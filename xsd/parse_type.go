@@ -595,6 +595,13 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 		if t.AttributeWildcard == nil {
 			t.AttributeWildcard = base.AttributeWildcard
 		}
+		// XSD 1.1 open content is inherited the same way: a type
+		// extending one with open content is open too, unless it
+		// declares its own. Without this a derived type silently closed
+		// a content model its base had opened.
+		if !t.declaredOpenContent && t.OpenContent == nil {
+			t.OpenContent = base.OpenContent
+		}
 		return nil
 	})
 }

@@ -221,6 +221,12 @@ type AttributeUse struct {
 	Required   bool
 	Decl       *AttributeDecl
 	Constraint *ValueConstraint
+
+	// Inheritable is the XSD 1.1 {inheritable}: the attribute is visible to
+	// conditional type assignment on descendant elements, not only on the
+	// element carrying it. It is how a schema lets an ancestor's xml:lang
+	// choose a descendant's type.
+	Inheritable bool
 }
 
 // ComponentKind implements Component.

@@ -362,3 +362,104 @@ func TestIDThroughUnion(t *testing.T) {
 	assertInvalid(t, schema,
 		`<root><v>abc</v><ref>nope</ref></root>`, "cvc-id.1")
 }
+
+// TestOpenContentSuffixMode covers the difference between the two modes.
+//
+// Suffix mode admits the wildcard only once the content model has been
+// satisfied; interleave admits it anywhere. Letting suffix match at the start
+// would make it mean interleave.
+func TestOpenContentSuffixMode(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:openContent mode="suffix">
+	        <xs:any namespace="##any" processContents="skip"/>
+	      </xs:openContent>
+	      <xs:sequence>
+	        <xs:element name="a" type="xs:string"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<root><a>x</a></root>`); err != nil {
+		t.Errorf("the model alone should be valid: %v", err)
+	}
+	if err := check11(t, s, `<root><a>x</a><extra/></root>`); err != nil {
+		t.Errorf("suffix content after the model should be valid: %v", err)
+	}
+	if err := check11(t, s, `<root><extra/><a>x</a></root>`); err == nil {
+		t.Error("suffix content before the model should be rejected")
+	}
+}
+
+// TestOpenContentIsInherited covers open content flowing to a derived type,
+// which is the same shape of bug as attribute uses not being inherited: a type
+// extending one with open content silently closed a model its base had opened.
+func TestOpenContentIsInherited(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="B">
+	    <xs:openContent mode="interleave">
+	      <xs:any namespace="##any" processContents="skip"/>
+	    </xs:openContent>
+	    <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="R">
+	    <xs:complexContent>
+	      <xs:extension base="B">
+	        <xs:sequence><xs:element name="d" type="xs:string" minOccurs="0"/></xs:sequence>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="root" type="R"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<root><a>x</a><extra/></root>`); err != nil {
+		t.Errorf("the derived type should inherit its base's open content: %v", err)
+	}
+}
+
+// TestInheritableAttributes covers the XSD 1.1 feature that lets an ancestor's
+// attribute choose a descendant's type.
+//
+// Without it, conditional type assignment on a nested element sees only that
+// element's own attributes, so a document-level xml:lang cannot select the type
+// of anything below it — which is the case the feature exists for.
+func TestInheritableAttributes(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence><xs:element ref="chap"/></xs:sequence>
+	      <xs:attribute name="lang" type="xs:string" inheritable="true"/>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="chap">
+	    <xs:alternative test="@lang='de'">
+	      <xs:complexType>
+	        <xs:sequence><xs:element name="de" type="xs:string"/></xs:sequence>
+	      </xs:complexType>
+	    </xs:alternative>
+	    <xs:alternative>
+	      <xs:complexType>
+	        <xs:sequence><xs:element name="en" type="xs:string"/></xs:sequence>
+	      </xs:complexType>
+	    </xs:alternative>
+	  </xs:element>
+	</xs:schema>`)
+
+	// The ancestor's lang selects the German alternative for chap.
+	if err := check11(t, s, `<doc lang="de"><chap><de>x</de></chap></doc>`); err != nil {
+		t.Errorf("an inherited attribute should select the type: %v", err)
+	}
+	// And the default alternative otherwise.
+	if err := check11(t, s, `<doc lang="en"><chap><en>x</en></chap></doc>`); err != nil {
+		t.Errorf("the default alternative should apply: %v", err)
+	}
+	// The wrong child for the selected type is rejected.
+	if err := check11(t, s, `<doc lang="de"><chap><en>x</en></chap></doc>`); err == nil {
+		t.Error("the German alternative should not accept <en>")
+	}
+}

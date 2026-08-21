@@ -202,6 +202,7 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 	}
 
 	use.Constraint = p.valueConstraint(el)
+	use.Inheritable = p.boolAttr(el, "inheritable", false)
 
 	if ref := el.AttrValue("ref"); ref != "" {
 		if el.AttrValue("name") != "" {

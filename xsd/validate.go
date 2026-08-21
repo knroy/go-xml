@@ -126,6 +126,11 @@ type validator struct {
 	// idrefs are the referenced values, checked against ids at the end.
 	idrefs []idref
 
+	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
+	// last. Conditional type assignment on a descendant sees them, which is
+	// how an ancestor's xml:lang can choose a nested element's type.
+	inherited []*xdm.Node
+
 	// stopped records that the error limit was reached.
 	stopped bool
 }
@@ -185,6 +190,11 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	// derived from.
 	if v.schema.Version == Version11 {
 		typ = v.selectAlternativeType(el, decl)
+		// The element's own inheritable attributes join the scope for
+		// its descendants, and leave it again on the way out.
+		if n := v.pushInherited(el, decl); n > 0 {
+			defer func() { v.inherited = v.inherited[:len(v.inherited)-n] }()
+		}
 	}
 
 	// xsi:type overrides the declared type, subject to the blocking rules.
@@ -493,8 +503,16 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			// In interleave mode it may appear anywhere; in suffix
 			// mode only once the model has been satisfied, which
 			// prevLast records.
+			// Suffix mode admits the wildcard only once the content
+			// model has been satisfied: either nothing has matched
+			// and the model accepts the empty sequence, or the last
+			// position reached is one the model may end at. Letting
+			// it match at the start would make suffix mean
+			// interleave.
+			satisfied := prevIdx < 0 && m.nullable ||
+				prevIdx >= 0 && contains(m.last, prevIdx)
 			if oc := v.openContentFor(t); oc != nil && oc.Wildcard.Allows(name.URI) &&
-				(oc.Mode == OpenInterleave || prevIdx < 0 || contains(m.last, prevIdx)) {
+				(oc.Mode == OpenInterleave || satisfied) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
 				}
@@ -743,4 +761,31 @@ func (v *validator) openContentFor(t *ComplexType) *OpenContent {
 		return nil
 	}
 	return t.OpenContent
+}
+
+// pushInherited adds an element's inheritable attributes to the scope, and
+// returns how many were added.
+//
+// The attributes are found from the type the element is being validated
+// against, which is why this runs after conditional type assignment has chosen
+// it: an alternative may select a type that declares different inheritable
+// attributes from the default one.
+func (v *validator) pushInherited(el *xdm.Node, decl *ElementDecl) int {
+	ct, ok := decl.Type.(*ComplexType)
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, use := range ct.AttributeUses {
+		if !use.Inheritable || use.Decl == nil {
+			continue
+		}
+		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
+		if a == nil {
+			continue
+		}
+		v.inherited = append(v.inherited, a)
+		n++
+	}
+	return n
 }

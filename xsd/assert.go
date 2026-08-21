@@ -218,6 +218,16 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	}
 	scoped := scopeForAssertion(el)
 
+	// An inheritable attribute from an ancestor is visible to the test, but
+	// only where the element does not carry one of the same name: the
+	// nearest declaration wins.
+	for _, a := range v.inherited {
+		if scoped.Attr(a.Name.URI, a.Name.Local) != nil {
+			continue
+		}
+		scoped.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value})
+	}
+
 	for _, alt := range decl.Alternatives {
 		if alt.Test == nil {
 			// The default alternative, which matches unconditionally.
