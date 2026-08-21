@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.73% of the W3C xsdtests *instance* tests (24,826 of 24,892); **94.99%** of its *schema-validity* tests (13,683 of 14,405) |
-| **XSD 1.1** | 99.72% instance (26,017 of 26,090); **94.13%** schema-validity (14,463 of 15,365); opt-in via `Version11` |
+| **XSD 1.0** | 99.76% of the W3C xsdtests *instance* tests (24,942 of 25,002); **98.04%** of its *schema-validity* tests (14,123 of 14,405) |
+| **XSD 1.1** | 99.74% instance (26,141 of 26,209); **97.01%** schema-validity (14,906 of 15,365); opt-in via `Version11` |
 | **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -652,8 +652,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 13,683 / 14,405 (94.99%) | 24,826 / 24,892 (99.73%) |
-| XSD 1.1 | 14,463 / 15,365 (94.13%) | 26,017 / 26,090 (99.72%) |
+| XSD 1.0 | 14,123 / 14,405 (98.04%) | 24,942 / 25,002 (99.76%) |
+| XSD 1.1 | 14,906 / 15,365 (97.01%) | 26,141 / 26,209 (99.74%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -705,6 +705,14 @@ disagreements are a ceiling rather than work outstanding. Twenty-seven of the
 | 4952 | 1 | `particlesW006` |
 | 4680 | 1 | `elemZ027_c` |
 | 4126 | 1 | `anyURI_a004_1339` |
+
+One test *set* is mislabelled rather than one test. `ibmMeta/wildcard.testSet`
+carries `version="1.0"`, which excludes it from the 1.1 run — but every one of
+its seventeen groups cites the XSD **1.1** specification in its own
+`documentationReference`, and four use `notQName`, a 1.1-only wildcard form,
+while expecting the schema to be valid. Refusing `notQName` under 1.0 is
+correct, and those four schemas do load under `Version11`, so the four
+disagreements are the label's fault rather than the validator's.
 
 Bug 4113 is the instructive one. The suite was written against **Unicode 3.1**,
 and characters have moved between general categories since. `reJ11` asserts that
