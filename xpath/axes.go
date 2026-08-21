@@ -1,6 +1,10 @@
 package xpath
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"sort"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // walkAxis calls visit for each node on the axis from n, in axis order.
 //
@@ -33,11 +37,25 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 	case AxisNamespace:
 		// The namespace axis exposes every in-scope binding, not just those
 		// declared on this element, so inherited declarations are included.
-		for prefix, uri := range n.InScopeNamespaces() {
+		//
+		// The bindings are held in a map, and the order they come out in
+		// is observable: as the comment above says, predicates number
+		// positions along the axis, so namespace::*[1] would name a
+		// different prefix from one run to the next. XPath leaves the
+		// order of this axis implementation-dependent, so any stable
+		// order conforms — an unstable one does not, in the sense that
+		// matters to a caller.
+		scope := n.InScopeNamespaces()
+		prefixes := make([]string, 0, len(scope))
+		for prefix := range scope {
+			prefixes = append(prefixes, prefix)
+		}
+		sort.Strings(prefixes)
+		for _, prefix := range prefixes {
 			ns := &xdm.Node{
 				Kind:   xdm.KindNamespace,
 				Name:   xdm.QName{Local: prefix},
-				Value:  uri,
+				Value:  scope[prefix],
 				Parent: n,
 			}
 			if !visit(ns) {

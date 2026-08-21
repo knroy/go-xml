@@ -847,3 +847,27 @@ func TestDistinctValuesNumericPromotion(t *testing.T) {
 		}
 	}
 }
+
+// The namespace axis yields its bindings in a stable order.
+//
+// Axis order is observable — predicates number positions along the axis, so
+// namespace::*[1] names whichever binding comes first — and the bindings are
+// held in a map, whose iteration Go randomises. Before they were sorted this
+// axis produced four distinct orders over forty runs of one four-prefix
+// document, which made namespace::*[1] name a different prefix run to run.
+//
+// XPath leaves the order of this axis implementation-dependent, so any stable
+// order conforms. An unstable one does not, in the sense a caller cares about.
+func TestNamespaceAxisOrderIsStable(t *testing.T) {
+	doc := `<r xmlns:a="urn:a" xmlns:b="urn:b" xmlns:c="urn:c" xmlns:d="urn:d"><e/></r>`
+	for i := 0; i < 20; i++ {
+		got := evalStr(t, doc, `string-join(for $n in /r/namespace::* return name($n), ',')`)
+		if want := "a,b,c,d"; got != want {
+			t.Fatalf("namespace axis order = %q, want %q", got, want)
+		}
+		// The positional predicate is the reason the order matters.
+		if got := evalStr(t, doc, `name(/r/namespace::*[1])`); got != "a" {
+			t.Fatalf("namespace::*[1] = %q, want %q", got, "a")
+		}
+	}
+}
