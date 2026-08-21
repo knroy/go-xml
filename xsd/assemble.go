@@ -3,6 +3,9 @@ package xsd
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -186,6 +189,45 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 // would collide under one schema anyway.
 type docKey struct {
 	location string
+}
+
+// canonicalLocation reduces a resolved location to a form two spellings of the
+// same document share.
+//
+// A resolved path is still a string, and one file can be named by more than
+// one of them: msData's schZ012 imports "Schz012_b.xsd" from a document that
+// was itself read as "schZ012_b.xsd", which on a case-insensitive filesystem
+// is one file reached twice. Read twice, every global in it collides with
+// itself. Asking the filesystem which file a path names settles it without
+// guessing at case rules — case-folding the string would be wrong on a
+// case-sensitive filesystem, where those really are two files.
+//
+// Anything that is not a local path, or that does not exist, is left as it
+// was: a remote URL has no filesystem identity to appeal to, and a location
+// that cannot be statted will fail when it is read.
+func canonicalLocation(resolved string) string {
+	if resolved == "" || strings.Contains(resolved, "://") {
+		return resolved
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return resolved
+	}
+	dir := filepath.Dir(resolved)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return resolved
+	}
+	for _, e := range entries {
+		ei, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if os.SameFile(info, ei) {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return resolved
 }
 
 // pending is a document waiting to be read.
@@ -432,7 +474,7 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 	// location names. Doing it on the raw schemaLocation makes two
 	// documents of one file whenever a schema set reaches it by different
 	// spellings; see docKey.
-	key := docKey{location: resolved}
+	key := docKey{location: canonicalLocation(resolved)}
 	if a.seen[key] {
 		return
 	}

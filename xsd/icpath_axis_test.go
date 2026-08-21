@@ -182,3 +182,30 @@ func TestChameleonIncludeConvertsReferences(t *testing.T) {
 		t.Error("the included declaration is not in the including namespace")
 	}
 }
+
+// One file can be named by more than one resolved path. Deduplicating on the
+// path string alone makes two documents of it, and every global in it then
+// collides with itself — which is what msData's schZ012 does, importing
+// "Schz012_b.xsd" from a document read as "schZ012_b.xsd".
+func TestSameFileReachedByTwoSpellings(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Lib.xsd")
+	if err := os.WriteFile(lib, []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="shared" type="xs:string"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(dir, "main.xsd")
+	if err := os.WriteFile(main, []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:include schemaLocation="Lib.xsd"/>
+	  <xs:include schemaLocation="./Lib.xsd"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFiles([]string{main},
+		Options{Resolver: &FileResolver{}}); err != nil {
+		t.Fatalf("one file reached twice was read as two: %v", err)
+	}
+}
