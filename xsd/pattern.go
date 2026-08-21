@@ -21,7 +21,17 @@ import (
 // widening of every pattern in every schema. The translated expression is
 // therefore wrapped so that it must span the whole string.
 func compilePattern(src string) (*Pattern, error) {
-	translated, err := xpath.TranslateSchemaRegexp(src)
+	return compilePatternVersion(src, Version10)
+}
+
+// compilePatternVersion is compilePattern for a schema of a known version.
+//
+// The two versions disagree on one grammar rule: 1.0 rejects a \p{Is...} block
+// name outside Appendix G's list, while 1.1 reads it as a class matching every
+// character. reK88 asserts the same pattern is invalid under one and valid
+// under the other, so the version has to reach the compiler.
+func compilePatternVersion(src string, version Version) (*Pattern, error) {
+	translated, err := xpath.TranslateSchemaRegexpVersion(src, version >= Version11)
 	if err != nil {
 		return nil, fmt.Errorf("pattern %q: %w", src, err)
 	}

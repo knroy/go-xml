@@ -917,6 +917,58 @@ func clampBound(body string, max int) (string, bool) {
 	return newLo + "," + newHi, loChanged || hiChanged
 }
 
+// rewriteUnknownBlocks replaces \p{Is...} / \P{Is...} references naming a block
+// Appendix G does not list with a class that XSD 1.1 says they denote.
+//
+// 1.1 reads an unrecognised block as the set of every character, so \p{IsFoo}
+// matches anything and its complement \P{IsFoo} matches nothing. Both are
+// written as explicit classes rather than as "." so that they keep their meaning
+// inside a character class and across the newline characters "." excludes.
+func rewriteUnknownBlocks(p string) string {
+	var sb strings.Builder
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c != '\\' || i+1 >= len(p) {
+			sb.WriteByte(c)
+			continue
+		}
+		esc := p[i+1]
+		if esc != 'p' && esc != 'P' {
+			// Copy the escape pair whole: a "\\" must not be mistaken for
+			// the backslash of a following escape.
+			sb.WriteByte(c)
+			sb.WriteByte(esc)
+			i++
+			continue
+		}
+		body, rest, ok := takeBlockName(p[i+2:])
+		if !ok || !strings.HasPrefix(body, "Is") {
+			sb.WriteByte(c)
+			sb.WriteByte(esc)
+			i++
+			continue
+		}
+		if _, known := unicodeBlocks[body]; known || body == "Is" {
+			sb.WriteByte(c)
+			sb.WriteByte(esc)
+			i++
+			continue
+		}
+		// The replacement has to survive translatePattern, which reads the
+		// result again and knows only Appendix F's escapes — "\x{...}" is
+		// not one of them. "[\s\S]" is: the union of a set and its
+		// complement is every character, and its negation is the empty set,
+		// which is what an unrecognised block and its complement mean.
+		if esc == 'p' {
+			sb.WriteString(`[\s\S]`)
+		} else {
+			sb.WriteString(`[^\s\S]`)
+		}
+		i += 2 + (len(p[i+2:]) - len(rest)) - 1
+	}
+	return sb.String()
+}
+
 // TranslateSchemaRegexp rewrites an XML Schema regular expression into RE2
 // syntax, without anchoring it.
 //
@@ -931,6 +983,29 @@ func clampBound(body string, max int) (string, bool) {
 // span the whole value. A caller using this for a pattern facet has to wrap the
 // result — see the xsd package, which does so with \A(?:...)\z.
 func TranslateSchemaRegexp(pattern string) (string, error) {
+	return TranslateSchemaRegexpVersion(pattern, false)
+}
+
+// TranslateSchemaRegexpVersion is TranslateSchemaRegexp with the one grammar
+// rule that XSD 1.1 changed made selectable.
+//
+// 1.1 stopped treating an unrecognised \p{Is...} block name as an error and
+// began reading it as a class that matches every character, so the same pattern
+// is invalid under 1.0 and valid under 1.1. reK88 asserts exactly that pair,
+// which is why the version has to reach the grammar check.
+func TranslateSchemaRegexpVersion(pattern string, xsd11 bool) (string, error) {
+	if err := validateSchemaRegexp(pattern, xsd11); err != nil {
+		return "", err
+	}
+	if xsd11 {
+		// The grammar check has already accepted any unrecognised block
+		// name; the translator still knows only Appendix G's list, so the
+		// unknown ones are rewritten here into the "matches everything"
+		// class 1.1 says they denote. Doing it here rather than inside
+		// translatePattern keeps fn:matches — which has no such rule —
+		// reading the same table it always did.
+		pattern = rewriteUnknownBlocks(pattern)
+	}
 	return translatePattern(escapeSchemaAnchors(pattern), false)
 }
 

@@ -205,7 +205,7 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 			f.WhiteSpaceFixed = p.boolAttr(c, "fixed", false)
 
 		case "pattern":
-			pat, err := compilePattern(v)
+			pat, err := compilePatternVersion(v, p.schema.Version)
 			if err != nil {
 				p.errs = append(p.errs, errorAt(c, "", "%v", err))
 				continue
