@@ -102,6 +102,14 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	if err := checkLexicalSpace(normalized, prim); err != nil {
 		return "", err
 	}
+	// The string branch's derived types narrow the lexical space rather
+	// than the value space, and they do it with patterns the spec states
+	// in prose. xs:ID is an xs:NCName, so "87123_" is not one — it starts
+	// with a digit — and nothing in the facets would have said so, since
+	// these types carry none.
+	if err := checkStringSubtype(normalized, t); err != nil {
+		return "", err
+	}
 
 	if err := checkEnumeration(steps, normalized, t); err != nil {
 		return "", err
@@ -689,4 +697,128 @@ func valueEqual(a, b, primitive string) bool {
 		return comparable && c == 0
 	}
 	return false
+}
+
+// checkStringSubtype applies the lexical constraints of the xs:string branch's
+// named subtypes.
+//
+// Part 2 defines xs:Name, xs:NCName and their descendants by pattern, but
+// states those patterns in prose rather than as facets on the type, so a schema
+// that restricts xs:ID inherits nothing that would reject a value which is not
+// an NCName. The check walks to the nearest built-in ancestor, since a
+// user-defined restriction of xs:ID is still an xs:ID.
+func checkStringSubtype(normalized string, t *SimpleType) error {
+	name := nearestBuiltinName(t)
+	if name == "" {
+		return nil
+	}
+	ok := true
+	switch name {
+	case "NCName", "ID", "IDREF", "ENTITY":
+		ok = isNCName(normalized)
+	case "Name":
+		ok = isXMLName(normalized)
+	case "NMTOKEN":
+		ok = isNmtoken(normalized)
+	case "IDREFS", "ENTITIES", "NMTOKENS":
+		// The list types are checked item by item where the list is
+		// split; the whole literal is not a single token.
+		return nil
+	case "language":
+		ok = isLanguage(normalized)
+	default:
+		return nil
+	}
+	if ok {
+		return nil
+	}
+	return &ParseError{
+		Code:    "cvc-datatype-valid.1.2.1",
+		Message: "\"" + truncate(normalized) + "\" is not a valid xs:" + name,
+	}
+}
+
+// nearestBuiltinName returns the local name of the nearest ancestor of t that
+// is a built-in in the schema namespace.
+func nearestBuiltinName(t *SimpleType) string {
+	for cur := t; cur != nil; {
+		if cur.Name.URI == NSSchema && cur.Name.Local != "" {
+			return cur.Name.Local
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			return ""
+		}
+		cur = base
+	}
+	return ""
+}
+
+// isXMLName reports whether v is an XML Name: like an NCName but with a colon
+// permitted anywhere a name character is.
+func isXMLName(v string) bool {
+	if v == "" {
+		return false
+	}
+	for i, r := range v {
+		if i == 0 {
+			if !isNameStartRune(r) && r != ':' {
+				return false
+			}
+			continue
+		}
+		if !isNameRune(r) && r != ':' {
+			return false
+		}
+	}
+	return true
+}
+
+// isNmtoken reports whether v is an Nmtoken: one or more name characters, with
+// no restriction on the first.
+func isNmtoken(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, r := range v {
+		if !isNameRune(r) && r != ':' {
+			return false
+		}
+	}
+	return true
+}
+
+func isNameStartRune(r rune) bool {
+	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= 0x80
+}
+
+func isNameRune(r rune) bool {
+	return isNameStartRune(r) || r == '-' || r == '.' || r >= '0' && r <= '9'
+}
+
+// isLanguage reports whether v matches xs:language: a primary subtag of one to
+// eight letters, then any number of subtags of one to eight alphanumerics.
+func isLanguage(v string) bool {
+	if v == "" {
+		return false
+	}
+	for i, part := range strings.Split(v, "-") {
+		if len(part) == 0 || len(part) > 8 {
+			return false
+		}
+		for j := 0; j < len(part); j++ {
+			c := part[j]
+			isAlpha := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+			isDigit := c >= '0' && c <= '9'
+			// The primary subtag names a language and is letters
+			// only; later subtags may be numeric region codes.
+			if i == 0 && !isAlpha {
+				return false
+			}
+			if i > 0 && !isAlpha && !isDigit {
+				return false
+			}
+		}
+	}
+	return true
 }

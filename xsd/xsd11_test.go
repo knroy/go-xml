@@ -2129,3 +2129,51 @@ func TestDefinedSiblingInOpenContent(t *testing.T) {
 		t.Error("a sibling name should be refused by the wildcard")
 	}
 }
+
+// TestStringSubtypeLexicalSpaces covers the xs:string branch's named subtypes,
+// which narrow the lexical space rather than the value space.
+//
+// Part 2 defines them by pattern but states those patterns in prose rather than
+// as facets on the type, so nothing a schema inherits from xs:ID would reject a
+// value that is not an NCName — "87123_" starts with a digit and was accepted.
+func TestStringSubtypeLexicalSpaces(t *testing.T) {
+	for _, c := range []struct {
+		typ  string
+		good []string
+		bad  []string
+	}{
+		{"NCName", []string{"a", "_x", "a-b.c1"}, []string{"87123_", "a:b", "-x", ""}},
+		{"ID", []string{"_d8732d"}, []string{"87123_", "a:b"}},
+		{"Name", []string{"a:b", "_x", ":x"}, []string{"1abc", "-x"}},
+		{"NMTOKEN", []string{"1abc", "a:b", "-x"}, []string{"a b"}},
+		{"language", []string{"en", "en-GB", "en-us-x1"}, []string{"1en", "toolongsubtag", "en-"}},
+	} {
+		schema := `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="v" type="xs:` + c.typ + `"/>
+		</xs:schema>`
+		for _, v := range c.good {
+			assertValid(t, schema, `<v>`+v+`</v>`)
+		}
+		for _, v := range c.bad {
+			assertInvalid(t, schema, `<v>`+v+`</v>`, "cvc")
+		}
+	}
+}
+
+// TestStringSubtypeThroughRestriction pins that the check walks to the nearest
+// built-in ancestor: a user-defined restriction of xs:ID is still an xs:ID.
+func TestStringSubtypeThroughRestriction(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="myID">
+	    <xs:restriction base="xs:ID">
+	      <xs:maxLength value="10"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="v" type="myID"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<v>_ok</v>`)
+	assertInvalid(t, schema, `<v>9bad</v>`, "cvc")
+}
