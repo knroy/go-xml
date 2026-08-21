@@ -966,9 +966,14 @@ func unionWildcards(a, b *Wildcard) *Wildcard {
 
 	out := &Wildcard{ProcessContents: pc}
 
-	// A name is disallowed by the union only if both operands disallow it:
-	// either one admitting it is enough.
-	out.DisallowedNames = intersectNames(a, b)
+	// A name survives the union if either operand admits it outright. A
+	// name one operand disallows is therefore kept out only when the other
+	// would not have admitted it anyway — which is not the same as both
+	// listing it. In the suite's wild046 the two branches are ##local and
+	// "not the XSLT namespace"; only the second can reach xml:lang at all,
+	// and it disallows the name, so the union does too even though the
+	// first never mentions it.
+	out.DisallowedNames = unionUnadmittedNames(a, b)
 	out.DisallowDefined = a.DisallowDefined && b.DisallowDefined
 	out.DisallowDefinedSibling = a.DisallowDefinedSibling && b.DisallowDefinedSibling
 
@@ -1023,20 +1028,26 @@ func unionWildcards(a, b *Wildcard) *Wildcard {
 	return out
 }
 
-// intersectNames returns the disallowed names both wildcards refuse.
-func intersectNames(a, b *Wildcard) []xdm.QName {
-	if len(a.DisallowedNames) == 0 || len(b.DisallowedNames) == 0 {
-		return nil
-	}
-	inB := make(map[xdm.QName]bool, len(b.DisallowedNames))
-	for _, n := range b.DisallowedNames {
-		inB[n] = true
-	}
+// unionUnadmittedNames returns the names the union still refuses.
+//
+// A name one operand disallows is refused only when the other does not admit
+// it — either because its namespace constraint excludes it, or because it
+// disallows the name too.
+func unionUnadmittedNames(a, b *Wildcard) []xdm.QName {
 	var out []xdm.QName
-	for _, n := range a.DisallowedNames {
-		if inB[n] {
-			out = append(out, n)
+	seen := map[xdm.QName]bool{}
+	keep := func(name xdm.QName, other *Wildcard) {
+		if seen[name] || other.AllowsName(name, nil) {
+			return
 		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, n := range a.DisallowedNames {
+		keep(n, b)
+	}
+	for _, n := range b.DisallowedNames {
+		keep(n, a)
 	}
 	return out
 }

@@ -2864,3 +2864,53 @@ func TestFacetsDirectlyInSimpleContentRestriction(t *testing.T) {
 		t.Errorf("the default type should not be constrained: %v", err)
 	}
 }
+
+// TestWildcardUnionKeepsUnadmittedNames pins how {disallowed names} survive a
+// union.
+//
+// A name survives if either operand admits it outright, so a name one operand
+// disallows is kept out only when the other would not have admitted it anyway
+// — which is not the same as both listing it. Here the branches are ##local and
+// "not the XSLT namespace": only the second can reach xml:lang at all, and it
+// disallows the name, so the union does too even though the first never
+// mentions it.
+func TestWildcardUnionKeepsUnadmittedNames(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:attributeGroup name="a">
+	    <xs:anyAttribute namespace="##local" notQName="a b c" processContents="skip"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="b">
+	    <xs:anyAttribute notNamespace="http://www.w3.org/1999/XSL/Transform"
+	                     notQName="c d e xml:lang" processContents="skip"/>
+	  </xs:attributeGroup>
+	  <xs:complexType name="computer">
+	    <xs:sequence/>
+	    <xs:attributeGroup ref="a"/>
+	  </xs:complexType>
+	  <xs:complexType name="extendedComputer">
+	    <xs:complexContent>
+	      <xs:extension base="computer">
+	        <xs:attributeGroup ref="b"/>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="computer" type="extendedComputer"/>
+	</xs:schema>`)
+
+	// a admits it: only b disallows it, and a's ##local reaches it.
+	if err := check11(t, s, `<computer a="1"/>`); err != nil {
+		t.Errorf("a name only one branch disallows should be admitted: %v", err)
+	}
+	if err := check11(t, s, `<computer d="1"/>`); err != nil {
+		t.Errorf("a name only one branch disallows should be admitted: %v", err)
+	}
+	// Both disallow c.
+	if err := check11(t, s, `<computer c="1"/>`); err == nil {
+		t.Error("a name both branches disallow should be refused")
+	}
+	// Only b can reach xml:lang, and b disallows it.
+	if err := check11(t, s, `<computer xml:lang="de"/>`); err == nil {
+		t.Error("a name the only branch that reaches it disallows should be refused")
+	}
+}
