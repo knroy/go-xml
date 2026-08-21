@@ -278,6 +278,17 @@ func (v *validator) derivedFrom(t, want Type) bool {
 	if want == nil {
 		return true
 	}
+	// A member of a union is validly derived from it (§3.14.6 clause 2.2.3),
+	// which is what lets xsi:type name one. The base chain alone does not
+	// reach it: a member's base is whatever it restricts, not the union.
+	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion {
+		for _, m := range u.MemberTypes {
+			if m != nil && v.derivedFrom(t, m) {
+				return true
+			}
+		}
+	}
+
 	seen := 0
 	for cur := t; cur != nil; {
 		if cur == want {

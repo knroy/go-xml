@@ -287,32 +287,100 @@ type duration struct {
 
 // compareDuration orders two durations, reporting whether they are comparable.
 //
-// The spec defines the order by adding each duration to four reference
-// dateTimes; two durations are ordered only if the answer is the same for all
-// four. That is equivalent to comparing the month and second components
-// separately and requiring them to agree.
+// The spec (Part 2 §3.2.6.2) defines the order by adding both durations to four
+// reference dateTimes and requiring the same answer from all four. That is not
+// the same as "the month and second components agree": P1973Y12M29DT05H47M26S
+// has fewer months but more seconds than P1979Y05M22DT21H16M00S, yet adding
+// each to any of the four references orders them the same way, because 65
+// months outweighs the six-day difference whichever month lengths apply.
+//
+// The four references are the ones the spec names, chosen so that every
+// combination of leap year and month length is covered.
 func compareDuration(a, b duration) (int, bool) {
-	mc := 0
-	switch {
-	case a.months < b.months:
-		mc = -1
-	case a.months > b.months:
-		mc = 1
+	if a.months == b.months {
+		return a.seconds.Cmp(b.seconds), true
 	}
-	sc := a.seconds.Cmp(b.seconds)
 
-	if mc == 0 {
-		return sc, true
+	var first int
+	for i, ref := range durationReferences {
+		ra := addDurationTo(ref, a)
+		rb := addDurationTo(ref, b)
+		c := ra.Cmp(rb)
+		if i == 0 {
+			first = c
+			continue
+		}
+		if c != first {
+			// The references disagree, so the order is genuinely
+			// indeterminate — P1M against P30D is the canonical case.
+			return 0, false
+		}
 	}
-	if sc == 0 {
-		return mc, true
+	return first, true
+}
+
+// durationReferences are the four dateTimes Part 2 §3.2.6.2 names for ordering
+// durations, as (year, month, day, seconds-into-day).
+//
+// They are chosen to cover every combination of leap year and month length, so
+// that two durations ordered the same way against all four are ordered the same
+// way against every dateTime.
+var durationReferences = [4]struct {
+	y, m, d int64
+	secs    int64
+}{
+	{1696, 9, 1, 0},
+	{1697, 2, 1, 0},
+	{1903, 3, 1, 0},
+	{1903, 7, 1, 0},
+}
+
+// addDurationTo adds a duration to a reference dateTime and returns the result
+// as seconds from the epoch.
+//
+// The months are added first and the day clamped to the length of the resulting
+// month, which is what makes "one month after 31 January" mean 28 or 29
+// February rather than an invalid date. Only then are the seconds added.
+func addDurationTo(ref struct {
+	y, m, d int64
+	secs    int64
+}, d duration) *big.Rat {
+	totalMonths := ref.y*12 + (ref.m - 1) + d.months
+	year := floorDiv(totalMonths, 12)
+	month := totalMonths - year*12 + 1
+
+	day := ref.d
+	if max := daysInMonth(year, month); day > max {
+		day = max
 	}
-	if mc == sc {
-		return mc, true
+
+	out := new(big.Rat).SetInt64(daysFromCivil(year, month, day)*86400 + ref.secs)
+	return out.Add(out, d.seconds)
+}
+
+// floorDiv divides rounding toward negative infinity, which is what a calendar
+// needs for years before the epoch.
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
 	}
-	// The components disagree — P1M versus P30D — so the order is
-	// indeterminate.
-	return 0, false
+	return q
+}
+
+// daysInMonth returns the length of a month in the proleptic Gregorian
+// calendar.
+func daysInMonth(year, month int64) int64 {
+	switch month {
+	case 1, 3, 5, 7, 8, 10, 12:
+		return 31
+	case 4, 6, 9, 11:
+		return 30
+	}
+	if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+		return 29
+	}
+	return 28
 }
 
 // parseDuration reduces an xs:duration literal to its components.

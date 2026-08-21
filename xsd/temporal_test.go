@@ -128,3 +128,49 @@ func TestValidateDurationBounds(t *testing.T) {
 	assertValid(t, schema, `<root>P2D</root>`)
 	assertInvalid(t, schema, `<root>PT1H</root>`, "minInclusive")
 }
+
+// TestDurationOrderUsesReferenceDateTimes covers the rule the spec actually
+// gives, which is not the one the components suggest.
+//
+// Part 2 §3.2.6.2 orders two durations by adding both to four reference
+// dateTimes and requiring the same answer from all four. Comparing the month
+// and second components and demanding they agree is a different and stricter
+// test: P1973Y12M29DT05H47M26S has fewer months but more seconds than
+// P1979Y05M22DT21H16M00S, so the components disagree — yet 65 months outweighs
+// the six-day difference against every reference, so the durations *are*
+// ordered, and treating them as incomparable let a bound accept a value it
+// should have rejected.
+func TestDurationOrderUsesReferenceDateTimes(t *testing.T) {
+	a, ok := parseDuration("P1973Y12M29DT05H47M26S")
+	if !ok {
+		t.Fatal("the first duration did not parse")
+	}
+	b, ok := parseDuration("P1979Y05M22DT21H16M00S")
+	if !ok {
+		t.Fatal("the second duration did not parse")
+	}
+	got, comparable := compareDuration(a, b)
+	if !comparable {
+		t.Fatal("the components disagree but the references do not; " +
+			"these durations are ordered")
+	}
+	if got != -1 {
+		t.Errorf("compare = %d, want -1", got)
+	}
+
+	// The canonical incomparable pair still is: a month is between 28 and
+	// 31 days, so the references genuinely disagree.
+	m, _ := parseDuration("P1M")
+	d30, _ := parseDuration("P30D")
+	if _, ok := compareDuration(m, d30); ok {
+		t.Error("P1M and P30D should remain incomparable")
+	}
+
+	// Leap years are covered by the reference set: P1Y against P365D is
+	// indeterminate for the same reason.
+	y, _ := parseDuration("P1Y")
+	d365, _ := parseDuration("P365D")
+	if _, ok := compareDuration(y, d365); ok {
+		t.Error("P1Y and P365D should be incomparable across a leap year")
+	}
+}
