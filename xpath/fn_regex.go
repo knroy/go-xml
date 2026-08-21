@@ -295,6 +295,9 @@ func classUnicodeEscape(esc byte) (string, bool) {
 func translatePattern(p string, dotAll bool) (string, error) {
 	var sb strings.Builder
 	inClass := false
+	// Where the class currently being read starts in p, so a subtraction
+	// can recover its left operand before translation rewrote it.
+	classSrc := -1
 
 	for i := 0; i < len(p); i++ {
 		c := p[i]
@@ -333,15 +336,34 @@ func translatePattern(p string, dotAll bool) (string, error) {
 						i += len(p[i+1:]) - len(rest)
 						continue
 					}
-					if r, known := unicodeBlockRange(body); known {
-						if esc == 'p' {
-							sb.WriteString("[" + r + "]")
-						} else {
-							sb.WriteString("[^" + r + "]")
-						}
-						i += len(p[i+1:]) - len(rest)
-						continue
+					r, known := unicodeBlockRange(body)
+					if !known {
+						// Appendix G fixes the set of block names, so
+						// one outside it is a malformed pattern rather
+						// than something to pass to RE2 and hope.
+						return "", fmt.Errorf(
+							"FORX0002: unknown Unicode block %q", body)
 					}
+					switch {
+					case inClass && esc == 'p':
+						// Already inside a class, so the range is
+						// contributed bare: wrapping it would nest a
+						// bracket, which RE2 reads as a literal "[".
+						sb.WriteString(r)
+					case inClass:
+						// A negated block inside a class cannot be
+						// written as a range, and RE2 has no
+						// class-level complement to fall back on.
+						return "", fmt.Errorf(
+							"FORX0002: \\P{%s} is not supported "+
+								"inside a character class", body)
+					case esc == 'p':
+						sb.WriteString("[" + r + "]")
+					default:
+						sb.WriteString("[^" + r + "]")
+					}
+					i += len(p[i+1:]) - len(rest)
+					continue
 				}
 				sb.WriteByte('\\')
 				sb.WriteByte(esc)
@@ -413,6 +435,7 @@ func translatePattern(p string, dotAll bool) (string, error) {
 		case '[':
 			if !inClass {
 				inClass = true
+				classSrc = i
 			}
 			sb.WriteByte(c)
 		case ']':
@@ -424,7 +447,19 @@ func translatePattern(p string, dotAll bool) (string, error) {
 			// difference is emitted as an ordinary class. Whatever has been
 			// written for the current class so far is the left operand.
 			if inClass && i+1 < len(p) && p[i+1] == '[' {
-				out, consumed, err := applySubtraction(sb.String(), p[i:])
+				// The left operand is taken from the source rather
+				// than from what has been emitted for it. By this
+				// point \i, \c, \d and \w have been rewritten into
+				// RE2 bodies that parseClassBody cannot read back,
+				// so re-reading the original is what lets a
+				// subtraction whose left side is a shorthand class —
+				// "[\i-[:]]", the form every XML Name pattern uses —
+				// be computed instead of refused.
+				built := sb.String()
+				if open := strings.LastIndexByte(built, '['); open >= 0 && classSrc >= 0 {
+					built = built[:open] + p[classSrc:i]
+				}
+				out, consumed, err := applySubtraction(built, p[i:])
 				if err != nil {
 					return "", err
 				}
@@ -671,34 +706,129 @@ func takeBlockName(s string) (name, rest string, ok bool) {
 	return s[1:end], s[end+1:], true
 }
 
+// unicodeBlocks maps every Unicode block name XML Schema Part 2 defines to the
+// codepoints it spans.
+//
+// The list is the one in Appendix G of the Datatypes spec, which fixes the
+// blocks at Unicode 3.1. Later Unicode versions moved some of these boundaries
+// and added blocks the spec does not name; following them would change which
+// strings a schema written against the spec accepts, so the ranges below stay
+// where the spec put them and are not read from Go's tables.
+//
+// Blocks are not scripts. Go exposes unicode.Scripts, but \p{IsTibetan} names a
+// contiguous range of codepoints, while the Tibetan script is a set that spans
+// several — substituting one for the other would quietly change the match.
+var unicodeBlocks = map[string][2]rune{
+	"IsBasicLatin":                            {0x0000, 0x007F},
+	"IsLatin-1Supplement":                     {0x0080, 0x00FF},
+	"IsLatinExtended-A":                       {0x0100, 0x017F},
+	"IsLatinExtended-B":                       {0x0180, 0x024F},
+	"IsIPAExtensions":                         {0x0250, 0x02AF},
+	"IsSpacingModifierLetters":                {0x02B0, 0x02FF},
+	"IsCombiningDiacriticalMarks":             {0x0300, 0x036F},
+	"IsGreek":                                 {0x0370, 0x03FF},
+	"IsCyrillic":                              {0x0400, 0x04FF},
+	"IsArmenian":                              {0x0530, 0x058F},
+	"IsHebrew":                                {0x0590, 0x05FF},
+	"IsArabic":                                {0x0600, 0x06FF},
+	"IsSyriac":                                {0x0700, 0x074F},
+	"IsThaana":                                {0x0780, 0x07BF},
+	"IsDevanagari":                            {0x0900, 0x097F},
+	"IsBengali":                               {0x0980, 0x09FF},
+	"IsGurmukhi":                              {0x0A00, 0x0A7F},
+	"IsGujarati":                              {0x0A80, 0x0AFF},
+	"IsOriya":                                 {0x0B00, 0x0B7F},
+	"IsTamil":                                 {0x0B80, 0x0BFF},
+	"IsTelugu":                                {0x0C00, 0x0C7F},
+	"IsKannada":                               {0x0C80, 0x0CFF},
+	"IsMalayalam":                             {0x0D00, 0x0D7F},
+	"IsSinhala":                               {0x0D80, 0x0DFF},
+	"IsThai":                                  {0x0E00, 0x0E7F},
+	"IsLao":                                   {0x0E80, 0x0EFF},
+	"IsTibetan":                               {0x0F00, 0x0FFF},
+	"IsMyanmar":                               {0x1000, 0x109F},
+	"IsGeorgian":                              {0x10A0, 0x10FF},
+	"IsHangulJamo":                            {0x1100, 0x11FF},
+	"IsEthiopic":                              {0x1200, 0x137F},
+	"IsCherokee":                              {0x13A0, 0x13FF},
+	"IsUnifiedCanadianAboriginalSyllabics":    {0x1400, 0x167F},
+	"IsOgham":                                 {0x1680, 0x169F},
+	"IsRunic":                                 {0x16A0, 0x16FF},
+	"IsKhmer":                                 {0x1780, 0x17FF},
+	"IsMongolian":                             {0x1800, 0x18AF},
+	"IsLatinExtendedAdditional":               {0x1E00, 0x1EFF},
+	"IsGreekExtended":                         {0x1F00, 0x1FFF},
+	"IsGeneralPunctuation":                    {0x2000, 0x206F},
+	"IsSuperscriptsandSubscripts":             {0x2070, 0x209F},
+	"IsCurrencySymbols":                       {0x20A0, 0x20CF},
+	"IsCombiningMarksforSymbols":              {0x20D0, 0x20FF},
+	"IsLetterlikeSymbols":                     {0x2100, 0x214F},
+	"IsNumberForms":                           {0x2150, 0x218F},
+	"IsArrows":                                {0x2190, 0x21FF},
+	"IsMathematicalOperators":                 {0x2200, 0x22FF},
+	"IsMiscellaneousTechnical":                {0x2300, 0x23FF},
+	"IsControlPictures":                       {0x2400, 0x243F},
+	"IsOpticalCharacterRecognition":           {0x2440, 0x245F},
+	"IsEnclosedAlphanumerics":                 {0x2460, 0x24FF},
+	"IsBoxDrawing":                            {0x2500, 0x257F},
+	"IsBlockElements":                         {0x2580, 0x259F},
+	"IsGeometricShapes":                       {0x25A0, 0x25FF},
+	"IsMiscellaneousSymbols":                  {0x2600, 0x26FF},
+	"IsDingbats":                              {0x2700, 0x27BF},
+	"IsBraillePatterns":                       {0x2800, 0x28FF},
+	"IsCJKRadicalsSupplement":                 {0x2E80, 0x2EFF},
+	"IsKangxiRadicals":                        {0x2F00, 0x2FDF},
+	"IsIdeographicDescriptionCharacters":      {0x2FF0, 0x2FFF},
+	"IsCJKSymbolsandPunctuation":              {0x3000, 0x303F},
+	"IsHiragana":                              {0x3040, 0x309F},
+	"IsKatakana":                              {0x30A0, 0x30FF},
+	"IsBopomofo":                              {0x3100, 0x312F},
+	"IsHangulCompatibilityJamo":               {0x3130, 0x318F},
+	"IsKanbun":                                {0x3190, 0x319F},
+	"IsBopomofoExtended":                      {0x31A0, 0x31BF},
+	"IsEnclosedCJKLettersandMonths":           {0x3200, 0x32FF},
+	"IsCJKCompatibility":                      {0x3300, 0x33FF},
+	"IsCJKUnifiedIdeographsExtensionA":        {0x3400, 0x4DB5},
+	"IsCJKUnifiedIdeographs":                  {0x4E00, 0x9FFF},
+	"IsYiSyllables":                           {0xA000, 0xA48F},
+	"IsYiRadicals":                            {0xA490, 0xA4CF},
+	"IsHangulSyllables":                       {0xAC00, 0xD7A3},
+	"IsHighSurrogates":                        {0xD800, 0xDB7F},
+	"IsLowSurrogates":                         {0xDC00, 0xDFFF},
+	"IsPrivateUse":                            {0xE000, 0xF8FF},
+	"IsCJKCompatibilityIdeographs":            {0xF900, 0xFAFF},
+	"IsAlphabeticPresentationForms":           {0xFB00, 0xFB4F},
+	"IsArabicPresentationForms-A":             {0xFB50, 0xFDFF},
+	"IsCombiningHalfMarks":                    {0xFE20, 0xFE2F},
+	"IsCJKCompatibilityForms":                 {0xFE30, 0xFE4F},
+	"IsSmallFormVariants":                     {0xFE50, 0xFE6F},
+	"IsArabicPresentationForms-B":             {0xFE70, 0xFEFE},
+	"IsSpecials":                              {0xFEFF, 0xFEFF},
+	"IsHalfwidthandFullwidthForms":            {0xFF00, 0xFFEF},
+	"IsOldItalic":                             {0x10300, 0x1032F},
+	"IsGothic":                                {0x10330, 0x1034F},
+	"IsDeseret":                               {0x10400, 0x1044F},
+	"IsByzantineMusicalSymbols":               {0x1D000, 0x1D0FF},
+	"IsMusicalSymbols":                        {0x1D100, 0x1D1FF},
+	"IsMathematicalAlphanumericSymbols":       {0x1D400, 0x1D7FF},
+	"IsCJKUnifiedIdeographsExtensionB":        {0x20000, 0x2A6D6},
+	"IsCJKCompatibilityIdeographsSupplement":  {0x2F800, 0x2FA1F},
+	"IsTags":                                  {0xE0000, 0xE007F},
+}
+
 // unicodeBlockRange maps an XML Schema Unicode block name to the RE2 class
 // body for its codepoint range.
 //
-// Only the blocks that occur in practice are listed. An unknown block is an
-// error rather than a silently empty class, because a pattern that matches
-// nothing is worse than one that refuses to compile.
+// An unknown name is reported rather than passed through. Emitting \p{IsFoo}
+// verbatim would hand RE2 a property it does not have, so the whole pattern
+// failed to compile and the schema carrying it failed to load — which is how a
+// missing block name turned into a schema-level error far from its cause.
 func unicodeBlockRange(name string) (string, bool) {
-	blocks := map[string]string{
-		"IsBasicLatin":                         `\x{0}-\x{7F}`,
-		"IsLatin-1Supplement":                  `\x{80}-\x{FF}`,
-		"IsLatinExtended-A":                    `\x{100}-\x{17F}`,
-		"IsLatinExtended-B":                    `\x{180}-\x{24F}`,
-		"IsGreek":                              `\x{370}-\x{3FF}`,
-		"IsCyrillic":                           `\x{400}-\x{4FF}`,
-		"IsHebrew":                             `\x{590}-\x{5FF}`,
-		"IsArabic":                             `\x{600}-\x{6FF}`,
-		"IsArabicPresentationForms-A":          `\x{FB50}-\x{FDFF}`,
-		"IsArabicPresentationForms-B":          `\x{FE70}-\x{FEFF}`,
-		"IsHiragana":                           `\x{3040}-\x{309F}`,
-		"IsKatakana":                           `\x{30A0}-\x{30FF}`,
-		"IsUnifiedCanadianAboriginalSyllabics": `\x{1400}-\x{167F}`,
-		"IsYiSyllables":                        `\x{A000}-\x{A48F}`,
-		"IsYiRadicals":                         `\x{A490}-\x{A4CF}`,
-		"IsCJKUnifiedIdeographs":               `\x{4E00}-\x{9FFF}`,
-		"IsSpecials":                           `\x{FFF0}-\x{FFFF}`,
+	b, ok := unicodeBlocks[name]
+	if !ok {
+		return "", false
 	}
-	r, ok := blocks[name]
-	return r, ok
+	return fmt.Sprintf(`\x{%X}-\x{%X}`, b[0], b[1]), true
 }
 
 func isPatternSpace(c byte) bool {
