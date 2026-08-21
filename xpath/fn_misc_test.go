@@ -773,11 +773,29 @@ func TestRegexClassSubtraction(t *testing.T) {
 		}
 	}
 
-	// A Unicode category still cannot be expanded exactly: doing so means
-	// embedding the tables that decide it, and a class that silently
-	// matched the wrong set would be worse than an error.
+	// \d is \p{Nd} in XML Schema — every decimal digit in Unicode, not the
+	// ASCII ten. RE2 reads it as ASCII, so a pattern of "\d" silently
+	// rejected digits the spec accepts.
+	for _, c := range []struct{ expr, want string }{
+		{`matches('0', '^\d+$')`, "true"}, // Fullwidth digit zero
+		{`matches('᠙', '^\d+$')`, "true"}, // Mongolian digit nine
+		{`matches('០', '^\d+$')`, "true"}, // Khmer digit zero
+		{`matches('a', '^\d+$')`, "false"},
+		// The same inside a class, which is a separate path.
+		{`matches('0', '^[\d]+$')`, "true"},
+		{`matches('0', '^[\D]+$')`, "false"},
+	} {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+
+	// A Unicode category the translator does not itself produce still
+	// cannot be expanded: doing so means embedding every category table,
+	// and a class that silently matched the wrong set would be worse than
+	// an error.
 	if err := evalErr(t, testDoc, `matches('a', '[\p{L}-[b]]')`); err == nil {
-		t.Error("subtraction from a Unicode category was accepted")
+		t.Error("subtraction from an arbitrary Unicode category was accepted")
 	}
 }
 

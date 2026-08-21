@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Character-class subtraction, "[a-z-[aeiou]]", selects the characters in the
@@ -35,6 +36,27 @@ func parseClassBody(body string) (ranges []cpRange, negated, ok bool) {
 				return nil, false, false
 			}
 			esc := r[i+1]
+
+			// \p{Nd} and \P{Nd} reach here because the translator
+			// rewrites \d and \D into them before the class body is
+			// read. Recognising the property form keeps subtraction
+			// working on a class the rewrite has already touched.
+			if esc == 'p' || esc == 'P' {
+				name, n, good := readPropertyName(r[i+2:])
+				if !good {
+					return nil, false, false
+				}
+				sub, good := propertyRanges(name)
+				if !good {
+					return nil, false, false
+				}
+				if esc == 'P' {
+					sub = complementRanges(sub)
+				}
+				ranges = append(ranges, sub...)
+				i += 2 + n
+				continue
+			}
 
 			// A multi-character escape contributes a set of ranges
 			// rather than one character, so it cannot take part in a
@@ -113,14 +135,17 @@ func classEscapeLiteral(esc rune) (rune, bool) {
 func shorthandRanges(esc rune) ([]cpRange, bool) {
 	switch esc {
 	case 'd':
-		return []cpRange{{'0', '9'}}, true
+		// Appendix F defines \d as \p{Nd}: every decimal digit in
+		// Unicode, not the ASCII ten. The ranges come from Go's own
+		// tables rather than a hand-written list, so they cannot drift
+		// from the standard.
+		return tableRanges(unicode.Nd), true
 	case 'D':
-		return complementRanges([]cpRange{{'0', '9'}}), true
+		return complementRanges(tableRanges(unicode.Nd)), true
 
 	case 'w':
-		// \w is "everything except punctuation, separators and other" —
-		// defined by subtraction in the spec. The complement of the
-		// three categories is what \W names, so \w is its complement.
+		// \w is everything outside the punctuation, separator and other
+		// categories — defined by subtraction in the spec.
 		return complementRanges(nonWordRanges()), true
 	case 'W':
 		return nonWordRanges(), true
@@ -141,6 +166,41 @@ func shorthandRanges(esc rune) ([]cpRange, bool) {
 		return nameCharRanges(), true
 	case 'C':
 		return complementRanges(nameCharRanges()), true
+	}
+	return nil, false
+}
+
+// readPropertyName reads "{Name}" following \p or \P, returning the name and
+// how many runes were consumed.
+func readPropertyName(r []rune) (string, int, bool) {
+	if len(r) == 0 || r[0] != '{' {
+		return "", 0, false
+	}
+	for i := 1; i < len(r); i++ {
+		if r[i] == '}' {
+			return string(r[1:i]), i + 1, true
+		}
+	}
+	return "", 0, false
+}
+
+// propertyRanges expands the Unicode properties this package can resolve
+// exactly.
+//
+// Only the ones the translator itself produces are handled. A schema writing
+// \p{Lu} inside a subtraction is still refused: the general case needs every
+// category table, and a class that silently matched the wrong set would be
+// worse than an error.
+func propertyRanges(name string) ([]cpRange, bool) {
+	switch name {
+	case "Nd":
+		return tableRanges(unicode.Nd), true
+	case "P":
+		return tableRanges(unicode.P), true
+	case "Z":
+		return tableRanges(unicode.Z), true
+	case "C":
+		return tableRanges(unicode.C), true
 	}
 	return nil, false
 }
@@ -167,20 +227,42 @@ func complementRanges(in []cpRange) []cpRange {
 	return out
 }
 
-// nonWordRanges is the set \W names: punctuation, separators and "other".
-//
-// The full definition is by Unicode category, which would need the tables. This
-// covers the ASCII range exactly — where nearly every real pattern operates —
-// and treats everything above it as a word character, which is what \w means
-// for letters and digits outside ASCII.
+// nonWordRanges is the set \W names: the punctuation, separator and other
+// categories, which Appendix F subtracts from everything to define \w.
 func nonWordRanges() []cpRange {
-	return []cpRange{
-		{0x00, 0x2F},
-		{0x3A, 0x40},
-		{0x5B, 0x5E},
-		{0x60, 0x60},
-		{0x7B, 0x7F},
+	var out []cpRange
+	for _, t := range []*unicode.RangeTable{unicode.P, unicode.Z, unicode.C} {
+		out = append(out, tableRanges(t)...)
 	}
+	return normalizeRanges(out)
+}
+
+// tableRanges converts a Unicode range table to codepoint ranges.
+//
+// Reading Go's tables rather than writing the ranges out is what keeps them
+// from drifting: the sets are large, they change between Unicode versions, and
+// a hand-copied list would be wrong in a way no test here would catch.
+func tableRanges(t *unicode.RangeTable) []cpRange {
+	var out []cpRange
+	for _, r := range t.R16 {
+		if r.Stride == 1 {
+			out = append(out, cpRange{rune(r.Lo), rune(r.Hi)})
+			continue
+		}
+		for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
+			out = append(out, cpRange{c, c})
+		}
+	}
+	for _, r := range t.R32 {
+		if r.Stride == 1 {
+			out = append(out, cpRange{rune(r.Lo), rune(r.Hi)})
+			continue
+		}
+		for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
+			out = append(out, cpRange{c, c})
+		}
+	}
+	return normalizeRanges(out)
 }
 
 // nameStartRanges is the set \i names: the characters that may begin an XML

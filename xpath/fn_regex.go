@@ -254,6 +254,43 @@ const dotClass = `[^\n\r]`
 
 const validEscapes = `nrt\\|.?*+(){}[]^$-sSdDwW`
 
+// unicodeEscape rewrites the escapes whose XML Schema meaning is wider than
+// RE2's, and reports whether it did.
+//
+// Appendix F defines \d as \p{Nd} and \w by subtracting the punctuation,
+// separator and other categories from everything — both are Unicode-wide, while
+// RE2 reads them as ASCII. \s is the same in both, so it is left alone.
+func unicodeEscape(esc byte) (string, bool) {
+	switch esc {
+	case 'd':
+		return `\p{Nd}`, true
+	case 'D':
+		return `\P{Nd}`, true
+	case 'w':
+		return `[^\p{P}\p{Z}\p{C}]`, true
+	case 'W':
+		return `[\p{P}\p{Z}\p{C}]`, true
+	}
+	return "", false
+}
+
+// classUnicodeEscape is unicodeEscape's form for use inside a character class,
+// where a bracketed alternative cannot nest.
+//
+// \w has no single property that names it — it is defined by subtraction — so
+// inside a class it stays as RE2's ASCII \w rather than becoming something
+// syntactically invalid. That is a narrowing, and the only one: \d and \D are
+// property references and carry their full Unicode meaning either way.
+func classUnicodeEscape(esc byte) (string, bool) {
+	switch esc {
+	case 'd':
+		return `\p{Nd}`, true
+	case 'D':
+		return `\P{Nd}`, true
+	}
+	return "", false
+}
+
 // translatePattern rewrites the XPath-specific escapes into RE2 syntax.
 func translatePattern(p string, dotAll bool) (string, error) {
 	var sb strings.Builder
@@ -325,6 +362,31 @@ func translatePattern(p string, dotAll bool) (string, error) {
 				if !strings.ContainsRune(validEscapes, rune(esc)) {
 					return "", fmt.Errorf(
 						"FORX0002: invalid escape %q", `\`+string(esc))
+				}
+				// \d and \w mean more in XML Schema than they do in
+				// RE2. Appendix F defines \d as \p{Nd} — every
+				// decimal digit in Unicode, not just 0-9 — and \w as
+				// everything outside the punctuation, separator and
+				// other categories. RE2 reads both as ASCII, so a
+				// pattern of "\d" silently rejected the Arabic-Indic,
+				// Mongolian and Khmer digits the spec accepts.
+				if repl, ok := unicodeEscape(esc); ok {
+					// Inside a class the bracketed forms of \w
+					// and \W cannot nest, so the escape is kept
+					// as a property reference. \d and \D are
+					// already property references and nest
+					// fine. The subtraction handler re-reads the
+					// original text, so this rewrite does not
+					// reach it.
+					if inClass {
+						if repl2, ok2 := classUnicodeEscape(esc); ok2 {
+							sb.WriteString(repl2)
+							continue
+						}
+					} else {
+						sb.WriteString(repl)
+						continue
+					}
 				}
 				sb.WriteByte('\\')
 				sb.WriteByte(esc)
