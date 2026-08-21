@@ -28,8 +28,7 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 				URI:   el.AttrValue("targetNamespace"),
 				Local: name,
 			}
-		case scope == ScopeGlobal || p.doc.elementFormQualified ||
-			el.AttrValue("form") == "qualified":
+		case scope == ScopeGlobal || formQualified(el, p.doc.elementFormQualified):
 			d.Name = p.qnameFor(name)
 		default:
 			// An unqualified local element is in the absent namespace,
@@ -164,8 +163,7 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 				URI:   el.AttrValue("targetNamespace"),
 				Local: name,
 			}
-		case scope == ScopeGlobal || p.doc.attributeFormQualified ||
-			el.AttrValue("form") == "qualified":
+		case scope == ScopeGlobal || formQualified(el, p.doc.attributeFormQualified):
 			d.Name = p.qnameFor(name)
 		default:
 			d.Name = xdm.QName{Local: name}
@@ -729,4 +727,21 @@ func groupWildcard(g *AttributeGroupDef, seen map[*AttributeGroupDef]bool) *Wild
 		}
 	}
 	return out
+}
+
+// formQualified reports whether a local declaration's name is qualified.
+//
+// The form attribute overrides the document's default in *both* directions.
+// Testing only for form="qualified" let the default win whenever it was
+// already qualified, so form="unqualified" did nothing — and a local element
+// written that way inside a qualified schema landed in the target namespace
+// instead of the absent one, where no instance could match it.
+func formQualified(el *xdm.Node, byDefault bool) bool {
+	switch el.AttrValue("form") {
+	case "qualified":
+		return true
+	case "unqualified":
+		return false
+	}
+	return byDefault
 }

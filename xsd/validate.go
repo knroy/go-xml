@@ -101,6 +101,21 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 
 	decl, ok := s.Elements[xdm.QName{URI: el.Name.URI, Local: el.Name.Local}]
 	if !ok {
+		// An element with no declaration is still assessable when
+		// xsi:type names a type: §3.3.4 clause 1.2 validates it against
+		// that type directly. A schema declaring only named types and
+		// no elements is a legitimate way to write one, and the
+		// instance says which type it means.
+		if xsiType := el.Attr(NSInstance, "type"); xsiType != nil {
+			t, err := v.resolveXSIType(el, xsiType.Value)
+			if err != nil {
+				v.fail(el, "cvc-elt.4.2", "%v", err)
+				return v.result()
+			}
+			v.validateAgainstType(el, t, nil)
+			v.checkIDs()
+			return v.result()
+		}
 		v.fail(el, "cvc-elt.1",
 			"no element declaration for {%s}%s", el.Name.URI, el.Name.Local)
 		return v.result()

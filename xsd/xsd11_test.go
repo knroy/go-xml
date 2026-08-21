@@ -3449,3 +3449,58 @@ func TestAttributesInheritAcrossDocuments(t *testing.T) {
 		t.Errorf("an empty extension should inherit its base's attributes: %v", err)
 	}
 }
+
+// TestFormOverridesDefaultBothWays pins that a local declaration's form
+// attribute overrides the document's default in either direction.
+//
+// Testing only for form="qualified" let the default win whenever it was
+// already qualified, so form="unqualified" did nothing — and a local element
+// written that way inside a qualified schema landed in the target namespace
+// instead of the absent one, where no instance could match it.
+func TestFormOverridesDefaultBothWays(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:t" xmlns:t="urn:t"
+	           elementFormDefault="qualified" attributeFormDefault="qualified">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="plain" form="unqualified"/>
+	        <xs:element name="fancy"/>
+	      </xs:sequence>
+	      <xs:attribute name="bare" form="unqualified"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema,
+		`<doc xmlns="urn:t" bare="x"><plain xmlns=""/><fancy/></doc>`)
+	// Qualifying the one declared unqualified no longer matches.
+	assertInvalid(t, schema,
+		`<doc xmlns="urn:t"><plain/><fancy/></doc>`, "cvc-complex-type.2.4")
+}
+
+// TestRootWithoutDeclarationUsesXSIType covers §3.3.4 clause 1.2: an element
+// with no declaration is still assessable when xsi:type names a type.
+//
+// A schema declaring only named types and no elements is a legitimate way to
+// write one, and the instance says which type it means.
+func TestRootWithoutDeclarationUsesXSIType(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:t" xmlns:t="urn:t">
+	  <xs:simpleType name="Test">
+	    <xs:restriction base="xs:string">
+	      <xs:pattern value="1|2"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`
+	const xsi = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+
+	assertValid(t, schema, `<test xmlns="urn:t" xmlns:t="urn:t"`+xsi+` xsi:type="t:Test">1</test>`)
+	// The named type is enforced.
+	assertInvalid(t, schema,
+		`<test xmlns="urn:t" xmlns:t="urn:t"`+xsi+` xsi:type="t:Test">9</test>`, "cvc")
+	// With no xsi:type there is still nothing to validate against.
+	assertInvalid(t, schema, `<test xmlns="urn:t">1</test>`, "cvc-elt.1")
+}
