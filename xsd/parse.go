@@ -25,6 +25,11 @@ type schemaDoc struct {
 	// the two cannot collide and one field carries both meanings.
 	targetNS string
 
+	// chameleon records that this document had no target namespace of its
+	// own and adopted the includer's. References written unprefixed in it
+	// have to be converted along with the declarations they name.
+	chameleon bool
+
 	// hasTargetNS records whether targetNamespace was written at all. A
 	// chameleon include needs this: a document with no target namespace
 	// adopts the includer's, and that rewrite must not apply to a document
@@ -519,7 +524,7 @@ func (p *parser) resolveQName(el *xdm.Node, attr, value string) (xdm.QName, erro
 		if prefix == "" {
 			// No default namespace is in scope: the name is in the
 			// absent namespace.
-			return xdm.QName{Local: local}, nil
+			return p.chameleonQName(local), nil
 		}
 		return xdm.QName{}, errorAt(el, "src-resolve",
 			"%s=%q uses undeclared prefix %q", attr, value, prefix)
@@ -530,7 +535,28 @@ func (p *parser) resolveQName(el *xdm.Node, attr, value string) (xdm.QName, erro
 	// prefixes are bound to the schema namespace. Leaving it in would make
 	// the prefix part of every map key, so a type would be findable only
 	// under the spelling its reference happened to use.
+	if uri == "" {
+		// A bound-but-empty default namespace is the same case as an
+		// unbound one: the name is in no namespace.
+		return p.chameleonQName(local), nil
+	}
 	return xdm.QName{URI: uri, Local: local}, nil
+}
+
+// chameleonQName places a name that resolved to no namespace.
+//
+// §4.2.1 converts a document with no target namespace to the namespace of the
+// document that included it, and the conversion is of the whole document, not
+// only its declarations: a reference written unprefixed named a component in
+// the same document, and it has to go on naming it after the move. Leaving
+// such a reference in the absent namespace pointed it at nothing, since the
+// component it names has been converted. sunData's xsd024 is built to catch
+// exactly this — a module whose components all refer to each other unprefixed.
+func (p *parser) chameleonQName(local string) xdm.QName {
+	if p.doc != nil && p.doc.chameleon {
+		return xdm.QName{URI: p.doc.targetNS, Local: local}
+	}
+	return xdm.QName{Local: local}
 }
 
 // occurs reads minOccurs and maxOccurs from a particle-bearing element.

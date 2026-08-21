@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -134,5 +136,49 @@ func TestMissingSubstitutionGroupHeadIsHarmless(t *testing.T) {
 	}
 	if err := validateString(t, schema, `<bad>3</bad>`); err != nil {
 		t.Errorf("an element naming a missing head was rejected: %v", err)
+	}
+}
+
+// A chameleon include converts the whole included document to the including
+// namespace, not only its declarations. A reference written unprefixed named a
+// component in the same document, and it must go on naming it after the move —
+// leaving it in the absent namespace pointed it at nothing.
+func TestChameleonIncludeConvertsReferences(t *testing.T) {
+	dir := t.TempDir()
+	mod := filepath.Join(dir, "mod.xsd")
+	if err := os.WriteFile(mod, []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root" type="ct"/>
+	  <xs:complexType name="ct">
+	    <xs:group ref="g"/>
+	    <xs:attribute ref="a"/>
+	  </xs:complexType>
+	  <xs:group name="g">
+	    <xs:sequence><xs:element name="kid" type="xs:string"/></xs:sequence>
+	  </xs:group>
+	  <xs:attribute name="a" type="st"/>
+	  <xs:simpleType name="st">
+	    <xs:restriction base="xs:string"/>
+	  </xs:simpleType>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(dir, "main.xsd")
+	if err := os.WriteFile(main, []byte(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="http://foo.com" xmlns="http://foo.com">
+	  <xs:include schemaLocation="mod.xsd"/>
+	</xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFiles([]string{main},
+		Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("the chameleon include did not resolve: %v", err)
+	}
+	// Every component landed in the including namespace, references
+	// included, so the declaration is findable there.
+	if _, ok := s.Elements[xdm.QName{URI: "http://foo.com", Local: "root"}]; !ok {
+		t.Error("the included declaration is not in the including namespace")
 	}
 }

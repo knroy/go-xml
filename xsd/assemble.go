@@ -288,6 +288,7 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 		// which readWildcard picks up from doc.targetNS.
 		doc.targetNS = item.chameleonNS
 		doc.hasTargetNS = true
+		doc.chameleon = true
 	}
 
 	doc.elementFormQualified = root.AttrValue("elementFormDefault") == "qualified"
