@@ -344,7 +344,9 @@ func (m *contentModel) buildChoice(g *ModelGroup, scope int) (frag, error) {
 func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 	var out frag
 	out.nullable = true
-	for _, p := range g.Particles {
+	// A group reference to an all group inside an all group contributes
+	// its members directly; see flattenAll.
+	for _, p := range flattenAll(g) {
 		if len(m.positions) >= maxPositions {
 			return frag{}, fmt.Errorf(
 				"content model has more than %d positions", maxPositions)

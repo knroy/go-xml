@@ -715,13 +715,14 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 	// counts rather than a seen set: XSD 1.0 confines every particle in an
 	// all group to maxOccurs 1, but 1.1 lifts that, so what is checked is
 	// the particle's own bound.
-	counts := make([]int, len(g.Particles))
+	particles := flattenAll(g)
+	counts := make([]int, len(particles))
 	var tables []icTables
 
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		found := false
-		for i, p := range g.Particles {
+		for i, p := range particles {
 			pos := &position{term: p.Term, particle: p}
 			if !pos.matches(name, v.elementDefined) {
 				continue
@@ -756,13 +757,22 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 			name.URI, name.Local)
 	}
 
-	for i, p := range g.Particles {
+	for i, p := range particles {
 		if counts[i] >= p.MinOccurs {
 			continue
 		}
-		if d, ok := p.Term.(*ElementDecl); ok {
+		switch term := p.Term.(type) {
+		case *ElementDecl:
 			v.fail(el, "cvc-complex-type.2.4.b",
-				"required element %s is missing from an all group", d.Name.Local)
+				"required element %s is missing from an all group", term.Name.Local)
+		case *Wildcard:
+			// A wildcard particle in an all group carries its own
+			// minOccurs in XSD 1.1, and falling short of it is the
+			// same failure as a missing element — there is just no
+			// name to report.
+			v.fail(el, "cvc-complex-type.2.4.b",
+				"an all group requires %d more element(s) matching a wildcard",
+				p.MinOccurs-counts[i])
 		}
 	}
 	return tables
@@ -864,4 +874,55 @@ func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
 		return raw
 	}
 	return decl.Constraint.Lexical
+}
+
+// flattenAll returns an all group's member particles, seeing through nested all
+// groups reached by a group reference.
+//
+// <xs:group ref="..."/> inside an <xs:all> is how XSD 1.1 lets a schema share
+// an all group, and the reference leaves a model group where matchAll expects
+// a term it can match a name against. The members of the referenced group are
+// members of the enclosing one — an all group nested in an all group adds no
+// ordering constraint of its own — so flattening is the meaning, not an
+// approximation.
+//
+// A reference carrying its own occurrence bounds is not flattened: those bounds
+// apply to the group as a unit, which is a different thing from applying them
+// to each member, and the members' own bounds could not express it.
+func flattenAll(g *ModelGroup) []*Particle {
+	return flattenAllSeen(g, map[*ModelGroup]bool{})
+}
+
+// flattenAllSeen carries the set of groups already entered.
+//
+// A group definition whose content references itself is a cycle, and following
+// it would recurse until the stack is gone. Stopping at a repeat drops the
+// self-reference rather than looping; the schema is ill-formed either way, and
+// the content-model compiler reports it.
+func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
+	if seen[g] {
+		return nil
+	}
+	seen[g] = true
+	defer delete(seen, g)
+
+	nested := false
+	for _, p := range g.Particles {
+		if inner := allGroupOf(p); inner != nil {
+			nested = true
+			break
+		}
+	}
+	if !nested {
+		return g.Particles
+	}
+	var out []*Particle
+	for _, p := range g.Particles {
+		if inner := allGroupOf(p); inner != nil {
+			out = append(out, flattenAllSeen(inner, seen)...)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

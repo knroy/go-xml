@@ -546,3 +546,257 @@ func TestAssertionCanUseCurrentDate(t *testing.T) {
 		t.Errorf("current-date() should be available in an assertion: %v", err)
 	}
 }
+
+// TestNotQNameExcludesNames covers {disallowed names}: a wildcard whose
+// namespace constraint admits a name may still refuse it by name.
+//
+// The two tests are independent, which is the part worth pinning: a schema
+// writes notQName precisely to exclude something the namespace constraint lets
+// through, so applying only the constraint admits exactly the names the author
+// meant to keep out.
+func TestNotQNameExcludesNames(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any namespace="##any" notQName="bad" processContents="skip"
+	                minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><good/></e>`); err != nil {
+		t.Errorf("a name not in notQName should be admitted: %v", err)
+	}
+	if err := check11(t, s, `<e><bad/></e>`); err == nil {
+		t.Error("notQName should exclude the name it lists")
+	}
+}
+
+// TestNotQNameUnprefixedIsAbsentNamespace pins the resolution rule that makes
+// notQName differ from every other QName-valued attribute: an unprefixed entry
+// names the absent namespace even when a default namespace is in scope.
+//
+// Resolving it against the default would silently retarget the exclusion at a
+// namespace the author did not name, admitting the element they excluded.
+func TestNotQNameUnprefixedIsAbsentNamespace(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns="urn:d" targetNamespace="urn:d">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any namespace="##any" notQName="bad" processContents="skip"
+	                minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// {urn:d}bad is *not* excluded: the notQName entry is unprefixed and so
+	// names {}bad, despite urn:d being the default namespace here.
+	if err := check11(t, s, `<e xmlns="urn:d"><bad/></e>`); err != nil {
+		t.Errorf("unprefixed notQName should not exclude a qualified name: %v", err)
+	}
+	if err := check11(t, s, `<e xmlns="urn:d"><bad xmlns=""/></e>`); err == nil {
+		t.Error("unprefixed notQName should exclude the unqualified name")
+	}
+}
+
+// TestNotQNameDefined covers ##defined: refuse any name the schema declares
+// globally, which is how an extension wildcard is written so that it cannot
+// shadow a declared element.
+func TestNotQNameDefined(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="known" type="xs:string"/>
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any namespace="##any" notQName="##defined" processContents="skip"
+	                minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><unknown/></e>`); err != nil {
+		t.Errorf("##defined should admit an undeclared name: %v", err)
+	}
+	if err := check11(t, s, `<e><known/></e>`); err == nil {
+		t.Error("##defined should exclude a globally declared name")
+	}
+}
+
+// TestNotQNameDefinedSibling covers ##definedSibling, which is local where
+// ##defined is global: it excludes names declared by other particles in the
+// same content model, and nothing else.
+//
+// The wildcard here precedes the declaration it must exclude, which is why the
+// set cannot be resolved while the particle tree is still being walked.
+func TestNotQNameDefinedSibling(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="elsewhere" type="xs:string"/>
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any namespace="##any" notQName="##definedSibling"
+	                processContents="skip" minOccurs="0" maxOccurs="unbounded"/>
+	        <xs:element name="sib" minOccurs="0"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><other/></e>`); err != nil {
+		t.Errorf("##definedSibling should admit an unrelated name: %v", err)
+	}
+	// elsewhere is declared globally but is not a sibling, so unlike
+	// ##defined it stays admitted — this is the distinction between them.
+	if err := check11(t, s, `<e><elsewhere/></e>`); err != nil {
+		t.Errorf("##definedSibling should not exclude a non-sibling global: %v", err)
+	}
+	if err := check11(t, s, `<e><sib/><sib/></e>`); err == nil {
+		t.Error("##definedSibling should exclude a name declared alongside it")
+	}
+}
+
+// TestAllExtensionMerges covers §3.4.2.3.3 clause 2.2: extending an all group
+// with an all group yields one all group, not a sequence of two.
+//
+// A sequence would require every base child to precede every extension child,
+// which is exactly the ordering an all group exists to not impose — so the 1.0
+// splice rejects documents a 1.1 schema permits.
+func TestAllExtensionMerges(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:all>
+	      <xs:element name="a"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="ext">
+	    <xs:complexContent>
+	      <xs:extension base="base">
+	        <xs:all>
+	          <xs:element name="b"/>
+	        </xs:all>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="e" type="ext"/>
+	</xs:schema>`)
+
+	// The extension's child first: a sequence splice would reject this.
+	if err := check11(t, s, `<e><b/><a/></e>`); err != nil {
+		t.Errorf("merged all group should accept either order: %v", err)
+	}
+	if err := check11(t, s, `<e><a/><b/></e>`); err != nil {
+		t.Errorf("merged all group should accept either order: %v", err)
+	}
+	if err := check11(t, s, `<e><a/></e>`); err == nil {
+		t.Error("merged all group should still require the extension's child")
+	}
+}
+
+// TestAllExtensionOptionalBase pins that minOccurs="0" on a merged all group
+// survives the merge.
+//
+// Once the members are folded into a larger group there is no group left to
+// carry the bound, so it has to move onto each member. Dropping it would turn
+// an optional base's children into required ones.
+func TestAllExtensionOptionalBase(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:all minOccurs="0">
+	      <xs:element name="a"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="ext">
+	    <xs:complexContent>
+	      <xs:extension base="base">
+	        <xs:all minOccurs="0">
+	          <xs:element name="b"/>
+	        </xs:all>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="e" type="ext"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><b/><a/></e>`); err != nil {
+		t.Errorf("optional merged all group should accept both: %v", err)
+	}
+	if err := check11(t, s, `<e/>`); err != nil {
+		t.Errorf("optional merged all group should accept nothing: %v", err)
+	}
+}
+
+// TestAllGroupReferenceFlattens covers <xs:group ref="..."/> naming an all
+// group from inside an all group, which XSD 1.1 permits so that an all group
+// can be shared.
+//
+// The members of the referenced group are members of the enclosing one — a
+// nested all adds no ordering of its own — so flattening is the meaning rather
+// than an approximation.
+func TestAllGroupReferenceFlattens(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:group name="g">
+	    <xs:all>
+	      <xs:element name="b"/>
+	      <xs:element name="c" maxOccurs="2"/>
+	    </xs:all>
+	  </xs:group>
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:all>
+	        <xs:element name="a" minOccurs="0"/>
+	        <xs:group ref="g"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><c/><b/><c/><a/></e>`); err != nil {
+		t.Errorf("referenced all group members should interleave: %v", err)
+	}
+	if err := check11(t, s, `<e><c/><c/><c/><b/></e>`); err == nil {
+		t.Error("a member's maxOccurs should survive flattening")
+	}
+	if err := check11(t, s, `<e><c/><c/></e>`); err == nil {
+		t.Error("a required member of a referenced all group should be required")
+	}
+}
+
+// TestAllWildcardMinOccurs pins that a wildcard particle in an all group
+// carries its own minOccurs in XSD 1.1.
+//
+// Falling short of it is the same failure as a missing element; there is just
+// no name to name in the message, which is why the check is easy to write only
+// for element particles and so to omit here.
+func TestAllWildcardMinOccurs(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:all>
+	        <xs:element name="a" minOccurs="0"/>
+	        <xs:any namespace="urn:w" processContents="skip"
+	                minOccurs="2" maxOccurs="2"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e xmlns:w="urn:w"><w:x/><w:y/></e>`); err != nil {
+		t.Errorf("two wildcard matches should satisfy minOccurs=2: %v", err)
+	}
+	if err := check11(t, s, `<e xmlns:w="urn:w"><w:x/></e>`); err == nil {
+		t.Error("one wildcard match should not satisfy minOccurs=2")
+	}
+}

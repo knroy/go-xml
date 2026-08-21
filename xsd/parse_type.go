@@ -441,6 +441,18 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 				}
 				return nil
 			}
+			// XSD 1.1 §3.4.2.3.3 clause 2.2: when both the base and
+			// the extension are all groups, the result is one all
+			// group holding both sets of particles — not a
+			// sequence of two. A sequence would demand that every
+			// base child precede every extension child, which is
+			// exactly what an all group exists not to require, so
+			// the 1.0 splice rejects documents the 1.1 schema
+			// permits.
+			if merged := mergeAllExtension(base.Particle, own); merged != nil {
+				t.Particle = merged
+				return nil
+			}
 			t.Particle = &Particle{
 				MinOccurs: 1, MaxOccurs: 1,
 				Term: &ModelGroup{
@@ -697,4 +709,67 @@ func (p *parser) applyDefaultOpenContent(t *ComplexType) {
 		return
 	}
 	t.OpenContent = p.doc.defaultOpenContent
+}
+
+// mergeAllExtension combines an all-group base with an all-group extension into
+// a single all group, or returns nil if either side is not one.
+//
+// Both particles must occur exactly once for the merge to be sound: an all
+// group repeated as a whole is a different language from one whose members
+// carry the repetition, and only the unrepeated form is what §3.4.2.3.3
+// describes.
+func mergeAllExtension(basePart, own *Particle) *Particle {
+	baseAll := allGroupOf(basePart)
+	ownAll := allGroupOf(own)
+	if baseAll == nil || ownAll == nil {
+		return nil
+	}
+	particles := make([]*Particle, 0, len(baseAll.Particles)+len(ownAll.Particles))
+	particles = append(particles, optionalIf(basePart.MinOccurs == 0, baseAll.Particles)...)
+	particles = append(particles, optionalIf(own.MinOccurs == 0, ownAll.Particles)...)
+	return &Particle{
+		MinOccurs: 1, MaxOccurs: 1,
+		Term: &ModelGroup{Compositor: CompositorAll, Particles: particles},
+	}
+}
+
+// allGroupOf returns the all group a particle is, seeing through a group
+// reference, or nil.
+//
+// The indirection matters because <xs:group ref="..."/> naming an all group is
+// how a schema shares one, and the reference is a distinct particle wrapping
+// the same term.
+//
+// maxOccurs must be 1: an all group repeated as a whole is a different language
+// from one whose members carry the repetition, and merging would lose that.
+// minOccurs="0" is admitted, because an optional all group is one whose members
+// are all optional — which the members' own minOccurs already say, and which
+// §3.4.2.3.3 relies on when it merges an optional base into an extension.
+func allGroupOf(p *Particle) *ModelGroup {
+	if p == nil || p.MinOccurs > 1 || p.MaxOccurs != 1 {
+		return nil
+	}
+	if g, ok := p.Term.(*ModelGroup); ok && g.Compositor == CompositorAll {
+		return g
+	}
+	return nil
+}
+
+// optionalIf makes every particle optional when the group containing them was.
+//
+// An all group with minOccurs="0" may be absent entirely, which once its
+// members are merged into a larger group can only be expressed by making each
+// member optional. Without this, merging an optional base into an extension
+// would turn its children into required ones.
+func optionalIf(optional bool, ps []*Particle) []*Particle {
+	if !optional {
+		return ps
+	}
+	out := make([]*Particle, len(ps))
+	for i, p := range ps {
+		c := *p
+		c.MinOccurs = 0
+		out[i] = &c
+	}
+	return out
 }
