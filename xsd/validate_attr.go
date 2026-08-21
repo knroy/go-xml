@@ -106,6 +106,34 @@ func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
 	// The element itself is the owner: a defaulted attribute belongs to the
 	// element it is supplied on, so recordID's parent step is already done.
 	v.recordIDsOwned(el, normalized, use.Decl.Type)
+
+	// An identity-constraint field may select this attribute, and the value
+	// it sees has to be the defaulted one — the schema supplies it to the
+	// infoset, so a field cannot tell it from a written one. idF016 puts
+	// two elements under a unique, one carrying the value and one letting
+	// it default, and expects them to collide.
+	if v.defaultedAttrs == nil {
+		v.defaultedAttrs = map[defaultedAttr]defaultedValue{}
+	}
+	prim := ""
+	if p := primitiveOf(atomicBaseOf(use.Decl.Type)); p != nil {
+		prim = p.Name.Local
+	}
+	v.defaultedAttrs[defaultedAttr{el: el, name: use.Decl.Name}] =
+		defaultedValue{normalized: normalized, primitive: prim}
+}
+
+// defaultedValue is a defaulted attribute's value and the primitive it belongs
+// to, so that a key built from it compares the same way a written one does.
+type defaultedValue struct {
+	normalized string
+	primitive  string
+}
+
+// defaultedAttr identifies one defaulted attribute on one element.
+type defaultedAttr struct {
+	el   *xdm.Node
+	name xdm.QName
 }
 
 // findAttributeUse returns the use declaring an attribute name.

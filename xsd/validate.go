@@ -155,6 +155,12 @@ type validator struct {
 	// constraint may have to compare by value rather than by spelling.
 	keyValues map[*xdm.Node]keyValue
 
+	// defaultedAttrs holds the value of each attribute a type supplied by
+	// default rather than the document writing it, so an identity
+	// constraint's field can select it. The tree is not mutated to carry
+	// them: validation must not rewrite the caller's document.
+	defaultedAttrs map[defaultedAttr]defaultedValue
+
 	// childTypes records the type each child name was matched with, per
 	// parent, for the dynamic Element Declarations Consistent check.
 	childTypes map[edtKey]Type

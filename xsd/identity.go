@@ -110,7 +110,7 @@ func copyEntries(in map[string]*xdm.Node) map[string]*xdm.Node {
 func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint) *nodeTable {
 	tbl := &nodeTable{entries: map[string]*xdm.Node{}}
 
-	for _, target := range selectNodes(el, ic.Selector) {
+	for _, target := range v.selectNodes(el, ic.Selector) {
 		if v.inSkippedContent(target) {
 			continue
 		}
@@ -153,7 +153,7 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 	}
 	target := tables[ic.Refer]
 
-	for _, node := range selectNodes(el, ic.Selector) {
+	for _, node := range v.selectNodes(el, ic.Selector) {
 		if v.inSkippedContent(node) {
 			continue
 		}
@@ -186,7 +186,7 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 // than one node (which is a failure of clause 3).
 func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq []string, complete, ok bool) {
 	for _, field := range ic.Fields {
-		nodes := selectNodes(target, field)
+		nodes := v.selectNodes(target, field)
 		switch len(nodes) {
 		case 0:
 			return nil, false, true
@@ -218,7 +218,7 @@ func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq [
 // leading ".//", an optional trailing attribute step, and "|" alternatives.
 // Nothing here needs the XPath engine, and using it would accept expressions
 // the spec forbids.
-func selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
+func (v *validator) selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 	if path == nil {
 		return nil
 	}
@@ -231,7 +231,7 @@ func selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 			starts = descendantsOrSelf(context)
 		}
 		for _, start := range starts {
-			for _, n := range walkSteps(start, alt) {
+			for _, n := range v.walkSteps(start, alt) {
 				if !seen[n] {
 					seen[n] = true
 					out = append(out, n)
@@ -243,7 +243,7 @@ func selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 }
 
 // walkSteps applies one alternative's steps from a starting node.
-func walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Node {
+func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Node {
 	current := []*xdm.Node{start}
 	for _, step := range alt.Steps {
 		var next []*xdm.Node
@@ -266,6 +266,38 @@ func walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Node {
 
 	var attrs []*xdm.Node
 	for _, n := range current {
+		// An attribute the type supplied by default is part of the
+		// infoset as much as a written one, so a field selects it. It
+		// is not in n.Attrs, because validation does not rewrite the
+		// caller's tree; the value recorded at the time it was applied
+		// stands in, carried on a node that exists only for this
+		// comparison.
+		if !alt.AttributeWildcard && alt.Attribute != nil {
+			if val, ok := v.defaultedAttrs[defaultedAttr{
+				el:   n,
+				name: xdm.QName{URI: alt.Attribute.URI, Local: alt.Attribute.Local},
+			}]; ok && !hasWrittenAttr(n, alt.Attribute) {
+				syn := &xdm.Node{
+					Kind:   xdm.KindAttribute,
+					Name:   xdm.QName{Local: alt.Attribute.Local},
+					Value:  val.normalized,
+					Parent: n,
+				}
+				// The synthetic node needs the same key entry a
+				// written attribute would have, or it compares
+				// by raw string against keys that compare by
+				// primitive and never matches.
+				if v.keyValues == nil {
+					v.keyValues = map[*xdm.Node]keyValue{}
+				}
+				v.keyValues[syn] = keyValue{
+					normalized: val.normalized,
+					primitive:  val.primitive,
+				}
+				attrs = append(attrs, syn)
+				continue
+			}
+		}
 		for _, a := range n.Attrs {
 			if alt.AttributeWildcard {
 				// "@*" selects every attribute, which is
@@ -281,6 +313,17 @@ func walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Node {
 		}
 	}
 	return attrs
+}
+
+// hasWrittenAttr reports whether the document itself carried the attribute a
+// field names, in which case no default was applied.
+func hasWrittenAttr(n *xdm.Node, want *xdm.QName) bool {
+	for _, a := range n.Attrs {
+		if a.Name.Local == want.Local && attrNamespaceMatches(a, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // attrNamespaceMatches compares an attribute's namespace with a field's.
