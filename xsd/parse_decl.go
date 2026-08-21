@@ -437,12 +437,10 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 
 // readDisallowedNames reads XSD 1.1's notQName into {disallowed names}.
 //
-// The names are QNames, but they do not resolve the way a type reference does:
-// an unprefixed name in notQName is in the *absent* namespace even when a
-// default namespace is in scope. That is deliberate in the spec — notQName
-// names what a wildcard refuses, and the refusals are written against the
-// namespaces the wildcard admits, which include the absent one. Applying the
-// default namespace here would silently retarget every unprefixed entry.
+// The names resolve as ordinary QNames — see resolveNotQName — which is why
+// this does not reuse resolveQName: that one drops the prefix into a map key
+// for component lookup, and these names are compared against instance element
+// names instead.
 func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
 	raw := el.AttrValue("notQName")
 	if raw == "" {
@@ -480,8 +478,13 @@ func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
 	}
 }
 
-// resolveNotQName resolves one notQName entry, leaving an unprefixed name in
-// the absent namespace.
+// resolveNotQName resolves one notQName entry.
+//
+// The names resolve the ordinary way for a QName-valued attribute: an
+// unprefixed name takes the default namespace declared in the schema document,
+// and the absent namespace only where no default is in scope. That is what
+// makes notQName="a b" in a document whose default namespace is X exclude
+// {X}a and {X}b — the names the author was looking at when they wrote it.
 func (p *parser) resolveNotQName(el *xdm.Node, value string) (xdm.QName, error) {
 	prefix, local := "", value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
@@ -491,11 +494,11 @@ func (p *parser) resolveNotQName(el *xdm.Node, value string) (xdm.QName, error) 
 		return xdm.QName{}, errorAt(el, "src-resolve",
 			"notQName=%q is not a valid QName", value)
 	}
-	if prefix == "" {
-		return xdm.QName{Local: local}, nil
-	}
 	uri, ok := el.LookupPrefix(prefix)
 	if !ok {
+		if prefix == "" {
+			return xdm.QName{Local: local}, nil
+		}
 		return xdm.QName{}, errorAt(el, "src-resolve",
 			"notQName=%q uses undeclared prefix %q", value, prefix)
 	}

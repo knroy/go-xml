@@ -575,16 +575,18 @@ func TestNotQNameExcludesNames(t *testing.T) {
 	}
 }
 
-// TestNotQNameUnprefixedIsAbsentNamespace pins the resolution rule that makes
-// notQName differ from every other QName-valued attribute: an unprefixed entry
-// names the absent namespace even when a default namespace is in scope.
+// TestNotQNameResolvesAgainstDefaultNamespace pins that notQName resolves the
+// ordinary way for a QName-valued attribute: an unprefixed name takes the
+// default namespace declared in the schema document.
 //
-// Resolving it against the default would silently retarget the exclusion at a
-// namespace the author did not name, admitting the element they excluded.
-func TestNotQNameUnprefixedIsAbsentNamespace(t *testing.T) {
+// That is what makes notQName="bad" in a document whose default namespace is
+// urn:d exclude {urn:d}bad — the name the author was looking at when they wrote
+// it. The absent namespace applies only where no default is in scope.
+func TestNotQNameResolvesAgainstDefaultNamespace(t *testing.T) {
 	s := load11(t, `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
-	           xmlns="urn:d" targetNamespace="urn:d">
+	           xmlns="urn:d" targetNamespace="urn:d"
+	           elementFormDefault="qualified">
 	  <xs:element name="e">
 	    <xs:complexType>
 	      <xs:sequence>
@@ -595,13 +597,35 @@ func TestNotQNameUnprefixedIsAbsentNamespace(t *testing.T) {
 	  </xs:element>
 	</xs:schema>`)
 
-	// {urn:d}bad is *not* excluded: the notQName entry is unprefixed and so
-	// names {}bad, despite urn:d being the default namespace here.
-	if err := check11(t, s, `<e xmlns="urn:d"><bad/></e>`); err != nil {
-		t.Errorf("unprefixed notQName should not exclude a qualified name: %v", err)
+	if err := check11(t, s, `<e xmlns="urn:d"><bad/></e>`); err == nil {
+		t.Error("notQName should exclude the name in the default namespace")
 	}
-	if err := check11(t, s, `<e xmlns="urn:d"><bad xmlns=""/></e>`); err == nil {
-		t.Error("unprefixed notQName should exclude the unqualified name")
+	// The same local name elsewhere is a different name and stays admitted.
+	if err := check11(t, s, `<e xmlns="urn:d"><bad xmlns=""/></e>`); err != nil {
+		t.Errorf("an unqualified name is not the one excluded: %v", err)
+	}
+}
+
+// TestNotQNameWithNoDefaultNamespace pins the other half: with no default
+// namespace in scope, an unprefixed notQName entry names the absent namespace.
+func TestNotQNameWithNoDefaultNamespace(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any namespace="##any" notQName="bad" processContents="skip"
+	                minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><bad/></e>`); err == nil {
+		t.Error("notQName should exclude the unqualified name")
+	}
+	if err := check11(t, s, `<e><bad xmlns="urn:x"/></e>`); err != nil {
+		t.Errorf("a qualified name of the same local name is admitted: %v", err)
 	}
 }
 
