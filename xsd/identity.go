@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"math/big"
 )
 
 // Identity constraint evaluation (§3.11.4, §3.11.5).
@@ -366,6 +367,9 @@ func (v *validator) keyString(n *xdm.Node) string {
 	if c, ok := canonicalTemporal(kv.normalized, kv.primitive); ok {
 		return c
 	}
+	if c, ok := canonicalValue(kv.normalized, kv.primitive); ok {
+		return c
+	}
 	// The primitive is part of the key. Values drawn from different
 	// primitives are never equal, whatever their spellings do: idF012 has
 	// the boolean 1 beside the decimal 1 and expects no duplicate.
@@ -373,6 +377,41 @@ func (v *validator) keyString(n *xdm.Node) string {
 	// Types that share a primitive still compare by value, which is what
 	// keeps xs:int 1 equal to xs:integer 1 — both are decimal.
 	return kv.primitive + "/" + kv.normalized
+}
+
+// canonicalValue renders a non-temporal value in a form that is the same for
+// every literal denoting it.
+//
+// The temporal families are handled by canonicalTemporal; this covers the rest
+// of the primitives whose lexical space has more than one spelling per value.
+// A key sequence compares values, so a keyref written 5.0 has to find a key
+// written 5 — sunData's identity suite pins exactly that pair, and the numeric
+// primitives are where the spelling varies most.
+func canonicalValue(normalized, primitive string) (string, bool) {
+	switch primitive {
+	case "decimal", "float", "double":
+		// A rational is the canonical form for all three: 5, 5.0 and
+		// 05.00 share one, and INF and NaN have no rational so they
+		// fall through to the lexical comparison, which is right —
+		// each has a single spelling.
+		if r, ok := new(big.Rat).SetString(normalized); ok {
+			return primitive + "/" + r.RatString(), true
+		}
+		// INF, -INF and NaN are their own canonical forms, but +INF
+		// and INF are the same value.
+		if normalized == "+INF" {
+			return primitive + "/INF", true
+		}
+	case "boolean":
+		// "1" and "true" are the same value, as are "0" and "false".
+		switch normalized {
+		case "1", "true":
+			return "boolean/true", true
+		case "0", "false":
+			return "boolean/false", true
+		}
+	}
+	return "", false
 }
 
 // canonicalTemporal renders a date, time or duration in a form that is the same
