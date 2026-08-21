@@ -1231,3 +1231,80 @@ func TestDefaultOpenContentAppliesToEmpty(t *testing.T) {
 		t.Errorf("a non-empty model should still be opened: %v", err)
 	}
 }
+
+// TestAttributeWildcardExtensionUnions covers the attribute wildcard combining
+// the way open content does: unioned for an extension, replaced for a
+// restriction.
+//
+// An extension may only widen what its base admits, so taking the base's
+// wildcard only when the derived type declared none refused attributes the base
+// type accepted.
+func TestAttributeWildcardExtensionUnions(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="B">
+	    <xs:sequence/>
+	    <xs:anyAttribute notNamespace="urn:cain" processContents="lax"/>
+	  </xs:complexType>
+	  <xs:complexType name="E">
+	    <xs:complexContent>
+	      <xs:extension base="B">
+	        <xs:sequence/>
+	        <xs:anyAttribute notNamespace="urn:abel" processContents="lax"/>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="eden" type="E"/>
+	</xs:schema>`)
+
+	// Two disjoint negations: their union admits everything, including the
+	// namespace each one excludes on its own.
+	if err := check11(t, s, `<eden xmlns:a="urn:abel" a:x="1"/>`); err != nil {
+		t.Errorf("the base wildcard should admit urn:abel: %v", err)
+	}
+	if err := check11(t, s, `<eden xmlns:c="urn:cain" c:x="1"/>`); err != nil {
+		t.Errorf("the extension wildcard should admit urn:cain: %v", err)
+	}
+}
+
+// TestAllGroupWildcardTakesOverflow pins that a particle whose bound is used up
+// does not fail the element when another particle still admits it.
+//
+// XSD 1.1 permits a wildcard alongside named particles in an all group, and it
+// is there precisely to take what the named ones cannot. Stopping at the first
+// particle matching by name reports a bound violation for content the group
+// accepts.
+func TestAllGroupWildcardTakesOverflow(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:all>
+	        <xs:element name="a" minOccurs="0"/>
+	        <xs:any processContents="skip" minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// The second <a/> exceeds the named particle's bound, and the wildcard
+	// takes it.
+	if err := check11(t, s, `<root><a/><a/></root>`); err != nil {
+		t.Errorf("the wildcard should absorb the overflow: %v", err)
+	}
+
+	// With no wildcard there is nothing to absorb it, so the bound stands.
+	s2 := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:all>
+	        <xs:element name="a" minOccurs="0"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	if err := check11(t, s2, `<root><a/><a/></root>`); err == nil {
+		t.Error("without a wildcard the bound violation should be reported")
+	}
+}

@@ -618,7 +618,14 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 			}
 			t.AttributeUses = append(t.AttributeUses, u)
 		}
-		if t.AttributeWildcard == nil {
+		// The attribute wildcard combines the way open content does:
+		// unioned for an extension, since an extension may only widen
+		// what its base admits, and replaced for a restriction. Taking
+		// the base's only when the derived type declared none refused
+		// attributes the base type accepted.
+		if t.DerivationMethod == DerivationExtension {
+			t.AttributeWildcard = unionWildcards(base.AttributeWildcard, t.AttributeWildcard)
+		} else if t.AttributeWildcard == nil {
 			t.AttributeWildcard = base.AttributeWildcard
 		}
 		// XSD 1.1 open content is inherited, but for an extension it is

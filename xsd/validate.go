@@ -739,17 +739,23 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		found := false
+		// A particle whose bound is used up does not fail the element:
+		// another particle may still admit it. XSD 1.1 permits a
+		// wildcard alongside named particles in an all group, and it is
+		// there precisely to take what the named ones cannot — so
+		// stopping at the first particle that matches by name reports a
+		// bound violation for content the group accepts.
+		exhausted := -1
 		for i, p := range particles {
 			pos := &position{term: p.Term, particle: p}
 			if !pos.matches(name, v.elementDefined) {
 				continue
 			}
 			if p.MaxOccurs != Unbounded && counts[i] >= p.MaxOccurs {
-				v.fail(kid, "cvc-complex-type.2.4.j",
-					"element {%s}%s appears more than %d times in an "+
-						"all group", name.URI, name.Local, p.MaxOccurs)
-				found = true
-				break
+				if exhausted < 0 {
+					exhausted = i
+				}
+				continue
 			}
 			counts[i]++
 			found = true
@@ -757,6 +763,15 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 				tables = append(tables, tbl)
 			}
 			break
+		}
+		if !found && exhausted >= 0 {
+			// Every particle that names this element is used up, and
+			// nothing else admits it: that is the bound violation.
+			p := particles[exhausted]
+			v.fail(kid, "cvc-complex-type.2.4.j",
+				"element {%s}%s appears more than %d times in an all group",
+				name.URI, name.Local, p.MaxOccurs)
+			continue
 		}
 		if found {
 			continue
