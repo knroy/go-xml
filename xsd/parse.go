@@ -125,6 +125,14 @@ type parser struct {
 	// once rather than once per derivation.
 	attrsDone map[*ComplexType]bool
 
+	// simpleTypes records every simple type read, with the element it came
+	// from, so that the Part 2 facet schema-component constraints can be
+	// applied once the base chain is resolved. They cannot be checked while
+	// reading: a restriction's base may be a forward reference, and a
+	// facet's legality depends on the base's primitive and on the facets
+	// the base already fixed.
+	simpleTypes []simpleTypeSite
+
 	// inOverride records that the components being read are the
 	// replacements inside an <xs:override>. The document's
 	// defaultAttributes and defaultOpenContent do not reach them — the
@@ -133,6 +141,14 @@ type parser struct {
 	// say what a component in *another* document should be, and that
 	// document's defaults are not this one's to supply.
 	inOverride bool
+}
+
+// simpleTypeSite pairs a simple type with the schema element that defined it,
+// so a facet constraint violated deep in a derivation can be reported at the
+// line the author wrote.
+type simpleTypeSite struct {
+	typ *SimpleType
+	el  *xdm.Node
 }
 
 // Schema is a set of schema components, assembled from one or more documents.
@@ -270,6 +286,13 @@ func (p *parser) finish() error {
 			p.resolveAttributes(ct, nil)
 		}
 	}
+
+	// The Part 2 facet constraints run last, once every base reference has
+	// been bound: they compare a facet against the base's primitive and
+	// against the facets the base itself set, neither of which is known
+	// while the restriction is being read.
+	p.checkFacetConstraints()
+
 	if len(p.errs) == 0 {
 		return nil
 	}

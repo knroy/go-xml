@@ -10,6 +10,9 @@ import (
 // readSimpleType reads an <xs:simpleType>.
 func (p *parser) readSimpleType(el *xdm.Node) *SimpleType {
 	t := &SimpleType{Facets: &FacetSet{}}
+	// Recorded for the deferred Part 2 facet constraints, which need the
+	// defining element to place their diagnostics.
+	p.simpleTypes = append(p.simpleTypes, simpleTypeSite{typ: t, el: el})
 	if name := el.AttrValue("name"); name != "" {
 		t.Name = p.qnameFor(name)
 	}
