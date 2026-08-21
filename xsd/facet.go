@@ -1,0 +1,491 @@
+package xsd
+
+import (
+	"fmt"
+	"math/big"
+	"strings"
+)
+
+// FacetKind identifies a constraining facet (Part 2 §4.3).
+type FacetKind uint8
+
+// The twelve constraining facets. The fundamental facets (§4.2) are properties
+// of a type rather than constraints an author writes, and are not modelled
+// here.
+const (
+	FacetLength FacetKind = iota
+	FacetMinLength
+	FacetMaxLength
+	FacetPattern
+	FacetEnumeration
+	FacetWhiteSpace
+	FacetMaxInclusive
+	FacetMaxExclusive
+	FacetMinInclusive
+	FacetMinExclusive
+	FacetTotalDigits
+	FacetFractionDigits
+)
+
+// String names the facet as it is spelled in a schema document.
+func (f FacetKind) String() string {
+	switch f {
+	case FacetLength:
+		return "length"
+	case FacetMinLength:
+		return "minLength"
+	case FacetMaxLength:
+		return "maxLength"
+	case FacetPattern:
+		return "pattern"
+	case FacetEnumeration:
+		return "enumeration"
+	case FacetWhiteSpace:
+		return "whiteSpace"
+	case FacetMaxInclusive:
+		return "maxInclusive"
+	case FacetMaxExclusive:
+		return "maxExclusive"
+	case FacetMinInclusive:
+		return "minInclusive"
+	case FacetMinExclusive:
+		return "minExclusive"
+	case FacetTotalDigits:
+		return "totalDigits"
+	case FacetFractionDigits:
+		return "fractionDigits"
+	}
+	return fmt.Sprintf("FacetKind(%d)", uint8(f))
+}
+
+// WhiteSpace is the value of the whiteSpace facet (Part 2 §4.3.6).
+//
+// The three modes are ordered by strength, and a derivation may only make the
+// value stronger: preserve → replace → collapse. That ordering is what the
+// comparison in checkWhiteSpaceRestriction relies on.
+type WhiteSpace uint8
+
+// The whiteSpace modes.
+const (
+	// WhitePreserve leaves the value alone. It is the value for xs:string
+	// and for xs:anySimpleType.
+	WhitePreserve WhiteSpace = iota
+	// WhiteReplace maps tab, newline and carriage return to a space.
+	WhiteReplace
+	// WhiteCollapse additionally merges runs of spaces and trims the ends.
+	// Every built-in type except the string family collapses.
+	WhiteCollapse
+)
+
+// String names the mode as it is spelled in a schema document.
+func (w WhiteSpace) String() string {
+	switch w {
+	case WhitePreserve:
+		return "preserve"
+	case WhiteReplace:
+		return "replace"
+	case WhiteCollapse:
+		return "collapse"
+	}
+	return fmt.Sprintf("WhiteSpace(%d)", uint8(w))
+}
+
+// Normalize applies the whiteSpace facet to a lexical value.
+//
+// Only the four XML whitespace characters take part. Using unicode.IsSpace here
+// would fold characters such as U+00A0 that XML does not treat as whitespace,
+// which would silently accept values the spec rejects.
+func (w WhiteSpace) Normalize(s string) string {
+	switch w {
+	case WhitePreserve:
+		return s
+	case WhiteReplace:
+		return strings.Map(func(r rune) rune {
+			if r == '\t' || r == '\n' || r == '\r' {
+				return ' '
+			}
+			return r
+		}, s)
+	case WhiteCollapse:
+		var b strings.Builder
+		b.Grow(len(s))
+		space := false
+		started := false
+		for _, r := range s {
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+				space = started
+				continue
+			}
+			if space {
+				b.WriteByte(' ')
+				space = false
+			}
+			b.WriteRune(r)
+			started = true
+		}
+		return b.String()
+	}
+	return s
+}
+
+// A Pattern is a compiled pattern facet.
+//
+// XSD patterns are anchored: the whole value must match. This differs from
+// fn:matches in XPath, which is a containment test, so the regex translation
+// this package shares with the xpath package must be wrapped before use. See
+// compilePattern.
+type Pattern struct {
+	// Source is the pattern as written, kept for diagnostics and for the
+	// schema-component constraints that compare patterns textually.
+	Source string
+	// re matches the whole value.
+	re matcher
+}
+
+// matcher is the subset of *regexp.Regexp this package needs, named so that the
+// pattern compiler can be tested without a real regexp.
+type matcher interface {
+	MatchString(s string) bool
+}
+
+// Matches reports whether the value satisfies the pattern.
+func (p *Pattern) Matches(s string) bool { return p.re.MatchString(s) }
+
+// FacetSet holds the constraining facets applied at one derivation step.
+//
+// A facet is present only if the schema document set it at this step; the
+// inherited value comes from walking the base chain. Keeping the steps separate
+// rather than flattening them is what makes the schema-component constraints on
+// restriction checkable, since those compare a derived facet against the value
+// it narrows.
+type FacetSet struct {
+	Length         *uint64
+	MinLength      *uint64
+	MaxLength      *uint64
+	TotalDigits    *uint64
+	FractionDigits *uint64
+
+	// WhiteSpace is the whiteSpace facet, and Fixed records whether the
+	// schema wrote fixed="true" on it. The built-in types fix it, which is
+	// why a user type cannot loosen xs:token back to preserve.
+	WhiteSpace      *WhiteSpace
+	WhiteSpaceFixed bool
+
+	// MinInclusive and friends hold bounds. They are stored as lexical
+	// strings because the type they must be parsed against is the type
+	// being defined, which is not complete while its own facets are read.
+	MinInclusive *string
+	MaxInclusive *string
+	MinExclusive *string
+	MaxExclusive *string
+
+	// Patterns from a single derivation step are alternatives: a value
+	// satisfying any one of them satisfies the step. Patterns from
+	// *different* steps are conjunctive. That asymmetry is why patterns are
+	// held per step rather than merged into one list.
+	Patterns []*Pattern
+
+	// Enumerations are the permitted values, lexical at this stage. An
+	// empty non-nil slice is meaningful — it permits nothing — so presence
+	// is tested with HasEnumeration rather than len.
+	Enumerations    []string
+	HasEnumerations bool
+}
+
+// applicable records which facets each primitive type admits (Part 2 §4.1.5,
+// and the per-type "Constraining facets" lists).
+//
+// The table is explicit rather than derived from a rule because the spec's
+// assignment is not systematic: xs:boolean admits pattern and whiteSpace but
+// *not* enumeration, and the digit facets belong to the decimal branch alone.
+var applicable = map[string]map[FacetKind]bool{
+	"string":       lengthFacets(),
+	"hexBinary":    lengthFacets(),
+	"base64Binary": lengthFacets(),
+	"anyURI":       lengthFacets(),
+	"QName":        lengthFacets(),
+	"NOTATION":     lengthFacets(),
+
+	// xs:boolean has no enumeration facet: with two values an enumeration
+	// could only restate the type or make it a constant, and the spec
+	// declines to allow either.
+	"boolean": {FacetPattern: true, FacetWhiteSpace: true},
+
+	"decimal": mergeFacets(orderedFacets(), map[FacetKind]bool{
+		FacetTotalDigits: true, FacetFractionDigits: true,
+	}),
+
+	"float":      orderedFacets(),
+	"double":     orderedFacets(),
+	"duration":   orderedFacets(),
+	"dateTime":   orderedFacets(),
+	"time":       orderedFacets(),
+	"date":       orderedFacets(),
+	"gYearMonth": orderedFacets(),
+	"gYear":      orderedFacets(),
+	"gMonthDay":  orderedFacets(),
+	"gDay":       orderedFacets(),
+	"gMonth":     orderedFacets(),
+}
+
+// lengthFacets is the facet set of the string-like primitives.
+func lengthFacets() map[FacetKind]bool {
+	return map[FacetKind]bool{
+		FacetLength: true, FacetMinLength: true, FacetMaxLength: true,
+		FacetPattern: true, FacetEnumeration: true, FacetWhiteSpace: true,
+	}
+}
+
+// orderedFacets is the facet set of the primitives that have an order but no
+// length: the numeric and date/time families.
+func orderedFacets() map[FacetKind]bool {
+	return map[FacetKind]bool{
+		FacetPattern: true, FacetEnumeration: true, FacetWhiteSpace: true,
+		FacetMaxInclusive: true, FacetMaxExclusive: true,
+		FacetMinInclusive: true, FacetMinExclusive: true,
+	}
+}
+
+func mergeFacets(a, b map[FacetKind]bool) map[FacetKind]bool {
+	out := make(map[FacetKind]bool, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+// FacetApplicable reports whether a facet may be applied to a simple type.
+//
+// Dispatch is on {variety} first, and the union case is the one that catches
+// implementations out: a union admits only pattern and enumeration whatever its
+// members admit. In particular it has no whiteSpace facet, because
+// normalisation belongs to whichever member type validates the value.
+func FacetApplicable(t *SimpleType, f FacetKind) bool {
+	switch t.Variety {
+	case VarietyList:
+		switch f {
+		case FacetLength, FacetMinLength, FacetMaxLength,
+			FacetPattern, FacetEnumeration, FacetWhiteSpace:
+			return true
+		}
+		return false
+
+	case VarietyUnion:
+		return f == FacetPattern || f == FacetEnumeration
+	}
+
+	prim := t.Primitive
+	if prim == nil {
+		// An atomic type with no primitive is xs:anySimpleType, which
+		// constrains nothing.
+		return false
+	}
+	set, ok := applicable[prim.Name.Local]
+	if !ok {
+		return false
+	}
+	return set[f]
+}
+
+// EffectiveWhiteSpace returns the whiteSpace value in force for a type, walking
+// up the base chain until a step sets one.
+//
+// The walk terminates on xs:anySimpleType rather than on nil, and must also
+// guard against xs:anyType, whose base type definition is *itself* — a
+// deliberate self-loop in the spec that turns a naive walk into an infinite
+// one.
+func EffectiveWhiteSpace(t *SimpleType) WhiteSpace {
+	for cur := t; cur != nil; {
+		if cur.Facets != nil && cur.Facets.WhiteSpace != nil {
+			return *cur.Facets.WhiteSpace
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	// xs:anySimpleType preserves; every built-in that differs sets the
+	// facet explicitly.
+	return WhitePreserve
+}
+
+// facetStep is one derivation step's facets together with the type that carried
+// them, so that diagnostics can name the type a constraint came from.
+type facetStep struct {
+	typ    *SimpleType
+	facets *FacetSet
+}
+
+// facetChain returns the derivation steps from t up to its primitive, nearest
+// first.
+//
+// Collecting the chain rather than merging the facets is what lets the
+// evaluator apply patterns conjunctively across steps while treating the
+// patterns within one step as alternatives.
+func facetChain(t *SimpleType) []facetStep {
+	var out []facetStep
+	seen := make(map[*SimpleType]bool)
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
+		if cur.Facets != nil {
+			out = append(out, facetStep{typ: cur, facets: cur.Facets})
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	return out
+}
+
+// checkLengthFacets applies length, minLength and maxLength.
+//
+// What "length" counts depends on the variety and the primitive: characters for
+// a string, octets for the binary types, and *items* for a list. Measuring a
+// list in characters is a classic wrong answer, so the unit is chosen by the
+// caller and passed in.
+func checkLengthFacets(steps []facetStep, n uint64, unit string) error {
+	for _, st := range steps {
+		f := st.facets
+		if f.Length != nil && n != *f.Length {
+			return facetError(st.typ, FacetLength,
+				"%d %s, want exactly %d", n, unit, *f.Length)
+		}
+		if f.MinLength != nil && n < *f.MinLength {
+			return facetError(st.typ, FacetMinLength,
+				"%d %s, want at least %d", n, unit, *f.MinLength)
+		}
+		if f.MaxLength != nil && n > *f.MaxLength {
+			return facetError(st.typ, FacetMaxLength,
+				"%d %s, want at most %d", n, unit, *f.MaxLength)
+		}
+	}
+	return nil
+}
+
+// checkPatterns applies the pattern facets of every derivation step.
+//
+// Within a step the patterns are alternatives; across steps they are
+// conjunctive. The spec expresses this by saying each step's patterns form one
+// regular expression by union, and that a value must satisfy the pattern facet
+// of every type in the derivation chain.
+func checkPatterns(steps []facetStep, lexical string) error {
+	for _, st := range steps {
+		if len(st.facets.Patterns) == 0 {
+			continue
+		}
+		ok := false
+		for _, p := range st.facets.Patterns {
+			if p.Matches(lexical) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return facetError(st.typ, FacetPattern,
+				"%q does not match %s", lexical, describePatterns(st.facets.Patterns))
+		}
+	}
+	return nil
+}
+
+func describePatterns(ps []*Pattern) string {
+	if len(ps) == 1 {
+		return fmt.Sprintf("pattern %q", ps[0].Source)
+	}
+	var b strings.Builder
+	b.WriteString("any of ")
+	for i, p := range ps {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%q", p.Source)
+	}
+	return b.String()
+}
+
+// checkDigitFacets applies totalDigits and fractionDigits to a decimal value.
+//
+// The counts are of the *value*, not the lexical form: "1.50" has two total
+// digits and one fraction digit, because trailing zeros in the fraction are not
+// significant. Counting the literal would reject values the spec accepts.
+func checkDigitFacets(steps []facetStep, v *big.Rat) error {
+	var total, frac uint64
+	counted := false
+	for _, st := range steps {
+		f := st.facets
+		if f.TotalDigits == nil && f.FractionDigits == nil {
+			continue
+		}
+		if !counted {
+			total, frac = countDigits(v)
+			counted = true
+		}
+		if f.TotalDigits != nil && total > *f.TotalDigits {
+			return facetError(st.typ, FacetTotalDigits,
+				"%d digits, want at most %d", total, *f.TotalDigits)
+		}
+		if f.FractionDigits != nil && frac > *f.FractionDigits {
+			return facetError(st.typ, FacetFractionDigits,
+				"%d fraction digits, want at most %d", frac, *f.FractionDigits)
+		}
+	}
+	return nil
+}
+
+// countDigits returns the total and fraction digit counts of a decimal value.
+//
+// The counts are of the value, not of the literal: 1.50 and 1.5 are the same
+// value and both have two total digits and one fraction digit.
+//
+// big.Rat normalises to lowest terms, so the denominator is not a power of ten
+// even for a decimal — 1.5 is held as 3/2. The fraction digit count is
+// therefore derived from the decimal expansion: multiply by ten until the
+// value is integral, which terminates for any value whose denominator has only
+// 2 and 5 as prime factors. That is exactly the set of exact decimals, and a
+// non-decimal is rejected before it reaches here.
+func countDigits(v *big.Rat) (total, frac uint64) {
+	if v.Sign() == 0 {
+		// Zero has one total digit and no fraction digits.
+		return 1, 0
+	}
+
+	scaled := new(big.Rat).Abs(v)
+	ten := big.NewRat(10, 1)
+	// A decimal's denominator is 2^a * 5^b, so at most max(a,b) steps are
+	// needed. The bound guards against a value that is not an exact decimal
+	// reaching here despite the lexical check.
+	const maxScale = 4096
+	for i := 0; !scaled.IsInt() && i < maxScale; i++ {
+		scaled.Mul(scaled, ten)
+		frac++
+	}
+
+	digits := uint64(len(scaled.Num().String()))
+	// A value such as 0.001 scales to 1, one digit, but the spec counts
+	// three: the leading zeros of the fraction are significant to
+	// totalDigits even though they are not to the value.
+	if digits < frac {
+		digits = frac
+	}
+	return digits, frac
+}
+
+// facetError builds the diagnostic for a failed facet, naming the type that
+// imposed it.
+//
+// The type is named because a value can fail a facet several levels up its
+// derivation chain, and "does not satisfy maxLength" without saying whose
+// maxLength sends the reader hunting through the schema.
+func facetError(t *SimpleType, f FacetKind, format string, args ...any) error {
+	where := "an anonymous type"
+	if t != nil && t.Name.Local != "" {
+		where = t.Name.Local
+	}
+	return fmt.Errorf("%s facet of %s: %s", f, where, fmt.Sprintf(format, args...))
+}
