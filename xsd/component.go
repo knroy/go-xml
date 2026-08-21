@@ -793,3 +793,21 @@ type NotationDecl struct {
 
 // ComponentKind implements Component.
 func (*NotationDecl) ComponentKind() string { return "notation declaration" }
+
+// String names a derivation method, so that a diagnostic reads "extension"
+// rather than the bit value.
+func (d Derivation) String() string {
+	switch d {
+	case DerivationExtension:
+		return "extension"
+	case DerivationRestriction:
+		return "restriction"
+	case DerivationSubstitution:
+		return "substitution"
+	case DerivationList:
+		return "list"
+	case DerivationUnion:
+		return "union"
+	}
+	return "derivation"
+}

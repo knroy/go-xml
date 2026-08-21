@@ -3504,3 +3504,101 @@ func TestRootWithoutDeclarationUsesXSIType(t *testing.T) {
 	// With no xsi:type there is still nothing to validate against.
 	assertInvalid(t, schema, `<test xmlns="urn:t">1</test>`, "cvc-elt.1")
 }
+
+// TestXSITypeSubstitutionIsBlocked covers cvc-elt.4.3's blocking half, which
+// was parsed and then never enforced.
+//
+// block= on an element and blockDefault= on the schema give the declaration its
+// {disallowed substitutions}; block= on a type gives it {prohibited
+// substitutions}. A type named by xsi:type must not reach the declared type by
+// a derivation either of them blocks — which is what stops a schema's
+// blockDefault="extension" from being bypassed by naming a derived type in the
+// instance.
+//
+// The whole chain is examined, not just the first step: substituting a type two
+// derivations away goes through the intermediate one, and it is the set of
+// methods used along the way that the block applies to.
+func TestXSITypeSubstitutionIsBlocked(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:t" xmlns:t="urn:t"
+	           elementFormDefault="qualified" blockDefault="extension">
+	  <xs:complexType name="B">
+	    <xs:sequence><xs:element name="foo" type="t:empty"/></xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="De">
+	    <xs:complexContent><xs:extension base="t:B"/></xs:complexContent>
+	  </xs:complexType>
+	  <xs:complexType name="Dr">
+	    <xs:complexContent>
+	      <xs:restriction base="t:B">
+	        <xs:sequence><xs:element name="foo" type="t:empty"/></xs:sequence>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:complexType name="empty"/>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="item" type="t:B" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	const xsi = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+	doc := func(typ string) string {
+		return `<root xmlns="urn:t" xmlns:t="urn:t"` + xsi +
+			`><item xsi:type="t:` + typ + `"><foo/></item></root>`
+	}
+
+	// blockDefault="extension" stops De from substituting.
+	assertInvalid(t, schema, doc("De"), "cvc-elt.4.3")
+	// Restriction is not blocked, so Dr may.
+	assertValid(t, schema, doc("Dr"))
+	// The declared type itself is always allowed.
+	assertValid(t, schema, doc("B"))
+}
+
+// TestElementBlockOverridesTheDefault pins where blockDefault can and cannot
+// be re-opened.
+//
+// blockDefault supplies the *element declaration's* {disallowed substitutions}
+// when the element writes no block of its own (§3.3.2), so block="" on the
+// element re-opens it. block="" on the type does not: that attribute populates
+// the type's {prohibited substitutions}, a different property, and emptying it
+// leaves the declaration's untouched. The suite's sunData/combined/003b turns
+// on exactly this — every type there writes block="" and the substitution is
+// still expected to be refused.
+func TestElementBlockOverridesTheDefault(t *testing.T) {
+	schema := func(elemBlock string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           targetNamespace="urn:t" xmlns:t="urn:t"
+		           elementFormDefault="qualified" blockDefault="extension">
+		  <xs:complexType name="B" block="">
+		    <xs:sequence><xs:element name="foo" type="t:empty"/></xs:sequence>
+		  </xs:complexType>
+		  <xs:complexType name="De" block="">
+		    <xs:complexContent><xs:extension base="t:B"/></xs:complexContent>
+		  </xs:complexType>
+		  <xs:complexType name="empty" block=""/>
+		  <xs:element name="root">
+		    <xs:complexType>
+		      <xs:sequence>
+		        <xs:element name="item" type="t:B" maxOccurs="unbounded"` +
+			elemBlock + `/>
+		      </xs:sequence>
+		    </xs:complexType>
+		  </xs:element>
+		</xs:schema>`
+	}
+	const xsi = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+	doc := `<root xmlns="urn:t" xmlns:t="urn:t"` + xsi +
+		`><item xsi:type="t:De"><foo/></item></root>`
+
+	// block="" on every type does not re-open it: the declaration still
+	// takes the document's blockDefault.
+	assertInvalid(t, schema(``), doc, "cvc-elt.4.3")
+	// block="" on the element itself does.
+	assertValid(t, schema(` block=""`), doc)
+}

@@ -285,6 +285,12 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 				xsiType.Value)
 			return nil
 		}
+		if m, blocked := v.substitutionBlocked(t, decl); blocked {
+			v.fail(el, "cvc-elt.4.3",
+				"xsi:type %q substitutes by %v, which is blocked",
+				xsiType.Value, m)
+			return nil
+		}
 		typ = t
 	}
 
@@ -1473,4 +1479,48 @@ func isNestedIn(m *contentModel, c, outer int) bool {
 		}
 	}
 	return false
+}
+
+// substitutionBlocked applies cvc-elt.4.3's blocking half.
+//
+// A type named by xsi:type must not reach the declared type by a derivation
+// the declaration blocks, or that the declared type prohibits. block= on the
+// element and blockDefault= on the schema populate the first; block= on the
+// type populates the second, which is why a type may re-open with block=""
+// what the document's blockDefault closed.
+//
+// The whole chain from the named type up to the declared one is examined, not
+// just the first step: substituting Dee for B goes through De, and it is the
+// *set* of methods used along the way that the block applies to.
+func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, bool) {
+	blocked := decl.DisallowedSubstitutions
+	if ct, ok := decl.Type.(*ComplexType); ok {
+		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
+	}
+	if blocked == 0 {
+		return 0, false
+	}
+
+	seen := 0
+	for cur := t; cur != nil && cur != decl.Type; {
+		ct, ok := cur.(*ComplexType)
+		if !ok {
+			// A simple type's derivation is always restriction.
+			if blocked.Has(DerivationRestriction) {
+				return DerivationRestriction, true
+			}
+			return 0, false
+		}
+		if blocked.Has(ct.DerivationMethod) {
+			return ct.DerivationMethod, true
+		}
+		if ct.Base == cur {
+			break
+		}
+		cur = ct.Base
+		if seen++; seen > 64 {
+			break
+		}
+	}
+	return 0, false
 }
