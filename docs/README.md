@@ -4,6 +4,8 @@
   request; timeouts, limits, and the mistakes that matter under load.
 * **[Validating XML](validation.md)** — what this engine can and cannot check,
   and how to combine it with the pieces it does not provide.
+* **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
+  limits, the PSVI, concurrency, and where conformance stands.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers.
 

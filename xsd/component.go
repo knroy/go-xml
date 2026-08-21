@@ -1,4 +1,4 @@
-// Package xsd implements XML Schema 1.0 validation.
+// Package xsd implements XML Schema 1.0 and 1.1 validation.
 //
 // The package is organised around the spec's own vocabulary. XSD is defined in
 // two layers: a *schema component model* (Part 1 §3), which is an abstract data
@@ -10,9 +10,30 @@
 //
 // # What is implemented
 //
-// XSD 1.0, targeting the W3C xsdtests suite. XSD 1.1 (assertions,
-// conditional type assignment, open content) is not implemented, but the
-// component model reserves room for it: see the notes on ComplexType.
+// XSD 1.0 and 1.1, both targeting the W3C xsdtests suite: the component model,
+// schema assembly through include, import, redefine and override, content
+// models, simple types and facets, xsi:type and xsi:nil, substitution groups,
+// wildcards, identity constraints, and document-level ID/IDREF.
+//
+// 1.1 is opt-in through Options.Version, because it changes which documents
+// are valid and a 1.0 schema must not acquire its behaviour by accident. It
+// adds assertions, conditional type assignment with xs:alternative and
+// inheritable attributes, open content, xs:override, the notNamespace and
+// notQName wildcard forms, explicitTimezone, and conditional inclusion through
+// the versioning attributes. The 1.1 constructs are always *parsed* — a schema
+// that uses one is not made valid by pretending it is absent — but they are
+// only honoured under Version11.
+//
+// One constraint is deliberately not checked: Particle Valid (Restriction).
+// See CheckConstraints.
+//
+// # Concurrency
+//
+// A Schema is immutable once loaded and safe to validate from any number of
+// goroutines. Its one piece of lazily-built state, the content-model cache, is
+// synchronised for that reason. A Schema still being assembled is not safe to
+// share, and neither is a document tree being validated: parse one per
+// goroutine.
 //
 // # Errata
 //

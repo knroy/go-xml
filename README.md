@@ -23,7 +23,7 @@ Requires Go 1.26 or later.
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.51% of the W3C xsdtests suite (24,863 of 24,986 instance tests) |
 | **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,083 of 1,083); opt-in via `Version11` |
-| **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
+| **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -64,6 +64,9 @@ Four packages, each usable on its own:
 * **[docs/validation.md](docs/validation.md)** — XSD validation, Schematron,
   and which kind of "valid" you actually need. Start here if you came to check
   a document against an `.xsd`.
+* **[docs/xsd.md](docs/xsd.md)** — the schema validator in detail: 1.0 versus
+  1.1, resolvers and what they will fetch, the PSVI, limits, concurrency, and
+  what the conformance figures cover.
 * **[docs/server.md](docs/server.md)** — compile once, transform per request:
   a complete validator service, timeouts, limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
@@ -805,11 +808,11 @@ had let something through.
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (499) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (526) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 14,682 cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 25,555 instance tests | schemas nobody writes by hand |
+| **W3C xsdtests suite** | systematic XSD conformance across 26,069 instance tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 
 **The production schema sets are the newest of the five and found the most per

@@ -37,6 +37,10 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 Measured against the W3C XSD test suite: **99.51%** agreement on 24,986
 instance tests.
 
+This section is the overview. [xsd.md](xsd.md) is the reference — resolvers,
+limits, the PSVI, concurrency, and what the conformance figures do and do not
+cover.
+
 XSD **1.1** is implemented and opt-in:
 
 ```go

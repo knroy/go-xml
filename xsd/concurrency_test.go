@@ -298,3 +298,69 @@ func TestConcurrentSchemaLoading(t *testing.T) {
 		t.Errorf("built-in xml:lang was overwritten: %v", d.Type)
 	}
 }
+
+// A 1.1 construct is parsed under either version but only *honoured* under
+// 1.1, so loading a 1.1 schema with the default options gives a working 1.0
+// validator for it that silently misses the 1.1 constraints. That is a sharp
+// edge worth pinning: it is documented in docs/xsd.md, and a change that made
+// either half of it false would need to change the documentation too.
+func TestVersionSelectsWhetherAssertionsAreHonoured(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="r">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="a" type="xs:int"/></xs:sequence>
+	      <xs:assert test="xs:int(a) gt 100"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	const doc = `<r><a>1</a></r>` // violates the assertion
+
+	for _, c := range []struct {
+		version Version
+		fails   bool
+	}{
+		{Version10, false}, // parsed, not run
+		{Version11, true},  // run
+	} {
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(tree.Root, "s.xsd", Options{Version: c.version})
+		if err != nil {
+			t.Fatalf("version %d: a schema using xs:assert must load: %v",
+				c.version, err)
+		}
+		d, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.Validate(d.Root, ValidateOptions{})
+		if c.fails && err == nil {
+			t.Errorf("version %d: the assertion was not honoured", c.version)
+		}
+		if !c.fails && err != nil {
+			t.Errorf("version %d: the assertion was run anyway: %v",
+				c.version, err)
+		}
+	}
+
+	// notQName is the exception: an error under 1.0 rather than ignored,
+	// because it narrows a wildcard — ignoring it would admit documents the
+	// schema means to exclude.
+	nq, err := xdm.ParseString(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="t">
+	    <xs:sequence/>
+	    <xs:anyAttribute notQName="##defined"/>
+	  </xs:complexType>
+	</xs:schema>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(nq.Root, "s.xsd", Options{}); err == nil {
+		t.Error("notQName under 1.0 was accepted; it narrows a wildcard " +
+			"and must not be silently ignored")
+	}
+}
