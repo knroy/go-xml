@@ -184,6 +184,73 @@ func buildBuiltins() {
 	unsignedInt := bounded("unsignedInt", unsignedLong, "", "4294967295")
 	unsignedShort := bounded("unsignedShort", unsignedInt, "", "65535")
 	bounded("unsignedByte", unsignedShort, "", "255")
+
+	// XSD 1.1 additions. They are defined unconditionally because a type is
+	// either in the schema namespace or it is not; whether a *schema* may
+	// use them is a version question, and refusing to define them here
+	// would only turn a version error into a confusing "no such type".
+	//
+	// xs:dateTimeStamp is xs:dateTime with explicitTimezone="required" —
+	// the type that says "an instant, not a wall-clock reading".
+	required := TimezoneRequired
+	dateTime := builtinMap[xsName("dateTime")].(*SimpleType)
+	derive("dateTimeStamp", dateTime, &FacetSet{ExplicitTimezone: &required})
+
+	// The two duration subtypes XPath has always had and XSD 1.0 left out.
+	duration := builtinMap[xsName("duration")].(*SimpleType)
+	derive("yearMonthDuration", duration, nil)
+	derive("dayTimeDuration", duration, nil)
+
+	// xs:anyAtomicType sits between anySimpleType and the primitives.
+	anyAtomic := &SimpleType{
+		Name:    xsName("anyAtomicType"),
+		Base:    anySimple,
+		Variety: VarietyAtomic,
+		Facets:  &FacetSet{},
+		builtin: true,
+	}
+	builtinMap[anyAtomic.Name] = anyAtomic
+
+	// xs:error has an empty value space: nothing is ever valid against it,
+	// which is how a 1.1 schema says "this branch must not be taken".
+	errType := &SimpleType{
+		Name:    xsName("error"),
+		Base:    anySimple,
+		Variety: VarietyUnion,
+		Facets:  &FacetSet{},
+		builtin: true,
+	}
+	builtinMap[errType.Name] = errType
+}
+
+// builtinAttributes returns the four xsi: attribute declarations.
+//
+// They are present in every schema without being declared, which is why a
+// schema may write <xs:attribute ref="xsi:type"/> without importing anything.
+func builtinAttributes() map[xdm.QName]*AttributeDecl {
+	str, _ := builtinTypes()[xsName("string")].(*SimpleType)
+	qname, _ := builtinTypes()[xsName("QName")].(*SimpleType)
+	boolean, _ := builtinTypes()[xsName("boolean")].(*SimpleType)
+	anyURI, _ := builtinTypes()[xsName("anyURI")].(*SimpleType)
+	_ = str
+
+	xsi := func(local string, t *SimpleType) (xdm.QName, *AttributeDecl) {
+		n := xdm.QName{URI: NSInstance, Local: local}
+		return n, &AttributeDecl{Name: n, Type: t, Scope: ScopeGlobal}
+	}
+	out := map[xdm.QName]*AttributeDecl{}
+	for _, f := range []func() (xdm.QName, *AttributeDecl){
+		func() (xdm.QName, *AttributeDecl) { return xsi("type", qname) },
+		func() (xdm.QName, *AttributeDecl) { return xsi("nil", boolean) },
+		func() (xdm.QName, *AttributeDecl) { return xsi("schemaLocation", anyURI) },
+		func() (xdm.QName, *AttributeDecl) {
+			return xsi("noNamespaceSchemaLocation", anyURI)
+		},
+	} {
+		n, d := f()
+		out[n] = d
+	}
+	return out
 }
 
 // anyType returns the ur-type definition.

@@ -72,6 +72,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 		return nil, err
 	}
 	a.runRedefines()
+	a.runOverrides()
 	if err := a.p.finish(); err != nil {
 		return nil, err
 	}
@@ -145,6 +146,11 @@ type assembler struct {
 	p      *parser
 	count  int
 
+	// pendingOverrides are the XSD 1.1 <xs:override> elements awaiting the
+	// same treatment, minus the self-reference binding: an override's
+	// replacement does not derive from what it replaces.
+	pendingOverrides []pendingRedefine
+
 	// pendingRedefines are the <xs:redefine> elements whose children have
 	// still to be read. They are deferred to the end of assembly because a
 	// redefinition is defined in terms of the document it redefines, which
@@ -217,6 +223,7 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 
 	doc.elementFormQualified = root.AttrValue("elementFormDefault") == "qualified"
 	doc.attributeFormQualified = root.AttrValue("attributeFormDefault") == "qualified"
+	doc.defaultAttributes = root.AttrValue("defaultAttributes")
 
 	var err error
 	if doc.blockDefault, err = a.p.derivationSet(root, "blockDefault"); err != nil {
@@ -238,6 +245,13 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 			a.queueRef(el, doc, "", el.AttrValue("schemaLocation"), true, false)
 		case "redefine":
 			a.queueRef(el, doc, "", el.AttrValue("schemaLocation"), true, true)
+		case "override":
+			// XSD 1.1. Like redefine in that it reads another document
+			// and replaces components of it, but the replacement does
+			// *not* derive from the original — it stands on its own,
+			// which is what makes override usable where redefine's
+			// self-reference rule is too restrictive.
+			a.queueRef(el, doc, "", el.AttrValue("schemaLocation"), true, false)
 		case "import":
 			ns := el.AttrValue("namespace")
 			if ns == doc.targetNS && doc.hasTargetNS {
@@ -262,10 +276,14 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	// makes redefine work, and it is why this cannot be done while the
 	// referenced document is merely queued.
 	for _, el := range root.ChildElements() {
-		if !el.IsElement(NSSchema, "redefine") {
-			continue
+		switch {
+		case el.IsElement(NSSchema, "redefine"):
+			a.pendingRedefines = append(a.pendingRedefines,
+				pendingRedefine{el: el, doc: doc})
+		case el.IsElement(NSSchema, "override"):
+			a.pendingOverrides = append(a.pendingOverrides,
+				pendingRedefine{el: el, doc: doc})
 		}
-		a.pendingRedefines = append(a.pendingRedefines, pendingRedefine{el: el, doc: doc})
 	}
 	return nil
 }
@@ -353,8 +371,12 @@ func linkSubstitutionGroups(s *Schema) {
 	// direct maps a head to the declarations naming it directly.
 	direct := map[*ElementDecl][]*ElementDecl{}
 	for _, d := range s.Elements {
-		if d.SubstitutionGroup != nil {
-			direct[d.SubstitutionGroup] = append(direct[d.SubstitutionGroup], d)
+		heads := d.SubstitutionGroups
+		if len(heads) == 0 && d.SubstitutionGroup != nil {
+			heads = []*ElementDecl{d.SubstitutionGroup}
+		}
+		for _, h := range heads {
+			direct[h] = append(direct[h], d)
 		}
 	}
 
@@ -398,5 +420,31 @@ func (a *assembler) runRedefines() {
 		r := a.pendingRedefines[i]
 		hold := a.prepareRedefine(r.el, r.doc)
 		a.applyRedefine(r.el, r.doc, hold)
+	}
+}
+
+// runOverrides applies the deferred XSD 1.1 overrides.
+//
+// An override replaces a component outright: unlike a redefine, the new
+// definition does not derive from the old one, so there is no self-reference to
+// bind and the originals are simply displaced and dropped.
+func (a *assembler) runOverrides() {
+	for i := len(a.pendingOverrides) - 1; i >= 0; i-- {
+		o := a.pendingOverrides[i]
+		a.prepareRedefine(o.el, o.doc)
+
+		prev := a.p.doc
+		a.p.doc = o.doc
+		for _, c := range o.el.ChildElements() {
+			if c.Name.URI != NSSchema {
+				continue
+			}
+			switch c.Name.Local {
+			case "simpleType", "complexType", "group", "attributeGroup",
+				"element", "attribute", "notation":
+				a.p.readTopLevel(c)
+			}
+		}
+		a.p.doc = prev
 	}
 }

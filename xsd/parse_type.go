@@ -223,6 +223,32 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 		case "maxExclusive":
 			f.MaxExclusive = &v
 
+		case "assertion":
+			// XSD 1.1: an assertion on a simple type is a facet
+			// rather than a component, but compiles identically.
+			if a := p.readAssert(c); a != nil {
+				f.Assertions = append(f.Assertions, a)
+			}
+
+		case "explicitTimezone":
+			// XSD 1.1: constrains whether a date or time value must
+			// carry a timezone.
+			switch v {
+			case "required":
+				tz := TimezoneRequired
+				f.ExplicitTimezone = &tz
+			case "prohibited":
+				tz := TimezoneProhibited
+				f.ExplicitTimezone = &tz
+			case "optional":
+				tz := TimezoneOptional
+				f.ExplicitTimezone = &tz
+			default:
+				p.errs = append(p.errs, errorAt(c, "",
+					"explicitTimezone=%q is not one of required, "+
+						"prohibited or optional", v))
+			}
+
 		case "simpleType", "annotation":
 			// Handled by the caller.
 
@@ -251,6 +277,8 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 		t.Name = p.qnameFor(name)
 	}
 	t.Abstract = p.boolAttr(el, "abstract", false)
+	p.applyDefaultAttributes(el, t)
+	defer p.applyDefaultOpenContent(t)
 
 	if f, err := p.derivationSet(el, "final"); err != nil {
 		p.errs = append(p.errs, err)
@@ -307,6 +335,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 			}
 		case "openContent":
 			t.OpenContent = p.readOpenContent(c)
+			t.declaredOpenContent = true
 		}
 	}
 	t.AttributeWildcard = p.readAttributes(el, &t.AttributeUses)
@@ -594,4 +623,71 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 		oc.Wildcard = &Wildcard{Kind: NSAny, ProcessContents: ProcessLax}
 	}
 	return oc
+}
+
+// applyDefaultAttributes adds the document's XSD 1.1 defaultAttributes group to
+// a complex type.
+//
+// The group is named once on <xs:schema> and applies to every complex type in
+// the document, which is how 1.1 lets a schema put xml:lang or a version
+// attribute everywhere without repeating it. A type opts out with
+// defaultAttributesApply="false".
+//
+// It is read whatever the version, for the same reason the other 1.1
+// constructs are: a schema that uses it is not made valid by pretending it is
+// absent. A 1.0 schema simply never writes the attribute.
+func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
+	if p.doc.defaultAttributes == "" {
+		return
+	}
+	if !p.boolAttr(el, "defaultAttributesApply", true) {
+		return
+	}
+	name, err := p.resolveQName(el, "defaultAttributes", p.doc.defaultAttributes)
+	if err != nil {
+		p.errs = append(p.errs, err)
+		return
+	}
+	p.fixups = append(p.fixups, func() error {
+		g, ok := p.schema.AttributeGroups[name]
+		if !ok {
+			return errorAt(el, "src-resolve",
+				"defaultAttributes names no attribute group %q",
+				p.doc.defaultAttributes)
+		}
+		// The type's own uses win: a declaration that names the same
+		// attribute overrides the default rather than colliding.
+		own := make(map[xdm.QName]bool, len(t.AttributeUses))
+		for _, u := range t.AttributeUses {
+			if u.Decl != nil {
+				own[u.Decl.Name] = true
+			}
+		}
+		for _, u := range g.AttributeUses {
+			if u.Decl != nil && !own[u.Decl.Name] {
+				t.AttributeUses = append(t.AttributeUses, u)
+			}
+		}
+		return nil
+	})
+}
+
+// applyDefaultOpenContent gives a type the document's <xs:defaultOpenContent>
+// when it declares none of its own.
+//
+// appliesToEmpty decides whether a type with no content model is opened too.
+// It defaults to false, so declaring a default open content does not silently
+// turn every empty type in the document into one that accepts anything.
+func (p *parser) applyDefaultOpenContent(t *ComplexType) {
+	if t.declaredOpenContent || p.doc.defaultOpenContent == nil {
+		return
+	}
+	if t.Content == ContentEmpty && !p.doc.appliesToEmpty {
+		return
+	}
+	if t.Content == ContentSimple {
+		// Simple content has no element children to open.
+		return
+	}
+	t.OpenContent = p.doc.defaultOpenContent
 }

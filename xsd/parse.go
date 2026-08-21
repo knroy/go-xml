@@ -39,6 +39,20 @@ type schemaDoc struct {
 
 	// baseURI locates this document, for resolving include and import.
 	baseURI string
+
+	// defaultAttributes is the XSD 1.1 schema-level attribute group applied
+	// to every complex type in this document, unless the type opts out with
+	// defaultAttributesApply="false".
+	defaultAttributes string
+
+	// defaultOpenContent is the XSD 1.1 <xs:defaultOpenContent>, applied to
+	// every complex type in the document that does not declare its own.
+	defaultOpenContent *OpenContent
+
+	// appliesToEmpty records defaultOpenContent's appliesToEmpty, which
+	// decides whether a type with empty content is opened too. It defaults
+	// to false, so a type declaring no content model stays closed.
+	appliesToEmpty bool
 }
 
 // ParseError reports a fault in a schema document.
@@ -175,6 +189,9 @@ func NewSchema() *Schema {
 	for name, t := range builtinTypes() {
 		s.Types[name] = t
 	}
+	for name, d := range builtinAttributes() {
+		s.Attributes[name] = d
+	}
 	return s
 }
 
@@ -254,6 +271,7 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	}
 	doc.elementFormQualified = root.AttrValue("elementFormDefault") == "qualified"
 	doc.attributeFormQualified = root.AttrValue("attributeFormDefault") == "qualified"
+	doc.defaultAttributes = root.AttrValue("defaultAttributes")
 
 	var err error
 	if doc.blockDefault, err = p.derivationSet(root, "blockDefault"); err != nil {
@@ -314,7 +332,13 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 			p.declareNotation(el, n)
 		}
 
-	case "include", "import", "redefine":
+	case "defaultOpenContent":
+		// XSD 1.1: an open content that applies to every complex type
+		// in the document that does not declare its own.
+		p.doc.defaultOpenContent = p.readOpenContent(el)
+		p.doc.appliesToEmpty = p.boolAttr(el, "appliesToEmpty", false)
+
+	case "override", "include", "import", "redefine":
 		// Assembling several documents is the caller's concern; see the
 		// note on ParseSchema. A single-document parse records nothing
 		// for these, and a reference into the un-read document will be

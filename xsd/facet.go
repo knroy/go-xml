@@ -25,6 +25,9 @@ const (
 	FacetMinExclusive
 	FacetTotalDigits
 	FacetFractionDigits
+	// FacetExplicitTimezone is the XSD 1.1 facet constraining whether a
+	// date or time value carries a timezone.
+	FacetExplicitTimezone
 )
 
 // String names the facet as it is spelled in a schema document.
@@ -54,6 +57,8 @@ func (f FacetKind) String() string {
 		return "totalDigits"
 	case FacetFractionDigits:
 		return "fractionDigits"
+	case FacetExplicitTimezone:
+		return "explicitTimezone"
 	}
 	return fmt.Sprintf("FacetKind(%d)", uint8(f))
 }
@@ -190,6 +195,40 @@ type FacetSet struct {
 	// is tested with HasEnumeration rather than len.
 	Enumerations    []string
 	HasEnumerations bool
+
+	// Assertions are the XSD 1.1 <xs:assertion> facets. On a simple type an
+	// assertion is a facet rather than a component, though it compiles the
+	// same way.
+	Assertions []*Assertion
+
+	// ExplicitTimezone is the XSD 1.1 facet constraining whether a date or
+	// time value carries a timezone.
+	ExplicitTimezone *Timezone
+}
+
+// Timezone is the value of the XSD 1.1 explicitTimezone facet.
+type Timezone uint8
+
+// The explicitTimezone values.
+const (
+	// TimezoneOptional permits a value with or without a timezone, which
+	// is the default for every date and time type.
+	TimezoneOptional Timezone = iota
+	// TimezoneRequired demands one.
+	TimezoneRequired
+	// TimezoneProhibited forbids one.
+	TimezoneProhibited
+)
+
+// String names the value as it is spelled in a schema document.
+func (t Timezone) String() string {
+	switch t {
+	case TimezoneRequired:
+		return "required"
+	case TimezoneProhibited:
+		return "prohibited"
+	}
+	return "optional"
 }
 
 // applicable records which facets each primitive type admits (Part 2 §4.1.5,

@@ -88,17 +88,27 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 				"only a top-level element declaration may have a "+
 					"substitutionGroup"))
 		} else {
-			name, err := p.resolveQName(el, "substitutionGroup", sg)
-			if err != nil {
-				p.errs = append(p.errs, err)
-			} else {
+			// XSD 1.1 permits a list of heads; 1.0 permits one. The
+			// list form is parsed either way, because a schema using
+			// it is not made valid by reading only the first name.
+			for _, one := range splitFields(sg) {
+				name, err := p.resolveQName(el, "substitutionGroup", one)
+				if err != nil {
+					p.errs = append(p.errs, err)
+					continue
+				}
+				ref := one
 				p.fixups = append(p.fixups, func() error {
 					head, ok := p.schema.Elements[name]
 					if !ok {
 						return errorAt(el, "src-resolve",
-							"substitutionGroup %q names no element declaration", sg)
+							"substitutionGroup %q names no element declaration",
+							ref)
 					}
-					d.SubstitutionGroup = head
+					if d.SubstitutionGroup == nil {
+						d.SubstitutionGroup = head
+					}
+					d.SubstitutionGroups = append(d.SubstitutionGroups, head)
 					return nil
 				})
 			}
@@ -318,6 +328,23 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		p.errs = append(p.errs, errorAt(el, "",
 			"processContents=%q is not one of strict, lax or skip",
 			el.AttrValue("processContents")))
+	}
+
+	// XSD 1.1 notNamespace: the complement of a namespace list, which 1.0
+	// could only express for a single namespace with ##other.
+	if not := el.AttrValue("notNamespace"); not != "" {
+		w.Kind = NSNot
+		for _, word := range splitFields(not) {
+			switch word {
+			case "##targetNamespace":
+				w.Namespace = append(w.Namespace, p.doc.targetNS)
+			case "##local":
+				w.Namespace = append(w.Namespace, "")
+			default:
+				w.Namespace = append(w.Namespace, word)
+			}
+		}
+		return w
 	}
 
 	ns := el.AttrValue("namespace")

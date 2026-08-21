@@ -89,7 +89,61 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 			}
 		}
 	}
+	if err := checkExplicitTimezone(steps, normalized, prim); err != nil {
+		return "", err
+	}
 	return normalized, nil
+}
+
+// checkExplicitTimezone applies the XSD 1.1 facet that says whether a date or
+// time value must carry a timezone.
+//
+// It is what distinguishes xs:dateTimeStamp — an instant — from xs:dateTime,
+// which may be a wall-clock reading with no way to place it on a timeline.
+func checkExplicitTimezone(steps []facetStep, normalized, prim string) error {
+	switch prim {
+	case "dateTime", "time", "date", "gYearMonth", "gYear",
+		"gMonthDay", "gDay", "gMonth":
+	default:
+		return nil
+	}
+	has := hasTimezone(normalized)
+	for _, st := range steps {
+		tz := st.facets.ExplicitTimezone
+		if tz == nil {
+			continue
+		}
+		switch *tz {
+		case TimezoneRequired:
+			if !has {
+				return facetError(st.typ, FacetExplicitTimezone,
+					"%s has no timezone, which this type requires", normalized)
+			}
+		case TimezoneProhibited:
+			if has {
+				return facetError(st.typ, FacetExplicitTimezone,
+					"%s carries a timezone, which this type forbids", normalized)
+			}
+		}
+		// The nearest facet wins; a base cannot re-tighten it.
+		return nil
+	}
+	return nil
+}
+
+// hasTimezone reports whether a date or time literal ends in a timezone.
+func hasTimezone(v string) bool {
+	if strings.HasSuffix(v, "Z") {
+		return true
+	}
+	if len(v) >= 6 {
+		tz := v[len(v)-6:]
+		if (tz[0] == '+' || tz[0] == '-') && tz[3] == ':' &&
+			isDigits(tz[1:3], 2) && isDigits(tz[4:], 2) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateListValue checks a whitespace-separated list.
@@ -320,7 +374,7 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 
 // recordIDs notes xs:ID and xs:IDREF values for the document-level check.
 func (v *validator) recordIDs(n *xdm.Node, value string, t *SimpleType) {
-	switch idKind(t) {
+	switch idKind(t, value) {
 	case "ID":
 		v.ids[value]++
 	case "IDREF":
@@ -334,7 +388,40 @@ func (v *validator) recordIDs(n *xdm.Node, value string, t *SimpleType) {
 
 // idKind reports whether a type is or derives from xs:ID, xs:IDREF or
 // xs:IDREFS.
-func idKind(t *SimpleType) string {
+//
+// The value is passed because a union has to be looked *through*: a union of
+// xs:ID and xs:boolean derives from xs:anySimpleType, so walking its base chain
+// finds nothing, and every ID declared through one was silently not recorded.
+// What decides is the member that actually validates the value, so the members
+// are tried in the same order validateUnionValue tries them.
+//
+// A list of xs:IDREF behaves the same way, which is what xs:IDREFS is.
+func idKind(t *SimpleType, value string) string {
+	if t == nil {
+		return ""
+	}
+	switch t.Variety {
+	case VarietyUnion:
+		for _, m := range t.MemberTypes {
+			if m == nil {
+				continue
+			}
+			if _, err := validateSimpleValue(value, m); err != nil {
+				continue
+			}
+			return idKind(m, value)
+		}
+		return ""
+	case VarietyList:
+		// A list whose items are IDREFs contributes each item as a
+		// reference; a list of IDs is not permitted, since an ID must
+		// be unique and a list would define several at one node.
+		if k := idKind(t.ItemType, value); k == "IDREF" {
+			return "IDREFS"
+		}
+		return ""
+	}
+
 	seen := 0
 	for cur := t; cur != nil; {
 		switch cur.Name.Local {

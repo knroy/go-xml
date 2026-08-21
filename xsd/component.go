@@ -160,7 +160,14 @@ type ElementDecl struct {
 	// SubstitutionGroup is the {substitution group affiliation}: the head
 	// this declaration may substitute for. Only a global declaration may
 	// have one (erratum E1-36 requires the head be global too).
+	//
+	// It is the first of SubstitutionGroups, kept as its own field because
+	// almost every use has exactly one head.
 	SubstitutionGroup *ElementDecl
+
+	// SubstitutionGroups holds every head, which XSD 1.1 permits to be a
+	// list where 1.0 allowed only one.
+	SubstitutionGroups []*ElementDecl
 
 	// DisallowedSubstitutions is {disallowed substitutions}, from block=.
 	// It controls substitution in an instance.
@@ -310,6 +317,11 @@ type ComplexType struct {
 	// OpenContent is the XSD 1.1 {open content}, which permits elements the
 	// content model does not name. Nil means the type is closed.
 	OpenContent *OpenContent
+
+	// declaredOpenContent records that the type wrote its own
+	// <xs:openContent>, so that a document-level <xs:defaultOpenContent>
+	// does not override it.
+	declaredOpenContent bool
 }
 
 // OpenContentMode says where an open content wildcard may match (XSD 1.1

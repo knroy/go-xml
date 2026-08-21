@@ -403,7 +403,7 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 	kids := el.ChildElements()
 
 	if isAllGroup(t.Particle) {
-		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup))
+		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup), t)
 	}
 	return v.matchSequence(el, kids, m, t)
 }
@@ -445,12 +445,24 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 // matchSequence walks the automaton over an element's children.
 func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel, t *ComplexType) []icTables {
 	if len(m.positions) == 0 {
-		if len(kids) > 0 {
-			v.fail(kids[0], "cvc-complex-type.2.4.d",
+		// An empty content model still admits whatever open content
+		// permits, which is the case that makes a type declaring only
+		// <xs:openContent> useful at all.
+		var tables []icTables
+		oc := v.openContentFor(t)
+		for _, kid := range kids {
+			if oc != nil && oc.Wildcard.Allows(kid.Name.URI) {
+				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
+					tables = append(tables, tbl)
+				}
+				continue
+			}
+			v.fail(kid, "cvc-complex-type.2.4.d",
 				"element {%s}%s is not permitted here: the content model "+
-					"is empty", kids[0].Name.URI, kids[0].Name.Local)
+					"is empty", kid.Name.URI, kid.Name.Local)
+			return tables
 		}
-		return nil
+		return tables
 	}
 
 	var tables []icTables
@@ -628,43 +640,53 @@ func expected(m *contentModel, positions []int) string {
 // All Group Limited confines an all group to the whole content model, with
 // element particles occurring at most once, which is what makes a seen-set
 // check sound rather than needing every interleaving.
-func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup) []icTables {
-	seen := make([]bool, len(g.Particles))
+func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *ComplexType) []icTables {
+	// counts rather than a seen set: XSD 1.0 confines every particle in an
+	// all group to maxOccurs 1, but 1.1 lifts that, so what is checked is
+	// the particle's own bound.
+	counts := make([]int, len(g.Particles))
 	var tables []icTables
+
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		found := false
 		for i, p := range g.Particles {
-			d, ok := p.Term.(*ElementDecl)
-			if !ok {
-				continue
-			}
-			pos := &position{term: d, particle: p}
+			pos := &position{term: p.Term, particle: p}
 			if !pos.matches(name) {
 				continue
 			}
-			if seen[i] {
+			if p.MaxOccurs != Unbounded && counts[i] >= p.MaxOccurs {
 				v.fail(kid, "cvc-complex-type.2.4.j",
-					"element {%s}%s appears more than once in an all group",
-					name.URI, name.Local)
+					"element {%s}%s appears more than %d times in an "+
+						"all group", name.URI, name.Local, p.MaxOccurs)
 				found = true
 				break
 			}
-			seen[i] = true
+			counts[i]++
 			found = true
-			if t := v.validateChild(kid, pos); t != nil {
-				tables = append(tables, t)
+			if tbl := v.validateChild(kid, pos); tbl != nil {
+				tables = append(tables, tbl)
 			}
 			break
 		}
-		if !found {
-			v.fail(kid, "cvc-complex-type.2.4.a",
-				"element {%s}%s is not permitted in this all group",
-				name.URI, name.Local)
+		if found {
+			continue
 		}
+		// XSD 1.1 open content applies to an all group too: the
+		// wildcard admits what the group does not name.
+		if oc := v.openContentFor(t); oc != nil && oc.Wildcard.Allows(name.URI) {
+			if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
+				tables = append(tables, tbl)
+			}
+			continue
+		}
+		v.fail(kid, "cvc-complex-type.2.4.a",
+			"element {%s}%s is not permitted in this all group",
+			name.URI, name.Local)
 	}
+
 	for i, p := range g.Particles {
-		if seen[i] || p.MinOccurs == 0 {
+		if counts[i] >= p.MinOccurs {
 			continue
 		}
 		if d, ok := p.Term.(*ElementDecl); ok {
