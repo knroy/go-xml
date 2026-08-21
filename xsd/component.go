@@ -568,6 +568,18 @@ type Wildcard struct {
 	// Namespace is the excluded namespace for NSNot, or the permitted set
 	// for NSEnumerated. It is unused for NSAny.
 	Namespace []string
+
+	// ExcludesAbsent records whether the absent namespace is excluded by an
+	// NSNot constraint.
+	//
+	// The two spellings differ here and the difference is easy to miss.
+	// XSD 1.0's ##other excludes unqualified names unconditionally —
+	// clause 2.3 of Wildcard allows Namespace Name — whereas XSD 1.1's
+	// notNamespace excludes only what it lists, so an unqualified name is
+	// permitted unless ##local appears. Applying ##other's rule to
+	// notNamespace rejects every unqualified attribute the wildcard was
+	// written to admit.
+	ExcludesAbsent bool
 }
 
 // ComponentKind implements Component.
@@ -585,7 +597,7 @@ func (w *Wildcard) Allows(ns string) bool {
 		return true
 	case NSNot:
 		if ns == "" {
-			return false
+			return !w.ExcludesAbsent
 		}
 		for _, n := range w.Namespace {
 			if n == ns {

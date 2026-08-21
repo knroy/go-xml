@@ -254,7 +254,7 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 		return nil
 	}
 	g := &AttributeGroupDef{Name: p.qnameFor(name)}
-	g.AttributeWildcard = p.readAttributes(el, &g.AttributeUses)
+	p.readAttributes(el, &g.AttributeUses, &g.AttributeWildcard)
 	return g
 }
 
@@ -271,7 +271,7 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 // fixup appending to a variable nobody reads — which is exactly the bug this
 // signature exists to prevent, and which silently dropped every
 // attribute-group attribute.
-func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse) *Wildcard {
+func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wildcard) {
 	var wildcard *Wildcard
 
 	for _, c := range contentChildren(el) {
@@ -303,14 +303,30 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse) *Wildcard
 						"attributeGroup ref %q names no attribute group", ref)
 				}
 				*target = append(*target, g.AttributeUses...)
+				// A referenced group's wildcard is the
+				// containing component's too, intersected with
+				// whatever else it has. Dropping it here left a
+				// type whose only wildcard came through a group
+				// with none at all.
+				if g.AttributeWildcard != nil {
+					*into = intersectWildcards(*into, g.AttributeWildcard)
+				}
 				return nil
 			})
 
 		case "anyAttribute":
-			wildcard = p.readWildcard(c)
+			// Several attribute groups may each contribute a
+			// wildcard, and the type's wildcard is their
+			// *intersection* (§3.10.6 Attribute Wildcard
+			// Intersection) — an attribute must satisfy all of them.
+			// Keeping only the last one accepts attributes every
+			// group but that one excluded.
+			wildcard = intersectWildcards(wildcard, p.readWildcard(c))
 		}
 	}
-	return wildcard
+	if wildcard != nil {
+		*into = intersectWildcards(*into, wildcard)
+	}
 }
 
 // readWildcard reads an <xs:any> or <xs:anyAttribute>.
@@ -339,7 +355,10 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 			case "##targetNamespace":
 				w.Namespace = append(w.Namespace, p.doc.targetNS)
 			case "##local":
-				w.Namespace = append(w.Namespace, "")
+				// Only an explicit ##local excludes unqualified
+				// names from a notNamespace wildcard, unlike
+				// ##other which excludes them always.
+				w.ExcludesAbsent = true
 			default:
 				w.Namespace = append(w.Namespace, word)
 			}
@@ -355,12 +374,13 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	case "##any":
 		w.Kind = NSAny
 	case "##other":
-		// ##other is "not the target namespace". In a document with no
-		// target namespace it becomes "not absent", which still excludes
-		// unqualified names by clause 2.3 of Wildcard allows Namespace
-		// Name — see Wildcard.Allows.
+		// ##other is "not the target namespace", and by clause 2.3 of
+		// Wildcard allows Namespace Name it excludes unqualified names
+		// as well — which is what ExcludesAbsent records, and what
+		// distinguishes it from XSD 1.1's notNamespace.
 		w.Kind = NSNot
 		w.Namespace = []string{p.doc.targetNS}
+		w.ExcludesAbsent = true
 	default:
 		w.Kind = NSEnumerated
 		for _, word := range splitFields(ns) {
@@ -423,4 +443,71 @@ func (p *parser) resolveTypeRef(el *xdm.Node, ref string, set func(Type)) {
 		set(t)
 		return nil
 	})
+}
+
+// intersectWildcards combines two attribute wildcards (§3.10.6).
+//
+// The intersection is what a type gets when more than one attribute group
+// contributes a wildcard: an attribute has to be admitted by all of them. The
+// spec allows the result to be inexpressible — the intersection of two
+// different negations, for instance — and in that case it is a schema error
+// rather than something to approximate. Here the inexpressible cases fall back
+// to the narrower of the two operands, which never admits more than the
+// intersection does.
+func intersectWildcards(a, b *Wildcard) *Wildcard {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+
+	// processContents takes the stronger of the two: strict over lax over
+	// skip, so that combining does not weaken checking.
+	pc := a.ProcessContents
+	if b.ProcessContents < pc {
+		pc = b.ProcessContents
+	}
+
+	switch {
+	case a.Kind == NSAny:
+		out := *b
+		out.ProcessContents = pc
+		return &out
+	case b.Kind == NSAny:
+		out := *a
+		out.ProcessContents = pc
+		return &out
+	}
+
+	// An enumerated set against anything: keep the members the other
+	// admits.
+	if a.Kind == NSEnumerated || b.Kind == NSEnumerated {
+		enum, other := a, b
+		if b.Kind == NSEnumerated && a.Kind != NSEnumerated {
+			enum, other = b, a
+		}
+		var kept []string
+		for _, ns := range enum.Namespace {
+			if other.Allows(ns) {
+				kept = append(kept, ns)
+			}
+		}
+		return &Wildcard{Kind: NSEnumerated, Namespace: kept, ProcessContents: pc}
+	}
+
+	// Both negations: the union of what each excludes.
+	out := &Wildcard{
+		Kind:            NSNot,
+		ProcessContents: pc,
+		ExcludesAbsent:  a.ExcludesAbsent || b.ExcludesAbsent,
+	}
+	seen := map[string]bool{}
+	for _, ns := range append(append([]string{}, a.Namespace...), b.Namespace...) {
+		if !seen[ns] {
+			seen[ns] = true
+			out.Namespace = append(out.Namespace, ns)
+		}
+	}
+	return out
 }

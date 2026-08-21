@@ -195,8 +195,10 @@ func TestWildcardAllows(t *testing.T) {
 
 	// ##other excludes the absent namespace as well as the named one.
 	// Clause 2.3 of Wildcard allows Namespace Name says so explicitly, and
-	// authors near-universally expect the opposite.
-	other := &Wildcard{Kind: NSNot, Namespace: []string{"urn:mine"}}
+	// authors near-universally expect the opposite. The parser sets
+	// ExcludesAbsent for ##other and leaves it clear for XSD 1.1's
+	// notNamespace, which excludes only what it lists.
+	other := &Wildcard{Kind: NSNot, Namespace: []string{"urn:mine"}, ExcludesAbsent: true}
 	if other.Allows("urn:mine") {
 		t.Error("##other should exclude its own namespace")
 	}
@@ -213,6 +215,18 @@ func TestWildcardAllows(t *testing.T) {
 	}
 	if enum.Allows("urn:b") {
 		t.Error("an enumerated constraint should exclude non-members")
+	}
+
+	// XSD 1.1's notNamespace excludes only the namespaces it lists, so an
+	// unqualified name is permitted unless ##local appears. Applying
+	// ##other's rule here rejects every unqualified attribute such a
+	// wildcard was written to admit.
+	notNS := &Wildcard{Kind: NSNot, Namespace: []string{"urn:a"}}
+	if !notNS.Allows("") {
+		t.Error("notNamespace without ##local should allow unqualified names")
+	}
+	if notNS.Allows("urn:a") {
+		t.Error("notNamespace should exclude what it lists")
 	}
 }
 

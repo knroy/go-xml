@@ -338,7 +338,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 			t.declaredOpenContent = true
 		}
 	}
-	t.AttributeWildcard = p.readAttributes(el, &t.AttributeUses)
+	p.readAttributes(el, &t.AttributeUses, &t.AttributeWildcard)
 
 	switch {
 	case t.Particle == nil && mixed:
@@ -392,7 +392,7 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	if inline := childElement(body, "simpleType"); inline != nil {
 		t.SimpleContent = p.readSimpleType(inline)
 	}
-	t.AttributeWildcard = p.readAttributes(body, &t.AttributeUses)
+	p.readAttributes(body, &t.AttributeUses, &t.AttributeWildcard)
 	p.inheritAttributes(t)
 }
 

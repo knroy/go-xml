@@ -234,3 +234,131 @@ func TestAssertionCompileErrorIsReported(t *testing.T) {
 		t.Fatal("a malformed assertion test should be a schema error")
 	}
 }
+
+// TestNotNamespaceAllowsUnqualified covers the difference between the two
+// spellings of a negated wildcard, which is easy to miss and rejects real
+// documents when missed.
+//
+// XSD 1.0's ##other excludes unqualified names unconditionally — clause 2.3 of
+// Wildcard allows Namespace Name. XSD 1.1's notNamespace excludes only what it
+// lists, so an unqualified name is permitted unless ##local appears.
+func TestNotNamespaceAllowsUnqualified(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:anyAttribute notNamespace="urn:no" processContents="skip"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e plain="x"/>`); err != nil {
+		t.Errorf("notNamespace should admit an unqualified attribute: %v", err)
+	}
+	if err := check11(t, s, `<e xmlns:n="urn:no" n:a="x"/>`); err == nil {
+		t.Error("notNamespace should exclude what it lists")
+	}
+
+	// With ##local it excludes unqualified names too.
+	s2 := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:anyAttribute notNamespace="##local" processContents="skip"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	if err := check11(t, s2, `<e plain="x"/>`); err == nil {
+		t.Error("notNamespace=\"##local\" should exclude unqualified attributes")
+	}
+}
+
+// TestAttributeWildcardIntersection covers §3.10.6: when more than one
+// attribute group contributes a wildcard, the type's wildcard is their
+// intersection — an attribute must satisfy all of them.
+//
+// Two bugs met here. The type kept only the last wildcard rather than
+// intersecting, and the fixup that flattened an attribute group copied its
+// uses but dropped its wildcard entirely, so a type whose only wildcard arrived
+// through a group had none.
+func TestAttributeWildcardIntersection(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="T"/>
+	  <xs:complexType name="T">
+	    <xs:sequence/>
+	    <xs:attributeGroup ref="a"/>
+	    <xs:attributeGroup ref="b"/>
+	  </xs:complexType>
+	  <xs:attributeGroup name="a">
+	    <xs:anyAttribute notNamespace="##local" processContents="lax"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="b">
+	    <xs:anyAttribute notNamespace="urn:eve" processContents="lax"/>
+	  </xs:attributeGroup>
+	</xs:schema>`)
+
+	// Admitted by both.
+	if err := check11(t, s, `<e xmlns:m="urn:adam" m:a="x"/>`); err != nil {
+		t.Errorf("an attribute both wildcards admit should be valid: %v", err)
+	}
+	// Excluded by the first.
+	if err := check11(t, s, `<e plain="x"/>`); err == nil {
+		t.Error("an unqualified attribute is excluded by ##local")
+	}
+	// Excluded by the second.
+	if err := check11(t, s, `<e xmlns:f="urn:eve" f:a="x"/>`); err == nil {
+		t.Error("urn:eve is excluded by the second wildcard")
+	}
+}
+
+// TestExplicitTimezone covers the XSD 1.1 facet, and xs:dateTimeStamp, which is
+// xs:dateTime with the facet fixed at required — the type that says "an
+// instant" rather than "a wall-clock reading".
+func TestExplicitTimezone(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="stamp" type="xs:dateTimeStamp"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<stamp>2024-01-01T00:00:00Z</stamp>`); err != nil {
+		t.Errorf("a value with a timezone should be valid: %v", err)
+	}
+	if err := check11(t, s, `<stamp>2024-01-01T00:00:00</stamp>`); err == nil {
+		t.Error("xs:dateTimeStamp requires a timezone")
+	}
+}
+
+// TestIDThroughUnion covers a bug that affected XSD 1.0 as much as 1.1.
+//
+// An ID declared through a union was never recorded, because idKind walked the
+// union's base chain — which is xs:anySimpleType — rather than looking at the
+// member that validates the value. Every reference to such an ID was then
+// reported as dangling.
+func TestIDThroughUnion(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="idOrBool">
+	    <xs:union memberTypes="xs:ID xs:boolean"/>
+	  </xs:simpleType>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="v" type="idOrBool" maxOccurs="unbounded"/>
+	        <xs:element name="ref" type="xs:IDREF"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema,
+		`<root><v>abc</v><v>true</v><ref>abc</ref></root>`)
+	// The ID is recorded, so a duplicate is caught.
+	assertInvalid(t, schema,
+		`<root><v>abc</v><v>abc</v><ref>abc</ref></root>`, "cvc-id.2")
+	// And a dangling reference is still caught.
+	assertInvalid(t, schema,
+		`<root><v>abc</v><ref>nope</ref></root>`, "cvc-id.1")
+}
