@@ -770,12 +770,39 @@ func mergeAllExtension(basePart, own *Particle) *Particle {
 	if baseAll == nil || ownAll == nil {
 		return nil
 	}
-	particles := make([]*Particle, 0, len(baseAll.Particles)+len(ownAll.Particles))
-	particles = append(particles, optionalIf(basePart.MinOccurs == 0, baseAll.Particles)...)
-	particles = append(particles, optionalIf(own.MinOccurs == 0, ownAll.Particles)...)
+	// An optional all group is all-or-nothing: minOccurs="0" says the group
+	// may be absent, not that each member is independently optional. The
+	// two differ as soon as the group has more than one member, and
+	// flattening the members with minOccurs="0" apiece loses the
+	// distinction — <child1/> alone would satisfy a group that requires
+	// both or neither.
+	//
+	// The group is kept as a nested particle so matchAll can enforce it,
+	// rather than being merged into the members.
+	particles := make([]*Particle, 0, 2)
+	particles = append(particles, allBranch(basePart, baseAll))
+	particles = append(particles, allBranch(own, ownAll))
 	return &Particle{
 		MinOccurs: 1, MaxOccurs: 1,
 		Term: &ModelGroup{Compositor: CompositorAll, Particles: particles},
+	}
+}
+
+// allBranch returns the particle for one side of a merged all group.
+//
+// A group that must occur contributes its members directly, since there is
+// nothing conditional about them. An optional one keeps its own particle, so
+// that "all of these or none" survives the merge.
+func allBranch(p *Particle, g *ModelGroup) *Particle {
+	if p.MinOccurs != 0 {
+		return &Particle{
+			MinOccurs: 1, MaxOccurs: 1,
+			Term: &ModelGroup{Compositor: CompositorAll, Particles: g.Particles},
+		}
+	}
+	return &Particle{
+		MinOccurs: 0, MaxOccurs: 1,
+		Term: &ModelGroup{Compositor: CompositorAll, Particles: g.Particles},
 	}
 }
 
@@ -801,24 +828,6 @@ func allGroupOf(p *Particle) *ModelGroup {
 	return nil
 }
 
-// optionalIf makes every particle optional when the group containing them was.
-//
-// An all group with minOccurs="0" may be absent entirely, which once its
-// members are merged into a larger group can only be expressed by making each
-// member optional. Without this, merging an optional base into an extension
-// would turn its children into required ones.
-func optionalIf(optional bool, ps []*Particle) []*Particle {
-	if !optional {
-		return ps
-	}
-	out := make([]*Particle, len(ps))
-	for i, p := range ps {
-		c := *p
-		c.MinOccurs = 0
-		out[i] = &c
-	}
-	return out
-}
 
 // combineOpenContent merges a base type's open content with a derived type's.
 //

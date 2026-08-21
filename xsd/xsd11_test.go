@@ -2438,3 +2438,72 @@ func TestAssertionOnUnionRestriction(t *testing.T) {
 		t.Error("a 2009 value should fail the assertion")
 	}
 }
+
+// TestNilledElementRejectsWhitespace pins that a nilled element must have no
+// character content at all.
+//
+// The indentation exception belongs to element-only content, and a nilled
+// element has no content model left for whitespace to sit inside — the suite's
+// all004.n02 is annotated "invalid, element is nilled but contains content,
+// albeit whitespace".
+func TestNilledElementRejectsWhitespace(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc" nillable="true">
+	    <xs:complexType mixed="true">
+	      <xs:sequence><xs:element name="a" minOccurs="0"/></xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	const nil1 = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="1"`
+
+	assertValid(t, schema, `<doc`+nil1+`/>`)
+	assertInvalid(t, schema, "<doc"+nil1+">\n\n</doc>", "cvc-elt.3.2.1")
+	assertInvalid(t, schema, `<doc`+nil1+`>x</doc>`, "cvc-elt.3.2.1")
+}
+
+// TestOptionalAllGroupIsAllOrNothing covers minOccurs="0" on an xs:all: it says
+// the group may be absent, not that each member is independently optional.
+//
+// The two differ as soon as the group has more than one member. Extending an
+// all group with an all group merges them into one, so the rule spans both
+// branches — the suite puts it as "if the group is present then all elements
+// must be present".
+func TestOptionalAllGroupIsAllOrNothing(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="ProductType">
+	    <xs:all minOccurs="0">
+	      <xs:element name="child1"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="ExtendedProductType">
+	    <xs:complexContent>
+	      <xs:extension base="ProductType">
+	        <xs:all minOccurs="0">
+	          <xs:element name="child2"/>
+	        </xs:all>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="product" type="ExtendedProductType"/>
+	</xs:schema>`)
+
+	for _, doc := range []string{
+		`<product><child1/><child2/></product>`,
+		`<product><child2/><child1/></product>`,
+		`<product/>`,
+	} {
+		if err := check11(t, s, doc); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
+	for _, doc := range []string{
+		`<product><child1/></product>`,
+		`<product><child2/></product>`,
+	} {
+		if err := check11(t, s, doc); err == nil {
+			t.Errorf("%s should be invalid: a present group owes every member", doc)
+		}
+	}
+}

@@ -283,8 +283,14 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 		}
 		if val == "true" || val == "1" {
 			// A nilled element must be empty and must not have a
-			// fixed value constraint.
-			if len(el.ChildElements()) > 0 || strings.TrimSpace(el.StringValue()) != "" {
+			// fixed value constraint. Empty means no character
+			// content at all, not merely none that is significant:
+			// the indentation exception belongs to element-only
+			// content, and a nilled element has no content model
+			// left for whitespace to sit inside. The suite's
+			// all004.n02 is annotated "invalid, element is nilled
+			// but contains content, albeit whitespace".
+			if len(el.ChildElements()) > 0 || hasText(el) {
 				v.fail(el, "cvc-elt.3.2.1",
 					"an element with xsi:nil=\"true\" must be empty")
 			}
@@ -1039,8 +1045,39 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 			name.URI, name.Local)
 	}
 
+	// An optional all group is all-or-nothing: minOccurs="0" says the group
+	// may be absent, not that each member is independently optional. Once
+	// anything from it has appeared the group is present, and every member
+	// it requires must be there — the suite puts it exactly that way:
+	// "invalid, if the group is present then all elements must be present".
+	//
+	// Extending an all group with an all group merges them into one, so the
+	// rule spans both branches: a document with only the base's child has
+	// made the merged group present and still owes the extension's.
+	optional := optionalAllMembers(g, particles)
+	if len(optional) > 0 {
+		present, missing := 0, 0
+		for _, idx := range optional {
+			if counts[idx] > 0 {
+				present++
+			} else if particles[idx].MinOccurs > 0 {
+				missing++
+			}
+		}
+		if present > 0 && missing > 0 {
+			v.fail(el, "cvc-complex-type.2.4.b",
+				"an optional all group is present, so every element it "+
+					"requires must be present")
+		}
+	}
+
 	for i, p := range particles {
 		if counts[i] >= p.MinOccurs {
+			continue
+		}
+		// A member of an optional all group is only required once the
+		// group is present at all, which the check above decides.
+		if len(optional) > 0 && contains(optional, i) {
 			continue
 		}
 		switch term := p.Term.(type) {
@@ -1297,4 +1334,29 @@ func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
 		}
 	}
 	return nil
+}
+
+// optionalAllMembers returns the indices in the flattened member list of every
+// particle belonging to an optional nested all group.
+//
+// Extending an all group with an all group produces one group holding both as
+// optional branches, so their members are pooled: the merged group is present
+// as soon as any of them appears.
+func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
+	var out []int
+	for _, p := range g.Particles {
+		inner := allGroupOf(p)
+		if inner == nil || p.MinOccurs != 0 {
+			continue
+		}
+		for _, member := range flattenAll(inner) {
+			for i, flat := range particles {
+				if flat == member {
+					out = append(out, i)
+					break
+				}
+			}
+		}
+	}
+	return out
 }
