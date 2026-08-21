@@ -247,6 +247,16 @@ The DOCTYPE default is worth naming: a schema document has no use for one, and
 it is the entry point for entity expansion attacks. Set
 `ParseOptions.AllowDOCTYPE` only for a schema you control.
 
+One consequence catches people out. UBL 2.1 ships
+`UBL-xmldsig-core-schema-2.1.xsd` with a DOCTYPE, and every UBL document
+schema includes it, so loading any of the 65 without the flag fails with a
+cascade of
+
+    src-resolve: element ref "ds:Signature" names no element declaration
+
+— one refused include, reported as a dozen unresolved references rather than
+as the DOCTYPE it actually is. With `AllowDOCTYPE` set, all 65 load clean.
+
 ## Concurrency
 
 A loaded `Schema` is immutable and safe to validate from any number of
