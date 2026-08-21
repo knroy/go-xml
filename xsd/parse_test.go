@@ -1688,3 +1688,79 @@ func TestSubstitutionGroupExclusions(t *testing.T) {
 		t.Errorf("a head with no final should admit an extending member: %v", err)
 	}
 }
+
+// A chain of extensions must flatten all the way down, not one link.
+//
+// An extension's content model is the base's followed by its own, and the
+// splice is deferred because the base may not be resolved when the type is
+// read. But a type's {base type definition} is itself filled in by a fixup, so
+// running the splice during the fixup pass could find a base whose own splice
+// had not happened — or whose base was still nil — and copy a half-built model,
+// losing every link below it.
+//
+// elemZ010 is the suite's case: four types across four documents, a extends b
+// extends c extends d, each adding one element. The content model of a is
+// d, c, b, a, and before this each type came out with only its own element and
+// its immediate base's.
+func TestExtensionChainFlattensCompletely(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="d">
+	    <xs:sequence><xs:element name="d" type="xs:string"/></xs:sequence>
+	  </xs:complexType>
+	  <!-- Declared out of derivation order on purpose: the splice must not
+	       depend on the order the types happen to be read in. -->
+	  <xs:complexType name="a">
+	    <xs:complexContent><xs:extension base="b">
+	      <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+	    </xs:extension></xs:complexContent>
+	  </xs:complexType>
+	  <xs:complexType name="c">
+	    <xs:complexContent><xs:extension base="d">
+	      <xs:sequence><xs:element name="c" type="xs:string"/></xs:sequence>
+	    </xs:extension></xs:complexContent>
+	  </xs:complexType>
+	  <xs:complexType name="b">
+	    <xs:complexContent><xs:extension base="c">
+	      <xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence>
+	    </xs:extension></xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="root" type="a"/>
+	</xs:schema>`)
+
+	var leaves func(p *Particle) []string
+	leaves = func(p *Particle) []string {
+		if p == nil {
+			return nil
+		}
+		switch term := p.Term.(type) {
+		case *ElementDecl:
+			return []string{term.Name.Local}
+		case *ModelGroup:
+			var out []string
+			for _, q := range term.Particles {
+				out = append(out, leaves(q)...)
+			}
+			return out
+		}
+		return nil
+	}
+
+	for _, want := range []struct {
+		typ   string
+		order string
+	}{
+		{"d", "d"},
+		{"c", "d c"},
+		{"b", "d c b"},
+		{"a", "d c b a"},
+	} {
+		ct, ok := s.Types[xdm.QName{Local: want.typ}].(*ComplexType)
+		if !ok {
+			t.Fatalf("type %q missing", want.typ)
+		}
+		if got := strings.Join(leaves(ct.Particle), " "); got != want.order {
+			t.Errorf("type %q content model = %q, want %q", want.typ, got, want.order)
+		}
+	}
+}

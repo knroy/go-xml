@@ -142,6 +142,13 @@ type parser struct {
 	// cannot be a fixup itself — it would run somewhere in the middle.
 	postFixups []func() error
 
+	// pendingSplice holds each extension's content-model splice, keyed by
+	// the type it belongs to, so that a type whose base has not been
+	// spliced yet can pull the base's splice forward rather than reading a
+	// half-built model. splicedNow records the ones already run.
+	pendingSplice map[*ComplexType]func(map[*ComplexType]bool)
+	splicedNow    map[*ComplexType]bool
+
 	// attrsDone marks the complex types whose inherited attributes have
 	// been resolved, so that a base shared by many derived types is walked
 	// once rather than once per derivation.

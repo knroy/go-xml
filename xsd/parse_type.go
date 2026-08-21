@@ -549,17 +549,37 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 	// deferred.
 	if t.DerivationMethod == DerivationExtension {
 		own := t.Particle
-		p.fixups = append(p.fixups, func() error {
+		splice := func(seen map[*ComplexType]bool) {
 			base, ok := t.Base.(*ComplexType)
-			if !ok || base.Particle == nil {
-				return nil
+			if !ok {
+				return
+			}
+			// The base must be spliced before it is read. Fixups run
+			// in the order they were queued, which is the order the
+			// types were read, and that need not follow the
+			// derivation chain: a type extending one whose own
+			// splice has not run yet copied a half-built content
+			// model, losing everything below it.
+			//
+			// elemZ010 is four types extending one another across
+			// four documents, a extends b extends c extends d. Each
+			// came out with two child elements instead of four,
+			// three and two, so the instance was rejected at the
+			// first child the model had lost.
+			// The caller's seen set is passed down rather than a
+			// fresh one, or a cycle in the base chain — which is
+			// ill-formed, and reported by a later constraint —
+			// recurses until the stack is gone.
+			p.spliceExtension(base, seen)
+			if base.Particle == nil {
+				return
 			}
 			if own == nil {
 				t.Particle = base.Particle
 				if t.Content == ContentEmpty {
 					t.Content = base.Content
 				}
-				return nil
+				return
 			}
 			// XSD 1.1 §3.4.2.3.3 clause 2.2: when both the base and
 			// the extension are all groups, the result is one all
@@ -571,7 +591,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			// permits.
 			if merged := mergeAllExtension(base.Particle, own); merged != nil {
 				t.Particle = merged
-				return nil
+				return
 			}
 			t.Particle = &Particle{
 				MinOccurs: 1, MaxOccurs: 1,
@@ -580,9 +600,51 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 					Particles:  []*Particle{base.Particle, own},
 				},
 			}
+		}
+		if p.pendingSplice == nil {
+			p.pendingSplice = map[*ComplexType]func(map[*ComplexType]bool){}
+			p.splicedNow = map[*ComplexType]bool{}
+		}
+		// A type may be read more than once — a redefine reads its
+		// replacement over the original — and only the last splice
+		// registered describes the type as it finally stands.
+		p.pendingSplice[t] = splice
+		// The splice runs as a post-fixup rather than a fixup. A type's
+		// {base type definition} is itself filled in by a fixup, so
+		// during the fixup pass a base may still be nil — and the
+		// recursion above, which exists to splice a base before reading
+		// it, cannot do anything with a base that is not there yet.
+		// postFixups run once the fixups have drained, when every base
+		// reference has been bound.
+		p.postFixups = append(p.postFixups, func() error {
+			p.spliceExtension(t, map[*ComplexType]bool{})
 			return nil
 		})
 	}
+}
+
+// spliceExtension runs a type's own extension splice ahead of its turn, so that
+// a type extending it sees the finished content model rather than a half-built
+// one.
+//
+// The seen set guards a cycle in the base chain, which is ill-formed but must
+// not hang here — the constraint that reports it runs later, and reaching it
+// requires getting this far first.
+func (p *parser) spliceExtension(t *ComplexType, seen map[*ComplexType]bool) {
+	if t == nil || seen[t] || p.splicedNow[t] {
+		return
+	}
+	pending := p.pendingSplice[t]
+	if pending == nil {
+		return
+	}
+	// The cycle guard is the caller's seen set, which is passed down the
+	// chain. splicedNow is set only *after* the splice has run, because the
+	// splice recurses into its own base first and marking it done up front
+	// would stop that recursion at the second link.
+	seen[t] = true
+	pending(seen)
+	p.splicedNow[t] = true
 }
 
 // readParticle reads an element, group reference, or model group as a particle.
