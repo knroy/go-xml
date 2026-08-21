@@ -351,16 +351,14 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			kt.Name = &qn
 			kt.HasName = true
 			p.pos++
-			// element(name, type) — the type annotation is accepted and
-			// ignored, since this engine does not carry schema types.
-			if _, ok := p.acceptOp(","); ok {
-				if p.cur().Kind == TokName {
-					p.pos++
-				}
-				p.acceptOp("?")
-			}
+			p.skipTypeAnnotation()
 		} else if p.cur().Kind == TokWildcard {
 			p.pos++ // element(*) is the same as element()
+			// element(*, type) and attribute(*, type) are as legal as
+			// the named forms; only the name may be a wildcard, not
+			// the whole second argument, so the annotation is skipped
+			// here too rather than only after a name.
+			p.skipTypeAnnotation()
 		}
 	default:
 		return nil, p.errorf("unknown kind test %q", name)
@@ -370,6 +368,24 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 		return nil, err
 	}
 	return kt, nil
+}
+
+// skipTypeAnnotation consumes the ", type" of element(name, type) and its
+// attribute() counterpart.
+//
+// The annotation is accepted and ignored: this engine carries no in-scope
+// schema, so there is no type hierarchy to check a node's annotation against.
+// Ignoring it makes the test the name test alone, which is weaker than the
+// spec's but never wrong about the name — whereas failing to parse it rejects
+// a legal expression outright.
+func (p *Parser) skipTypeAnnotation() {
+	if _, ok := p.acceptOp(","); !ok {
+		return
+	}
+	if p.cur().Kind == TokName {
+		p.pos++
+	}
+	p.acceptOp("?")
 }
 
 func (p *Parser) parsePredicates() ([]Expr, error) {
