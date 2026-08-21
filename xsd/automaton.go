@@ -50,6 +50,13 @@ type contentModel struct {
 	// count for each rather than duplicating states.
 	counters []*counter
 
+	// scopeFirst[c] and scopeLast[c] are the positions at which one
+	// repetition of counter c may begin and end. They are what tells a
+	// restart from a continuation, which cannot be read off the position
+	// numbering once a group reference makes it non-monotonic.
+	scopeFirst []map[int]bool
+	scopeLast  []map[int]bool
+
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
 	active map[*ModelGroup]bool
@@ -126,6 +133,8 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		m.counters = append(m.counters, &counter{
 			min: p.MinOccurs, max: p.MaxOccurs, parent: enclosing,
 		})
+		m.scopeFirst = append(m.scopeFirst, map[int]bool{})
+		m.scopeLast = append(m.scopeLast, map[int]bool{})
 		scope = len(m.counters) - 1
 	}
 
@@ -181,6 +190,16 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 
 	// A repeatable particle may follow itself, which is what replaces
 	// unrolling: the cycle is in the automaton and the count is at runtime.
+	// The positions that begin and end one repetition are recorded so that
+	// the runtime can tell a restart from a continuation.
+	if scope != enclosing && scope >= 0 {
+		for _, f := range inner.first {
+			m.scopeFirst[scope][f] = true
+		}
+		for _, l := range inner.last {
+			m.scopeLast[scope][l] = true
+		}
+	}
 	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
 		for _, l := range inner.last {
 			m.addFollow(l, inner.first)

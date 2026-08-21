@@ -313,7 +313,7 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 				"an element with a simple type may not have element children")
 		}
 		v.checkNoForeignAttributes(el, nil, nil)
-		v.validateSimpleContent(el, el.StringValue(), t, decl)
+		v.validateSimpleContent(el, effectiveValue(el, decl), t, decl)
 
 	case *ComplexType:
 		tables = v.validateComplexType(el, t, decl)
@@ -362,7 +362,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 				"element has simple content but has element children")
 		}
 		if t.SimpleContent != nil {
-			v.validateSimpleContent(el, el.StringValue(), t.SimpleContent, decl)
+			v.validateSimpleContent(el, effectiveValue(el, decl), t.SimpleContent, decl)
 		}
 
 	case ContentElementOnly:
@@ -557,13 +557,20 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 func counterAllows(m *contentModel, counts []int, from, to int) bool {
 	p := m.positions[to]
 	for _, c := range p.counters {
-		// Entering the same scope again is what the count bounds; the
-		// count is only consulted for a scope that is being re-entered
-		// rather than entered for the first time.
-		if from >= 0 && sharesScope(m.positions[from], c) {
-			if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
-				return false
-			}
+		if from < 0 || !sharesScope(m.positions[from], c) {
+			// Entering the scope for the first time; nothing to bound.
+			continue
+		}
+		// The bound applies to a *restart*, not to every transition
+		// inside the scope. Consulting the count on a continuation —
+		// x1 to x2 within one repetition of a group — refused a legal
+		// step the moment the count reached its maximum, which is the
+		// same confusion the restart test exists to resolve.
+		if !isScopeRestart(m, c, from, to) {
+			continue
+		}
+		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
+			return false
 		}
 	}
 	return true
@@ -587,21 +594,38 @@ func advanceCounters(m *contentModel, counts []int, from, to int) {
 			counts[c] = 1
 			continue
 		}
-		// Re-entering from the scope's own last position means another
-		// repetition; staying within it does not.
-		if from >= 0 && contains(m.follow[from], to) && isScopeRestart(m, from, to, c) {
+		if isScopeRestart(m, c, from, to) {
 			counts[c]++
 		}
 	}
 }
 
-// isScopeRestart reports whether a transition goes back to the start of a
-// repetition scope rather than forward within it.
-func isScopeRestart(m *contentModel, from, to, scope int) bool {
-	// A restart is a transition to a position that can begin the scope,
-	// from one that can end it. Approximating this by "to is reachable
-	// from itself" would count forward transitions inside the scope.
-	return to <= from
+// isScopeRestart reports whether a transition begins another repetition of a
+// scope rather than continuing the current one.
+//
+// A repetition restarts when the transition lands on a position that can *begin*
+// the scope, from one that can *end* it — which is exactly the edge the compiler
+// added to make the scope repeatable.
+//
+// The first version compared position indices, on the reasoning that a restart
+// goes backwards. That holds only while positions are numbered in the order
+// they appear, and a group reference breaks it: a choice of two groups numbers
+// the second group's positions after the first's, so moving from the first
+// group's end into the second group's start is a restart that runs *forwards*.
+// A repeated choice over two groups was then read as one long repetition and
+// rejected once it passed maxOccurs.
+func isScopeRestart(m *contentModel, scope, from, to int) bool {
+	return scopeCanEndAt(m, scope, from) && scopeCanBeginAt(m, scope, to)
+}
+
+// scopeCanBeginAt reports whether a position can start a repetition of a scope.
+func scopeCanBeginAt(m *contentModel, scope, at int) bool {
+	return m.scopeFirst[scope][at]
+}
+
+// scopeCanEndAt reports whether a position can finish a repetition of a scope.
+func scopeCanEndAt(m *contentModel, scope, at int) bool {
+	return m.scopeLast[scope][at]
 }
 
 // countersSatisfied reports whether every counter containing a position has met
@@ -788,4 +812,27 @@ func (v *validator) pushInherited(el *xdm.Node, decl *ElementDecl) int {
 		n++
 	}
 	return n
+}
+
+// effectiveValue returns the value an element is validated against.
+//
+// An element with no content and a value constraint takes that value — §3.3.4
+// clause 5.2. Without this an empty <price/> declared with default="0" was
+// validated as the empty string, which is not a valid xs:decimal, so a document
+// the schema explicitly provides for was rejected.
+//
+// A fixed constraint supplies its value the same way: fixed means "this value
+// or nothing", not "this value must be written out".
+func effectiveValue(el *xdm.Node, decl *ElementDecl) string {
+	raw := el.StringValue()
+	if raw != "" || decl == nil || decl.Constraint == nil {
+		return raw
+	}
+	// Only a genuinely empty element defaults. One containing whitespace has
+	// content, which whiteSpace normalisation may later collapse to nothing
+	// — that is a different value from absent, and the spec treats it so.
+	if len(el.Children) > 0 {
+		return raw
+	}
+	return decl.Constraint.Lexical
 }

@@ -604,3 +604,73 @@ func TestQNameLengthFacetIsIgnored(t *testing.T) {
 	assertValid(t, schema,
 		`<root xmlns:x="urn:x">x:a-considerably-longer-local-name-than-seven</root>`)
 }
+
+// TestRepeatedChoiceOfGroups covers a counter bug that only appears once a
+// group reference makes position numbering non-monotonic.
+//
+// The runtime tells a repetition restart from a continuation. The first version
+// did it by comparing position indices, on the reasoning that a restart goes
+// backwards — which holds only while positions are numbered in the order they
+// appear. A choice of two groups numbers the second group's positions after the
+// first's, so moving from the first group's end into the second group's start
+// is a restart that runs *forwards*: the whole thing was read as one long
+// repetition and rejected once it passed maxOccurs.
+func TestRepeatedChoiceOfGroups(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:group name="x">
+	    <xs:sequence>
+	      <xs:element name="x1" type="xs:string"/>
+	      <xs:element name="x2" type="xs:string"/>
+	    </xs:sequence>
+	  </xs:group>
+	  <xs:group name="y">
+	    <xs:choice>
+	      <xs:element name="y1" type="xs:string"/>
+	      <xs:element name="y2" type="xs:string"/>
+	    </xs:choice>
+	  </xs:group>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:choice minOccurs="0" maxOccurs="4">
+	        <xs:group ref="x"/>
+	        <xs:group ref="y"/>
+	      </xs:choice>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	// Two repetitions, the second entering the *other* group.
+	assertValid(t, schema, `<root><x1>a</x1><x2>b</x2><y1>c</y1></root>`)
+	// Four repetitions, the maximum.
+	assertValid(t, schema,
+		`<root><y1>a</y1><y2>b</y2><y1>c</y1><x1>d</x1><x2>e</x2></root>`)
+	// Five exceeds it.
+	assertInvalid(t, schema,
+		`<root><y1>a</y1><y1>b</y1><y1>c</y1><y1>d</y1><y1>e</y1></root>`,
+		"cvc-complex-type.2.4")
+}
+
+// TestElementDefaultAppliesToEmptyContent covers §3.3.4 clause 5.2: an element
+// with no content and a value constraint takes that value.
+//
+// Without it an empty <price/> declared with default="0" was validated as the
+// empty string, which is not a valid xs:decimal — so a document the schema
+// explicitly provides for was rejected.
+func TestElementDefaultAppliesToEmptyContent(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="price" type="xs:decimal" default="0"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema, `<root><price/></root>`)
+	assertValid(t, schema, `<root><price>1.5</price></root>`)
+	assertInvalid(t, schema, `<root><price>notanumber</price></root>`,
+		"cvc-datatype-valid")
+}
