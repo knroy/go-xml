@@ -19,7 +19,7 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
+| **XPath 2.0** | 99.84% of the W3C QT3 suite (14,697 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,002); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,208); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
