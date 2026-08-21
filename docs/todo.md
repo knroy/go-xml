@@ -66,44 +66,67 @@ delegate to the XSD types already here.
 Cost: ~4,000–6,000 lines, and it needs James Clark's suite to be trustworthy.
 Buys: breadth. Recommend only after 1.1 and 1.2.
 
-### 1.4 Particle Valid (Restriction)
+### 1.4 Schema Component Constraints — the remaining bulk
 
-Deliberately unimplemented. A schema whose restriction is unsound in this
-specific way is accepted rather than reported. The company this keeps is
-reasonable — libxml2 omits it entirely, Xerces leaves it off by default — and
-it affects schema authors, not document validators.
+**Largely done, and the biggest single change to the numbers so far.** Particle
+Valid (Restriction) is implemented, along with the Part 2 facet constraints, a
+structural check of each schema document against the schema for schemas, the
+XSD regular-expression grammar, and occurrence bounds without an upper limit.
+Together they took schema-validity agreement from 85.19% to 94.99% on 1.0.
 
-Cost: moderate and fiddly. Buys: nothing measurable on the suite, since these
-schemas are marked invalid-by-design and skipped either way.
+The earlier entry here argued these were not worth implementing because "these
+schemas are marked invalid-by-design and skipped either way". That was true of
+the test driver, not of the suite: skipping them was a measurement bug, and
+they are roughly 14,000 real tests. See the correction in [xsd.md](xsd.md).
+
+What is left, in rough order of size:
+
+| area | schema false-accepts (1.0) |
+|---|---:|
+| attribute declarations and attribute groups | ~106 |
+| wildcards, element declarations, model group definitions | ~215 |
+| identity constraints | ~38 |
+| notations | ~21 |
+| schema-level and assorted | ~90 |
 
 ---
 
 ## 2. Bugs
 
-### 2.1 XSD 1.0: 111 disagreements
+### 2.1 XSD 1.0: 786 disagreements, 27 of them disputed
 
-No cluster above three cases, so this is individual spec-reading rather than
-one fix. Split by direction, because they are different kinds of work:
+Split by direction, because they are different kinds of work:
 
-**83 false accepts** — a document the suite calls invalid is accepted. These
-are missing checks, and each is a constraint not being applied.
+**~700 schema false accepts** — an invalid schema loads without complaint.
+These are Schema Component Constraints not yet applied; see 1.4 for where they
+sit.
 
-**28 false rejects** — a valid document is refused. Work these first: an error
-naming a code and a path is a far shorter route to the cause than "this should
-have failed and did not". Four clusters have already gone that way — the
-top-level optional all group, the Specials block, \w inside a character class,
-and key comparison by primitive — which is where twelve of the original 123
-went.
+**~25 schema false rejects and ~15 instance false rejects** — valid input we
+refuse. **Work these first.** A false reject breaks a caller outright, while a
+false accept only fails to catch someone else's mistake; the two are not
+symmetric, and a single percentage treats them as though they were. An error
+naming a code and a path is also a far shorter route to a cause.
 
-What is left of them is mostly one case each, across content models, wildcard
-`processContents="strict"`, fixed values and `xsi:type` derivation.
+**27 are disputed** — `status="queried"` against an open W3C bug. Nineteen of
+those are one cause: bug 4113, the regex general-category tests, written
+against Unicode 3.1 before characters moved between categories. Passing them
+would mean freezing a Unicode 3.1 table and being wrong about modern text.
+Check the metadata before assuming a disagreement is ours — and note the status
+is on the `<current>` element, not on `<expected>`.
 
-**At least one is a suite defect, not a bug here.** `anyURI_a004` is marked
-`status="queried"` against an open W3C bug, and its own group annotation
-contradicts the expectation recorded for it. Expect a few more like it — check
-the `.testSet` metadata before assuming a disagreement is ours.
+### 2.2 QName values do not resolve their prefix
 
-### 2.2 XPath: 28 in-scope failures
+An `xs:QName` value is checked lexically: prefix and local name must be
+NCNames, and `xmlns` is rejected as a prefix because nothing can bind it. But a
+prefix that is simply *undeclared* is accepted, because the lexical check has
+no access to the element's in-scope namespaces.
+
+Fixing it means threading the instance element's namespace context through
+`validateSimpleValueVersion` and its ten call sites. Worth doing for
+correctness — a QName whose prefix does not resolve has no value — but it buys
+one test on the suite, so it has not been done for the number.
+
+### 2.3 XPath: 28 in-scope failures
 
 Mostly not fixable, and worth stating why so nobody re-litigates it:
 
@@ -118,11 +141,12 @@ Only those 4 are work. The backreference 12 are the one genuine architectural
 ceiling in the project: supporting them means leaving RE2, and RE2's linear
 time guarantee is worth more than twelve tests.
 
-### 2.3 Remaining load failures: 20
+### 2.4 Remaining load failures
 
 Most are correct behaviour rather than bugs — nine XML 1.1 documents (item
-1.1), five using 1.1 constructs under 1.0 and *meant* to fail, two needing a
-DOCTYPE that is refused by default, several naming deliberately absent files.
+1.1), two needing a DOCTYPE that is refused by default, several naming
+deliberately absent files. The chameleon-include and huge-occurrence cases that
+used to sit here have been fixed.
 
 The genuinely open one: `common/xsts.xsd`, the suite's own harness file, needs
 a remote XLink schema. Not a bug — network resolution is off by default — but
@@ -155,6 +179,19 @@ UBL, CII, Peppol and Factur-X found more bugs per hour than any other method,
 but they live in a scratch directory and are re-fetched by hand. They should
 be a documented, opt-in fixture like `GOXSLT_QT3` — otherwise the highest-yield
 test is the one most likely to stop being run.
+
+**This is now the main safeguard against over-strict schema checks, which
+raises its priority.** Every Schema Component Constraint added is a chance to
+reject a schema real systems depend on, and the conformance suite cannot catch
+that: it scores agreement with the W3C's labels, so a rule that is merely *too
+strict* shows up only if the suite happens to contain a valid schema
+exercising it. Re-loading the corpora does catch it. As of the constraint work
+above, 65 UBL 2.1 and 427 CII/EN16931 schemas load clean.
+
+Note the corpora need `ParseOptions{AllowDOCTYPE: true}`: UBL's
+`UBL-xmldsig-core-schema-2.1.xsd` carries a DOCTYPE, and without the flag all
+65 fail with a cascade of unresolved `ds:` element references from the one
+refused include.
 
 ---
 
