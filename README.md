@@ -21,19 +21,20 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 98.86% of the W3C xsdtests suite (24,199 of 24,477 instance tests) |
-| **XSD 1.1** | 81.27% of the suite's 1.1 instance tests; opt-in via `Version11` |
-| **Tests** | 428, clean under `-race` (420 from a fresh clone; the rest need the corpora below) |
+| **XSD 1.0** | 99.08% of the W3C xsdtests suite (24,248 of 24,473 instance tests) |
+| **XSD 1.1** | 99.34% of the suite's 1.1 instance tests (1,051 of 1,058); opt-in via `Version11` |
+| **Tests** | 493, clean under `-race` (485 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **XSD 1.0 is solid; XSD 1.1 is usable but not finished.** 1.1 measures
-   81.27% on its part of the suite. Particle Valid (Restriction) is not checked
-   in either version, so a schema invalid in that specific way is accepted
-   rather than reported — libxml2 does not implement it either and Xerces
-   leaves it off by default.
+1. **Particle Valid (Restriction) is not checked** in either version, so a
+   schema invalid in that specific way is accepted rather than reported —
+   libxml2 does not implement it either and Xerces leaves it off by default.
+   Both versions otherwise measure above 99% on their part of the suite; the
+   remaining disagreements are listed in *Where it fails*, along with what the
+   suite skips and why.
 2. **Regular-expression backreferences are unsupported and always will be.**
    RE2 has none by design, which is also why no pattern can hang this engine.
    Everything else in the XML Schema regex flavour is implemented.
@@ -629,6 +630,29 @@ stylesheet fails to compile and discovering it did not.
 | 7 | `fn-collection` | the harness configures no collection |
 | 5 | `xs-dateTimeStamp` | an XSLT 3.0 type this engine does not claim |
 | 3 | three different sets, one case each | the long tail |
+
+### 2a. Where the XSD suite still disagrees
+
+**225 of 24,473 XSD 1.0 instance tests (0.92%) and 7 of 1,058 XSD 1.1 tests
+(0.66%).** Every 1.1 disagreement is now a document *accepted* that the suite
+expects refused; there are no false rejects left in that half of the suite.
+
+The seven remaining 1.1 cases:
+
+| cases | what it is |
+|---:|---|
+| 2 | an assertion's `//` reaching further than the confined subtree the spec allows |
+| 2 | an ID that denotes no element, where the value comes from the element's own content |
+| 2 | `defaultOpenContent` and `defaultAttributes` reaching types brought in through `xs:override` and `xs:redefine`, which they should not |
+| 1 | a defaulted `xs:ENTITY` naming no declared unparsed entity — this parser refuses a `DOCTYPE` by default, so it records none to check against |
+
+Two further notes on the measurement. 227 test groups are skipped because the
+suite marks their schema invalid by design — checking those is Schema Component
+Constraint territory, not instance validation — and 24 more because a
+schema-level construct still fails to load, mostly regular-expression forms and
+identity-constraint references across documents. The 24 are counted as skips
+rather than failures, which flatters the figure; they are listed here so that
+the number is read with that in mind.
 
 ### Is 100% reachable?
 

@@ -34,7 +34,7 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **98.86%** agreement on 24,477
+Measured against the W3C XSD test suite: **99.08%** agreement on 24,473
 instance tests.
 
 XSD **1.1** is implemented and opt-in:
@@ -45,10 +45,10 @@ xsd.Options{Version: xsd.Version11}
 
 That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
-`xs:defaultOpenContent`, `xs:override`, the `notNamespace` wildcard form,
-`explicitTimezone`, and the 1.1 built-ins. It measures **78.38%** on the
-suite's 1.1 instance tests — usable, not finished; a third of the 1.1 test
-groups still skip because some schema-level construct fails to load.
+`xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
+wildcard forms, `explicitTimezone`, conditional inclusion through the
+versioning attributes, and the 1.1 built-ins. It measures **99.34%** on the
+suite's 1.1 instance tests (1,051 of 1,058).
 
 The version is opt-in rather than automatic because 1.1 changes which
 documents are valid, so a 1.0 schema must not acquire its behaviour by
