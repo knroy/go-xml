@@ -994,6 +994,16 @@ func CastToDerived(a *xdm.Atomic, target xdm.TypeCode, facet string) (*xdm.Atomi
 		out, err = applyRangeFacet(out, facet)
 	} else if hasStringFacet(facet) {
 		out, err = applyStringFacet(out, facet)
+	} else if facet == "dateTimeStamp" {
+		// xs:dateTimeStamp is xs:dateTime with
+		// explicitTimezone="required". A value without one is outside
+		// the type's value space, so the cast fails and "castable as"
+		// is false — the facet has to be enforced here as well as in
+		// the constructor, since a cast does not go through that.
+		if dt := out.DateTimeVal(); dt == nil || !dt.HasTZ {
+			return nil, xdm.ErrCast(
+				"FORG0001: xs:dateTimeStamp requires a timezone")
+		}
 	} else {
 		return out, nil
 	}

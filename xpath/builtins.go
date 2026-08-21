@@ -288,4 +288,29 @@ func registerIntegerSubtypes(l *Library) {
 			return xdm.One(v.WithDerived(f.name)), nil
 		})
 	}
+
+	// xs:dateTimeStamp is xs:dateTime with explicitTimezone="required", so
+	// the constructor casts to xs:dateTime and then insists on the
+	// timezone the facet demands. A value without one is not in the type's
+	// value space, which is FORG0001 rather than a type error — the same
+	// shape as the out-of-range integer subtypes above.
+	l.register(xdm.NSXS, "dateTimeStamp", 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		atoms := xdm.Atomize(args[0])
+		if len(atoms) == 0 {
+			return xdm.Empty, nil
+		}
+		it, err := atoms.Single()
+		if err != nil {
+			return nil, err
+		}
+		v, err := CastAtomic(it.(*xdm.Atomic), xdm.TypeDateTime)
+		if err != nil {
+			return nil, err
+		}
+		if dt := v.DateTimeVal(); dt == nil || !dt.HasTZ {
+			return nil, xdm.ErrCast(
+				"FORG0001: xs:dateTimeStamp requires a timezone")
+		}
+		return xdm.One(v.WithDerived("dateTimeStamp")), nil
+	})
 }

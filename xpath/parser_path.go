@@ -764,6 +764,11 @@ func atomicTypeByName(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
 		return xdm.TypeDate, true
 	case "time":
 		return xdm.TypeTime, true
+	case "dateTimeStamp":
+		// xs:dateTime with explicitTimezone="required". The code carries
+		// the arithmetic; the written name is kept so that a cast can
+		// still enforce the facet, exactly as for the integer subtypes.
+		return xdm.TypeDateTime, true
 	case "dateTime":
 		return xdm.TypeDateTime, true
 	case "duration":
@@ -808,7 +813,11 @@ func localTypeName(name string) string {
 	if i := strings.Index(name, ":"); i >= 0 {
 		name = name[i+1:]
 	}
-	if hasRangeFacet(name) || hasStringFacet(name) || isAbstractType(name) {
+	// dateTimeStamp is named here for the same reason as the range- and
+	// string-facet types: its code is xs:dateTime, so the written name is
+	// the only thing that still carries explicitTimezone="required".
+	if hasRangeFacet(name) || hasStringFacet(name) || isAbstractType(name) ||
+		name == "dateTimeStamp" {
 		return name
 	}
 	return ""
