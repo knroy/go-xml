@@ -604,17 +604,52 @@ func (p *parser) chameleonQName(local string) xdm.QName {
 	return xdm.QName{Local: local}
 }
 
+// occursValue parses one xs:nonNegativeInteger occurrence bound.
+//
+// The type has no upper bound in the spec, and msData's particlesZ033_a writes
+// minOccurs="79228162514244337593543950335" in a schema the suite expects to
+// load. Rejecting that as "not a non-negative integer" is simply wrong: it is
+// one. Values past what an int can hold are saturated to occursHuge rather than
+// refused, since no instance document can ever supply that many children and
+// any bound at or above the saturation point behaves identically during
+// validation. Leading "+" and leading zeros are permitted by the lexical space
+// of xs:nonNegativeInteger, so they are accepted here too.
+func occursValue(v string) (int, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if v[0] == '+' {
+		v = v[1:]
+	}
+	if v == "" {
+		return 0, false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return occursHuge, true
+	}
+	return n, true
+}
+
+// occursHuge stands in for an occurrence bound too large to hold in an int.
+// It is far beyond any attainable child count, so treating a larger bound as
+// equal to it cannot change the outcome of validating a real document.
+const occursHuge = int(^uint(0) >> 2)
+
 // occurs reads minOccurs and maxOccurs from a particle-bearing element.
 //
-// Both default to 1. maxOccurs additionally accepts "unbounded". The values are
-// xs:nonNegativeInteger, which is unbounded in principle; a value too large for
-// an int is rejected rather than wrapped, because silently truncating an
-// occurrence bound would change which documents validate.
+// Both default to 1. maxOccurs additionally accepts "unbounded".
 func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 	min, max = 1, 1
 	if v := el.AttrValue("minOccurs"); v != "" {
-		n, e := strconv.Atoi(strings.TrimSpace(v))
-		if e != nil || n < 0 {
+		n, ok := occursValue(v)
+		if !ok {
 			return 0, 0, errorAt(el, "p-props-correct.1",
 				"minOccurs=%q is not a non-negative integer", v)
 		}
@@ -625,8 +660,8 @@ func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 		if v == "unbounded" {
 			max = Unbounded
 		} else {
-			n, e := strconv.Atoi(v)
-			if e != nil || n < 0 {
+			n, ok := occursValue(v)
+			if !ok {
 				return 0, 0, errorAt(el, "p-props-correct.1",
 					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", v)
 			}

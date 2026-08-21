@@ -332,3 +332,91 @@ func TestHTTPResolverFallsBackToFiles(t *testing.T) {
 	}
 	rc.Close()
 }
+
+// TestChameleonIncludeIntoTwoNamespaces covers one namespace-less document
+// pulled into two different target namespaces by two separate includers.
+//
+// Each reading produces a distinct set of components — {urn:a}shared and
+// {urn:b}shared — and both are required, because each includer refers to the
+// name it created. Deduplicating on the document's location alone let whichever
+// include ran first suppress the other, leaving the loser's reference dangling.
+func TestChameleonIncludeIntoTwoNamespaces(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:import namespace="urn:a" schemaLocation="a.xsd"/>
+		  <xs:import namespace="urn:b" schemaLocation="b.xsd"/>
+		</xs:schema>`,
+		"a.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:a="urn:a" targetNamespace="urn:a">
+		  <xs:include schemaLocation="nons.xsd"/>
+		  <xs:element name="ea" type="a:shared"/>
+		</xs:schema>`,
+		"b.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:b="urn:b" targetNamespace="urn:b">
+		  <xs:include schemaLocation="nons.xsd"/>
+		  <xs:element name="eb" type="b:shared"/>
+		</xs:schema>`,
+		"nons.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="shared">
+		    <xs:restriction base="xs:string"/>
+		  </xs:simpleType>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, ns := range []string{"urn:a", "urn:b"} {
+		if s.Types[xdm.QName{URI: ns, Local: "shared"}] == nil {
+			t.Errorf("the chameleon include produced no {%s}shared", ns)
+		}
+	}
+}
+
+// TestChameleonIncludeOfDocumentAlsoLoadedDirectly covers boeingData's ipo3,
+// where the harness hands the loader ipo.xsd and the namespace-less itematt.xsd
+// side by side, and ipo.xsd also includes itematt.xsd.
+//
+// The direct reading defines {}ItemDelivery and the included one defines
+// {urn:ipo}ItemDelivery. ipo.xsd's attributeGroup ref names the latter, so
+// suppressing the include because the file had already been read as a top-level
+// document left that ref unresolvable.
+func TestChameleonIncludeOfDocumentAlsoLoadedDirectly(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	main := write("main.xsd", `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:ipo" targetNamespace="urn:ipo">
+		  <xs:include schemaLocation="grp.xsd"/>
+		  <xs:complexType name="CT">
+		    <xs:attributeGroup ref="t:ItemDelivery"/>
+		  </xs:complexType>
+		</xs:schema>`)
+	grp := write("grp.xsd", `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:attributeGroup name="ItemDelivery">
+		    <xs:attribute name="partNum" type="xs:string"/>
+		  </xs:attributeGroup>
+		</xs:schema>`)
+
+	s, err := LoadFiles([]string{main, grp}, Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("LoadFiles: %v", err)
+	}
+	if s.AttributeGroups[xdm.QName{URI: "urn:ipo", Local: "ItemDelivery"}] == nil {
+		t.Error("the chameleon-included attribute group did not adopt urn:ipo")
+	}
+	if s.AttributeGroups[xdm.QName{Local: "ItemDelivery"}] == nil {
+		t.Error("the directly loaded document lost its absent-namespace group")
+	}
+}

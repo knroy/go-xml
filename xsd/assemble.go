@@ -160,8 +160,11 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
 		}
+		// A document named directly by the caller adopts no namespace, so
+		// its key carries an empty adoptedNS; a later chameleon include of
+		// the same file keys separately and is still read.
 		if resolved != "" {
-			a.seen[docKey{location: resolved}] = true
+			a.seen[docKey{location: canonicalLocation(resolved)}] = true
 		}
 		a.push(tree.Root, resolved, "", false)
 	}
@@ -196,18 +199,19 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 // reported as a duplicate of itself. That is a diamond in the import graph,
 // which is the normal shape of a large schema set rather than an unusual one.
 //
-// Keying on (namespace, location) looks more precise and is wrong for a
-// different reason: two schemas may import each other, and the second reference
-// arrives with a different declared namespace than the first — a.xsd entered as
-// the root with no namespace, then again as urn:a from b.xsd's import.
-//
-// The chameleon case that a pair key seemed to serve is handled where it
-// belongs, in readOne: the adopted namespace comes from the *including*
-// document, so the same file included from two namespaces would need to be
-// read twice — a case this deliberately does not support, since the components
-// would collide under one schema anyway.
+// The key also carries the namespace a chameleon include will make the
+// document adopt, because that genuinely changes which components the file
+// produces. boeingData's ipo3 hands the harness ipo.xsd, address.xsd and
+// itematt.xsd together; itematt.xsd declares no target namespace, so read as a
+// top-level document it defines {}ItemDelivery, while ipo.xsd's include of it
+// makes it define {http://www.example.com/IPO}ItemDelivery. Both readings are
+// required — ipo.xsd's attributeGroup ref names the second — and a key on
+// location alone lets whichever reading came first suppress the other, leaving
+// the ref dangling. The adopted namespace is empty for every non-chameleon
+// document, so the ordinary diamond-import case still collapses to one entry.
 type docKey struct {
-	location string
+	location  string
+	adoptedNS string
 }
 
 // redefinesAnything reports whether a redefine or override has any child that
@@ -506,16 +510,6 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 	}
 	defer rc.Close()
 
-	// Deduplication happens here, once the resolver has said which file the
-	// location names. Doing it on the raw schemaLocation makes two
-	// documents of one file whenever a schema set reaches it by different
-	// spellings; see docKey.
-	key := docKey{location: canonicalLocation(resolved)}
-	if a.seen[key] {
-		return
-	}
-	a.seen[key] = true
-
 	a.parseAndQueue(el, rc, resolved, namespace, doc, isInclude, redefining)
 }
 
@@ -528,12 +522,40 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	}
 
 	chameleon := ""
-	if isInclude && doc.hasTargetNS {
+	if isInclude && doc.hasTargetNS && !declaresTargetNS(tree.Root) {
 		// Only an include can be a chameleon: an import brings in a
-		// different namespace by definition.
+		// different namespace by definition, and a document that
+		// declares its own target namespace keeps it.
 		chameleon = doc.targetNS
 	}
+
+	// Deduplication happens here rather than at the resolver, because the
+	// key needs the namespace this reading of the document will produce
+	// components in, and that is only known once the document has been
+	// parsed and its own targetNamespace inspected. Keying on the raw
+	// schemaLocation instead of the resolved path would make two documents
+	// of one file whenever a schema set reaches it by different spellings;
+	// see docKey.
+	key := docKey{location: canonicalLocation(resolved), adoptedNS: chameleon}
+	if a.seen[key] {
+		return
+	}
+	a.seen[key] = true
+
 	a.push(tree.Root, resolved, chameleon, redefining)
+}
+
+// declaresTargetNS reports whether a schema document element carries a
+// targetNamespace of its own, and so cannot be made to adopt an includer's.
+func declaresTargetNS(root *xdm.Node) bool {
+	if root.Kind == xdm.KindDocument {
+		els := root.ChildElements()
+		if len(els) == 0 {
+			return false
+		}
+		root = els[0]
+	}
+	return root.Attr("", "targetNamespace") != nil
 }
 
 // linkSubstitutionGroups fills the transitive substitution group membership

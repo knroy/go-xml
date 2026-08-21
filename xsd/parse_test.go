@@ -645,3 +645,56 @@ func TestSourceModelAcceptsRefForms(t *testing.T) {
 	  </xs:element>
 	</xs:schema>`)
 }
+
+
+// TestParseOccursAcceptsHugeValues covers msData's particlesZ033_a, whose
+// minOccurs is 79228162514244337593543950335.
+//
+// xs:nonNegativeInteger has no upper bound, so a value past what an int can
+// hold is still a well-formed occurrence bound and the schema must load.
+// Saturating is safe because no document can supply that many children, so a
+// bound at or above the saturation point behaves the same during validation.
+func TestParseOccursAcceptsHugeValues(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="t">
+	    <xs:sequence>
+	      <xs:element name="a" type="xs:string"
+	                  minOccurs="79228162514244337593543950335"
+	                  maxOccurs="79228162514264337593543950335"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	</xs:schema>`)
+
+	ct := s.Types[xdm.QName{Local: "t"}].(*ComplexType)
+	g := ct.Particle.Term.(*ModelGroup)
+	if got := g.Particles[0].MinOccurs; got != occursHuge {
+		t.Errorf("minOccurs saturated to %d, want %d", got, occursHuge)
+	}
+	if got := g.Particles[0].MaxOccurs; got != occursHuge {
+		t.Errorf("maxOccurs saturated to %d, want %d", got, occursHuge)
+	}
+}
+
+// TestParseOccursRejectsNonIntegers keeps the saturation from swallowing values
+// that are not xs:nonNegativeInteger at all.
+func TestParseOccursRejectsNonIntegers(t *testing.T) {
+	for _, bad := range []string{"-1", "1.5", "abc", "1e9", ""} {
+		_, err := parseSchemaString(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="t">
+		    <xs:sequence>
+		      <xs:element name="a" type="xs:string" minOccurs="`+bad+`"/>
+		    </xs:sequence>
+		  </xs:complexType>
+		</xs:schema>`)
+		if bad == "" {
+			// An empty attribute is absent for this purpose and takes
+			// the default of 1, so it is not a fault.
+			continue
+		}
+		if err == nil {
+			t.Errorf("minOccurs=%q was accepted", bad)
+		}
+	}
+}
