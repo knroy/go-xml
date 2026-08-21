@@ -346,20 +346,31 @@ func (p *parser) checkFacetApplicable(t *SimpleType, el *xdm.Node) {
 func (p *parser) checkFacetCombinations(t *SimpleType, el *xdm.Node) {
 	m := mergedFacets(t)
 
-	// "length and minLength or maxLength" (§4.3.1.4). The constraint has an
-	// escape clause for the case where the base fixed the same minLength
-	// and did not specify length, but the plain conflict — both written on
-	// one restriction step — is always an error (string_length006).
+	// "length and minLength or maxLength" (§4.3.1.4).
+	//
+	// This is not a flat prohibition, and reading it as one rejects schemas
+	// the working group decided are legal. minLength alongside length is an
+	// error *unless* both: the minLength does not exceed the length, and
+	// some type further up the derivation chain states that same minLength
+	// without stating a length. maxLength mirrors it.
+	//
+	// The escape clause is what makes a restriction of xs:IDREFS legal:
+	// IDREFS carries minLength="1" and no length, so a restriction adding
+	// length="5" satisfies both halves. IDREFS_length006 is marked valid
+	// against W3C bug 6446 with the note "WG decided spec. has a special
+	// case which allows this" — this is that special case.
 	if t.Facets.Length != nil {
-		if t.Facets.MinLength != nil {
+		if m.MinLength != nil &&
+			!(*m.MinLength <= *t.Facets.Length && lengthEscape(t, true, *m.MinLength)) {
 			p.errs = append(p.errs, errorAt(el, "length-minLength-maxLength",
-				"xs:length and xs:minLength may not both be specified "+
-					"in the same derivation step"))
+				"xs:length %d is contradicted by xs:minLength %d",
+				*t.Facets.Length, *m.MinLength))
 		}
-		if t.Facets.MaxLength != nil {
+		if m.MaxLength != nil &&
+			!(*t.Facets.Length <= *m.MaxLength && lengthEscape(t, false, *m.MaxLength)) {
 			p.errs = append(p.errs, errorAt(el, "length-minLength-maxLength",
-				"xs:length and xs:maxLength may not both be specified "+
-					"in the same derivation step"))
+				"xs:length %d is contradicted by xs:maxLength %d",
+				*t.Facets.Length, *m.MaxLength))
 		}
 	}
 
@@ -510,4 +521,35 @@ func boundFacetCode(kind FacetKind) string {
 		return "enumeration-valid-restriction"
 	}
 	return ""
+}
+
+// lengthEscape answers clause 1.2 (and its 2.2 mirror) of "length and minLength
+// or maxLength": is there a type definition, reached by one or more restriction
+// steps, which states this same minLength (or maxLength) and does not state a
+// length?
+//
+// Without it the constraint reads as a flat prohibition, which rejects every
+// restriction of a built-in list type — those carry minLength="1" of their own,
+// so any length added below would collide with it.
+func lengthEscape(t *SimpleType, min bool, want uint64) bool {
+	steps := facetChain(t)
+	// The type's own step is skipped: the clause asks for a type this one
+	// is *derived from*, so a minLength written alongside the length here
+	// does not excuse itself.
+	for _, st := range steps[1:] {
+		if st.facets.Length != nil {
+			// This step states a length, so it is not the witness
+			// the clause asks for, and no step above it can be
+			// either: its own length would have to have collided.
+			return false
+		}
+		got := st.facets.MinLength
+		if !min {
+			got = st.facets.MaxLength
+		}
+		if got != nil && *got == want {
+			return true
+		}
+	}
+	return false
 }

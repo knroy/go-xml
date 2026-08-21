@@ -233,3 +233,56 @@ func TestWildcardAllows(t *testing.T) {
 // timeoutAfterSecond returns a channel that fires after a second, used by the
 // termination tests above.
 func timeoutAfterSecond() <-chan time.Time { return time.After(time.Second) }
+
+// "length and minLength or maxLength" (Part 2 §4.3.1.4) is not the flat
+// prohibition it is easy to read it as. minLength alongside length is an error
+// *unless* the minLength does not exceed the length and some type further up
+// the chain states that same minLength without stating a length.
+//
+// The escape clause is not an edge case: every built-in list type carries
+// minLength="1", so reading the constraint flatly rejects every restriction of
+// xs:IDREFS or xs:NMTOKENS that sets a length. IDREFS_length006 is marked valid
+// in the suite against W3C bug 6446, noting "WG decided spec. has a special
+// case which allows this".
+func TestLengthWithMinLengthEscapeClause(t *testing.T) {
+	// xs:IDREFS supplies minLength="1" and no length, so length="5" here
+	// satisfies both halves of the clause.
+	if _, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:IDREFS">
+	      <xs:length value="5"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`); err != nil {
+		t.Errorf("a length over a list type's inherited minLength is legal: %v", err)
+	}
+
+	// Both written on one step, with nothing above supplying the minLength:
+	// no witness for clause 1.2, so this is the error the constraint is for.
+	if _, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:string">
+	      <xs:length value="5"/>
+	      <xs:minLength value="1"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`); err == nil {
+		t.Error("length beside a minLength no ancestor supplies should be rejected")
+	}
+
+	// The witness exists but the values contradict: minLength 7 exceeds
+	// length 5, so clause 1.1 fails however clause 1.2 comes out.
+	if _, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="base">
+	    <xs:restriction base="xs:string"><xs:minLength value="7"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:simpleType name="t">
+	    <xs:restriction base="base"><xs:length value="5"/></xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`); err == nil {
+		t.Error("a minLength greater than the length should be rejected")
+	}
+}
