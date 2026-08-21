@@ -2507,3 +2507,46 @@ func TestOptionalAllGroupIsAllOrNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestAssertionQNameAtomization covers an xs:QName attribute in an assertion.
+//
+// Two things had to hold. A QName atomises as a QName only if its prefix can be
+// resolved, which needs the node's in-scope namespaces rather than the lexical
+// form alone — that is the whole difference between a QName and the string that
+// spells it. And the assertion's confined copy is rooted at the element, so a
+// declaration made by an ancestor is out of scope in it and has to be carried
+// across.
+func TestAssertionQNameAtomization(t *testing.T) {
+	s := load11(t, `
+	<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	  <xsd:element name="Test">
+	    <xsd:complexType>
+	      <xsd:sequence>
+	        <xsd:element name="Rule" maxOccurs="unbounded">
+	          <xsd:complexType>
+	            <xsd:attribute name="name" type="xsd:QName" use="required"/>
+	            <xsd:assert test="@name eq xsd:QName('xsd:element')"/>
+	          </xsd:complexType>
+	        </xsd:element>
+	      </xsd:sequence>
+	    </xsd:complexType>
+	  </xsd:element>
+	</xsd:schema>`)
+
+	// The prefix is declared on Test, an ancestor of the assertion's scope.
+	if err := check11(t, s,
+		`<Test xmlns:xsd="http://www.w3.org/2001/XMLSchema"><Rule name="xsd:element"/></Test>`); err != nil {
+		t.Errorf("a QName attribute should compare as a QName: %v", err)
+	}
+	// A different name in the same namespace does not match.
+	if err := check11(t, s,
+		`<Test xmlns:xsd="http://www.w3.org/2001/XMLSchema"><Rule name="xsd:attribute"/></Test>`); err == nil {
+		t.Error("a different local name should fail the assertion")
+	}
+	// The same local name in another namespace does not match either, which
+	// is what makes it a QName comparison rather than a string one.
+	if err := check11(t, s,
+		`<Test xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:o="urn:other"><Rule name="o:element"/></Test>`); err == nil {
+		t.Error("the same local name in another namespace should fail")
+	}
+}

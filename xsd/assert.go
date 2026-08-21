@@ -210,7 +210,17 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 // assertion cannot mutate the document it is checking.
 func scopeForAssertion(el *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
+	// The copy is rooted at the element, so namespace declarations made by
+	// an ancestor are out of scope in it. They still apply to the element
+	// in the real document, and a QName-valued attribute cannot be expanded
+	// without them, so the whole in-scope set is copied onto the root of
+	// the confined tree.
 	clone := deepCopyNode(el)
+	for prefix, uri := range inScopeNamespaces(el) {
+		if _, declared := clone.LookupPrefix(prefix); !declared {
+			clone.AddNamespace(prefix, uri)
+		}
+	}
 	tree.Root.AppendChild(clone)
 	tree.Finalize()
 	return clone
@@ -516,4 +526,23 @@ func listItemTypeOf(t *SimpleType) *SimpleType {
 		}
 	}
 	return nil
+}
+
+// inScopeNamespaces gathers every prefix binding visible at a node.
+//
+// The walk is outward and the innermost declaration wins, which is how XML
+// scoping works: an inner xmlns:p rebinding p hides the outer one.
+func inScopeNamespaces(el *xdm.Node) map[string]string {
+	out := map[string]string{}
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		for _, ns := range cur.Namespaces {
+			if _, seen := out[ns.Name.Local]; !seen {
+				out[ns.Name.Local] = ns.Value
+			}
+		}
+	}
+	return out
 }

@@ -222,6 +222,18 @@ func (n *Node) Atomize() *Atomic {
 	// lexical forms this package can already parse — because a type it
 	// cannot construct is better left untyped than guessed at.
 	if n.TypeAnnotation != "" {
+		// xs:QName and xs:NOTATION are handled here rather than in
+		// atomicForAnnotation because resolving the prefix needs the
+		// node's in-scope namespaces, which a lexical form alone does
+		// not carry. That is the whole difference between a QName and
+		// the string that spells it.
+		switch n.TypeAnnotation {
+		case "QName", "NOTATION":
+			if q, ok := n.resolveQNameValue(); ok {
+				return NewQNameValue(q)
+			}
+			return NewUntypedAtomic(n.StringValue())
+		}
 		if a := atomicForAnnotation(n.TypeAnnotation, n.StringValue()); a != nil {
 			return a
 		}
@@ -340,6 +352,39 @@ func atomicForAnnotation(typeName, value string) *Atomic {
 		return NewBinary(value, TypeBase64Binary)
 	}
 	return nil
+}
+
+// resolveQNameValue expands the node's string value as a QName against the
+// namespaces in scope at the node.
+//
+// An unprefixed name takes the default namespace when the node is an element
+// and the absent namespace when it is an attribute — the XPath rule, and the
+// one the schema's own QName-valued attributes follow.
+func (n *Node) resolveQNameValue() (QName, bool) {
+	value := strings.TrimSpace(n.StringValue())
+	prefix, local := "", value
+	if i := strings.IndexByte(value, ':'); i >= 0 {
+		prefix, local = value[:i], value[i+1:]
+	}
+	if local == "" || strings.ContainsRune(local, ':') {
+		return QName{}, false
+	}
+	scope := n
+	if scope.Kind == KindAttribute && scope.Parent != nil {
+		scope = scope.Parent
+	}
+	if prefix == "" {
+		if n.Kind == KindAttribute {
+			return QName{Local: local}, true
+		}
+		uri, _ := scope.LookupPrefix("")
+		return QName{URI: uri, Local: local}, true
+	}
+	uri, ok := scope.LookupPrefix(prefix)
+	if !ok {
+		return QName{}, false
+	}
+	return QName{URI: uri, Local: local, Prefix: prefix}, true
 }
 
 // Attr returns the attribute node with the given expanded name, or nil.
