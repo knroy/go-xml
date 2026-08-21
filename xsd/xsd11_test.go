@@ -3257,3 +3257,34 @@ func TestDefaultedEntityCannotResolve(t *testing.T) {
 		t.Errorf("a written xs:ENTITY should not be refused: %v", err)
 	}
 }
+
+// TestNestedCounterRepeatIsNotAnOuterRestart pins that a step an inner counter
+// can account for is a repetition of that counter, not of the one around it.
+//
+// The scopes nest, so a position at the boundary of an inner one is at the
+// boundary of every scope around it. <sequence maxOccurs="1"> wrapping
+// <element maxOccurs="2"/> puts the element at both ends of the outer scope, so
+// following itself looked like an outer restart — and the outer bound of 1 then
+// refused the element's own second occurrence.
+func TestNestedCounterRepeatIsNotAnOuterRestart(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a"/>
+	        <xs:sequence minOccurs="0" maxOccurs="1">
+	          <xs:element name="b" maxOccurs="2"/>
+	        </xs:sequence>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc><a/></doc>`)
+	assertValid(t, schema, `<doc><a/><b/></doc>`)
+	assertValid(t, schema, `<doc><a/><b/><b/></doc>`)
+	// The element's own bound still applies.
+	assertInvalid(t, schema, `<doc><a/><b/><b/><b/></doc>`,
+		"cvc-complex-type.2.4")
+}

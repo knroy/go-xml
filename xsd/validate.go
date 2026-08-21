@@ -897,6 +897,15 @@ func counterAllows(m *contentModel, counts []int, from, to int) bool {
 		if !isScopeRestart(m, c, from, to) {
 			continue
 		}
+		// A step that an inner counter can account for is a repetition
+		// of that counter, not of this one. <sequence maxOccurs="1">
+		// wrapping <element maxOccurs="2"/> puts the element at both
+		// ends of the outer scope, so following itself looks like an
+		// outer restart — and the outer bound of 1 then refused the
+		// element's own second occurrence.
+		if innerRepeats(m, counts, c, from, to) {
+			continue
+		}
 		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
 			return false
 		}
@@ -1411,4 +1420,42 @@ func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 		}
 	}
 	return out
+}
+
+// innerRepeats reports whether a transition is already a repetition of some
+// counter nested inside c.
+//
+// The scopes are nested, so a position at the boundary of an inner one is at
+// the boundary of every scope around it too. Only the innermost counter that
+// can account for the step is repeating; the outer ones are being continued,
+// not restarted, and consulting their bounds refuses legal content.
+func innerRepeats(m *contentModel, counts []int, outer, from, to int) bool {
+	for _, c := range m.positions[to].counters {
+		if c == outer || !sharesScope(m.positions[from], c) {
+			continue
+		}
+		if !isNestedIn(m, c, outer) {
+			continue
+		}
+		if !isScopeRestart(m, c, from, to) {
+			continue
+		}
+		if m.counters[c].max == Unbounded || counts[c] < m.counters[c].max {
+			return true
+		}
+	}
+	return false
+}
+
+// isNestedIn reports whether counter c lies inside counter outer.
+func isNestedIn(m *contentModel, c, outer int) bool {
+	for i := c; i >= 0; i = m.counters[i].parent {
+		if m.counters[i].parent == outer {
+			return true
+		}
+		if m.counters[i].parent < 0 {
+			return false
+		}
+	}
+	return false
 }

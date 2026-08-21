@@ -21,7 +21,7 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.09% of the W3C xsdtests suite (24,250 of 24,473 instance tests) |
+| **XSD 1.0** | 99.12% of the W3C xsdtests suite (24,257 of 24,473 instance tests) |
 | **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,058 of 1,058); opt-in via `Version11` |
 | **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -633,7 +633,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**223 of 24,473 XSD 1.0 instance tests (0.91%); the 1.1 half agrees on all
+**216 of 24,473 XSD 1.0 instance tests (0.88%); the 1.1 half agrees on all
 1,058.**
 
 The 1.0 remainder is a long tail: the largest group is 15 cases of
