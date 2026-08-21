@@ -257,10 +257,15 @@ func base64DecodedLen(s string) int {
 func checkBounds(steps []facetStep, normalized, prim string) error {
 	switch prim {
 	case "decimal", "float", "double":
+	case "duration":
+		return checkDurationBounds(steps, normalized)
+	case "dateTime", "time", "date", "gYearMonth", "gYear",
+		"gMonthDay", "gDay", "gMonth":
+		return checkTemporalBounds(steps, normalized, prim)
 	default:
-		// Ordering on the date and duration types needs their own
-		// comparison, which is not implemented here; those bounds are
-		// not enforced rather than being enforced wrongly.
+		// The remaining primitives have no order, so the bound facets do
+		// not apply and the facet-applicability constraint has already
+		// refused any that were written.
 		return nil
 	}
 
@@ -360,4 +365,90 @@ func (v *validator) checkIDs() {
 				"IDREF %q does not match any ID in the document", ref.value)
 		}
 	}
+}
+
+// checkTemporalBounds applies the bound facets to a date or time value.
+//
+// A bound that is not comparable to the value does not constrain it. The order
+// on these types is partial — a value with a timezone and one without are only
+// ordered when every timezone the absent one could stand for gives the same
+// answer — and treating "indeterminate" as a failure would reject values the
+// spec leaves undetermined.
+func checkTemporalBounds(steps []facetStep, normalized, primitive string) error {
+	val, ok := parseTemporal(normalized, primitive)
+	if !ok {
+		return nil
+	}
+	for _, st := range steps {
+		f := st.facets
+		cmp := func(lex *string) (int, bool) {
+			if lex == nil {
+				return 0, false
+			}
+			b, ok := parseTemporal(strings.TrimSpace(*lex), primitive)
+			if !ok {
+				return 0, false
+			}
+			return compareTemporal(val, b)
+		}
+		if c, ok := cmp(f.MinInclusive); ok && c < 0 {
+			return facetError(st.typ, FacetMinInclusive,
+				"%s is earlier than %s", normalized, *f.MinInclusive)
+		}
+		if c, ok := cmp(f.MaxInclusive); ok && c > 0 {
+			return facetError(st.typ, FacetMaxInclusive,
+				"%s is later than %s", normalized, *f.MaxInclusive)
+		}
+		if c, ok := cmp(f.MinExclusive); ok && c <= 0 {
+			return facetError(st.typ, FacetMinExclusive,
+				"%s is not later than %s", normalized, *f.MinExclusive)
+		}
+		if c, ok := cmp(f.MaxExclusive); ok && c >= 0 {
+			return facetError(st.typ, FacetMaxExclusive,
+				"%s is not earlier than %s", normalized, *f.MaxExclusive)
+		}
+	}
+	return nil
+}
+
+// checkDurationBounds applies the bound facets to an xs:duration.
+//
+// Duration is only partially ordered because a month has no fixed length: P1M
+// and P30D have no order at all. An incomparable bound does not constrain the
+// value, for the same reason as above.
+func checkDurationBounds(steps []facetStep, normalized string) error {
+	val, ok := parseDuration(normalized)
+	if !ok {
+		return nil
+	}
+	for _, st := range steps {
+		f := st.facets
+		cmp := func(lex *string) (int, bool) {
+			if lex == nil {
+				return 0, false
+			}
+			b, ok := parseDuration(strings.TrimSpace(*lex))
+			if !ok {
+				return 0, false
+			}
+			return compareDuration(val, b)
+		}
+		if c, ok := cmp(f.MinInclusive); ok && c < 0 {
+			return facetError(st.typ, FacetMinInclusive,
+				"%s is shorter than %s", normalized, *f.MinInclusive)
+		}
+		if c, ok := cmp(f.MaxInclusive); ok && c > 0 {
+			return facetError(st.typ, FacetMaxInclusive,
+				"%s is longer than %s", normalized, *f.MaxInclusive)
+		}
+		if c, ok := cmp(f.MinExclusive); ok && c <= 0 {
+			return facetError(st.typ, FacetMinExclusive,
+				"%s is not longer than %s", normalized, *f.MinExclusive)
+		}
+		if c, ok := cmp(f.MaxExclusive); ok && c >= 0 {
+			return facetError(st.typ, FacetMaxExclusive,
+				"%s is not shorter than %s", normalized, *f.MaxExclusive)
+		}
+	}
+	return nil
 }
