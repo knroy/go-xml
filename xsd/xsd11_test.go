@@ -3225,3 +3225,35 @@ func TestRootContentIDDenotesNothing(t *testing.T) {
 		t.Errorf("an ID in a child's content should still bind: %v", err)
 	}
 }
+
+// TestDefaultedEntityCannotResolve pins that a defaulted xs:ENTITY is refused.
+//
+// The type requires the value to name an unparsed entity declared in the
+// document's DTD, and this parser refuses a DOCTYPE unless the caller opts in
+// and records no entities when it does — so there is no table for the name to
+// be in. A written xs:ENTITY is left alone: the document at least had the
+// chance to declare one, and refusing it would make the type unusable rather
+// than merely unchecked. A defaulted one had no such chance, since the schema
+// supplied it.
+func TestDefaultedEntityCannotResolve(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="p">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:extension base="xs:string">
+	          <xs:attribute name="entity" type="xs:ENTITY" default="entity-ref"/>
+	        </xs:extension>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<p/>`); err == nil {
+		t.Error("a defaulted xs:ENTITY names no declared entity")
+	}
+	// A written one is not refused; it is simply unchecked.
+	if err := check11(t, s, `<p entity="whatever">x</p>`); err != nil {
+		t.Errorf("a written xs:ENTITY should not be refused: %v", err)
+	}
+}

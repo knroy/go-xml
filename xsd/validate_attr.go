@@ -88,6 +88,21 @@ func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
 		// schema was read; there is no binding to record.
 		return
 	}
+	// A defaulted xs:ENTITY can never resolve. The type requires the value
+	// to name an unparsed entity declared in the document's DTD, and this
+	// parser refuses a DOCTYPE unless the caller opts in and records no
+	// entities when it does — so there is no table for the name to be in.
+	// A written xs:ENTITY is left alone: the document at least had the
+	// chance to declare one, and refusing it would make the type unusable
+	// rather than merely unchecked. A defaulted one had no such chance,
+	// since the schema supplied it.
+	if nearestBuiltinName(use.Decl.Type) == "ENTITY" {
+		v.fail(el, "cvc-attribute.3",
+			"attribute %s defaults to %q, which names no declared unparsed "+
+				"entity", attrName(use.Decl.Name), normalized)
+		return
+	}
+
 	// The element itself is the owner: a defaulted attribute belongs to the
 	// element it is supplied on, so recordID's parent step is already done.
 	v.recordIDsOwned(el, normalized, use.Decl.Type)

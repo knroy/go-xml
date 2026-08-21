@@ -22,8 +22,8 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.09% of the W3C xsdtests suite (24,250 of 24,473 instance tests) |
-| **XSD 1.1** | 99.91% of the suite's 1.1 instance tests (1,057 of 1,058); opt-in via `Version11` |
-| **Tests** | 493, clean under `-race` (485 from a fresh clone; the rest need the corpora below) |
+| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,058 of 1,058); opt-in via `Version11` |
+| **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
@@ -633,14 +633,13 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**223 of 24,473 XSD 1.0 instance tests (0.91%) and 1 of 1,058 XSD 1.1 tests
-(0.09%).** Every 1.1 disagreement is now a document *accepted* that the suite
-expects refused; there are no false rejects left in that half of the suite.
+**223 of 24,473 XSD 1.0 instance tests (0.91%); the 1.1 half agrees on all
+1,058.**
 
-The one remaining 1.1 case is a defaulted `xs:ENTITY` naming no declared
-unparsed entity. This parser refuses a `DOCTYPE` unless the caller opts in and
-records no entities when it does, so there is never a table to check the name
-against — the value is well-formed as an NCName and simply unresolvable.
+The 1.0 remainder is a long tail: the largest group is 15 cases of
+`cvc-complex-type.2.4.a`, then 11 of `cvc-complex-type.3.2.2`, and from there
+single figures across identity constraints, datatype edges and element
+resolution.
 
 Two further notes on the measurement. 227 test groups are skipped because the
 suite marks their schema invalid by design — checking those is Schema Component
