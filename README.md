@@ -19,22 +19,21 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.82% of the W3C QT3 suite (14,655 of 14,682 in scope) |
+| **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.28% of the W3C xsdtests suite (19,995 of 20,140 instance tests) |
-| **XSD 1.1** | 78.38% of the suite's 1.1 instance tests; opt-in via `Version11` |
-| **Tests** | 417, clean under `-race` (409 from a fresh clone; the rest need the corpora below) |
+| **XSD 1.0** | 98.86% of the W3C xsdtests suite (24,199 of 24,477 instance tests) |
+| **XSD 1.1** | 81.27% of the suite's 1.1 instance tests; opt-in via `Version11` |
+| **Tests** | 428, clean under `-race` (420 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
 1. **XSD 1.0 is solid; XSD 1.1 is usable but not finished.** 1.1 measures
-   78.38% on its part of the suite, and about a third of its test groups still
-   skip because some schema-level construct fails to load. Particle Valid
-   (Restriction) is not checked in either version, so a schema invalid in that
-   specific way is accepted rather than reported — libxml2 does not implement
-   it either and Xerces leaves it off by default.
+   81.27% on its part of the suite. Particle Valid (Restriction) is not checked
+   in either version, so a schema invalid in that specific way is accepted
+   rather than reported — libxml2 does not implement it either and Xerces
+   leaves it off by default.
 2. **Regular-expression backreferences are unsupported and always will be.**
    RE2 has none by design, which is also why no pattern can hang this engine.
    Everything else in the XML Schema regex flavour is implemented.
