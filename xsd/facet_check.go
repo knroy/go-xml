@@ -18,7 +18,65 @@ import (
 func (p *parser) checkFacetConstraints() {
 	for _, site := range p.simpleTypes {
 		p.checkTypeFacets(site.typ, site.el)
+		p.checkSimpleTypeFinal(site.typ, site.el)
 	}
+}
+
+// checkSimpleTypeFinal enforces {final} on a simple type definition.
+//
+// "final" names the derivations a type forbids from itself, and until now it
+// was parsed and then never consulted, so a schema could declare
+// final="restriction" and restrict the type on the next line. Part 1 §3.14.6
+// (Derivation Valid (Restriction, Simple)) makes each variety its own clause,
+// which is why this is a switch on how the derived type was built rather than
+// one comparison: restricting a type is forbidden by "restriction", using it as
+// a list item type by "list", and naming it in a union by "union".
+//
+// The check is separate from checkTypeFacets because that one returns early for
+// a type with no facets, and a list or union derivation has none — which is
+// exactly the ST_final00101m2..m6 half of the suite's cases.
+func (p *parser) checkSimpleTypeFinal(t *SimpleType, el *xdm.Node) {
+	if t == nil {
+		return
+	}
+	report := func(base *SimpleType, what string) {
+		p.errs = append(p.errs, errorAt(el, "st-props-correct",
+			"simple type %s is final=%q and may not be used by %s",
+			typeNameFor(base), what, what))
+	}
+	switch t.Variety {
+	case VarietyAtomic:
+		if base, ok := t.Base.(*SimpleType); ok && base != t &&
+			base.unresolved == "" && base.FinalSet.Has(DerivationRestriction) {
+			report(base, "restriction")
+		}
+	case VarietyList:
+		if item := t.ItemType; item != nil && item != t &&
+			item.unresolved == "" && item.FinalSet.Has(DerivationList) {
+			report(item, "list")
+		}
+	case VarietyUnion:
+		for _, member := range t.MemberTypes {
+			if member == nil || member == t || member.unresolved != "" {
+				continue
+			}
+			if member.FinalSet.Has(DerivationUnion) {
+				report(member, "union")
+			}
+		}
+	}
+}
+
+// typeNameFor names a type for a diagnostic, falling back to a description for
+// an anonymous one.
+func typeNameFor(t *SimpleType) string {
+	if t == nil {
+		return "an unnamed type"
+	}
+	if t.Name.Local == "" {
+		return "an anonymous simple type"
+	}
+	return t.Name.Local
 }
 
 // checkTypeFacets applies the facet constraints to one simple type.

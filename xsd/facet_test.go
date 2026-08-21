@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -319,5 +320,49 @@ func TestTotalDigitsMustBePositive(t *testing.T) {
 	  </xs:simpleType>
 	</xs:schema>`); err != nil {
 		t.Errorf("fractionDigits=0 is legal: %v", err)
+	}
+}
+
+// "final" on a simple type names the derivations it forbids from itself. It was
+// parsed and then never consulted, so a schema could declare
+// final="restriction" and restrict the type on the very next line.
+//
+// Each variety is its own clause, which is why one comparison will not do:
+// restricting a type is forbidden by "restriction", using it as a list's item
+// type by "list", and naming it in a union by "union". The suite's
+// ST_final00101m set walks all three.
+func TestSimpleTypeFinalIsEnforced(t *testing.T) {
+	head := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="Test" final="%s">
+	    <xs:restriction base="xs:string"><xs:pattern value="1|2"/></xs:restriction>
+	  </xs:simpleType>`
+
+	derivations := map[string]string{
+		"restriction": `<xs:simpleType name="D">
+		    <xs:restriction base="Test"><xs:pattern value="1"/></xs:restriction>
+		  </xs:simpleType>`,
+		"list":  `<xs:simpleType name="D"><xs:list itemType="Test"/></xs:simpleType>`,
+		"union": `<xs:simpleType name="D"><xs:union memberTypes="Test xs:int"/></xs:simpleType>`,
+	}
+
+	for forbidden, body := range derivations {
+		// The derivation the type declares final must be refused.
+		src := fmt.Sprintf(head, forbidden) + body + `</xs:schema>`
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("final=%q should forbid the matching derivation", forbidden)
+		}
+		// And a *different* one must still be allowed, so the check is
+		// reading which derivation is named rather than treating any
+		// final at all as blocking everything.
+		for other, otherBody := range derivations {
+			if other == forbidden {
+				continue
+			}
+			src := fmt.Sprintf(head, forbidden) + otherBody + `</xs:schema>`
+			if _, err := parseSchemaString(t, src); err != nil {
+				t.Errorf("final=%q should not forbid %s: %v",
+					forbidden, other, err)
+			}
+		}
 	}
 }
