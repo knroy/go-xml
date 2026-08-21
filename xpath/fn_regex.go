@@ -496,12 +496,16 @@ func translatePattern(p string, dotAll bool) (string, error) {
 }
 
 // The XML NameStartChar and NameChar productions, as RE2 class bodies.
-const (
-	nameStartBody = `A-Za-z_:\x{C0}-\x{D6}\x{D8}-\x{F6}\x{F8}-\x{2FF}` +
-		`\x{370}-\x{37D}\x{37F}-\x{1FFF}\x{200C}-\x{200D}\x{2070}-\x{218F}` +
-		`\x{2C00}-\x{2FEF}\x{3001}-\x{D7FF}\x{F900}-\x{FDCF}\x{FDF0}-\x{FFFD}`
-	nameCharExtra = `\-.0-9\x{B7}\x{300}-\x{36F}\x{203F}-\x{2040}`
-	nameCharBody  = nameStartBody + nameCharExtra
+//
+// These are derived from nameStartRanges and nameCharRanges rather than
+// written out, because a hand-written copy is a second source of truth that
+// can disagree with the first. It did: the literal omitted
+// \x{10000}-\x{EFFFF}, so a Name character on a supplementary plane matched
+// \i outside a class — where the ranges were used — and not inside one, which
+// is what saxonData's xv100 catches.
+var (
+	nameStartBody = formatClass(nameStartRanges())
+	nameCharBody  = formatClass(nameCharRanges())
 )
 
 func classNameStart(inClass bool) string {

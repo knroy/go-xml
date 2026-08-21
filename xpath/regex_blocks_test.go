@@ -193,3 +193,36 @@ func TestWordClassAgreesWithItself(t *testing.T) {
 		}
 	}
 }
+
+// A Name character on a supplementary plane matches \i and \c. The class
+// bodies used inside another class were written out by hand and omitted
+// \x{10000}-\x{EFFFF}, while the ranges used elsewhere included it — so the
+// two forms disagreed above the BMP, which is what saxonData's xv100 catches.
+//
+// Both are now derived from the same ranges, so there is one source of truth.
+func TestNameCharsAboveTheBMP(t *testing.T) {
+	// No "^...$" here: TranslateSchemaRegexp makes those literal, and the
+	// \A...\z wrapping below is what anchors a schema pattern.
+	for _, pat := range []string{`[\i]+`, `\i+`, `[\c]+`, `\c+`} {
+		tr, err := TranslateSchemaRegexp(pat)
+		if err != nil {
+			t.Errorf("%s: %v", pat, err)
+			continue
+		}
+		re, err := regexp.Compile(`\A(?:` + tr + `)\z`)
+		if err != nil {
+			t.Errorf("%s: compile: %v", pat, err)
+			continue
+		}
+		for _, r := range []rune{0x10000, 0x10064, 0xEFFFF} {
+			if !re.MatchString(string(r)) {
+				t.Errorf("%s does not match %U", pat, r)
+			}
+		}
+		// Still bounded: EFFFF is the top of the production.
+		if re.MatchString(string(rune(0xF0000))) {
+			t.Errorf("%s matches %U, past the end of NameStartChar",
+				pat, rune(0xF0000))
+		}
+	}
+}
