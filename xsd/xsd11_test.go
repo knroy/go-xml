@@ -933,3 +933,33 @@ func TestDefaultedIDREFMustResolve(t *testing.T) {
 		t.Error("a defaulted IDREF matching no ID should fail")
 	}
 }
+
+// TestIDOwnershipIsVersionDependent pins the difference between the two
+// versions' ID binding, which is the whole of the 1.1 relaxation.
+//
+// XSD 1.0 permits an element at most one ID, so every value is its own binding
+// and two sibling elements holding the same ID collide. 1.1 permits several per
+// element and binds a value to the element it identifies, so the same two
+// siblings are one binding. Applying the 1.1 rule under 1.0 accepts a document
+// 1.0 rejects, which is why the owner depends on the version rather than being
+// a single rule for both.
+func TestIDOwnershipIsVersionDependent(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="v" type="xs:ID" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	doc := `<root><v>abc</v><v>abc</v></root>`
+
+	assertInvalid(t, schema, doc, "cvc-id.2")
+
+	s := load11(t, schema)
+	if err := check11(t, s, doc); err != nil {
+		t.Errorf("XSD 1.1 binds both to the same element, so this is valid: %v", err)
+	}
+}

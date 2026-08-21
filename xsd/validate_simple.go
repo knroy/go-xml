@@ -382,11 +382,34 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 // them holding the same value — that is one ID appearing twice on one element,
 // not a document with a duplicate. Counting occurrences would reject it.
 func (v *validator) recordIDs(n *xdm.Node, value string, t *SimpleType) {
-	owner := n
-	if owner != nil && owner.Parent != nil {
-		owner = owner.Parent
+	v.recordIDsOwned(v.idOwner(n), value, t)
+}
+
+// idOwner returns the element an ID carried by n is bound to.
+//
+// The two versions differ, and the difference is the whole of the 1.1
+// relaxation. XSD 1.0 permits an element at most one ID, so every value is its
+// own binding and the carrying node is the owner. XSD 1.1 permits several per
+// element and does not require them to differ, so what a value binds to is the
+// element it identifies — the parent of the carrying node, whether that node is
+// an attribute or an element whose content is the ID.
+//
+// Applying the 1.1 rule under 1.0 would accept a document with two elements
+// sharing an ID whenever they happened to be siblings.
+func (v *validator) idOwner(n *xdm.Node) *xdm.Node {
+	if n == nil {
+		return nil
 	}
-	v.recordIDsOwned(owner, value, t)
+	if v.schema.Version < Version11 {
+		if n.Kind == xdm.KindAttribute && n.Parent != nil {
+			return n.Parent
+		}
+		return n
+	}
+	if n.Parent != nil {
+		return n.Parent
+	}
+	return n
 }
 
 // recordIDsOwned records bindings for a value already attributed to its owning
