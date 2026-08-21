@@ -157,8 +157,17 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 	scoped := scopeForAssertion(el)
 	annotateForAssertion(scoped, t)
 
+	// $value is in scope in every assertion, not only those on a simple
+	// type (§3.13.4). On a complex type it is the element's simple content
+	// where there is one, and the empty sequence otherwise — which is what
+	// makes empty($value) the way a schema asserts "this element has element
+	// content, not a value". Leaving it unbound raises XPST0008 and turns a
+	// legitimate assertion into an evaluation failure.
+	value := v.assertionValue(el, t)
+
 	for _, a := range t.Assertions {
 		ctx := newAssertContext(scoped)
+		ctx.Vars = map[string]xdm.Sequence{"value": value}
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
 			v.fail(el, "cvc-assertion.2",
@@ -170,6 +179,27 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 				"assertion %q is not satisfied", a.Source)
 		}
 	}
+}
+
+// assertionValue returns the sequence bound to $value in a complex type's
+// assertions.
+//
+// A type with simple content has a value; one with element content or empty
+// content does not, and the empty sequence is what the spec binds there rather
+// than a zero-length string. The distinction is visible: empty($value) is true
+// for the second and false for a simple content whose value happens to be "".
+func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
+	if t.Content != ContentSimple || t.SimpleContent == nil {
+		return nil
+	}
+	normalized, err := validateSimpleValue(el.StringValue(), t.SimpleContent)
+	if err != nil {
+		// The content is invalid and has already been reported; there
+		// is no typed value to bind, so the assertion sees nothing
+		// rather than a value the type does not admit.
+		return nil
+	}
+	return xdm.One(typedValueFor(normalized, t.SimpleContent))
 }
 
 // scopeForAssertion returns a copy of an element rooted in its own tree.
@@ -187,6 +217,13 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 }
 
 // deepCopyNode copies a node and its subtree, detached from any parent.
+//
+// Comments and processing instructions are dropped. XSD 1.1 builds the tree an
+// assertion sees from the element's [children] with comments and PIs excluded
+// unless a processor offers an option to include them, and this one does not:
+// an assertion writing empty(.//comment()) is asking whether the schema-visible
+// content holds any, and the answer the spec defines is yes-by-default only for
+// a processor that has been told to expose them.
 func deepCopyNode(n *xdm.Node) *xdm.Node {
 	out := &xdm.Node{
 		Kind:           n.Kind,
@@ -203,6 +240,9 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 		out.AddNamespace(ns.Name.Local, ns.Value)
 	}
 	for _, c := range n.Children {
+		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+			continue
+		}
 		out.AppendChild(deepCopyNode(c))
 	}
 	return out
@@ -260,11 +300,27 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 // raises XPTY0004 — the assertion then fails to evaluate rather than being
 // true or false, which is a different and much less useful answer.
 //
-// Only the immediate attributes and children are labelled. An assertion may
-// reach deeper, but the type of a grandchild depends on its parent's content
-// model, and walking that here would duplicate the validator; the untyped
-// fallback is correct rather than wrong for those.
+// The whole subtree is labelled, not just the immediate children. An assertion
+// reaches as far as any XPath does — "data(event/d) instance of xs:date*" is a
+// grandchild — and a descendant left untyped atomises as xs:untypedAtomic,
+// which makes the instance-of false and the comparison a type error. The type
+// of a descendant is reachable because each child's declaration names its type,
+// and that type carries its own content model.
+//
+// The depth bound is what makes a recursive schema safe: a type whose content
+// model reaches itself is legal, and an instance of it is finite, but the walk
+// follows declarations rather than nodes and would otherwise not terminate.
 func annotateForAssertion(el *xdm.Node, t *ComplexType) {
+	annotateSubtree(el, t, 0)
+}
+
+// maxAnnotateDepth bounds the descent through declared types.
+const maxAnnotateDepth = 32
+
+func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
+	if el == nil || t == nil || depth > maxAnnotateDepth {
+		return
+	}
 	for _, use := range t.AttributeUses {
 		if use.Decl == nil || use.Decl.Type == nil {
 			continue
@@ -288,11 +344,16 @@ func annotateForAssertion(el *xdm.Node, t *ComplexType) {
 	collectElementDecls(t.Particle, byName, 0)
 	for _, c := range el.ChildElements() {
 		d, ok := byName[xdm.QName{URI: c.Name.URI, Local: c.Name.Local}]
-		if !ok || d.Type == nil || c.TypeAnnotation != "" {
+		if !ok || d.Type == nil {
 			continue
 		}
-		if st, isSimple := d.Type.(*SimpleType); isSimple {
-			c.TypeAnnotation = st.Name.Local
+		switch dt := d.Type.(type) {
+		case *SimpleType:
+			if c.TypeAnnotation == "" {
+				c.TypeAnnotation = dt.Name.Local
+			}
+		case *ComplexType:
+			annotateSubtree(c, dt, depth+1)
 		}
 	}
 }

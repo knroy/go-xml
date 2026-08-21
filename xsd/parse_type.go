@@ -324,20 +324,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 	// schema that uses them is not made valid by pretending they are absent
 	// — Options.Version decides whether they are *honoured*, which is where
 	// the distinction belongs.
-	for _, c := range contentChildren(el) {
-		if c.Name.URI != NSSchema {
-			continue
-		}
-		switch c.Name.Local {
-		case "assert":
-			if a := p.readAssert(c); a != nil {
-				t.Assertions = append(t.Assertions, a)
-			}
-		case "openContent":
-			t.OpenContent = p.readOpenContent(c)
-			t.declaredOpenContent = true
-		}
-	}
+	p.readAssertions(el, t)
 	p.readAttributes(el, &t.AttributeUses, &t.AttributeWildcard)
 
 	switch {
@@ -392,8 +379,35 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	if inline := childElement(body, "simpleType"); inline != nil {
 		t.SimpleContent = p.readSimpleType(inline)
 	}
+	// An assertion may sit inside the restriction or extension of a
+	// simpleContent, where it constrains the element's value through
+	// $value. Reading them only from a content model missed every one.
+	p.readAssertions(body, t)
 	p.readAttributes(body, &t.AttributeUses, &t.AttributeWildcard)
 	p.inheritAttributes(t)
+}
+
+// readAssertions reads the XSD 1.1 <xs:assert> and <xs:openContent> children of
+// a type body.
+//
+// They are read whatever the version, because a schema that uses them is not
+// made valid by pretending they are absent — Options.Version decides whether
+// they are honoured, which is where the distinction belongs.
+func (p *parser) readAssertions(el *xdm.Node, t *ComplexType) {
+	for _, c := range contentChildren(el) {
+		if c.Name.URI != NSSchema {
+			continue
+		}
+		switch c.Name.Local {
+		case "assert":
+			if a := p.readAssert(c); a != nil {
+				t.Assertions = append(t.Assertions, a)
+			}
+		case "openContent":
+			t.OpenContent = p.readOpenContent(c)
+			t.declaredOpenContent = true
+		}
+	}
 }
 
 // readComplexContent reads <xs:complexContent>.

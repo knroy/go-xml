@@ -284,6 +284,60 @@ func atomicForAnnotation(typeName, value string) *Atomic {
 
 	case "anyURI":
 		return NewAnyURI(value)
+
+	case "date", "time", "dateTime", "dateTimeStamp":
+		// xs:dateTimeStamp is xs:dateTime with a required timezone; the
+		// lexical form is a dateTime's, and the requirement was already
+		// enforced when the value was validated.
+		code := TypeDate
+		switch typeName {
+		case "time":
+			code = TypeTime
+		case "dateTime", "dateTimeStamp":
+			code = TypeDateTime
+		}
+		dt, err := ParseDateTime(strings.TrimSpace(value), code)
+		if err != nil {
+			return nil
+		}
+		return NewDateTime(dt, code)
+
+	case "gYear", "gYearMonth", "gMonth", "gMonthDay", "gDay":
+		code := TypeGYear
+		switch typeName {
+		case "gYearMonth":
+			code = TypeGYearMonth
+		case "gMonth":
+			code = TypeGMonth
+		case "gMonthDay":
+			code = TypeGMonthDay
+		case "gDay":
+			code = TypeGDay
+		}
+		dt, err := ParseGregorian(strings.TrimSpace(value), code)
+		if err != nil {
+			return nil
+		}
+		return NewGregorian(dt, code)
+
+	case "duration", "yearMonthDuration", "dayTimeDuration":
+		code := TypeDuration
+		switch typeName {
+		case "yearMonthDuration":
+			code = TypeYearMonthDuration
+		case "dayTimeDuration":
+			code = TypeDayTimeDuration
+		}
+		d, err := ParseDuration(strings.TrimSpace(value), code)
+		if err != nil {
+			return nil
+		}
+		return NewDuration(d, code)
+
+	case "hexBinary":
+		return NewBinary(value, TypeHexBinary)
+	case "base64Binary":
+		return NewBinary(value, TypeBase64Binary)
 	}
 	return nil
 }

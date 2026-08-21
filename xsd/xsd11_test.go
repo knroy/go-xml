@@ -963,3 +963,133 @@ func TestIDOwnershipIsVersionDependent(t *testing.T) {
 		t.Errorf("XSD 1.1 binds both to the same element, so this is valid: %v", err)
 	}
 }
+
+// TestAssertionSeesTypedDescendants covers assertions reaching past the
+// immediate children.
+//
+// An assertion reaches as far as any XPath does, and a descendant left untyped
+// atomises as xs:untypedAtomic — so "instance of xs:date" is false and a
+// comparison raises XPTY0004. Either way the assertion answers something other
+// than the question the schema asked.
+func TestAssertionSeesTypedDescendants(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="inner">
+	    <xs:sequence>
+	      <xs:element name="d" type="xs:date"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="temp">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="event" type="inner"/>
+	      </xs:sequence>
+	      <xs:assert test="data(event/d) instance of xs:date"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<temp><event><d>2001-01-01</d></event></temp>`); err != nil {
+		t.Errorf("a grandchild should carry its declared type: %v", err)
+	}
+}
+
+// TestAssertionTemporalAtomization pins that the date and duration families
+// atomise to their own types in an assertion, not to xs:untypedAtomic.
+//
+// These were absent from the annotation table, so every temporal comparison in
+// an assertion was a string comparison — which silently gives the right answer
+// for ISO dates and the wrong one for anything with a timezone or a duration.
+func TestAssertionTemporalAtomization(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a" type="xs:date"/>
+	        <xs:element name="b" type="xs:date"/>
+	      </xs:sequence>
+	      <xs:assert test="a castable as xs:date and xs:date(a) lt xs:date(b)"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e><a>2001-01-01</a><b>2002-01-01</b></e>`); err != nil {
+		t.Errorf("dates should compare as dates: %v", err)
+	}
+	if err := check11(t, s, `<e><a>2002-01-01</a><b>2001-01-01</b></e>`); err == nil {
+		t.Error("the ordering assertion should fail when reversed")
+	}
+}
+
+// TestAssertionDoesNotSeeComments pins that comments and processing
+// instructions are invisible to an assertion.
+//
+// XSD 1.1 builds the tree an assertion sees with them excluded unless the
+// processor offers an option to include them, and this one does not. A schema
+// writing empty(.//comment()) is asking about the schema-visible content, and
+// the suite's assert023 turns on exactly this: the same instance is valid by
+// default and invalid only for a processor told to expose them.
+func TestAssertionDoesNotSeeComments(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="temp">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:attribute name="x"/>
+	      <xs:assert test="empty(.//comment()) and empty(.//processing-instruction())"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<temp x="1"><!--hidden--></temp>`); err != nil {
+		t.Errorf("a comment should not be visible to an assertion: %v", err)
+	}
+	if err := check11(t, s, `<temp x="1"><?pi go?></temp>`); err != nil {
+		t.Errorf("a PI should not be visible to an assertion: %v", err)
+	}
+}
+
+// TestValueBoundInComplexAssertion covers $value being in scope in every
+// assertion, not only those on a simple type.
+//
+// On a complex type it is the simple content where there is one and the empty
+// sequence otherwise, which is what makes empty($value) the way a schema
+// asserts "this element has element content, not a value". Leaving it unbound
+// raises XPST0008 and turns the assertion into an evaluation failure — a
+// different answer from either true or false.
+func TestValueBoundInComplexAssertion(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="elem">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="d" type="xs:string"/>
+	      </xs:sequence>
+	      <xs:assert test="empty($value)"/>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="simple">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:extension base="xs:integer">
+	          <xs:attribute name="k"/>
+	          <xs:assert test="$value gt 5"/>
+	        </xs:extension>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<elem><d>x</d></elem>`); err != nil {
+		t.Errorf("$value should be the empty sequence for element content: %v", err)
+	}
+	// On simple content $value carries the declared type, so this is a
+	// numeric comparison rather than a string one.
+	if err := check11(t, s, `<simple k="a">9</simple>`); err != nil {
+		t.Errorf("$value should carry the simple content's type: %v", err)
+	}
+	if err := check11(t, s, `<simple k="a">3</simple>`); err == nil {
+		t.Error("the $value assertion should fail for 3")
+	}
+}
