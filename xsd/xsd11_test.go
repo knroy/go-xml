@@ -1308,3 +1308,58 @@ func TestAllGroupWildcardTakesOverflow(t *testing.T) {
 		t.Error("without a wildcard the bound violation should be reported")
 	}
 }
+
+// TestIdentityConstraintSkipsSkippedContent pins that a selector does not reach
+// into content matched by a processContents="skip" wildcard.
+//
+// An identity constraint selects nodes out of the PSVI, and skipped content was
+// never assessed — it has no schema-normalized values and no type annotations,
+// so there is nothing there for a field to select. Reaching into it makes a key
+// report a duplicate for an element the schema explicitly said not to look at.
+func TestIdentityConstraintSkipsSkippedContent(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:choice maxOccurs="unbounded">
+	        <xs:element ref="note"/>
+	        <xs:element ref="wrapper"/>
+	      </xs:choice>
+	    </xs:complexType>
+	    <xs:key name="k">
+	      <xs:selector xpath=".//note"/>
+	      <xs:field xpath="@id"/>
+	    </xs:key>
+	  </xs:element>
+	  <xs:element name="note">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:attribute name="id" type="xs:string"/>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="wrapper">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:any processContents="skip" minOccurs="0" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// The nested note repeats an id, but it is in skipped content, so the
+	// key never sees it.
+	if err := check11(t, s,
+		`<doc><note id="n1"/><wrapper><note id="n1"/></wrapper></doc>`); err != nil {
+		t.Errorf("a duplicate in skipped content should be invisible: %v", err)
+	}
+	// A nested note with no id at all: a key requires every field, but not
+	// for a node it does not select.
+	if err := check11(t, s,
+		`<doc><note id="n1"/><wrapper><note/></wrapper></doc>`); err != nil {
+		t.Errorf("a missing field in skipped content should be invisible: %v", err)
+	}
+	// Outside the skipped content the key still applies.
+	if err := check11(t, s, `<doc><note id="n1"/><note id="n1"/></doc>`); err == nil {
+		t.Error("a duplicate outside skipped content should still be caught")
+	}
+}

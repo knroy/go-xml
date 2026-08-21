@@ -131,6 +131,11 @@ type validator struct {
 	// permits an element to carry several ID attributes.
 	idOwners map[string]*xdm.Node
 
+	// skipped holds the elements matched by a processContents="skip"
+	// wildcard. They and their descendants are outside the assessment, so
+	// an identity constraint's selector must not reach into them.
+	skipped map[*xdm.Node]bool
+
 	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
 	// last. Conditional type assignment on a descendant sees them, which is
 	// how an ancestor's xml:lang can choose a nested element's type.
@@ -818,7 +823,18 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
 		case ProcessSkip:
-			// Nothing is checked, by definition.
+			// Nothing is checked, by definition. The element is
+			// recorded so that identity constraints skip it too:
+			// a selector picks nodes out of the PSVI, and skipped
+			// content was never assessed, so it contributes no
+			// nodes to select. Without this a key sees ids in
+			// content the schema said not to look at, and reports
+			// a duplicate or a missing field for an element that
+			// was never validated at all.
+			if v.skipped == nil {
+				v.skipped = map[*xdm.Node]bool{}
+			}
+			v.skipped[kid] = true
 			return nil
 		case ProcessLax:
 			if d, ok := v.schema.Elements[name]; ok {

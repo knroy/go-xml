@@ -109,6 +109,9 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint) *nodeTa
 	tbl := &nodeTable{entries: map[string]*xdm.Node{}}
 
 	for _, target := range selectNodes(el, ic.Selector) {
+		if v.inSkippedContent(target) {
+			continue
+		}
 		seq, complete, ok := v.keySequence(target, ic)
 		if !ok {
 			// A field selected more than one node, which clause 3
@@ -149,6 +152,9 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 	target := tables[ic.Refer]
 
 	for _, node := range selectNodes(el, ic.Selector) {
+		if v.inSkippedContent(node) {
+			continue
+		}
 		seq, complete, ok := v.keySequence(node, ic)
 		if !ok || !complete {
 			// A keyref whose fields are absent simply does not
@@ -316,4 +322,28 @@ func descendantsOrSelf(el *xdm.Node) []*xdm.Node {
 		out = append(out, out[i].ChildElements()...)
 	}
 	return out
+}
+
+// inSkippedContent reports whether a node lies inside content matched by a
+// processContents="skip" wildcard.
+//
+// An identity constraint selects nodes out of the PSVI, and skipped content was
+// never assessed — it has no schema-normalized values and no type annotations,
+// so there is nothing there for a field to select. Reaching into it makes a key
+// report a duplicate for an element the schema explicitly said not to look at,
+// or a missing field for one that was never validated.
+//
+// The walk is upward from the node rather than a mark on every descendant,
+// because a skip wildcard may cover an arbitrarily large subtree and marking it
+// wholesale would cost more than the constraints that consult it.
+func (v *validator) inSkippedContent(n *xdm.Node) bool {
+	if len(v.skipped) == 0 {
+		return false
+	}
+	for cur := n; cur != nil; cur = cur.Parent {
+		if v.skipped[cur] {
+			return true
+		}
+	}
+	return false
 }
