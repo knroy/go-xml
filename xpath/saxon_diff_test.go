@@ -198,8 +198,12 @@ var saxonRejected = []struct {
 		`QName('http://x', '1person')`, "FOCA0002"},
 	{"a base64 lexical form is not hex", `xs:hexBinary('D7c=')`, ""},
 	{"a value out of range for the type is an error", `xs:byte(128)`, "FORG0001"},
-	{"subtraction from a shorthand class cannot be expanded exactly",
-		`matches('a', '[\d-[5]]')`, "FORX0002"},
+	// Subtraction from a Unicode category is refused here because expanding
+	// one means embedding the tables that decide it. Saxon accepts it; this
+	// entry records a deliberate narrowing, not a shared rejection, and is
+	// the one place this table does so.
+	{"subtraction from a Unicode category is not expanded",
+		`matches('a', '[\p{L}-[b]]')`, "FORX0002"},
 }
 
 func TestSaxonRejection(t *testing.T) {

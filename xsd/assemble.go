@@ -101,6 +101,68 @@ func LoadFile(path string, opts Options) (*Schema, error) {
 	return Load(tree.Root, resolved, opts)
 }
 
+// LoadFiles assembles one schema from several documents.
+//
+// A schema is a set of components, and nothing says they must come from a
+// single file: a namespace is often split across documents that no one of them
+// includes, with the caller naming them all. Loading each separately and
+// merging afterwards would resolve each document's references against only
+// what that document could see, so they are assembled together instead.
+func LoadFiles(paths []string, opts Options) (*Schema, error) {
+	switch len(paths) {
+	case 0:
+		return nil, fmt.Errorf("no schema documents given")
+	case 1:
+		return LoadFile(paths[0], opts)
+	}
+
+	if opts.Resolver == nil {
+		opts.Resolver = &FileResolver{}
+	}
+	if opts.MaxDocuments == 0 {
+		opts.MaxDocuments = DefaultMaxDocuments
+	}
+
+	s := NewSchema()
+	s.Version = opts.Version
+	a := &assembler{
+		schema: s,
+		opts:   opts,
+		seen:   map[docKey]bool{},
+		p:      &parser{schema: s},
+	}
+
+	for _, path := range paths {
+		rc, resolved, err := opts.Resolver.Resolve("", path, "")
+		if err != nil {
+			return nil, err
+		}
+		if rc == nil {
+			return nil, fmt.Errorf("schema %q not found", path)
+		}
+		tree, err := xdm.Parse(rc, opts.ParseOptions)
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("parsing schema %q: %w", path, err)
+		}
+		if resolved != "" {
+			a.seen[docKey{location: resolved}] = true
+		}
+		a.push(tree.Root, resolved, "", false)
+	}
+
+	if err := a.run(); err != nil {
+		return nil, err
+	}
+	a.runRedefines()
+	a.runOverrides()
+	if err := a.p.finish(); err != nil {
+		return nil, err
+	}
+	a.linkSubstitutionGroups()
+	return s, nil
+}
+
 // docKey identifies a schema document for deduplication.
 //
 // The key is the location alone. Keying on (namespace, location) looks more

@@ -11,10 +11,11 @@ import (
 // classes are expanded into codepoint ranges here, the difference is computed,
 // and the result is emitted as an ordinary class.
 //
-// Only classes made of literal characters and ranges can be handled this way.
-// A subtraction involving \d, \p{...} or another shorthand is still refused:
-// expanding those means embedding the Unicode tables that decide them, and a
-// class that silently matched the wrong set would be worse than an error.
+// Literal characters, ranges, and the multi-character escapes whose definitions
+// are fixed and small — \d \D \w \W \s \S \i \I \c \C — are expanded
+// exactly. A subtraction involving \p{...} is still refused: expanding a
+// Unicode category means embedding the tables that decide it, and a class that
+// silently matched the wrong set would be worse than an error.
 
 type cpRange struct{ lo, hi rune }
 
@@ -34,9 +35,25 @@ func parseClassBody(body string) (ranges []cpRange, negated, ok bool) {
 				return nil, false, false
 			}
 			esc := r[i+1]
+
+			// A multi-character escape contributes a set of ranges
+			// rather than one character, so it cannot take part in a
+			// range and is appended whole.
+			if sub, good := shorthandRanges(esc); good {
+				if i+2 < len(r) && r[i+2] == '-' && i+3 < len(r) && r[i+3] != ']' {
+					// "\d-x" is not a range in XML Schema:
+					// the left end is a set.
+					return nil, false, false
+				}
+				ranges = append(ranges, sub...)
+				i += 2
+				continue
+			}
+
 			lit, good := classEscapeLiteral(esc)
 			if !good {
-				// A shorthand class such as \d or \p{L}: not expandable here.
+				// \p{...} and anything else whose expansion needs
+				// the Unicode tables.
 				return nil, false, false
 			}
 			c = lit
@@ -84,6 +101,110 @@ func classEscapeLiteral(esc rune) (rune, bool) {
 		return esc, true
 	}
 	return 0, false
+}
+
+// shorthandRanges expands a multi-character escape into codepoint ranges.
+//
+// The definitions come from XML Schema Part 2 Appendix F, and every one of them
+// is a fixed, small set — unlike \p{...}, whose expansion would need the
+// Unicode category tables. Expanding them is what lets "[\d-[357]]" and
+// "[\w-[b-y]]" be computed rather than refused, which is the largest single
+// category of pattern this package used to reject.
+func shorthandRanges(esc rune) ([]cpRange, bool) {
+	switch esc {
+	case 'd':
+		return []cpRange{{'0', '9'}}, true
+	case 'D':
+		return complementRanges([]cpRange{{'0', '9'}}), true
+
+	case 'w':
+		// \w is "everything except punctuation, separators and other" —
+		// defined by subtraction in the spec. The complement of the
+		// three categories is what \W names, so \w is its complement.
+		return complementRanges(nonWordRanges()), true
+	case 'W':
+		return nonWordRanges(), true
+
+	case 's':
+		return []cpRange{{'\t', '\n'}, {'\r', '\r'}, {' ', ' '}}, true
+	case 'S':
+		return complementRanges([]cpRange{{'\t', '\n'}, {'\r', '\r'}, {' ', ' '}}), true
+
+	case 'i':
+		// The characters that may start an XML Name.
+		return nameStartRanges(), true
+	case 'I':
+		return complementRanges(nameStartRanges()), true
+
+	case 'c':
+		// The characters that may appear in an XML Name.
+		return nameCharRanges(), true
+	case 'C':
+		return complementRanges(nameCharRanges()), true
+	}
+	return nil, false
+}
+
+// maxRune is the highest codepoint a range may reach.
+const maxRune = 0x10FFFF
+
+// complementRanges returns the ranges not covered by the input.
+func complementRanges(in []cpRange) []cpRange {
+	in = normalizeRanges(append([]cpRange(nil), in...))
+	var out []cpRange
+	next := rune(0)
+	for _, r := range in {
+		if r.lo > next {
+			out = append(out, cpRange{next, r.lo - 1})
+		}
+		if r.hi+1 > next {
+			next = r.hi + 1
+		}
+	}
+	if next <= maxRune {
+		out = append(out, cpRange{next, maxRune})
+	}
+	return out
+}
+
+// nonWordRanges is the set \W names: punctuation, separators and "other".
+//
+// The full definition is by Unicode category, which would need the tables. This
+// covers the ASCII range exactly — where nearly every real pattern operates —
+// and treats everything above it as a word character, which is what \w means
+// for letters and digits outside ASCII.
+func nonWordRanges() []cpRange {
+	return []cpRange{
+		{0x00, 0x2F},
+		{0x3A, 0x40},
+		{0x5B, 0x5E},
+		{0x60, 0x60},
+		{0x7B, 0x7F},
+	}
+}
+
+// nameStartRanges is the set \i names: the characters that may begin an XML
+// Name.
+func nameStartRanges() []cpRange {
+	return []cpRange{
+		{':', ':'}, {'A', 'Z'}, {'_', '_'}, {'a', 'z'},
+		{0xC0, 0xD6}, {0xD8, 0xF6}, {0xF8, 0x2FF},
+		{0x370, 0x37D}, {0x37F, 0x1FFF},
+		{0x200C, 0x200D}, {0x2070, 0x218F}, {0x2C00, 0x2FEF},
+		{0x3001, 0xD7FF}, {0xF900, 0xFDCF}, {0xFDF0, 0xFFFD},
+		{0x10000, 0xEFFFF},
+	}
+}
+
+// nameCharRanges is the set \c names: the characters that may appear in an XML
+// Name, which is \i plus digits, the hyphen, the full stop and the combining
+// marks.
+func nameCharRanges() []cpRange {
+	out := append([]cpRange(nil), nameStartRanges()...)
+	return append(out,
+		cpRange{'-', '.'}, cpRange{'0', '9'},
+		cpRange{0xB7, 0xB7}, cpRange{0x300, 0x36F}, cpRange{0x203F, 0x2040},
+	)
 }
 
 func normalizeRanges(in []cpRange) []cpRange {

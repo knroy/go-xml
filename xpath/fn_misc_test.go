@@ -759,10 +759,25 @@ func TestRegexClassSubtraction(t *testing.T) {
 			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
 		}
 	}
-	// A shorthand class cannot be expanded exactly, so it is still refused
-	// rather than approximated.
-	if err := evalErr(t, testDoc, `matches('a', '[\d-[5]]')`); err == nil {
-		t.Error("subtraction from a shorthand class was accepted")
+	// The multi-character escapes have fixed, small definitions, so a
+	// subtraction involving one is computed rather than refused.
+	for _, c := range []struct{ expr, want string }{
+		{`matches('4', '^[\d-[357]]+$')`, "true"},
+		{`matches('3', '^[\d-[357]]+$')`, "false"},
+		{`matches('a', '^[\w-[b-y]]+$')`, "true"},
+		{`matches('c', '^[\w-[b-y]]+$')`, "false"},
+		{`matches('z', '^[\w-[b-y]]+$')`, "true"},
+	} {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+
+	// A Unicode category still cannot be expanded exactly: doing so means
+	// embedding the tables that decide it, and a class that silently
+	// matched the wrong set would be worse than an error.
+	if err := evalErr(t, testDoc, `matches('a', '[\p{L}-[b]]')`); err == nil {
+		t.Error("subtraction from a Unicode category was accepted")
 	}
 }
 
