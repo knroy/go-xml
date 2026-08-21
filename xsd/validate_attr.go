@@ -410,9 +410,20 @@ func isBase64Binary(v string) bool {
 
 // isQNameLexical reports whether v is a QName: an optional prefix and a local
 // name, both NCNames.
+//
+// "xmlns" is excluded as a prefix. Namespaces in XML binds it to nothing — it
+// is the attribute that *declares* bindings, and no declaration can bind it —
+// so "xmlns:xsi" has a prefix that cannot resolve, whatever is in scope. The
+// working group settled this on the 2010-02-05 telcon, "there is no binding
+// for xmlns as a prefix, so these are not valid QNames", and QName009 has been
+// marked stable against it since.
+//
+// A prefix that is merely *undeclared* is a different fault and not one this
+// function can see: it needs the element's in-scope namespaces. Only the
+// unbindable prefix is decidable from the literal alone.
 func isQNameLexical(v string) bool {
 	if i := strings.IndexByte(v, ':'); i >= 0 {
-		return isNCName(v[:i]) && isNCName(v[i+1:])
+		return isNCName(v[:i]) && v[:i] != "xmlns" && isNCName(v[i+1:])
 	}
 	return isNCName(v)
 }

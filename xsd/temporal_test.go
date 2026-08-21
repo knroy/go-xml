@@ -174,3 +174,24 @@ func TestDurationOrderUsesReferenceDateTimes(t *testing.T) {
 		t.Error("P1Y and P365D should be incomparable across a leap year")
 	}
 }
+
+// "xmlns" is not a QName prefix. Namespaces in XML binds it to nothing — it is
+// the attribute that declares bindings, and no declaration can bind it — so a
+// value like "xmlns:xsi" has a prefix that cannot resolve whatever is in
+// scope. The working group settled this on its 2010-02-05 telcon and QName009
+// has been marked stable against it since.
+//
+// A merely undeclared prefix is a different fault, decidable only with the
+// element's in-scope namespaces; this one is decidable from the literal.
+func TestXmlnsIsNotAQNamePrefix(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="v" type="xs:QName"/>
+	</xs:schema>`
+
+	assertInvalid(t, schema, `<v xmlns:xsi="urn:x">xmlns:xsi</v>`, "cvc-datatype-valid")
+	// A declared prefix still resolves, so the check has not swallowed the
+	// ordinary case.
+	assertValid(t, schema, `<v xmlns:p="urn:x">p:local</v>`)
+	assertValid(t, schema, `<v>local</v>`)
+}
