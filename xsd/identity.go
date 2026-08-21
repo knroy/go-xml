@@ -397,10 +397,14 @@ func canonicalValue(normalized, primitive string) (string, bool) {
 		if r, ok := new(big.Rat).SetString(normalized); ok {
 			return primitive + "/" + r.RatString(), true
 		}
-		// INF, -INF and NaN are their own canonical forms, but +INF
-		// and INF are the same value.
-		if normalized == "+INF" {
+		// The specials have no rational. Each is its own canonical
+		// form, except that +INF and INF are two spellings of one
+		// value.
+		switch normalized {
+		case "+INF", "INF":
 			return primitive + "/INF", true
+		case "-INF", "NaN":
+			return primitive + "/" + normalized, true
 		}
 	case "boolean":
 		// "1" and "true" are the same value, as are "0" and "false".

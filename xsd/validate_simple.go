@@ -30,7 +30,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	// spec's [schema normalized value] holds.
 	if decl != nil && decl.Constraint != nil && decl.Constraint.Fixed {
 		want, err := validateSimpleValue(decl.Constraint.Lexical, t)
-		if err == nil && want != normalized {
+		if err == nil && !fixedValueEqual(want, normalized, t) {
 			v.fail(n, "cvc-elt.5.2.2.2.1",
 				"value %q does not equal the fixed value %q",
 				normalized, want)
@@ -328,6 +328,57 @@ func checkEnumeration(steps []facetStep, normalized string, t *SimpleType) error
 		}
 	}
 	return nil
+}
+
+// fixedValueEqual reports whether an instance value satisfies a fixed value
+// constraint.
+//
+// The spec compares *values*, not spellings, and several primitives have more
+// than one literal per value: fixed="1" on a union admitting xs:boolean is
+// satisfied by "true" (stE050), and fixed="1.0" by "1.000" (stE055). Comparing
+// the normalized lexical forms refused both.
+//
+// The canonical form is the one identity constraints already use, so a fixed
+// value and a key agree on what equality means.
+func fixedValueEqual(want, got string, t *SimpleType) bool {
+	if want == got {
+		return true
+	}
+	prim := ""
+	if p := primitiveOf(atomicBaseOf(t)); p != nil {
+		prim = p.Name.Local
+	}
+	if a, ok := canonicalValue(want, prim); ok {
+		if b, ok2 := canonicalValue(got, prim); ok2 {
+			return a == b
+		}
+	}
+	if c, ok := canonicalTemporal(want, prim); ok {
+		if d, ok2 := canonicalTemporal(got, prim); ok2 {
+			return c == d
+		}
+	}
+	// A union takes the primitive of whichever member validated, which
+	// differs between the two values in general, so each is canonicalised
+	// under every member and a match under any one is a match. That is what
+	// makes fixed="1" equal to "true" where the union admits xs:boolean.
+	if t != nil && t.Variety == VarietyUnion {
+		for _, m := range t.MemberTypes {
+			if m != nil && fixedValueEqual(want, got, m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// atomicBaseOf reduces a list to its item type, so that primitiveOf sees
+// something with a primitive.
+func atomicBaseOf(t *SimpleType) *SimpleType {
+	if t != nil && t.Variety == VarietyList && t.ItemType != nil {
+		return t.ItemType
+	}
+	return t
 }
 
 // numericEqual compares two numeric literals by value.

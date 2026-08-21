@@ -145,7 +145,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	}
 	if c != nil && c.Fixed {
 		want, err := validateSimpleValue(c.Lexical, decl.Type)
-		if err == nil && want != normalized {
+		if err == nil && !fixedValueEqual(want, normalized, decl.Type) {
 			v.fail(a, "cvc-attribute.4",
 				"attribute %s is fixed at %q but is %q",
 				attrName(decl.Name), want, normalized)
