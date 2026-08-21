@@ -97,6 +97,33 @@ func TestDOCTYPERejectedByDefault(t *testing.T) {
 	}
 }
 
+// AllowDOCTYPE buys tolerance, not validation: the DTD is parsed past rather
+// than applied. Worth pinning because a DTD that is silently ignored is more
+// dangerous than one that is refused — a caller who set the flag to "support
+// DTDs" would otherwise believe the constraints were being enforced.
+//
+// docs/validation.md says this, and a change that made either half false would
+// need to change the documentation too.
+func TestDOCTYPEIsToleratedNotApplied(t *testing.T) {
+	// <r> is declared to contain <a>; the document carries <b>.
+	const violating = `<!DOCTYPE r [
+	  <!ELEMENT r (a)>
+	  <!ELEMENT a (#PCDATA)>
+	]>
+	<r><b>wrong</b></r>`
+	if _, err := ParseString(violating, ParseOptions{AllowDOCTYPE: true}); err != nil {
+		t.Errorf("a document violating its own DTD failed to parse: %v\n"+
+			"if the content model is now enforced, the docs need updating", err)
+	}
+
+	// An entity the DTD declares is not expanded either.
+	const entity = `<!DOCTYPE r [<!ENTITY x "EXPANDED">]><r>&x;</r>`
+	if _, err := ParseString(entity, ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("a DTD-declared entity resolved; entity expansion is " +
+			"deliberately limited to the predefined five")
+	}
+}
+
 func TestDepthLimit(t *testing.T) {
 	deep := strings.Repeat("<a>", 200) + strings.Repeat("</a>", 200)
 	if _, err := ParseString(deep, ParseOptions{MaxDepth: 50}); err == nil {

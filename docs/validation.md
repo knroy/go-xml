@@ -8,15 +8,42 @@ Being precise about which one you need saves the most time:
 |---|---|---|
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
 | the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
-| the XML matches a DTD or RELAX NG schema | a different validator | ❌ not implemented |
+| the XML matches a **DTD** | a validating parser | ❌ a DOCTYPE is parsed past, never applied |
+| the XML matches a **RELAX NG** schema | a different validator | ❌ not implemented |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
+
+### DTD and RELAX NG
+
+Neither is implemented, and the DTD case has a trap worth naming. A `DOCTYPE`
+is refused by default; set `ParseOptions.AllowDOCTYPE` and it is *parsed past*
+rather than applied. A document that violates its own internal DTD parses
+without complaint, and entities the DTD declares are not expanded:
+
+```go
+// <!DOCTYPE r [ <!ELEMENT r (a)> ]>  <r><b>wrong</b></r>
+_, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
+// err is nil — the content model is never checked
+```
+
+So `AllowDOCTYPE` buys tolerance, not validation. If a document's constraints
+live in a DTD and you need them enforced, this is not the library for that
+document — convert the DTD to XSD, or use a validating parser.
+
+The default is off for a reason beyond that: a DTD is the entry point for
+entity expansion and XXE, so permitting one is a decision to make per document
+source rather than globally.
+
+RELAX NG is a larger absence: it validates by a different model — derivatives
+over patterns rather than a finite automaton — so it is a separate engine
+rather than a use of the one here, and its `interleave` is the part that makes
+it so.
 
 ## XSD
 
-`xsd` implements XML Schema 1.0: the component model, schema assembly through
-`include`, `import` and `redefine`, content models, simple types and facets,
-`xsi:type` and `xsi:nil`, substitution groups, wildcards, identity constraints
-and document-level ID/IDREF.
+`xsd` implements XML Schema 1.0 and 1.1: the component model, schema assembly
+through `include`, `import`, `redefine` and `override`, content models, simple
+types and facets, `xsi:type` and `xsi:nil`, substitution groups, wildcards,
+identity constraints and document-level ID/IDREF.
 
 ```go
 schema, err := xsd.LoadFile("invoice.xsd", xsd.Options{})
