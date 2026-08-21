@@ -284,6 +284,26 @@ documents carrying identical `xs:ID` and key values concurrently — the state
 most likely to have been hung off the schema by mistake — and loads schemas
 in parallel, all under `-race`.
 
+### Determinism
+
+Loading the same schema twice gives the same answer. That is worth stating
+because it was once untrue: `{substitution group}` membership was built by
+ranging a Go map, whose iteration order is deliberately randomised, and
+Particle Valid (Restriction) maps a derived choice onto a base choice with an
+*order-preserving* mapping. So when a substitution-group head was expanded into
+a choice, the order of that choice decided the answer — one suite schema,
+loaded forty times from the same file, was accepted five times and rejected
+thirty-five.
+
+Membership is now ordered by qualified name. The spec does not order
+`{substitution group}`, so any stable order conforms; what does not conform is
+a different one each run. The regression test loads the schema many times,
+because a single load used to pass by luck about one time in eight.
+
+Error *reporting* is stabilised the same way: where several independent types
+each fail, the messages are sorted before the error is built, so the one
+message a caller sees under `MaxErrors: 1` does not vary between runs.
+
 ## Conformance
 
 Measured against the W3C xsdtests suite:
