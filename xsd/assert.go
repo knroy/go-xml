@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"time"
+
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -153,9 +155,10 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 		return
 	}
 	scoped := scopeForAssertion(el)
+	annotateForAssertion(scoped, t)
 
 	for _, a := range t.Assertions {
-		ctx := xpath.NewContext(scoped, xpath.Builtins())
+		ctx := newAssertContext(scoped)
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
 			v.fail(el, "cvc-assertion.2",
@@ -236,7 +239,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 			}
 			continue
 		}
-		ctx := xpath.NewContext(scoped, xpath.Builtins())
+		ctx := newAssertContext(scoped)
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil || !ok {
 			continue
@@ -246,4 +249,128 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 		}
 	}
 	return decl.Type
+}
+
+// annotateForAssertion labels the copy an assertion evaluates against with the
+// types the schema assigns.
+//
+// XSD 1.1 assertions run on the PSVI, so "@length eq count(entry)" compares an
+// integer with an integer. Without the annotations the attribute atomises as
+// xs:untypedAtomic, which promotes to a string against a numeric operand and
+// raises XPTY0004 — the assertion then fails to evaluate rather than being
+// true or false, which is a different and much less useful answer.
+//
+// Only the immediate attributes and children are labelled. An assertion may
+// reach deeper, but the type of a grandchild depends on its parent's content
+// model, and walking that here would duplicate the validator; the untyped
+// fallback is correct rather than wrong for those.
+func annotateForAssertion(el *xdm.Node, t *ComplexType) {
+	for _, use := range t.AttributeUses {
+		if use.Decl == nil || use.Decl.Type == nil {
+			continue
+		}
+		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
+		if a != nil && a.TypeAnnotation == "" {
+			a.TypeAnnotation = use.Decl.Type.Name.Local
+		}
+	}
+
+	if t.Content == ContentSimple && t.SimpleContent != nil {
+		if el.TypeAnnotation == "" {
+			el.TypeAnnotation = t.SimpleContent.Name.Local
+		}
+		return
+	}
+	if t.Particle == nil {
+		return
+	}
+	byName := map[xdm.QName]*ElementDecl{}
+	collectElementDecls(t.Particle, byName, 0)
+	for _, c := range el.ChildElements() {
+		d, ok := byName[xdm.QName{URI: c.Name.URI, Local: c.Name.Local}]
+		if !ok || d.Type == nil || c.TypeAnnotation != "" {
+			continue
+		}
+		if st, isSimple := d.Type.(*SimpleType); isSimple {
+			c.TypeAnnotation = st.Name.Local
+		}
+	}
+}
+
+// collectElementDecls gathers the element declarations a particle can match.
+//
+// The depth bound is what makes a recursive model group safe here: a group that
+// reaches itself is legal, and the content-model compiler refuses it, but this
+// runs before that and would otherwise recurse without end.
+func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, depth int) {
+	if p == nil || depth > 32 {
+		return
+	}
+	switch term := p.Term.(type) {
+	case *ElementDecl:
+		if _, seen := out[term.Name]; !seen {
+			out[term.Name] = term
+		}
+		for _, sub := range term.substitutable {
+			if _, seen := out[sub.Name]; !seen {
+				out[sub.Name] = sub
+			}
+		}
+	case *ModelGroup:
+		for _, child := range term.Particles {
+			collectElementDecls(child, out, depth+1)
+		}
+	}
+}
+
+// newAssertContext builds the evaluation context for an assertion.
+//
+// The clock is set because XSD 1.1 permits fn:current-date and its siblings in
+// an assertion, and this package has no transform to inherit one from. It is
+// read once per context so that two calls inside one assertion cannot disagree
+// with each other.
+func newAssertContext(item xdm.Item) *xpath.Context {
+	ctx := xpath.NewContext(item, xpath.Builtins())
+	ctx.Now = time.Now()
+	ctx.HasNow = true
+	return ctx
+}
+
+// checkSimpleAssertions evaluates the <xs:assertion> facets of a simple type.
+//
+// On a simple type an assertion is a facet rather than a component, and the
+// value under test is bound to $value — there is no element to be the context
+// item, so an expression has nothing else to refer to.
+func checkSimpleAssertions(steps []facetStep, normalized string, t *SimpleType) error {
+	for _, st := range steps {
+		for _, a := range st.facets.Assertions {
+			ctx := newAssertContext(nil)
+			ctx.Vars = map[string]xdm.Sequence{
+				"value": xdm.One(typedValueFor(normalized, t)),
+			}
+			ok, err := a.Test.EvalBool(ctx)
+			if err != nil {
+				return facetError(st.typ, FacetKind(0),
+					"assertion %q could not be evaluated: %v", a.Source, err)
+			}
+			if !ok {
+				return facetError(st.typ, FacetKind(0),
+					"assertion %q is not satisfied", a.Source)
+			}
+		}
+	}
+	return nil
+}
+
+// typedValueFor builds the value bound to $value in a simple-type assertion.
+//
+// It carries the type the schema assigns, so that "$value gt 5" compares
+// numbers rather than raising on a string against an integer.
+func typedValueFor(normalized string, t *SimpleType) xdm.Item {
+	prim := ""
+	if p := primitiveOf(t); p != nil {
+		prim = p.Name.Local
+	}
+	n := &xdm.Node{Kind: xdm.KindText, Value: normalized, TypeAnnotation: prim}
+	return n.Atomize()
 }

@@ -92,6 +92,9 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	if err := checkExplicitTimezone(steps, normalized, prim); err != nil {
 		return "", err
 	}
+	if err := checkSimpleAssertions(steps, normalized, t); err != nil {
+		return "", err
+	}
 	return normalized, nil
 }
 

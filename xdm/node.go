@@ -1,7 +1,10 @@
 package xdm
 
 import (
+	"math"
+	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -209,7 +212,80 @@ func (n *Node) appendText(sb *strings.Builder) {
 // node atomises to xs:untypedAtomic, which is what makes untyped comparison
 // rules apply throughout a schemaless transform.
 func (n *Node) Atomize() *Atomic {
+	// A node validated against a schema atomises as its annotated type;
+	// one that was not is xs:untypedAtomic, the schemaless default.
+	//
+	// This is what makes "@length eq count(entry)" work in a schema-aware
+	// context: without it the attribute is a string, and comparing a string
+	// with an integer is XPTY0004 rather than a comparison. The conversion
+	// is deliberately narrow — the numeric, boolean and date types, whose
+	// lexical forms this package can already parse — because a type it
+	// cannot construct is better left untyped than guessed at.
+	if n.TypeAnnotation != "" {
+		if a := atomicForAnnotation(n.TypeAnnotation, n.StringValue()); a != nil {
+			return a
+		}
+	}
 	return NewUntypedAtomic(n.StringValue())
+}
+
+// atomicForAnnotation builds a typed value from a schema type annotation, or
+// returns nil when the annotation names a type this package does not construct.
+func atomicForAnnotation(typeName, value string) *Atomic {
+	switch typeName {
+	case "string", "normalizedString", "token", "language", "Name", "NCName",
+		"ID", "IDREF", "ENTITY", "NMTOKEN":
+		return NewString(value)
+
+	case "boolean":
+		switch value {
+		case "true", "1":
+			return NewBoolean(true)
+		case "false", "0":
+			return NewBoolean(false)
+		}
+		return nil
+
+	case "decimal", "integer", "long", "int", "short", "byte",
+		"nonNegativeInteger", "positiveInteger", "nonPositiveInteger",
+		"negativeInteger", "unsignedLong", "unsignedInt", "unsignedShort",
+		"unsignedByte":
+		// The integer family atomises as xs:integer and xs:decimal as
+		// itself. Both parse exactly, through big.Rat rather than a
+		// float, so that a value too large for a machine word keeps
+		// every digit.
+		r, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+		if !ok {
+			return nil
+		}
+		if typeName == "decimal" {
+			return NewDecimal(r)
+		}
+		return NewIntegerFromRat(r)
+
+	case "float", "double":
+		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			switch strings.TrimSpace(value) {
+			case "INF":
+				f = math.Inf(1)
+			case "-INF":
+				f = math.Inf(-1)
+			case "NaN":
+				f = math.NaN()
+			default:
+				return nil
+			}
+		}
+		if typeName == "float" {
+			return NewFloat(f)
+		}
+		return NewDouble(f)
+
+	case "anyURI":
+		return NewAnyURI(value)
+	}
+	return nil
 }
 
 // Attr returns the attribute node with the given expanded name, or nil.

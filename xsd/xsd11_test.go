@@ -463,3 +463,86 @@ func TestInheritableAttributes(t *testing.T) {
 		t.Error("the German alternative should not accept <en>")
 	}
 }
+
+// TestAssertionComparesTypedValues covers assertions running on the PSVI.
+//
+// "@length eq count(entry)" compares an integer with an integer only if the
+// attribute carries the type the schema gave it. Untyped, it promotes to a
+// string against a numeric operand and raises XPTY0004 — so the assertion
+// fails to *evaluate* rather than being true or false, which is a different
+// and much less useful answer.
+func TestAssertionComparesTypedValues(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="list">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="entry" type="xs:string" minOccurs="0"
+	                    maxOccurs="unbounded"/>
+	      </xs:sequence>
+	      <xs:attribute name="length" type="xs:integer"/>
+	      <xs:assert test="@length eq count(entry)"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<list length="2"><entry>a</entry><entry>b</entry></list>`); err != nil {
+		t.Errorf("a matching count should be valid: %v", err)
+	}
+	err := check11(t, s, `<list length="3"><entry>a</entry></list>`)
+	if err == nil {
+		t.Fatal("a mismatched count should be rejected")
+	}
+	// The failure must be the assertion being false, not the comparison
+	// raising.
+	if strings.Contains(err.Error(), "could not be evaluated") {
+		t.Errorf("the assertion raised instead of evaluating: %v", err)
+	}
+}
+
+// TestSimpleTypeAssertion covers <xs:assertion> as a facet, where the value
+// under test is bound to $value.
+//
+// There is no element to be the context item, so an expression has nothing else
+// to refer to — a simple-type assertion that cannot see $value can say nothing
+// at all.
+func TestSimpleTypeAssertion(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="even">
+	    <xs:restriction base="xs:integer">
+	      <xs:assertion test="$value mod 2 = 0"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="n" type="even"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<n>4</n>`); err != nil {
+		t.Errorf("an even value should be valid: %v", err)
+	}
+	if err := check11(t, s, `<n>5</n>`); err == nil {
+		t.Error("an odd value should be rejected")
+	}
+}
+
+// TestAssertionCanUseCurrentDate records that the date and time functions work
+// inside an assertion.
+//
+// XSD 1.1 permits them and this package has no transform to inherit a clock
+// from, so the context sets one — read once, so that two calls inside one
+// assertion cannot disagree.
+func TestAssertionCanUseCurrentDate(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e">
+	    <xs:complexType>
+	      <xs:attribute name="a" type="xs:string"/>
+	      <xs:assert test="year-from-date(current-date()) gt 2000"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e a="x"/>`); err != nil {
+		t.Errorf("current-date() should be available in an assertion: %v", err)
+	}
+}
