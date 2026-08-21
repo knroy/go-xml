@@ -363,6 +363,25 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 					"attribute ref %q names no attribute declaration", ref)
 			}
 			use.Decl = decl
+			// Attribute Use Correct clause 2 (§3.5.6): a use may
+			// not talk over a value the declaration fixes. If the
+			// declaration fixes one, a use carrying a constraint of
+			// its own must fix the same string — a use with no
+			// constraint simply inherits it, which is the ordinary
+			// case and stays legal.
+			//
+			// The check belongs in the fixup because the
+			// declaration is a forward reference: attO025 writes
+			// the ref before nothing, but a schema is free to write
+			// it before the declaration it names.
+			if dv := decl.Constraint; dv != nil && dv.Fixed && use.Constraint != nil {
+				if !use.Constraint.Fixed || use.Constraint.Lexical != dv.Lexical {
+					return errorAt(el, "au-props-correct.2",
+						"attribute use %q gives %q where the "+
+							"declaration fixes %q", ref,
+						use.Constraint.Lexical, dv.Lexical)
+				}
+			}
 			return nil
 		})
 		return use
@@ -1076,6 +1095,23 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 				"restriction makes required attribute %q optional",
 				r.Decl.Name.Local))
 		}
+		// Clause 2.1.3: a value the base fixes may not be changed.
+		//
+		// The clause is written over the *effective* value constraint —
+		// the use's own if it has one, otherwise the declaration's —
+		// because a use and the declaration it refers to may each carry
+		// one. A base that only supplies a default constrains nothing,
+		// so the restriction is free; a base that fixes a value admits
+		// exactly that value, and a restriction naming any other admits
+		// something the base does not.
+		if bv := effectiveValueConstraint(b); bv != nil && bv.Fixed {
+			rv := effectiveValueConstraint(r)
+			if rv == nil || !rv.Fixed || rv.Lexical != bv.Lexical {
+				p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.3",
+					"restriction changes attribute %q, which the base "+
+						"fixes to %q", r.Decl.Name.Local, bv.Lexical))
+			}
+		}
 	}
 
 	// Clause 3: every attribute the base requires must still be required
@@ -1135,4 +1171,23 @@ func (p *parser) checkAttributeGroupCycles() {
 				"attribute group %q references itself", g.Name.Local))
 		}
 	}
+}
+
+// effectiveValueConstraint is the {value constraint} an attribute use actually
+// imposes: its own if it has one, otherwise the declaration's.
+//
+// XSD 1.0 §3.4.6 names this in so many words, defining the "effective value
+// constraint" precisely because a use and the declaration it refers to may each
+// carry one and the constraints are written over the combination.
+func effectiveValueConstraint(u *AttributeUse) *ValueConstraint {
+	if u == nil {
+		return nil
+	}
+	if u.Constraint != nil {
+		return u.Constraint
+	}
+	if u.Decl != nil {
+		return u.Decl.Constraint
+	}
+	return nil
 }

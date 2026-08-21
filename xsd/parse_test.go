@@ -973,3 +973,64 @@ func TestProhibitedAttributeNeedsWildcard(t *testing.T) {
 		}
 	})
 }
+
+// A value the base fixes may not be changed, in either of the two places a
+// value constraint can be written.
+//
+// Attribute Use Correct clause 2 (§3.5.6) covers a use referring to a
+// declaration that fixes a value; derivation-ok-restriction.2.1.3 covers a
+// restriction against a base that fixes one. Both are written over the
+// *effective* value constraint — the use's own if present, otherwise the
+// declaration's — because the two may each carry one.
+//
+// A base that only supplies a *default* constrains nothing, so the restriction
+// is free; that half is the guard against a check that just compares values.
+func TestFixedValueMayNotBeChanged(t *testing.T) {
+	// au-props-correct.2: attO025 writes fixed="456" over a declaration
+	// that fixes "123".
+	if _, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:t" xmlns:t="urn:t">
+	  <xs:attribute name="foo" fixed="123"/>
+	  <xs:complexType name="c"><xs:attribute ref="t:foo" fixed="456"/></xs:complexType>
+	</xs:schema>`); err == nil {
+		t.Error("a use may not give a value the declaration fixes differently")
+	}
+	// Repeating the same fixed value is legal, and so is inheriting it.
+	for _, use := range []string{`fixed="123"`, ``} {
+		if _, err := parseSchemaString(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           targetNamespace="urn:t" xmlns:t="urn:t">
+		  <xs:attribute name="foo" fixed="123"/>
+		  <xs:complexType name="c"><xs:attribute ref="t:foo" `+use+`/></xs:complexType>
+		</xs:schema>`); err != nil {
+			t.Errorf("use %q should be legal: %v", use, err)
+		}
+	}
+
+	// derivation-ok-restriction.2.1.3: attZ008_e restricts a base that
+	// fixes "not_fixed" and names "fixed" instead.
+	restriction := func(baseAttr, derivedAttr string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="B"><xs:sequence/>` + baseAttr + `</xs:complexType>
+		  <xs:complexType name="D"><xs:complexContent><xs:restriction base="B">
+		    <xs:sequence/>` + derivedAttr + `</xs:restriction></xs:complexContent></xs:complexType>
+		</xs:schema>`
+	}
+	if _, err := parseSchemaString(t, restriction(
+		`<xs:attribute name="a" type="xs:string" fixed="one"/>`,
+		`<xs:attribute name="a" type="xs:string" fixed="two"/>`)); err == nil {
+		t.Error("a restriction may not change a value the base fixes")
+	}
+	if _, err := parseSchemaString(t, restriction(
+		`<xs:attribute name="a" type="xs:string" fixed="one"/>`,
+		`<xs:attribute name="a" type="xs:string" fixed="one"/>`)); err != nil {
+		t.Errorf("repeating the base's fixed value is legal: %v", err)
+	}
+	// A base that only defaults constrains nothing.
+	if _, err := parseSchemaString(t, restriction(
+		`<xs:attribute name="a" type="xs:string" default="one"/>`,
+		`<xs:attribute name="a" type="xs:string" fixed="two"/>`)); err != nil {
+		t.Errorf("a base default does not fix the value: %v", err)
+	}
+}
