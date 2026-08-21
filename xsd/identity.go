@@ -366,7 +366,13 @@ func (v *validator) keyString(n *xdm.Node) string {
 	if c, ok := canonicalTemporal(kv.normalized, kv.primitive); ok {
 		return c
 	}
-	return kv.normalized
+	// The primitive is part of the key. Values drawn from different
+	// primitives are never equal, whatever their spellings do: idF012 has
+	// the boolean 1 beside the decimal 1 and expects no duplicate.
+	//
+	// Types that share a primitive still compare by value, which is what
+	// keeps xs:int 1 equal to xs:integer 1 — both are decimal.
+	return kv.primitive + "/" + kv.normalized
 }
 
 // canonicalTemporal renders a date, time or duration in a form that is the same

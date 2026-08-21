@@ -50,18 +50,29 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 // the type, which is known here and gone by the time the constraint runs — the
 // constraint sees only nodes, and type annotations are opt-in.
 //
-// Only the temporal families are recorded. Every other primitive's canonical
-// form is its normalized lexical form, so the string comparison the constraint
-// already does is a value comparison for them.
+// The primitive is recorded for every type, not only the temporal ones,
+// because values of different primitives are never equal however their
+// spellings compare. idF012 puts it directly: one member is the boolean 1 and
+// the other the decimal 1, and the constraint is satisfied — comparing the
+// lexical forms alone made them a duplicate.
 func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType) {
+	// A list takes its item type's primitive, not one of its own. A
+	// singleton list is equal to the atomic value it contains — saxonData's
+	// id022 matches a keyref typed as a list of xs:Name against a key typed
+	// xs:Name — so the two have to reach the same key, which means the same
+	// primitive on both sides.
+	//
+	// A union takes the primitive of the member that validated, which is
+	// what primitiveOf already reports.
+	item := t
+	if item != nil && item.Variety == VarietyList && item.ItemType != nil {
+		item = item.ItemType
+	}
 	prim := ""
-	if p := primitiveOf(t); p != nil {
+	if p := primitiveOf(item); p != nil {
 		prim = p.Name.Local
 	}
-	switch prim {
-	case "duration", "dateTime", "date", "time",
-		"gYear", "gYearMonth", "gMonth", "gMonthDay", "gDay":
-	default:
+	if prim == "" {
 		return
 	}
 	if v.keyValues == nil {

@@ -389,3 +389,71 @@ func TestTopLevelOptionalAllGroup(t *testing.T) {
 	// each member independently so.
 	assertInvalid(t, schema, `<doc><t1/></doc>`, "cvc-complex-type.2.4.b")
 }
+
+// A key sequence compares values, and values drawn from different primitives
+// are never equal however their spellings compare. Comparing the lexical forms
+// alone made the boolean 1 a duplicate of the decimal 1.
+func TestKeyComparisonIsByPrimitive(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element ref="uid" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:unique name="u">
+	      <xs:selector xpath=".//uid"/>
+	      <xs:field xpath="."/>
+	    </xs:unique>
+	  </xs:element>
+	  <xs:element name="uid" type="xs:anyType"/>
+	</xs:schema>`
+	const ns = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+		` xmlns:xs="http://www.w3.org/2001/XMLSchema"`
+
+	// Different primitives, same lexical form: not a duplicate.
+	assertValid(t, schema, `<root`+ns+`>`+
+		`<uid xsi:type="xs:boolean">1</uid>`+
+		`<uid xsi:type="xs:decimal">1</uid></root>`)
+	assertValid(t, schema, `<root`+ns+`>`+
+		`<uid xsi:type="xs:float">1</uid>`+
+		`<uid xsi:type="xs:unsignedByte">1</uid></root>`)
+
+	// The same primitive still compares by value, so two spellings of one
+	// decimal are a duplicate — xs:int and xs:integer are both decimal.
+	assertInvalid(t, schema, `<root`+ns+`>`+
+		`<uid xsi:type="xs:int">1</uid>`+
+		`<uid xsi:type="xs:integer">1</uid></root>`,
+		"cvc-identity-constraint.4.1")
+}
+
+// A list takes its item type's primitive rather than one of its own, because a
+// singleton list is equal to the atomic value it contains. Giving a list a
+// primitive of its own separated a keyref typed as a list of xs:Name from a
+// key typed xs:Name, which saxonData's id022 is built to catch.
+func TestSingletonListMatchesAtomicKey(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence><xs:element ref="para" maxOccurs="unbounded"/></xs:sequence>
+	    </xs:complexType>
+	    <xs:key name="k">
+	      <xs:selector xpath="para"/><xs:field xpath="@key"/>
+	    </xs:key>
+	    <xs:keyref name="r" refer="k">
+	      <xs:selector xpath="para"/><xs:field xpath="@ref"/>
+	    </xs:keyref>
+	  </xs:element>
+	  <xs:element name="para">
+	    <xs:complexType>
+	      <xs:attribute name="key" type="xs:Name" use="required"/>
+	      <xs:attribute name="ref" type="names"/>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:simpleType name="names"><xs:list itemType="xs:Name"/></xs:simpleType>
+	</xs:schema>`
+	assertValid(t, schema,
+		`<doc><para key="alpha"/><para key="beta" ref="alpha"/></doc>`)
+}
