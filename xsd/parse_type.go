@@ -21,7 +21,7 @@ func (p *parser) readSimpleType(el *xdm.Node) *SimpleType {
 		t.FinalSet = p.doc.finalDefault
 	}
 
-	body := childElement(el, "restriction", "list", "union")
+	body := p.childElement(el, "restriction", "list", "union")
 	if body == nil {
 		p.errs = append(p.errs, errorAt(el, "src-simple-type.1",
 			"a simpleType must have a restriction, list or union child"))
@@ -45,7 +45,7 @@ func (p *parser) readSimpleType(el *xdm.Node) *SimpleType {
 // readSimpleRestriction reads <xs:restriction> inside a simpleType.
 func (p *parser) readSimpleRestriction(el *xdm.Node, t *SimpleType) {
 	base := el.AttrValue("base")
-	inline := childElement(el, "simpleType")
+	inline := p.childElement(el, "simpleType")
 	switch {
 	case base != "" && inline != nil:
 		p.errs = append(p.errs, errorAt(el, "src-simple-type.2",
@@ -85,7 +85,7 @@ func (p *parser) readSimpleRestriction(el *xdm.Node, t *SimpleType) {
 // readSimpleList reads <xs:list>.
 func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 	item := el.AttrValue("itemType")
-	inline := childElement(el, "simpleType")
+	inline := p.childElement(el, "simpleType")
 	switch {
 	case item != "" && inline != nil:
 		p.errs = append(p.errs, errorAt(el, "src-simple-type.3",
@@ -151,7 +151,7 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 			})
 		}
 	}
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.IsElement(NSSchema, "simpleType") {
 			t.MemberTypes = append(t.MemberTypes, p.readSimpleType(c))
 		}
@@ -165,7 +165,7 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 
 // readFacets reads the constraining facet children of a restriction.
 func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}
@@ -297,11 +297,11 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 
 	mixed := p.boolAttr(el, "mixed", false)
 
-	if sc := childElement(el, "simpleContent"); sc != nil {
+	if sc := p.childElement(el, "simpleContent"); sc != nil {
 		p.readSimpleContent(sc, t)
 		return t
 	}
-	if cc := childElement(el, "complexContent"); cc != nil {
+	if cc := p.childElement(el, "complexContent"); cc != nil {
 		p.readComplexContent(cc, t, mixed)
 		return t
 	}
@@ -316,7 +316,7 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 // readTypeBody reads the particle and attributes of a complex type from an
 // element whose children are the content model.
 func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
-	if g := childElement(el, "all", "choice", "sequence", "group"); g != nil {
+	if g := p.childElement(el, "all", "choice", "sequence", "group"); g != nil {
 		t.Particle = p.readParticle(g)
 	}
 
@@ -348,7 +348,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 // character-data content and attributes.
 func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	t.Content = ContentSimple
-	body := childElement(el, "restriction", "extension")
+	body := p.childElement(el, "restriction", "extension")
 	if body == nil {
 		p.errs = append(p.errs, errorAt(el, "src-ct.1",
 			"simpleContent must have a restriction or extension child"))
@@ -376,7 +376,7 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 		})
 	}
 
-	if inline := childElement(body, "simpleType"); inline != nil {
+	if inline := p.childElement(body, "simpleType"); inline != nil {
 		t.SimpleContent = p.readSimpleType(inline)
 	}
 	// An assertion may sit inside the restriction or extension of a
@@ -394,7 +394,7 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 // made valid by pretending they are absent — Options.Version decides whether
 // they are honoured, which is where the distinction belongs.
 func (p *parser) readAssertions(el *xdm.Node, t *ComplexType) {
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}
@@ -417,7 +417,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 		mixed = p.boolAttr(el, "mixed", mixed)
 	}
 
-	body := childElement(el, "restriction", "extension")
+	body := p.childElement(el, "restriction", "extension")
 	if body == nil {
 		p.errs = append(p.errs, errorAt(el, "src-ct.1",
 			"complexContent must have a restriction or extension child"))
@@ -560,7 +560,7 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 	case "sequence":
 		g.Compositor = CompositorSequence
 	}
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}
@@ -579,7 +579,7 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 			"a top-level group must have a name"))
 		return nil
 	}
-	inner := childElement(el, "all", "choice", "sequence")
+	inner := p.childElement(el, "all", "choice", "sequence")
 	if inner == nil {
 		p.errs = append(p.errs, errorAt(el, "",
 			"a group definition must contain an all, choice or sequence"))
@@ -668,7 +668,7 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 			"mode=%q is not one of interleave, suffix or none",
 			el.AttrValue("mode")))
 	}
-	if w := childElement(el, "any"); w != nil {
+	if w := p.childElement(el, "any"); w != nil {
 		oc.Wildcard = p.readWildcard(w)
 	} else {
 		// An openContent with no wildcard defaults to ##any, lax.

@@ -129,7 +129,7 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 
 	if ref := el.AttrValue("type"); ref != "" {
 		p.resolveTypeRef(el, ref, func(t Type) { alt.Type = t })
-	} else if inline := childElement(el, "simpleType", "complexType"); inline != nil {
+	} else if inline := p.childElement(el, "simpleType", "complexType"); inline != nil {
 		if inline.Name.Local == "simpleType" {
 			alt.Type = p.readSimpleType(inline)
 		} else {

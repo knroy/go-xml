@@ -65,7 +65,7 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 	// The type is either named by the type attribute or given inline, and
 	// never both — src-element.3.
 	typeAttr := el.Attr("", "type")
-	inline := childElement(el, "simpleType", "complexType")
+	inline := p.childElement(el, "simpleType", "complexType")
 	switch {
 	case typeAttr != nil && inline != nil:
 		p.errs = append(p.errs, errorAt(el, "src-element.3",
@@ -129,7 +129,7 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		}
 	}
 
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}
@@ -174,7 +174,7 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 	d.Constraint = p.valueConstraint(el)
 
 	typeAttr := el.Attr("", "type")
-	inline := childElement(el, "simpleType")
+	inline := p.childElement(el, "simpleType")
 	switch {
 	case typeAttr != nil && inline != nil:
 		p.errs = append(p.errs, errorAt(el, "src-attribute.4",
@@ -297,7 +297,7 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wildcard) {
 	var wildcard *Wildcard
 
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}

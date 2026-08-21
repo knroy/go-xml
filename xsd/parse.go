@@ -283,6 +283,13 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	p.doc = doc
 
 	for _, el := range root.ChildElements() {
+		// Conditional inclusion applies at the top level too: a schema
+		// document commonly carries a 1.0 and a 1.1 spelling of the
+		// same global declaration side by side, and reading both would
+		// make them duplicates of each other.
+		if !includeElement(el, p.schema.Version) {
+			continue
+		}
 		p.readTopLevel(el)
 	}
 	return nil
@@ -580,9 +587,14 @@ func (p *parser) valueConstraint(el *xdm.Node) *ValueConstraint {
 
 // childElement returns the first child of el in the schema namespace with one
 // of the given names, skipping annotations.
-func childElement(el *xdm.Node, names ...string) *xdm.Node {
+func (p *parser) childElement(el *xdm.Node, names ...string) *xdm.Node {
 	for _, c := range el.ChildElements() {
 		if c.Name.URI != NSSchema {
+			continue
+		}
+		if !includeElement(c, p.schema.Version) {
+			// Excluded by conditional inclusion: the element is not
+			// there as far as this processor is concerned.
 			continue
 		}
 		for _, n := range names {
@@ -599,10 +611,18 @@ func childElement(el *xdm.Node, names ...string) *xdm.Node {
 //
 // Annotations may appear as the first child of nearly every schema element, so
 // almost every caller would otherwise have to skip them by hand.
-func contentChildren(el *xdm.Node) []*xdm.Node {
+func (p *parser) contentChildren(el *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
 	for _, c := range el.ChildElements() {
 		if c.Name.URI == NSSchema && c.Name.Local == "annotation" {
+			continue
+		}
+		// XSD 1.1 conditional inclusion (§4.2.1): an element the
+		// versioning attributes exclude is treated as though it were
+		// not written, so it has to vanish before anything reads it.
+		// A reader that noticed it and skipped it would still report
+		// its errors, which is the opposite of what the feature is for.
+		if !includeElement(c, p.schema.Version) {
 			continue
 		}
 		out = append(out, c)

@@ -1895,3 +1895,115 @@ func TestMinOccursCheckedForEveryCounter(t *testing.T) {
 	assertInvalid(t, schema, `<doc><a/><a/><a/><a/></doc>`,
 		"cvc-complex-type.2.4.b")
 }
+
+// TestConditionalInclusion covers XSD 1.1's versioning attributes (§4.2.1).
+//
+// An element the conditions exclude is treated as though it were not written,
+// so one schema document can carry both a 1.0 and a 1.1 spelling of the same
+// declaration and each processor reads the one it understands.
+func TestConditionalInclusion(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning">
+	  <xs:element name="temp">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:attribute name="x" use="required"/>
+	      <xs:assert test="@x > 300" vc:minVersion="1.1"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	// 1.1 sees the assertion.
+	s := load11(t, schema)
+	if err := check11(t, s, `<temp x="400"/>`); err != nil {
+		t.Errorf("400 satisfies the assertion: %v", err)
+	}
+	if err := check11(t, s, `<temp x="200"/>`); err == nil {
+		t.Error("200 should fail the assertion under 1.1")
+	}
+	// 1.0 never sees it, so the same document is valid.
+	assertValid(t, schema, `<temp x="200"/>`)
+}
+
+// TestConditionalInclusionAvailability pins the three-way availability rule
+// that typeAvailable and typeUnavailable share.
+//
+// Each keeps the element only when every name in its list is definitely
+// available (or definitely unavailable, respectively). A name this processor
+// cannot resolve at all leaves the condition undecided, and an undecided
+// condition keeps the element — which is the only reading under which the
+// suite's vc011 and vc013 can both hold, since they use the same instance and
+// expect opposite answers from lists differing only by an unresolvable name.
+func TestConditionalInclusionAvailability(t *testing.T) {
+	build := func(cond string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning">
+		  <xs:element name="temp">
+		    <xs:complexType>
+		      <xs:sequence/>
+		      <xs:attribute name="x" ` + cond + `/>
+		    </xs:complexType>
+		  </xs:element>
+		</xs:schema>`
+	}
+	doc := `<temp x="204"/>`
+
+	// A known type is available, so typeAvailable keeps the attribute.
+	if err := check11(t, load11(t, build(`vc:typeAvailable="xs:integer"`)), doc); err != nil {
+		t.Errorf("a known type should keep the attribute: %v", err)
+	}
+	// One unresolvable name in the list makes it undecided, so the
+	// attribute is dropped and x is undeclared.
+	if err := check11(t, load11(t,
+		build(`vc:typeAvailable="xs:integer vc:bananaSkin"`)), doc); err == nil {
+		t.Error("an unresolvable name should leave typeAvailable unsatisfied")
+	}
+	// typeUnavailable naming only known types drops the attribute.
+	if err := check11(t, load11(t, build(`vc:typeUnavailable="xs:integer"`)), doc); err == nil {
+		t.Error("typeUnavailable naming an available type should drop the attribute")
+	}
+	// Mixing in an unresolvable name leaves it undecided, so it stays.
+	if err := check11(t, load11(t,
+		build(`vc:typeUnavailable="vc:list-of-QNames xs:integer"`)), doc); err != nil {
+		t.Errorf("an unresolvable name should keep the attribute: %v", err)
+	}
+}
+
+// TestIdentityConstraintXPathDefaultNamespace covers XSD 1.1's
+// xpathDefaultNamespace, which is how a schema writes a selector over qualified
+// elements without inventing a prefix for them.
+func TestIdentityConstraintXPathDefaultNamespace(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:d" xmlns:d="urn:d"
+	           elementFormDefault="qualified">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="emp" maxOccurs="unbounded">
+	          <xs:complexType>
+	            <xs:sequence><xs:element name="nr" type="xs:string"/></xs:sequence>
+	          </xs:complexType>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:unique name="u">
+	      <xs:selector xpath="emp" xpathDefaultNamespace="urn:d"/>
+	      <xs:field xpath="nr" xpathDefaultNamespace="urn:d"/>
+	    </xs:unique>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<doc xmlns="urn:d"><emp><nr>1</nr></emp><emp><nr>2</nr></emp></doc>`); err != nil {
+		t.Errorf("distinct values should satisfy the constraint: %v", err)
+	}
+	// Without the default namespace the selector would match nothing and
+	// the duplicate would go unnoticed.
+	if err := check11(t, s,
+		`<doc xmlns="urn:d"><emp><nr>1</nr></emp><emp><nr>1</nr></emp></doc>`); err == nil {
+		t.Error("a duplicate should be caught through xpathDefaultNamespace")
+	}
+}

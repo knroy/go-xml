@@ -279,7 +279,7 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 		ic.Kind = ICKeyref
 	}
 
-	sel := childElement(el, "selector")
+	sel := p.childElement(el, "selector")
 	if sel == nil {
 		p.errs = append(p.errs, errorAt(el, "",
 			"%s %q has no selector", el.Name.Local, name))
@@ -290,9 +290,10 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 		p.errs = append(p.errs, errorAt(sel, "c-selector-xpath", "%v", err))
 		return nil
 	}
+	p.resolveICPath(sel, path)
 	ic.Selector = path
 
-	for _, c := range contentChildren(el) {
+	for _, c := range p.contentChildren(el) {
 		if !c.IsElement(NSSchema, "field") {
 			continue
 		}
@@ -301,6 +302,7 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 			p.errs = append(p.errs, errorAt(c, "c-fields-xpaths", "%v", err))
 			continue
 		}
+		p.resolveICPath(c, f)
 		ic.Fields = append(ic.Fields, f)
 	}
 	if len(ic.Fields) == 0 {
@@ -351,4 +353,75 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 	}
 
 	return ic
+}
+
+// resolveICPath binds each step's prefix to a namespace.
+//
+// Two sources decide the namespace of an unprefixed element name. XSD 1.1's
+// xpathDefaultNamespace names one directly, which is how a schema writes a
+// selector over qualified elements without inventing a prefix for them; it
+// also takes the two tokens ##targetNamespace and ##defaultNamespace. Without
+// it an unprefixed name is in the absent namespace, which is the XPath rule and
+// the 1.0 behaviour.
+//
+// An attribute name is deliberately not given the default: XPath resolves an
+// unprefixed attribute name to the absent namespace whatever the default
+// element namespace is, and applying it here would retarget every unprefixed
+// field at a namespace unqualified attributes are never in.
+func (p *parser) resolveICPath(el *xdm.Node, path *ICPath) {
+	if path == nil {
+		return
+	}
+	def, hasDef := p.xpathDefaultNamespace(el)
+
+	for i := range path.Alternatives {
+		alt := &path.Alternatives[i]
+		for j := range alt.Steps {
+			step := &alt.Steps[j]
+			if step.Wildcard {
+				continue
+			}
+			if step.Name.Prefix != "" {
+				if uri, ok := el.LookupPrefix(step.Name.Prefix); ok {
+					step.Name.URI = uri
+				}
+				continue
+			}
+			if hasDef {
+				step.Name.URI = def
+			}
+		}
+		if alt.Attribute != nil && alt.Attribute.Prefix != "" {
+			if uri, ok := el.LookupPrefix(alt.Attribute.Prefix); ok {
+				alt.Attribute.URI = uri
+			}
+		}
+	}
+}
+
+// xpathDefaultNamespace returns the XSD 1.1 xpathDefaultNamespace in force at
+// an element, looking outward to the schema element for the document default.
+func (p *parser) xpathDefaultNamespace(el *xdm.Node) (string, bool) {
+	for cur := el; cur != nil; cur = cur.Parent {
+		a := cur.Attr("", "xpathDefaultNamespace")
+		if a == nil {
+			continue
+		}
+		switch a.Value {
+		case "##targetNamespace":
+			return p.doc.targetNS, true
+		case "##defaultNamespace":
+			uri, ok := cur.LookupPrefix("")
+			return uri, ok
+		case "##local":
+			// Explicitly the absent namespace, which is also what no
+			// attribute at all means — but saying so is not the same
+			// as saying nothing, since an outer element may have set
+			// a default this one is overriding.
+			return "", true
+		default:
+			return a.Value, true
+		}
+	}
+	return "", false
 }
