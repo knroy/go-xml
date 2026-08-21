@@ -2177,3 +2177,36 @@ func TestStringSubtypeThroughRestriction(t *testing.T) {
 	assertValid(t, schema, `<v>_ok</v>`)
 	assertInvalid(t, schema, `<v>9bad</v>`, "cvc")
 }
+
+// TestEffectivelyEmptyContentRejectsWhitespace pins that a content model
+// matching nothing but the empty sequence admits no character data, whitespace
+// included.
+//
+// The indentation exception belongs to element-only content, where there are
+// elements for the whitespace to sit between. <xs:sequence/> has none, so it is
+// empty content in every sense — the suite's open012.n3 is annotated "invalid,
+// even whitespace is not allowed".
+func TestEffectivelyEmptyContentRejectsWhitespace(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType><xs:sequence/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc/>`)
+	assertValid(t, schema, `<doc></doc>`)
+	assertInvalid(t, schema, "<doc>\n  \n</doc>", "cvc-complex-type.2.1")
+	assertInvalid(t, schema, `<doc>x</doc>`, "cvc-complex-type.2.1")
+
+	// A model with something in it keeps the indentation exception.
+	withContent := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="a"/></xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	assertValid(t, withContent, "<doc>\n  <a/>\n</doc>")
+}

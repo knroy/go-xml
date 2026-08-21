@@ -441,7 +441,21 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 	case ContentElementOnly:
 		// Character data other than whitespace is not permitted. The
 		// whitespace exception is what lets a schema-valid document be
-		// indented.
+		// indented — but only where there is a content model for the
+		// indentation to sit between. A model matching nothing but the
+		// empty sequence is empty content in every sense, and empty
+		// content admits no character data at all.
+		if isEmptyContent(t) && v.openContentFor(t) == nil {
+			if s := strings.TrimSpace(el.StringValue()); s != "" {
+				v.fail(el, "cvc-complex-type.2.1",
+					"element must be empty but has character content %q",
+					truncate(s))
+			} else if hasText(el) {
+				v.fail(el, "cvc-complex-type.2.1",
+					"element must be empty but has character content")
+			}
+			return v.validateChildren(el, t)
+		}
 		if s := nonSpaceText(el); s != "" {
 			v.fail(el, "cvc-complex-type.2.3",
 				"element-only content may not contain character data %q",
@@ -477,6 +491,20 @@ func (v *validator) matchOpenOnly(el *xdm.Node, kids []*xdm.Node, oc *OpenConten
 		}
 	}
 	return tables
+}
+
+// hasText reports whether el has any character content at all, whitespace
+// included.
+//
+// Empty content admits none: the indentation exception belongs to element-only
+// content, where there are elements for the whitespace to sit between.
+func hasText(el *xdm.Node) bool {
+	for _, c := range el.Children {
+		if c.Kind == xdm.KindText && c.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // nonSpaceText returns the first non-whitespace text directly inside el.
