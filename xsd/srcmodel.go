@@ -97,6 +97,119 @@ var srcModels = map[string][]srcTerm{
 	"assertion":      {annot},
 }
 
+// srcAttrs maps a schema element's local name to the attributes it may carry,
+// beside `id` and any attribute in a non-schema namespace — both of which the
+// schema for schemas allows on every element and checkAttrs handles separately.
+//
+// The lists are the "XML Representation Summary" boxes of XSD 1.0 §3 and XSD
+// 1.1 §3, unioned across the two versions. Taking the union is deliberate:
+// this check exists to catch a name that is simply not an XSD attribute — the
+// `foo="bar"` of wildI003, the `minOccurs` that wildQ002 puts on an
+// <anyAttribute> which has no occurrence range at all. Whether a 1.1-only
+// attribute is *honoured* under 1.0 is a separate question, decided where that
+// attribute is read (readDisallowedNames does exactly this for notQName), and
+// rejecting it here would pre-empt that decision for every one of them at once.
+var srcAttrs = map[string][]string{
+	"schema": {"attributeFormDefault", "blockDefault", "elementFormDefault",
+		"finalDefault", "targetNamespace", "version", "lang",
+		"defaultAttributes", "xpathDefaultNamespace"},
+	"element": {"abstract", "block", "default", "final", "fixed", "form",
+		"maxOccurs", "minOccurs", "name", "nillable", "ref",
+		"substitutionGroup", "type", "targetNamespace"},
+	"attribute": {"default", "fixed", "form", "name", "ref", "type", "use",
+		"targetNamespace", "inheritable"},
+	"complexType": {"abstract", "block", "final", "mixed", "name",
+		"defaultAttributesApply"},
+	"simpleType":     {"final", "name"},
+	"simpleContent":  {},
+	"complexContent": {"mixed"},
+	"restriction":    {"base"},
+	"extension":      {"base"},
+	"attributeGroup": {"name", "ref"},
+	"group":          {"maxOccurs", "minOccurs", "name", "ref"},
+	"all":            {"maxOccurs", "minOccurs"},
+	"choice":         {"maxOccurs", "minOccurs"},
+	"sequence":       {"maxOccurs", "minOccurs"},
+	"any": {"maxOccurs", "minOccurs", "namespace", "processContents",
+		"notNamespace", "notQName"},
+	"anyAttribute": {"namespace", "processContents",
+		"notNamespace", "notQName"},
+	"unique":      {"name", "ref"},
+	"key":         {"name", "ref"},
+	"keyref":      {"name", "refer", "ref"},
+	"selector":    {"xpath", "xpathDefaultNamespace"},
+	"field":       {"xpath", "xpathDefaultNamespace"},
+	"notation":    {"name", "public", "system"},
+	"include":     {"schemaLocation"},
+	"import":      {"namespace", "schemaLocation"},
+	"redefine":    {"schemaLocation"},
+	"override":    {"schemaLocation"},
+	"list":        {"itemType"},
+	"union":       {"memberTypes"},
+	"annotation":  {},
+	"openContent": {"mode"},
+	"defaultOpenContent": {"mode", "appliesToEmpty"},
+	"alternative": {"test", "type", "xpathDefaultNamespace"},
+	"assert":      {"test", "xpathDefaultNamespace"},
+	"assertion":   {"test", "xpathDefaultNamespace"},
+}
+
+// checkAttrs reports attributes el carries that the schema for schemas does
+// not allow on it.
+//
+// Two kinds of attribute are always permitted and so are skipped: `id`, which
+// every XSD element takes (and checkID validates), and anything in a
+// non-schema namespace, which the "{any attributes with non-schema namespace}"
+// clause in every summary box admits — that is why wildI002's `a:b="c"` is
+// fine while its unprefixed `b="c"` is not.
+//
+// A prefixed attribute whose namespace *is* the schema namespace is not
+// allowed: the wildcard in the schema for schemas excludes its own namespace.
+func (p *parser) checkAttrs(el *xdm.Node) {
+	allowed, ok := srcAttrs[el.Name.Local]
+	if !ok {
+		return
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" && a.Name.URI != NSSchema {
+			continue
+		}
+		if a.Name.Local == "id" {
+			continue
+		}
+		found := false
+		for _, n := range allowed {
+			if n == a.Name.Local {
+				found = true
+				break
+			}
+		}
+		if !found {
+			p.errs = append(p.errs, errorAt(el, "",
+				"attribute %q is not allowed on xs:%s",
+				a.Name.Local, el.Name.Local))
+			continue
+		}
+		// Every `name` in the schema for schemas is an xs:NCName — the
+		// component being declared gets its {name} from it, and a
+		// component name is a local name with no colon in it. The
+		// readers take the value verbatim, so without this a group
+		// called "1" (groupA010) or "a:b" (groupA012) declared itself
+		// happily under a name no reference could ever be written for.
+		//
+		// The value is trimmed first. NCName derives from xs:token, so
+		// its whiteSpace facet is a fixed "collapse" and leading and
+		// trailing space is gone before the value is ever matched
+		// against the NCName production. addB193 declares
+		// name="sub2-elem " with a trailing space and the suite expects
+		// it to be accepted, under exactly that rule.
+		if a.Name.Local == "name" && !isNCName(strings.TrimSpace(a.Value)) {
+			p.errs = append(p.errs, errorAt(el, "",
+				"name=%q is not a valid NCName", a.Value))
+		}
+	}
+}
+
 // srcModelFor returns the content model for el, whose parent is parent.
 //
 // The name alone does not always decide the grammar: <restriction> and
@@ -217,7 +330,7 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 		return
 	}
 
-	p.checkElementID(el)
+	p.checkAttrs(el)
 
 	if terms, ok := srcModelFor(el, el.Parent); ok {
 		p.matchSourceModel(el, terms)
@@ -229,6 +342,10 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 		p.checkSourceModel(c)
 	}
 }
+
+// checkID applies xs:ID to the id attribute the schema for schemas puts on
+// every XSD element.
+//
 
 // matchSourceModel walks el's schema-namespace children against terms,
 // reporting the first child that does not fit.
@@ -288,35 +405,3 @@ func matchesName(c *xdm.Node, names []string) bool {
 	return false
 }
 
-// checkElementID applies the xs:ID rules to an id= attribute.
-//
-// Almost every element in the schema for schemas carries `id = ID`, and ID
-// means two things: the value is an NCName, and it is unique within the
-// document that writes it — not across the assembled schema, which is why the
-// set lives on schemaDoc. Neither was checked, which let a large part of MS-IdentityConstraint
-// through — idA002 and idB002 write one id= on an element declaration and the
-// same id= on a constraint beside it, idA006 writes the empty string. The same
-// rule covers notatA005..A007 in MS-Notations.
-//
-// This sits in the source-model walk because that walk already visits every
-// schema-namespace element exactly once, on every path into the readers.
-func (p *parser) checkElementID(el *xdm.Node) {
-	a := el.Attr("", "id")
-	if a == nil || p.doc == nil {
-		return
-	}
-	if !isNCName(a.Value) {
-		p.errs = append(p.errs, errorAt(el, "src-resolve",
-			"id %q is not an NCName", a.Value))
-		return
-	}
-	if p.doc.ids[a.Value] {
-		p.errs = append(p.errs, errorAt(el, "src-resolve",
-			"id %q is already used in this schema", a.Value))
-		return
-	}
-	if p.doc.ids == nil {
-		p.doc.ids = map[string]bool{}
-	}
-	p.doc.ids[a.Value] = true
-}

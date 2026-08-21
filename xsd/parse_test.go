@@ -1186,3 +1186,505 @@ func TestNotationWellFormedIsAccepted(t *testing.T) {
 		}
 	}
 }
+
+
+// wrapAny puts attrs on an <xs:any> inside a content model, so that the tests
+// below differ only in the wildcard attributes under test.
+func wrapAny(attrs string) string {
+	return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="foo"><xs:complexType><xs:sequence>
+	    <xs:any ` + attrs + `/>
+	  </xs:sequence></xs:complexType></xs:element>
+	</xs:schema>`
+}
+
+// TestNamespaceListSyntax covers the xs:namespaceList grammar of §3.10.2,
+// `(##any | ##other) | List of (anyURI | ##targetNamespace | ##local)`.
+//
+// The union's first branch is one token, so ##any and ##other are complete
+// values that may not be combined with anything; every member of the list
+// branch is either an anyURI or one of the two remaining keywords. A
+// misspelled keyword is neither, and used to be taken as a namespace name
+// nothing could ever be in — accepting the schema and silently matching no
+// element.
+func TestNamespaceListSyntax(t *testing.T) {
+	valid := []string{
+		`namespace="##any"`,
+		`namespace="##other"`,
+		`namespace="##targetNamespace"`,
+		`namespace="##local"`,
+		`namespace="##targetNamespace ##local http://example.com/a"`,
+		`namespace="http://a http://b"`,
+		// A list type collapses surrounding whitespace, so this is
+		// still the single token ##any and not a two-member list.
+		`namespace="  ##any  "`,
+	}
+	for _, attrs := range valid {
+		if _, err := parseSchemaString(t, wrapAny(attrs)); err != nil {
+			t.Errorf("%s should be accepted: %v", attrs, err)
+		}
+	}
+
+	invalid := []string{
+		`namespace="##any ##other"`,          // wildC049
+		`namespace="##any http://example.com"`, // wildC066
+		`namespace="##other http://a"`,       // wildF006
+		`namespace="##target"`,               // wildC035, a misspelling
+		`namespace="##anyAttribute"`,         // wildK002
+		`namespace="##anyAttribute ##other"`, // wildK020
+	}
+	for _, attrs := range invalid {
+		if _, err := parseSchemaString(t, wrapAny(attrs)); err == nil {
+			t.Errorf("%s should be rejected", attrs)
+		}
+	}
+}
+
+// TestSchemaIDMustBeUniqueNCName covers the `id` attribute the schema for
+// schemas declares as xs:ID on nearly every XSD element.
+//
+// Nothing in assembly reads id — it exists for external reference — so the
+// constraint had no other enforcement point and went unchecked entirely.
+func TestSchemaIDMustBeUniqueNCName(t *testing.T) {
+	if _, err := parseSchemaString(t, wrapAny(`id="ok-name"`)); err != nil {
+		t.Errorf("a valid NCName id should be accepted: %v", err)
+	}
+	// wildA003/A004/A005: a bare number is not an NCName, which may not
+	// start with a digit.
+	if _, err := parseSchemaString(t, wrapAny(`id="25"`)); err == nil {
+		t.Error(`id="25" should be rejected: an NCName may not start with a digit`)
+	}
+	// wildA006/A007: "non-colonized" is the whole point of an NCName.
+	if _, err := parseSchemaString(t, wrapAny(`id="foo:bar"`)); err == nil {
+		t.Error(`id="foo:bar" should be rejected: an NCName has no colon`)
+	}
+	// wildA008: xs:ID is unique across the document, so an element and a
+	// wildcard beneath it may not share one.
+	dup := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="foo" id="dup"><xs:complexType><xs:sequence>
+	    <xs:any id="dup"/>
+	  </xs:sequence></xs:complexType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, dup); err == nil {
+		t.Error("a duplicate id should be rejected")
+	}
+}
+
+// TestUnknownAttributeIsRejected covers the attribute lists in the XML
+// Representation Summary boxes of §3.
+//
+// The readers pick out the attributes they know by name, so one they do not
+// know was simply invisible — a typo in a schema was silently ignored rather
+// than reported. An attribute in a foreign namespace stays legal: every
+// summary box ends with "{any attributes with non-schema namespace}".
+func TestUnknownAttributeIsRejected(t *testing.T) {
+	// wildI003: an unprefixed name that is not an XSD attribute.
+	if _, err := parseSchemaString(t, wrapAny(`foo="bar"`)); err == nil {
+		t.Error(`foo="bar" on xs:any should be rejected`)
+	}
+	// wildI002: the same document, except the attribute is prefixed into a
+	// namespace of its own, which the wildcard admits.
+	ok := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:a="http://foo">
+	  <xs:element name="foo"><xs:complexType><xs:sequence>
+	    <xs:any namespace="##other" processContents="lax" a:b="c"/>
+	  </xs:sequence></xs:complexType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, ok); err != nil {
+		t.Errorf("a foreign-namespace attribute should be accepted: %v", err)
+	}
+	// wildQ002/Q003: an attribute wildcard has no occurrence range at all —
+	// it is not a particle — so minOccurs and maxOccurs are not among its
+	// attributes even though they are perfectly good names elsewhere.
+	bad := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="foo"><xs:complexType><xs:simpleContent>
+	    <xs:extension base="xs:string"><xs:anyAttribute minOccurs="2"/></xs:extension>
+	  </xs:simpleContent></xs:complexType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, bad); err == nil {
+		t.Error("minOccurs on xs:anyAttribute should be rejected")
+	}
+}
+
+// TestEmptyAttributeValueIsNotTheDefault covers attributes written with an
+// empty value, which is not the same as leaving them out.
+//
+// The readers fetched these through AttrValue, which returns "" for both the
+// absent and the present-but-empty case, so an empty value silently took the
+// attribute's declared default. But "" is not a member of the lexical space of
+// xs:nonNegativeInteger, nor of the NMTOKEN enumeration processContents
+// restricts, so each of these is a fault.
+func TestEmptyAttributeValueIsNotTheDefault(t *testing.T) {
+	for _, attrs := range []string{
+		`maxOccurs=""`,       // wildB014
+		`minOccurs=""`,       // wildB022
+		`processContents=""`, // wildD071
+	} {
+		if _, err := parseSchemaString(t, wrapAny(attrs)); err == nil {
+			t.Errorf("%s should be rejected", attrs)
+		}
+	}
+}
+
+// TestNameMustBeNCName covers the `name` attribute, an xs:NCName wherever the
+// schema for schemas uses it.
+//
+// A component takes its {name} from this attribute verbatim, so a value that
+// is not an NCName declares a component under a name no reference could be
+// written for — the schema loads and then nothing can ever use it.
+func TestNameMustBeNCName(t *testing.T) {
+	bad := []string{
+		`<xs:group name="1"><xs:sequence/></xs:group>`,     // groupA010
+		`<xs:group name="a:b"><xs:sequence/></xs:group>`,   // groupA012
+		`<xs:element name="x y"/>`,
+	}
+	for _, decl := range bad {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+			decl + `</xs:schema>`
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("%s should be rejected", decl)
+		}
+	}
+
+	// addB193 pins the other side: NCName derives from xs:token, whose
+	// whiteSpace facet is a fixed "collapse", so surrounding space is gone
+	// before the value is matched and this name is simply "sub2-elem".
+	src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="sub2-elem "/></xs:schema>`
+	if _, err := parseSchemaString(t, src); err != nil {
+		t.Errorf("a name with trailing whitespace should be accepted: %v", err)
+	}
+}
+
+// TestElementRefExcludesDeclarationAttributes covers src-element.2.2 (§3.3.3):
+// a local <element> with ref may carry only minOccurs, maxOccurs and id.
+//
+// A reference *is* the declaration it names, so an attribute beside it that
+// would describe a declaration is not a modification of the referenced one for
+// this use — it is simply ignored. The schema then does not mean what it
+// appears to say, which the author only discovers if it is reported.
+func TestElementRefExcludesDeclarationAttributes(t *testing.T) {
+	local := func(attrs string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="head" type="xs:string"/>
+		  <xs:element name="doc"><xs:complexType><xs:sequence>
+		    <xs:element ref="head" ` + attrs + `/>
+		  </xs:sequence></xs:complexType></xs:element>
+		</xs:schema>`
+	}
+
+	// Only the occurrence attributes and id survive beside a ref.
+	for _, attrs := range []string{``, `minOccurs="0"`, `maxOccurs="3"`, `id="r1"`} {
+		if _, err := parseSchemaString(t, local(attrs)); err != nil {
+			t.Errorf("ref with %q should be accepted: %v", attrs, err)
+		}
+	}
+
+	for _, attrs := range []string{
+		`name="Local"`,        // name00401m3/m4/m5: clause 2.1
+		`type="xs:boolean"`,   // name00501m12
+		`block="#all"`,        // name00501m10
+		`form="qualified"`,
+		`nillable="true"`,
+		`default="x"`,
+		`fixed="x"`,
+	} {
+		if _, err := parseSchemaString(t, local(attrs)); err == nil {
+			t.Errorf("ref with %q should be rejected", attrs)
+		}
+	}
+
+	// The excluded children, which belong to a declaration rather than to a
+	// use of one.
+	withChild := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="head" type="xs:string"/>
+	  <xs:element name="doc"><xs:complexType><xs:sequence>
+	    <xs:element ref="head"><xs:simpleType>
+	      <xs:restriction base="xs:string"/>
+	    </xs:simpleType></xs:element>
+	  </xs:sequence></xs:complexType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, withChild); err == nil {
+		t.Error("a ref with an inline simpleType should be rejected")
+	}
+}
+
+// TestElementDefaultMustBeValidForItsType covers e-props-correct.2 (§3.3.6):
+// a default or fixed value must be valid against the declaration's type.
+//
+// The value was previously stored without ever being validated, so a schema
+// could promise a default its own type could not represent — and the fault
+// only surfaced, if at all, as a confusing failure against an instance.
+func TestElementDefaultMustBeValidForItsType(t *testing.T) {
+	decl := func(d string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="root" ` + d + `/></xs:schema>`
+	}
+	for _, d := range []string{
+		`type="xsd:decimal" default="XII"`, // valueConstraint00101m2
+		`type="xs:boolean" default="Yes"`,  // valueConstraint00401m2
+		`type="xs:float" fixed="1.0F-2"`,   // valueConstraint00601m2
+	} {
+		// The first case deliberately uses an unbound prefix, so build
+		// it against the real schema prefix instead.
+		src := decl(strings.ReplaceAll(d, "xsd:", "xs:"))
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("%s should be rejected", d)
+		}
+	}
+	for _, d := range []string{
+		`type="xs:decimal" default="12"`,
+		`type="xs:boolean" default="true"`,
+		`type="xs:float" fixed="1.0E-2"`,
+	} {
+		if _, err := parseSchemaString(t, decl(d)); err != nil {
+			t.Errorf("%s should be accepted: %v", d, err)
+		}
+	}
+
+	// A union member type is filled in by its own fixup, so this check has
+	// to run after the fixups have drained rather than among them. stE050
+	// is the case that caught it: read too early the union has no members
+	// yet and every value "matches none of them".
+	union := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root" fixed="1"><xs:simpleType>
+	    <xs:union memberTypes="xs:boolean xs:int xs:string"/>
+	  </xs:simpleType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, union); err != nil {
+		t.Errorf("a fixed value valid for a union member should be accepted: %v", err)
+	}
+
+	// Clause 2.2: character data has nowhere to go in an element-only type.
+	elementOnly := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root" default="x"><xs:complexType><xs:sequence>
+	    <xs:element name="a" type="xs:string"/>
+	  </xs:sequence></xs:complexType></xs:element>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, elementOnly); err == nil {
+		t.Error("a default on an element-only type should be rejected")
+	}
+}
+
+// TestIDTypedElementValueConstraintIsVersioned covers e-props-correct.5, which
+// XSD 1.0 imposes and XSD 1.1 dropped.
+//
+// Under 1.0 an xs:ID-typed element may carry no default or fixed value at all:
+// an ID is unique across the document, so a schema-supplied value would
+// collide with itself on the second element that used it. 1.1 removes the
+// restriction, and the suite pins both halves — valueConstraint01001m2 is
+// expected invalid under 1.0 and valid under 1.1.
+func TestIDTypedElementValueConstraintIsVersioned(t *testing.T) {
+	src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root"/>
+	  <xs:element name="ID" type="xs:ID" fixed="alpha"/>
+	</xs:schema>`
+
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the test schema as XML: %v", err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{}); err == nil {
+		t.Error("XSD 1.0 should reject a fixed value on an xs:ID-typed element")
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err != nil {
+		t.Errorf("XSD 1.1 should accept it: %v", err)
+	}
+}
+
+// TestAllGroupOccursLimited covers All Group Limited clause 1.2 (§3.8.6): the
+// particle whose term is an xs:all group must have maxOccurs=1.
+//
+// "Each of these once, in any order" is defined against the members' own
+// bounds, so repeating the group as a whole has no meaning the spec assigns —
+// it confines the group to one occurrence instead.
+func TestAllGroupOccursLimited(t *testing.T) {
+	inType := func(attrs string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="foo"><xs:all ` + attrs + `>
+		    <xs:element name="t1"/>
+		  </xs:all></xs:complexType>
+		</xs:schema>`
+	}
+	for _, attrs := range []string{
+		`maxOccurs="2"`,          // mgAb004
+		`maxOccurs="9999999999"`, // mgAb006
+		`maxOccurs="unbounded"`,  // mgAb007
+		`minOccurs="0" maxOccurs="2"`, // mgO003
+	} {
+		if _, err := parseSchemaString(t, inType(attrs)); err == nil {
+			t.Errorf("xs:all with %q should be rejected", attrs)
+		}
+	}
+	// An optional all group is explicitly allowed, and §3.4.2.3.3 relies on
+	// it when merging an optional base into an extension.
+	for _, attrs := range []string{``, `maxOccurs="1"`, `minOccurs="0"`} {
+		if _, err := parseSchemaString(t, inType(attrs)); err != nil {
+			t.Errorf("xs:all with %q should be accepted: %v", attrs, err)
+		}
+	}
+}
+
+// TestNamedGroupDefinitionProhibitsOccurs covers the xs:namedGroup type in the
+// schema for schemas, which marks ref, minOccurs and maxOccurs "prohibited" on
+// a <group name="..."> and both occurrence attributes on the <all> inside it.
+//
+// A definition is not a use, so it has no occurrence range to state. Neither
+// attribute is read on this path — the definition's group is not built as a
+// particle — so both were silently discarded, and mgO019's <all maxOccurs="0">
+// inside a named group loaded clean while the identical group written inline
+// was rejected.
+func TestNamedGroupDefinitionProhibitsOccurs(t *testing.T) {
+	group := func(gAttrs, allAttrs string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:group name="g" ` + gAttrs + `><xs:all ` + allAttrs + `>
+		    <xs:element name="e1"/>
+		  </xs:all></xs:group>
+		</xs:schema>`
+	}
+	if _, err := parseSchemaString(t, group(``, ``)); err != nil {
+		t.Fatalf("a plain named group should be accepted: %v", err)
+	}
+	for _, g := range []string{`minOccurs="0"`, `maxOccurs="2"`, `ref="g"`} {
+		if _, err := parseSchemaString(t, group(g, ``)); err == nil {
+			t.Errorf("a named group with %q should be rejected", g)
+		}
+	}
+	// mgO019: the occurrence attributes are prohibited on the inner all
+	// outright, not merely constrained to 1.
+	for _, a := range []string{`maxOccurs="0" minOccurs="0"`, `maxOccurs="1"`, `minOccurs="0"`} {
+		if _, err := parseSchemaString(t, group(``, a)); err == nil {
+			t.Errorf("the xs:all of a named group with %q should be rejected", a)
+		}
+	}
+}
+
+// TestFinalAndBlockTokensDiffer covers the two derivation-set types in the
+// schema for schemas, which are not interchangeable.
+//
+// blockSet — block and blockDefault — is "#all or a subset of {substitution,
+// extension, restriction}". derivationSet — final on an element — is "#all or a
+// subset of {extension, restriction}", with no substitution: preventing
+// substitution is what block does, and final="substitution" reads as though it
+// did the same thing while having no such meaning. elemF004 and the elemF006-8
+// series each pin one spelling of that mistake.
+func TestFinalAndBlockTokensDiffer(t *testing.T) {
+	decl := func(attrs string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="foo" ` + attrs + `/></xs:schema>`
+	}
+	for _, attrs := range []string{
+		`final="substitution"`,                        // elemF004
+		`final="restriction substitution"`,            // elemF006
+		`final="substitution extension"`,              // elemF007
+		`final="extension restriction substitution"`,  // elemF008
+	} {
+		if _, err := parseSchemaString(t, decl(attrs)); err == nil {
+			t.Errorf("%s should be rejected", attrs)
+		}
+	}
+	// The same token is perfectly good in block, and #all covers everything
+	// in either attribute.
+	for _, attrs := range []string{
+		`block="substitution"`, `block="#all"`,
+		`final="#all"`, `final="extension restriction"`,
+	} {
+		if _, err := parseSchemaString(t, decl(attrs)); err != nil {
+			t.Errorf("%s should be accepted: %v", attrs, err)
+		}
+	}
+}
+
+// TestBooleanAttributeRejectsEmptyValue covers xs:boolean-typed attributes
+// written with an empty value.
+//
+// As with the occurrence attributes, the value was read through AttrValue,
+// which cannot tell an absent attribute from one written as "" — so the empty
+// value quietly took the declared default instead of being reported. "" is not
+// in the lexical space of xs:boolean. elemB005 and elemK003 pin it.
+func TestBooleanAttributeRejectsEmptyValue(t *testing.T) {
+	for _, attrs := range []string{`abstract=""`, `nillable=""`, `abstract="yes"`} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="foo" ` + attrs + `/></xs:schema>`
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("%s should be rejected", attrs)
+		}
+	}
+}
+
+// TestFormDefaultIsAnEnumeration covers elementFormDefault and
+// attributeFormDefault, whose type is the two-token xs:formChoice.
+//
+// The value was compared against "qualified" and anything else taken as
+// unqualified, so a misspelling silently reversed the meaning of every local
+// declaration in the document rather than being reported. elemH004
+// ("Qualified") and elemH005 ("Unqualified") are that mistake; elemH003 ("")
+// and elemH006 (two tokens) are values outside the enumeration.
+func TestFormDefaultIsAnEnumeration(t *testing.T) {
+	for _, attrs := range []string{
+		`elementFormDefault=""`,                       // elemH003
+		`elementFormDefault="Qualified"`,              // elemH004
+		`elementFormDefault="Unqualified"`,            // elemH005
+		`elementFormDefault="qualified unqualified"`,  // elemH006
+		`attributeFormDefault="Qualified"`,
+	} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" ` + attrs + `>
+		  <xs:element name="myElem" type="xs:string"/></xs:schema>`
+		if _, err := parseSchemaString(t, src); err == nil {
+			t.Errorf("%s should be rejected", attrs)
+		}
+	}
+	for _, attrs := range []string{
+		`elementFormDefault="qualified"`, `elementFormDefault="unqualified"`,
+		`attributeFormDefault="qualified"`,
+	} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" ` + attrs + `>
+		  <xs:element name="myElem" type="xs:string"/></xs:schema>`
+		if _, err := parseSchemaString(t, src); err != nil {
+			t.Errorf("%s should be accepted: %v", attrs, err)
+		}
+	}
+}
+
+// TestSubstitutionGroupExclusions covers e-props-correct.4 (§3.3.6): a
+// member's type must be validly derived from the head's, given the head's
+// {substitution group exclusions}.
+//
+// final= on a head is how it fixes the shape its substitutes may have —
+// final="extension" says no element whose type extends mine may stand in for
+// me. The set was parsed and then never read, so substGrpExcl00202m2, whose
+// member extends a head declared final="extension", loaded clean.
+func TestSubstitutionGroupExclusions(t *testing.T) {
+	schema := func(final, memberType string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="Head" type="HeadType" ` + final + `/>
+		  <xs:complexType name="HeadType"><xs:sequence>
+		    <xs:element name="Ear"/>
+		  </xs:sequence></xs:complexType>
+		  <xs:element name="Member" substitutionGroup="Head">
+		    <xs:complexType><xs:complexContent>
+		      <xs:` + memberType + ` base="HeadType"><xs:sequence>
+		        <xs:element name="Nose"/>
+		      </xs:sequence></xs:` + memberType + `>
+		    </xs:complexContent></xs:complexType>
+		  </xs:element>
+		</xs:schema>`
+	}
+
+	// substGrpExcl00202m2: the member extends a head that excludes extension.
+	if _, err := parseSchemaString(t, schema(`final="extension"`, "extension")); err == nil {
+		t.Error("extending a head declared final=\"extension\" should be rejected")
+	}
+	// substGrpExcl00303m2: "restriction extension" excludes both.
+	if _, err := parseSchemaString(t, schema(`final="restriction extension"`, "extension")); err == nil {
+		t.Error(`final="restriction extension" should exclude an extending member`)
+	}
+	// The exclusion is per method: a head that excludes only restriction
+	// still accepts a member that extends it.
+	if _, err := parseSchemaString(t, schema(`final="restriction"`, "extension")); err != nil {
+		t.Errorf(`final="restriction" should still admit an extending member: %v`, err)
+	}
+	// And with no final at all, either derivation is fine.
+	if _, err := parseSchemaString(t, schema(``, "extension")); err != nil {
+		t.Errorf("a head with no final should admit an extending member: %v", err)
+	}
+}

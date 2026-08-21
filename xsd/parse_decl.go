@@ -42,6 +42,7 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 	d.Nillable = p.boolAttr(el, "nillable", false)
 	d.Abstract = p.boolAttr(el, "abstract", false)
 	d.Constraint = p.valueConstraint(el)
+	p.checkElementValueConstraint(el, d)
 
 	block, err := p.derivationSet(el, "block")
 	if err != nil {
@@ -144,6 +145,8 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 			}
 		}
 	}
+
+	p.checkSubstitutionGroupDerivation(el, d)
 
 	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
@@ -674,17 +677,26 @@ func (p *parser) checkAttributeUsesConsistent(el *xdm.Node, uses []*AttributeUse
 func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	w := &Wildcard{}
 
-	switch el.AttrValue("processContents") {
-	case "", "strict":
+	// Absent means "strict" by the attribute's declared default, but
+	// processContents="" is an empty NMTOKEN matching none of the three
+	// enumerated values and so is a fault — a distinction AttrValue cannot
+	// make, which is why the attribute node is fetched instead. Pins
+	// wildD071 and wildL001.
+	if a := el.Attr("", "processContents"); a == nil {
 		w.ProcessContents = ProcessStrict
-	case "lax":
-		w.ProcessContents = ProcessLax
-	case "skip":
-		w.ProcessContents = ProcessSkip
-	default:
-		p.errs = append(p.errs, errorAt(el, "",
-			"processContents=%q is not one of strict, lax or skip",
-			el.AttrValue("processContents")))
+	} else {
+		switch a.Value {
+		case "strict":
+			w.ProcessContents = ProcessStrict
+		case "lax":
+			w.ProcessContents = ProcessLax
+		case "skip":
+			w.ProcessContents = ProcessSkip
+		default:
+			p.errs = append(p.errs, errorAt(el, "",
+				"processContents=%q is not one of strict, lax or skip",
+				a.Value))
+		}
 	}
 
 	// XSD 1.1 notNamespace: the complement of a namespace list, which 1.0
@@ -719,14 +731,20 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		return w
 	}
 
-	ns := el.AttrValue("namespace")
-	if ns == "" {
-		ns = "##any"
+	// xs:namespaceList is `(##any | ##other) | List of (anyURI |
+	// ##targetNamespace | ##local)` (§3.10.2, and the schema for schemas).
+	// The union's first branch is a *single* token, so ##any and ##other may
+	// not be combined with anything — not even each other. Splitting into
+	// words before the comparison also normalises leading and trailing
+	// whitespace, which xs:namespaceList being a list type collapses away.
+	words := splitFields(el.AttrValue("namespace"))
+	if len(words) == 0 {
+		words = []string{"##any"}
 	}
-	switch ns {
-	case "##any":
+	switch {
+	case len(words) == 1 && words[0] == "##any":
 		w.Kind = NSAny
-	case "##other":
+	case len(words) == 1 && words[0] == "##other":
 		// ##other is "not the target namespace", and by clause 2.3 of
 		// Wildcard allows Namespace Name it excludes unqualified names
 		// as well — which is what ExcludesAbsent records, and what
@@ -736,7 +754,7 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		w.ExcludesAbsent = true
 	default:
 		w.Kind = NSEnumerated
-		for _, word := range splitFields(ns) {
+		for _, word := range words {
 			switch word {
 			case "##targetNamespace":
 				w.Namespace = append(w.Namespace, p.doc.targetNS)
@@ -744,7 +762,25 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 				// ##local is the absent namespace, spelled as the
 				// empty string in the enumerated set.
 				w.Namespace = append(w.Namespace, "")
+			case "##any", "##other":
+				// Reached only in a multi-token list, which the
+				// union's first branch does not admit. Pins
+				// wildC049 (##any ##other) and wildK020.
+				p.errs = append(p.errs, errorAt(el, "",
+					"namespace=%q: %s may not appear in a namespace list",
+					el.AttrValue("namespace"), word))
 			default:
+				if !isNamespaceListURI(word) {
+					// Every remaining member must be an
+					// anyURI. Pins wildC035 (##target) and
+					// wildK002 (##anyAttribute), where a
+					// misspelled ## keyword is neither a
+					// keyword nor a usable namespace name.
+					p.errs = append(p.errs, errorAt(el, "",
+						"namespace=%q: %q is not a valid namespace name",
+						el.AttrValue("namespace"), word))
+					continue
+				}
 				w.Namespace = append(w.Namespace, word)
 			}
 		}
@@ -821,6 +857,24 @@ func (p *parser) resolveNotQName(el *xdm.Node, value string) (xdm.QName, error) 
 			"notQName=%q uses undeclared prefix %q", value, prefix)
 	}
 	return xdm.QName{URI: uri, Local: local}, nil
+}
+
+// isNamespaceListURI reports whether word is usable as a namespace name in an
+// xs:namespaceList.
+//
+// The only check is the leading "##". Members are xs:anyURI, whose lexical
+// space the suite pins as effectively unrestricted: anyURI_a014_1349 and
+// anyURI_a015_1350 both put "foo>bar" — a character RFC 2396 excludes from a
+// URI reference — in a namespace list and expect the schema to be *valid*.
+// So no character is rejected here.
+//
+// "##" is different. Those characters are legal in a URI, but the schema for
+// schemas spells every ## keyword out by enumeration, so a token starting with
+// ## that is not ##targetNamespace or ##local (both handled by the caller) is a
+// misspelled keyword rather than a namespace name. This is what rejects
+// wildC035's "##target" and wildK002's "##anyAttribute".
+func isNamespaceListURI(word string) bool {
+	return !strings.HasPrefix(word, "##")
 }
 
 // splitFields splits on XML whitespace only.
@@ -1268,4 +1322,172 @@ func effectiveValueConstraint(u *AttributeUse) *ValueConstraint {
 		return u.Decl.Constraint
 	}
 	return nil
+}
+
+// checkElementValueConstraint enforces e-props-correct clauses 2 and 5
+// (§3.3.6) for an element declaration's default or fixed value.
+//
+// Clause 2 requires the value be valid against the declaration's type, by
+// Element Default Valid (Immediate). For a simple type that is String Valid;
+// for a complex type the {content type} must itself be simple or mixed — a
+// default is character data, and an element-only type has nowhere to put it —
+// and a simple content type validates the value the same way.
+//
+// Clause 5 forbids a value constraint entirely when the type is or derives
+// from xs:ID, because an ID must be unique across the document and a value the
+// schema supplies would collide with itself on the second element to use it.
+//
+// Deferred to a fixup for the same reason as the attribute equivalent: the
+// type is commonly a forward reference, and reading d.Type during the parse
+// would see nil for precisely the declarations worth checking.
+func (p *parser) checkElementValueConstraint(el *xdm.Node, d *ElementDecl) {
+	if d.Constraint == nil {
+		return
+	}
+	what := "default"
+	if d.Constraint.Fixed {
+		what = "fixed"
+	}
+	// Queued after the fixups rather than among them. The declaration's
+	// type is finished by a fixup, but so are that type's own parts — a
+	// union's member types are appended by one fixup each — and this check
+	// reads all of them. Registered as an ordinary fixup it ran before
+	// those had filled in, and stE050's fixed="1" was compared against a
+	// union with no members yet and reported as matching none of them.
+	p.postFixups = append(p.postFixups, func() error {
+		// A type that never resolved has already been reported at the
+		// reference, or is deliberately tolerated until use; either way
+		// re-reporting it here as a bad default helps nobody.
+		if d.Type == nil {
+			return nil
+		}
+
+		var simple *SimpleType
+		switch t := d.Type.(type) {
+		case *SimpleType:
+			simple = t
+		case *ComplexType:
+			switch t.Content {
+			case ContentSimple:
+				simple = t.SimpleContent
+			case ContentMixed:
+				// Clause 2.2: a mixed content type accepts the
+				// value as character data, and there is no
+				// simple type to check it against.
+				return nil
+			default:
+				return errorAt(el, "e-props-correct.2",
+					"an element with a %s value must have simple or "+
+						"mixed content", what)
+			}
+		}
+		if simple == nil {
+			return nil
+		}
+
+		// Clause 5 is a 1.0 rule only. XSD 1.1 dropped it, and the suite
+		// pins the difference sharply: valueConstraint01001m2, m3, m5
+		// and m6 each fix an xs:ID-typed element and are expected to be
+		// invalid under 1.0 and valid under 1.1, as are Id/id014 and
+		// id015 and the ID_IDREF s3_3_4 pair.
+		if p.schema.Version < Version11 && nearestBuiltinName(simple) == "ID" {
+			return errorAt(el, "e-props-correct.5",
+				"an element whose type is derived from xs:ID "+
+					"may not have a default or fixed value")
+		}
+		if _, err := validateSimpleValueVersion(
+			d.Constraint.Lexical, simple, p.schema.Version); err != nil {
+			return errorAt(el, "e-props-correct.2",
+				"%s=%q is not valid for the declared type: %v",
+				what, d.Constraint.Lexical, err)
+		}
+		return nil
+	})
+}
+
+// checkSubstitutionGroupDerivation enforces e-props-correct.4 (§3.3.6): a
+// member's {type definition} must be validly derived from the head's, given
+// the head's {substitution group exclusions}.
+//
+// The exclusions come from final= on the head. final="extension" means "no
+// element whose type extends mine may stand in for me" — it is how a head
+// fixes the shape substitutes must have. The set was parsed into
+// SubstitutionGroupExclusions and then never read, so substGrpExcl00202m2,
+// whose Member3 extends a head declared final="extension", loaded clean.
+//
+// Runs as a post-fixup: both types and the affiliation itself are filled in by
+// fixups, so nothing here is knowable during the parse.
+func (p *parser) checkSubstitutionGroupDerivation(el *xdm.Node, d *ElementDecl) {
+	p.postFixups = append(p.postFixups, func() error {
+		for _, head := range d.SubstitutionGroups {
+			if head == nil || head.Type == nil || d.Type == nil {
+				continue
+			}
+			// Same type: no derivation happened, so no exclusion can
+			// apply to it.
+			if d.Type == head.Type {
+				continue
+			}
+			excl := head.SubstitutionGroupExclusions
+			if excl == 0 {
+				continue
+			}
+			used, reached := derivationMethodsTo(d.Type, head.Type)
+			if !reached {
+				// The member's type is not derived from the
+				// head's at all. That is its own violation of
+				// clause 4, but it is also what a schema looks
+				// like mid-edit, and the suite does not pin it
+				// here; leave it to validation.
+				continue
+			}
+			if excl.Has(DerivationExtension) && used.Has(DerivationExtension) {
+				return errorAt(el, "e-props-correct.4",
+					"element %q may not substitute for %q: the head is "+
+						"final=\"extension\"", d.Name.Local, head.Name.Local)
+			}
+			if excl.Has(DerivationRestriction) && used.Has(DerivationRestriction) {
+				return errorAt(el, "e-props-correct.4",
+					"element %q may not substitute for %q: the head is "+
+						"final=\"restriction\"", d.Name.Local, head.Name.Local)
+			}
+		}
+		return nil
+	})
+}
+
+// derivationMethodsTo collects the derivation methods used walking from a
+// member's type up to a head's, and reports whether the head's type was
+// reached at all.
+//
+// The methods on the *whole* chain matter, not just the last step: a member two
+// derivations away from the head goes through an intermediate type, and clause
+// 4 asks about every method used along the way.
+//
+// The step count is bounded because a malformed base chain can be circular —
+// the type-level check for that lives elsewhere, and this must not hang while
+// waiting for it.
+func derivationMethodsTo(member, head Type) (used DerivationSet, reached bool) {
+	for cur, steps := member, 0; cur != nil && steps <= 64; steps++ {
+		if cur == head {
+			return used, true
+		}
+		ct, ok := cur.(*ComplexType)
+		if !ok {
+			// A simple type's derivation from another simple type is
+			// always a restriction.
+			if st, ok := cur.(*SimpleType); ok && st.Base != nil && st.Base != cur {
+				used = used.With(DerivationRestriction)
+				cur = st.Base
+				continue
+			}
+			return used, false
+		}
+		used = used.With(ct.DerivationMethod)
+		if ct.Base == cur {
+			return used, false
+		}
+		cur = ct.Base
+	}
+	return used, false
 }

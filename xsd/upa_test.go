@@ -196,15 +196,19 @@ func TestCheckConstraintsIsSeparate(t *testing.T) {
 // crashed the compiler.
 //
 // A model group that reaches itself — <xs:group name="expr"> whose content
-// references expr — is how a schema describes a nested structure, and it is
-// legal to write. The particle tree is then a cyclic graph while Glushkov
+// references expr — makes the particle tree a cyclic graph, while Glushkov
 // construction assumes a tree, so following the cycle recursed until the stack
-// was gone. A recursive content model is not a regular language, so no finite
-// automaton describes it; refusing is the honest answer, and the alternative
-// would be to unroll to some arbitrary depth and accept or reject documents
-// based on where the unrolling stopped.
+// was gone.
+//
+// Model Group Correct clause 2 (§3.8.6) settles what to do about it: circular
+// groups are disallowed outright, so such a document is not a schema and is
+// refused when it is read, before any consumer of the component graph can walk
+// into the cycle. This test used only to require that CheckConstraints
+// terminate, on the view that a recursive group was legal and merely
+// uncompilable; the suite disagrees — groupB013, groupB014 and groupB015 are
+// all circular and all expected to be invalid.
 func TestRecursiveGroupIsRefused(t *testing.T) {
-	s := mustParseSchema(t, `
+	_, err := parseSchemaString(t, `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 	  <xs:group name="expr">
 	    <xs:sequence>
@@ -214,13 +218,46 @@ func TestRecursiveGroupIsRefused(t *testing.T) {
 	  </xs:group>
 	  <xs:complexType name="t"><xs:group ref="expr"/></xs:complexType>
 	</xs:schema>`)
-
-	done := make(chan error, 1)
-	go func() { done <- s.CheckConstraints(CheckOptions{}) }()
-	select {
-	case <-done:
-		// Either outcome is acceptable; not hanging is the point.
-	case <-timeoutAfterSecond():
-		t.Fatal("a recursive model group did not terminate")
+	if err == nil {
+		t.Fatal("a circular model group should be refused at load")
 	}
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("error should name the circularity, got: %v", err)
+	}
+}
+
+// TestGroupCycleThroughTwoDefinitions covers indirect circularity.
+//
+// Clause 2 of Model Group Correct bans a self-reference "at any depth", which
+// includes a cycle that passes through another definition rather than closing
+// on itself directly. Checking only for a group that names itself would miss
+// this, and it is the shape groupB015 uses.
+func TestGroupCycleThroughTwoDefinitions(t *testing.T) {
+	_, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:group name="foo"><xs:sequence><xs:group ref="bar"/></xs:sequence></xs:group>
+	  <xs:group name="bar"><xs:sequence><xs:group ref="foo"/></xs:sequence></xs:group>
+	</xs:schema>`)
+	if err == nil {
+		t.Fatal("a cycle through two group definitions should be refused")
+	}
+}
+
+// TestDisjointGroupReuseIsNotACycle guards the cycle search against reporting
+// a group reached twice by different routes.
+//
+// Marking a group "seen" for the whole search rather than for the current
+// descent would call this circular: base is reached once from left and once
+// from right, and neither route revisits anything. It is an ordinary
+// diamond, and a very common way to reuse a group.
+func TestDisjointGroupReuseIsNotACycle(t *testing.T) {
+	mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:group name="base"><xs:sequence><xs:element name="a"/></xs:sequence></xs:group>
+	  <xs:group name="left"><xs:sequence><xs:group ref="base"/></xs:sequence></xs:group>
+	  <xs:group name="right"><xs:sequence><xs:group ref="base"/></xs:sequence></xs:group>
+	  <xs:group name="top">
+	    <xs:sequence><xs:group ref="left"/><xs:group ref="right"/></xs:sequence>
+	  </xs:group>
+	</xs:schema>`)
 }

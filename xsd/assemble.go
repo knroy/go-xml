@@ -372,8 +372,8 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 		doc.chameleon = true
 	}
 
-	doc.elementFormQualified = root.AttrValue("elementFormDefault") == "qualified"
-	doc.attributeFormQualified = root.AttrValue("attributeFormDefault") == "qualified"
+	doc.elementFormQualified = a.p.formDefault(root, "elementFormDefault")
+	doc.attributeFormQualified = a.p.formDefault(root, "attributeFormDefault")
 	doc.defaultAttributes = root.AttrValue("defaultAttributes")
 
 	var err error

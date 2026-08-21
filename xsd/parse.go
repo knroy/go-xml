@@ -137,6 +137,11 @@ type parser struct {
 	// absentNamespace.
 	unresolvedImports map[string]bool
 
+	// postFixups run once the fixups have drained. A fixup may queue
+	// another, so a check that must see the *settled* component graph
+	// cannot be a fixup itself — it would run somewhere in the middle.
+	postFixups []func() error
+
 	// attrsDone marks the complex types whose inherited attributes have
 	// been resolved, so that a base shared by many derived types is walked
 	// once rather than once per derivation.
@@ -345,9 +350,24 @@ func (p *parser) finish() error {
 		}
 	}
 
+	// Checks that need every fixup to have run, including the fixups other
+	// fixups queue: a value constraint is validated against a type whose
+	// own members and base are themselves filled in by fixups.
+	for i := 0; i < len(p.postFixups); i++ {
+		if err := p.postFixups[i](); err != nil {
+			p.errs = append(p.errs, err)
+		}
+	}
+
 	// Circular attribute group references are diagnosed once every ref edge
 	// has been resolved, which is only true after the fixups have drained.
 	p.checkAttributeGroupCycles()
+
+	// Circular group references, once every group ref has been bound to the
+	// group it names. This has to follow the fixups: a <group ref> becomes a
+	// term only when its fixup runs, so before that point the cycle the
+	// check is looking for does not exist in the component graph yet.
+	p.checkGroupCycles()
 
 	// The Part 2 facet constraints run last, once every base reference has
 	// been bound: they compare a facet against the base's primitive and
@@ -402,8 +422,8 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 		doc.targetNS = a.Value
 		doc.hasTargetNS = true
 	}
-	doc.elementFormQualified = root.AttrValue("elementFormDefault") == "qualified"
-	doc.attributeFormQualified = root.AttrValue("attributeFormDefault") == "qualified"
+	doc.elementFormQualified = p.formDefault(root, "elementFormDefault")
+	doc.attributeFormQualified = p.formDefault(root, "attributeFormDefault")
 	doc.defaultAttributes = root.AttrValue("defaultAttributes")
 
 	var err error
@@ -423,6 +443,10 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 		return nil
 	}
 
+	// checkIDs walks the whole document, <xs:schema> included, so it is the
+	// single place the id attribute is checked. An earlier arrangement also
+	// checked it per element on the source-model walk, which reported every
+	// duplicate twice in two different wordings.
 	p.checkIDs(root)
 
 	for _, el := range root.ChildElements() {
@@ -748,25 +772,32 @@ const occursHuge = int(^uint(0) >> 2)
 // occurs reads minOccurs and maxOccurs from a particle-bearing element.
 //
 // Both default to 1. maxOccurs additionally accepts "unbounded".
+//
+// The attribute is looked up with Attr rather than AttrValue because the two
+// cases AttrValue conflates — absent, and present but empty — have opposite
+// answers here. An absent minOccurs means 1; minOccurs="" is a
+// xs:nonNegativeInteger with no digits, which is a fault. Reading it through
+// AttrValue silently applied the default to both, which is how wildB014
+// (maxOccurs="") and wildB022 (minOccurs="") loaded clean.
 func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 	min, max = 1, 1
-	if v := el.AttrValue("minOccurs"); v != "" {
-		n, ok := occursValue(v)
+	if a := el.Attr("", "minOccurs"); a != nil {
+		n, ok := occursValue(a.Value)
 		if !ok {
 			return 0, 0, errorAt(el, "p-props-correct.1",
-				"minOccurs=%q is not a non-negative integer", v)
+				"minOccurs=%q is not a non-negative integer", a.Value)
 		}
 		min = n
 	}
-	if v := el.AttrValue("maxOccurs"); v != "" {
-		v = strings.TrimSpace(v)
+	if a := el.Attr("", "maxOccurs"); a != nil {
+		v := strings.TrimSpace(a.Value)
 		if v == "unbounded" {
 			max = Unbounded
 		} else {
 			n, ok := occursValue(v)
 			if !ok {
 				return 0, 0, errorAt(el, "p-props-correct.1",
-					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", v)
+					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", a.Value)
 			}
 			max = n
 		}
@@ -784,10 +815,16 @@ func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 // rather than a silent false, since "True" or "yes" in a schema is a mistake
 // the author wants to hear about.
 func (p *parser) boolAttr(el *xdm.Node, name string, def bool) bool {
-	v := strings.TrimSpace(el.AttrValue(name))
-	switch v {
-	case "":
+	// Fetched as a node so that an absent attribute, which takes the
+	// default, is distinguished from one written with an empty value, which
+	// is not in the lexical space of xs:boolean and so is a fault.
+	// elemB005 (abstract="") and elemK003 (nillable="") are exactly this.
+	a := el.Attr("", name)
+	if a == nil {
 		return def
+	}
+	v := strings.TrimSpace(a.Value)
+	switch v {
 	case "true", "1":
 		return true
 	case "false", "0":
@@ -807,6 +844,23 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 	if v == "#all" {
 		return All, nil
 	}
+	// Which tokens are legal depends on the attribute, and the schema for
+	// schemas gives each its own type rather than one shared list.
+	//
+	// blockSet — block and blockDefault — admits substitution, because
+	// blocking substitution is a thing an element can do. derivationSet —
+	// final and finalDefault on an element — does not: "#all or (possibly
+	// empty) subset of {extension, restriction}". A simple type's final is
+	// different again, admitting list and union, since those are the ways a
+	// simple type is derived.
+	//
+	// Accepting every token everywhere let elemF004 write
+	// final="substitution" on an <element>, which reads as though it
+	// prevented substitution and does not — that is what block says.
+	blocking := name == "block" || name == "blockDefault"
+	simple := el.Name.Local == "simpleType" ||
+		(name == "finalDefault" && !blocking)
+
 	var out DerivationSet
 	for _, word := range strings.Fields(v) {
 		switch word {
@@ -814,11 +868,21 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 			out = out.With(DerivationExtension)
 		case "restriction":
 			out = out.With(DerivationRestriction)
-		case "list":
-			out = out.With(DerivationList)
-		case "union":
-			out = out.With(DerivationUnion)
+		case "list", "union":
+			if !simple {
+				return 0, errorAt(el, "",
+					"%s=%q: %q is not permitted here", name, v, word)
+			}
+			if word == "list" {
+				out = out.With(DerivationList)
+			} else {
+				out = out.With(DerivationUnion)
+			}
 		case "substitution":
+			if !blocking {
+				return 0, errorAt(el, "",
+					"%s=%q: %q is only permitted in block", name, v, word)
+			}
 			out = out.With(DerivationSubstitution)
 		default:
 			return 0, errorAt(el, "",
@@ -891,4 +955,29 @@ func (p *parser) contentChildren(el *xdm.Node) []*xdm.Node {
 		out = append(out, c)
 	}
 	return out
+}
+
+// formDefault reads elementFormDefault or attributeFormDefault, whose value is
+// the two-token enumeration xs:formChoice.
+//
+// The value used to be compared against "qualified" and anything else taken as
+// unqualified, so a misspelling silently reversed the meaning of every local
+// declaration in the document: elemH004 writes "Qualified" with a capital Q
+// and elemH005 "Unqualified", and both loaded as though they said the
+// opposite of what their author intended. An empty value (elemH003) and a
+// two-token list (elemH006) are equally not members of the enumeration.
+func (p *parser) formDefault(root *xdm.Node, name string) bool {
+	a := root.Attr("", name)
+	if a == nil {
+		return false
+	}
+	switch a.Value {
+	case "qualified":
+		return true
+	case "unqualified":
+		return false
+	}
+	p.errs = append(p.errs, errorAt(root, "",
+		"%s=%q is not one of qualified or unqualified", name, a.Value))
+	return false
 }

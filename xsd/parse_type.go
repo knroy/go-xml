@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -610,6 +611,7 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 	switch el.Name.Local {
 	case "element":
 		if ref := el.AttrValue("ref"); ref != "" {
+			p.checkElementRefExclusions(el)
 			name, err := p.resolveQName(el, "ref", ref)
 			if err != nil {
 				p.errs = append(p.errs, err)
@@ -658,6 +660,9 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 		})
 
 	case "all", "choice", "sequence":
+		if el.Name.Local == "all" {
+			p.checkAllOccurs(el, max)
+		}
 		part.Term = p.readModelGroup(el)
 
 	default:
@@ -703,6 +708,31 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 		p.errs = append(p.errs, errorAt(el, "",
 			"a group definition must contain an all, choice or sequence"))
 		return nil
+	}
+	// The schema for schemas gives a named group definition the type
+	// xs:namedGroup, which prohibits ref, minOccurs and maxOccurs outright:
+	// a definition is not a use, so it has no occurrence range and cannot
+	// also be a reference. The same type prohibits both occurrence
+	// attributes on the <all> it may contain.
+	//
+	// None of these is read on this path — the definition's group is not
+	// built as a particle — so each was silently discarded. mgO019 writes
+	// <all maxOccurs="0"> inside a <group name="..."> and loaded clean,
+	// while the identical group written inline was rejected.
+	for _, attr := range []string{"ref", "minOccurs", "maxOccurs"} {
+		if el.Attr("", attr) != nil {
+			p.errs = append(p.errs, errorAt(el, "",
+				"attribute %q is not allowed on a named group definition", attr))
+		}
+	}
+	if inner.Name.Local == "all" {
+		for _, attr := range []string{"minOccurs", "maxOccurs"} {
+			if inner.Attr("", attr) != nil {
+				p.errs = append(p.errs, errorAt(inner, "cos-all-limited.1.2",
+					"attribute %q is not allowed on the xs:all of a "+
+						"named group definition", attr))
+			}
+		}
 	}
 	return &ModelGroupDef{Name: p.qnameFor(name), Group: p.readModelGroup(inner)}
 }
@@ -1324,4 +1354,129 @@ func dropProhibited(uses []*AttributeUse) []*AttributeUse {
 		kept = append(kept, u)
 	}
 	return kept
+}
+
+// checkGroupCycles enforces Model Group Correct clause 2 (§3.8.6): within the
+// {particles} of a group there must not be, at any depth, a particle whose
+// {term} is the group itself.
+//
+// A cycle is not merely invalid, it is dangerous to this implementation: the
+// content model is compiled into an automaton by walking the particle tree, so
+// a group that reaches itself makes that walk non-terminating. Every consumer
+// of the component graph would have to defend itself; rejecting the schema
+// here means none of them has to.
+//
+// The search is over ModelGroup identity rather than group *names* because a
+// reference is resolved to the definition's ModelGroup pointer — so a cycle
+// through any number of intermediate definitions shows up as the same pointer
+// reappearing on the current path. Pins groupB013 (a group whose choice refs
+// itself), groupB014 (the sequence form) and groupB015 (a two-group cycle).
+func (p *parser) checkGroupCycles() {
+	// Only the named definitions are roots. An anonymous group inside a
+	// complex type can only be part of a cycle by way of a <group ref>, and
+	// that ref points at a named definition, which is a root already.
+	for _, def := range p.schema.ModelGroups {
+		if def == nil || def.Group == nil {
+			continue
+		}
+		if cycleFrom(def.Group, map[*ModelGroup]bool{}) {
+			p.errs = append(p.errs, &ParseError{
+				Code: "mg-props-correct.2",
+				Message: fmt.Sprintf(
+					"group %q is circular: its content refers back to itself",
+					def.Name.Local),
+			})
+		}
+	}
+}
+
+// cycleFrom reports whether g reaches itself through the particle tree.
+//
+// path holds the groups on the current descent, not the groups already
+// visited: a group legitimately reachable by two disjoint routes is not a
+// cycle, and marking it seen on the first route would either miss a real cycle
+// on the second or report one that is not there.
+func cycleFrom(g *ModelGroup, path map[*ModelGroup]bool) bool {
+	if path[g] {
+		return true
+	}
+	path[g] = true
+	defer delete(path, g)
+
+	for _, part := range g.Particles {
+		if part == nil {
+			continue
+		}
+		if inner, ok := part.Term.(*ModelGroup); ok && cycleFrom(inner, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkElementRefExclusions enforces src-element.2.2 (§3.3.3): when a local
+// <element> carries ref, everything that would describe a declaration of its
+// own must be absent.
+//
+// The list is exhaustive in the spec — "only minOccurs, maxOccurs, id are
+// allowed in addition to ref, along with <annotation>" — because a reference
+// *is* the declaration it names. Writing type or nillable beside a ref reads
+// as though it modified the referenced declaration for this one use, and it
+// does not; the attribute is simply ignored, so the schema does not mean what
+// it appears to say. Rejecting it is the only way the author finds out.
+//
+// name is checked here rather than by the general attribute table because it
+// is legal on <element> in the abstract, and only its combination with ref is
+// the fault (clause 2.1: one of ref or name, but not both). Pins name00401m3,
+// name00401m4, name00401m5 and the name00501m series.
+func (p *parser) checkElementRefExclusions(el *xdm.Node) {
+	for _, attr := range []string{
+		"name", "type", "form", "block", "nillable", "default", "fixed",
+		// 1.1 adds these two to <element>, and both describe a
+		// declaration, so both fall under the same exclusion.
+		"targetNamespace", "abstract",
+	} {
+		if el.Attr("", attr) != nil {
+			p.errs = append(p.errs, errorAt(el, "src-element.2.2",
+				"an element reference may not also carry %q", attr))
+		}
+	}
+	// The children the clause names. An inline type or an identity
+	// constraint belongs to a declaration, and a ref makes one elsewhere.
+	for _, child := range []string{
+		"simpleType", "complexType", "key", "keyref", "unique", "alternative",
+	} {
+		if c := p.childElement(el, child); c != nil {
+			p.errs = append(p.errs, errorAt(el, "src-element.2.2",
+				"an element reference may not also contain <%s>", child))
+		}
+	}
+}
+
+// checkAllOccurs enforces the occurrence half of All Group Limited (§3.8.6
+// clause 1.2): the particle whose {term} is an all group must have
+// {max occurs} = 1.
+//
+// An all group means "each of these once, in any order". Repeating the group
+// as a whole is not a language any finite automaton built from these members
+// describes — the members' own bounds are what "any order" is defined against
+// — so the spec confines the group to a single occurrence rather than giving
+// the repetition a meaning. maxOccurs="unbounded" is the same fault written
+// differently.
+//
+// minOccurs is left alone for maxOccurs=1: minOccurs="0" is an optional all
+// group, which is explicitly allowed and which §3.4.2.3.3 relies on. But
+// maxOccurs="0" makes the group unusable, and XSD 1.0 rejects it while 1.1
+// permits it — mgO001 is expected invalid under 1.0 and is not scored under
+// 1.1 at all. Pins mgAb004, mgAb006, mgAb007, mgC013 and mgO003.
+func (p *parser) checkAllOccurs(el *xdm.Node, max int) {
+	if max == Unbounded || max > 1 {
+		p.errs = append(p.errs, errorAt(el, "cos-all-limited.1.2",
+			"an xs:all group must have maxOccurs=1"))
+		return
+	}
+	if max == 0 && p.schema.Version < Version11 {
+		p.errs = append(p.errs, errorAt(el, "cos-all-limited.1.2",
+			"an xs:all group must have maxOccurs=1"))
+	}
 }
