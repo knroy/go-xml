@@ -152,3 +152,44 @@ func TestSpecialsIsTwoRanges(t *testing.T) {
 		}
 	}
 }
+
+// Appendix F defines \w by subtraction — everything outside \p{P}, \p{Z} and
+// \p{C} — which has no single property to name it, so inside a character class
+// the escape used to fall back to RE2's own ASCII \w.
+//
+// That made the two spellings disagree with each other, which is how it was
+// found: "`" is Sk, a symbol, so it matches \w but did not match [\w]; "_" is
+// Pc, punctuation, so it does the opposite. Neither of those is the ASCII
+// intuition, which is exactly why the fallback looked reasonable.
+func TestWordClassAgreesWithItself(t *testing.T) {
+	for _, c := range []struct {
+		r     rune
+		match bool
+		why   string
+	}{
+		{'a', true, "Ll"},
+		{'0', true, "Nd"},
+		{'`', true, "Sk — a symbol, not punctuation"},
+		{'_', false, "Pc — punctuation, despite ASCII intuition"},
+		{'-', false, "Pd"},
+		{'.', false, "Po"},
+		{' ', false, "Zs"},
+	} {
+		for _, pat := range []string{`^\w$`, `^[\w]$`} {
+			tr, err := translatePattern(pat, false)
+			if err != nil {
+				t.Errorf("%s: translate: %v", pat, err)
+				continue
+			}
+			re, err := regexp.Compile(tr)
+			if err != nil {
+				t.Errorf("%s: compile: %v", pat, err)
+				continue
+			}
+			if got := re.MatchString(string(c.r)); got != c.match {
+				t.Errorf("%s on %q = %v, want %v (%s)",
+					pat, c.r, got, c.match, c.why)
+			}
+		}
+	}
+}

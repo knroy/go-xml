@@ -277,16 +277,24 @@ func unicodeEscape(esc byte) (string, bool) {
 // classUnicodeEscape is unicodeEscape's form for use inside a character class,
 // where a bracketed alternative cannot nest.
 //
-// \w has no single property that names it — it is defined by subtraction — so
-// inside a class it stays as RE2's ASCII \w rather than becoming something
-// syntactically invalid. That is a narrowing, and the only one: \d and \D are
-// property references and carry their full Unicode meaning either way.
+// \w has no single property that names it — Appendix F defines it by
+// subtraction, as everything outside \p{P}, \p{Z} and \p{C} — so the bracketed
+// form unicodeEscape returns cannot be dropped inside another class. The
+// ranges are computed instead and contributed bare.
+//
+// Leaving it as RE2's own \w was a narrowing to ASCII, and the two forms then
+// disagreed with each other: "`" is Sk, so it matches \w and used not to match
+// [\w], while "_" is Pc and did the opposite.
 func classUnicodeEscape(esc byte) (string, bool) {
 	switch esc {
 	case 'd':
 		return `\p{Nd}`, true
 	case 'D':
 		return `\P{Nd}`, true
+	case 'w':
+		return formatClass(complementRanges(nonWordRanges())), true
+	case 'W':
+		return formatClass(nonWordRanges()), true
 	}
 	return "", false
 }
