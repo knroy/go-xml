@@ -1251,6 +1251,24 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
 			if !ok {
+				// Strict asks for the element to be *assessed*,
+				// not for it to have a declaration. §3.3.4
+				// clause 1.2 assesses one against the type
+				// xsi:type names, which is exactly what the
+				// declaration-less root does — so an element a
+				// strict wildcard matches is valid when it says
+				// which type it means. test75092 puts xsi:type
+				// on every child under a strict wildcard and
+				// declares none of them.
+				if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
+					t, err := v.resolveXSIType(kid, xsiType.Value)
+					if err != nil {
+						v.fail(kid, "cvc-elt.4.2", "%v", err)
+						return nil
+					}
+					v.validateAgainstType(kid, t, nil)
+					return nil
+				}
 				v.fail(kid, "cvc-complex-type.2.4.c",
 					"no declaration for {%s}%s, matched by a strict wildcard",
 					name.URI, name.Local)

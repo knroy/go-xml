@@ -497,3 +497,38 @@ func TestXPathDefaultNamespaceResolvesAtTheExpression(t *testing.T) {
 			"its test resolved to the wrong namespace")
 	}
 }
+
+// processContents="strict" asks for the element to be assessed, not for it to
+// have a declaration. §3.3.4 clause 1.2 assesses an element against the type
+// xsi:type names, so one a strict wildcard matches is valid when it says which
+// type it means — msData's test75092 declares none of its children and puts
+// xsi:type on each.
+func TestStrictWildcardAcceptsXSIType(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="foo">
+	    <xs:sequence>
+	      <xs:element name="a"/>
+	      <xs:any namespace="##any" processContents="strict"
+	              minOccurs="0" maxOccurs="unbounded"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="foo" type="foo"/>
+	</xs:schema>`
+	const ns = ` xmlns:xs="http://www.w3.org/2001/XMLSchema"` +
+		` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+
+	assertValid(t, schema, `<foo`+ns+`><a/>`+
+		`<b xsi:type="xs:string">abc</b>`+
+		`<c xsi:type="xs:int">123</c></foo>`)
+
+	// The type still has to hold: xsi:type does not waive validation.
+	assertInvalid(t, schema, `<foo`+ns+`><a/>`+
+		`<c xsi:type="xs:int">notanint</c></foo>`,
+		"cvc-datatype-valid.1")
+
+	// With neither a declaration nor an xsi:type there is nothing to
+	// assess against, which is what strict refuses.
+	assertInvalid(t, schema, `<foo`+ns+`><a/><b/></foo>`,
+		"cvc-complex-type.2.4.c")
+}
