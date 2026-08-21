@@ -2069,3 +2069,63 @@ func TestGregorianLexicalRanges(t *testing.T) {
 		assertInvalid(t, schema, `<v>`+c.bad+`</v>`, "cvc-datatype-valid")
 	}
 }
+
+// TestNotNamespaceTargetInNoNamespaceSchema pins that ##targetNamespace names
+// the absent namespace when the schema has no target namespace.
+//
+// Appending the empty target namespace to the excluded list does not do it:
+// Allows answers the absent namespace from ExcludesAbsent and never reaches the
+// list, so the wildcard admitted every unqualified attribute it was written to
+// refuse.
+func TestNotNamespaceTargetInNoNamespaceSchema(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="eden">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:anyAttribute notNamespace=" ##targetNamespace " processContents="skip"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<eden xmlns:n="urn:n" n:x="1"/>`); err != nil {
+		t.Errorf("a qualified attribute should be admitted: %v", err)
+	}
+	if err := check11(t, s, `<eden cain="abel"/>`); err == nil {
+		t.Error("an unqualified attribute is in the target namespace here")
+	}
+}
+
+// TestDefinedSiblingInOpenContent covers ##definedSibling on an open content
+// wildcard, which is not a particle in any content model.
+//
+// Its siblings are that model's element names: open content is written to
+// admit what the model does not already name, and ##definedSibling is how a
+// schema says so without listing them. The set has to be resolved per type,
+// since one defaultOpenContent is shared by every type in the document that
+// declares none of its own.
+func TestDefinedSiblingInOpenContent(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:defaultOpenContent mode="interleave">
+	    <xs:any processContents="skip" notQName="##definedSibling"/>
+	  </xs:defaultOpenContent>
+	  <xs:element name="root" type="zing"/>
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="b" type="xs:string" minOccurs="0"/>
+	      <xs:element name="c" type="xs:string" minOccurs="0"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	</xs:schema>`)
+
+	// A name the model does not declare goes through the wildcard.
+	if err := check11(t, s, `<root><b/><d/></root>`); err != nil {
+		t.Errorf("an undeclared name should pass the wildcard: %v", err)
+	}
+	// A second <c/> is a sibling name, so the wildcard refuses it and the
+	// model has already used its one occurrence.
+	if err := check11(t, s, `<root><c/><b/><c/></root>`); err == nil {
+		t.Error("a sibling name should be refused by the wildcard")
+	}
+}

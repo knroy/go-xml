@@ -376,6 +376,17 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 		for _, word := range splitFields(not) {
 			switch word {
 			case "##targetNamespace":
+				if p.doc.targetNS == "" {
+					// In a no-namespace schema the target
+					// namespace *is* the absent one, so
+					// ##targetNamespace excludes unqualified
+					// names. Appending "" to the list would
+					// not do it: Allows answers the absent
+					// namespace from ExcludesAbsent and
+					// never reaches the list.
+					w.ExcludesAbsent = true
+					continue
+				}
 				w.Namespace = append(w.Namespace, p.doc.targetNS)
 			case "##local":
 				// Only an explicit ##local excludes unqualified

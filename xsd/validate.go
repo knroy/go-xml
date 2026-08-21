@@ -144,6 +144,11 @@ type validator struct {
 	// parent, for the dynamic Element Declarations Consistent check.
 	childTypes map[edtKey]Type
 
+	// openContents caches the per-type copy of an open content whose
+	// wildcard uses ##definedSibling, since the component itself may be
+	// shared across types and must not be written to.
+	openContents map[*ComplexType]*OpenContent
+
 	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
 	// last. Conditional type assignment on a descendant sees them, which is
 	// how an ancestor's xml:lang can choose a nested element's type.
@@ -1034,7 +1039,55 @@ func (v *validator) openContentFor(t *ComplexType) *OpenContent {
 	if t.OpenContent.Wildcard == nil {
 		return nil
 	}
+	if t.OpenContent.Wildcard.DisallowDefinedSibling {
+		// The wildcard may be the document's shared defaultOpenContent,
+		// so its sibling set cannot be written onto the component: a
+		// Schema is safe to share between goroutines, and two of them
+		// validating against different types would race on it. The
+		// resolved copy is returned instead.
+		return v.openContentWithSiblings(t)
+	}
 	return t.OpenContent
+}
+
+// bindOpenSiblings resolves ##definedSibling on an open content wildcard.
+//
+// The wildcard is not a particle in the content model, so compiling the model
+// never reaches it — but its siblings are exactly that model's element names:
+// open content is written to admit what the model does not already name, and
+// ##definedSibling is how a schema says so without listing them.
+//
+// It is done here rather than at parse time because the same defaultOpenContent
+// component is shared by every type in the document that does not declare its
+// own, and each has different siblings. Binding one set onto the shared
+// component would give every type the last one's.
+func (v *validator) openContentWithSiblings(t *ComplexType) *OpenContent {
+	if v.openContents == nil {
+		v.openContents = map[*ComplexType]*OpenContent{}
+	}
+	if oc, done := v.openContents[t]; done {
+		return oc
+	}
+
+	names := map[xdm.QName]bool{}
+	if m, err := v.modelFor(t); err == nil {
+		for _, pos := range m.positions {
+			d, ok := pos.term.(*ElementDecl)
+			if !ok {
+				continue
+			}
+			names[d.Name] = true
+			for _, sub := range d.substitutable {
+				names[sub.Name] = true
+			}
+		}
+	}
+
+	w := *t.OpenContent.Wildcard
+	w.siblingNames = names
+	oc := &OpenContent{Mode: t.OpenContent.Mode, Wildcard: &w}
+	v.openContents[t] = oc
+	return oc
 }
 
 // pushInherited adds an element's inheritable attributes to the scope, and
