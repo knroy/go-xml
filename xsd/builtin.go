@@ -232,7 +232,6 @@ func builtinAttributes() map[xdm.QName]*AttributeDecl {
 	qname, _ := builtinTypes()[xsName("QName")].(*SimpleType)
 	boolean, _ := builtinTypes()[xsName("boolean")].(*SimpleType)
 	anyURI, _ := builtinTypes()[xsName("anyURI")].(*SimpleType)
-	_ = str
 
 	xsi := func(local string, t *SimpleType) (xdm.QName, *AttributeDecl) {
 		n := xdm.QName{URI: NSInstance, Local: local}
@@ -249,6 +248,31 @@ func builtinAttributes() map[xdm.QName]*AttributeDecl {
 	} {
 		n, d := f()
 		out[n] = d
+	}
+
+	// The XML namespace has a schema of its own, given in Part 1 §F.1, and a
+	// schema may import it without a schemaLocation — which is how both
+	// schemas in the suite that use xml:base and xml:space refer to them.
+	// An import with no location asks the processor for whatever it already
+	// knows about that namespace, so if these are not here the import
+	// resolves to nothing and the ref that follows fails.
+	//
+	// xml:lang is xs:language in that schema rather than a union with the
+	// empty string; the union is a later relaxation and is not what §F.1
+	// says.
+	lang, _ := builtinTypes()[xsName("language")].(*SimpleType)
+	ncname, _ := builtinTypes()[xsName("NCName")].(*SimpleType)
+	for _, x := range []struct {
+		local string
+		t     *SimpleType
+	}{
+		{"lang", lang},
+		{"space", str},
+		{"base", anyURI},
+		{"id", ncname},
+	} {
+		n := xdm.QName{URI: NSXML, Local: x.local}
+		out[n] = &AttributeDecl{Name: n, Type: x.t, Scope: ScopeGlobal}
 	}
 	return out
 }

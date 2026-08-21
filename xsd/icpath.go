@@ -85,13 +85,17 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 			break
 		}
 
-		if p.src[p.pos] == '@' {
+		if p.src[p.pos] == '@' || p.atAxis("attribute") {
 			if !p.field {
 				return alt, fmt.Errorf(
 					"identity-constraint selector %q: a selector may not "+
 						"select attributes", p.src)
 			}
-			p.pos++
+			// atAxis has already consumed the unabbreviated form; only
+			// the abbreviation still needs its "@" stepping over.
+			if p.src[p.pos] == '@' {
+				p.pos++
+			}
 			name, err := p.parseNameTest()
 			if err != nil {
 				return alt, err
@@ -160,12 +164,40 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 	return alt, nil
 }
 
-// skipAxis consumes a leading "child::" if present.
-func (p *icPathParser) skipAxis() {
-	const axis = "child::"
-	if strings.HasPrefix(p.src[p.pos:], axis) {
-		p.pos += len(axis)
+// atAxis reports whether the named axis begins here, consuming it if so.
+//
+// Clause 2.2 of Fields Value OK admits the unabbreviated "attribute::a"
+// wherever "@a" is allowed, just as it admits "child::e" for "e". Recognising
+// only the abbreviation rejected the long form as a malformed path, which
+// failed the whole schema rather than the one step.
+func (p *icPathParser) atAxis(axis string) bool {
+	save := p.pos
+	p.skipSpace()
+	if !strings.HasPrefix(p.src[p.pos:], axis) {
+		p.pos = save
+		return false
 	}
+	p.pos += len(axis)
+	p.skipSpace()
+	if !strings.HasPrefix(p.src[p.pos:], "::") {
+		// An element named "attribute" is a name test, not an axis.
+		p.pos = save
+		return false
+	}
+	p.pos += 2
+	p.skipSpace()
+	return true
+}
+
+// skipAxis consumes a leading "child::" if present.
+//
+// XPath allows whitespace around "::" and either side of the axis name, so the
+// axis is matched in pieces rather than as one string. "child :: e" and
+// "child:: e" are the same step as "child::e"; matching only the closed
+// spelling rejected the others as malformed paths, which failed the whole
+// schema rather than the step.
+func (p *icPathParser) skipAxis() {
+	p.atAxis("child")
 }
 
 // nameTest is a parsed NameTest, before its prefix is resolved.
