@@ -127,3 +127,46 @@ func TestRefusedNamespaceIsIgnoredNotAnError(t *testing.T) {
 		t.Error("a refused location was followed anyway")
 	}
 }
+
+// An instance naming a document the schema already holds must not load it
+// twice.
+//
+// The ordinary spelling puts xsi:noNamespaceSchemaLocation — the instance's own
+// schema — beside an xsi:schemaLocation for some other namespace, so the list
+// routinely contains a document already in hand. Loading it again made every
+// global in it a duplicate of itself and failed the whole assembly with
+// sch-props-correct.2, which reads as a broken schema rather than as the
+// double-load it is. The suite reaches this through particlesB013, ctL021 and
+// attgD034.
+func TestInstanceLocationNamingTheSchemaItself(t *testing.T) {
+	_, main := writeSchemaSet(t)
+
+	s, err := LoadFile(main, Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	// The instance names main.xsd as well as other.xsd. The spellings
+	// differ from the one the schema was loaded under, which is why the
+	// comparison has to be by file identity rather than by path text.
+	doc := `<doc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+		` xsi:noNamespaceSchemaLocation="./main.xsd"` +
+		` xsi:schemaLocation="urn:other other.xsd">` +
+		`<b xmlns="urn:other">x</b></doc>`
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ext, err := s.WithInstanceLocations(tree.Root, InstanceLocationPolicy{
+		AllowNamespace:   func(string) bool { return true },
+		AllowNoNamespace: true,
+		Resolver:         &FileResolver{},
+	}, Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("the schema's own document should not collide with itself: %v", err)
+	}
+	if err := ext.Validate(tree.Root, ValidateOptions{}); err != nil {
+		t.Errorf("the strict wildcard should find the declaration: %v", err)
+	}
+}

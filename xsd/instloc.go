@@ -108,12 +108,36 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 	// entirely.
 	base := filepath.Dir(s.sourcePaths[0])
 	paths := append([]string(nil), s.sourcePaths...)
+
+	// A document the schema already holds must not be listed again. An
+	// instance routinely names its own schema — xsi:noNamespaceSchemaLocation
+	// beside an xsi:schemaLocation for some other namespace is the ordinary
+	// spelling — and loading it twice makes every global in it a duplicate
+	// of itself, so the whole assembly fails with sch-props-correct.2.
+	//
+	// The comparison is by file identity rather than by path text, because
+	// the instance's spelling of a location need not match the one the
+	// schema was loaded under: "b.xsd" and "./b.xsd" and an absolute path
+	// are three ways of naming one file.
+	have := map[string]bool{}
+	for _, p := range s.sourcePaths {
+		have[canonicalLocation(p)] = true
+	}
 	for _, loc := range locs {
-		if filepath.IsAbs(loc) || strings.Contains(loc, "://") {
-			paths = append(paths, loc)
-			continue
+		full := loc
+		if !filepath.IsAbs(loc) && !strings.Contains(loc, "://") {
+			full = filepath.Join(base, loc)
 		}
-		paths = append(paths, filepath.Join(base, loc))
+		if key := canonicalLocation(full); have[key] {
+			continue
+		} else {
+			have[key] = true
+		}
+		paths = append(paths, full)
+	}
+	if len(paths) == len(s.sourcePaths) {
+		// Every location named a document already loaded.
+		return s, nil
 	}
 	return LoadFiles(paths, opts)
 }
