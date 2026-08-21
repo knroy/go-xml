@@ -698,3 +698,20 @@ func clampBound(body string, max int) (string, bool) {
 	newHi, hiChanged := clamp(hi)
 	return newLo + "," + newHi, loChanged || hiChanged
 }
+
+// TranslateSchemaRegexp rewrites an XML Schema regular expression into RE2
+// syntax, without anchoring it.
+//
+// The XML Schema flavour and the XPath flavour share a grammar — Part 2
+// Appendix F defines the one, and XPath's fn:matches extends it — so the
+// translation is the same in both directions: the multi-character escapes \i
+// and \c, the block and category escapes, and character class subtraction, none
+// of which RE2 accepts as written.
+//
+// The result is deliberately unanchored, because the two flavours differ
+// exactly there. fn:matches is a containment test, while a pattern facet must
+// span the whole value. A caller using this for a pattern facet has to wrap the
+// result — see the xsd package, which does so with \A(?:...)\z.
+func TranslateSchemaRegexp(pattern string) (string, error) {
+	return translatePattern(pattern, false)
+}
