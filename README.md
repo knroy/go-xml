@@ -21,7 +21,7 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.51% of the W3C xsdtests suite (24,863 of 24,986 instance tests) |
+| **XSD 1.0** | 99.56% of the W3C xsdtests suite (24,875 of 24,986 instance tests) |
 | **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,083 of 1,083); opt-in via `Version11` |
 | **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
@@ -648,7 +648,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**123 of 24,986 XSD 1.0 instance tests (0.49%); the 1.1 half agrees on all
+**111 of 24,986 XSD 1.0 instance tests (0.44%); the 1.1 half agrees on all
 1,083.**
 
 The 1.0 remainder is a long tail with no group above ten cases, spread across

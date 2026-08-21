@@ -249,7 +249,7 @@ Measured against the W3C xsdtests suite:
 
 | | |
 |---|---|
-| **XSD 1.0** | 99.51% — 24,863 of 24,986 instance tests |
+| **XSD 1.0** | 99.56% — 24,875 of 24,986 instance tests |
 | **XSD 1.1** | 100% — 1,083 of 1,083 |
 
 The remaining 1.0 disagreements are a long tail with no group above ten cases,

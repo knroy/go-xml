@@ -7,7 +7,7 @@ Current position:
 
 | | |
 |---|---|
-| XSD 1.0 | 99.51% — 24,863 of 24,986 |
+| XSD 1.0 | 99.56% — 24,875 of 24,986 |
 | XSD 1.1 | 100% — 1,083 of 1,083 |
 | XPath 2.0 | 99.81% — 14,692 of 14,720 in scope (28 failing) |
 | Schemas that fail to load | 20, most of them correctly |
@@ -80,7 +80,7 @@ schemas are marked invalid-by-design and skipped either way.
 
 ## 2. Bugs
 
-### 2.1 XSD 1.0: 123 disagreements
+### 2.1 XSD 1.0: 111 disagreements
 
 No cluster above three cases, so this is individual spec-reading rather than
 one fix. Split by direction, because they are different kinds of work:
@@ -88,21 +88,15 @@ one fix. Split by direction, because they are different kinds of work:
 **83 false accepts** — a document the suite calls invalid is accepted. These
 are missing checks, and each is a constraint not being applied.
 
-**40 false rejects** — a valid document is refused. These have diagnosable
-error codes:
+**28 false rejects** — a valid document is refused. Work these first: an error
+naming a code and a path is a far shorter route to the cause than "this should
+have failed and did not". Four clusters have already gone that way — the
+top-level optional all group, the Specials block, \w inside a character class,
+and key comparison by primitive — which is where twelve of the original 123
+went.
 
-| cases | code | area |
-|---:|---|---|
-| 12 | `cvc-complex-type.2` | content models |
-| 8 | `cvc-identity-constraint.4` | key/keyref/unique field selection |
-| 8 | `cvc-datatype-valid.1` | simple type values |
-| 2 | `cvc-id.2` | ID uniqueness |
-| 2 | `cvc-elt.5.2.2.2.1` | element default vs content |
-| 2 | `cvc-attribute.3`, `cvc-attribute.4` | attribute values and fixed |
-| ~4 | one each | the tail |
-
-Start with the false rejects: an error message naming a code and a path is a
-much shorter path to the cause than "this should have failed and did not".
+What is left of them is mostly one case each, across content models, wildcard
+`processContents="strict"`, fixed values and `xsi:type` derivation.
 
 **At least one is a suite defect, not a bug here.** `anyURI_a004` is marked
 `status="queried"` against an open W3C bug, and its own group annotation
