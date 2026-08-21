@@ -114,12 +114,44 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 	return validateAtomicValueVersion(lexical, t, version)
 }
 
+// valueSpaceOnly reports whether a lexical form denotes a value in a type's
+// value space, without asking whether the type's bounding facets admit it.
+// See validateAtomicValueBounds for why the distinction matters.
+func valueSpaceOnly(lexical string, t *SimpleType, version Version) (string, error) {
+	if t.unresolved != "" {
+		return "", fmt.Errorf(
+			"src-resolve: type refers to %q, which no definition matches",
+			t.unresolved)
+	}
+	switch t.Variety {
+	case VarietyList:
+		return validateListValue(lexical, t)
+	case VarietyUnion:
+		return validateUnionValue(lexical, t)
+	}
+	return validateAtomicValueBounds(lexical, t, version, false)
+}
+
 // validateAtomicValue checks an atomic value.
 func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	return validateAtomicValueVersion(lexical, t, Version10)
 }
 
 func validateAtomicValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
+	return validateAtomicValueBounds(lexical, t, version, true)
+}
+
+// validateAtomicValueBounds is validateAtomicValueVersion with a say over
+// whether the base's bounding facets apply.
+//
+// They always do for a value in a document. They do not when the "value" is a
+// bounding facet being declared: "maxExclusive valid restriction" asks only
+// whether it lies in the base's *value space*, and the relation it must hold to
+// the base's own bounds is a separate clause with its own comparison — greater
+// than, not greater than or equal. Applying the base's bounds here instead made
+// re-stating a bound with the same value contradict itself, which the spec
+// allows outright (d3_4_28v09).
+func validateAtomicValueBounds(lexical string, t *SimpleType, version Version, bounds bool) (string, error) {
 	ws := EffectiveWhiteSpace(t)
 	normalized := ws.Normalize(lexical)
 
@@ -162,8 +194,10 @@ func validateAtomicValueVersion(lexical string, t *SimpleType, version Version) 
 	if err := checkLengthForPrimitive(steps, normalized, prim); err != nil {
 		return "", err
 	}
-	if err := checkBounds(steps, normalized, prim); err != nil {
-		return "", err
+	if bounds {
+		if err := checkBounds(steps, normalized, prim); err != nil {
+			return "", err
+		}
 	}
 	if prim == "decimal" {
 		if r, ok := new(big.Rat).SetString(normalized); ok {

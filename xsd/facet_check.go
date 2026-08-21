@@ -609,7 +609,14 @@ func (p *parser) checkFacetValueSpace(t, base *SimpleType, el *xdm.Node) {
 		if lex == nil {
 			return
 		}
-		if _, err := validateSimpleValueVersion(*lex, base, p.schema.Version); err != nil {
+		// The base's own bounding facets are deliberately not applied.
+		// This clause asks whether the facet value is in the base's
+		// value space; how it must relate to the base's bounds is
+		// checked separately above, where "greater than" is the right
+		// comparison. Validating against them here rejected a bound
+		// re-stated with the same value as its parent's, which the
+		// spec permits (d3_4_28v09).
+		if _, err := valueSpaceOnly(*lex, base, p.schema.Version); err != nil {
 			p.errs = append(p.errs, errorAt(el, boundFacetCode(kind),
 				"xs:%s value %q is not in the value space of the base type: %v",
 				kind, *lex, err))

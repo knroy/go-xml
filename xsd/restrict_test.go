@@ -341,3 +341,137 @@ func TestSubstitutionGroupMemberOrderIsStable(t *testing.T) {
 		}
 	}
 }
+
+// TestAllGroupBudgetsSubstitutionGroup covers clause 2.1 as it reaches the
+// all-group case: a base particle naming a substitution group head stands for a
+// choice over the whole group, so every member draws on that head's occurrence
+// allowance — and on the *same* allowance, which makes their occurrences sum.
+//
+// Keyed by exact name, the members matched no budget at all and four valid
+// schemas were rejected as elements the base "does not allow" (all221, all222,
+// all225, all226).
+func TestAllGroupBudgetsSubstitutionGroup(t *testing.T) {
+	// These derivations are XSD 1.1: 1.0 does not let an all group take
+	// part in a restriction this way at all.
+	load11 := func(src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the test schema as XML: %v", err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{Version: Version11})
+		return err
+	}
+	ok11 := func(src string) {
+		t.Helper()
+		if err := load11(src); err != nil {
+			t.Fatalf("schema should load, got: %v", err)
+		}
+	}
+	fail11 := func(src, want string) {
+		t.Helper()
+		err := load11(src)
+		if err == nil {
+			t.Fatal("schema should have been rejected")
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+
+	// A1 6..8 and A2 6..8 sum to 12..16, inside the base's 10..20.
+	ok11(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="b">
+	    <xs:all>
+	      <xs:element ref="a" minOccurs="10" maxOccurs="20"/>
+	      <xs:element name="pad" minOccurs="0" maxOccurs="1"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="r">
+	    <xs:complexContent>
+	      <xs:restriction base="b">
+	        <xs:all>
+	          <xs:element ref="A1" minOccurs="6" maxOccurs="8"/>
+	          <xs:element ref="A2" minOccurs="6" maxOccurs="8"/>
+	        </xs:all>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="a"/>
+	  <xs:element name="A1" substitutionGroup="a"/>
+	  <xs:element name="A2" substitutionGroup="a"/>
+	</xs:schema>`)
+
+	// The sum is what is bounded, so a pair exceeding the base's maximum
+	// together is still an error even though each fits alone.
+	fail11(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="b">
+	    <xs:all>
+	      <xs:element ref="a" minOccurs="0" maxOccurs="10"/>
+	      <xs:element name="pad" minOccurs="0" maxOccurs="1"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="r">
+	    <xs:complexContent>
+	      <xs:restriction base="b">
+	        <xs:all>
+	          <xs:element ref="A1" minOccurs="0" maxOccurs="8"/>
+	          <xs:element ref="A2" minOccurs="0" maxOccurs="8"/>
+	        </xs:all>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="a"/>
+	  <xs:element name="A1" substitutionGroup="a"/>
+	  <xs:element name="A2" substitutionGroup="a"/>
+	</xs:schema>`, "is not a valid restriction")
+
+	// A name in no substitution group of the base is still refused, which
+	// is the rule the budget exists to enforce.
+	fail11(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="b">
+	    <xs:all>
+	      <xs:element ref="a" minOccurs="0" maxOccurs="10"/>
+	      <xs:element name="pad" minOccurs="0" maxOccurs="1"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="r">
+	    <xs:complexContent>
+	      <xs:restriction base="b">
+	        <xs:all>
+	          <xs:element name="z" minOccurs="0" maxOccurs="1"/>
+	        </xs:all>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="a"/>
+	</xs:schema>`, "does not allow it")
+
+	// The head's minimum is met by its members collectively; requiring each
+	// member to meet it on its own would be a stricter, different rule.
+	ok11(`
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="b">
+	    <xs:all>
+	      <xs:element ref="a" minOccurs="4" maxOccurs="10"/>
+	      <xs:element name="pad" minOccurs="0" maxOccurs="1"/>
+	    </xs:all>
+	  </xs:complexType>
+	  <xs:complexType name="r">
+	    <xs:complexContent>
+	      <xs:restriction base="b">
+	        <xs:all>
+	          <xs:element ref="A1" minOccurs="2" maxOccurs="5"/>
+	          <xs:element ref="A2" minOccurs="2" maxOccurs="5"/>
+	        </xs:all>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="a"/>
+	  <xs:element name="A1" substitutionGroup="a"/>
+	  <xs:element name="A2" substitutionGroup="a"/>
+	</xs:schema>`)
+}

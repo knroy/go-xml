@@ -936,7 +936,33 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		if _, dup := budget[bd.Name]; dup {
 			return nil, false
 		}
-		budget[bd.Name] = &occBudget{decl: bd, min: bp.MinOccurs, max: bp.MaxOccurs}
+		b := &occBudget{decl: bd, min: bp.MinOccurs, max: bp.MaxOccurs}
+		budget[bd.Name] = b
+		// A base particle naming a substitution group head stands for a
+		// choice over the whole group (clause 2.1), so every member
+		// draws on the head's budget — and they draw on *one* budget,
+		// which is what makes their occurrences sum against it.
+		//
+		// all221 is the case: the base allows <a> 10 to 20 times, and
+		// the restriction offers A1 and A2, each 6 to 8. Neither fits
+		// alone; together 12..16 sits inside 10..20. Keying the budget
+		// by exact name only, the members matched nothing at all and
+		// four valid schemas were rejected (all221, all222, all225,
+		// all226).
+		//
+		// An abstract head is excluded because it cannot itself appear,
+		// matching asSubstitutionChoice.
+		if bd.Scope == ScopeGlobal {
+			for _, m := range bd.substitutable {
+				if m == bd || m.Abstract {
+					continue
+				}
+				if _, dup := budget[m.Name]; dup {
+					return nil, false
+				}
+				budget[m.Name] = b
+			}
+		}
 	}
 
 	branches, ok := allBranchCounts(r)
@@ -1100,6 +1126,14 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 // branchFitsBudget checks one branch of the derived model against the base's
 // per-name budgets.
 func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
+	// Several names may share one budget, because a base particle naming a
+	// substitution group head budgets every member of the group. Their
+	// occurrences are drawn from that single allowance and so are summed
+	// before it is consulted — checking each name on its own would reject
+	// A1 6..8 and A2 6..8 against a base allowing 10..20, when together
+	// they fit exactly (all221).
+	spend := map[*occBudget]*occRange{}
+	name0 := map[*occBudget]xdm.QName{}
 	for name, rng := range br {
 		bud := budget[name]
 		if bud == nil {
@@ -1113,22 +1147,76 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 		if rng.max == 0 {
 			continue
 		}
+		cur, ok := spend[bud]
+		if !ok {
+			spend[bud] = &occRange{min: rng.min, max: rng.max}
+			name0[bud] = name
+			continue
+		}
+		cur.min += rng.min
+		if cur.max == Unbounded || rng.max == Unbounded {
+			cur.max = Unbounded
+		} else {
+			cur.max += rng.max
+		}
+		// br is a map, so which name arrives first is not stable across
+		// runs. The name only labels the diagnostic, but a diagnostic
+		// that changes between identical runs is a bug of its own, so
+		// the lowest-sorting name is chosen rather than the first seen.
+		if less := qnameLess(name, name0[bud]); less {
+			name0[bud] = name
+		}
+	}
+	// Reported in name order for the same reason: a schema violating two
+	// budgets must name the same one every time.
+	order := make([]*occBudget, 0, len(spend))
+	for bud := range spend {
+		order = append(order, bud)
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return qnameLess(name0[order[i]], name0[order[j]])
+	})
+	for _, bud := range order {
+		rng := spend[bud]
 		if err := rangeOK(rng.min, rng.max, bud.min, bud.max); err != nil {
-			return fmt.Errorf("element %s: %w", name.Local, err)
+			return fmt.Errorf("element %s: %w", name0[bud].Local, err)
 		}
 	}
 	// A budget with a non-zero minimum must be met by this branch, even
 	// when the branch never mentions the name at all. all204 and all214
 	// drop a required element that way.
-	for name, bud := range budget {
-		if bud.min == 0 {
+	//
+	// The budget map is walked by value, not by name, since one budget may
+	// be reachable under several names and requiring each of them to meet
+	// the minimum on its own would be a different, stricter rule.
+	names := make([]xdm.QName, 0, len(budget))
+	for name := range budget {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return qnameLess(names[i], names[j]) })
+	seen := map[*occBudget]bool{}
+	for _, name := range names {
+		bud := budget[name]
+		if bud.min == 0 || seen[bud] {
 			continue
 		}
-		if rng, ok := br[name]; !ok || rng.max == 0 {
+		seen[bud] = true
+		if _, ok := spend[bud]; !ok {
 			return fmt.Errorf(
 				"the base requires element %s at least %d times, which the restriction omits",
 				name.Local, bud.min)
 		}
 	}
 	return nil
+}
+
+// qnameLess orders expanded names so that a diagnostic naming one of several
+// candidates names the same one on every run. Go map iteration is randomised,
+// and an error message that changes between identical runs is a bug in its own
+// right, however cosmetic.
+func qnameLess(a, b xdm.QName) bool {
+	if a.URI != b.URI {
+		return a.URI < b.URI
+	}
+	return a.Local < b.Local
 }
