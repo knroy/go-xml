@@ -293,7 +293,7 @@ func lexicalOKVersion(v, primitive string, version Version) bool {
 		return isQNameLexical(v)
 	case "duration", "dateTime", "time", "date",
 		"gYearMonth", "gYear", "gMonthDay", "gDay", "gMonth":
-		return isDateTimeLexical(v, primitive)
+		return isDateTimeLexical(v, primitive, version)
 	}
 	return true
 }
@@ -444,7 +444,7 @@ func isNCName(v string) bool {
 // The shapes are checked rather than the values: whether 2024-02-31 names a
 // real day is a value-space question the date parser answers, and this only
 // establishes that the literal has the right form to be handed to it.
-func isDateTimeLexical(v, primitive string) bool {
+func isDateTimeLexical(v, primitive string, version Version) bool {
 	if primitive == "duration" {
 		return isDurationLexical(v)
 	}
@@ -456,16 +456,16 @@ func isDateTimeLexical(v, primitive string) bool {
 	switch primitive {
 	case "dateTime":
 		i := strings.IndexByte(body, 'T')
-		return i > 0 && isDatePart(body[:i]) && isTimePart(body[i+1:])
+		return i > 0 && isDatePart(body[:i], version) && isTimePart(body[i+1:])
 	case "date":
-		return isDatePart(body)
+		return isDatePart(body, version)
 	case "time":
 		return isTimePart(body)
 	case "gYear":
-		return isSignedDigits(body, 4)
+		return isSignedDigits(body, 4) && yearOK(body, version)
 	case "gYearMonth":
 		i := strings.LastIndexByte(body, '-')
-		return i > 0 && isSignedDigits(body[:i], 4) &&
+		return i > 0 && isSignedDigits(body[:i], 4) && yearOK(body[:i], version) &&
 			isDigits(body[i+1:], 2) && inRange(body[i+1:], 1, 12)
 	case "gMonth":
 		return strings.HasPrefix(body, "--") && isDigits(body[2:], 2) &&
@@ -506,7 +506,7 @@ func splitTimezone(v string) (string, bool) {
 	return v, true
 }
 
-func isDatePart(v string) bool {
+func isDatePart(v string, version Version) bool {
 	// A year may have more than four digits and may be negative, so the
 	// split is on the last two hyphens rather than on fixed offsets.
 	last := strings.LastIndexByte(v, '-')
@@ -519,6 +519,9 @@ func isDatePart(v string) bool {
 	}
 	if !isSignedDigits(v[:mid], 4) || !isDigits(v[mid+1:last], 2) ||
 		!isDigits(v[last+1:], 2) {
+		return false
+	}
+	if !yearOK(v[:mid], version) {
 		return false
 	}
 	// The components must name a date that exists. 2001-02-30 is three
@@ -673,4 +676,23 @@ func inRange(v string, lo, hi int64) bool {
 		return false
 	}
 	return n >= lo && n <= hi
+}
+
+// yearOK rejects year zero under XSD 1.0.
+//
+// Part 2 §D.3.2 is blunt about it — "The year '0000' is an illegal year value"
+// — and §3.2.7.1 repeats it in the lexical production. The note beside it
+// explains why the rule did not last: ISO 8601:2000 arrived while 1.0 was being
+// finished and does allow '0000', for the year 1 BCE, which is the ordinary
+// astronomical convention. The working group recorded its intention to allow it
+// "in a subsequent version", and 1.1 does.
+//
+// So this is a genuine version difference rather than an erratum, and the same
+// literal has to be refused under one version and accepted under the other.
+// dateTime011 pins the 1.0 half.
+func yearOK(year string, version Version) bool {
+	if version >= Version11 {
+		return true
+	}
+	return strings.TrimLeft(strings.TrimPrefix(year, "-"), "0") != ""
 }

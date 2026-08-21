@@ -2081,8 +2081,16 @@ func TestDateLexicalSpaceChecksRanges(t *testing.T) {
 	  <xs:element name="d" type="xs:date"/>
 	</xs:schema>`
 
-	for _, v := range []string{"2001-02-28", "2000-02-29", "0000-02-29", "-0004-02-29"} {
+	for _, v := range []string{"2001-02-28", "2000-02-29", "-0004-02-29"} {
 		assertValid(t, schema, `<d>`+v+`</d>`)
+	}
+	// Year zero is a version difference, not a leap-year question. Part 2
+	// §D.3.2 prohibits "0000" outright in 1.0; 1.1 admits it as 1 BCE,
+	// which is a leap year, so the same literal is invalid under one
+	// version and a valid 29 February under the other.
+	assertInvalid(t, schema, `<d>0000-02-29</d>`, "cvc-datatype-valid")
+	if err := check11(t, load11(t, schema), `<d>0000-02-29</d>`); err != nil {
+		t.Errorf("XSD 1.1 admits year zero: %v", err)
 	}
 	for _, v := range []string{
 		"2001-02-30", "2001-13-01", "2001-00-01", "2001-01-00",
@@ -2759,10 +2767,16 @@ func TestYearMayNotBePadded(t *testing.T) {
 	  <xs:element name="v" type="xs:gYearMonth"/>
 	</xs:schema>`
 
-	assertValid(t, schema, `<v>0000-02</v>`)
 	assertValid(t, schema, `<v>12345-02</v>`)
 	assertValid(t, schema, `<v>-0001-02</v>`)
 	assertInvalid(t, schema, `<v>00000-02</v>`, "cvc-datatype-valid")
+	// "0000-02" is well-formed in both versions — the padding rule is not
+	// what rejects it under 1.0, the prohibition on year zero is — so it
+	// is checked against each version rather than left to the default.
+	assertInvalid(t, schema, `<v>0000-02</v>`, "cvc-datatype-valid")
+	if err := check11(t, load11(t, schema), `<v>0000-02</v>`); err != nil {
+		t.Errorf("XSD 1.1 admits year zero: %v", err)
+	}
 	assertInvalid(t, schema, `<v>012345-02</v>`, "cvc-datatype-valid")
 	assertInvalid(t, schema, `<v>000-02</v>`, "cvc-datatype-valid")
 }
