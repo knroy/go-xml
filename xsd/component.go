@@ -227,6 +227,13 @@ type AttributeUse struct {
 	// element carrying it. It is how a schema lets an ancestor's xml:lang
 	// choose a descendant's type.
 	Inheritable bool
+
+	// Prohibited marks use="prohibited": the attribute is removed rather
+	// than declared. Such a use is not part of the type's {attribute uses}
+	// — it exists only so that inheritance can tell "this name was ruled
+	// out" from "this name was never mentioned", which is what stops the
+	// base's use being inherited straight back.
+	Prohibited bool
 }
 
 // ComponentKind implements Component.

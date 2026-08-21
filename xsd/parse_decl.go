@@ -212,10 +212,12 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 	case "required":
 		use.Required = true
 	case "prohibited":
-		// A prohibited use removes an inherited attribute. It is modelled
-		// by returning nil so that the attribute simply does not appear
-		// in the type's uses.
-		return nil
+		// A prohibited use removes an inherited attribute. It is kept
+		// in the list, marked, so that inheritance can tell "this name
+		// was ruled out" from "this name was never mentioned" —
+		// dropping it entirely let the base's use be inherited straight
+		// back, which is the opposite of prohibiting.
+		use.Prohibited = true
 	case "", "optional":
 	default:
 		p.errs = append(p.errs, errorAt(el, "",
@@ -278,6 +280,14 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 	}
 	g := &AttributeGroupDef{Name: p.qnameFor(name)}
 	p.readAttributes(el, &g.AttributeUses, &g.AttributeWildcard)
+	// A prohibited use is not one of an attribute group's attribute uses,
+	// so it contributes nothing and removes nothing — only a use written
+	// directly on the type does. The suite states it in those words:
+	// "a prohibited attribute should not be in the attribute uses of an
+	// attributeGroup", and attZ015 pins it with a group prohibiting an
+	// attribute its base declares, against an instance that still carries
+	// it and is expected valid.
+	g.AttributeUses = dropProhibited(g.AttributeUses)
 	return g
 }
 

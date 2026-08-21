@@ -2955,3 +2955,61 @@ func TestDynamicEDTIsDirectionalThroughWildcards(t *testing.T) {
 		t.Error("a widening xsi:type through a wildcard should be refused")
 	}
 }
+
+// TestProhibitedAttributeRemovesInheritedUse covers use="prohibited" on a use
+// written directly on a restricting type.
+//
+// A prohibited use was modelled by dropping it, so the name never entered the
+// set of names the derived type declares — and inheritance then took the base's
+// use straight back, which is the opposite of prohibiting. The marker is now
+// kept until inheritance has run and removed afterwards, since a prohibited use
+// is not one of the type's {attribute uses} and must not reach validation.
+func TestProhibitedAttributeRemovesInheritedUse(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:attribute name="a"/>
+	    <xs:attribute name="b"/>
+	  </xs:complexType>
+	  <xs:complexType name="derived">
+	    <xs:complexContent>
+	      <xs:restriction base="base">
+	        <xs:attribute name="a" use="prohibited"/>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="derived"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc b="x"/>`)
+	assertInvalid(t, schema, `<doc a="x"/>`, "cvc-complex-type.3.2.2")
+}
+
+// TestProhibitedInAttributeGroupRemovesNothing pins the other half, which the
+// suite states in those words: "a prohibited attribute should not be in the
+// attribute uses of an attributeGroup".
+//
+// A group prohibiting an attribute its base declares removes nothing, because
+// the prohibited use is not one of the group's uses to begin with — only a use
+// written directly on the type does the removing.
+func TestProhibitedInAttributeGroupRemovesNothing(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:attribute name="a"/>
+	  </xs:complexType>
+	  <xs:complexType name="derived">
+	    <xs:complexContent>
+	      <xs:restriction base="base">
+	        <xs:attributeGroup ref="attG"/>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:attributeGroup name="attG">
+	    <xs:attribute name="a" use="prohibited"/>
+	  </xs:attributeGroup>
+	  <xs:element name="doc" type="derived"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc a="a"/>`)
+}

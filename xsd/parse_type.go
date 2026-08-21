@@ -691,6 +691,11 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 			}
 			t.AttributeUses = append(t.AttributeUses, u)
 		}
+		// The prohibited uses have done their work now that inheritance
+		// has run, and must not reach validation: a prohibited use is
+		// not one of the type's {attribute uses}, and leaving it there
+		// would let the attribute be matched and validated.
+		t.AttributeUses = dropProhibited(t.AttributeUses)
 		// Assertions accumulate down a derivation chain: a derived type
 		// has to satisfy its base's as well as its own, whether it
 		// extends or restricts. §3.4.2.4 makes {assertions} the base's
@@ -1156,4 +1161,16 @@ func hasFacetChild(el *xdm.Node) bool {
 		}
 	}
 	return false
+}
+
+// dropProhibited removes the placeholder uses left by use="prohibited".
+func dropProhibited(uses []*AttributeUse) []*AttributeUse {
+	kept := uses[:0]
+	for _, u := range uses {
+		if u.Prohibited {
+			continue
+		}
+		kept = append(kept, u)
+	}
+	return kept
 }
