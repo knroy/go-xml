@@ -389,6 +389,13 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 
 	rc, resolved, err := a.opts.Resolver.Resolve(namespace, location, doc.baseURI)
 	if err != nil || rc == nil {
+		// A redefine with no children redefines nothing, so an
+		// unresolvable location costs it nothing either — anyURI_a001
+		// says of exactly this case that it "should give only 3 warning
+		// for the unresolved schemaLocations".
+		if redefining && len(el.ChildElements()) == 0 {
+			return
+		}
 		if !redefining {
 			// schemaLocation is a hint, not a requirement. §4.2.1
 			// clause 1 says of include that where the location
