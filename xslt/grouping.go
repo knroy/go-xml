@@ -1,0 +1,786 @@
+package xslt
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
+)
+
+// forEachGroupInstr implements xsl:for-each-group.
+//
+// Grouping is the headline addition of XSLT 2.0 and the reason many rule sets
+// require it: expressing "group consecutive rows by their key" in 1.0 needed
+// the Muenchian key trick, which is unreadable and slow.
+type forEachGroupInstr struct {
+	sel *xpath.Compiled
+	// exactly one of these grouping modes is set
+	groupBy         *xpath.Compiled
+	groupAdjacent   *xpath.Compiled
+	groupStartsWith *Pattern
+	groupEndsWith   *Pattern
+	sorts           []*sortKey
+	body            []Instruction
+}
+
+// group is one population group, carrying the key that formed it.
+type group struct {
+	key   xdm.Sequence
+	items xdm.Sequence
+}
+
+func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
+	seq, err := i.sel.Eval(rt.ctx)
+	if err != nil {
+		return err
+	}
+
+	var groups []group
+	switch {
+	case i.groupBy != nil:
+		groups, err = groupByKey(rt, seq, i.groupBy)
+	case i.groupAdjacent != nil:
+		groups, err = groupAdjacentKey(rt, seq, i.groupAdjacent)
+	case i.groupStartsWith != nil:
+		groups, err = groupStartingWith(rt, seq, i.groupStartsWith)
+	case i.groupEndsWith != nil:
+		groups, err = groupEndingWith(rt, seq, i.groupEndsWith)
+	default:
+		return fmt.Errorf("xsl:for-each-group requires a grouping attribute")
+	}
+	if err != nil {
+		return err
+	}
+
+	if len(i.sorts) > 0 {
+		// Sorting applies to the groups, with each group's first item as the
+		// context, so a sort key can name the grouping value.
+		var items xdm.Sequence
+		byItem := map[xdm.Item]group{}
+		for _, g := range groups {
+			if len(g.items) == 0 {
+				continue
+			}
+			items = append(items, g.items[0])
+			byItem[g.items[0]] = g
+		}
+		sorted, err := applySorts(rt, items, i.sorts)
+		if err != nil {
+			return err
+		}
+		reordered := make([]group, 0, len(sorted))
+		for _, it := range sorted {
+			reordered = append(reordered, byItem[it])
+		}
+		groups = reordered
+	}
+
+	size := len(groups)
+	for idx, g := range groups {
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		// Inside the body, the context item is the group's first item and
+		// current-group()/current-grouping-key() expose the rest.
+		var focus xdm.Item
+		if len(g.items) > 0 {
+			focus = g.items[0]
+		}
+		sub := rt.withCurrent(focus, idx+1, size)
+		sub = sub.withVar(currentGroupVar, g.items)
+		sub = sub.withVar(currentGroupingKeyVar, g.key)
+		if err := execSequence(i.body, sub, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The grouping state is passed to current-group() and current-grouping-key()
+// through variable bindings, for the same reason the runtime is: the xpath
+// package cannot depend on this one.
+var (
+	currentGroupVar       = xdm.QName{URI: internalNS, Local: "current-group"}
+	currentGroupingKeyVar = xdm.QName{URI: internalNS, Local: "current-grouping-key"}
+)
+
+// groupByKey groups items by the value of a key expression, preserving the
+// order in which each key was first seen.
+func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, error) {
+	index := map[string]int{}
+	var groups []group
+
+	for idx, it := range seq {
+		sub := rt.withFocus(it, idx+1, len(seq))
+		vals, err := key.Eval(sub.ctx)
+		if err != nil {
+			return nil, err
+		}
+		// An item with multiple key values joins every corresponding group,
+		// which is what makes group-by usable for many-to-many classification.
+		for _, kv := range xdm.Atomize(vals) {
+			k := kv.(*xdm.Atomic).String()
+			gi, ok := index[k]
+			if !ok {
+				index[k] = len(groups)
+				groups = append(groups, group{key: xdm.One(kv)})
+				gi = len(groups) - 1
+			}
+			groups[gi].items = append(groups[gi].items, it)
+		}
+	}
+	return groups, nil
+}
+
+// groupAdjacentKey starts a new group whenever the key value changes, so
+// non-consecutive items with the same key form separate groups.
+func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, error) {
+	var groups []group
+	var prev string
+	first := true
+
+	for idx, it := range seq {
+		sub := rt.withFocus(it, idx+1, len(seq))
+		vals, err := key.Eval(sub.ctx)
+		if err != nil {
+			return nil, err
+		}
+		atoms := xdm.Atomize(vals)
+		if len(atoms) == 0 {
+			continue
+		}
+		k := atoms[0].(*xdm.Atomic).String()
+		if first || k != prev {
+			groups = append(groups, group{key: xdm.One(atoms[0])})
+			first, prev = false, k
+		}
+		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
+	}
+	return groups, nil
+}
+
+// groupStartingWith begins a new group at each item matching the pattern.
+func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
+	var groups []group
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		start := false
+		if ok {
+			m, err := pat.Matches(n, rt.ctx)
+			if err != nil {
+				return nil, err
+			}
+			start = m
+		}
+		if start || len(groups) == 0 {
+			groups = append(groups, group{})
+		}
+		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
+	}
+	return groups, nil
+}
+
+// groupEndingWith closes a group after each item matching the pattern.
+func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
+	var groups []group
+	open := false
+	for _, it := range seq {
+		if !open {
+			groups = append(groups, group{})
+			open = true
+		}
+		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
+
+		if n, ok := it.(*xdm.Node); ok {
+			m, err := pat.Matches(n, rt.ctx)
+			if err != nil {
+				return nil, err
+			}
+			if m {
+				open = false
+			}
+		}
+	}
+	return groups, nil
+}
+
+// compileForEachGroup compiles xsl:for-each-group.
+func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
+	sel, err := requiredExpr(n, "select", ns)
+	if err != nil {
+		return nil, err
+	}
+	instr := &forEachGroupInstr{sel: sel}
+
+	count := 0
+	if v := n.AttrValue("group-by"); v != "" {
+		if instr.groupBy, err = xpath.Compile(v, ns); err != nil {
+			return nil, err
+		}
+		count++
+	}
+	if v := n.AttrValue("group-adjacent"); v != "" {
+		if instr.groupAdjacent, err = xpath.Compile(v, ns); err != nil {
+			return nil, err
+		}
+		count++
+	}
+	if v := n.AttrValue("group-starting-with"); v != "" {
+		if instr.groupStartsWith, err = CompilePattern(v, ns); err != nil {
+			return nil, err
+		}
+		count++
+	}
+	if v := n.AttrValue("group-ending-with"); v != "" {
+		if instr.groupEndsWith, err = CompilePattern(v, ns); err != nil {
+			return nil, err
+		}
+		count++
+	}
+	if count != 1 {
+		return nil, fmt.Errorf(
+			"xsl:for-each-group requires exactly one grouping attribute, found %d", count)
+	}
+
+	_, sorts, err := c.compileParamsAndSorts(n, ns)
+	if err != nil {
+		return nil, err
+	}
+	instr.sorts = sorts
+
+	body, err := c.compileNodes(nonSortChildren(n), n)
+	if err != nil {
+		return nil, err
+	}
+	instr.body = body
+	return instr, nil
+}
+
+// --- xsl:analyze-string -----------------------------------------------------
+
+// analyzeStringInstr implements xsl:analyze-string, which splits a string by a
+// regular expression and processes matching and non-matching runs separately.
+type analyzeStringInstr struct {
+	sel      *xpath.Compiled
+	regex    *avt
+	flags    *avt
+	matching []Instruction
+	nonMatch []Instruction
+}
+
+func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
+	seq, err := i.sel.Eval(rt.ctx)
+	if err != nil {
+		return err
+	}
+	input := stringJoin(seq, "")
+
+	pattern, err := i.regex.eval(rt)
+	if err != nil {
+		return err
+	}
+	flags := ""
+	if i.flags != nil {
+		if flags, err = i.flags.eval(rt); err != nil {
+			return err
+		}
+	}
+
+	re, err := xpath.CompileRegexp(pattern, flags)
+	if err != nil {
+		return err
+	}
+	if re.MatchString("") {
+		return fmt.Errorf("FORX0003: analyze-string pattern matches the empty string")
+	}
+
+	pos := 0
+	for _, loc := range re.FindAllStringSubmatchIndex(input, -1) {
+		if loc[0] > pos {
+			if err := i.runBranch(rt, out, i.nonMatch, input[pos:loc[0]], nil, input); err != nil {
+				return err
+			}
+		}
+		if err := i.runBranch(rt, out, i.matching, input[loc[0]:loc[1]], loc, input); err != nil {
+			return err
+		}
+		pos = loc[1]
+	}
+	if pos < len(input) {
+		if err := i.runBranch(rt, out, i.nonMatch, input[pos:], nil, input); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runBranch executes one branch with the run as the context item.
+func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
+	body []Instruction, text string, loc []int, input string) error {
+	if len(body) == 0 {
+		return nil
+	}
+	sub := rt.withFocus(xdm.NewString(text), 1, 1)
+	if loc != nil {
+		// regex-group(n) reads the captured groups of the current match.
+		groups := make([]string, 0, len(loc)/2)
+		for g := 0; g < len(loc)/2; g++ {
+			if loc[2*g] < 0 {
+				groups = append(groups, "")
+				continue
+			}
+			groups = append(groups, input[loc[2*g]:loc[2*g+1]])
+		}
+		sub = sub.withVar(regexGroupsVar, groupsToSeq(groups))
+	}
+	return execSequence(body, sub, out)
+}
+
+var regexGroupsVar = xdm.QName{URI: internalNS, Local: "regex-groups"}
+
+func groupsToSeq(groups []string) xdm.Sequence {
+	out := make(xdm.Sequence, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, xdm.NewString(g))
+	}
+	return out
+}
+
+func (c *compiler) compileAnalyzeString(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
+	sel, err := requiredExpr(n, "select", ns)
+	if err != nil {
+		return nil, err
+	}
+	regex, err := requiredAVT(n, "regex", ns)
+	if err != nil {
+		return nil, err
+	}
+	instr := &analyzeStringInstr{sel: sel, regex: regex}
+	if v := n.AttrValue("flags"); v != "" {
+		if instr.flags, err = compileAVT(v, ns); err != nil {
+			return nil, err
+		}
+	}
+	for _, ch := range n.ChildElements() {
+		switch {
+		case isXSL(ch, "matching-substring"):
+			if instr.matching, err = c.compileSequence(ch, ch); err != nil {
+				return nil, err
+			}
+		case isXSL(ch, "non-matching-substring"):
+			if instr.nonMatch, err = c.compileSequence(ch, ch); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return instr, nil
+}
+
+// --- xsl:number -------------------------------------------------------------
+
+// numberInstr implements xsl:number.
+//
+// Two levels are supported. "single" counts the node among its like-named
+// preceding siblings; "multiple" walks up the ancestor chain and emits one
+// number per level, which is what produces the "3.1.4" style path a
+// Schematron report uses to point at an element.
+//
+// "any" counts every node the count pattern selects that precedes this one in
+// document order, regardless of depth, restarting after the nearest preceding
+// node matching @from.
+type numberInstr struct {
+	value *xpath.Compiled
+	// count selects which nodes are counted; nil means "nodes with the same
+	// name and kind as the context node", the spec's default.
+	count *Pattern
+	// from bounds the upward walk: numbering restarts below the nearest
+	// ancestor matching it.
+	from   *Pattern
+	format *avt
+	level  string
+}
+
+func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
+	format := "1"
+	if i.format != nil {
+		f, err := i.format.eval(rt)
+		if err != nil {
+			return err
+		}
+		if f != "" {
+			format = f
+		}
+	}
+
+	// An explicit value bypasses counting entirely.
+	if i.value != nil {
+		seq, err := i.value.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		atoms := xdm.Atomize(seq)
+		if len(atoms) == 0 {
+			return nil
+		}
+		conv, err := xpath.CastAtomic(atoms[0].(*xdm.Atomic), xdm.TypeInteger)
+		if err != nil {
+			return err
+		}
+		out.appendText(formatNumberSeq([]int64{conv.Int64()}, format))
+		return nil
+	}
+
+	node, ok := rt.ctx.Item.(*xdm.Node)
+	if !ok {
+		return fmt.Errorf("xsl:number requires a node context or a value attribute")
+	}
+
+	numbers, err := i.countNode(rt, node)
+	if err != nil {
+		return err
+	}
+	if len(numbers) == 0 {
+		return nil
+	}
+	out.appendText(formatNumberSeq(numbers, format))
+	return nil
+}
+
+// countNode produces the sequence of numbers for a node, one per level.
+func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
+	if i.level == "any" {
+		n, err := i.countAny(rt, node)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			// The node itself is not selected by the count pattern, so there
+			// is nothing to number and xsl:number produces no output.
+			return nil, nil
+		}
+		return []int64{n}, nil
+	}
+	if i.level == "multiple" {
+		var nums []int64
+		for cur := node; cur != nil; cur = cur.Parent {
+			if cur.Kind == xdm.KindDocument {
+				break
+			}
+			stop, err := i.matchesFrom(rt, cur)
+			if err != nil {
+				return nil, err
+			}
+			if stop {
+				break
+			}
+			counted, err := i.matchesCount(rt, cur, node)
+			if err != nil {
+				return nil, err
+			}
+			if !counted {
+				continue
+			}
+			n, err := i.positionAmongSiblings(rt, cur, node)
+			if err != nil {
+				return nil, err
+			}
+			// The walk is upward, so each level is prepended to keep the
+			// outermost number first.
+			nums = append([]int64{n}, nums...)
+		}
+		return nums, nil
+	}
+
+	// level="single": the nearest self-or-ancestor that the count pattern
+	// selects is the node that gets numbered.
+	for cur := node; cur != nil; cur = cur.Parent {
+		if cur.Kind == xdm.KindDocument {
+			break
+		}
+		stop, err := i.matchesFrom(rt, cur)
+		if err != nil {
+			return nil, err
+		}
+		if stop {
+			break
+		}
+		counted, err := i.matchesCount(rt, cur, node)
+		if err != nil {
+			return nil, err
+		}
+		if !counted {
+			continue
+		}
+		n, err := i.positionAmongSiblings(rt, cur, node)
+		if err != nil {
+			return nil, err
+		}
+		return []int64{n}, nil
+	}
+	return nil, nil
+}
+
+// matchesCount reports whether n is a node the count pattern selects. With no
+// count attribute the default is "same node kind and name as the node being
+// numbered".
+func (i *numberInstr) matchesCount(rt *runtime, n, target *xdm.Node) (bool, error) {
+	if i.count == nil {
+		return n.Kind == target.Kind &&
+			n.Name.URI == target.Name.URI &&
+			n.Name.Local == target.Name.Local, nil
+	}
+	return i.count.Matches(n, rt.ctx)
+}
+
+func (i *numberInstr) matchesFrom(rt *runtime, n *xdm.Node) (bool, error) {
+	if i.from == nil {
+		return false, nil
+	}
+	return i.from.Matches(n, rt.ctx)
+}
+
+// countAny implements level="any": one number, counting every node the count
+// pattern selects at or before this node in document order, at any depth.
+//
+// The walk is over the whole tree rather than the ancestor chain, which is why
+// this cannot reuse positionAmongSiblings. Ancestors are excluded from the
+// count: the spec counts nodes that *precede* the target, and an ancestor
+// contains it rather than preceding it — counting them would inflate every
+// number by the depth of the node.
+//
+// @from restarts the numbering: only nodes after the last preceding node
+// matching it are counted, which is what makes "number the footnotes within
+// each chapter" work.
+func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
+	root := node.Root()
+	ancestors := map[*xdm.Node]bool{}
+	for a := node.Parent; a != nil; a = a.Parent {
+		ancestors[a] = true
+	}
+
+	var count int64
+	var reached bool
+	var walk func(cur *xdm.Node) error
+	walk = func(cur *xdm.Node) error {
+		if reached {
+			return nil
+		}
+		// A @from match resets the count, so numbering restarts inside each
+		// region the pattern delimits.
+		if cur != node {
+			restart, err := i.matchesFrom(rt, cur)
+			if err != nil {
+				return err
+			}
+			if restart {
+				count = 0
+			}
+		}
+		if !ancestors[cur] {
+			counted, err := i.matchesCount(rt, cur, node)
+			if err != nil {
+				return err
+			}
+			if counted {
+				count++
+			}
+		}
+		if cur == node {
+			// Everything after the target in document order is irrelevant.
+			reached = true
+			return nil
+		}
+		for _, ch := range cur.Children {
+			if err := walk(ch); err != nil {
+				return err
+			}
+			if reached {
+				return nil
+			}
+		}
+		return nil
+	}
+	if err := walk(root); err != nil {
+		return 0, err
+	}
+	if !reached {
+		return 0, fmt.Errorf("xsl:number: the context node is not in the tree being walked")
+	}
+	return count, nil
+}
+
+// positionAmongSiblings counts how many preceding siblings the count pattern
+// also selects, plus one.
+func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (int64, error) {
+	if n.Parent == nil {
+		return 1, nil
+	}
+	var count int64
+	for _, sib := range n.Parent.Children {
+		ok, err := i.matchesCount(rt, sib, target)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			count++
+		}
+		if sib == n {
+			return count, nil
+		}
+	}
+	return count, nil
+}
+
+// formatNumberSeq renders a sequence of level numbers, reusing the picture's
+// separator between them.
+//
+// A format like "1.1.1" gives "." as the separator; a single-token format like
+// "1" repeats that token for every level and joins with ".", which is what
+// makes "<xsl:number level='multiple' format='1'/>" produce "2.1.3".
+func formatNumberSeq(nums []int64, format string) string {
+	tokens, seps := splitFormat(format)
+	if len(tokens) == 0 {
+		tokens = []string{"1"}
+	}
+	var sb strings.Builder
+	for i, n := range nums {
+		if i > 0 {
+			sep := "."
+			if i-1 < len(seps) {
+				sep = seps[i-1]
+			} else if len(seps) > 0 {
+				sep = seps[len(seps)-1]
+			}
+			sb.WriteString(sep)
+		}
+		tok := tokens[len(tokens)-1]
+		if i < len(tokens) {
+			tok = tokens[i]
+		}
+		sb.WriteString(formatNumber(n, tok))
+	}
+	return sb.String()
+}
+
+// splitFormat separates a picture into alphanumeric format tokens and the
+// literal separators between them.
+func splitFormat(format string) (tokens, seps []string) {
+	runes := []rune(format)
+	i := 0
+	for i < len(runes) {
+		if isFormatToken(runes[i]) {
+			j := i
+			for j < len(runes) && isFormatToken(runes[j]) {
+				j++
+			}
+			tokens = append(tokens, string(runes[i:j]))
+			i = j
+			continue
+		}
+		j := i
+		for j < len(runes) && !isFormatToken(runes[j]) {
+			j++
+		}
+		// A separator before the first token is a prefix, not a separator.
+		if len(tokens) > 0 {
+			seps = append(seps, string(runes[i:j]))
+		}
+		i = j
+	}
+	return tokens, seps
+}
+
+func isFormatToken(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+}
+
+func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
+	instr := &numberInstr{level: n.AttrValue("level")}
+	if instr.level == "" {
+		instr.level = "single"
+	}
+	switch instr.level {
+	case "single", "multiple":
+	case "any":
+	default:
+		return nil, fmt.Errorf("invalid xsl:number level %q", instr.level)
+	}
+
+	var err error
+	if v := n.AttrValue("value"); v != "" {
+		if instr.value, err = xpath.Compile(v, ns); err != nil {
+			return nil, err
+		}
+	}
+	if v := n.AttrValue("count"); v != "" {
+		if instr.count, err = CompilePattern(v, ns); err != nil {
+			return nil, fmt.Errorf("in xsl:number/@count: %w", err)
+		}
+	}
+	if v := n.AttrValue("from"); v != "" {
+		if instr.from, err = CompilePattern(v, ns); err != nil {
+			return nil, fmt.Errorf("in xsl:number/@from: %w", err)
+		}
+	}
+	if v := n.AttrValue("format"); v != "" {
+		if instr.format, err = compileAVT(v, ns); err != nil {
+			return nil, err
+		}
+	}
+	return instr, nil
+}
+
+// formatNumber renders one level number in a numbering style.
+func formatNumber(n int64, format string) string {
+	switch format {
+	case "1":
+		return strconv.FormatInt(n, 10)
+	case "a":
+		return alphaNumber(n, 'a')
+	case "A":
+		return alphaNumber(n, 'A')
+	case "i":
+		return strings.ToLower(romanNumber(n))
+	case "I":
+		return romanNumber(n)
+	}
+	// A run of zeros sets a minimum width: "01" pads to two digits, "001" to
+	// three. Any other token falls back to plain decimal.
+	if strings.Trim(format, "0") == "" && len(format) > 1 {
+		return fmt.Sprintf("%0*d", len(format), n)
+	}
+	return strconv.FormatInt(n, 10)
+}
+
+// alphaNumber renders 1 as "a", 26 as "z", 27 as "aa", in a bijective base-26
+// system that has no zero digit.
+func alphaNumber(n int64, base rune) string {
+	if n <= 0 {
+		return "0"
+	}
+	var sb []rune
+	for n > 0 {
+		n--
+		sb = append([]rune{base + rune(n%26)}, sb...)
+		n /= 26
+	}
+	return string(sb)
+}
+
+func romanNumber(n int64) string {
+	if n <= 0 || n > 3999 {
+		return strconv.FormatInt(n, 10)
+	}
+	vals := []int64{1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1}
+	syms := []string{"M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"}
+	var sb strings.Builder
+	for i, v := range vals {
+		for n >= v {
+			sb.WriteString(syms[i])
+			n -= v
+		}
+	}
+	return sb.String()
+}

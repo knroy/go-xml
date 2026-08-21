@@ -1,0 +1,413 @@
+// Package xpath implements XPath 2.0: lexing, parsing to an AST, static
+// analysis, and evaluation against an XDM tree.
+package xpath
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// TokenKind classifies a lexical token.
+type TokenKind int
+
+const (
+	TokEOF  TokenKind = iota
+	TokName           // NCName or QName, including keywords: disambiguated by the parser
+	TokNumber
+	TokString
+	TokVar      // $name
+	TokOp       // operators and punctuation
+	TokWildcard // *, prefix:*, *:local
+)
+
+// Token is a lexical token with its source offset, which error messages use to
+// point at the offending construct.
+type Token struct {
+	Kind TokenKind
+	Val  string
+	Pos  int
+
+	// Num holds the parsed numeric value and NumType its XPath type, so the
+	// parser does not re-parse the literal. A numeric literal's type is fixed
+	// by its lexical form: no dot or E means integer, a dot means decimal, an
+	// E means double.
+	Num     float64
+	NumType numLiteralKind
+}
+
+type numLiteralKind int
+
+const (
+	numInteger numLiteralKind = iota
+	numDecimal
+	numDouble
+)
+
+// Lexer turns XPath source into tokens.
+//
+// XPath 2.0's grammar is not context-free at the lexical level: whether `*`
+// means multiplication or "any element", and whether `div`, `and`, `is` and
+// friends are operators or element names, depends on what preceded them. The
+// spec resolves this with a rule stated in terms of the previous token, and
+// that is what prevOperand tracks. Trying to decide these in the parser
+// instead means the lexer must emit ambiguous tokens and the parser must
+// re-lex, which is worse.
+type Lexer struct {
+	src string
+	pos int
+
+	// prevOperand reports whether the previous token could end an operand. If
+	// it could, then `*` is multiplication and `div` is an operator; if it
+	// could not, `*` is a wildcard and `div` is a name test.
+	prevOperand bool
+}
+
+// NewLexer returns a lexer over src.
+func NewLexer(src string) *Lexer { return &Lexer{src: src} }
+
+// operatorKeywords are the names that act as infix operators when they follow
+// an operand.
+var operatorKeywords = map[string]bool{
+	"and": true, "or": true, "div": true, "idiv": true, "mod": true,
+	"is": true, "to": true, "eq": true, "ne": true, "lt": true,
+	"le": true, "gt": true, "ge": true, "union": true, "intersect": true,
+	"except": true, "instance": true, "treat": true, "castable": true,
+	"cast": true, "satisfies": true, "return": true, "in": true, "as": true,
+	"then": true, "else": true,
+}
+
+// Tokens lexes the entire input.
+func (l *Lexer) Tokens() ([]Token, error) {
+	var out []Token
+	for {
+		t, err := l.next()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+		if t.Kind == TokEOF {
+			return out, nil
+		}
+	}
+}
+
+func (l *Lexer) next() (Token, error) {
+	if err := l.skipSpace(); err != nil {
+		return Token{}, err
+	}
+	start := l.pos
+	if l.pos >= len(l.src) {
+		return Token{Kind: TokEOF, Pos: start}, nil
+	}
+
+	c := l.src[l.pos]
+	switch {
+	case c == '$':
+		l.pos++
+		name, err := l.lexQName()
+		if err != nil {
+			return Token{}, err
+		}
+		l.prevOperand = true
+		return Token{Kind: TokVar, Val: name, Pos: start}, nil
+
+	case c == '"' || c == '\'':
+		s, err := l.lexString(c)
+		if err != nil {
+			return Token{}, err
+		}
+		l.prevOperand = true
+		return Token{Kind: TokString, Val: s, Pos: start}, nil
+
+	case c >= '0' && c <= '9':
+		return l.lexNumber(start)
+
+	case c == '.':
+		// A leading dot may start a decimal literal (.5) or be the context
+		// item (.) or the descendant step (..).
+		if l.pos+1 < len(l.src) && l.src[l.pos+1] >= '0' && l.src[l.pos+1] <= '9' {
+			return l.lexNumber(start)
+		}
+		if strings.HasPrefix(l.src[l.pos:], "..") {
+			l.pos += 2
+			l.prevOperand = true
+			return Token{Kind: TokOp, Val: "..", Pos: start}, nil
+		}
+		l.pos++
+		l.prevOperand = true
+		return Token{Kind: TokOp, Val: ".", Pos: start}, nil
+
+	case c == '*':
+		// The context-dependence in its purest form.
+		if l.prevOperand {
+			l.pos++
+			// A "*" that follows an operand is either multiplication or a
+			// sequence-type occurrence indicator, and the lexer cannot tell
+			// which. Leaving the flag set treats it as ending an operand,
+			// which is what the indicator does — "xs:integer * * 3"
+			// multiplies by 3 — and costs nothing for multiplication, where
+			// the parser demands an operand next in any case.
+			l.prevOperand = true
+			return Token{Kind: TokOp, Val: "*", Pos: start}, nil
+		}
+		l.pos++
+		// *:local is a wildcard with a fixed local name.
+		if l.pos < len(l.src) && l.src[l.pos] == ':' {
+			l.pos++
+			local, err := l.lexNCName()
+			if err != nil {
+				return Token{}, err
+			}
+			l.prevOperand = true
+			return Token{Kind: TokWildcard, Val: "*:" + local, Pos: start}, nil
+		}
+		l.prevOperand = true
+		return Token{Kind: TokWildcard, Val: "*", Pos: start}, nil
+
+	case isNameStart(rune(c)) || c >= utf8.RuneSelf:
+		name, err := l.lexQName()
+		if err != nil {
+			return Token{}, err
+		}
+		// prefix:* is a wildcard over one namespace.
+		if strings.HasSuffix(name, ":") && l.pos < len(l.src) && l.src[l.pos] == '*' {
+			l.pos++
+			l.prevOperand = true
+			return Token{Kind: TokWildcard, Val: name + "*", Pos: start}, nil
+		}
+		if operatorKeywords[name] && l.prevOperand {
+			l.prevOperand = false
+			return Token{Kind: TokOp, Val: name, Pos: start}, nil
+		}
+		// Otherwise it is a name: an element name test, a function name, an
+		// axis name, or a keyword in a position where it is not an operator
+		// (the `if` in `if (...)`, the `for` in `for $x in ...`).
+		l.prevOperand = true
+		return Token{Kind: TokName, Val: name, Pos: start}, nil
+	}
+
+	// Multi-character operators must be matched before their prefixes, or
+	// "!=" lexes as "!" followed by "=".
+	for _, op := range []string{"!=", "<=", ">=", "<<", ">>", "//", "::"} {
+		if strings.HasPrefix(l.src[l.pos:], op) {
+			l.pos += len(op)
+			l.prevOperand = false
+			return Token{Kind: TokOp, Val: op, Pos: start}, nil
+		}
+	}
+
+	switch c {
+	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}':
+		l.pos++
+		op := string(c)
+		// A closing bracket ends an operand. So do "?" and "+" when one
+		// precedes them, because there they are sequence-type occurrence
+		// indicators rather than the start of something — and an indicator
+		// ends the type it applies to.
+		//
+		// This matters for the "*" that may come next, which is a wildcard or
+		// a multiplication depending on this flag: "3 treat as xs:integer ? *
+		// 3" multiplies, and without this the "*" lexed as a wildcard and the
+		// expression did not parse. Treating a binary "+" as ending its
+		// left operand is harmless, since the parser demands an operand after
+		// it either way.
+		l.prevOperand = op == ")" || op == "]" ||
+			((op == "?" || op == "+") && l.prevOperand)
+		return Token{Kind: TokOp, Val: op, Pos: start}, nil
+	}
+
+	return Token{}, fmt.Errorf("XPST0003: unexpected character %q at offset %d", string(c), l.pos)
+}
+
+func (l *Lexer) skipSpace() error {
+	for l.pos < len(l.src) {
+		switch l.src[l.pos] {
+		case ' ', '\t', '\n', '\r':
+			l.pos++
+		case '(':
+			// (: comment :) — nestable, per the spec.
+			if strings.HasPrefix(l.src[l.pos:], "(:") {
+				if err := l.skipComment(); err != nil {
+					return err
+				}
+				continue
+			}
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+func (l *Lexer) skipComment() error {
+	start := l.pos
+	depth := 0
+	for l.pos < len(l.src) {
+		switch {
+		case strings.HasPrefix(l.src[l.pos:], "(:"):
+			depth++
+			l.pos += 2
+		case strings.HasPrefix(l.src[l.pos:], ":)"):
+			depth--
+			l.pos += 2
+			if depth == 0 {
+				return nil
+			}
+		default:
+			l.pos++
+		}
+	}
+	// Running off the end means the comment was never closed. Ignoring that
+	// silently discarded the rest of the expression, so "1(: unterminated"
+	// evaluated to 1 instead of reporting the syntax error.
+	return fmt.Errorf(
+		"XPST0003: unterminated comment starting at offset %d", start)
+}
+
+func (l *Lexer) lexString(quote byte) (string, error) {
+	l.pos++ // opening quote
+	var sb strings.Builder
+	for l.pos < len(l.src) {
+		c := l.src[l.pos]
+		if c == quote {
+			// A doubled quote is an escaped quote, not the end of the literal.
+			if l.pos+1 < len(l.src) && l.src[l.pos+1] == quote {
+				sb.WriteByte(quote)
+				l.pos += 2
+				continue
+			}
+			l.pos++
+			return sb.String(), nil
+		}
+		sb.WriteByte(c)
+		l.pos++
+	}
+	return "", fmt.Errorf("XPST0003: unterminated string literal")
+}
+
+func (l *Lexer) lexNumber(start int) (Token, error) {
+	kind := numInteger
+	for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+		l.pos++
+	}
+	if l.pos < len(l.src) && l.src[l.pos] == '.' {
+		kind = numDecimal
+		l.pos++
+		for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+			l.pos++
+		}
+	}
+	if l.pos < len(l.src) && (l.src[l.pos] == 'e' || l.src[l.pos] == 'E') {
+		save := l.pos
+		l.pos++
+		if l.pos < len(l.src) && (l.src[l.pos] == '+' || l.src[l.pos] == '-') {
+			l.pos++
+		}
+		if l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+			kind = numDouble
+			for l.pos < len(l.src) && l.src[l.pos] >= '0' && l.src[l.pos] <= '9' {
+				l.pos++
+			}
+		} else {
+			// "1e" with no exponent digits: the 'e' belongs to a following
+			// name, as in "1 eq 2" written without spaces.
+			l.pos = save
+		}
+	}
+	text := l.src[start:l.pos]
+	// A numeric literal must be followed by something that is not a name
+	// character. "10idiv 3" is not "10 idiv 3": the grammar requires the
+	// separation, and without this check the number and the operator ran
+	// together and evaluated as though the space were there.
+	if l.pos < len(l.src) && isNameStart(rune(l.src[l.pos])) {
+		return Token{}, fmt.Errorf(
+			"XPST0003: numeric literal %q must be separated from what follows",
+			text)
+	}
+	// The float value is a convenience for the double case; integer and
+	// decimal literals are re-parsed exactly, in big.Rat, by the parser.
+	// Sscanf overflows to +Inf and reports an error for a literal with more
+	// digits than a double can hold, which made a 400-digit xs:integer — a
+	// perfectly ordinary arbitrary-precision value — a syntax error. An
+	// overflow is only meaningful for a double, where it yields INF.
+	// The float value is a convenience for the double case; integer and
+	// decimal literals are re-parsed exactly, in big.Rat, by the parser.
+	//
+	// A literal too large for a double is not a syntax error. For an
+	// xs:integer it is an ordinary arbitrary-precision value, and a 400-digit
+	// one was being refused outright; for an xs:double it is INF, which is
+	// what IEEE 754 overflow produces and what the suite asserts for
+	// "999...9E1000...0". Only a genuinely malformed literal is XPST0003, and
+	// the scanner above has already established the shape.
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		var numErr *strconv.NumError
+		if !errors.As(err, &numErr) || numErr.Err != strconv.ErrRange {
+			return Token{}, fmt.Errorf(
+				"XPST0003: invalid numeric literal %q", text)
+		}
+		// ErrRange: ParseFloat still returns ±Inf (or ±0 for underflow),
+		// which is the right value.
+	}
+	l.prevOperand = true
+	return Token{Kind: TokNumber, Val: text, Pos: start, Num: f, NumType: kind}, nil
+}
+
+// lexQName reads an NCName, optionally followed by ':' and a second NCName.
+// A trailing ':' is returned as part of the value so the caller can detect the
+// prefix:* wildcard form.
+func (l *Lexer) lexQName() (string, error) {
+	first, err := l.lexNCName()
+	if err != nil {
+		return "", err
+	}
+	// A single ':' means a QName; '::' is the axis separator and must not be
+	// consumed here.
+	if l.pos < len(l.src) && l.src[l.pos] == ':' &&
+		!strings.HasPrefix(l.src[l.pos:], "::") {
+		l.pos++
+		if l.pos < len(l.src) && l.src[l.pos] == '*' {
+			return first + ":", nil // caller consumes the '*'
+		}
+		second, err := l.lexNCName()
+		if err != nil {
+			return "", err
+		}
+		return first + ":" + second, nil
+	}
+	return first, nil
+}
+
+func (l *Lexer) lexNCName() (string, error) {
+	start := l.pos
+	r, size := utf8.DecodeRuneInString(l.src[l.pos:])
+	if !isNameStart(r) {
+		return "", fmt.Errorf("XPST0003: expected a name at offset %d", l.pos)
+	}
+	l.pos += size
+	for l.pos < len(l.src) {
+		r, size := utf8.DecodeRuneInString(l.src[l.pos:])
+		if !isNameChar(r) {
+			break
+		}
+		l.pos += size
+	}
+	return l.src[start:l.pos], nil
+}
+
+// isNameStart reports whether r may begin an NCName. Note that ':' is excluded:
+// it separates the parts of a QName rather than being part of one.
+func isNameStart(r rune) bool {
+	return r == '_' || unicode.IsLetter(r)
+}
+
+func isNameChar(r rune) bool {
+	return r == '_' || r == '-' || r == '.' ||
+		unicode.IsLetter(r) || unicode.IsDigit(r) ||
+		unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r)
+}

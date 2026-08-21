@@ -1,0 +1,405 @@
+// Package xslt implements XSLT 2.0 transformation over the xdm data model,
+// using the xpath package for expression evaluation.
+package xslt
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
+)
+
+// Pattern is a compiled xsl:template match pattern.
+//
+// Patterns look like path expressions but mean something different: a path
+// says "navigate from here", a pattern says "does this node match". The
+// natural implementation of matching — evaluate the path and check membership
+// — is quadratic, because it would visit every node in the document for every
+// node being matched.
+//
+// Instead a pattern is matched right-to-left from the candidate node: check
+// the last step's node test against the node itself, then walk *up* verifying
+// each preceding step. That makes a match cost O(depth) rather than O(document
+// size), which is the difference between a transform that finishes and one
+// that does not on a large invoice.
+type Pattern struct {
+	src  string
+	alts []*patternAlt
+	prio float64
+}
+
+// patternAlt is one alternative of a "|"-separated pattern.
+type patternAlt struct {
+	// steps are the pattern's steps in source order; matching walks them
+	// backwards.
+	steps []patternStep
+	// absolute marks a pattern rooted at the document node ("/foo").
+	absolute bool
+	// predicate expressions are attached to the step they qualify.
+}
+
+type patternStep struct {
+	test xdm.NodeKind
+	// nodeTest is the compiled name or kind test for this step.
+	nodeTest xpath.NodeTest
+	// axis is the axis this step traverses when walking up: child steps are
+	// verified against the parent, descendant steps against any ancestor.
+	descendant bool
+	// attribute marks a step matching on the attribute axis.
+	attribute bool
+	// preds are predicates on this step, evaluated with the candidate node as
+	// context.
+	preds []xpath.Expr
+}
+
+// CompilePattern compiles an XSLT match pattern.
+func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
+	p := &Pattern{src: src}
+	for _, alt := range splitTopLevel(src, '|') {
+		alt = strings.TrimSpace(alt)
+		if alt == "" {
+			continue
+		}
+		a, err := compilePatternAlt(alt, ns)
+		if err != nil {
+			return nil, fmt.Errorf("pattern %q: %w", src, err)
+		}
+		p.alts = append(p.alts, a)
+	}
+	if len(p.alts) == 0 {
+		return nil, fmt.Errorf("pattern %q is empty", src)
+	}
+	p.prio = p.computePriority()
+	return p, nil
+}
+
+// splitTopLevel splits on sep, ignoring occurrences inside brackets, parens or
+// string literals. A naive strings.Split would break "a[b|c]".
+func splitTopLevel(s string, sep byte) []string {
+	var out []string
+	depth := 0
+	var quote byte
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '[' || c == '(':
+			depth++
+		case c == ']' || c == ')':
+			depth--
+		case c == sep && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+// compilePatternAlt compiles one alternative by parsing it as a path
+// expression and reinterpreting the result.
+//
+// Reusing the XPath parser rather than writing a second one keeps the two in
+// agreement about name tests, kind tests and predicates. The grammar of
+// patterns is a subset of path expressions, so anything the pattern grammar
+// allows parses here; the reinterpretation below rejects the constructs that
+// parse but are not legal patterns.
+func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, error) {
+	expr, err := xpath.Parse(src, ns)
+	if err != nil {
+		return nil, err
+	}
+
+	a := &patternAlt{}
+	switch e := expr.(type) {
+	case *xpath.PathExpr:
+		a.absolute = e.Root
+		if len(e.Steps) == 0 {
+			// The pattern "/" matches the document node alone.
+			a.steps = []patternStep{{
+				nodeTest:   &xpath.KindTest{Kind: xdm.KindDocument},
+				descendant: false,
+			}}
+			return a, nil
+		}
+		for _, s := range e.Steps {
+			step, ok := s.(*xpath.Step)
+			if !ok {
+				return nil, fmt.Errorf("not a valid pattern step: %s", s.String())
+			}
+			ps, err := convertStep(step)
+			if err != nil {
+				return nil, err
+			}
+			a.steps = append(a.steps, ps)
+		}
+
+	case *xpath.Step:
+		ps, err := convertStep(e)
+		if err != nil {
+			return nil, err
+		}
+		a.steps = []patternStep{ps}
+
+	case *xpath.FuncCall:
+		// id() and key() are legal pattern starts; they are matched by
+		// evaluating the function and testing membership, which is the one
+		// case where the right-to-left trick does not apply.
+		return nil, fmt.Errorf("id() and key() patterns are not supported")
+
+	default:
+		return nil, fmt.Errorf("not a valid pattern: %s", expr.String())
+	}
+	return a, nil
+}
+
+// convertStep reinterprets a path step as a pattern step.
+func convertStep(s *xpath.Step) (patternStep, error) {
+	ps := patternStep{nodeTest: s.Test, preds: s.Predicates}
+	switch s.Axis {
+	case xpath.AxisChild:
+	case xpath.AxisAttribute:
+		ps.attribute = true
+	case xpath.AxisDescendantOrSelf:
+		// This is what "//" expands to.
+		ps.descendant = true
+	case xpath.AxisDescendant:
+		ps.descendant = true
+	default:
+		return ps, fmt.Errorf("axis %q is not allowed in a pattern", s.String())
+	}
+	return ps, nil
+}
+
+// Matches reports whether node matches the pattern.
+//
+// ctx supplies the focus for predicate evaluation. Predicates in a pattern are
+// evaluated with the candidate node as the context item, and with a context
+// position derived from its position among its like-named siblings — which is
+// why "para[1]" as a pattern means "a para that is the first para child of its
+// parent" rather than "the first para in the document".
+func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	for _, alt := range p.alts {
+		ok, err := alt.matches(node, ctx)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	if len(a.steps) == 0 {
+		return false, nil
+	}
+	// The last step must match the candidate node itself.
+	last := a.steps[len(a.steps)-1]
+	ok, err := matchStep(last, node, ctx)
+	if err != nil || !ok {
+		return false, err
+	}
+	return a.matchAncestors(a.steps[:len(a.steps)-1], node, ctx)
+}
+
+// matchAncestors verifies the remaining steps against node's ancestors,
+// walking up.
+func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	if len(steps) == 0 {
+		// Every step is satisfied. An absolute pattern additionally requires
+		// that we have reached the document node.
+		if a.absolute {
+			return node.Parent != nil && node.Parent.Kind == xdm.KindDocument ||
+				node.Kind == xdm.KindDocument, nil
+		}
+		return true, nil
+	}
+
+	step := steps[len(steps)-1]
+	rest := steps[:len(steps)-1]
+
+	if step.descendant {
+		// A "//" step matches at any depth, so try every ancestor. The
+		// step itself is the node() test that "//" expands to, so what
+		// actually has to match is the *remaining* steps against some
+		// ancestor.
+		for anc := node.Parent; anc != nil; anc = anc.Parent {
+			ok, err := a.matchAncestors(rest, anc, ctx)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		// An absolute "//" pattern is satisfied by reaching the root.
+		if len(rest) == 0 && a.absolute {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	parent := node.Parent
+	if parent == nil {
+		return false, nil
+	}
+	ok, err := matchStep(step, parent, ctx)
+	if err != nil || !ok {
+		return false, err
+	}
+	return a.matchAncestors(rest, parent, ctx)
+}
+
+// matchStep tests one step against one node, including its predicates.
+func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	principal := xdm.KindElement
+	if s.attribute {
+		principal = xdm.KindAttribute
+	}
+	if node.Kind == xdm.KindAttribute && !s.attribute {
+		// A child-axis step never matches an attribute.
+		return false, nil
+	}
+	if !s.nodeTest.Matches(node, principal) {
+		return false, nil
+	}
+
+	for _, pred := range s.preds {
+		ok, err := evalPatternPredicate(pred, s, node, ctx)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// evalPatternPredicate evaluates a pattern predicate against a candidate node.
+//
+// The context position is the node's position among the siblings that the same
+// step would have selected, so "item[2]" matches the second item child of its
+// parent. Computing that requires scanning the siblings, which is why
+// positional predicates in patterns are more expensive than name tests and
+// worth avoiding in hot rule sets.
+func evalPatternPredicate(pred xpath.Expr, s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	pos, size := 1, 1
+	if needsPosition(pred) && node.Parent != nil {
+		principal := xdm.KindElement
+		if s.attribute {
+			principal = xdm.KindAttribute
+		}
+		siblings := node.Parent.Children
+		if s.attribute {
+			siblings = node.Parent.Attrs
+		}
+		size = 0
+		for _, sib := range siblings {
+			if s.nodeTest.Matches(sib, principal) {
+				size++
+				if sib == node {
+					pos = size
+				}
+			}
+		}
+	}
+
+	sub := ctx.WithFocus(node, pos, size)
+	v, err := pred.Eval(sub)
+	if err != nil {
+		return false, err
+	}
+	// A numeric predicate selects by position, exactly as in a path.
+	if len(v) == 1 {
+		if a, isAtomic := v[0].(*xdm.Atomic); isAtomic && a.Type.IsNumeric() {
+			return !a.IsNaN() && a.Float64() == float64(pos), nil
+		}
+	}
+	return xpath.EffectiveBooleanValue(v)
+}
+
+// needsPosition reports whether an expression could observe the context
+// position, so that the sibling scan is skipped when it cannot.
+//
+// It is deliberately conservative: a false positive costs a scan, a false
+// negative would produce a wrong match.
+func needsPosition(e xpath.Expr) bool {
+	switch v := e.(type) {
+	case *xpath.Literal:
+		return v.Val.Type.IsNumeric()
+	case *xpath.FuncCall:
+		if v.Name.URI == xdm.NSFN && (v.Name.Local == "position" || v.Name.Local == "last") {
+			return true
+		}
+		for _, a := range v.Args {
+			if needsPosition(a) {
+				return true
+			}
+		}
+		return false
+	case *xpath.BinaryOp:
+		return needsPosition(v.Left) || needsPosition(v.Right)
+	case *xpath.UnaryOp:
+		return needsPosition(v.Operand)
+	case *xpath.IfExpr:
+		return needsPosition(v.Cond) || needsPosition(v.Then) || needsPosition(v.Else)
+	}
+	return false
+}
+
+// Priority returns the pattern's default priority, per the XSLT rules:
+// a specific name test scores 0, a namespace wildcard -0.25, a full wildcard
+// or bare kind test -0.5, and anything more complex 0.5.
+//
+// These numbers exist so that a more specific template wins over a general
+// one without the author having to say so. Getting them wrong makes template
+// selection silently pick the wrong rule, which is far harder to debug than a
+// crash.
+func (p *Pattern) Priority() float64 { return p.prio }
+
+func (p *Pattern) computePriority() float64 {
+	best := -1000.0
+	for _, alt := range p.alts {
+		pr := alt.priority()
+		if pr > best {
+			best = pr
+		}
+	}
+	return best
+}
+
+func (a *patternAlt) priority() float64 {
+	// A pattern with more than one step, or with predicates, is "complex" and
+	// takes the highest default priority.
+	if len(a.steps) != 1 || len(a.steps[0].preds) > 0 || a.absolute {
+		return 0.5
+	}
+	s := a.steps[0]
+	switch t := s.nodeTest.(type) {
+	case *xpath.NameTest:
+		switch {
+		case t.AnyURI && t.AnyLocal:
+			return -0.5 // "*"
+		case t.AnyLocal:
+			return -0.25 // "prefix:*"
+		case t.AnyURI:
+			return -0.25 // "*:local"
+		}
+		return 0 // a specific name
+	case *xpath.KindTest:
+		return -0.5 // "node()", "text()", and friends
+	}
+	return 0.5
+}
+
+// String returns the pattern source.
+func (p *Pattern) String() string { return p.src }

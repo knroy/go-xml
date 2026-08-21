@@ -1,0 +1,378 @@
+package xslt
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
+)
+
+// runtime holds per-transform state.
+//
+// One runtime is created per Transform call and is never shared, which is what
+// lets a single compiled Stylesheet serve concurrent transforms: everything
+// mutable — the variable stack, the key index, the recursion depth — lives
+// here, and the Stylesheet itself is read-only.
+type runtime struct {
+	sheet *Stylesheet
+	ctx   *xpath.Context
+
+	// keyIndex caches xsl:key lookups per document. Building an index is a
+	// full document scan, so it is done once per (key, document) pair on
+	// first use rather than eagerly for every declared key.
+	keyIndex map[keyCacheKey]map[string]xdm.Sequence
+
+	// depth bounds apply-templates recursion, which the spec does not bound
+	// and which a stylesheet with a cycle would otherwise run forever.
+	depth int
+
+	// secondary collects xsl:result-document outputs. Like messages it is a
+	// pointer, because the runtime struct is copied on every focus change:
+	// a plain slice would leave a result-document written inside a template
+	// appending to a copy that the caller never sees.
+	secondary *[]SecondaryResult
+
+	// messages collects xsl:message output rather than writing to stderr.
+	//
+	// It is a pointer to a slice because the runtime struct is copied on
+	// every focus change and template dispatch; a plain slice would leave
+	// each copy appending to its own, and messages emitted inside a template
+	// would never reach the caller.
+	messages *[]string
+
+	// tunnel holds tunnel parameters, which pass through templates that do
+	// not declare them.
+	tunnel map[string]xdm.Sequence
+
+	// sel records how the currently-executing template was selected, so that
+	// xsl:next-match and xsl:apply-imports in its body can resume the search
+	// where it left off rather than starting over and picking the same
+	// template forever.
+	sel selection
+}
+
+// selection is the template-selection state of the enclosing apply-templates.
+type selection struct {
+	// template is the one currently running; nil outside any match template.
+	template *Template
+	// next is the index into Stylesheet.templates at which to resume.
+	next int
+	// mode, params and tunnels are carried so a resumed dispatch behaves
+	// like the original one.
+	mode    string
+	params  map[string]xdm.Sequence
+	tunnels map[string]xdm.Sequence
+}
+
+type keyCacheKey struct {
+	name string
+	tree *xdm.Tree
+}
+
+// maxDepth bounds template recursion.
+const maxDepth = 300
+
+func (rt *runtime) descend() error {
+	rt.depth++
+	if rt.depth > maxDepth {
+		return fmt.Errorf("template recursion exceeded %d levels", maxDepth)
+	}
+	return nil
+}
+
+func (rt *runtime) ascend() { rt.depth-- }
+
+// withFocus returns a runtime whose XPath context has a new focus.
+//
+// The runtime struct is copied rather than mutated so that a nested
+// instruction cannot disturb its caller's focus — a bug that manifests as
+// sibling elements being processed against the wrong context node.
+func (rt *runtime) withFocus(item xdm.Item, pos, size int) *runtime {
+	n := *rt
+	n.ctx = rt.ctx.WithFocus(item, pos, size)
+	return &n
+}
+
+// withCurrent sets the focus and records it as the value fn:current returns.
+//
+// Only instructions that establish a new "node being processed" call this —
+// xsl:for-each, xsl:apply-templates, xsl:for-each-group. Predicate and step
+// evaluation use withFocus, which deliberately leaves current() alone.
+func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
+	n := *rt
+	n.ctx = rt.ctx.WithFocus(item, pos, size)
+	if item != nil {
+		n.ctx = n.ctx.WithVar(currentVar, xdm.One(item))
+	}
+	return &n
+}
+
+// withSelection records the template-selection state for the body about to run.
+func (rt *runtime) withSelection(t *Template, next int, mode string,
+	params, tunnels map[string]xdm.Sequence) *runtime {
+	n := *rt
+	n.sel = selection{template: t, next: next, mode: mode, params: params, tunnels: tunnels}
+	return &n
+}
+
+func (rt *runtime) withVar(name xdm.QName, val xdm.Sequence) *runtime {
+	n := *rt
+	n.ctx = rt.ctx.WithVar(name, val)
+	return &n
+}
+
+// --- Output construction ----------------------------------------------------
+
+// outputBuilder accumulates the result of a sequence constructor.
+//
+// XSLT output is a sequence of nodes and atomic values, not a string: an
+// attribute added after an element has children is an error, adjacent text
+// must be merged, and the result may be a temporary tree that later
+// instructions navigate. Building a string directly would make all of that
+// impossible.
+type outputBuilder struct {
+	items xdm.Sequence
+	// open is the element currently being built, if any. Attributes and
+	// namespaces are added to it until it is closed.
+	open *xdm.Node
+	// parent chains open elements so that nested construction works.
+	parent *outputBuilder
+	tree   *xdm.Tree
+}
+
+func newOutputBuilder() *outputBuilder {
+	return &outputBuilder{tree: xdm.NewTree()}
+}
+
+// appendNode adds a node to the current output position.
+//
+// A node that already belongs to a tree is copied first. AppendChild rewrites
+// the node's Parent and tree pointers and Finalize renumbers its document
+// order, so adopting a source node in place *mutates the source document* —
+// evaluating an unused variable containing xsl:sequence was enough to reorder
+// the input, and two goroutines transforming a shared parsed tree raced on it.
+// xsl:copy-of already copied; xsl:sequence and xsl:perform-sort did not, and
+// the guard belongs here where every caller is covered.
+func (b *outputBuilder) appendNode(n *xdm.Node) {
+	n = detach(n)
+	if b.open != nil {
+		b.open.AppendChild(n)
+		return
+	}
+	b.items = append(b.items, n)
+}
+
+// detach returns a node safe to re-parent: n itself when it is freshly
+// constructed, a deep copy when it belongs to a tree already.
+func detach(n *xdm.Node) *xdm.Node {
+	if n == nil || (n.Tree() == nil && n.Parent == nil) {
+		return n
+	}
+	return deepCopy(n)
+}
+
+// appendText adds text, merging with a preceding text node so that the XDM
+// invariant of no adjacent text nodes holds in constructed trees too.
+func (b *outputBuilder) appendText(s string) {
+	if s == "" {
+		return
+	}
+	if b.open != nil {
+		if k := len(b.open.Children); k > 0 {
+			if last := b.open.Children[k-1]; last.Kind == xdm.KindText {
+				last.Value += s
+				return
+			}
+		}
+		b.open.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: s})
+		return
+	}
+	if k := len(b.items); k > 0 {
+		if last, ok := b.items[k-1].(*xdm.Node); ok && last.Kind == xdm.KindText {
+			last.Value += s
+			return
+		}
+	}
+	b.items = append(b.items, &xdm.Node{Kind: xdm.KindText, Value: s})
+}
+
+// appendValue adds an atomic value to the output sequence.
+func (b *outputBuilder) appendValue(a *xdm.Atomic) {
+	// Inside an element being built, an atomic value becomes text; at the top
+	// level it stays an atomic item, because xsl:sequence can return one.
+	if b.open != nil {
+		b.appendText(a.String())
+		return
+	}
+	b.items = append(b.items, a)
+}
+
+// addAttribute attaches an attribute to the element under construction.
+func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
+	if b.open == nil {
+		return fmt.Errorf("XTDE0410: an attribute cannot be created outside an element")
+	}
+	// Adding an attribute after children exist is an error the spec calls out,
+	// because it usually means the stylesheet's instruction order is wrong.
+	if len(b.open.Children) > 0 {
+		return fmt.Errorf("XTDE0410: attribute %q added after the element already has children",
+			name.Lexical())
+	}
+	// A repeated attribute replaces the earlier one rather than duplicating.
+	for _, a := range b.open.Attrs {
+		if a.Name.URI == name.URI && a.Name.Local == name.Local {
+			a.Value = value
+			return nil
+		}
+	}
+	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value})
+	return nil
+}
+
+// startElement opens a new element, returning a builder scoped to it.
+func (b *outputBuilder) startElement(name xdm.QName) *outputBuilder {
+	el := &xdm.Node{Kind: xdm.KindElement, Name: name}
+	b.appendNode(el)
+	return &outputBuilder{open: el, parent: b, tree: b.tree}
+}
+
+// sequence returns the accumulated items.
+func (b *outputBuilder) sequence() xdm.Sequence { return b.items }
+
+// toTree wraps the accumulated items in a document node, which is what a
+// variable with content produces.
+func (b *outputBuilder) toTree() *xdm.Node {
+	tree := xdm.NewTree()
+	for _, it := range b.items {
+		if n, ok := it.(*xdm.Node); ok {
+			tree.Root.AppendChild(detach(n))
+		} else if a, ok := it.(*xdm.Atomic); ok {
+			tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: a.String()})
+		}
+	}
+	tree.Finalize()
+	return tree.Root
+}
+
+// --- Instruction execution helpers -----------------------------------------
+
+// execSequence runs a sequence constructor into out.
+func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
+	for _, instr := range body {
+		if err := rt.ctx.Err(); err != nil {
+			return err
+		}
+		// A variable declared mid-sequence is in scope for the instructions
+		// that follow it, so it rebinds the runtime for the rest of the loop
+		// rather than only for its own execution.
+		if v, ok := instr.(*varInstr); ok {
+			val, err := evalVariable(v.v, rt)
+			if err != nil {
+				return err
+			}
+			rt = rt.withVar(v.v.Name, val)
+			continue
+		}
+		if err := instr.Execute(rt, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evalVariable computes a variable's value from its select expression or its
+// content.
+func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
+	seq, err := evalVariableRaw(v, rt)
+	if err != nil {
+		return nil, err
+	}
+	return v.AsType.convert(seq, "$"+v.Name.Lexical())
+}
+
+// evalVariableRaw computes the value before the "as" declaration is applied.
+func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
+	if v.Select != nil {
+		return v.Select.Eval(rt.ctx)
+	}
+	if len(v.Body) == 0 {
+		// A variable with neither select nor content is the empty string, not
+		// the empty sequence: this is what makes <xsl:variable name="x"/>
+		// usable as "".
+		return xdm.One(xdm.NewString("")), nil
+	}
+	out := newOutputBuilder()
+	if err := execSequence(v.Body, rt, out); err != nil {
+		return nil, err
+	}
+	// Content always builds a temporary tree rooted at a document node.
+	return xdm.One(out.toTree()), nil
+}
+
+// stringJoin renders a sequence as a separated string, which is what
+// xsl:value-of and attribute value templates produce.
+func stringJoin(seq xdm.Sequence, sep string) string {
+	parts := make([]string, 0, len(seq))
+	for _, it := range seq {
+		switch v := it.(type) {
+		case *xdm.Node:
+			parts = append(parts, v.StringValue())
+		case *xdm.Atomic:
+			parts = append(parts, v.String())
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
+// newRuntime builds a runtime for one transform.
+func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
+	rt := &runtime{
+		sheet:     s,
+		keyIndex:  map[keyCacheKey]map[string]xdm.Sequence{},
+		tunnel:    map[string]xdm.Sequence{},
+		messages:  new([]string),
+		secondary: new([]SecondaryResult),
+	}
+
+	xctx := xpath.NewContext(root, s.funcs)
+	xctx.Ctx = ctx
+	xctx.Docs = opts.Documents
+	xctx.ImplicitTimezone = opts.ImplicitTimezone
+	// One clock reading per transform, so fn:current-dateTime is stable
+	// across every call the stylesheet makes.
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	xctx = xctx.WithNow(now)
+	rt.ctx = xctx
+
+	// The key() and current() functions need the runtime, so they are bound
+	// per transform rather than living in the shared builtin library.
+	lib := xpath.NewLibrary(s.funcs)
+	registerRuntimeFuncs(lib, rt)
+	rt.ctx.Funcs = lib
+
+	// Global variables are evaluated in declaration order. The spec permits
+	// any order consistent with dependencies; declaration order is the
+	// predictable choice and matches what stylesheet authors assume.
+	for _, g := range s.globals {
+		if supplied, ok := opts.Params[g.Name.Clark()]; ok {
+			rt.ctx = rt.ctx.WithVar(g.Name, supplied)
+			continue
+		}
+		if g.Required {
+			return nil, fmt.Errorf("XTDE0050: required parameter $%s was not supplied",
+				g.Name.Lexical())
+		}
+		val, err := evalVariable(g, rt)
+		if err != nil {
+			return nil, fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
+		}
+		rt.ctx = rt.ctx.WithVar(g.Name, val)
+	}
+	return rt, nil
+}
