@@ -126,6 +126,11 @@ type validator struct {
 	// idrefs are the referenced values, checked against ids at the end.
 	idrefs []idref
 
+	// idOwners maps each ID value to the element that defined it, so that
+	// the same value on two attributes of one element counts once. XSD 1.1
+	// permits an element to carry several ID attributes.
+	idOwners map[string]*xdm.Node
+
 	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
 	// last. Conditional type assignment on a descendant sees them, which is
 	// how an ancestor's xml:lang can choose a nested element's type.

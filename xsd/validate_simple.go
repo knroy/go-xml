@@ -376,17 +376,59 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 }
 
 // recordIDs notes xs:ID and xs:IDREF values for the document-level check.
+//
+// An ID is recorded against the element carrying it, not counted outright.
+// XSD 1.1 lets one element have several ID attributes, and nothing stops two of
+// them holding the same value — that is one ID appearing twice on one element,
+// not a document with a duplicate. Counting occurrences would reject it.
 func (v *validator) recordIDs(n *xdm.Node, value string, t *SimpleType) {
+	owner := n
+	if owner != nil && owner.Parent != nil {
+		owner = owner.Parent
+	}
+	v.recordIDsOwned(owner, value, t)
+}
+
+// recordIDsOwned records bindings for a value already attributed to its owning
+// element, which is what a defaulted attribute supplies directly.
+func (v *validator) recordIDsOwned(owner *xdm.Node, value string, t *SimpleType) {
 	switch idKind(t, value) {
 	case "ID":
-		v.ids[value]++
+		v.recordID(owner, value)
+	case "IDS":
+		for _, item := range splitFields(value) {
+			v.recordID(owner, item)
+		}
 	case "IDREF":
-		v.idrefs = append(v.idrefs, idref{value: value, node: n})
+		v.idrefs = append(v.idrefs, idref{value: value, node: owner})
 	case "IDREFS":
 		for _, item := range splitFields(value) {
-			v.idrefs = append(v.idrefs, idref{value: item, node: n})
+			v.idrefs = append(v.idrefs, idref{value: item, node: owner})
 		}
 	}
+}
+
+// recordID notes one ID value as bound to an element.
+//
+// XSD 1.1 lets an element carry several IDs, from attributes and children
+// alike, and nothing requires them to differ: the same value twice on one
+// element is one binding, not a duplicate. What is still invalid is the same
+// value bound to two different elements, which is the distinction between the
+// valid and invalid cases the suite pairs up.
+//
+// owner is the element the ID identifies — see recordIDs, which derives it.
+func (v *validator) recordID(owner *xdm.Node, value string) {
+	if v.idOwners == nil {
+		v.idOwners = map[string]*xdm.Node{}
+	}
+	if prev, seen := v.idOwners[value]; seen {
+		if prev != owner {
+			v.ids[value]++
+		}
+		return
+	}
+	v.idOwners[value] = owner
+	v.ids[value]++
 }
 
 // idKind reports whether a type is or derives from xs:ID, xs:IDREF or
@@ -417,10 +459,15 @@ func idKind(t *SimpleType, value string) string {
 		return ""
 	case VarietyList:
 		// A list whose items are IDREFs contributes each item as a
-		// reference; a list of IDs is not permitted, since an ID must
-		// be unique and a list would define several at one node.
-		if k := idKind(t.ItemType, value); k == "IDREF" {
+		// reference, which is what xs:IDREFS is. XSD 1.1 also permits
+		// a list of xs:ID — 1.0 forbade it because an element could
+		// carry only one ID, and lifting that restriction lifts this
+		// one with it — so each item is a definition.
+		switch idKind(t.ItemType, value) {
+		case "IDREF":
 			return "IDREFS"
+		case "ID":
+			return "IDS"
 		}
 		return ""
 	}

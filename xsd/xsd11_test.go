@@ -800,3 +800,136 @@ func TestAllWildcardMinOccurs(t *testing.T) {
 		t.Error("one wildcard match should not satisfy minOccurs=2")
 	}
 }
+
+// TestMultipleIDsOnOneElement covers the XSD 1.1 relaxation that an element may
+// carry more than one ID, and that two of them may hold the same value.
+//
+// The binding is to the element, not to the attribute, so the same value twice
+// on one element is one binding. Counting occurrences instead rejects a
+// document the schema permits.
+func TestMultipleIDsOnOneElement(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element ref="p" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="p">
+	    <xs:complexType>
+	      <xs:attribute name="a" type="xs:ID"/>
+	      <xs:attribute name="b" type="xs:ID"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><p a="x" b="x"/></doc>`); err != nil {
+		t.Errorf("two IDs on one element may share a value: %v", err)
+	}
+	// The same value on two *different* elements is still a duplicate.
+	if err := check11(t, s, `<doc><p a="x"/><p a="x"/></doc>`); err == nil {
+		t.Error("the same ID on two elements should still be a duplicate")
+	}
+}
+
+// TestListOfIDAndIDREF covers xs:list of xs:ID, which XSD 1.0 forbade because
+// an element could carry only one ID. Lifting that restriction lifts this one,
+// and each item of the list is its own binding.
+func TestListOfIDAndIDREF(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="ids"><xs:list itemType="xs:ID"/></xs:simpleType>
+	  <xs:simpleType name="refs"><xs:list itemType="xs:IDREF"/></xs:simpleType>
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element ref="p" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="p">
+	    <xs:complexType>
+	      <xs:attribute name="id" type="ids"/>
+	      <xs:attribute name="ref" type="refs"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><p id="a b"/><p ref="a b"/></doc>`); err != nil {
+		t.Errorf("a list of IDs should define each item: %v", err)
+	}
+	if err := check11(t, s, `<doc><p id="a b"/><p ref="a c"/></doc>`); err == nil {
+		t.Error("a list IDREF item matching no ID should fail")
+	}
+	if err := check11(t, s, `<doc><p id="a b"/><p id="b c"/></doc>`); err == nil {
+		t.Error("a list ID item repeated on another element should fail")
+	}
+}
+
+// TestDefaultedAttributeBindsID covers XSD 1.1 permitting a default on an
+// xs:ID or xs:IDREF attribute.
+//
+// The schema supplies the value to the infoset, so nothing downstream can tell
+// it from a written one: it takes part in ID/IDREF binding the same way.
+// Skipping absent attributes accepts documents where two elements share a
+// defaulted ID, or where a defaulted IDREF points at nothing.
+func TestDefaultedAttributeBindsID(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element ref="p" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="p">
+	    <xs:complexType>
+	      <xs:attribute name="id" type="xs:ID" default="d1"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><p/></doc>`); err != nil {
+		t.Errorf("a single defaulted ID should be fine: %v", err)
+	}
+	// Both elements take the default, so both bind d1 — a duplicate that
+	// is invisible unless defaults are recorded.
+	if err := check11(t, s, `<doc><p/><p/></doc>`); err == nil {
+		t.Error("two elements taking the same defaulted ID should collide")
+	}
+	// One written, one defaulted, colliding.
+	if err := check11(t, s, `<doc><p id="d1"/><p/></doc>`); err == nil {
+		t.Error("a written ID colliding with a defaulted one should fail")
+	}
+}
+
+// TestDefaultedIDREFMustResolve pins that a defaulted IDREF is checked against
+// the document's IDs like any other reference.
+func TestDefaultedIDREFMustResolve(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element ref="p" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:element name="p">
+	    <xs:complexType>
+	      <xs:attribute name="id" type="xs:ID"/>
+	      <xs:attribute name="ref" type="xs:IDREF" default="target"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><p id="target"/></doc>`); err != nil {
+		t.Errorf("a defaulted IDREF with a matching ID should pass: %v", err)
+	}
+	if err := check11(t, s, `<doc><p id="other"/></doc>`); err == nil {
+		t.Error("a defaulted IDREF matching no ID should fail")
+	}
+}

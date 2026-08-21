@@ -48,8 +48,42 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		if use.Required && !matched[use] {
 			v.fail(el, "cvc-complex-type.4",
 				"required attribute %s is missing", attrName(use.Decl.Name))
+			continue
+		}
+		if !matched[use] {
+			v.recordDefaultID(el, use)
 		}
 	}
+}
+
+// recordDefaultID binds the ID or IDREF a defaulted attribute contributes.
+//
+// XSD 1.1 permits a default on an attribute of type xs:ID or xs:IDREF, and the
+// defaulted value takes part in ID/IDREF binding exactly as a written one does
+// — the schema supplies it to the infoset, and nothing downstream can tell the
+// difference. Skipping absent attributes therefore accepts documents where two
+// elements end up sharing a defaulted ID, or where a defaulted IDREF points at
+// nothing.
+func (v *validator) recordDefaultID(el *xdm.Node, use *AttributeUse) {
+	if use == nil || use.Decl == nil || use.Decl.Type == nil {
+		return
+	}
+	c := use.Constraint
+	if c == nil {
+		c = use.Decl.Constraint
+	}
+	if c == nil || c.Lexical == "" {
+		return
+	}
+	normalized, err := validateSimpleValue(c.Lexical, use.Decl.Type)
+	if err != nil {
+		// An invalid default is a schema error, reported when the
+		// schema was read; there is no binding to record.
+		return
+	}
+	// The element itself is the owner: a defaulted attribute belongs to the
+	// element it is supplied on, so recordID's parent step is already done.
+	v.recordIDsOwned(el, normalized, use.Decl.Type)
 }
 
 // findAttributeUse returns the use declaring an attribute name.
