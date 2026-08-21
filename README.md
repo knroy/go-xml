@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.50% of the W3C xsdtests suite (24,360 of 24,482 instance tests) |
-| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,073 of 1,073); opt-in via `Version11` |
+| **XSD 1.0** | 99.51% of the W3C xsdtests suite (24,863 of 24,986 instance tests) |
+| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,083 of 1,083); opt-in via `Version11` |
 | **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -634,19 +634,31 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**122 of 24,482 XSD 1.0 instance tests (0.50%); the 1.1 half agrees on all
-1,073.**
+**123 of 24,986 XSD 1.0 instance tests (0.49%); the 1.1 half agrees on all
+1,083.**
 
 The 1.0 remainder is a long tail with no group above ten cases, spread across
 content models, attribute resolution, identity constraints and datatype edges.
 
-Two further notes on the measurement. 227 test groups are skipped because the
+Two further notes on the measurement. 3,376 test groups are skipped because the
 suite marks their schema invalid by design — checking those is Schema Component
-Constraint territory, not instance validation — and 9 more because a
-schema-level construct still fails to load, mostly regular-expression forms and
-identity-constraint references across documents. The 9 are counted as skips
-rather than failures, which flatters the figure; they are listed here so that
-the number is read with that in mind.
+Constraint territory, not instance validation — and 20 more because the schema
+does not load.
+
+Those 20 are counted as skips rather than failures, which would flatter the
+figure if they were bugs. Most are not: nine are XML 1.1 documents, which this
+parser does not read; five use XSD 1.1 constructs under 1.0 and are meant to
+fail; two need a DOCTYPE, which is refused by default because it enables XXE;
+and several name a document that is deliberately absent. They are listed here
+so the number is read with that in mind.
+
+This is worth stating plainly because the denominator moved. An earlier
+revision measured 24,482 tests with 418 schemas failing to load, and reported
+99.50%. Fixing those loaders — Unicode block names, class subtraction,
+unabbreviated axes, chameleon references, unresolvable hints — brought roughly
+500 previously unmeasured tests into the run. Nearly all of them agree, so the
+percentage barely moved while the thing it is measured over grew by 2%. A
+figure over a subset is a weaker claim than the same figure over the whole.
 
 ### Is 100% reachable?
 
