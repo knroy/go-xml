@@ -770,7 +770,7 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 // constructs are: a schema that uses it is not made valid by pretending it is
 // absent. A 1.0 schema simply never writes the attribute.
 func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
-	if p.doc.defaultAttributes == "" {
+	if p.doc.defaultAttributes == "" || p.inOverride {
 		return
 	}
 	if !p.boolAttr(el, "defaultAttributesApply", true) {
@@ -821,7 +821,7 @@ func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 // It defaults to false, so declaring a default open content does not silently
 // turn every empty type in the document into one that accepts anything.
 func (p *parser) applyDefaultOpenContent(t *ComplexType) {
-	if t.declaredOpenContent || p.doc.defaultOpenContent == nil {
+	if t.declaredOpenContent || p.doc.defaultOpenContent == nil || p.inOverride {
 		return
 	}
 	if !p.doc.appliesToEmpty && isEmptyContent(t) {

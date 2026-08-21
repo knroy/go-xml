@@ -505,7 +505,8 @@ func (a *assembler) runOverrides() {
 		a.prepareRedefine(o.el, o.doc)
 
 		prev := a.p.doc
-		a.p.doc = o.doc
+		prevOverride := a.p.inOverride
+		a.p.doc, a.p.inOverride = o.doc, true
 		for _, c := range o.el.ChildElements() {
 			if c.Name.URI != NSSchema {
 				continue
@@ -516,6 +517,6 @@ func (a *assembler) runOverrides() {
 				a.p.readTopLevel(c)
 			}
 		}
-		a.p.doc = prev
+		a.p.doc, a.p.inOverride = prev, prevOverride
 	}
 }

@@ -114,6 +114,15 @@ type parser struct {
 	// fixups are deferred resolutions, run after every document has been
 	// read. Each returns an error naming the unresolvable reference.
 	fixups []func() error
+
+	// inOverride records that the components being read are the
+	// replacements inside an <xs:override>. The document's
+	// defaultAttributes and defaultOpenContent do not reach them — the
+	// suite says so in as many words, "defaultAttributes does not apply to
+	// types defined within xs:override" — because an override's job is to
+	// say what a component in *another* document should be, and that
+	// document's defaults are not this one's to supply.
+	inOverride bool
 }
 
 // Schema is a set of schema components, assembled from one or more documents.

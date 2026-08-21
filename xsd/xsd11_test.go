@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -3067,5 +3069,56 @@ func TestDefaultAttributesContributeTheirWildcard(t *testing.T) {
 	}
 	if err := check11(t, s, `<doc xmlns:o="urn:o" o:x="1"/>`); err == nil {
 		t.Error("a namespace the wildcard excludes should still be refused")
+	}
+}
+
+// TestDocumentDefaultsDoNotReachOverrides pins that a document's
+// defaultAttributes and defaultOpenContent do not apply to the replacement
+// components inside an <xs:override>.
+//
+// The suite says it in as many words — "defaultAttributes does not apply to
+// types defined within xs:override" — and the reason is that an override's job
+// is to say what a component in *another* document should be. That document's
+// defaults are not this one's to supply.
+func TestDocumentDefaultsDoNotReachOverrides(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	write("base.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="beta"><xs:sequence/></xs:complexType>
+	</xs:schema>`)
+	main := write("main.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" defaultAttributes="dag">
+	  <xs:override schemaLocation="base.xsd">
+	    <xs:complexType name="beta"><xs:sequence/></xs:complexType>
+	  </xs:override>
+	  <xs:attributeGroup name="dag">
+	    <xs:anyAttribute namespace="http://www.w3.org/XML/1998/namespace"
+	                     processContents="lax"/>
+	  </xs:attributeGroup>
+	  <xs:element name="b" type="beta"/>
+	  <xs:element name="here">
+	    <xs:complexType><xs:sequence/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	s, err := LoadFiles([]string{main}, Options{Version: Version11})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// A type declared in this document does take the default attributes.
+	if err := check11(t, s, `<here xml:lang="jp"/>`); err != nil {
+		t.Errorf("a local type should take the default attributes: %v", err)
+	}
+	// One declared inside the override does not.
+	if err := check11(t, s, `<b xml:lang="jp"/>`); err == nil {
+		t.Error("an override's type should not take the default attributes")
 	}
 }
