@@ -191,6 +191,21 @@ type docKey struct {
 	location string
 }
 
+// redefinesAnything reports whether a redefine or override has any child that
+// actually replaces a component.
+//
+// Only the four definition kinds do. An annotation is documentation, so a
+// redefine carrying nothing else asks nothing of the document it names.
+func redefinesAnything(el *xdm.Node) bool {
+	for _, kid := range el.ChildElements() {
+		switch kid.Name.Local {
+		case "simpleType", "complexType", "group", "attributeGroup":
+			return true
+		}
+	}
+	return false
+}
+
 // canonicalLocation reduces a resolved location to a form two spellings of the
 // same document share.
 //
@@ -432,11 +447,13 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 
 	rc, resolved, err := a.opts.Resolver.Resolve(namespace, location, doc.baseURI)
 	if err != nil || rc == nil {
-		// A redefine with no children redefines nothing, so an
-		// unresolvable location costs it nothing either — anyURI_a001
-		// says of exactly this case that it "should give only 3 warning
-		// for the unresolved schemaLocations".
-		if redefining && len(el.ChildElements()) == 0 {
+		// A redefine that redefines nothing costs nothing when its
+		// location cannot be resolved — anyURI_a001 says of exactly
+		// this case that the document "should give only 3 warning for
+		// the unresolved schemaLocations". An annotation is not a
+		// redefinition, so a redefine carrying only one is as empty as
+		// a redefine carrying nothing (schH9).
+		if redefining && !redefinesAnything(el) {
 			return
 		}
 		if !redefining {
