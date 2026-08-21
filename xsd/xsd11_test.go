@@ -1661,3 +1661,76 @@ func TestListValueBindsAsSequence(t *testing.T) {
 		t.Error("six items should exceed count($value) le 5")
 	}
 }
+
+// TestDeclaredXSIAttributeUse covers a type declaring one of the four xsi:
+// attributes, which is how XSD 1.1 makes xsi:type mandatory.
+//
+// The xsi: attributes are permitted on any element and are not subject to a
+// type's attribute uses, so they were skipped outright — which left a declared
+// use unmatched, and a type requiring xsi:type reported it missing even when
+// the instance carried it.
+func TestDeclaredXSIAttributeUse(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	  <xs:complexType name="B">
+	    <xs:sequence/>
+	    <xs:attribute ref="xsi:type" use="required"/>
+	  </xs:complexType>
+	  <xs:complexType name="R">
+	    <xs:complexContent>
+	      <xs:restriction base="B">
+	        <xs:sequence/>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="root" type="B"/>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<root xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="R"/>`); err != nil {
+		t.Errorf("a declared xsi:type use should be satisfied by the attribute: %v", err)
+	}
+	if err := check11(t, s, `<root/>`); err == nil {
+		t.Error("a required xsi:type should still be required when absent")
+	}
+}
+
+// TestLocalTargetNamespace covers XSD 1.1's targetNamespace on a local
+// declaration.
+//
+// It is how a schema declares a component belonging somewhere other than its
+// own target namespace without importing one, and it overrides form and
+// elementFormDefault — both of which only choose between the target namespace
+// and none, so neither can express this.
+func TestLocalTargetNamespace(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:string">
+	        <xs:anyAttribute/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:element name="x">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:restriction base="base">
+	          <xs:attribute name="a" type="xs:integer" targetNamespace="http://test1"/>
+	        </xs:restriction>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<x xmlns:t="http://test1" t:a="100">Hello</x>`); err != nil {
+		t.Errorf("the local attribute should be in the named namespace: %v", err)
+	}
+	// The declared type applies, so a non-integer fails.
+	if err := check11(t, s,
+		`<x xmlns:t="http://test1" t:a="oops">Hello</x>`); err == nil {
+		t.Error("the local declaration's type should be enforced")
+	}
+}

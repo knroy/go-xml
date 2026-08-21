@@ -15,10 +15,17 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
 
 		// The four xsi: attributes are permitted on any element and are
-		// not subject to the type's attribute uses.
+		// not subject to the type's attribute uses — but a type may
+		// still declare one, which is how XSD 1.1 makes xsi:type
+		// mandatory. Skipping them outright left such a use unmatched,
+		// so a type requiring xsi:type reported it missing even when
+		// the instance carried it.
 		if name.URI == NSInstance {
 			switch name.Local {
 			case "type", "nil", "schemaLocation", "noNamespaceSchemaLocation":
+				if use := findAttributeUse(t.AttributeUses, name); use != nil {
+					matched[use] = true
+				}
 				continue
 			}
 		}

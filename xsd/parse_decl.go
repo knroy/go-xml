@@ -16,10 +16,22 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 
 	name := el.AttrValue("name")
 	if name != "" {
-		if scope == ScopeGlobal || p.doc.elementFormQualified ||
-			el.AttrValue("form") == "qualified" {
+		switch {
+		case scope == ScopeLocal && el.Attr("", "targetNamespace") != nil:
+			// XSD 1.1 lets a local declaration name its own
+			// namespace, which is how a schema declares a component
+			// belonging somewhere other than its own target
+			// namespace without importing one. It overrides form
+			// and elementFormDefault, both of which only choose
+			// between the target namespace and none.
+			d.Name = xdm.QName{
+				URI:   el.AttrValue("targetNamespace"),
+				Local: name,
+			}
+		case scope == ScopeGlobal || p.doc.elementFormQualified ||
+			el.AttrValue("form") == "qualified":
 			d.Name = p.qnameFor(name)
-		} else {
+		default:
 			// An unqualified local element is in the absent namespace,
 			// whatever the document's target namespace is. This is what
 			// elementFormDefault controls, and getting it backwards
@@ -144,10 +156,18 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 
 	name := el.AttrValue("name")
 	if name != "" {
-		if scope == ScopeGlobal || p.doc.attributeFormQualified ||
-			el.AttrValue("form") == "qualified" {
+		switch {
+		case scope == ScopeLocal && el.Attr("", "targetNamespace") != nil:
+			// As for elements: XSD 1.1 lets a local attribute name
+			// the namespace it belongs to directly.
+			d.Name = xdm.QName{
+				URI:   el.AttrValue("targetNamespace"),
+				Local: name,
+			}
+		case scope == ScopeGlobal || p.doc.attributeFormQualified ||
+			el.AttrValue("form") == "qualified":
 			d.Name = p.qnameFor(name)
-		} else {
+		default:
 			d.Name = xdm.QName{Local: name}
 		}
 	}
