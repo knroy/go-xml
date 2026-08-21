@@ -24,6 +24,7 @@ Requires Go 1.26 or later.
 | **XSD 1.0** | 99.15% of the W3C xsdtests suite (24,273 of 24,482 instance tests) |
 | **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,073 of 1,073); opt-in via `Version11` |
 | **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
+| **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
@@ -775,16 +776,40 @@ DTD-declared IDs gets an empty result rather than a wrong one.
 
 ## How this was tested
 
-Four methods, each catching a class the others miss. That is the point: no
+Five methods, each catching a class the others miss. That is the point: no
 single one of them was sufficient, and each was added because the previous set
 had let something through.
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (296) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (499) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 14,682 cases | XSLT (it is an XPath suite) |
+| **W3C xsdtests suite** | systematic XSD conformance across 25,555 instance tests | schemas nobody writes by hand |
+| **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
+
+**The production schema sets are the newest of the five and found the most per
+hour.** Pointing the validator at UBL 2.1 turned up two bugs the entire W3C
+suite had not: deduplication keyed on the `schemaLocation` as written rather
+than the resolved path, so a diamond in the import graph read one file twice
+and reported every global in it as a duplicate; and attribute inheritance
+scheduled on a fixed number of passes, which no chain depth is guaranteed to
+fit. Between them they meant *all 65* UBL main-document schemas failed to load,
+with 1,758 errors apiece. Neither is exotic — a diamond is the normal shape of
+a modular schema set, and UBL's `EndpointIDType` is an empty
+`<xs:extension base="udt:IdentifierType"/>`.
+
+| schema set | schemas | result |
+|---|---:|---|
+| **UBL 2.1** (OASIS) | 65 | all load; 8 real invoice and credit-note instances validate clean |
+| **UN/CEFACT CII** D16B (EN 16931) | 2 | both load; 15 instances validate clean |
+| **Factur-X / ZUGFeRD** (all profiles) | 21 | all load; samples validate clean against their own profile |
+| **Peppol BIS Billing 3.0** | — | 24 UBL instances validate clean |
+
+The three Mustang fixtures this rejects are genuinely invalid — two carry a
+second `URIID` where the schema allows one, and the third is named
+`not_validating_…` in its own corpus.
 
 **Unit tests concentrate on where being plausible is not enough** rather than
 on breadth: exact decimal arithmetic, the canonical form of doubles at the
