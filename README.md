@@ -637,14 +637,14 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**27 of 14,682 in-scope cases fail (0.18%).** They no longer form clusters:
+**28 of 14,720 in-scope cases fail (0.19%).** They no longer form clusters:
 
 | cases | set | what it is |
 |---:|---|---|
 | 12 | `fn-matches` | regex backreferences, which RE2 does not have |
 | 7 | `fn-collection` | the harness configures no collection |
 | 5 | `xs-dateTimeStamp` | an XSLT 3.0 type this engine does not claim |
-| 3 | three different sets, one case each | the long tail |
+| 4 | four different sets, one case each | the long tail |
 
 ### 2a. Where the XSD suite still disagrees
 
@@ -676,16 +676,16 @@ figure over a subset is a weaker claim than the same figure over the whole.
 
 ### Is 100% reachable?
 
-Not with this architecture. Sorting the 27 by *why* they fail:
+Not with this architecture. Sorting the 28 by *why* they fail:
 
 | cases | cause | fixable? |
 |---:|---|---|
 | 12 | **regex backreferences** (`\1`) | **no** — see below |
 | 7 | `fn:collection` | no — the harness configures no collection |
 | 5 | `xs:dateTimeStamp` | no — an XSLT 3.0 type this engine does not claim |
-| 3 | ordinary bugs, one per test set | yes, one at a time |
+| 4 | ordinary bugs, one per test set | yes, one at a time |
 
-**24 of the 27 are structural.** One of the remaining three is the only
+**24 of the 28 are structural.** One of the remaining four is the only
 *genuine* static-typing case in the suite: `for $var in "ABC" return $var
 castable as xs:QName` is false while the same expression with `let` is true,
 because a QName's namespace comes from the static context and only a
@@ -811,7 +811,7 @@ had let something through.
 | **Unit tests** (526) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
-| **W3C QT3 suite** | systematic conformance across 14,682 cases | XSLT (it is an XPath suite) |
+| **W3C QT3 suite** | systematic conformance across 14,720 cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 26,069 instance tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 
@@ -1092,8 +1092,8 @@ which is exactly how the earlier bugs were found.
 
 ## Where this is going
 
-The conformance tail is no longer the interesting work: 24 of the 27 remaining
-QT3 failures are structural, and the other three are one case each. Three
+The conformance tail is no longer the interesting work: 24 of the 28 remaining
+QT3 failures are structural, and the other four are one case each. Three
 larger things are open, in rough order of how much they would change:
 
 * **Receiver-based output.** The runtime builds a result tree and serialises

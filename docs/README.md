@@ -6,6 +6,8 @@
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
   limits, the PSVI, concurrency, and where conformance stands.
+* **[TODO](todo.md)** — what is left: features, the measured bug tail, and
+  the non-goals recorded so they are not proposed again as oversights.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting
   line numbers, rendering to HTML, custom document resolvers.
 
