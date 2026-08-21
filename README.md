@@ -692,9 +692,26 @@ accepting invalid input only fails to catch their mistake.
 Two notes on the denominator. A handful of schemas still fail to load for
 reasons that are not bugs: nine are XML 1.1 documents, which this parser does
 not read, and two need a DOCTYPE, refused by default because it enables XXE.
-And `status="queried"` on a test means the W3C itself has challenged the
-expected result; twenty-seven such cases sit in the 1.0 instance tail and are a
-genuine ceiling rather than work outstanding.
+
+And some of the suite is disputed. `status="queried"` on a test means the W3C
+has challenged the expected result, usually with a bugzilla reference, so those
+disagreements are a ceiling rather than work outstanding. Twenty-seven of the
+1.0 disagreements are marked that way:
+
+| bug | cases | what |
+|---|---:|---|
+| 4113 | 19 | regex `\p{...}` general-category tests |
+| 6901 | 2 | `gMonth002_2061`, `gMonth004_2063` |
+| 4952 | 1 | `particlesW006` |
+| 4680 | 1 | `elemZ027_c` |
+| 4126 | 1 | `anyURI_a004_1339` |
+
+Bug 4113 is the instructive one. The suite was written against **Unicode 3.1**,
+and characters have moved between general categories since. `reJ11` asserts that
+`\p{Lu}*` rejects U+1D7A8, which *is* an uppercase letter in modern Unicode.
+Passing that test would mean shipping a frozen Unicode 3.1 table and being wrong
+about every text written in the twenty years since — so these are left
+disagreeing on purpose.
 
 ### Is 100% reachable?
 
