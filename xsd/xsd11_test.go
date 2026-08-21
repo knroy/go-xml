@@ -3013,3 +3013,59 @@ func TestProhibitedInAttributeGroupRemovesNothing(t *testing.T) {
 
 	assertValid(t, schema, `<doc a="a"/>`)
 }
+
+// TestRestrictionDropsInheritedAttributeWildcard pins that a restriction
+// declaring no attribute wildcard has none.
+//
+// It narrows what the base accepts, and inheriting the base's wildcard would
+// keep admitting every attribute the base did. This is the attribute
+// counterpart of a restriction closing open content.
+func TestRestrictionDropsInheritedAttributeWildcard(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:sequence/>
+	    <xs:anyAttribute namespace="##other" processContents="lax"/>
+	  </xs:complexType>
+	  <xs:complexType name="derived">
+	    <xs:complexContent>
+	      <xs:restriction base="base">
+	        <xs:sequence/>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="derived"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc/>`)
+	assertInvalid(t, schema, `<doc xmlns:o="urn:o" o:x="1"/>`,
+		"cvc-complex-type.3.2.2")
+}
+
+// TestDefaultAttributesContributeTheirWildcard covers defaultAttributes
+// bringing the named group's wildcard along with its uses.
+//
+// A group whose whole content is an anyAttribute contributed nothing
+// otherwise, and that is the form the feature is most often written in: "let
+// every type in this document take the xml: attributes" is a wildcard, not a
+// list of uses.
+func TestDefaultAttributesContributeTheirWildcard(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           defaultAttributes="dag">
+	  <xs:attributeGroup name="dag">
+	    <xs:anyAttribute namespace="http://www.w3.org/XML/1998/namespace"
+	                     processContents="lax"/>
+	  </xs:attributeGroup>
+	  <xs:element name="doc">
+	    <xs:complexType><xs:sequence/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc xml:lang="jp"/>`); err != nil {
+		t.Errorf("the default group's wildcard should admit xml:lang: %v", err)
+	}
+	if err := check11(t, s, `<doc xmlns:o="urn:o" o:x="1"/>`); err == nil {
+		t.Error("a namespace the wildcard excludes should still be refused")
+	}
+}

@@ -21,7 +21,7 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.08% of the W3C xsdtests suite (24,248 of 24,473 instance tests) |
+| **XSD 1.0** | 99.09% of the W3C xsdtests suite (24,250 of 24,473 instance tests) |
 | **XSD 1.1** | 99.34% of the suite's 1.1 instance tests (1,051 of 1,058); opt-in via `Version11` |
 | **Tests** | 493, clean under `-race` (485 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -633,7 +633,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**225 of 24,473 XSD 1.0 instance tests (0.92%) and 7 of 1,058 XSD 1.1 tests
+**223 of 24,473 XSD 1.0 instance tests (0.91%) and 7 of 1,058 XSD 1.1 tests
 (0.66%).** Every 1.1 disagreement is now a document *accepted* that the suite
 expects refused; there are no false rejects left in that half of the suite.
 
@@ -643,7 +643,7 @@ The seven remaining 1.1 cases:
 |---:|---|
 | 2 | an assertion's `//` reaching further than the confined subtree the spec allows |
 | 2 | an ID that denotes no element, where the value comes from the element's own content |
-| 2 | `defaultOpenContent` and `defaultAttributes` reaching types brought in through `xs:override` and `xs:redefine`, which they should not |
+| 2 | `defaultOpenContent` reaching types brought in through `xs:override`, which it should not |
 | 1 | a defaulted `xs:ENTITY` naming no declared unparsed entity — this parser refuses a `DOCTYPE` by default, so it records none to check against |
 
 Two further notes on the measurement. 227 test groups are skipped because the

@@ -713,9 +713,12 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 		// attributes the base type accepted.
 		if t.DerivationMethod == DerivationExtension {
 			t.AttributeWildcard = unionWildcards(base.AttributeWildcard, t.AttributeWildcard)
-		} else if t.AttributeWildcard == nil {
-			t.AttributeWildcard = base.AttributeWildcard
 		}
+		// A restriction declaring no attribute wildcard has none: it
+		// narrows what the base accepts, and inheriting the base's
+		// wildcard would keep admitting every attribute the base did.
+		// This is the attribute counterpart of a restriction closing
+		// open content, and the same reasoning applies.
 		// XSD 1.1 open content is inherited, but for an extension it is
 		// combined rather than replaced (§3.4.2.3.3 clause 3): the
 		// result admits what either the base or the extension admits.
@@ -797,6 +800,15 @@ func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 			if u.Decl != nil && !own[u.Decl.Name] {
 				t.AttributeUses = append(t.AttributeUses, u)
 			}
+		}
+		// The group's wildcard comes with it. A defaultAttributes group
+		// whose whole content is an anyAttribute contributed nothing at
+		// all otherwise, which is the form the feature is most often
+		// written in — "let every type in this document take the xml:
+		// attributes" is a wildcard, not a list of uses.
+		if g.AttributeWildcard != nil {
+			t.AttributeWildcard = unionWildcards(
+				t.AttributeWildcard, g.AttributeWildcard)
 		}
 		return nil
 	})
