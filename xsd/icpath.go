@@ -96,6 +96,15 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 		}
 
 		if p.src[p.pos] == '@' || p.atAxis("attribute") {
+			// atAxis consumes the axis and any space after it, so a
+			// path ending in "attribute::" leaves p.pos at the end.
+			// Everything below indexes p.src, so the exhausted case
+			// is answered here rather than by a panic.
+			if p.pos >= len(p.src) {
+				return alt, fmt.Errorf(
+					"identity-constraint path %q: an attribute "+
+						"axis needs a name test", p.src)
+			}
 			if !p.field {
 				return alt, fmt.Errorf(
 					"identity-constraint selector %q: a selector may not "+

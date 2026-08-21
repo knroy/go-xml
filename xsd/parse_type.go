@@ -834,12 +834,18 @@ func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 		p.errs = append(p.errs, err)
 		return
 	}
+	// The spelling is captured now rather than read inside the fixup. A
+	// fixup runs after every document has been read, by which time p.doc is
+	// whatever was last in hand — nil, once the assembler is done with it.
+	// Reading it there dereferenced that nil for the one input that reaches
+	// the branch: a defaultAttributes naming a group that does not exist.
+	spelling := p.doc.defaultAttributes
 	p.fixups = append(p.fixups, func() error {
 		g, ok := p.schema.AttributeGroups[name]
 		if !ok {
 			return errorAt(el, "src-resolve",
 				"defaultAttributes names no attribute group %q",
-				p.doc.defaultAttributes)
+				spelling)
 		}
 		// The type's own uses win: a declaration that names the same
 		// attribute overrides the default rather than colliding.

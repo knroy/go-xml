@@ -510,3 +510,28 @@ func TestSplitFieldsUsesXMLWhitespace(t *testing.T) {
 		t.Errorf("U+00A0 split the value into %d tokens, want 1", n)
 	}
 }
+
+// defaultAttributes naming a group that does not exist is an error, and the
+// error has to be reportable. The message quotes the spelling the schema used,
+// which used to be read from p.doc inside the deferred fixup — but a fixup runs
+// after every document has been read, when p.doc no longer points at the
+// document the attribute came from. The one input that reached the branch, an
+// unresolvable group name, therefore crashed rather than reporting itself.
+func TestUnresolvedDefaultAttributesIsAnErrorNotACrash(t *testing.T) {
+	for _, src := range []string{
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		            defaultAttributes="dad">
+		  <xs:element name="doc"><xs:complexType/></xs:element>
+		</xs:schema>`,
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		            xmlns:other="http://other.example/"
+		            defaultAttributes="other:da">
+		  <xs:element name="doc"><xs:complexType/></xs:element>
+		</xs:schema>`,
+	} {
+		_, err := parseSchemaString(t, src)
+		if err == nil {
+			t.Error("want an error naming the missing attribute group, got none")
+		}
+	}
+}

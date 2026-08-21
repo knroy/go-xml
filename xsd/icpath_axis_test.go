@@ -209,3 +209,22 @@ func TestSameFileReachedByTwoSpellings(t *testing.T) {
 		t.Fatalf("one file reached twice was read as two: %v", err)
 	}
 }
+
+// A path may run out after the axis. "attribute::" names an axis and then
+// stops, and everything the attribute branch does next indexes the source, so
+// the exhausted case has to be answered before the indexing rather than by a
+// panic. The suite reaches this through a schema whose field is written
+// xpath="attribute::", which is invalid and must be reported as such — a
+// crash takes the caller down instead of failing the one schema.
+func TestIdentityConstraintTruncatedAxisIsAnError(t *testing.T) {
+	for _, path := range []string{
+		"attribute::",
+		"attribute:: ",
+		"e/attribute::",
+	} {
+		p := &icPathParser{src: path, field: true}
+		if _, err := p.parseAlternative(); err == nil {
+			t.Errorf("field %q: want an error, got none", path)
+		}
+	}
+}
