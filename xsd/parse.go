@@ -305,20 +305,22 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	}
 
 	for _, el := range root.ChildElements() {
-		// Conditional inclusion applies at the top level too: a schema
-		// document commonly carries a 1.0 and a 1.1 spelling of the
-		// same global declaration side by side, and reading both would
-		// make them duplicates of each other.
-		if !includeElement(el, p.schema.Version) {
-			continue
-		}
 		p.readTopLevel(el)
 	}
 	return nil
 }
 
 // readTopLevel dispatches one child of <xs:schema>.
+//
+// Conditional inclusion is applied here rather than in the callers' loops,
+// because there is more than one loop: the assembler has its own, and a filter
+// in only one of them let a schema document carrying a 1.0 and a 1.1 spelling
+// of the same global declaration be read twice — reporting each as a duplicate
+// of the other, which is exactly what the feature exists to prevent.
 func (p *parser) readTopLevel(el *xdm.Node) {
+	if !includeElement(el, p.schema.Version) {
+		return
+	}
 	if el.Name.URI != NSSchema {
 		// Foreign elements at the top level are permitted only inside
 		// <xs:annotation>; elsewhere they are a representation fault.
