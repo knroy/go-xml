@@ -235,7 +235,7 @@ func builtinAttributes() map[xdm.QName]*AttributeDecl {
 
 	xsi := func(local string, t *SimpleType) (xdm.QName, *AttributeDecl) {
 		n := xdm.QName{URI: NSInstance, Local: local}
-		return n, &AttributeDecl{Name: n, Type: t, Scope: ScopeGlobal}
+		return n, &AttributeDecl{Name: n, Type: t, Scope: ScopeGlobal, builtin: true}
 	}
 	out := map[xdm.QName]*AttributeDecl{}
 	for _, f := range []func() (xdm.QName, *AttributeDecl){
@@ -272,7 +272,7 @@ func builtinAttributes() map[xdm.QName]*AttributeDecl {
 		{"id", ncname},
 	} {
 		n := xdm.QName{URI: NSXML, Local: x.local}
-		out[n] = &AttributeDecl{Name: n, Type: x.t, Scope: ScopeGlobal}
+		out[n] = &AttributeDecl{Name: n, Type: x.t, Scope: ScopeGlobal, builtin: true}
 	}
 	return out
 }

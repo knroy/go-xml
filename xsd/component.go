@@ -206,6 +206,12 @@ type AttributeDecl struct {
 	Type       *SimpleType
 	Scope      Scope
 	Constraint *ValueConstraint
+
+	// builtin marks a declaration this implementation supplies rather than
+	// one read from a document — the xsi attributes and the four in the XML
+	// namespace. A schema may declare the latter itself, so a supplied
+	// declaration gives way to a real one instead of colliding with it.
+	builtin bool
 }
 
 // ComponentKind implements Component.

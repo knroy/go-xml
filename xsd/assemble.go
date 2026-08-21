@@ -388,24 +388,34 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 	}
 
 	rc, resolved, err := a.opts.Resolver.Resolve(namespace, location, doc.baseURI)
-	if err != nil {
-		if isInclude && !redefining {
-			// An unresolvable include is explicitly not an error
-			// (§4.2.1 clause 1): "no corresponding inclusion is
-			// performed". A redefine is different, because its
-			// children are defined in terms of what it redefines.
+	if err != nil || rc == nil {
+		if !redefining {
+			// schemaLocation is a hint, not a requirement. §4.2.1
+			// clause 1 says of include that where the location
+			// cannot be resolved "no corresponding inclusion is
+			// performed", and §4.2.6.2 gives import the same
+			// latitude — the location merely offers a document,
+			// and the components may be available some other way
+			// or not be needed at all.
+			//
+			// A redefine is different: its children are defined in
+			// terms of what it redefines, so there is nothing to
+			// carry on with.
+			//
+			// Failing here meant a schema naming a document this
+			// processor could not fetch — a remote URL with the
+			// network off, most commonly — failed to load
+			// entirely, rather than losing only what that document
+			// would have contributed. Any reference that really
+			// needed those components still fails, at the
+			// reference, naming what is missing.
 			return
+		}
+		if err == nil {
+			err = fmt.Errorf("resolved to nothing")
 		}
 		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
 			"cannot resolve schemaLocation %q: %v", location, err))
-		return
-	}
-	if rc == nil {
-		if isInclude && !redefining {
-			return
-		}
-		a.p.errs = append(a.p.errs, errorAt(el, "src-resolve",
-			"schemaLocation %q resolved to nothing", location))
 		return
 	}
 	defer rc.Close()

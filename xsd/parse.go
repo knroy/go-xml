@@ -449,10 +449,18 @@ func (p *parser) declareAttribute(el *xdm.Node, d *AttributeDecl) {
 			"a top-level attribute declaration must have a name"))
 		return
 	}
-	if _, ok := p.schema.Attributes[d.Name]; ok {
-		p.errs = append(p.errs, errorAt(el, "sch-props-correct.2",
-			"duplicate attribute declaration %s", d.Name.Local))
-		return
+	if prev, ok := p.schema.Attributes[d.Name]; ok {
+		// The XML namespace's own attributes are supplied so that an
+		// import without a schemaLocation resolves, but a schema may
+		// also declare them itself — the schema document for that
+		// namespace in Part 1 §F.1 does exactly that, and it is in the
+		// suite. An explicit declaration replaces the supplied one
+		// rather than colliding with it.
+		if !prev.builtin {
+			p.errs = append(p.errs, errorAt(el, "sch-props-correct.2",
+				"duplicate attribute declaration %s", d.Name.Local))
+			return
+		}
 	}
 	p.schema.Attributes[d.Name] = d
 }

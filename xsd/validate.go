@@ -191,9 +191,15 @@ func (v *validator) elementDefined(name xdm.QName) bool {
 }
 
 // attributeDefined answers ##defined for an attribute wildcard.
+//
+// ##defined asks whether the *schema* declares the name, so the declarations
+// this implementation supplies — the xsi attributes and the four in the XML
+// namespace — do not count. Otherwise a wildcard with notQName="##defined"
+// would refuse xml:lang on the strength of a declaration nobody wrote, which
+// is what the suite's wild054 pins.
 func (v *validator) attributeDefined(name xdm.QName) bool {
-	_, ok := v.schema.Attributes[name]
-	return ok
+	d, ok := v.schema.Attributes[name]
+	return ok && !d.builtin
 }
 
 // edtKey identifies one element name within one content model, which is the
