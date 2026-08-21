@@ -44,6 +44,13 @@ type TypeAlternative struct {
 	Source string
 	// Type is the type to use when the test matches.
 	Type Type
+
+	// staticBaseURI locates the schema document the test was written in.
+	// fn:static-base-uri returns the base URI of the *expression*, which
+	// for a type alternative is the schema, not the instance the test is
+	// evaluated against — cta0024 asks for exactly that distinction, and
+	// cta0021 asks for the other half with fn:base-uri.
+	staticBaseURI string
 }
 
 // readAssert reads an <xs:assert> or <xs:assertion>.
@@ -112,6 +119,9 @@ func (r assertResolver) DefaultFunctionNamespace() string {
 // readAlternative reads an <xs:alternative>.
 func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	alt := &TypeAlternative{Source: el.AttrValue("test")}
+	if p.doc != nil {
+		alt.staticBaseURI = p.doc.baseURI
+	}
 
 	if alt.Source != "" {
 		// As for an assertion: the attribute may be inherited and takes
@@ -370,6 +380,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 			continue
 		}
 		ctx := newAssertContext(scoped)
+		ctx.StaticBaseURI = alt.staticBaseURI
 		ok, err := alt.Test.EvalBool(ctx)
 		if err != nil || !ok {
 			continue

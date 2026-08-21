@@ -3801,3 +3801,45 @@ func TestIdentityConstraintRefRejectsRefer(t *testing.T) {
 		t.Fatal("ref= together with refer= should be a schema error")
 	}
 }
+
+// A type alternative's test sees two different base URIs, and they are not the
+// same value.
+//
+// fn:base-uri() reports the *node's*, which comes from the instance document,
+// and fn:static-base-uri() reports the *expression's*, which for a type
+// alternative is the schema document the alternative was written in. The suite
+// asks for each separately — cta0021 for the instance's, cta0024 for the
+// schema's — and a schema is routinely applied to documents from elsewhere, so
+// conflating them gives the wrong answer for every one of them.
+func TestAlternativeSeesBothBaseURIs(t *testing.T) {
+	src := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="when" type="xs:string">
+	    <xs:alternative test="ends-with(base-uri(.), 'inst.xml')
+	                          and ends-with(static-base-uri(), 'sch.xsd')"
+	                    type="xs:date"/>
+	    <xs:alternative type="xs:error"/>
+	  </xs:element>
+	</xs:schema>`
+
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: "/schemas/sch.xsd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(tree.Root, "/schemas/sch.xsd", Options{Version: Version11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	doc, err := xdm.ParseString(`<when>2010-10-16</when>`,
+		xdm.ParseOptions{BaseURI: "/elsewhere/inst.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both conjuncts held, so the alternative fired and selected xs:date.
+	// Had either base URI been empty or been the other one, the fallback
+	// xs:error would reject the document whatever it contained.
+	if err := s.Validate(doc.Root, ValidateOptions{}); err != nil {
+		t.Errorf("the alternative should have selected xs:date: %v", err)
+	}
+}
