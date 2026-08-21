@@ -76,3 +76,60 @@ func TestBoundFacetMayRestateBaseBound(t *testing.T) {
 	  </xs:simpleType>
 	</xs:schema>`, "maxExclusive-valid-restriction")
 }
+
+// TestFacetAndAnnotationChildren covers the schema-for-schemas content models
+// that were missing from the table: every constraining facet takes
+// "annotation?" and nothing else, and an <annotation> takes appinfo and
+// documentation and nothing else.
+//
+// Without them a stray <xs:notation> nested inside a facet — or directly
+// inside an annotation — loaded without complaint, which is the whole
+// MS-Notations F-series (notatF003, F025, F041, F045, F049, F053).
+func TestFacetAndAnnotationChildren(t *testing.T) {
+	// A notation inside a facet is not a schema.
+	for _, facet := range []string{
+		`<xs:enumeration value="1"><xs:notation name="n" system="v"/></xs:enumeration>`,
+		`<xs:length value="8"><xs:notation name="n" system="v"/></xs:length>`,
+		`<xs:pattern value="0"><xs:notation name="n" system="v"/></xs:pattern>`,
+		`<xs:maxInclusive value="0"><xs:notation name="n" system="v"/></xs:maxInclusive>`,
+		`<xs:minInclusive value="0"><xs:notation name="n" system="v"/></xs:minInclusive>`,
+	} {
+		mustLoadFail(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="foo">
+		    <xs:restriction base="xs:string">`+facet+`</xs:restriction>
+		  </xs:simpleType>
+		</xs:schema>`, "")
+	}
+
+	// Nor directly inside an annotation.
+	mustLoadFail(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:annotation><xs:notation name="foo" system=""/></xs:annotation>
+	</xs:schema>`, "")
+
+	// An annotation on a facet is still allowed, and so is a facet with no
+	// children at all — the rule is "annotation only", not "nothing".
+	mustLoadOK(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="foo">
+	    <xs:restriction base="xs:string">
+	      <xs:maxLength value="8">
+	        <xs:annotation><xs:documentation>why</xs:documentation></xs:annotation>
+	      </xs:maxLength>
+	      <xs:minLength value="1"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`)
+
+	// An annotation's own appinfo and documentation hold open content, so
+	// arbitrary elements inside *those* remain fine.
+	mustLoadOK(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:annotation>
+	    <xs:appinfo><anything xmlns=""><nested/></anything></xs:appinfo>
+	    <xs:documentation><p xmlns="">text</p></xs:documentation>
+	  </xs:annotation>
+	  <xs:element name="e" type="xs:string"/>
+	</xs:schema>`)
+}

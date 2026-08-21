@@ -95,6 +95,30 @@ var srcModels = map[string][]srcTerm{
 	"alternative":    {annot, opt("simpleType", "complexType")},
 	"assert":         {annot},
 	"assertion":      {annot},
+
+	// Every constraining facet takes an annotation and nothing else. The
+	// facets were absent from this table, so <xs:notation> nested inside
+	// an <xs:enumeration> or an <xs:length> loaded without complaint
+	// (notatF025, notatF041, notatF045, notatF049, notatF053).
+	"minExclusive":     {annot},
+	"minInclusive":     {annot},
+	"maxExclusive":     {annot},
+	"maxInclusive":     {annot},
+	"totalDigits":      {annot},
+	"fractionDigits":   {annot},
+	"length":           {annot},
+	"minLength":        {annot},
+	"maxLength":        {annot},
+	"enumeration":      {annot},
+	"whiteSpace":       {annot},
+	"pattern":          {annot},
+	"explicitTimezone": {annot},
+
+	// An annotation holds appinfo and documentation, in any order and any
+	// number, and nothing else — notatF003 puts an <xs:notation> straight
+	// under one. The *contents* of appinfo and documentation are open,
+	// which checkSourceModel handles by not descending into them.
+	"annotation": {star("appinfo", "documentation")},
 }
 
 // srcAttrs maps a schema element's local name to the attributes it may carry,
@@ -324,9 +348,10 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 	if el.Name.URI != NSSchema {
 		return
 	}
-	// An annotation's own children are open content, so neither it nor
-	// anything under it is checked here.
-	if el.Name.Local == "annotation" {
+	// An <appinfo> or <documentation> holds open content, so nothing under
+	// one is checked. The annotation itself still is: it admits only those
+	// two children (notatF003).
+	if el.Name.Local == "appinfo" || el.Name.Local == "documentation" {
 		return
 	}
 
