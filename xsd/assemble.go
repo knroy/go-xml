@@ -298,8 +298,17 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	// The references are queued before the body is read, so that a
 	// reference to an imported component resolves through the fixup list
 	// once every document has been read.
+	// A schema document the versioning attributes exclude contributes
+	// nothing, and that includes the documents it would have pulled in:
+	// vc:maxVersion on <xs:schema> is how a file says "this is for some
+	// other version", and following its includes would read exactly the
+	// components it was hiding.
+	if !includeElement(root, a.schema.Version) {
+		return nil
+	}
+
 	for _, el := range root.ChildElements() {
-		if el.Name.URI != NSSchema {
+		if el.Name.URI != NSSchema || !includeElement(el, a.schema.Version) {
 			continue
 		}
 		switch el.Name.Local {

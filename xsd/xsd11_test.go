@@ -2679,3 +2679,53 @@ func TestXSITypeOnRepeatedElementIsNotEDT(t *testing.T) {
 		t.Errorf("xsi:type choosing different derived types is legal: %v", err)
 	}
 }
+
+// TestVersioningOnSchemaElement covers the versioning attributes on
+// <xs:schema> itself, where they make the whole document invisible.
+//
+// It is how a file says "this is for some other version" without the reader
+// having to understand its contents — and the documents it would have included
+// go with it, since following them would read exactly the components it was
+// hiding.
+func TestVersioningOnSchemaElement(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+	           vc:maxVersion="0.9">
+	  <xs:element name="temp" type="xs:string"/>
+	</xs:schema>`
+
+	// maxVersion is exclusive, so 1.0 and 1.1 both exceed 0.9 and neither
+	// sees the declaration.
+	s := load11(t, schema)
+	if err := check11(t, s, `<temp>x</temp>`); err == nil {
+		t.Error("an excluded schema document declares nothing")
+	}
+	assertInvalid(t, schema, `<temp>x</temp>`, "cvc-elt.1")
+
+	// The same document without the condition does declare it.
+	live := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="temp" type="xs:string"/>
+	</xs:schema>`
+	assertValid(t, live, `<temp>x</temp>`)
+}
+
+// TestYearMayNotBePadded pins that a year is exactly four digits unless it
+// needs more, and one that needs more may not be padded.
+//
+// "00000-02" is a five-digit spelling of year zero, and the only thing
+// distinguishing it from "0000-02" is a character the value space cannot see.
+func TestYearMayNotBePadded(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="v" type="xs:gYearMonth"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<v>0000-02</v>`)
+	assertValid(t, schema, `<v>12345-02</v>`)
+	assertValid(t, schema, `<v>-0001-02</v>`)
+	assertInvalid(t, schema, `<v>00000-02</v>`, "cvc-datatype-valid")
+	assertInvalid(t, schema, `<v>012345-02</v>`, "cvc-datatype-valid")
+	assertInvalid(t, schema, `<v>000-02</v>`, "cvc-datatype-valid")
+}

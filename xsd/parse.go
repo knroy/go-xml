@@ -282,6 +282,14 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	}
 	p.doc = doc
 
+	// The versioning attributes may sit on <xs:schema> itself, and there
+	// they make the whole document invisible to a processor the conditions
+	// exclude. It is how a schema says "this file is for some other
+	// version" without the reader having to understand its contents.
+	if !includeElement(root, p.schema.Version) {
+		return nil
+	}
+
 	for _, el := range root.ChildElements() {
 		// Conditional inclusion applies at the top level too: a schema
 		// document commonly carries a 1.0 and a 1.1 spelling of the

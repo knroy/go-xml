@@ -524,7 +524,15 @@ func isSignedDigits(v string, min int) bool {
 	if strings.HasPrefix(v, "-") {
 		v = v[1:]
 	}
-	return isDigits(v, -1) && len(v) >= min
+	if !isDigits(v, -1) || len(v) < min {
+		return false
+	}
+	// A year is exactly four digits unless it needs more, and one that
+	// needs more may not be padded: "00000-02" is a five-digit spelling of
+	// year zero, which the lexical space does not admit. Without this the
+	// only thing distinguishing it from "0000-02" is a character the value
+	// space cannot see.
+	return len(v) == min || v[0] != '0'
 }
 
 // isDigits reports whether v is a run of digits, of exactly n of them when n is
