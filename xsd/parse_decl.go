@@ -279,7 +279,7 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 		return nil
 	}
 	g := &AttributeGroupDef{Name: p.qnameFor(name)}
-	p.readAttributes(el, &g.AttributeUses, &g.AttributeWildcard)
+	p.readAttributes(el, &g.AttributeUses, &g.AttributeWildcard, g)
 	// A prohibited use is not one of an attribute group's attribute uses,
 	// so it contributes nothing and removes nothing — only a use written
 	// directly on the type does. The suite states it in those words:
@@ -304,7 +304,11 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 // fixup appending to a variable nobody reads — which is exactly the bug this
 // signature exists to prevent, and which silently dropped every
 // attribute-group attribute.
-func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wildcard) {
+// owner is the attribute group definition being read, or nil when the
+// attributes belong to a complex type. A reference inside a group definition is
+// recorded as an edge rather than flattened, so that the graph can be walked
+// once every fixup has run — see groupUses.
+func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wildcard, owner *AttributeGroupDef) {
 	var wildcard *Wildcard
 
 	for _, c := range p.contentChildren(el) {
@@ -335,15 +339,31 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wi
 					return errorAt(c, "src-resolve",
 						"attributeGroup ref %q names no attribute group", ref)
 				}
-				*target = append(*target, g.AttributeUses...)
-				// A referenced group's wildcard is the
-				// containing component's too, intersected with
-				// whatever else it has. Dropping it here left a
-				// type whose only wildcard came through a group
-				// with none at all.
-				if g.AttributeWildcard != nil {
-					*into = intersectWildcards(*into, g.AttributeWildcard)
+				if owner != nil {
+					// Inside another group definition:
+					// record the edge and let the graph
+					// walk resolve it later.
+					owner.refs = append(owner.refs, g)
+					return nil
 				}
+				// The graph is read in a second pass. The edges
+				// between groups are themselves resolved by
+				// fixups, and this one may run before them —
+				// so reading now would see a group that has not
+				// finished referencing the groups it names.
+				p.fixups = append(p.fixups, func() error {
+					*target = append(*target, groupUses(g, nil)...)
+					// A referenced group's wildcard is the
+					// containing component's too,
+					// intersected with whatever else it
+					// has. Dropping it left a type whose
+					// only wildcard came through a group
+					// with none at all.
+					if w := groupWildcard(g, nil); w != nil {
+						*into = intersectWildcards(*into, w)
+					}
+					return nil
+				})
 				return nil
 			})
 
@@ -659,6 +679,53 @@ func unionNames(a, b *Wildcard) []xdm.QName {
 		if !seen[n] {
 			seen[n] = true
 			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// groupUses returns an attribute group's uses, including those it reaches
+// through referenced groups.
+//
+// The seen set guards a cycle. A group that references itself is ill-formed,
+// and the walk stopping is what keeps that a schema error rather than a hang.
+func groupUses(g *AttributeGroupDef, seen map[*AttributeGroupDef]bool) []*AttributeUse {
+	if g == nil {
+		return nil
+	}
+	if seen == nil {
+		seen = map[*AttributeGroupDef]bool{}
+	}
+	if seen[g] {
+		return nil
+	}
+	seen[g] = true
+
+	out := append([]*AttributeUse(nil), g.AttributeUses...)
+	for _, ref := range g.refs {
+		out = append(out, groupUses(ref, seen)...)
+	}
+	return out
+}
+
+// groupWildcard returns the intersection of a group's own attribute wildcard
+// and those of the groups it references.
+func groupWildcard(g *AttributeGroupDef, seen map[*AttributeGroupDef]bool) *Wildcard {
+	if g == nil {
+		return nil
+	}
+	if seen == nil {
+		seen = map[*AttributeGroupDef]bool{}
+	}
+	if seen[g] {
+		return nil
+	}
+	seen[g] = true
+
+	out := g.AttributeWildcard
+	for _, ref := range g.refs {
+		if w := groupWildcard(ref, seen); w != nil {
+			out = intersectWildcards(out, w)
 		}
 	}
 	return out

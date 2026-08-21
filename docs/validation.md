@@ -34,7 +34,7 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.12%** agreement on 24,473
+Measured against the W3C XSD test suite: **99.13%** agreement on 24,473
 instance tests.
 
 XSD **1.1** is implemented and opt-in:

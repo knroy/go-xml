@@ -694,6 +694,13 @@ type AttributeGroupDef struct {
 	Name              xdm.QName
 	AttributeUses     []*AttributeUse
 	AttributeWildcard *Wildcard
+
+	// refs are the attribute groups this one references. They are kept
+	// rather than flattened at parse time because a group's own uses may
+	// still be arriving when something reads it: the references resolve
+	// through fixups whose order no reference can arrange. Reading through
+	// the graph makes the order irrelevant, and the nesting depth with it.
+	refs []*AttributeGroupDef
 }
 
 // ComponentKind implements Component.

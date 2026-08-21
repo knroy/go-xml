@@ -3288,3 +3288,44 @@ func TestNestedCounterRepeatIsNotAnOuterRestart(t *testing.T) {
 	assertInvalid(t, schema, `<doc><a/><b/><b/><b/></doc>`,
 		"cvc-complex-type.2.4")
 }
+
+// TestNestedAttributeGroupReferences covers an attribute group that references
+// other attribute groups.
+//
+// A group's own uses arrive through fixups, and a reference resolved before
+// them copied a slice that had not finished filling — so the uses of a group
+// that referenced a group were silently dropped, and an attribute the schema
+// plainly declares was refused. The references are kept as edges and the graph
+// walked once every fixup has run, which makes the order irrelevant and the
+// nesting depth with it.
+func TestNestedAttributeGroupReferences(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:attribute name="att1" type="xs:string"/>
+	  <xs:element name="doc">
+	    <xs:complexType mixed="true">
+	      <xs:attributeGroup ref="main"/>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:attributeGroup name="main">
+	    <xs:attribute ref="att1"/>
+	    <xs:attributeGroup ref="foo"/>
+	    <xs:attributeGroup ref="bar"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="foo">
+	    <xs:attribute name="foo" type="xs:int"/>
+	    <xs:attributeGroup ref="deep"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="bar">
+	    <xs:attribute name="bar" type="xs:int"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="deep">
+	    <xs:attribute name="deep" type="xs:int"/>
+	  </xs:attributeGroup>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc att1="x" foo="1" bar="2" deep="3"/>`)
+	// The declared types still apply through the chain.
+	assertInvalid(t, schema, `<doc deep="notanint"/>`, "cvc")
+	assertInvalid(t, schema, `<doc unknown="x"/>`, "cvc-complex-type.3.2.2")
+}

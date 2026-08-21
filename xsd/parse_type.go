@@ -331,7 +331,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 	// — Options.Version decides whether they are *honoured*, which is where
 	// the distinction belongs.
 	p.readAssertions(el, t)
-	p.readAttributes(el, &t.AttributeUses, &t.AttributeWildcard)
+	p.readAttributes(el, &t.AttributeUses, &t.AttributeWildcard, nil)
 
 	switch {
 	case t.Particle == nil && mixed:
@@ -456,7 +456,7 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	// simpleContent, where it constrains the element's value through
 	// $value. Reading them only from a content model missed every one.
 	p.readAssertions(body, t)
-	p.readAttributes(body, &t.AttributeUses, &t.AttributeWildcard)
+	p.readAttributes(body, &t.AttributeUses, &t.AttributeWildcard, nil)
 	p.inheritAttributes(t)
 }
 
@@ -674,7 +674,19 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 // the derived type wins over the inherited one of the same name, which is how a
 // restriction narrows an attribute and how "prohibited" removes it.
 func (p *parser) inheritAttributes(t *ComplexType) {
+	// Two passes. The type's own attribute groups contribute through fixups
+	// queued before this one, and those queue a second pass of their own —
+	// the group graph cannot be read until every edge between groups
+	// exists. So inheritance waits for that second pass, or it would union
+	// the base's wildcard with a slot the groups have not filled yet.
 	p.fixups = append(p.fixups, func() error {
+		p.fixups = append(p.fixups, p.inheritAttributesFixup(t))
+		return nil
+	})
+}
+
+func (p *parser) inheritAttributesFixup(t *ComplexType) func() error {
+	return func() error {
 		base, ok := t.Base.(*ComplexType)
 		if !ok || base == t {
 			return nil
@@ -729,7 +741,7 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 		t.OpenContent = combineOpenContent(base.OpenContent, t.OpenContent,
 			t.DerivationMethod, t.declaredOpenContent)
 		return nil
-	})
+	}
 }
 
 // readOpenContent reads an <xs:openContent> or <xs:defaultOpenContent>.
