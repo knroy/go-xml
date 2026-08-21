@@ -320,3 +320,79 @@ func TestIdentityConstraintPathPrefixMustBeBound(t *testing.T) {
 		t.Errorf("a bound prefix should load:\n%v", err)
 	}
 }
+
+// TestFieldAttributeWildcardHonoursPrefix separates the two grammatical
+// attribute wildcards a field may use. "@*" selects every attribute, so an
+// element carrying more than one fails Identity-constraint Satisfied clause 3.
+// "@p:*" is the narrower form and selects only the attributes in p's
+// namespace, so a second attribute from another namespace is no obstacle.
+//
+// idL102 pins the difference: its field is "@myNS:*" over elements that also
+// carry xsi:nil, and treating the prefixed form as a bare "@*" selected two
+// nodes and rejected a document whose key holds.
+func TestFieldAttributeWildcardHonoursPrefix(t *testing.T) {
+	schema := func(field string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t"
+		           elementFormDefault="qualified"
+		           attributeFormDefault="qualified">
+		  <xs:element name="root">
+		    <xs:complexType>
+		      <xs:sequence>
+		        <xs:element name="item" maxOccurs="unbounded" nillable="true">
+		          <xs:complexType>
+		            <xs:attribute name="id" type="xs:string"/>
+		          </xs:complexType>
+		        </xs:element>
+		      </xs:sequence>
+		    </xs:complexType>
+		    <xs:key name="k">
+		      <xs:selector xpath=".//t:item"/>
+		      <xs:field xpath="` + field + `"/>
+		    </xs:key>
+		  </xs:element>
+		</xs:schema>`
+	}
+	const doc = `
+	<t:root xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	  <t:item t:id="1" xsi:nil="true"/>
+	  <t:item t:id="2" xsi:nil="true"/>
+	</t:root>`
+
+	// xsi:nil is not in urn:t, so "@t:*" selects exactly the id attribute.
+	assertValid(t, schema("@t:*"), doc)
+
+	// The unprefixed wildcard selects xsi:nil too, which is two nodes.
+	assertInvalid(t, schema("@*"), doc, "cvc-identity-constraint.3")
+}
+
+// TestPrimitivesDeriveFromAnyAtomicType covers Part 2 §3.4.1: xs:anyAtomicType
+// is the {base type definition} of all 19 primitives, sitting between
+// xs:anySimpleType and them.
+//
+// It was defined but never inserted into the chain — created after the
+// primitives, which kept anySimpleType as their base. Nothing named it, so the
+// gap was invisible until an element declared xs:anyAtomicType met an
+// xsi:type: simple050 does exactly that, and xsi:type="xs:date" was refused as
+// a type not derived from the declaration.
+func TestPrimitivesDeriveFromAnyAtomicType(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="xs:anyAtomicType"/>
+	</xs:schema>`
+	const ns = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` +
+		` xmlns:xs="http://www.w3.org/2001/XMLSchema"`
+
+	// A primitive and a type restricted from one both substitute.
+	assertValid(t, schema, `<e`+ns+` xsi:type="xs:date">2010-11-10</e>`)
+	assertValid(t, schema, `<e`+ns+` xsi:type="xs:int">42</e>`)
+
+	// The value still has to hold against the named type.
+	assertInvalid(t, schema, `<e`+ns+` xsi:type="xs:date">not-a-date</e>`,
+		"cvc-datatype-valid")
+
+	// A list type is not atomic, so it does not derive from anyAtomicType.
+	assertInvalid(t, schema, `<e`+ns+` xsi:type="xs:NMTOKENS">a b</e>`,
+		"cvc-elt.4.3")
+}

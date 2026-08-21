@@ -38,6 +38,24 @@ type Options struct {
 	// schema has no use for one and it is the entry point for entity
 	// expansion attacks.
 	ParseOptions xdm.ParseOptions
+
+	// LaxUPA relaxes Unique Particle Attribution, which loading enforces,
+	// to the reading Saxon and XSV take: two competing particles are
+	// tolerated when both are references to the same element declaration.
+	//
+	// Off by default because the strict reading is the conforming one —
+	// erratum E1-29 is explicit that particles at different points are
+	// distinct "even if they originated from the same named model group".
+	// It exists because schemas written against those processors do rely
+	// on the permissive rule, and such a schema would otherwise be
+	// unloadable rather than merely non-conforming.
+	LaxUPA bool
+}
+
+// checkOptions carries the assembly's constraint settings into the content
+// model checks.
+func (o Options) checkOptions() CheckOptions {
+	return CheckOptions{LaxUPA: o.LaxUPA, Version: o.Version}
 }
 
 // DefaultMaxDocuments bounds an assembly that does not set MaxDocuments.
@@ -86,6 +104,16 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	// substitution-group expansion — the substitution closure already
 	// linked.
 	if err := a.p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
+	// Unique Particle Attribution and Element Declarations Consistent are
+	// checked after restriction for the same reason it runs last: both walk
+	// compiled content models, which need every base resolved and every
+	// group spliced.
+	if err := checkContentModelConstraints(s, a.opts.checkOptions()); err != nil {
+		return nil, err
+	}
+	if err := checkAllGroupLimited(s); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -184,6 +212,16 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	// substitution-group expansion — the substitution closure already
 	// linked.
 	if err := a.p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
+	// Unique Particle Attribution and Element Declarations Consistent are
+	// checked after restriction for the same reason it runs last: both walk
+	// compiled content models, which need every base resolved and every
+	// group spliced.
+	if err := checkContentModelConstraints(s, a.opts.checkOptions()); err != nil {
+		return nil, err
+	}
+	if err := checkAllGroupLimited(s); err != nil {
 		return nil, err
 	}
 	return s, nil

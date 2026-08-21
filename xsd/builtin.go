@@ -61,6 +61,27 @@ func buildBuiltins() {
 	}
 	builtinMap[anySimple.Name] = anySimple
 
+	// xs:anyAtomicType sits between anySimpleType and the primitives: Part 2
+	// §3.4.1 makes it the {base type definition} of every one of them. It has
+	// to exist before they are built, because they name it as their base —
+	// declaring it afterwards left all 19 parented on anySimpleType, and
+	// xsi:type="xs:date" against an element declared xs:anyAtomicType was
+	// then refused as a type that does not derive from its declaration
+	// (simple050).
+	//
+	// XSD 1.0 has no such type. Nothing is lost by defining it in both
+	// versions: a 1.0 schema cannot name it, since it is not in the 1.0
+	// schema for schemas, and the extra step in the base chain is
+	// transparent to every rule that walks it.
+	anyAtomic := &SimpleType{
+		Name:    xsName("anyAtomicType"),
+		Base:    anySimple,
+		Variety: VarietyAtomic,
+		Facets:  &FacetSet{},
+		builtin: true,
+	}
+	builtinMap[anyAtomic.Name] = anyAtomic
+
 	preserve, collapse := WhitePreserve, WhiteCollapse
 
 	// The 19 primitives. Every one except xs:string collapses whitespace,
@@ -68,7 +89,7 @@ func buildBuiltins() {
 	primitive := func(local string, ws WhiteSpace) *SimpleType {
 		t := &SimpleType{
 			Name:    xsName(local),
-			Base:    anySimple,
+			Base:    anyAtomic,
 			Variety: VarietyAtomic,
 			Facets:  &FacetSet{WhiteSpace: &ws, WhiteSpaceFixed: true},
 			builtin: true,
@@ -200,16 +221,6 @@ func buildBuiltins() {
 	duration := builtinMap[xsName("duration")].(*SimpleType)
 	derive("yearMonthDuration", duration, nil)
 	derive("dayTimeDuration", duration, nil)
-
-	// xs:anyAtomicType sits between anySimpleType and the primitives.
-	anyAtomic := &SimpleType{
-		Name:    xsName("anyAtomicType"),
-		Base:    anySimple,
-		Variety: VarietyAtomic,
-		Facets:  &FacetSet{},
-		builtin: true,
-	}
-	builtinMap[anyAtomic.Name] = anyAtomic
 
 	// xs:error has an empty value space: nothing is ever valid against it,
 	// which is how a 1.1 schema says "this branch must not be taken".

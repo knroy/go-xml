@@ -39,19 +39,52 @@ type CheckOptions struct {
 	// it, so this exists — but it is off by default, because the strict
 	// reading is the conforming one.
 	LaxUPA bool
+
+	// Version selects the UPA rule. XSD 1.1 relaxed the constraint so that
+	// an element particle competing with a wildcard is no longer an error;
+	// only element-against-element and wildcard-against-wildcard remain.
+	// The suite states it outright — the feature category is
+	// xsd1_1-Wildcards-RelaxationOfUPA, "wildcard/element competition no
+	// longer violates UPA" — and s3_10_1v04s through s3_10_1ii09s are
+	// version="1.1" schemaTests expected valid for exactly that shape.
+	//
+	// The zero value is 1.0, which keeps the stricter rule.
+	Version Version
 }
 
 // CheckConstraints applies the schema component constraints that are checked
 // against a compiled content model: Unique Particle Attribution and Element
 // Declarations Consistent.
 //
-// It is a separate call rather than part of loading, following the precedent
-// every mature implementation sets: Xerces gates exactly these two behind
-// schema-full-checking, default false, and libxml2 omits particle restriction
-// entirely. They are the expensive half, they say nothing about whether an
-// instance document is valid, and a caller validating documents against a
-// schema they already trust has no reason to pay for them.
+// Loading already applies both — see checkContentModelConstraints — so this
+// re-runs work the schema has passed. It remains exported because it is the
+// only way to ask for the *permissive* UPA reading after the fact: a caller
+// that loaded with Options.LaxUPA set cannot otherwise re-check under the
+// strict rule, and a caller holding a Schema from elsewhere may want the
+// constraints stated as a list of errors rather than as a load failure.
 func (s *Schema) CheckConstraints(opts CheckOptions) error {
+	return checkContentModelConstraints(s, opts)
+}
+
+// checkContentModelConstraints applies Unique Particle Attribution (§3.8.6)
+// and Element Declarations Consistent (§3.8.6) to every complex type.
+//
+// These run at load time for the same reason Particle Valid (Restriction)
+// does — see checkParticleRestriction: both are properties of the schema
+// alone, and a document violating either "is not a schema" in the spec's
+// terms. The suite is unambiguous that they gate loading, not validation:
+// mgR001..mgR022 and mgQ001/mgQ021 are schemaTest cases expected invalid for
+// declaring one element name with two types, and mgS002..mgS005 are
+// schemaTest cases expected invalid for an ambiguous content model. All 26
+// loaded clean while these constraints were opt-in, because nothing in the
+// load path ever called them.
+//
+// The earlier design deferred them on the Xerces schema-full-checking
+// precedent. That precedent governs whether a *validator* pays the cost, and
+// it is the wrong analogy for a loader asked "is this a schema?": answering
+// yes for a schema the spec says does not exist is a false accept, and the
+// cost is paid once per load rather than once per document.
+func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	var errs []error
 	for name, t := range s.Types {
 		ct, ok := t.(*ComplexType)
@@ -69,7 +102,7 @@ func (s *Schema) CheckConstraints(opts CheckOptions) error {
 		if err := checkUPA(m, where, opts); err != nil {
 			errs = append(errs, err)
 		}
-		if err := checkElementDeclarationsConsistent(m, where); err != nil {
+		if err := checkElementDeclarationsConsistent(m, where, s.Version); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -109,13 +142,21 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 		for i := 0; i < len(state); i++ {
 			for j := i + 1; j < len(state); j++ {
 				a, b := m.positions[state[i]], m.positions[state[j]]
-				if !positionsCompete(a, b) {
+				if !positionsCompete(a, b, opts.Version) {
 					continue
 				}
 				if opts.LaxUPA && sameDeclaration(a, b) {
 					// The permissive reading: the element
 					// declaration is identifiable even
 					// though the particle is not.
+					continue
+				}
+				if counterForces(m, a, b) {
+					// Not a free choice: a counter that
+					// has not reached its minimum has to
+					// keep going, so the automaton is
+					// still deterministic. See
+					// counterForces.
 					continue
 				}
 				return fmt.Errorf(
@@ -135,19 +176,23 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 // wildcard that admits its namespace. processContents is irrelevant — a skip
 // wildcard competes exactly as a strict one does, because the ambiguity is
 // about which particle matches, not about what happens afterwards.
-func positionsCompete(a, b *position) bool {
+//
+// The third case is 1.0-only. XSD 1.1 resolves element-against-wildcard in
+// favour of the element rather than calling the model ambiguous, so the pair
+// no longer competes; see CheckOptions.Version.
+func positionsCompete(a, b *position, version Version) bool {
 	switch ta := a.term.(type) {
 	case *ElementDecl:
 		switch tb := b.term.(type) {
 		case *ElementDecl:
 			return elementNamesOverlap(ta, tb)
 		case *Wildcard:
-			return wildcardAdmitsElement(tb, ta)
+			return version < Version11 && wildcardAdmitsElement(tb, ta)
 		}
 	case *Wildcard:
 		switch tb := b.term.(type) {
 		case *ElementDecl:
-			return wildcardAdmitsElement(ta, tb)
+			return version < Version11 && wildcardAdmitsElement(ta, tb)
 		case *Wildcard:
 			return wildcardsOverlap(ta, tb)
 		}
@@ -259,7 +304,7 @@ func describeWildcard(w *Wildcard) string {
 // This is separate from UPA and catches a different mistake: not "which
 // particle matches" but "the same element name means two things here". A
 // document could be validated either way, so the schema is what is wrong.
-func checkElementDeclarationsConsistent(m *contentModel, where string) error {
+func checkElementDeclarationsConsistent(m *contentModel, where string, v Version) error {
 	byName := map[string]*ElementDecl{}
 	for _, p := range m.positions {
 		d, ok := p.term.(*ElementDecl)
@@ -277,6 +322,158 @@ func checkElementDeclarationsConsistent(m *contentModel, where string) error {
 				"cos-element-consistent: %s declares %s with two different "+
 					"types", where, describeTerm(&position{term: d}))
 		}
+		// Conditional type assignment is 1.1-only, so the type table half
+		// of the constraint must not fire under 1.0, where <xs:alternative>
+		// is not a component at all. See sameTypeTable.
+		if v >= Version11 && !sameTypeTable(prev, d) {
+			return fmt.Errorf(
+				"cos-element-consistent: %s declares %s with two different "+
+					"type tables", where, describeTerm(&position{term: d}))
+		}
 	}
 	return nil
+}
+
+// checkAllGroupLimited enforces clause 1 of All Group Limited (§3.8.6): a
+// model group whose {compositor} is all "appears only as" the {model group} of
+// a model group definition (1.1), or the {term} of a particle with
+// {max occurs} = 1 that constitutes the {content type} of a complex type (1.2).
+//
+// Read together those two clauses say an all group is only ever a whole
+// content model. It may be *written* inside a named <xs:group>, because 1.1
+// permits the definition, but the reference to that definition still has to
+// land where 1.2 allows — as the content type itself, once.
+//
+// Everything else is out of bounds, and the suite tests each way of getting it
+// wrong: mgA020 references a group holding an all from inside a <sequence>,
+// particlesEa025 references one with maxOccurs="2", particlesEc009 nests a
+// repeating choice where the all's own members must be 0 or 1, and mgA016 and
+// particlesFb002 make an all the content of an <xs:extension>, where the
+// effective content type is the base's model followed by this one — a
+// sequence, so the all is no longer the content type. particlesFb003 is the
+// mirror image: the base's all survives into an extension whose own content is
+// a choice.
+//
+// The parser already applies 1.2's occurrence half to an *inline* <xs:all>
+// (see checkAllOccurs). It cannot see the group-reference cases, because the
+// referenced definition is bound by a fixup long after the reference is read,
+// which is why this runs over the settled component graph instead.
+func checkAllGroupLimited(s *Schema) error {
+	var errs []error
+	for _, ct := range s.allComplexTypes {
+		if ct.Particle == nil {
+			continue
+		}
+		where := ct.Name.Local
+		if where == "" {
+			where = "an anonymous type"
+		}
+		// The content type's own particle is the one place clause 1.2
+		// allows, and only at maxOccurs=1. Its descendants are not.
+		if g, ok := ct.Particle.Term.(*ModelGroup); ok && g.Compositor == CompositorAll {
+			if ct.Particle.MaxOccurs != 1 {
+				errs = append(errs, fmt.Errorf(
+					"cos-all-limited.1.2: the xs:all group of %s must have maxOccurs=1", where))
+			}
+			// An all group directly inside the content type's own all
+			// group is 1.1's doing, not the schema author's: a
+			// <xs:group ref> naming an all group is how 1.1 shares
+			// one, and §3.4.2.3.3 clause 2.2 builds an all-of-alls
+			// when an all group extends an all group. Both are
+			// legal there, so only the members below them are
+			// examined.
+			for _, sub := range g.Particles {
+				if inner, ok := sub.Term.(*ModelGroup); ok &&
+					inner.Compositor == CompositorAll && s.Version >= Version11 {
+					for _, deep := range inner.Particles {
+						errs = append(errs, badNestedAll(deep, where, s.Version)...)
+					}
+					continue
+				}
+				errs = append(errs, badNestedAll(sub, where, s.Version)...)
+			}
+			continue
+		}
+		errs = append(errs, badNestedAll(ct.Particle, where, s.Version)...)
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	// No sort here: allComplexTypes is in document order already, which is
+	// a more useful order to read than an alphabetical one.
+	return &SchemaErrors{Errors: errs}
+}
+
+// badNestedAll reports every all group at or below a particle that is not the
+// content type, all of which clause 1 forbids.
+//
+// The recursion stops descending into an offending all group: one report per
+// misplaced group is what a schema author needs, and the members of a group
+// that should not be there at all say nothing further about the fault.
+func badNestedAll(p *Particle, where string, version Version) []error {
+	if p == nil {
+		return nil
+	}
+	g, ok := p.Term.(*ModelGroup)
+	if !ok {
+		return nil
+	}
+	if g.Compositor == CompositorAll {
+		return []error{fmt.Errorf(
+			"cos-all-limited.1: an xs:all group may only be the whole content "+
+				"type of a complex type, but %s nests one inside another group", where)}
+	}
+	var errs []error
+	for _, sub := range g.Particles {
+		errs = append(errs, badNestedAll(sub, where, version)...)
+	}
+	return errs
+}
+
+// counterForces reports whether a repetition counter decides between two
+// competing positions, leaving no ambiguity for UPA to object to.
+//
+// This automaton counts rather than duplicating positions: <element name="b"
+// minOccurs="2" maxOccurs="2"/> is one position carrying a counter, not two
+// positions in sequence. Two positions on the same element name are therefore
+// far more common here than in the textbook Glushkov construction, and most of
+// them are not ambiguous at all.
+//
+// The case that matters is one position sitting inside a counter scope the
+// other has left. While that counter is below its minimum the automaton has no
+// choice — it must take the transition that stays inside, because leaving would
+// strand the counter short — so the element is still attributed to exactly one
+// particle. mgZ005 is the shape: <b minOccurs="2" maxOccurs="2"/> followed by
+// <b/>, where the first two b's belong to the counted particle and the third to
+// the plain one, and which is which is never in doubt. The W3C expects it
+// valid.
+//
+// A counter whose minimum is 0 or 1 forces nothing, because leaving it
+// immediately is allowed, and then the choice is real.
+func counterForces(m *contentModel, a, b *position) bool {
+	return exitBlocked(m, a, b) || exitBlocked(m, b, a)
+}
+
+// exitBlocked reports whether inner sits in a counter scope that outer is not
+// in, and whose minimum has still to be met.
+func exitBlocked(m *contentModel, inner, outer *position) bool {
+	for _, c := range inner.counters {
+		if containsScope(outer.counters, c) {
+			continue
+		}
+		if m.counters[c].min > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// containsScope reports whether a counter scope is in a position's chain.
+func containsScope(scopes []int, want int) bool {
+	for _, s := range scopes {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

@@ -169,13 +169,37 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 	t.Base = p.schema.anySimpleType()
 }
 
+// repeatableFacets are the two constraining facets a single restriction may
+// carry more than once. Part 2's schema-for-schemas marks exactly these with
+// the comment "This one can be repeated"; every other facet contributes one
+// value to the facet set, so writing it twice is an error rather than a
+// silently-wins-last. The suite pins this with saxonData/Simple simple060
+// through simple084, one group per repeated facet.
+// xs:assertion joins them: 1.1 §4.3.13 makes {assertions} a sequence that
+// several <xs:assertion> children extend, exactly as patterns do.
+var repeatableFacets = map[string]bool{
+	"pattern": true, "enumeration": true, "assertion": true,
+}
+
 // readFacets reads the constraining facet children of a restriction.
 func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
+	// Tracks which non-repeatable facets this restriction has already named,
+	// so a second occurrence is reported rather than overwriting the first.
+	seen := make(map[string]bool)
 	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
 			continue
 		}
 		v := c.AttrValue("value")
+		if knownFacet(c.Name.Local) && !repeatableFacets[c.Name.Local] {
+			if seen[c.Name.Local] {
+				p.errs = append(p.errs, errorAt(c, "src-single-facet-value",
+					"facet xs:%s appears more than once in a single restriction",
+					c.Name.Local))
+				continue
+			}
+			seen[c.Name.Local] = true
+		}
 		switch c.Name.Local {
 		case "length":
 			f.Length = p.uintFacet(c, v)
@@ -308,6 +332,13 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 	if name := el.AttrValue("name"); name != "" {
 		t.Name = p.qnameFor(name)
 	}
+	// Every complex type is recorded, named or not. Schema.Types holds only
+	// the named ones, so a constraint walked over that map alone never sees
+	// a type declared inline in an <xs:element> — and inline is where the
+	// suite puts most of them. particlesEa025 and particlesFb002 both hang
+	// their offending content model off <xs:element name="doc">, and both
+	// loaded clean while All Group Limited walked Schema.Types.
+	p.schema.allComplexTypes = append(p.schema.allComplexTypes, t)
 	t.Abstract = p.boolAttr(el, "abstract", false)
 	p.applyDefaultAttributes(el, t)
 	defer p.applyDefaultOpenContent(t)
@@ -589,8 +620,32 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			// exactly what an all group exists not to require, so
 			// the 1.0 splice rejects documents the 1.1 schema
 			// permits.
-			if merged := mergeAllExtension(base.Particle, own); merged != nil {
-				t.Particle = merged
+			//
+			// This is 1.1-only. XSD 1.0 has no such clause: there
+			// the splice is always a sequence, and a sequence
+			// holding an all group violates All Group Limited
+			// clause 1, so extending an all group is simply
+			// illegal. mgA016 pins the split exactly — expected
+			// invalid under 1.0 and valid under 1.1 — and
+			// particlesFb002 is the same shape with an all
+			// extending a choice.
+			if p.schema.Version >= Version11 {
+				if merged := mergeAllExtension(base.Particle, own); merged != nil {
+					t.Particle = merged
+					return
+				}
+			}
+			// A base that matches only the empty sequence
+			// contributes nothing to the extension, so the
+			// effective content type is the extension's own
+			// particle rather than a sequence of the two. Building
+			// the sequence anyway would wrap an all group in a
+			// sequence and break All Group Limited for a schema
+			// that is fine — mgO014 extends <sequence/> with a
+			// group whose term is an all group, and the W3C
+			// expects it valid.
+			if isEmptyContent(base) {
+				t.Particle = own
 				return
 			}
 			t.Particle = &Particle{
@@ -796,6 +851,19 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 			}
 		}
 	}
+	// The <choice> or <sequence> inside a definition still carries an
+	// occurrence range that must be well formed, even though the range
+	// itself is discarded: the group definition has no {max occurs}, so
+	// only the reference's range survives. Nothing validated it, because
+	// this path never builds a particle and occurs() runs only in
+	// readParticle — particlesEc009 writes <choice minOccurs="2"> with
+	// maxOccurs defaulting to 1, which is p-props-correct.2.1, and it
+	// loaded clean.
+	if inner.Name.Local != "all" {
+		if _, _, err := p.occurs(inner); err != nil {
+			p.errs = append(p.errs, err)
+		}
+	}
 	return &ModelGroupDef{Name: p.qnameFor(name), Group: p.readModelGroup(inner)}
 }
 
@@ -875,6 +943,8 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 		p.resolveAttributes(base, seen)
 	}
 	p.attrsDone[t] = true
+	// The base is fully resolved by now, so its {final} can be trusted.
+	p.checkComplexDerivationFinal(t)
 	p.inheritAttributesNow(t)
 
 	// A prohibited use is never one of the type's {attribute uses}, whether

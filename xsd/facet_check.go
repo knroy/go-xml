@@ -19,6 +19,64 @@ func (p *parser) checkFacetConstraints() {
 	for _, site := range p.simpleTypes {
 		p.checkTypeFacets(site.typ, site.el)
 		p.checkSimpleTypeFinal(site.typ, site.el)
+		p.checkNotationEnumerated(site.typ, site.el)
+	}
+}
+
+// isBuiltinNotation reports whether t is xs:NOTATION itself, as opposed to a
+// type derived from it.
+func isBuiltinNotation(t *SimpleType) bool {
+	return t != nil && t.builtin && t.Name == xsName("NOTATION")
+}
+
+// checkNotationEnumerated enforces Part 2 §3.2.19's "enumeration facet value
+// required for NOTATION": it is an error for xs:NOTATION to be used directly in
+// a schema, and only types derived from it by specifying an enumeration may be
+// used.
+//
+// The rule bites in four places, which is why this walks the variety rather
+// than looking at one field: xs:NOTATION named as a restriction base without
+// adding an enumeration (simple094), as a list item type (simple092), as a
+// union member (simple093), and — via checkNotationUse below — as the type of
+// an element or attribute (simple090, simple091).
+//
+// The enumeration values must also name notations the schema actually declares.
+// Part 2 gives NOTATION a lexical space of "all names of notations declared in
+// the current schema", so an enumeration naming an undeclared one constrains
+// the type to a value that can never occur; simple095 pins this.
+func (p *parser) checkNotationEnumerated(t *SimpleType, el *xdm.Node) {
+	if t == nil {
+		return
+	}
+	switch t.Variety {
+	case VarietyAtomic:
+		base, ok := t.Base.(*SimpleType)
+		if !ok || !isBuiltinNotation(base) {
+			return
+		}
+		if len(t.Facets.Enumerations) == 0 {
+			p.errs = append(p.errs, errorAt(el, "enumeration-required-notation",
+				"a type restricting xs:NOTATION must specify an enumeration facet"))
+			return
+		}
+		p.checkNotationValues(t, el)
+	}
+}
+
+// checkNotationValues reports enumeration values on a NOTATION restriction that
+// do not name a notation declared anywhere in the schema.
+func (p *parser) checkNotationValues(t *SimpleType, el *xdm.Node) {
+	for _, v := range t.Facets.Enumerations {
+		name, err := p.resolveQName(el, "value", v)
+		if err != nil {
+			// A value that is not even a QName is already reported by
+			// the ordinary facet-value check; nothing to add here.
+			continue
+		}
+		if _, ok := p.schema.Notations[name]; !ok {
+			p.errs = append(p.errs, errorAt(el, "enumeration-required-notation",
+				"enumeration value %q does not name a declared notation", v))
+		}
 	}
 }
 

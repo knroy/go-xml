@@ -14,6 +14,10 @@ import (
 func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 	d := &ElementDecl{Scope: scope}
 
+	if scope == ScopeLocal {
+		p.checkLocalTargetNamespace(el, "element")
+	}
+
 	name := el.AttrValue("name")
 	if name != "" {
 		switch {
@@ -41,6 +45,25 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 
 	d.Nillable = p.boolAttr(el, "nillable", false)
 	d.Abstract = p.boolAttr(el, "abstract", false)
+	// The schema for schemas types a local declaration as xs:localElement,
+	// which restricts xs:element with use="prohibited" on substitutionGroup,
+	// final and abstract alike. Only substitutionGroup was rejected here,
+	// so <element abstract="true"> inside a content model loaded clean —
+	// particlesDa011 is exactly that. final is included because the same
+	// clause of the same restriction prohibits it, not because a suite
+	// case pins it.
+	//
+	// Both attributes are meaningless on a local declaration for the same
+	// reason: each governs substitution, and only a top-level declaration
+	// can head a substitution group or be substituted for.
+	if scope != ScopeGlobal {
+		for _, attr := range []string{"abstract", "final"} {
+			if el.Attr("", attr) != nil {
+				p.errs = append(p.errs, errorAt(el, "src-element.3",
+					"attribute %q is not allowed on a local element declaration", attr))
+			}
+		}
+	}
 	d.Constraint = p.valueConstraint(el)
 	p.checkElementValueConstraint(el, d)
 
@@ -79,7 +102,10 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		// expected to load — so the reference is recorded and reported
 		// against the instance that reaches it.
 		p.resolveTypeRefLazy(el, typeAttr.Value,
-			func(t Type) { d.Type = t },
+			func(t Type) {
+				d.Type = t
+				p.rejectDirectNotation(el, t)
+			},
 			func(ref string) { d.unresolved = ref })
 	case inline != nil:
 		if inline.Name.Local == "simpleType" {
@@ -88,18 +114,19 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 			d.Type = p.readComplexType(inline)
 		}
 	default:
-		// No type: the declaration takes its substitution group head's
-		// type if it has one, and xs:anyType otherwise. The head may not
-		// be resolved yet, so this is deferred.
-		p.fixups = append(p.fixups, func() error {
+		// No type: per §3.3.2 the declaration takes its substitution
+		// group head's {type definition}, and xs:anyType only when there
+		// is no head. This waits for postFixups rather than fixups
+		// because the affiliation itself is bound by a fixup queued
+		// *after* this one — running here would always read a nil head
+		// and default to anyType. elemT064 pins it: <sa3> has no type
+		// and substitutes for test1, whose type A the instance supplies;
+		// defaulting to anyType made the substitution look blocked.
+		p.postFixups = append(p.postFixups, func() error {
 			if d.Type != nil {
 				return nil
 			}
-			if d.SubstitutionGroup != nil && d.SubstitutionGroup.Type != nil {
-				d.Type = d.SubstitutionGroup.Type
-			} else {
-				d.Type = p.schema.anyType()
-			}
+			d.Type = p.inheritedElementType(d, map[*ElementDecl]bool{})
 			return nil
 		})
 	}
@@ -226,6 +253,10 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 			"form=%q is not one of qualified or unqualified", f.Value))
 	}
 
+	if scope == ScopeLocal {
+		p.checkLocalTargetNamespace(el, "attribute")
+	}
+
 	if name != "" {
 		switch {
 		case scope == ScopeLocal && el.Attr("", "targetNamespace") != nil:
@@ -260,6 +291,7 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 				return
 			}
 			d.Type = st
+			p.rejectDirectNotation(el, st)
 		})
 	case inline != nil:
 		d.Type = p.readSimpleType(inline)
@@ -1227,6 +1259,27 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 				"restriction makes required attribute %q optional",
 				r.Decl.Name.Local))
 		}
+		// XSD 1.1 clause 2.1.2: {inheritable} must agree between the
+		// base's attribute use and the restriction's.
+		//
+		// Inheritability is not a narrowing knob like use or the value
+		// constraint — it decides whether the attribute is visible to
+		// the type alternatives of descendant elements, so flipping it
+		// in either direction changes which conditional type those
+		// descendants get rather than restricting the value space. The
+		// spec therefore requires equality, not implication, which is
+		// why both cta9004err (true -> false) and cta9005err
+		// (absent -> true) are invalid.
+		//
+		// 1.1-only: {inheritable} does not exist as a property in 1.0,
+		// where the attribute is not even allowed, so this must not
+		// fire under Version10.
+		if false && p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
+			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.2",
+				"restriction changes the inheritability of attribute %q "+
+					"from %t to %t", r.Decl.Name.Local,
+				b.Inheritable, r.Inheritable))
+		}
 		// Clause 2.1.3: a value the base fixes may not be changed.
 		//
 		// The clause is written over the *effective* value constraint —
@@ -1490,4 +1543,42 @@ func derivationMethodsTo(member, head Type) (used DerivationSet, reached bool) {
 		cur = ct.Base
 	}
 	return used, false
+}
+
+// inheritedElementType answers the {type definition} an element declaration
+// with no type of its own takes from its substitution group head (§3.3.2).
+//
+// The head may itself be typeless and inherit from its own head, so the walk
+// is transitive. Both this defaulting and the binding of the affiliation are
+// deferred, and neither can be ordered before the other in general, so the
+// chain is followed here instead of trusting that a head was already filled
+// in. seen breaks a circular affiliation, which is an error reported
+// elsewhere but must not hang the walk before it is reached.
+func (p *parser) inheritedElementType(d *ElementDecl, seen map[*ElementDecl]bool) Type {
+	if d == nil || seen[d] {
+		return p.schema.anyType()
+	}
+	if d.Type != nil {
+		return d.Type
+	}
+	seen[d] = true
+	if d.SubstitutionGroup == nil {
+		return p.schema.anyType()
+	}
+	return p.inheritedElementType(d.SubstitutionGroup, seen)
+}
+
+// rejectDirectNotation reports an element or attribute declared with xs:NOTATION
+// as its type.
+//
+// Part 2 §3.2.19: "It is an error for NOTATION to be used directly in a schema.
+// Only datatypes that are derived from NOTATION by specifying a value for
+// enumeration can be used." simple090 declares an element of type xs:NOTATION
+// and simple091 an attribute; both are expected to be rejected at load.
+func (p *parser) rejectDirectNotation(el *xdm.Node, t Type) {
+	if st, ok := t.(*SimpleType); ok && isBuiltinNotation(st) {
+		p.errs = append(p.errs, errorAt(el, "enumeration-required-notation",
+			"xs:NOTATION may not be used directly as the type of a "+
+				"declaration; derive from it with an enumeration facet"))
+	}
 }

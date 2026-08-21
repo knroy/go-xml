@@ -216,6 +216,16 @@ type Schema struct {
 	// reassembling rather than merging.
 	sourcePaths []string
 
+	// allComplexTypes holds every complex type read, anonymous ones
+	// included, in the order they were read. Types holds only the named
+	// ones; the schema component constraints apply to both, and an
+	// inline <xs:complexType> is a component like any other.
+	//
+	// The slice is append-only and never keyed, so the order is the
+	// document order rather than a map walk — which keeps the errors a
+	// schema reports stable between runs.
+	allComplexTypes []*ComplexType
+
 	// models caches compiled content models, keyed by complex type. It is
 	// a sync.Map because the access pattern is write-once then read-many —
 	// after the first document there are no more writes — and because a
@@ -289,6 +299,16 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 	// rather than from files.
 	linkSubstitutionGroups(s)
 	if err := p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
+	// Unique Particle Attribution and Element Declarations Consistent are
+	// checked after restriction for the same reason it runs last: both walk
+	// compiled content models, which need every base resolved and every
+	// group spliced.
+	if err := checkContentModelConstraints(s, CheckOptions{Version: s.Version}); err != nil {
+		return nil, err
+	}
+	if err := checkAllGroupLimited(s); err != nil {
 		return nil, err
 	}
 	return s, nil

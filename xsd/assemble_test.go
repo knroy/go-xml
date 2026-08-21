@@ -489,3 +489,47 @@ func TestUnresolvedReferenceStillFails(t *testing.T) {
 		t.Fatal("an attribute ref naming nothing should still be a schema error")
 	}
 }
+
+// TestTypelessMemberTakesHeadType covers §3.3.2: an element declaration with
+// neither a type attribute nor an inline type definition takes its
+// substitution group head's {type definition}, falling back to xs:anyType only
+// when it has no head at all.
+//
+// The defaulting and the binding of the affiliation are both deferred, and the
+// affiliation is queued second, so doing the defaulting in the same pass always
+// read a nil head and settled on anyType. elemT064 pins the consequence: <sa3>
+// substitutes for a head typed A, and an anyType member made the substitution
+// look blocked against a document that is valid.
+//
+// The chain is transitive — c's head b is itself typeless — because neither
+// deferred step can be ordered before the other in general.
+func TestTypelessMemberTakesHeadType(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+		  <xs:element name="c" substitutionGroup="t:b"/>
+		  <xs:element name="b" substitutionGroup="t:a"/>
+		  <xs:element name="a" type="xs:int"/>
+		  <xs:element name="lone"/>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		d := s.Elements[xdm.QName{URI: "urn:t", Local: name}]
+		if d == nil {
+			t.Fatalf("%s was not declared", name)
+		}
+		if got := d.Type.TypeName().Local; got != "int" {
+			t.Errorf("element %q has type %q, want xs:int from its head",
+				name, got)
+		}
+	}
+	lone := s.Elements[xdm.QName{URI: "urn:t", Local: "lone"}]
+	if got := lone.Type.TypeName().Local; got != "anyType" {
+		t.Errorf("a declaration with no head has type %q, want anyType", got)
+	}
+}

@@ -82,7 +82,7 @@ func (p *parser) checkParticleRestriction() error {
 			}
 			continue
 		}
-		if err := particleValidRestriction(ct.Particle, base.Particle); err != nil {
+		if err := particleValidRestrictionVersion(ct.Particle, base.Particle, p.schema.Version); err != nil {
 			errs = append(errs, fmt.Errorf(
 				"%s is not a valid restriction of %s: %w",
 				typeLabel(name, ct), typeLabel(base.Name, base), err))
@@ -126,7 +126,13 @@ func isUrType(ct *ComplexType) bool {
 // columns. Every cell not named is Forbidden, which is why the fallthrough is
 // an error rather than a pass.
 func particleValidRestriction(r, b *Particle) error {
-	return particleRestricts(r, b, false)
+	return particleRestricts(r, b, false, Version10)
+}
+
+// particleValidRestrictionVersion is particleValidRestriction with the schema
+// version, which decides whether the 1.1 all-group subsumption rule applies.
+func particleValidRestrictionVersion(r, b *Particle, v Version) error {
+	return particleRestricts(r, b, false, v)
 }
 
 // particleRestricts carries the clause 2.1 state that particleValidRestriction
@@ -137,7 +143,7 @@ func particleValidRestriction(r, b *Particle) error {
 // a member of its own substitution group: expanding again on the way down
 // through RecurseAsIfGroup and RecurseLax reproduces the same head particle
 // forever.
-func particleRestricts(r, b *Particle, expanded bool) error {
+func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// Clause 1: the same particle restricts itself. This is not merely an
 	// optimisation — a group reference shared between base and derived
 	// resolves to one *Particle, and the structural rules below would have
@@ -153,6 +159,31 @@ func particleRestricts(r, b *Particle, expanded bool) error {
 	r = stripPointless(r)
 	b = stripPointless(b)
 
+	// Clause 2.2.1 makes an empty <sequence> or <all> — and an empty
+	// <choice> under a particle with {min occurs} of 0 — pointless, so it
+	// is *ignored* rather than matched against a cell of the table. A
+	// restriction whose whole content model is ignored away contributes no
+	// element at all, and admitting nothing is a valid restriction of any
+	// base that is itself allowed to match nothing.
+	//
+	// The table has no row for "no particle", which is why omitting this
+	// lands such a derivation in the Forbidden fallthrough instead. mgE014
+	// pins it: <sequence><element name="title" minOccurs="0"
+	// maxOccurs="0"/></sequence> restricting <sequence><element
+	// name="title" minOccurs="0"/></sequence>. The 0..0 element maps to no
+	// component at all (§3.9.2, "it maps to no component at all"), leaving
+	// R an empty sequence, while B's single-member sequence collapses to
+	// the bare optional element — a group against an element declaration,
+	// which the table forbids. Both W3C versions expect it valid.
+	if particleIgnorable(r) {
+		if !particleEmptiable(b) {
+			return fmt.Errorf(
+				"the restriction has no content but the base requires %s",
+				particleKind(b))
+		}
+		return nil
+	}
+
 	// Clause 2.1: a top-level element declaration heading a non-trivial
 	// substitution group stands for a choice over that group. Without this
 	// a restriction that names a *member* where the base names the *head*
@@ -167,7 +198,28 @@ func particleRestricts(r, b *Particle, expanded bool) error {
 	// otherwise expand forever.
 	if !expanded && !sameElementDecl(r, b) {
 		if sub := asSubstitutionChoice(b); sub != nil {
-			return particleRestricts(r, sub, true)
+			return particleRestricts(r, sub, true, v)
+		}
+	}
+
+	// XSD 1.1 replaced the structural table below with a single semantic
+	// constraint, Content type restricts (Complex Content) (§3.4.6.4):
+	// every sequence locally valid against R must be locally valid against
+	// B. That is language inclusion, and it accepts derivations the 1.0
+	// table calls Forbidden — a choice or a wildcard restricting an all
+	// group, an all group reordered, one base particle covered by several
+	// derived ones.
+	//
+	// allSubsumes decides that inclusion exactly for the shape that
+	// accounts for the whole 1.1 all-group cluster: a base all group whose
+	// particles are element declarations. It returns notApplicable for
+	// anything outside that shape, so wildcards and non-all bases keep the
+	// 1.0 table, which stays sound under 1.1 — the table is a conservative
+	// approximation of the same inclusion, never wrong in the accepting
+	// direction.
+	if v >= Version11 {
+		if err, ok := allSubsumes(r, b); ok {
+			return err
 		}
 	}
 
@@ -179,7 +231,7 @@ func particleRestricts(r, b *Particle, expanded bool) error {
 		case *Wildcard:
 			return nsCompat(r, rt, b, bt)
 		case *ModelGroup:
-			return recurseAsIfGroup(r, b, bt, expanded)
+			return recurseAsIfGroup(r, b, bt, expanded, v)
 		}
 	case *Wildcard:
 		switch bt := b.Term.(type) {
@@ -189,18 +241,18 @@ func particleRestricts(r, b *Particle, expanded bool) error {
 	case *ModelGroup:
 		switch bt := b.Term.(type) {
 		case *Wildcard:
-			return nsRecurseCheckCardinality(r, rt, b, bt, expanded)
+			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, v)
 		case *ModelGroup:
 			switch {
 			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll,
 				rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
-				return recurse(r, rt, b, bt, expanded)
+				return recurse(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorChoice && bt.Compositor == CompositorChoice:
-				return recurseLax(r, rt, b, bt, expanded)
+				return recurseLax(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorAll:
-				return recurseUnordered(r, rt, b, bt, expanded)
+				return recurseUnordered(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorChoice:
-				return mapAndSum(r, rt, b, bt, expanded)
+				return mapAndSum(r, rt, b, bt, expanded, v)
 			}
 		}
 	}
@@ -247,6 +299,35 @@ func stripPointless(p *Particle) *Particle {
 		}
 		p = inner
 	}
+}
+
+// particleIgnorable reports whether clause 2.2.1 erases this particle
+// entirely: an empty <sequence> or <all>, or an empty <choice> whose
+// containing particle may occur zero times.
+//
+// The emptiness that matters is emptiness after the same erasure, because a
+// sequence holding nothing but an empty sequence is itself empty. Erasing is
+// not the same as being ·emptiable·: an optional element is emptiable but is
+// still a particle the table has a row for, and collapsing it here would
+// discard the name check that makes a restriction meaningful.
+func particleIgnorable(p *Particle) bool {
+	g, ok := p.Term.(*ModelGroup)
+	if !ok {
+		return false
+	}
+	for _, child := range g.Particles {
+		if !particleIgnorable(child) {
+			return false
+		}
+	}
+	// A <choice> with no alternatives matches nothing at all rather than
+	// the empty sequence, so the spec erases it only when the containing
+	// particle is free to skip it. A <sequence> or <all> with no members
+	// already matches the empty sequence, whatever its range.
+	if g.Compositor == CompositorChoice && len(g.Particles) == 0 {
+		return p.MinOccurs == 0
+	}
+	return true
 }
 
 // occurrenceRangeOK is Occurrence Range OK (§3.9.6): R's range must fit inside
@@ -366,16 +447,16 @@ func nsCompat(r *Particle, rd *ElementDecl, b *Particle, bw *Wildcard) error {
 // recurseAsIfGroup is Particle Derivation OK (Elt:All/Choice/Sequence)
 // (§3.9.6): an element restricting a group is checked as a one-member group of
 // the base's variety.
-func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool) error {
+func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
 	wrapped := &Particle{
 		MinOccurs: 1, MaxOccurs: 1,
 		Term: &ModelGroup{Compositor: bg.Compositor, Particles: []*Particle{r}},
 	}
 	switch bg.Compositor {
 	case CompositorChoice:
-		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded)
+		return recurseLax(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
 	default:
-		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded)
+		return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bg, expanded, v)
 	}
 }
 
@@ -475,7 +556,7 @@ func sameNamespaceSet(a, b []string) bool {
 
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
 // (§3.9.6): a group restricting a wildcard.
-func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool) error {
+func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool, v Version) error {
 	// Clause 1 says each member must be a valid restriction of "the
 	// wildcard" — the {term}, not the particle B. A wildcard term carries a
 	// namespace constraint and a processContents, but no occurrence range;
@@ -504,7 +585,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 	// which leaves exactly the namespace test clause 1 is for.
 	anyOccurs := &Particle{MinOccurs: 0, MaxOccurs: Unbounded, Term: bw}
 	for _, member := range rg.Particles {
-		if err := particleRestricts(member, anyOccurs, expanded); err != nil {
+		if err := particleRestricts(member, anyOccurs, expanded, v); err != nil {
 			return err
 		}
 	}
@@ -526,7 +607,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 // single left-to-right walk rather than a search over permutations: each
 // particle of R must match the next particle of B that it can, and every
 // particle of B skipped along the way must be emptiable.
-func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool) error {
+func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("%s group: %w", rg.Compositor, err)
 	}
@@ -536,7 +617,7 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 		for bi < len(bg.Particles) {
 			bp := bg.Particles[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded) == nil {
+			if particleRestricts(rp, bp, expanded, v) == nil {
 				matched = true
 				break
 			}
@@ -572,7 +653,7 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 // Like Recurse, the mapping is order-preserving — but unlike Recurse, the
 // unmapped particles of B need not be emptiable: dropping an alternative from
 // a choice is exactly what restricting a choice means.
-func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool) error {
+func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("choice group: %w", err)
 	}
@@ -582,7 +663,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 		for bi < len(bg.Particles) {
 			bp := bg.Particles[bi]
 			bi++
-			if particleRestricts(rp, bp, expanded) == nil {
+			if particleRestricts(rp, bp, expanded, v) == nil {
 				matched = true
 				break
 			}
@@ -601,7 +682,7 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 // group's particles in any order, which is the whole point of restricting an
 // all group to a sequence — but it must still be injective: clause 2.1 forbids
 // two particles of R mapping to one of B.
-func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool) error {
+func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("sequence restricting an all group: %w", err)
 	}
@@ -612,7 +693,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			if used[i] {
 				continue
 			}
-			if particleRestricts(rp, bp, expanded) == nil {
+			if particleRestricts(rp, bp, expanded, v) == nil {
 				used[i] = true
 				matched = true
 				break
@@ -642,11 +723,11 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 // nor injective — the same alternative may be chosen repeatedly — and clause 2
 // compares the *total* length of the unfolded sequence against the choice's
 // range.
-func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool) error {
+func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
 	for _, rp := range rg.Particles {
 		matched := false
 		for _, bp := range bg.Particles {
-			if particleRestricts(rp, bp, expanded) == nil {
+			if particleRestricts(rp, bp, expanded, v) == nil {
 				matched = true
 				break
 			}
@@ -813,4 +894,241 @@ func sameElementDecl(a, b *Particle) bool {
 	da, okA := a.Term.(*ElementDecl)
 	db, okB := b.Term.(*ElementDecl)
 	return okA && okB && da == db
+}
+
+// allSubsumes decides Content type restricts (Complex Content) (§3.4.6.4) for
+// the case that dominates the 1.1 all-group tests: a base <all> group whose
+// particles are all element declarations.
+//
+// The second result reports whether the rule applied at all. When it is false
+// the caller falls back to the 1.0 structural table, which remains sound: the
+// table is a conservative approximation of this same language inclusion, so
+// everything it accepts is genuinely included.
+//
+// Why this shape is decidable cheaply. An <all> group's particles are
+// unordered and each names a distinct element (Unique Particle Attribution
+// forbids two particles of one all group matching the same name), so the base
+// is exactly a per-name occurrence budget: name n may appear between min and
+// max times, in any order, and no other name may appear. A sequence of
+// elements is therefore locally valid against B if and only if, for every
+// name, its total count lies in that name's budget. Order is irrelevant, which
+// is what makes counting sufficient and why no automaton is needed.
+//
+// R is then included in B exactly when every branch through R produces counts
+// inside every budget. allBranchCounts enumerates the branches.
+func allSubsumes(r, b *Particle) (error, bool) {
+	bg, ok := b.Term.(*ModelGroup)
+	if !ok || bg.Compositor != CompositorAll {
+		return nil, false
+	}
+	// A base particle that is not an element declaration — a wildcard, or
+	// a nested group — has no single name to budget, and a wildcard can
+	// absorb names belonging to other buckets, which makes the assignment
+	// ambiguous rather than a count. all244 is the case that punishes
+	// guessing: a derived wildcard spanning two base buckets is invalid
+	// precisely because of how its occurrences may be split between them.
+	budget := map[xdm.QName]*occBudget{}
+	for _, bp := range bg.Particles {
+		bd, ok := bp.Term.(*ElementDecl)
+		if !ok {
+			return nil, false
+		}
+		if _, dup := budget[bd.Name]; dup {
+			return nil, false
+		}
+		budget[bd.Name] = &occBudget{decl: bd, min: bp.MinOccurs, max: bp.MaxOccurs}
+	}
+
+	branches, ok := allBranchCounts(r)
+	if !ok {
+		return nil, false
+	}
+	for _, br := range branches {
+		if err := branchFitsBudget(br, budget); err != nil {
+			return err, true
+		}
+	}
+	// Clause 1 also requires that R admit nothing B forbids by way of
+	// *absence*: a name whose budget has a non-zero minimum must be
+	// produced by every branch, which branchFitsBudget checks, since a
+	// name a branch never mentions has count zero.
+	return nil, true
+}
+
+// occBudget is one base all-group particle seen as an occurrence budget for a
+// single element name.
+type occBudget struct {
+	decl     *ElementDecl
+	min, max int
+}
+
+// branchCount is the number of times each element name occurs along one branch
+// through the derived content model, as a range because a branch still
+// contains its own optional and repeated particles.
+type branchCount map[xdm.QName]*occRange
+
+type occRange struct{ min, max int }
+
+// add accumulates n more occurrences of a name, propagating unbounded.
+func (c branchCount) add(name xdm.QName, min, max int) {
+	cur, ok := c[name]
+	if !ok {
+		cur = &occRange{}
+		c[name] = cur
+	}
+	cur.min += min
+	if cur.max == Unbounded || max == Unbounded {
+		cur.max = Unbounded
+		return
+	}
+	cur.max += max
+}
+
+// allBranchCounts enumerates the branches through a derived particle, each as
+// a per-name occurrence range.
+//
+// A <choice> forks — each alternative is its own branch, which is what lets
+// all231 and all232 restrict an all group with a choice: every branch is
+// independently checked, and all233 is rejected because only its third branch
+// exceeds a budget. A <sequence> or <all> concatenates, summing the counts of
+// its members, which is what makes all216 (the same name taken twice) and
+// all234 (one name split across two particles) come out right.
+//
+// The second result is false when the model contains something this counting
+// cannot describe — a wildcard, or an element with no resolvable name — in
+// which case the caller falls back to the structural table.
+func allBranchCounts(p *Particle) ([]branchCount, bool) {
+	if p.MaxOccurs == 0 {
+		return []branchCount{{}}, true
+	}
+	switch t := p.Term.(type) {
+	case *ElementDecl:
+		c := branchCount{}
+		c.add(t.Name, p.MinOccurs, p.MaxOccurs)
+		return []branchCount{c}, true
+
+	case *ModelGroup:
+		inner, ok := groupBranchCounts(t)
+		if !ok {
+			return nil, false
+		}
+		// Repeating a branch multiplies every count in it. An
+		// unbounded repetition makes every name it can produce
+		// unbounded, which is what stops a repeated group from
+		// sneaking past a finite budget.
+		out := make([]branchCount, 0, len(inner))
+		for _, br := range inner {
+			scaled := branchCount{}
+			for name, rng := range br {
+				min := rng.min * p.MinOccurs
+				max := rng.max
+				switch {
+				case max == Unbounded || p.MaxOccurs == Unbounded:
+					if max != 0 {
+						max = Unbounded
+					}
+				default:
+					max *= p.MaxOccurs
+				}
+				scaled[name] = &occRange{min: min, max: max}
+			}
+			out = append(out, scaled)
+		}
+		return out, true
+	}
+	// A wildcard cannot be counted per name.
+	return nil, false
+}
+
+// groupBranchCounts enumerates the branches of a model group's particles.
+//
+// The number of branches is the product of the choice arities on the path, so
+// a deeply nested model could in principle blow up; branchLimit caps it and
+// falls back to the structural table rather than spending unbounded time.
+const branchLimit = 4096
+
+func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
+	if g.Compositor == CompositorChoice {
+		if len(g.Particles) == 0 {
+			return []branchCount{{}}, true
+		}
+		var out []branchCount
+		for _, child := range g.Particles {
+			brs, ok := allBranchCounts(child)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, brs...)
+			if len(out) > branchLimit {
+				return nil, false
+			}
+		}
+		return out, true
+	}
+
+	// <sequence> and <all> both concatenate: the counts of the members
+	// add. They differ only in the order elements may appear, and order is
+	// exactly what a per-name count discards — which is sound here because
+	// the base is an all group, whose language is likewise order-blind.
+	out := []branchCount{{}}
+	for _, child := range g.Particles {
+		brs, ok := allBranchCounts(child)
+		if !ok {
+			return nil, false
+		}
+		if len(out)*len(brs) > branchLimit {
+			return nil, false
+		}
+		next := make([]branchCount, 0, len(out)*len(brs))
+		for _, base := range out {
+			for _, add := range brs {
+				merged := branchCount{}
+				for n, r := range base {
+					merged[n] = &occRange{min: r.min, max: r.max}
+				}
+				for n, r := range add {
+					merged.add(n, r.min, r.max)
+				}
+				next = append(next, merged)
+			}
+		}
+		out = next
+	}
+	return out, true
+}
+
+// branchFitsBudget checks one branch of the derived model against the base's
+// per-name budgets.
+func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
+	for name, rng := range br {
+		bud := budget[name]
+		if bud == nil {
+			// A name the base's all group never mentions cannot
+			// appear, however few times. all205 and all215 pin
+			// this.
+			return fmt.Errorf(
+				"element %s may occur in the restriction but the base's all group does not allow it",
+				name.Local)
+		}
+		if rng.max == 0 {
+			continue
+		}
+		if err := rangeOK(rng.min, rng.max, bud.min, bud.max); err != nil {
+			return fmt.Errorf("element %s: %w", name.Local, err)
+		}
+	}
+	// A budget with a non-zero minimum must be met by this branch, even
+	// when the branch never mentions the name at all. all204 and all214
+	// drop a required element that way.
+	for name, bud := range budget {
+		if bud.min == 0 {
+			continue
+		}
+		if rng, ok := br[name]; !ok || rng.max == 0 {
+			return fmt.Errorf(
+				"the base requires element %s at least %d times, which the restriction omits",
+				name.Local, bud.min)
+		}
+	}
+	return nil
 }

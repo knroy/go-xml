@@ -303,6 +303,17 @@ func (v *validator) walkSteps(start *xdm.Node, alt ICPathAlternative) []*xdm.Nod
 				// "@*" selects every attribute, which is
 				// grammatical even though a field using it can
 				// only be valid when the element has exactly one.
+				//
+				// "@prefix:*" is the narrower form and selects
+				// only the attributes in that namespace. idL102
+				// pins the difference: its field is "@myNS:*"
+				// over elements carrying both myNS:row and
+				// xsi:nil, so ignoring the prefix selected two
+				// attributes and failed a key that holds.
+				if alt.Attribute != nil && alt.Attribute.Prefix != "" &&
+					!attrNamespaceMatches(a, alt.Attribute) {
+					continue
+				}
 				attrs = append(attrs, a)
 				continue
 			}
