@@ -74,6 +74,21 @@ func TestInScopePrefixes(t *testing.T) {
 	if got != "3" {
 		t.Errorf("count(in-scope-prefixes()) = %q, want 3", got)
 	}
+
+	// The order is pinned as well as the count. In-scope namespaces are
+	// held in a map, and Go randomises map iteration, so before they were
+	// sorted this function returned a different order from run to run —
+	// four distinct orders over forty runs of one four-prefix document.
+	// XPath leaves the order implementation-dependent, so the unsorted
+	// answer conformed; it was just useless for anything a caller wants to
+	// compare, print or test against.
+	wide := `<r xmlns:a="urn:a" xmlns:b="urn:b" xmlns:c="urn:c" xmlns:d="urn:d"><e/></r>`
+	for i := 0; i < 20; i++ {
+		got := evalStr(t, wide, `string-join(in-scope-prefixes(//e), ',')`)
+		if want := "a,b,c,d,xml"; got != want {
+			t.Fatalf("in-scope-prefixes order = %q, want %q", got, want)
+		}
+	}
 }
 
 func TestResolveURI(t *testing.T) {

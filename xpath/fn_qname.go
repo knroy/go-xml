@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"golang.org/x/text/unicode/norm"
@@ -121,13 +122,26 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		var out xdm.Sequence
-		for prefix := range el.InScopeNamespaces() {
-			out = append(out, xdm.NewString(prefix))
+		// InScopeNamespaces returns a map, and Go randomises map
+		// iteration, so the prefixes are sorted before they are
+		// returned. XPath leaves the order implementation-dependent, so
+		// an unsorted answer conforms — but a different one on every
+		// run makes the function useless for anything a caller wants to
+		// compare, print or test against, and costs nothing to avoid.
+		scope := el.InScopeNamespaces()
+		prefixes := make([]string, 0, len(scope)+1)
+		for prefix := range scope {
+			prefixes = append(prefixes, prefix)
 		}
 		// "xml" is always in scope and is never declared, so it does not
 		// appear in the declaration walk.
-		out = append(out, xdm.NewString("xml"))
+		prefixes = append(prefixes, "xml")
+		sort.Strings(prefixes)
+
+		out := make(xdm.Sequence, 0, len(prefixes))
+		for _, prefix := range prefixes {
+			out = append(out, xdm.NewString(prefix))
+		}
 		return out, nil
 	})
 }
