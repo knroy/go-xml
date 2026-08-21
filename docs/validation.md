@@ -1,31 +1,95 @@
 # Validating XML
 
-## First: this library does not do XSD
-
-If you came here to validate against an `.xsd` schema, **go-xml cannot do
-that**, and no combination of its APIs will. It implements XPath 2.0 and
-XSLT 2.0. `xsl:import-schema` is refused at compile time with an explicit
-error rather than silently ignored:
-
-```
-xsl:import-schema is not supported: this engine is not schema-aware
-```
-
-That refusal is deliberate. Schema-awareness changes how *every* value in a
-stylesheet atomises — a schema-validated `<price>10.50</price>` yields an
-`xs:decimal`, an unvalidated one yields an `xs:untypedAtomic` — so accepting
-the declaration and ignoring it would make the stylesheet's type assertions
-quietly meaningless rather than obviously broken.
-
-### The three kinds of "valid" people mean
+## The three kinds of "valid" people mean
 
 Being precise about which one you need saves the most time:
 
 | you want to check | what does it | go-xml |
 |---|---|---|
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
-| the XML matches a **structural schema** (XSD, DTD, RELAX NG) | a schema validator | ❌ not implemented |
+| the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
+| the XML matches a DTD or RELAX NG schema | a different validator | ❌ not implemented |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
+
+## XSD
+
+`xsd` implements XML Schema 1.0: the component model, schema assembly through
+`include`, `import` and `redefine`, content models, simple types and facets,
+`xsi:type` and `xsi:nil`, substitution groups, wildcards, identity constraints
+and document-level ID/IDREF.
+
+```go
+schema, err := xsd.LoadFile("invoice.xsd", xsd.Options{})
+if err != nil {
+    return err
+}
+doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+if err != nil {
+    return err
+}
+if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
+    // *xsd.ValidationErrors, one entry per failure, each carrying the
+    // spec's error code.
+    return err
+}
+```
+
+Measured against the W3C XSD test suite: **99.26%** agreement on 20,131
+instance tests. XSD **1.1** — assertions, conditional type assignment, open
+content — is not implemented.
+
+Two schema-component constraints are not checked: Unique Particle Attribution
+and Particle Valid (Restriction). Both are opt-in in Xerces
+(`schema-full-checking` defaults to false) and neither is implemented at all in
+libxml2, so this is where the mature implementations sit too — but it means a
+schema that is itself invalid in those specific ways will be accepted rather
+than reported.
+
+### Resolving schemaLocation
+
+`include`, `import` and `redefine` name other documents, and following those
+names means fetching whatever the schema says. The default `FileResolver` reads
+only from disk. To follow remote locations, opt in:
+
+```go
+xsd.Options{Resolver: &xsd.HTTPResolver{
+    AllowHost: func(host string) bool { return host == "schemas.example.com" },
+}}
+```
+
+`AllowHost` runs before the request, so it is the place to refuse loopback and
+private address ranges. `MapResolver` resolves from an in-memory table and
+touches neither disk nor network, which is the right choice in a server.
+
+Note that `xsi:schemaLocation` lives in the *instance document*. Honouring it
+lets whoever supplied the document choose which schema it is judged against, so
+this library never reads it — the schema is always the one the caller loaded.
+
+## xsl:import-schema
+
+A stylesheet can declare a schema, which makes its type names available and
+lets a caller validate the source against the same components:
+
+```go
+sheet, err := xslt.Compile(styleTree.Root, xslt.CompileOptions{
+    SchemaResolver: &xsd.FileResolver{},
+})
+if err != nil {
+    return err
+}
+if s := sheet.Schema(); s != nil {
+    if err := s.Validate(srcTree.Root, xsd.ValidateOptions{}); err != nil {
+        return err
+    }
+}
+```
+
+One boundary worth stating plainly: importing a schema makes type *names*
+known, but it does not change how a node atomises. A `<price>10.50</price>`
+annotated as `xs:decimal` still atomises as untyped, because the typed value
+would have to be carried on the node rather than its name. A stylesheet
+relying on schema-aware *arithmetic* will behave as it does without a schema;
+one relying on type assertions will not.
 
 Most real "invoice validation" pipelines need the first and third, and use the
 second mainly as a cheap early filter. The rules that actually reject documents

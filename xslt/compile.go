@@ -124,10 +124,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "character-map":
 		return c.compileCharacterMap(el)
 	case "import-schema":
-		// Schema-awareness would change how every value atomises, so
-		// accepting the declaration and then ignoring it would make the
-		// stylesheet's type assertions silently meaningless.
-		return fmt.Errorf("xsl:import-schema is not supported: this engine is not schema-aware")
+		return c.compileImportSchema(el)
 	}
 	// An unrecognised xsl: element at the top level is an error, not something
 	// to skip. The spec reserves the whole namespace, so anything unknown in

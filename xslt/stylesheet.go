@@ -7,6 +7,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // Stylesheet is a compiled XSLT 2.0 stylesheet.
@@ -31,6 +32,9 @@ type Stylesheet struct {
 	// decimalFormats holds xsl:decimal-format declarations by Clark name;
 	// the unnamed default is stored under "".
 	decimalFormats map[string]*DecimalFormat
+	// schema holds the components brought in by xsl:import-schema, or nil
+	// when the stylesheet declares none.
+	schema *xsd.Schema
 	// attributeSets holds xsl:attribute-set declarations, several per name
 	// when modules declare the same one.
 	attributeSets map[string][]*attributeSet
@@ -165,6 +169,12 @@ type CompileOptions struct {
 	BaseURI string
 	// StaticParams supplies values for top-level xsl:param at compile time.
 	StaticParams map[string]string
+
+	// SchemaResolver loads the schemas named by xsl:import-schema. Nil
+	// disables loading by location, for the same reason a nil Resolver
+	// disables xsl:include: following a location means fetching whatever
+	// the stylesheet names. An inline <xs:schema> child needs no resolver.
+	SchemaResolver xsd.Resolver
 }
 
 // ModuleResolver loads an included or imported stylesheet module.

@@ -20,18 +20,20 @@ Requires Go 1.26 or later.
 | | |
 |---|---|
 | **XPath 2.0** | 99.82% of the W3C QT3 suite (14,655 of 14,682 in scope) |
-| **XSLT 2.0** | complete except `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD** | **not implemented** — see [docs/validation.md](docs/validation.md) |
-| **Tests** | 296, clean under `-race` (293 from a fresh clone; 4 need the corpora below) |
+| **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
+| **XSD 1.0** | 99.26% of the W3C xsdtests suite (19,983 of 20,131 instance tests) |
+| **Tests** | 395, clean under `-race` (381 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **This does not validate against XSD.** It runs Schematron rule sets, which
-   is a different and often complementary thing. If you came here to check a
-   document against an `.xsd`, start at [docs/validation.md](docs/validation.md)
-   — it explains what each does and what this engine covers.
+1. **XSD 1.0 is implemented; XSD 1.1 is not.** Assertions, conditional type
+   assignment and open content are absent, and two schema-component constraints
+   — Unique Particle Attribution and Particle Valid (Restriction) — are not
+   checked, so a schema invalid in those specific ways is accepted rather than
+   reported. Both are opt-in in Xerces and absent from libxml2, so this is
+   where the mature implementations sit too.
 2. **Regular-expression backreferences are unsupported and always will be.**
    RE2 has none by design, which is also why no pattern can hang this engine.
    Everything else in the XML Schema regex flavour is implemented.
@@ -52,13 +54,14 @@ Four packages, each usable on its own:
 | [`xdm`](xdm/) | The XQuery/XPath data model: typed atomic values, the node tree, an XML parser |
 | [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, and the `fn:` function library |
 | [`xslt`](xslt/) | XSLT 2.0: pattern matching, the stylesheet compiler, the transform runtime, serialisation |
+| [`xsd`](xsd/) | XML Schema 1.0: the component model, schema assembly, content models, facets, identity constraints |
 | [`cmd/go-xml`](cmd/go-xml/) | A command-line transformer |
 
 ## Documentation
 
-* **[docs/validation.md](docs/validation.md)** — what this engine can and
-  cannot check. **It does not do XSD**; start here if that is what you came
-  for.
+* **[docs/validation.md](docs/validation.md)** — XSD validation, Schematron,
+  and which kind of "valid" you actually need. Start here if you came to check
+  a document against an `.xsd`.
 * **[docs/server.md](docs/server.md)** — compile once, transform per request:
   a complete validator service, timeouts, limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
@@ -566,7 +569,7 @@ value carries the namespace URI and the prefix binding exists only in the
 static context — which is also why the spec restricts its argument to a string
 literal.
 
-**XSLT 2.0.** Every element except `xsl:import-schema`: `apply-templates`
+**XSLT 2.0.** Every element: `apply-templates`
 (with modes and the built-in rules), `apply-imports`, `next-match`,
 `call-template`, `for-each`, `for-each-group` (all four grouping modes), `if`,
 `choose`, `variable`, `param` with tunnel parameters, `element`, `attribute`,
@@ -604,8 +607,7 @@ different reasons.
 Each errors rather than doing something plausible. An XSLT processor that
 accepts an instruction and quietly ignores it is the worst failure mode,
 because the output looks fine and is wrong. See *What is not* below for the
-full list — `xsl:import-schema`, `fn:collection`, `fn:unparsed-text`, and
-regex backreferences.
+full list — `fn:collection`, `fn:unparsed-text`, and regex backreferences.
 
 **Malformed stylesheets are refused too**, which is the same principle applied
 one level up. An unknown element in the `xsl:` namespace is `XTSE0010` rather
@@ -734,15 +736,11 @@ here rather than half-done in the code.
 
 ## What is not
 
-Three things are unsupported, none of them an XSLT element other than
-`xsl:import-schema`. **Each one errors rather than doing something
-plausible** — an XSLT processor that accepts an instruction and quietly ignores
-it is the worst possible failure mode, because the output looks fine and is
-wrong.
+Two things are unsupported, neither of them an XSLT element. **Each one errors
+rather than doing something plausible** — an XSLT processor that accepts an
+instruction and quietly ignores it is the worst possible failure mode, because
+the output looks fine and is wrong.
 
-* **`xsl:import-schema`** — schema-awareness would change how every value
-  atomises, so accepting it and ignoring it would make the stylesheet's type
-  assertions silently meaningless.
 * **`fn:collection` and `fn:unparsed-text`** — no collection is configured, and
   reading arbitrary files named by a stylesheet is disabled by design.
 * **Regular-expression backreferences** (`\1`) — RE2 has none, by the design
@@ -1034,9 +1032,11 @@ larger things are open, in rough order of how much they would change:
   it. Emitting events to a receiver instead is what makes streaming possible
   and would cut peak memory on large documents — it is the one change here that
   is architectural rather than additive.
-* **`xsl:import-schema`.** Schema-awareness needs an XSD implementation, which
-  is a project rather than a feature. It is refused rather than ignored for the
-  reason given above.
+* **Schema-aware atomisation.** `xsl:import-schema` loads a schema and makes
+  its type names available, but a validated `<price>10.50</price>` still
+  atomises as untyped: the typed value would have to be carried on the node
+  rather than its name. Stylesheets relying on type assertions work; ones
+  relying on schema-aware arithmetic do not.
 * **An XSLT conformance run.** The absence of one is the largest gap in the
   evidence. Adapting the XSLT 3.0 catalog to the subset this engine claims is
   tractable and would replace corpus-shaped confidence with systematic

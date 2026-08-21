@@ -186,22 +186,22 @@ func TestCharacterMapUnknownNameIsAnError(t *testing.T) {
 	}
 }
 
-func TestUnsupportedElementsAreRejectedLoudly(t *testing.T) {
-	// Accepting and ignoring this would produce output that looks plausible
-	// and is wrong, which is strictly worse than refusing to run.
-	cases := []struct{ name, sheet string }{
-		{"import-schema", wrap(`<xsl:import-schema namespace="urn:x"/>
-			<xsl:template match="/"><r/></xsl:template>`)},
-	}
-	for _, c := range cases {
-		_, err := runErr(t, c.sheet, `<a/>`)
-		if err == nil {
-			t.Errorf("xsl:%s was accepted; it must be rejected rather than ignored", c.name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "not supported") {
-			t.Errorf("xsl:%s error = %v, want a clear 'not supported' message", c.name, err)
-		}
+// TestImportSchemaIsSupported records that xsl:import-schema now works.
+//
+// It used to be refused, on the grounds that accepting a declaration and
+// ignoring it would make a stylesheet's type assertions silently meaningless.
+// The xsd package answers that: the declaration loads a real schema, and
+// Stylesheet.Schema exposes it so the caller can validate the source against
+// the same components the stylesheet declares.
+//
+// A namespace-only declaration asserts availability and loads nothing, which is
+// legal and is what this covers; the loading forms are tested in
+// importschema_test.go.
+func TestImportSchemaIsSupported(t *testing.T) {
+	sheet := wrap(`<xsl:import-schema namespace="urn:x"/>
+		<xsl:template match="/"><r/></xsl:template>`)
+	if _, err := runErr(t, sheet, `<a/>`); err != nil {
+		t.Errorf("xsl:import-schema should be accepted: %v", err)
 	}
 }
 
