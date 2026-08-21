@@ -454,7 +454,14 @@ func (p *parser) xpathDefaultNamespace(el *xdm.Node) (string, bool) {
 		case "##targetNamespace":
 			return p.doc.targetNS, true
 		case "##defaultNamespace":
-			uri, ok := cur.LookupPrefix("")
+			// The default namespace in scope where the *expression*
+			// is written, not where the attribute is. The attribute
+			// is commonly on <xs:schema> and the xmlns= on the
+			// element carrying the test — saxonData's cta0005 is
+			// exactly that shape, and resolving at cur found no
+			// default at all, so every unprefixed name in the test
+			// went to the absent namespace and matched nothing.
+			uri, ok := el.LookupPrefix("")
 			return uri, ok
 		case "##local":
 			// Explicitly the absent namespace, which is also what no

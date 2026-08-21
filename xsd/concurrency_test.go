@@ -457,3 +457,43 @@ func TestSingletonListMatchesAtomicKey(t *testing.T) {
 	assertValid(t, schema,
 		`<doc><para key="alpha"/><para key="beta" ref="alpha"/></doc>`)
 }
+
+// xpathDefaultNamespace="##defaultNamespace" means the default namespace in
+// scope where the *expression* is written, which is not always where the
+// attribute is: the attribute is commonly on <xs:schema> and the xmlns= on the
+// element carrying the test. saxonData's cta0005 is that shape.
+//
+// Resolving at the attribute found no default there, so every unprefixed name
+// in the test went to the absent namespace and matched nothing — the
+// alternative never fired and the more permissive declared type was used.
+func TestXPathDefaultNamespaceResolvesAtTheExpression(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	  targetNamespace="urn:c" xmlns:c="urn:c"
+	  elementFormDefault="qualified"
+	  xpathDefaultNamespace="##defaultNamespace">
+	  <xs:complexType name="t">
+	    <xs:sequence><xs:element name="e" minOccurs="0" type="xs:decimal"/></xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="treq">
+	    <xs:complexContent>
+	      <xs:restriction base="c:t">
+	        <xs:sequence><xs:element name="e" minOccurs="1" type="xs:decimal"/></xs:sequence>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="message" type="c:t">
+	    <xs:alternative test="self::message" type="c:treq" xmlns="urn:c"/>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<message xmlns="urn:c"><e>1</e></message>`); err != nil {
+		t.Errorf("the alternative's type rejected a document it permits: %v", err)
+	}
+	// The alternative selects treq, which requires e; an empty element
+	// fails only if the alternative actually fired.
+	if err := check11(t, s, `<message xmlns="urn:c"/>`); err == nil {
+		t.Error("the alternative did not fire; the unprefixed name in " +
+			"its test resolved to the wrong namespace")
+	}
+}
