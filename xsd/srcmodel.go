@@ -119,6 +119,19 @@ var srcModels = map[string][]srcTerm{
 	// under one. The *contents* of appinfo and documentation are open,
 	// which checkSourceModel handles by not descending into them.
 	"annotation": {star("appinfo", "documentation")},
+
+	// <redefine> admits the ·redefinable· components and annotations,
+	// interleaved in any order — the one place an annotation is not
+	// restricted to the front. Notably absent is <notation>, which is not
+	// redefinable, so notatF055 is not a schema.
+	"redefine": {star("annotation", "simpleType", "complexType",
+		"group", "attributeGroup")},
+
+	// <override> takes a leading annotation and then anything that may
+	// appear at the top of a schema, which unlike <redefine> does include
+	// <notation> and <element> and <attribute>.
+	"override": {annot, star("simpleType", "complexType", "group",
+		"attributeGroup", "element", "attribute", "notation")},
 }
 
 // srcAttrs maps a schema element's local name to the attributes it may carry,

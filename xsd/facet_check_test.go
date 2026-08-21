@@ -133,3 +133,35 @@ func TestFacetAndAnnotationChildren(t *testing.T) {
 	  <xs:element name="e" type="xs:string"/>
 	</xs:schema>`)
 }
+
+// TestRedefineAndOverrideChildren covers the two content models the
+// schema-for-schemas table still lacked.
+//
+// <redefine> admits only the ·redefinable· components — simpleType,
+// complexType, group, attributeGroup — interleaved freely with annotations,
+// which is the one place an annotation is not restricted to the front.
+// <notation> is not redefinable, so notatF055 is not a schema.
+//
+// <override> is the 1.1 element that admits anything appearing at the top of a
+// schema, notation included, after a single leading annotation.
+func TestRedefineAndOverrideChildren(t *testing.T) {
+	// A notation is not redefinable.
+	mustLoadFail(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:redefine schemaLocation="foo">
+	    <xs:notation name="jpeg" public="image/jpeg" system="viewer.exe"/>
+	  </xs:redefine>
+	</xs:schema>`, "")
+
+	// Annotations may sit between the redefinable components, not only
+	// before them.
+	mustLoadOK(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:redefine schemaLocation="empty.xsd">
+	    <xs:annotation><xs:documentation>first</xs:documentation></xs:annotation>
+	    <xs:simpleType name="a"><xs:restriction base="xs:string"/></xs:simpleType>
+	    <xs:annotation><xs:documentation>between</xs:documentation></xs:annotation>
+	    <xs:attributeGroup name="g"/>
+	  </xs:redefine>
+	</xs:schema>`)
+}
