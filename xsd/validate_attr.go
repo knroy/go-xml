@@ -35,7 +35,7 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			continue
 		}
 
-		if t.AttributeWildcard != nil && t.AttributeWildcard.Allows(name.URI) {
+		if t.AttributeWildcard != nil && t.AttributeWildcard.AllowsName(name, v.attributeDefined) {
 			v.validateWildcardAttribute(a, t.AttributeWildcard, name)
 			continue
 		}
@@ -147,7 +147,7 @@ func (v *validator) checkNoForeignAttributes(el *xdm.Node, uses []*AttributeUse,
 		if findAttributeUse(uses, name) != nil {
 			continue
 		}
-		if w != nil && w.Allows(name.URI) {
+		if w != nil && w.AllowsName(name, v.attributeDefined) {
 			continue
 		}
 		v.fail(a, "cvc-type.3.1.1",

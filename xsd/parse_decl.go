@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"strings"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -364,6 +366,7 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 				w.Namespace = append(w.Namespace, word)
 			}
 		}
+		p.readDisallowedNames(el, w)
 		return w
 	}
 
@@ -397,7 +400,75 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 			}
 		}
 	}
+	p.readDisallowedNames(el, w)
 	return w
+}
+
+// readDisallowedNames reads XSD 1.1's notQName into {disallowed names}.
+//
+// The names are QNames, but they do not resolve the way a type reference does:
+// an unprefixed name in notQName is in the *absent* namespace even when a
+// default namespace is in scope. That is deliberate in the spec — notQName
+// names what a wildcard refuses, and the refusals are written against the
+// namespaces the wildcard admits, which include the absent one. Applying the
+// default namespace here would silently retarget every unprefixed entry.
+func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
+	raw := el.AttrValue("notQName")
+	if raw == "" {
+		return
+	}
+	if p.schema.Version < Version11 {
+		p.errs = append(p.errs, errorAt(el, "",
+			"notQName requires XSD 1.1"))
+		return
+	}
+	isAttr := el.Name.Local == "anyAttribute"
+	for _, word := range splitFields(raw) {
+		switch word {
+		case "##defined":
+			w.DisallowDefined = true
+		case "##definedSibling":
+			if isAttr {
+				// The schema for schemas allows ##defined on an
+				// attribute wildcard but not ##definedSibling:
+				// attributes have no content model to be
+				// siblings within.
+				p.errs = append(p.errs, errorAt(el, "",
+					"##definedSibling is not permitted on xs:anyAttribute"))
+				continue
+			}
+			w.DisallowDefinedSibling = true
+		default:
+			name, err := p.resolveNotQName(el, word)
+			if err != nil {
+				p.errs = append(p.errs, err)
+				continue
+			}
+			w.DisallowedNames = append(w.DisallowedNames, name)
+		}
+	}
+}
+
+// resolveNotQName resolves one notQName entry, leaving an unprefixed name in
+// the absent namespace.
+func (p *parser) resolveNotQName(el *xdm.Node, value string) (xdm.QName, error) {
+	prefix, local := "", value
+	if i := strings.IndexByte(value, ':'); i >= 0 {
+		prefix, local = value[:i], value[i+1:]
+	}
+	if local == "" || strings.ContainsRune(local, ':') {
+		return xdm.QName{}, errorAt(el, "src-resolve",
+			"notQName=%q is not a valid QName", value)
+	}
+	if prefix == "" {
+		return xdm.QName{Local: local}, nil
+	}
+	uri, ok := el.LookupPrefix(prefix)
+	if !ok {
+		return xdm.QName{}, errorAt(el, "src-resolve",
+			"notQName=%q uses undeclared prefix %q", value, prefix)
+	}
+	return xdm.QName{URI: uri, Local: local}, nil
 }
 
 // splitFields splits on XML whitespace only.

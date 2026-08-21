@@ -100,7 +100,48 @@ func compileContentModel(p *Particle) (*contentModel, error) {
 	m.first = f.first
 	m.last = f.last
 	m.nullable = f.nullable
+	m.bindSiblings()
 	return m, nil
+}
+
+// bindSiblings resolves ##definedSibling against the finished model.
+//
+// The keyword means "a name some other particle in this content model
+// declares", so it cannot be answered while the tree is still being walked —
+// a wildcard may precede the declarations it must exclude. Binding it here,
+// once, also keeps it off the validation path: the alternative is re-walking
+// the particle tree for every element checked against the wildcard.
+//
+// Substitution group members count as declared names. A wildcard that admitted
+// a substitute while excluding its head would let the same element in through
+// the back door, which is not what the schema author wrote.
+func (m *contentModel) bindSiblings() {
+	var wildcards []*Wildcard
+	for _, pos := range m.positions {
+		if w, ok := pos.term.(*Wildcard); ok && w.DisallowDefinedSibling {
+			wildcards = append(wildcards, w)
+		}
+	}
+	if len(wildcards) == 0 {
+		return
+	}
+	names := map[xdm.QName]bool{}
+	for _, pos := range m.positions {
+		d, ok := pos.term.(*ElementDecl)
+		if !ok {
+			continue
+		}
+		names[d.Name] = true
+		for _, sub := range d.substitutable {
+			names[sub.Name] = true
+		}
+	}
+	for _, w := range wildcards {
+		// The map is shared: it is never written after this point, and
+		// the same wildcard component may appear in more than one
+		// model only when the models agree on its siblings.
+		w.siblingNames = names
+	}
 }
 
 // frag is the Glushkov data for one subtree: the positions that may start it,
@@ -343,7 +384,10 @@ func (m *contentModel) addFollow(from int, to []int) {
 }
 
 // matches reports whether a position's term accepts an element name.
-func (p *position) matches(name xdm.QName) bool {
+//
+// defined answers ##defined for a wildcard term, and may be nil when no
+// wildcard in the model uses it.
+func (p *position) matches(name xdm.QName, defined func(xdm.QName) bool) bool {
 	switch t := p.term.(type) {
 	case *ElementDecl:
 		if t.Name == name {
@@ -359,7 +403,7 @@ func (p *position) matches(name xdm.QName) bool {
 		}
 		return false
 	case *Wildcard:
-		return t.Allows(name.URI)
+		return t.AllowsName(name, defined)
 	}
 	return false
 }

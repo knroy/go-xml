@@ -135,6 +135,24 @@ type validator struct {
 	stopped bool
 }
 
+// elementDefined answers ##defined for an element wildcard: whether the schema
+// has a global element declaration of this name.
+//
+// It is a method rather than a closure literal at each call site so that the
+// two kinds — element and attribute — cannot be confused. They are separate
+// symbol spaces, and a wildcard that consulted the wrong one would exclude
+// names it should admit.
+func (v *validator) elementDefined(name xdm.QName) bool {
+	_, ok := v.schema.Elements[name]
+	return ok
+}
+
+// attributeDefined answers ##defined for an attribute wildcard.
+func (v *validator) attributeDefined(name xdm.QName) bool {
+	_, ok := v.schema.Attributes[name]
+	return ok
+}
+
 type idref struct {
 	value string
 	node  *xdm.Node
@@ -472,7 +490,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		var tables []icTables
 		oc := v.openContentFor(t)
 		for _, kid := range kids {
-			if oc != nil && oc.Wildcard.Allows(kid.Name.URI) {
+			if oc != nil && oc.Wildcard.AllowsName(kid.Name, v.elementDefined) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
 				}
@@ -499,7 +517,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		next := -1
 		for _, idx := range current {
 			p := m.positions[idx]
-			if !p.matches(name) {
+			if !p.matches(name, v.elementDefined) {
 				continue
 			}
 			if !counterAllows(m, counts, prevIdx, idx) {
@@ -522,7 +540,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			// interleave.
 			satisfied := prevIdx < 0 && m.nullable ||
 				prevIdx >= 0 && contains(m.last, prevIdx)
-			if oc := v.openContentFor(t); oc != nil && oc.Wildcard.Allows(name.URI) &&
+			if oc := v.openContentFor(t); oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) &&
 				(oc.Mode == OpenInterleave || satisfied) {
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
@@ -705,7 +723,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 		found := false
 		for i, p := range g.Particles {
 			pos := &position{term: p.Term, particle: p}
-			if !pos.matches(name) {
+			if !pos.matches(name, v.elementDefined) {
 				continue
 			}
 			if p.MaxOccurs != Unbounded && counts[i] >= p.MaxOccurs {
@@ -727,7 +745,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 		}
 		// XSD 1.1 open content applies to an all group too: the
 		// wildcard admits what the group does not name.
-		if oc := v.openContentFor(t); oc != nil && oc.Wildcard.Allows(name.URI) {
+		if oc := v.openContentFor(t); oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) {
 			if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 				tables = append(tables, tbl)
 			}

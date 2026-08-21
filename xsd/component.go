@@ -586,10 +586,70 @@ type Wildcard struct {
 	// notNamespace rejects every unqualified attribute the wildcard was
 	// written to admit.
 	ExcludesAbsent bool
+
+	// DisallowedNames is XSD 1.1's {disallowed names} (§3.10.1): specific
+	// expanded names the wildcard refuses even though their namespace is
+	// admitted. It is the notQName attribute, and it is what lets a schema
+	// say "anything from this namespace except these".
+	//
+	// The namespace constraint and this set are independent tests: a name
+	// matches the wildcard only if the namespace admits it *and* it is not
+	// disallowed. That ordering matters because notQName may name a
+	// namespace the constraint would otherwise let through, which is the
+	// only reason to write it.
+	DisallowedNames []xdm.QName
+
+	// DisallowDefined is ##defined: refuse any name for which the schema
+	// has a global declaration of the matching kind. It is how a schema
+	// writes "anything the schema does not already know about", which is
+	// the useful form of an extension wildcard — one that cannot silently
+	// shadow a declared element.
+	DisallowDefined bool
+
+	// DisallowDefinedSibling is ##definedSibling: refuse any name declared
+	// by some other particle in the same content model. Unlike ##defined it
+	// is local, and it applies to elements only — an attribute wildcard has
+	// no siblings in the sense the keyword means, and the schema for
+	// schemas does not permit it there.
+	DisallowDefinedSibling bool
+
+	// siblingNames are the element names declared alongside this wildcard
+	// in its content model, resolved once the particle tree is complete.
+	//
+	// It is stored on the wildcard rather than looked up at validation time
+	// because the content model that gives "sibling" its meaning is not
+	// reachable from the wildcard, and computing it per element would
+	// re-walk the particle tree for every item validated.
+	siblingNames map[xdm.QName]bool
 }
 
 // ComponentKind implements Component.
 func (*Wildcard) ComponentKind() string { return "wildcard" }
+
+// Disallows reports whether a name is excluded by {disallowed names}.
+//
+// The definedNames callback answers ##defined, which needs the schema and so
+// cannot be decided by the wildcard alone.
+func (w *Wildcard) Disallows(name xdm.QName, defined func(xdm.QName) bool) bool {
+	for _, n := range w.DisallowedNames {
+		if n == name {
+			return true
+		}
+	}
+	if w.DisallowDefined && defined != nil && defined(name) {
+		return true
+	}
+	if w.DisallowDefinedSibling && w.siblingNames[name] {
+		return true
+	}
+	return false
+}
+
+// AllowsName reports whether the wildcard admits an expanded name, applying
+// both the namespace constraint and {disallowed names}.
+func (w *Wildcard) AllowsName(name xdm.QName, defined func(xdm.QName) bool) bool {
+	return w.Allows(name.URI) && !w.Disallows(name, defined)
+}
 
 // Allows reports whether the wildcard permits a name in namespace ns, where the
 // empty string means the absent namespace.
