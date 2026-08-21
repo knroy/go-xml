@@ -2811,3 +2811,56 @@ func TestInheritedSimpleContentThroughRestriction(t *testing.T) {
 	// restriction had ended up with none.
 	assertInvalid(t, schema, `<temp>not-a-date</temp>`, "cvc")
 }
+
+// TestFacetsDirectlyInSimpleContentRestriction covers facets written inside a
+// simpleContent restriction with no inline simpleType to hold them.
+//
+// They narrow whatever content type the base supplies, so the derived content
+// is an anonymous restriction of it. Dropping them left a restriction that
+// accepted everything its base did, which is no restriction at all — and a
+// conditional type alternative selecting such a type then constrained nothing.
+func TestFacetsDirectlyInSimpleContentRestriction(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="dimType">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:string">
+	        <xs:attribute name="length" type="xs:anySimpleType"/>
+	        <xs:attribute name="width" type="xs:anySimpleType"/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:complexType name="squareType">
+	    <xs:simpleContent>
+	      <xs:restriction base="dimType">
+	        <xs:enumeration value="square"/>
+	      </xs:restriction>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:element name="shape">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="dimension" type="dimType" maxOccurs="unbounded">
+	          <xs:alternative test="xs:float(@length) = xs:float(@width)"
+	                          type="squareType"/>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// Equal sides select squareType, whose enumeration admits only "square".
+	if err := check11(t, s,
+		`<shape><dimension length="1.0" width="1">square</dimension></shape>`); err != nil {
+		t.Errorf("the enumerated value should be admitted: %v", err)
+	}
+	if err := check11(t, s,
+		`<shape><dimension length="1.0" width="1">rectangle</dimension></shape>`); err == nil {
+		t.Error("a value outside the enumeration should be refused")
+	}
+	// Unequal sides keep the base type, which enumerates nothing.
+	if err := check11(t, s,
+		`<shape><dimension length="2.0" width="1">anything</dimension></shape>`); err != nil {
+		t.Errorf("the default type should not be constrained: %v", err)
+	}
+}

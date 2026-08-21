@@ -249,8 +249,14 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 						"prohibited or optional", v))
 			}
 
-		case "simpleType", "annotation":
-			// Handled by the caller.
+		case "simpleType", "annotation", "assert", "openContent",
+			"attribute", "attributeGroup", "anyAttribute",
+			"all", "choice", "sequence", "group":
+			// Handled by the caller. A simpleContent restriction
+			// may hold facets alongside its attribute declarations
+			// and its XSD 1.1 assertions, so reading facets there
+			// meets elements that are not facets and must not be
+			// reported as bad ones.
 
 		default:
 			p.errs = append(p.errs, errorAt(c, "",
@@ -392,6 +398,33 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 			}
 		})
 		if inline == nil {
+			// Facets may be written directly inside the
+			// restriction, with no inline simpleType to hold them.
+			// They narrow whatever content type the base supplies,
+			// so the derived content is an anonymous restriction of
+			// it — dropping them left a restriction that accepted
+			// everything its base did, which is no restriction at
+			// all.
+			if facets := p.readFacetsOnly(body); facets != nil {
+				p.fixups = append(p.fixups, func() error {
+					base := t.SimpleContent
+					if base == nil {
+						base = inheritedSimpleContent(t)
+					}
+					if base == nil {
+						return nil
+					}
+					t.SimpleContent = &SimpleType{
+						Base:      base,
+						Variety:   base.Variety,
+						ItemType:  base.ItemType,
+						Primitive: base.Primitive,
+						Facets:    facets,
+					}
+					return nil
+				})
+			}
+
 			// The base may itself be a complex type whose own
 			// simple content is filled in by a later fixup, so
 			// reading it above can find nothing. A second pass
@@ -1079,4 +1112,37 @@ func inheritedSimpleContent(t *ComplexType) *SimpleType {
 		}
 	}
 	return nil
+}
+
+// readFacetsOnly reads a restriction's facet children, returning nil when there
+// are none.
+//
+// A simpleContent restriction may carry facets directly, with no inline
+// simpleType to hold them: they narrow whatever content type the base supplies,
+// so the derived content becomes an anonymous restriction of it.
+func (p *parser) readFacetsOnly(body *xdm.Node) *FacetSet {
+	if !hasFacetChild(body) {
+		return nil
+	}
+	f := &FacetSet{}
+	p.readFacets(body, f)
+	return f
+}
+
+// hasFacetChild reports whether an element has any constraining facet child.
+//
+// xs:assert is deliberately not one of them. Inside a simpleContent it is a
+// complex-type assertion, read by readAssertions, and it is spelled differently
+// from the xs:assertion facet precisely so that the two can sit in the same
+// place without ambiguity.
+func hasFacetChild(el *xdm.Node) bool {
+	for _, c := range el.ChildElements() {
+		if c.Name.URI != NSSchema || c.Name.Local == "assert" {
+			continue
+		}
+		if knownFacet(c.Name.Local) {
+			return true
+		}
+	}
+	return false
 }
