@@ -951,10 +951,53 @@ func counterAllows(m *contentModel, counts []int, from, to int) bool {
 			continue
 		}
 		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
+			// c is spent, but an enclosing scope may still restart,
+			// and restarting it begins a fresh repetition of c.
+			// <choice maxOccurs="unbounded"> over branches with
+			// minOccurs="3" maxOccurs="5" is the shape: the sixth
+			// foo is not a sixth repetition of the inner counter
+			// but the first of a second choice, and refusing it
+			// treated the inner bound as a total.
+			if outerRestarts(m, counts, c, from, to) {
+				continue
+			}
 			return false
 		}
 	}
 	return true
+}
+
+// outerRestarts reports whether a scope enclosing c can begin another
+// repetition on this transition.
+//
+// It is the mirror of innerRepeats. That one says an inner counter accounts for
+// the step so the outer is merely continuing; this says the outer accounts for
+// it so the inner is starting over. Both exist because a position at the
+// boundary of one scope is at the boundary of every scope around it, and only
+// one of them is actually repeating.
+func outerRestarts(m *contentModel, counts []int, inner, from, to int) bool {
+	for _, c := range m.positions[to].counters {
+		if c == inner || !sharesScope(m.positions[from], c) {
+			continue
+		}
+		if !isNestedIn(m, inner, c) {
+			continue
+		}
+		if !isScopeRestart(m, c, from, to) {
+			continue
+		}
+		// The enclosing scope has to have a repetition left to give,
+		// and the inner one has to have met its minimum before it can
+		// be abandoned for a new round.
+		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
+			continue
+		}
+		if counts[inner] < m.counters[inner].min {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func sharesScope(p *position, c int) bool {

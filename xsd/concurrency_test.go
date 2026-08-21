@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -531,4 +532,35 @@ func TestStrictWildcardAcceptsXSIType(t *testing.T) {
 	// assess against, which is what strict refuses.
 	assertInvalid(t, schema, `<foo`+ns+`><a/><b/></foo>`,
 		"cvc-complex-type.2.4.c")
+}
+
+// A repeated group whose branches carry their own bounds: <choice
+// maxOccurs="unbounded"> over elements with minOccurs="3" maxOccurs="5". The
+// sixth foo is not a sixth repetition of the inner counter but the first of a
+// second choice, and treating the inner bound as a total refused it.
+func TestInnerBoundIsNotATotal(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:choice minOccurs="0" maxOccurs="unbounded">
+	        <xs:element name="foo" minOccurs="3" maxOccurs="5"/>
+	        <xs:element name="sg" minOccurs="3" maxOccurs="5"/>
+	      </xs:choice>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	for _, n := range []int{3, 4, 5, 6, 8, 10, 13} {
+		doc := "<root>" + strings.Repeat("<foo/>", n) + "</root>"
+		if err := validateString(t, schema, doc); err != nil {
+			t.Errorf("%d foo rejected: %v", n, err)
+		}
+	}
+	// Below the branch minimum there is no round to make, so it still fails.
+	for _, n := range []int{1, 2} {
+		doc := "<root>" + strings.Repeat("<foo/>", n) + "</root>"
+		if err := validateString(t, schema, doc); err == nil {
+			t.Errorf("%d foo accepted; the branch requires 3", n)
+		}
+	}
 }
