@@ -259,6 +259,9 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 	// does nothing on the one entry point that reads a schema from a node
 	// rather than from files.
 	linkSubstitutionGroups(s)
+	if err := p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

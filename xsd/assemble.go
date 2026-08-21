@@ -80,6 +80,13 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 		return nil, err
 	}
 	a.linkSubstitutionGroups()
+	// Particle Valid (Restriction) is checked last: it needs every base
+	// resolved, every content model spliced, and — for clause 2.1's
+	// substitution-group expansion — the substitution closure already
+	// linked.
+	if err := a.p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -168,6 +175,13 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		return nil, err
 	}
 	a.linkSubstitutionGroups()
+	// Particle Valid (Restriction) is checked last: it needs every base
+	// resolved, every content model spliced, and — for clause 2.1's
+	// substitution-group expansion — the substitution closure already
+	// linked.
+	if err := a.p.checkParticleRestriction(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
