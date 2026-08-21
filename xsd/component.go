@@ -628,6 +628,11 @@ type ICPathAlternative struct {
 	// Attribute is the trailing "@name" step, which only a field may have
 	// and only in final position.
 	Attribute *xdm.QName
+
+	// AttributeWildcard records that the attribute step was written "@*"
+	// or "@prefix:*". Such a field is grammatical; whether it selects
+	// exactly one node is decided per instance document, not here.
+	AttributeWildcard bool
 }
 
 // ICStep is one step of an identity-constraint path.

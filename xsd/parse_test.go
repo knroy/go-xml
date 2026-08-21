@@ -351,6 +351,7 @@ func TestICPathRejectsOutOfSubset(t *testing.T) {
 		{"@id", false},          // a selector may not select attributes
 		{"@id/more", true},      // an attribute step must be last
 		{"item//sub", false},    // "//" only as a leading ".//"
+		{"//", false},           // a bare "//" is not in the subset
 	}
 	for _, c := range cases {
 		if _, err := parseICPath(c.expr, c.field); err == nil {
@@ -371,6 +372,15 @@ func TestICPathAccepts(t *testing.T) {
 		{"a|b", false},
 		{".//a|.//b", false},
 		{"@id", true},
+		// NameTest admits "*", so "@*" is grammatical. Whether such a
+		// field selects exactly one node is decided per instance
+		// document, not at parse time.
+		{"@*", true},
+		{"@ns:*", true},
+		// Clause 2.2 permits the unabbreviated child axis wherever the
+		// abbreviated form is legal.
+		{"child::a", false},
+		{"child::a/child::b", false},
 		{"a/@id", true},
 		{".//a/@id", true},
 		{".", true},

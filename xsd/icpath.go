@@ -96,16 +96,14 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 			if err != nil {
 				return alt, err
 			}
-			if name.wildcard {
-				// "@*" is permitted by the grammar's NameTest but
-				// selects an unpredictable attribute, so a field
-				// using it can never have the "at most one node"
-				// property the spec requires.
-				return alt, fmt.Errorf(
-					"identity-constraint field %q: @* does not select a "+
-						"single attribute", p.src)
-			}
+			// "@*" and "@prefix:*" are grammatical: NameTest admits
+			// both. Whether such a field selects exactly one node is a
+			// validation question, answered per instance document by
+			// Identity-constraint Satisfied clause 3 — not a parse
+			// error. Rejecting it here refused schemas that conforming
+			// processors accept.
 			alt.Attribute = &xdm.QName{Prefix: name.prefix, Local: name.local}
+			alt.AttributeWildcard = name.wildcard
 			p.skipSpace()
 			if p.pos < len(p.src) && p.src[p.pos] != '|' {
 				return alt, fmt.Errorf(
@@ -125,6 +123,13 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 			}
 			break
 		}
+
+		// Clause 2.2 of both Selector Value OK and Fields Value OK
+		// permits "an XPath expression involving the child axis whose
+		// abbreviated form is as given above", so "child::foo" is legal
+		// wherever "foo" is. The axis is stripped and the step read as
+		// if it had been written in the abbreviated form.
+		p.skipAxis()
 
 		name, err := p.parseNameTest()
 		if err != nil {
@@ -153,6 +158,14 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 		}
 	}
 	return alt, nil
+}
+
+// skipAxis consumes a leading "child::" if present.
+func (p *icPathParser) skipAxis() {
+	const axis = "child::"
+	if strings.HasPrefix(p.src[p.pos:], axis) {
+		p.pos += len(axis)
+	}
 }
 
 // nameTest is a parsed NameTest, before its prefix is resolved.
