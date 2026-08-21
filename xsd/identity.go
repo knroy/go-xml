@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -198,11 +199,14 @@ func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq [
 
 		n := nodes[0]
 		// The key sequence uses the [schema normalized value], so a
-		// defaulted or fixed value participates. The annotation written
-		// during validation is not enough to recover the type here, so
-		// the string value is used with whitespace collapsed — which is
-		// what every built-in except xs:string does anyway.
-		seq = append(seq, strings.TrimSpace(n.StringValue()))
+		// defaulted or fixed value participates. For most primitives
+		// the normalized lexical form is canonical, so collapsing
+		// whitespace makes the string comparison a value comparison.
+		// The temporal families are the exception — 24:00:00Z and
+		// 00:00:00Z are one time, PT29H and P1DT5H one duration — and
+		// their canonical form is recovered from what validation
+		// recorded, since the constraint sees only nodes.
+		seq = append(seq, v.keyString(n))
 	}
 	return seq, true, true
 }
@@ -346,4 +350,52 @@ func (v *validator) inSkippedContent(n *xdm.Node) bool {
 		}
 	}
 	return false
+}
+
+// keyString returns the value a node contributes to a key sequence.
+//
+// Two values that are equal must produce the same string, because the table is
+// keyed by the joined sequence. For the temporal families that means a
+// canonical form rather than the spelling: a keyref written 05:00:00+05:00 has
+// to find a key written 00:00:00Z, which is the same time.
+func (v *validator) keyString(n *xdm.Node) string {
+	kv, ok := v.keyValues[n]
+	if !ok {
+		return strings.TrimSpace(n.StringValue())
+	}
+	if c, ok := canonicalTemporal(kv.normalized, kv.primitive); ok {
+		return c
+	}
+	return kv.normalized
+}
+
+// canonicalTemporal renders a date, time or duration in a form that is the same
+// for every literal denoting the same value.
+//
+// The seconds-from-epoch the comparison already computes is exactly such a
+// form, so this reuses it rather than inventing a second notion of equality
+// that could disagree with compareTemporal. A value with no timezone is kept
+// distinct from one with, because they are not equal — the order between them
+// is indeterminate, and an indeterminate pair is not a match.
+func canonicalTemporal(normalized, primitive string) (string, bool) {
+	if primitive == "duration" {
+		d, ok := parseDuration(normalized)
+		if !ok || d.seconds == nil {
+			return "", false
+		}
+		// Two durations are equal exactly when their months and their
+		// seconds both agree — compareDuration's fast path — so the
+		// pair is itself a canonical key. P1M and P30D differ here, and
+		// rightly: they are incomparable, not equal.
+		return fmt.Sprintf("duration/%d/%s", d.months, d.seconds.RatString()), true
+	}
+	t, ok := parseTemporal(normalized, primitive)
+	if !ok || t.seconds == nil {
+		return "", false
+	}
+	tz := "-"
+	if t.hasTZ {
+		tz = "Z"
+	}
+	return primitive + "/" + tz + "/" + t.seconds.RatString(), true
 }

@@ -136,6 +136,10 @@ type validator struct {
 	// an identity constraint's selector must not reach into them.
 	skipped map[*xdm.Node]bool
 
+	// keyValues records the primitive of each node whose value an identity
+	// constraint may have to compare by value rather than by spelling.
+	keyValues map[*xdm.Node]keyValue
+
 	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
 	// last. Conditional type assignment on a descendant sees them, which is
 	// how an ancestor's xml:lang can choose a nested element's type.
@@ -161,6 +165,13 @@ func (v *validator) elementDefined(name xdm.QName) bool {
 func (v *validator) attributeDefined(name xdm.QName) bool {
 	_, ok := v.schema.Attributes[name]
 	return ok
+}
+
+// keyValue is a node's schema-normalized value and the primitive it belongs
+// to, kept so that an identity constraint can canonicalise it.
+type keyValue struct {
+	normalized string
+	primitive  string
 }
 
 type idref struct {

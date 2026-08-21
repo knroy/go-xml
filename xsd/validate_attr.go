@@ -131,6 +131,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	}
 
 	v.recordIDs(a, normalized, decl.Type)
+	v.recordKeyValue(a, normalized, decl.Type)
 
 	if v.opts.Annotate && decl.Type.Name.Local != "" {
 		a.TypeAnnotation = decl.Type.Name.Local

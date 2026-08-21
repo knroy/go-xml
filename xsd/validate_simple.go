@@ -38,6 +38,36 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	}
 
 	v.recordIDs(n, normalized, t)
+	v.recordKeyValue(n, normalized, t)
+}
+
+// recordKeyValue notes a node's schema-normalized value and primitive, for the
+// benefit of identity constraints.
+//
+// A key sequence compares values, not spellings: 24:00:00Z and 00:00:00Z are
+// the same time and PT29H and P1DT5H the same duration, so a keyref written
+// with one form must match a key written with the other. Deciding that needs
+// the type, which is known here and gone by the time the constraint runs — the
+// constraint sees only nodes, and type annotations are opt-in.
+//
+// Only the temporal families are recorded. Every other primitive's canonical
+// form is its normalized lexical form, so the string comparison the constraint
+// already does is a value comparison for them.
+func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType) {
+	prim := ""
+	if p := primitiveOf(t); p != nil {
+		prim = p.Name.Local
+	}
+	switch prim {
+	case "duration", "dateTime", "date", "time",
+		"gYear", "gYearMonth", "gMonth", "gMonthDay", "gDay":
+	default:
+		return
+	}
+	if v.keyValues == nil {
+		v.keyValues = map[*xdm.Node]keyValue{}
+	}
+	v.keyValues[n] = keyValue{normalized: normalized, primitive: prim}
 }
 
 // validateSimpleValue checks a lexical form against a simple type and returns
@@ -239,6 +269,10 @@ func checkEnumeration(steps []facetStep, normalized string, t *SimpleType) error
 				break
 			}
 			if numeric && numericEqual(cand, normalized) {
+				ok = true
+				break
+			}
+			if valueEqual(cand, normalized, prim) {
 				ok = true
 				break
 			}
@@ -620,4 +654,39 @@ func checkDurationBounds(steps []facetStep, normalized string) error {
 		}
 	}
 	return nil
+}
+
+// valueEqual compares two literals of a primitive by value rather than by
+// spelling.
+//
+// The date and duration families are the ones where this bites:
+// 2010-09-19T24:00:00Z and 2010-09-20T00:00:00Z denote the same instant, and
+// PT29H and P1DT5H the same length, so an enumeration listing either admits
+// both. Comparing lexical forms rejects documents the spec accepts.
+//
+// A pair the order leaves indeterminate — one value with a timezone against one
+// without, where the ±14 hour interval overlaps — is not equal. Equality has to
+// be decided, and "might be equal for some timezone" is not that.
+func valueEqual(a, b, primitive string) bool {
+	switch primitive {
+	case "duration":
+		da, okA := parseDuration(a)
+		db, okB := parseDuration(b)
+		if !okA || !okB {
+			return false
+		}
+		c, comparable := compareDuration(da, db)
+		return comparable && c == 0
+
+	case "dateTime", "date", "time",
+		"gYear", "gYearMonth", "gMonth", "gMonthDay", "gDay":
+		ta, okA := parseTemporal(a, primitive)
+		tb, okB := parseTemporal(b, primitive)
+		if !okA || !okB {
+			return false
+		}
+		c, comparable := compareTemporal(ta, tb)
+		return comparable && c == 0
+	}
+	return false
 }

@@ -1363,3 +1363,110 @@ func TestIdentityConstraintSkipsSkippedContent(t *testing.T) {
 		t.Error("a duplicate outside skipped content should still be caught")
 	}
 }
+
+// TestTemporalEnumerationComparesByValue pins that the enumeration facet
+// compares dates and durations by value rather than by spelling.
+//
+// 2010-09-19T24:00:00Z and 2010-09-20T00:00:00Z denote the same instant, so an
+// enumeration listing either admits both. Comparing lexical forms rejects
+// documents the spec accepts.
+func TestTemporalEnumerationComparesByValue(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:simpleType>
+	      <xs:restriction base="xs:dateTime">
+	        <xs:enumeration value="2010-09-20T00:00:00Z"/>
+	        <xs:enumeration value="2010-09-20T12:00:00Z"/>
+	      </xs:restriction>
+	    </xs:simpleType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// 24:00:00 on the 19th is 00:00:00 on the 20th.
+	if err := check11(t, s, `<doc>2010-09-19T24:00:00Z</doc>`); err != nil {
+		t.Errorf("24:00 should equal the next day's 00:00: %v", err)
+	}
+	// The same instant written in another timezone.
+	if err := check11(t, s, `<doc>2010-09-20T13:00:00.000+01:00</doc>`); err != nil {
+		t.Errorf("an equal instant in another timezone should match: %v", err)
+	}
+	if err := check11(t, s, `<doc>2010-09-20T06:00:00Z</doc>`); err == nil {
+		t.Error("a different instant should not match")
+	}
+}
+
+// TestIdentityConstraintComparesTemporalByValue pins the same rule for key and
+// keyref, where it decides whether a reference resolves.
+//
+// A key sequence compares values, not spellings, so a keyref written
+// 05:00:00+05:00 has to find a key written 00:00:00Z — the same time.
+func TestIdentityConstraintComparesTemporalByValue(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="target" type="xs:time"/>
+	        <xs:element name="equiv" type="xs:time" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:key name="t">
+	      <xs:selector xpath="target"/>
+	      <xs:field xpath="."/>
+	    </xs:key>
+	    <xs:keyref name="r" refer="t">
+	      <xs:selector xpath="equiv"/>
+	      <xs:field xpath="."/>
+	    </xs:keyref>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<doc><target>00:00:00Z</target><equiv>05:00:00+05:00</equiv></doc>`); err != nil {
+		t.Errorf("an equal time in another timezone should resolve: %v", err)
+	}
+	if err := check11(t, s,
+		`<doc><target>00:00:00Z</target><equiv>06:00:00Z</equiv></doc>`); err == nil {
+		t.Error("a different time should not resolve")
+	}
+}
+
+// TestDurationKeyComparesByValue covers the duration family, where equality is
+// months and seconds agreeing rather than the components being written the same
+// way.
+//
+// PT29H and P1DT5H are one duration; P1M and P30D are not, and are not even
+// comparable — which is why an incomparable pair must not be treated as equal.
+func TestDurationKeyComparesByValue(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="target" type="xs:duration"/>
+	        <xs:element name="equiv" type="xs:duration" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:key name="t">
+	      <xs:selector xpath="target"/>
+	      <xs:field xpath="."/>
+	    </xs:key>
+	    <xs:keyref name="r" refer="t">
+	      <xs:selector xpath="equiv"/>
+	      <xs:field xpath="."/>
+	    </xs:keyref>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<doc><target>P1DT5H</target><equiv>PT29H</equiv></doc>`); err != nil {
+		t.Errorf("PT29H should equal P1DT5H: %v", err)
+	}
+	// A month is not thirty days: the two are incomparable, so the keyref
+	// does not resolve.
+	if err := check11(t, s,
+		`<doc><target>P1M</target><equiv>P30D</equiv></doc>`); err == nil {
+		t.Error("P30D should not resolve against P1M")
+	}
+}
