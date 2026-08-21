@@ -286,3 +286,38 @@ func TestLengthWithMinLengthEscapeClause(t *testing.T) {
 		t.Error("a minLength greater than the length should be rejected")
 	}
 }
+
+// totalDigits is a positiveInteger, unlike the length facets beside it, which
+// are nonNegativeIntegers. Part 2 §4.3.11 says so outright, and it follows from
+// what the facet means: a value space restricted to numbers expressible in at
+// most zero digits is empty, so totalDigits="0" describes no type at all.
+//
+// The suite writes it against every integer type in turn — int, short, byte,
+// long, the unsigned four, and the four integer subtypes — which is thirteen
+// schemas turning on one rule.
+func TestTotalDigitsMustBePositive(t *testing.T) {
+	for _, base := range []string{"xs:int", "xs:decimal", "xs:unsignedByte", "xs:integer"} {
+		if _, err := parseSchemaString(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="t">
+		    <xs:restriction base="`+base+`">
+		      <xs:totalDigits value="0"/>
+		    </xs:restriction>
+		  </xs:simpleType>
+		</xs:schema>`); err == nil {
+			t.Errorf("totalDigits=0 on %s should be rejected", base)
+		}
+	}
+	// fractionDigits is a nonNegativeInteger, so zero is legal there — it
+	// is how a schema says "no fractional part".
+	if _, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:decimal">
+	      <xs:fractionDigits value="0"/>
+	    </xs:restriction>
+	  </xs:simpleType>
+	</xs:schema>`); err != nil {
+		t.Errorf("fractionDigits=0 is legal: %v", err)
+	}
+}

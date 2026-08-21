@@ -183,7 +183,13 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 		case "maxLength":
 			f.MaxLength = p.uintFacet(c, v)
 		case "totalDigits":
-			f.TotalDigits = p.uintFacet(c, v)
+			// totalDigits is a positiveInteger, not a
+			// nonNegativeInteger like the length facets: Part 2
+			// §4.3.11 says so outright, and a value space holding
+			// numbers expressible in at most zero digits is empty.
+			// The suite writes totalDigits="0" against every
+			// integer type in turn.
+			f.TotalDigits = p.positiveUintFacet(c, v)
 		case "fractionDigits":
 			f.FractionDigits = p.uintFacet(c, v)
 
@@ -279,6 +285,20 @@ func (p *parser) uintFacet(el *xdm.Node, v string) *uint64 {
 		return nil
 	}
 	return &n
+}
+
+// positiveUintFacet reads a facet value that must be a positiveInteger.
+func (p *parser) positiveUintFacet(el *xdm.Node, v string) *uint64 {
+	n := p.uintFacet(el, v)
+	if n == nil {
+		return nil
+	}
+	if *n == 0 {
+		p.errs = append(p.errs, errorAt(el, "",
+			"xs:%s value %q is not a positive integer", el.Name.Local, v))
+		return nil
+	}
+	return n
 }
 
 // readComplexType reads an <xs:complexType>.
