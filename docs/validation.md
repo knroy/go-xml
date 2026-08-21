@@ -61,8 +61,10 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.56%** agreement on 24,986
-instance tests.
+Measured against the W3C XSD test suite: **99.73%** agreement on 24,891
+instance tests, and **85.19%** on its 14,405 schema-validity tests — the
+second figure is the honest one to quote, and [xsd.md](xsd.md) explains why
+earlier revisions reported neither.
 
 This section is the overview. [xsd.md](xsd.md) is the reference — resolvers,
 limits, the PSVI, concurrency, and what the conformance figures do and do not
@@ -78,8 +80,11 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **100%** on the
-suite's 1.1 instance tests (1,083 of 1,083).
+versioning attributes, and the 1.1 built-ins. It measures **99.72%** on the
+26,091 instance tests that apply to a 1.1 processor and **84.74%** on the
+15,365 schema-validity tests. An earlier revision claimed 100%; that was
+measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
+tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).
 
 The version is opt-in rather than automatic because 1.1 changes which
 documents are valid, so a 1.0 schema must not acquire its behaviour by

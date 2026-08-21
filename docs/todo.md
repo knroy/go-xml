@@ -5,10 +5,10 @@ it buys, because several of them buy less than they look like they do.
 
 Current position:
 
-| | |
-|---|---|
-| XSD 1.0 | 99.56% — 24,875 of 24,986 |
-| XSD 1.1 | 100% — 1,083 of 1,083 |
+| | schema-validity | instance |
+|---|---|---|
+| XSD 1.0 | 12,271 / 14,405 (85.19%) | 24,824 / 24,891 (99.73%) |
+| XSD 1.1 | 13,020 / 15,365 (84.74%) | 26,017 / 26,091 (99.72%) |
 | XPath 2.0 | 99.81% — 14,692 of 14,720 in scope (28 failing) |
 | Schemas that fail to load | 20, most of them correctly |
 | Tests | 526, clean under `-race` |

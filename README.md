@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.56% of the W3C xsdtests suite (24,875 of 24,986 instance tests) |
-| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,083 of 1,083); opt-in via `Version11` |
+| **XSD 1.0** | 99.73% of the W3C xsdtests *instance* tests (24,824 of 24,891); **85.19%** of its *schema-validity* tests (12,271 of 14,405) |
+| **XSD 1.1** | 99.72% instance (26,017 of 26,091); **84.74%** schema-validity (13,020 of 15,365); opt-in via `Version11` |
 | **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -648,31 +648,47 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**111 of 24,986 XSD 1.0 instance tests (0.44%); the 1.1 half agrees on all
-1,083.**
+Two figures, and the second is the one that matters.
 
-The 1.0 remainder is a long tail with no group above ten cases, spread across
-content models, attribute resolution, identity constraints and datatype edges.
+| | schema-validity | instance |
+|---|---|---|
+| XSD 1.0 | 12,271 / 14,405 (85.19%) | 24,824 / 24,891 (99.73%) |
+| XSD 1.1 | 13,020 / 15,365 (84.74%) | 26,017 / 26,091 (99.72%) |
 
-Two further notes on the measurement. 3,376 test groups are skipped because the
-suite marks their schema invalid by design — checking those is Schema Component
-Constraint territory, not instance validation — and 20 more because the schema
-does not load.
+**Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
+measured wrongly, and the correction is large enough to state outright.**
 
-Those 20 are counted as skips rather than failures, which would flatter the
-figure if they were bugs. Most are not: nine are XML 1.1 documents, which this
-parser does not read; five use XSD 1.1 constructs under 1.0 and are meant to
-fail; two need a DOCTYPE, which is refused by default because it enables XXE;
-and several name a document that is deliberately absent. They are listed here
-so the number is read with that in mind.
+*The schema-validity tests were never scored.* A test group whose schema the
+suite marks invalid by design was counted as a "skip" on the grounds that
+checking it is Schema Component Constraint territory rather than instance
+validation. But that is exactly what those groups test: the schema is *meant*
+to be rejected, and loading it without complaint is a failure. Scoring them
+turned roughly 2,200 silent passes in 1.0 into what they always were.
 
-This is worth stating plainly because the denominator moved. An earlier
-revision measured 24,482 tests with 418 schemas failing to load, and reported
-99.50%. Fixing those loaders — Unicode block names, class subtraction,
-unabbreviated axes, chameleon references, unresolvable hints — brought roughly
-500 previously unmeasured tests into the run. Nearly all of them agree, so the
-percentage barely moved while the thing it is measured over grew by 2%. A
-figure over a subset is a weaker claim than the same figure over the whole.
+*The 1.1 run scored about six per cent of its tests.* Per `common/xsts.xsd` the
+`version` attribute is a **list of tokens**, not a single string — OR-joined on
+`testSet`/`testGroup`/`schemaTest`/`instanceTest`, AND-joined on `expected`,
+and **absent means the test applies to every processor**. The driver compared
+it for equality with `"1.1"`, so the 1.1 run saw only the explicitly-marked 1.1
+groups: 888 schema tests rather than the 15,365 that apply. The old "100%" was
+a real result over an unrepresentative sixteenth of the suite.
+
+The instance figures are now close to each other and to where 1.0 stood before,
+which is the expected shape: most groups carry no version attribute and so are
+scored identically by both runs.
+
+The remaining gap is dominated by **schema false-accepts** — invalid schemas
+loaded without complaint, i.e. Schema Component Constraints not yet checked —
+spread across facet consistency, regular-expression syntax, particles and model
+groups, complex-type derivation, and identity constraints. False *rejects*,
+where a valid schema or instance is refused, number in the low tens.
+
+Two notes on the denominator. A handful of schemas still fail to load for
+reasons that are not bugs: nine are XML 1.1 documents, which this parser does
+not read, and two need a DOCTYPE, refused by default because it enables XXE.
+And `status="queried"` on a test means the W3C itself has challenged the
+expected result; twenty-seven such cases sit in the 1.0 instance tail and are a
+genuine ceiling rather than work outstanding.
 
 ### Is 100% reachable?
 

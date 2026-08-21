@@ -278,16 +278,37 @@ in parallel, all under `-race`.
 
 Measured against the W3C xsdtests suite:
 
-| | |
-|---|---|
-| **XSD 1.0** | 99.56% — 24,875 of 24,986 instance tests |
-| **XSD 1.1** | 100% — 1,083 of 1,083 |
+| | schema-validity | instance |
+|---|---|---|
+| **XSD 1.0** | 12,271 / 14,405 (85.19%) | 24,824 / 24,891 (99.73%) |
+| **XSD 1.1** | 13,020 / 15,365 (84.74%) | 26,017 / 26,091 (99.72%) |
 
-The remaining 1.0 disagreements are a long tail with no group above ten cases,
-spread across content models, attribute resolution, identity constraints and
-datatype edges. At least one is a suite defect rather than a bug here:
-`anyURI_a004` is marked `status="queried"` against an open W3C bug, and its
-own group annotation contradicts the expectation recorded for it.
+**Earlier revisions reported 99.56% and "1.1: 100%". Both were measured
+wrongly.** Two bugs in the test driver, both of which flattered the result:
+
+*Schema-validity tests were not scored at all.* A group whose schema the suite
+marks invalid by design was treated as a skip, on the reasoning that Schema
+Component Constraints are a separate concern from instance validation. They are
+not a separate concern from *conformance*: the schema is meant to be rejected,
+and accepting it is a failure. Scoring them exposed roughly 2,200 of them.
+
+*The 1.1 run scored about six per cent of its tests.* `common/xsts.xsd` defines
+`version` as a **list of tokens** — OR-joined on `testSet`, `testGroup`,
+`schemaTest` and `instanceTest`, AND-joined on `expected`, and **absent means
+the test applies to every processor**. Comparing the attribute for equality
+with `"1.1"` restricted the 1.1 run to the explicitly-marked groups: 888 schema
+tests instead of 15,365.
+
+The dominant remaining gap is schema false-accepts — Schema Component
+Constraints not yet enforced — across facet consistency, regular-expression
+syntax, particles and model groups, complex-type derivation and identity
+constraints. Instance false-rejects and false-accepts together are in the low
+hundreds.
+
+Some disagreements are suite defects rather than bugs here: `anyURI_a004` is
+marked `status="queried"` against an open W3C bug, and its own group annotation
+contradicts the expectation recorded for it. Twenty-seven such queried cases
+sit in the 1.0 instance tail.
 
 A further 20 test groups are skipped because their schema does not load, and
 most of those are correct behaviour rather than gaps: nine are XML 1.1
