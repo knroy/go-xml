@@ -74,9 +74,19 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 	// A leading ".//" is the only place a descendant step may appear. It is
 	// not a general "//" — the spec permits it only at the start, which is
 	// what confines a selector to the subtree it is anchored at.
-	if strings.HasPrefix(p.src[p.pos:], ".//") {
-		alt.DescendantOrSelf = true
-		p.pos += 3
+	// XPath allows whitespace between the tokens, so ".//" is matched as
+	// three of them rather than as one string: ". //." is the same path as
+	// ".//.".
+	if save := p.pos; p.pos < len(p.src) && p.src[p.pos] == '.' {
+		p.pos++
+		p.skipSpace()
+		if strings.HasPrefix(p.src[p.pos:], "//") {
+			alt.DescendantOrSelf = true
+			p.pos += 2
+			p.skipSpace()
+		} else {
+			p.pos = save
+		}
 	}
 
 	for {
@@ -95,6 +105,7 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 			// the abbreviation still needs its "@" stepping over.
 			if p.src[p.pos] == '@' {
 				p.pos++
+				p.skipSpace()
 			}
 			name, err := p.parseNameTest()
 			if err != nil {

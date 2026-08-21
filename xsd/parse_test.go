@@ -244,13 +244,26 @@ func TestParseForwardReference(t *testing.T) {
 	}
 }
 
+// An element declaration naming a type that does not exist is an error only
+// where the declaration is used. The suite says so in as many words —
+// missing001 is "Error only if the element declaration is needed for
+// validation" — and expects the schema itself to load, so that every other
+// declaration in it still works.
 func TestParseUnresolvedReference(t *testing.T) {
-	_, err := parseSchemaString(t, `
+	const schema = `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-	  <xs:element name="root" type="missing"/>
-	</xs:schema>`)
+	  <xs:element name="good" type="xs:integer"/>
+	  <xs:element name="bad" type="missing"/>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, schema); err != nil {
+		t.Fatalf("the schema did not load: %v", err)
+	}
+	if err := validateString(t, schema, `<good>1</good>`); err != nil {
+		t.Errorf("the sound declaration beside it failed: %v", err)
+	}
+	err := validateString(t, schema, `<bad/>`)
 	if err == nil {
-		t.Fatal("a reference to an undeclared type should be an error")
+		t.Fatal("using the declaration with the missing type was accepted")
 	}
 	if !strings.Contains(err.Error(), "src-resolve") {
 		t.Errorf("error %q does not cite src-resolve", err)

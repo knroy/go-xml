@@ -255,6 +255,17 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	v.path = append(v.path, el.Name.Local)
 	defer func() { v.path = v.path[:len(v.path)-1] }()
 
+	// A declaration whose type could not be resolved is an error only here,
+	// where something actually uses it. The schema loaded so that the
+	// declarations around this one still work.
+	if decl.unresolved != "" {
+		v.fail(el, "src-resolve",
+			"element declaration {%s}%s refers to %q, which no "+
+				"definition matches",
+			decl.Name.URI, decl.Name.Local, decl.unresolved)
+		return nil
+	}
+
 	// An abstract declaration cannot itself validate an element; only a
 	// member of its substitution group can.
 	if decl.Abstract {

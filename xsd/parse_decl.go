@@ -71,7 +71,15 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 			"an element declaration may not have both a type attribute "+
 				"and an inline type definition"))
 	case typeAttr != nil:
-		p.resolveTypeRef(el, typeAttr.Value, func(t Type) { d.Type = t })
+		// An element declaration naming a type that does not exist is an
+		// error only where the declaration is used. The suite is
+		// explicit about it — missing001 is "Error only if the element
+		// declaration is needed for validation", and its schema is
+		// expected to load — so the reference is recorded and reported
+		// against the instance that reaches it.
+		p.resolveTypeRefLazy(el, typeAttr.Value,
+			func(t Type) { d.Type = t },
+			func(ref string) { d.unresolved = ref })
 	case inline != nil:
 		if inline.Name.Local == "simpleType" {
 			d.Type = p.readSimpleType(inline)
@@ -110,13 +118,22 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 					p.errs = append(p.errs, err)
 					continue
 				}
-				ref := one
 				p.fixups = append(p.fixups, func() error {
 					head, ok := p.schema.Elements[name]
 					if !ok {
-						return errorAt(el, "src-resolve",
-							"substitutionGroup %q names no element declaration",
-							ref)
+						// A missing head is not an error for this
+						// declaration at all. The affiliation only
+						// decides what this element may substitute
+						// *for*; using the declaration directly
+						// asks nothing of the head. missing002
+						// pins exactly that: <bad> names a head
+						// that does not exist, and an instance of
+						// <bad> is still valid.
+						//
+						// Nothing can substitute for a head that
+						// does not exist either, so dropping the
+						// affiliation loses no constraint.
+						return nil
 					}
 					if d.SubstitutionGroup == nil {
 						d.SubstitutionGroup = head
@@ -563,6 +580,18 @@ func splitFields(s string) []string {
 // resolveTypeRef resolves a type named by an attribute, deferring until every
 // document has been read.
 func (p *parser) resolveTypeRef(el *xdm.Node, ref string, set func(Type)) {
+	p.resolveTypeRefLazy(el, ref, set, nil)
+}
+
+// resolveTypeRefLazy is resolveTypeRef with somewhere to put the failure.
+//
+// Where miss is non-nil an unresolved name is handed to it instead of being
+// reported, which lets the caller carry the reference on the component and
+// raise it if validation ever reaches there. That is what the spec asks for on
+// an element declaration, whose missing type matters only where the
+// declaration is used; a base or item type has no such latitude, since the
+// type being defined cannot be built without it.
+func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), miss func(string)) {
 	name, err := p.resolveQName(el, "type", ref)
 	if err != nil {
 		p.errs = append(p.errs, err)
@@ -571,6 +600,10 @@ func (p *parser) resolveTypeRef(el *xdm.Node, ref string, set func(Type)) {
 	p.fixups = append(p.fixups, func() error {
 		t, ok := p.schema.Types[name]
 		if !ok {
+			if miss != nil {
+				miss(ref)
+				return nil
+			}
 			return errorAt(el, "src-resolve",
 				"type %q names no type definition", ref)
 		}

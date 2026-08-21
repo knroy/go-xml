@@ -92,7 +92,7 @@ func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 			"a list may not have both an itemType attribute and an "+
 				"inline simpleType"))
 	case item != "":
-		p.resolveTypeRef(el, item, func(bt Type) {
+		p.resolveTypeRefLazy(el, item, func(bt Type) {
 			st, ok := bt.(*SimpleType)
 			if !ok {
 				p.errs = append(p.errs, errorAt(el, "src-resolve",
@@ -100,7 +100,7 @@ func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 				return
 			}
 			t.ItemType = st
-		})
+		}, func(ref string) { t.unresolved = ref })
 	case inline != nil:
 		t.ItemType = p.readSimpleType(inline)
 	default:
@@ -138,8 +138,10 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 			p.fixups = append(p.fixups, func() error {
 				bt, ok := p.schema.Types[name]
 				if !ok {
-					return errorAt(el, "src-resolve",
-						"union memberTypes names no type %q", ref)
+					// Reported where the union is used, not
+					// here; see SimpleType.unresolved.
+					t.unresolved = ref
+					return nil
 				}
 				st, ok := bt.(*SimpleType)
 				if !ok {

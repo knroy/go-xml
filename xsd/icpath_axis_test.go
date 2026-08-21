@@ -78,8 +78,9 @@ func TestUnresolvableSchemaLocationIsNotFatal(t *testing.T) {
 	}
 }
 
-// A reference that genuinely needed the missing components still fails — at
-// the reference, naming what is missing, rather than at the import.
+// A reference that genuinely needed the missing components still fails — but
+// against the instance that reaches it, not at load. The schema keeps working
+// for everything that did not depend on the import.
 func TestReferenceIntoAnUnresolvedImportStillFails(t *testing.T) {
 	const doc = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
 	              xmlns:o="http://example.com/other">
@@ -87,7 +88,51 @@ func TestReferenceIntoAnUnresolvedImportStillFails(t *testing.T) {
 	             schemaLocation="http://127.0.0.1/must-not-resolve.xyzzy"/>
 	  <xs:element name="e" type="o:missing"/>
 	</xs:schema>`
-	if _, err := parseSchemaString(t, doc); err == nil {
-		t.Fatal("a reference to a type from an unresolved import was accepted")
+	if _, err := parseSchemaString(t, doc); err != nil {
+		t.Fatalf("the schema did not load: %v", err)
+	}
+	if err := validateString(t, doc, `<e/>`); err == nil {
+		t.Fatal("using a type from an unresolved import was accepted")
+	}
+}
+
+// A list or union naming a type that does not exist loads, and fails against
+// the value that reaches it — missing006 is "Error only if the list type is
+// needed for validation". Checking at use also keeps a half-built list from
+// being walked, whose ItemType is nil.
+func TestUnresolvedListItemTypeIsReportedAtUse(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="l">
+	    <xs:list itemType="absent"/>
+	  </xs:simpleType>
+	  <xs:element name="good" type="xs:integer"/>
+	  <xs:element name="bad" type="l"/>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, schema); err != nil {
+		t.Fatalf("the schema did not load: %v", err)
+	}
+	if err := validateString(t, schema, `<good>1</good>`); err != nil {
+		t.Errorf("the sound declaration failed: %v", err)
+	}
+	if err := validateString(t, schema, `<bad>x</bad>`); err == nil {
+		t.Error("a list with a missing item type validated a value")
+	}
+}
+
+// A substitution group head that does not exist is not an error for the
+// declaration naming it. The affiliation decides only what the element may
+// substitute *for*, so using the declaration directly asks nothing of the
+// head — and nothing can substitute for a head that does not exist either.
+func TestMissingSubstitutionGroupHeadIsHarmless(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="bad" substitutionGroup="rotten"/>
+	</xs:schema>`
+	if _, err := parseSchemaString(t, schema); err != nil {
+		t.Fatalf("the schema did not load: %v", err)
+	}
+	if err := validateString(t, schema, `<bad>3</bad>`); err != nil {
+		t.Errorf("an element naming a missing head was rejected: %v", err)
 	}
 }

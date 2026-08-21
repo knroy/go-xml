@@ -152,6 +152,12 @@ type ValueConstraint struct {
 type ElementDecl struct {
 	Name       xdm.QName
 	Type       Type
+	// unresolved names a type reference that no definition matched. The
+	// spec makes this an error only where the declaration is actually used
+	// (missing001: "Error only if the element declaration is needed for
+	// validation"), so it is carried here and reported at use rather than
+	// failing the schema at load.
+	unresolved string
 	Scope      Scope
 	Nillable   bool
 	Constraint *ValueConstraint
@@ -414,6 +420,13 @@ func (v Variety) String() string {
 // Part 1 §3.14.1 also defines this component, but that section is marked
 // non-normative and disagrees with Part 2 about {final}. Part 2 governs here.
 type SimpleType struct {
+	// unresolved names a type reference within this definition that no
+	// definition matched — a list's item type or a union's member. As with
+	// an element declaration, the spec makes this an error only where the
+	// type is used (missing006: "Error only if the list type is needed for
+	// validation"), so it is reported against the value that reaches it.
+	unresolved string
+
 	Name     xdm.QName
 	Base     Type
 	FinalSet DerivationSet

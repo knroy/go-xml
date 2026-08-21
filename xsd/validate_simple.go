@@ -73,6 +73,16 @@ func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType
 // validateSimpleValue checks a lexical form against a simple type and returns
 // the normalised value.
 func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
+	// A definition naming a type that does not exist loaded anyway, because
+	// the spec makes that an error only where the type is used. This is
+	// where it is used, so it is an error now — and checking here also
+	// keeps a half-built list or union from being walked, whose ItemType or
+	// member slot is nil.
+	if t.unresolved != "" {
+		return "", fmt.Errorf(
+			"src-resolve: type refers to %q, which no definition matches",
+			t.unresolved)
+	}
 	switch t.Variety {
 	case VarietyList:
 		return validateListValue(lexical, t)
