@@ -231,10 +231,41 @@ func isNameChar(c byte) bool {
 
 // readIdentityConstraint reads an <xs:key>, <xs:keyref> or <xs:unique>.
 func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
+	// XSD 1.1 lets a declaration reference a constraint declared elsewhere
+	// instead of defining one: <xs:key ref="s:some-key"/>. The referenced
+	// constraint applies to this element as if written here, which is how a
+	// schema states one key over several element declarations without
+	// repeating its selector and fields.
+	if ref := el.AttrValue("ref"); ref != "" {
+		if el.AttrValue("name") != "" {
+			p.errs = append(p.errs, errorAt(el, "src-identity-constraint",
+				"an identity constraint may not have both name and ref"))
+			return nil
+		}
+		target, err := p.resolveQName(el, "ref", ref)
+		if err != nil {
+			p.errs = append(p.errs, err)
+			return nil
+		}
+		// The reference is a placeholder until the constraint it names
+		// has been read, which may be in a document not yet seen.
+		placeholder := &IdentityConstraint{Name: target}
+		p.fixups = append(p.fixups, func() error {
+			found, ok := p.schema.identityConstraints[target]
+			if !ok {
+				return errorAt(el, "src-resolve",
+					"identity constraint ref %q names no key or unique", ref)
+			}
+			*placeholder = *found
+			return nil
+		})
+		return placeholder
+	}
+
 	name := el.AttrValue("name")
 	if name == "" {
 		p.errs = append(p.errs, errorAt(el, "",
-			"an identity constraint must have a name"))
+			"an identity constraint must have a name or a ref"))
 		return nil
 	}
 
