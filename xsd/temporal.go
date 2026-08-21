@@ -148,6 +148,16 @@ func parseTemporal(v, primitive string) (temporal, bool) {
 	days := daysFromCivil(year, month, day)
 	total := new(big.Rat).SetInt64(days * 86400)
 	total.Add(total, secs)
+	if primitive == "time" {
+		// xs:time has no date, so 24:00:00 is the same time of day as
+		// 00:00:00 rather than a point a day later. Leaving it at 86400
+		// makes two spellings of one time compare unequal, which a key
+		// sequence and an enumeration both notice.
+		//
+		// This is not done for dateTime, where 24:00:00 genuinely means
+		// midnight starting the *next* day and the date carries it.
+		total = wrapDay(total)
+	}
 	if hasTZ {
 		// A timezone of +05:00 means the local time is ahead of UTC, so
 		// the instant is *earlier*.
@@ -477,4 +487,21 @@ func ratToInt(r *big.Rat) (int64, bool) {
 		return 0, false
 	}
 	return n.Int64(), true
+}
+
+// wrapDay reduces a seconds-of-day value into [0, 86400).
+//
+// It is used for xs:time, where the value space is a time of day rather than a
+// point on a timeline: 24:00:00 and 00:00:00 name the same time, and a
+// timezone may carry a value outside the day in either direction.
+func wrapDay(t *big.Rat) *big.Rat {
+	day := new(big.Rat).SetInt64(86400)
+	for t.Cmp(day) >= 0 {
+		t = new(big.Rat).Sub(t, day)
+	}
+	zero := new(big.Rat)
+	for t.Cmp(zero) < 0 {
+		t = new(big.Rat).Add(t, day)
+	}
+	return t
 }

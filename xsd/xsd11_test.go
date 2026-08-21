@@ -1734,3 +1734,71 @@ func TestLocalTargetNamespace(t *testing.T) {
 		t.Error("the local declaration's type should be enforced")
 	}
 }
+
+// TestOpenContentOnEmptyType covers appliesToEmpty="true", which exists
+// precisely to open a type with no content model at all.
+//
+// Refusing children before consulting the wildcard makes the attribute do
+// nothing, since an empty type is the only kind it applies to.
+func TestOpenContentOnEmptyType(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:defaultOpenContent mode="interleave" appliesToEmpty="true">
+	    <xs:any namespace="urn:o" processContents="skip"/>
+	  </xs:defaultOpenContent>
+	  <xs:complexType name="c"/>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="p" type="c"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<root><p><x xmlns="urn:o"/></p></root>`); err != nil {
+		t.Errorf("appliesToEmpty should open an empty type: %v", err)
+	}
+	// The wildcard still bounds what may appear.
+	if err := check11(t, s, `<root><p><x/></p></root>`); err == nil {
+		t.Error("a child the wildcard does not admit should be refused")
+	}
+}
+
+// TestTimeWrapsAtMidnight pins that xs:time's value space is a time of day
+// rather than a point on a timeline.
+//
+// 24:00:00 and 00:00:00 name the same time, so two spellings of one value must
+// compare equal — which a key sequence and an enumeration both notice. This is
+// not true of xs:dateTime, where 24:00:00 means midnight starting the next day
+// and the date carries it.
+func TestTimeWrapsAtMidnight(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="target" type="xs:time"/>
+	        <xs:element name="equiv" type="xs:time" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:key name="t">
+	      <xs:selector xpath="target"/><xs:field xpath="."/>
+	    </xs:key>
+	    <xs:keyref name="r" refer="t">
+	      <xs:selector xpath="equiv"/><xs:field xpath="."/>
+	    </xs:keyref>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><target>00:00:00Z</target>`+
+		`<equiv>05:00:00+05:00</equiv><equiv>24:00:00Z</equiv>`+
+		`<equiv>24:00:00+00:00</equiv></doc>`); err != nil {
+		t.Errorf("every spelling of midnight should resolve: %v", err)
+	}
+	if err := check11(t, s,
+		`<doc><target>00:00:00Z</target><equiv>12:00:00Z</equiv></doc>`); err == nil {
+		t.Error("a different time should not resolve")
+	}
+}

@@ -407,6 +407,13 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 
 	switch t.Content {
 	case ContentEmpty:
+		// An empty type with open content is not empty: XSD 1.1's
+		// appliesToEmpty="true" exists precisely to open one, and
+		// refusing children before consulting the wildcard makes the
+		// attribute do nothing.
+		if oc := v.openContentFor(t); oc != nil {
+			return v.matchOpenOnly(el, el.ChildElements(), oc)
+		}
 		if len(el.ChildElements()) > 0 {
 			v.fail(el, "cvc-complex-type.2.1",
 				"element must be empty but has element children")
@@ -441,6 +448,30 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		return v.validateChildren(el, t)
 	}
 	return nil
+}
+
+// matchOpenOnly validates the children of a type whose only content model is
+// its open content wildcard.
+//
+// An empty type opened by appliesToEmpty="true" has no particle at all, so
+// there is no automaton to walk: every child is either admitted by the wildcard
+// or refused. Mode does not enter into it — with nothing in the model, every
+// position is both after it and interleaved with it.
+func (v *validator) matchOpenOnly(el *xdm.Node, kids []*xdm.Node, oc *OpenContent) []icTables {
+	var tables []icTables
+	for _, kid := range kids {
+		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+		if !oc.Wildcard.AllowsName(name, v.elementDefined) {
+			v.fail(kid, "cvc-complex-type.2.4.a",
+				"element {%s}%s is not permitted by the open content wildcard",
+				name.URI, name.Local)
+			continue
+		}
+		if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
+			tables = append(tables, tbl)
+		}
+	}
+	return tables
 }
 
 // nonSpaceText returns the first non-whitespace text directly inside el.
