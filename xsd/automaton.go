@@ -49,6 +49,10 @@ type contentModel struct {
 	// inside a bounded repetition belongs to one, and the runtime tracks a
 	// count for each rather than duplicating states.
 	counters []*counter
+
+	// active is the set of model groups on the path currently being built,
+	// used to detect a group that reaches itself.
+	active map[*ModelGroup]bool
 }
 
 // A position is one occurrence of an element declaration or wildcard in a
@@ -77,7 +81,7 @@ type counter struct {
 
 // compileContentModel builds the automaton for a complex type's particle.
 func compileContentModel(p *Particle) (*contentModel, error) {
-	m := &contentModel{}
+	m := &contentModel{active: map[*ModelGroup]bool{}}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -143,7 +147,26 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		inner = frag{first: []int{idx}, last: []int{idx}}
 
 	case *ModelGroup:
+		// A model group may reach itself: <xs:group name="expr"> whose
+		// content references expr is how a schema describes a nested
+		// structure, and it is legal. The particle tree is then a cyclic
+		// graph, and Glushkov construction assumes a tree — following
+		// the cycle recurses until the stack is gone, which is what real
+		// schemas in the W3C suite actually do.
+		//
+		// A recursive content model is not a regular language, so no
+		// finite automaton describes it. Refusing is the honest answer;
+		// the alternative is to unroll to some arbitrary depth and
+		// accept or reject documents based on where the unrolling
+		// stopped.
+		if m.active[t] {
+			return frag{}, fmt.Errorf(
+				"content model is recursive: a model group reaches itself, " +
+					"which no finite automaton can describe")
+		}
+		m.active[t] = true
 		inner, err = m.buildGroup(t, scope)
+		delete(m.active, t)
 		if err != nil {
 			return frag{}, err
 		}
