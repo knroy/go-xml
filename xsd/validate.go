@@ -539,11 +539,27 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position) {
 		v.childTypes[k] = got
 		return
 	}
-	if prev != got {
-		v.fail(kid, "cvc-complex-type.2.4.k",
-			"element {%s}%s is matched with two different types in one "+
-				"content model", name.URI, name.Local)
+	if edtConsistent(v, prev, got) {
+		return
 	}
+	v.fail(kid, "cvc-complex-type.2.4.k",
+		"element {%s}%s is matched with two different types in one "+
+			"content model", name.URI, name.Local)
+}
+
+// edtConsistent reports whether two types one name was matched with agree.
+//
+// Identity is too strict: the rule is that the declarations are consistent, and
+// a type validly derived from the other is consistent with it. A global
+// <e type="xs:positiveInteger"/> reached through a wildcard does not conflict
+// with a local <e type="xs:integer"/>, because everything the global admits the
+// local admits too. Union membership counts for the same reason — a local type
+// that is a union of xs:date and xs:time is consistent with a global xs:date.
+//
+// The test runs both ways, since which of the two the wildcard supplied is an
+// accident of document order rather than something the rule distinguishes.
+func edtConsistent(v *validator, a, b Type) bool {
+	return a == b || v.derivedFrom(a, b) || v.derivedFrom(b, a)
 }
 
 // isAllGroup reports whether a particle is an xs:all at the top of a content

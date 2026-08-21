@@ -1568,3 +1568,96 @@ func TestPlusINFIsAFloat(t *testing.T) {
 		t.Error("++INF should not be a valid xs:float")
 	}
 }
+
+// TestDynamicEDTAllowsDerivedTypes pins that the dynamic Element Declarations
+// Consistent check compares by derivation, not by identity.
+//
+// A global <e type="xs:positiveInteger"/> reached through a wildcard does not
+// conflict with a local <e type="xs:integer"/>: everything the global admits
+// the local admits too. Union membership counts for the same reason.
+func TestDynamicEDTAllowsDerivedTypes(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="e" type="xs:integer"/>
+	      <xs:element name="f" type="xs:integer"/>
+	      <xs:any namespace="##local" processContents="lax"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="doc" type="zing"/>
+	  <xs:element name="e" type="xs:positiveInteger"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><e>1</e><f>2</f><e>3</e></doc>`); err != nil {
+		t.Errorf("a derived type should not conflict: %v", err)
+	}
+}
+
+// TestAssertionTypesAnonymousSimpleTypes covers an element whose type is an
+// anonymous restriction.
+//
+// The annotation was taken from the type's own name, which an anonymous type
+// does not have, so the node stayed untyped: "even-number lt 500" against a
+// restriction of xs:int compared a string with an integer and raised XPTY0004,
+// when the schema plainly gave the element a numeric type.
+func TestAssertionTypesAnonymousSimpleTypes(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="Example">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="n">
+	          <xs:simpleType>
+	            <xs:restriction base="xs:int">
+	              <xs:minInclusive value="0"/>
+	            </xs:restriction>
+	          </xs:simpleType>
+	        </xs:element>
+	      </xs:sequence>
+	      <xs:assert test="n lt 500"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<Example><n>42</n></Example>`); err != nil {
+		t.Errorf("an anonymous restriction should still atomise numerically: %v", err)
+	}
+	if err := check11(t, s, `<Example><n>900</n></Example>`); err == nil {
+		t.Error("the assertion should fail for 900")
+	}
+}
+
+// TestListValueBindsAsSequence pins that $value for a list type is a sequence
+// with one item per list item, not one item holding the whole literal.
+//
+// Given the literal as a single item, data($value) yields "2 4 6 8 10" and the
+// arithmetic raises FORG0001 rather than running over five numbers.
+func TestListValueBindsAsSequence(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="ints"><xs:list itemType="xs:integer"/></xs:simpleType>
+	  <xs:element name="list">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:extension base="ints">
+	          <xs:assert test="count($value) le 5"/>
+	          <xs:assert test="every $x in data($value) satisfies ($x mod 2 = 0)"/>
+	        </xs:extension>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<list>2 4 6 8 10</list>`); err != nil {
+		t.Errorf("an all-even list should satisfy the assertion: %v", err)
+	}
+	if err := check11(t, s, `<list>2 4 5</list>`); err == nil {
+		t.Error("a list with an odd item should fail the assertion")
+	}
+	// count($value) is the number of list items, which only holds if the
+	// binding is a sequence rather than one item.
+	if err := check11(t, s, `<list>2 4 6 8 10 12</list>`); err == nil {
+		t.Error("six items should exceed count($value) le 5")
+	}
+}

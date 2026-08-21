@@ -199,7 +199,7 @@ func (v *validator) assertionValue(el *xdm.Node, t *ComplexType) xdm.Sequence {
 		// rather than a value the type does not admit.
 		return nil
 	}
-	return xdm.One(typedValueFor(normalized, t.SimpleContent))
+	return typedSequenceFor(normalized, t.SimpleContent)
 }
 
 // scopeForAssertion returns a copy of an element rooted in its own tree.
@@ -327,13 +327,13 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		}
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
 		if a != nil && a.TypeAnnotation == "" {
-			a.TypeAnnotation = use.Decl.Type.Name.Local
+			a.TypeAnnotation = annotationName(use.Decl.Type)
 		}
 	}
 
 	if t.Content == ContentSimple && t.SimpleContent != nil {
 		if el.TypeAnnotation == "" {
-			el.TypeAnnotation = t.SimpleContent.Name.Local
+			el.TypeAnnotation = annotationName(t.SimpleContent)
 		}
 		return
 	}
@@ -350,7 +350,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		switch dt := d.Type.(type) {
 		case *SimpleType:
 			if c.TypeAnnotation == "" {
-				c.TypeAnnotation = dt.Name.Local
+				c.TypeAnnotation = annotationName(dt)
 			}
 		case *ComplexType:
 			annotateSubtree(c, dt, depth+1)
@@ -407,7 +407,7 @@ func checkSimpleAssertions(steps []facetStep, normalized string, t *SimpleType) 
 		for _, a := range st.facets.Assertions {
 			ctx := newAssertContext(nil)
 			ctx.Vars = map[string]xdm.Sequence{
-				"value": xdm.One(typedValueFor(normalized, t)),
+				"value": typedSequenceFor(normalized, t),
 			}
 			ok, err := a.Test.EvalBool(ctx)
 			if err != nil {
@@ -434,4 +434,59 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 	}
 	n := &xdm.Node{Kind: xdm.KindText, Value: normalized, TypeAnnotation: prim}
 	return n.Atomize()
+}
+
+// typedSequenceFor builds the sequence bound to $value.
+//
+// A list type's value is a sequence with one item per list item, not one item
+// holding the whole literal. "every $x in data($value) satisfies $x mod 2 = 0"
+// over a list of integers depends on it: given the literal as a single item,
+// data() yields "2 4 6 8 10" and the arithmetic raises FORG0001 rather than
+// running over five numbers.
+func typedSequenceFor(normalized string, t *SimpleType) xdm.Sequence {
+	if t != nil && t.Variety == VarietyList && t.ItemType != nil {
+		items := splitFields(normalized)
+		out := make(xdm.Sequence, 0, len(items))
+		for _, item := range items {
+			out = append(out, typedValueFor(item, t.ItemType))
+		}
+		return out
+	}
+	return xdm.One(typedValueFor(normalized, t))
+}
+
+// annotationName returns the built-in name a type atomises as.
+//
+// An anonymous type has no name of its own, and using it leaves the node
+// untyped — so "even-number lt 500" against a restriction of xs:int compares a
+// string with an integer and raises XPTY0004, when the schema plainly gave the
+// element a numeric type. What decides atomisation is the primitive, and every
+// simple type has one whether or not it was given a name.
+//
+// A named built-in still returns its own name, since a restriction of xs:int
+// atomises as xs:int rather than as xs:decimal.
+func annotationName(t Type) string {
+	st, ok := t.(*SimpleType)
+	if !ok || st == nil {
+		return ""
+	}
+	if st.Name.Local != "" {
+		return st.Name.Local
+	}
+	// Walk to the nearest named ancestor: a restriction of xs:int atomises
+	// as xs:int, which the primitive alone (xs:decimal) would lose.
+	for cur := st; cur != nil; {
+		if cur.Name.Local != "" && cur.Name.URI == NSSchema {
+			return cur.Name.Local
+		}
+		base, isSimple := cur.Base.(*SimpleType)
+		if !isSimple || base == cur {
+			break
+		}
+		cur = base
+	}
+	if p := st.Primitive; p != nil {
+		return p.Name.Local
+	}
+	return ""
 }
