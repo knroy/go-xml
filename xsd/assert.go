@@ -59,12 +59,13 @@ func (p *parser) readAssert(el *xdm.Node) *Assertion {
 		return nil
 	}
 
-	def := el.AttrValue("xpathDefaultNamespace")
-	if def == "##targetNamespace" {
-		def = p.doc.targetNS
-	} else if def == "##local" {
-		def = ""
-	}
+	// xpathDefaultNamespace may be set on the assertion, on an ancestor, or
+	// on <xs:schema> for the whole document, and takes three keywords
+	// besides a literal URI. Reading only the local attribute treated
+	// "##defaultNamespace" as a namespace URI of that spelling, so every
+	// unprefixed name in the test was resolved into a namespace no element
+	// is ever in.
+	def, _ := p.xpathDefaultNamespace(el)
 
 	compiled, err := xpath.Compile(test, assertResolver{el: el, defaultNS: def})
 	if err != nil {
@@ -113,10 +114,9 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	alt := &TypeAlternative{Source: el.AttrValue("test")}
 
 	if alt.Source != "" {
-		def := el.AttrValue("xpathDefaultNamespace")
-		if def == "##targetNamespace" {
-			def = p.doc.targetNS
-		}
+		// As for an assertion: the attribute may be inherited and takes
+		// keywords besides a URI.
+		def, _ := p.xpathDefaultNamespace(el)
 		compiled, err := xpath.Compile(alt.Source,
 			assertResolver{el: el, defaultNS: def})
 		if err != nil {

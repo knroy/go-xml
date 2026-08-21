@@ -414,14 +414,27 @@ func isDateTimeLexical(v, primitive string) bool {
 		return isSignedDigits(body, 4)
 	case "gYearMonth":
 		i := strings.LastIndexByte(body, '-')
-		return i > 0 && isSignedDigits(body[:i], 4) && isDigits(body[i+1:], 2)
+		return i > 0 && isSignedDigits(body[:i], 4) &&
+			isDigits(body[i+1:], 2) && inRange(body[i+1:], 1, 12)
 	case "gMonth":
-		return strings.HasPrefix(body, "--") && isDigits(body[2:], 2)
+		return strings.HasPrefix(body, "--") && isDigits(body[2:], 2) &&
+			inRange(body[2:], 1, 12)
 	case "gDay":
-		return strings.HasPrefix(body, "---") && isDigits(body[3:], 2)
+		return strings.HasPrefix(body, "---") && isDigits(body[3:], 2) &&
+			inRange(body[3:], 1, 31)
 	case "gMonthDay":
-		return strings.HasPrefix(body, "--") && len(body) == 7 &&
-			isDigits(body[2:4], 2) && body[4] == '-' && isDigits(body[5:], 2)
+		if !strings.HasPrefix(body, "--") || len(body) != 7 || body[4] != '-' ||
+			!isDigits(body[2:4], 2) || !isDigits(body[5:], 2) {
+			return false
+		}
+		var month, day int64
+		if !parseInt(body[2:4], &month) || !parseInt(body[5:], &day) {
+			return false
+		}
+		// gMonthDay has no year, so February is given 29 days: --02-29
+		// is a date that occurs, just not every year.
+		return month >= 1 && month <= 12 && day >= 1 &&
+			day <= daysInMonth(2000, month)
 	}
 	return false
 }
@@ -453,9 +466,29 @@ func isDatePart(v string) bool {
 	if mid <= 0 {
 		return false
 	}
-	return isSignedDigits(v[:mid], 4) && isDigits(v[mid+1:last], 2) &&
-		isDigits(v[last+1:], 2)
+	if !isSignedDigits(v[:mid], 4) || !isDigits(v[mid+1:last], 2) ||
+		!isDigits(v[last+1:], 2) {
+		return false
+	}
+	// The components must name a date that exists. 2001-02-30 is three
+	// well-formed numbers and not a day, and -0003-02-29 is the same trap
+	// with the proleptic Gregorian leap rule: year -3 is 4 BCE in
+	// astronomical numbering, which is not divisible by four.
+	var year, month, day int64
+	if !parseInt(v[:mid], &year) || !parseInt(v[mid+1:last], &month) ||
+		!parseInt(v[last+1:], &day) {
+		return false
+	}
+	if v[0] == '-' {
+		year = -year
+	}
+	return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month)
 }
+
+// daysInMonth is in temporal.go, applying the proleptic Gregorian leap rule to
+// an astronomical year number: 0 is 1 BCE and -1 is 2 BCE, which is why year 0
+// is a leap year and year -3 is not.
+
 
 func isTimePart(v string) bool {
 	if len(v) < 8 || v[2] != ':' || v[5] != ':' {
@@ -464,8 +497,23 @@ func isTimePart(v string) bool {
 	if !isDigits(v[:2], 2) || !isDigits(v[3:5], 2) || !isDigits(v[6:8], 2) {
 		return false
 	}
+	var h, m, sec int64
+	if !parseInt(v[:2], &h) || !parseInt(v[3:5], &m) || !parseInt(v[6:8], &sec) {
+		return false
+	}
+	// 24:00:00 is the one hour-24 form the lexical space admits, and only
+	// with zero minutes and seconds: it names the end of a day, not a
+	// twenty-fifth hour.
+	if h > 24 || m > 59 || sec > 59 || (h == 24 && (m != 0 || sec != 0)) {
+		return false
+	}
 	if len(v) == 8 {
 		return true
+	}
+	if h == 24 {
+		// 24:00:00.5 would be past the end of the day.
+		return v[8] == '.' && len(v) > 9 && isDigits(v[9:], -1) &&
+			strings.Trim(v[9:], "0") == ""
 	}
 	return v[8] == '.' && len(v) > 9 && isDigits(v[9:], -1)
 }
@@ -542,4 +590,13 @@ func isDurationFields(v, designators string) bool {
 		v = v[n+1:]
 	}
 	return true
+}
+
+// inRange reports whether a digit string denotes a value within bounds.
+func inRange(v string, lo, hi int64) bool {
+	var n int64
+	if !parseInt(v, &n) {
+		return false
+	}
+	return n >= lo && n <= hi
 }

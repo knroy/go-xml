@@ -2007,3 +2007,65 @@ func TestIdentityConstraintXPathDefaultNamespace(t *testing.T) {
 		t.Error("a duplicate should be caught through xpathDefaultNamespace")
 	}
 }
+
+// TestDateLexicalSpaceChecksRanges pins that a date's components must name a
+// date that occurs, not merely three well-formed numbers.
+//
+// 2001-02-30 is the everyday case; -0003-02-29 is the same trap under the
+// proleptic Gregorian leap rule, where the year is astronomical — 0 is 1 BCE,
+// so year 0 is a leap year and year -3 is not.
+func TestDateLexicalSpaceChecksRanges(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="d" type="xs:date"/>
+	</xs:schema>`
+
+	for _, v := range []string{"2001-02-28", "2000-02-29", "0000-02-29", "-0004-02-29"} {
+		assertValid(t, schema, `<d>`+v+`</d>`)
+	}
+	for _, v := range []string{
+		"2001-02-30", "2001-13-01", "2001-00-01", "2001-01-00",
+		"1900-02-29", // divisible by 100 but not 400
+		"-0003-02-29",
+	} {
+		assertInvalid(t, schema, `<d>`+v+`</d>`, "cvc-datatype-valid")
+	}
+}
+
+// TestTimeLexicalSpaceChecksRanges pins the hour-24 rule: 24:00:00 names the
+// end of a day and is the only hour-24 form the lexical space admits.
+func TestTimeLexicalSpaceChecksRanges(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="t" type="xs:time"/>
+	</xs:schema>`
+
+	for _, v := range []string{"00:00:00", "23:59:59", "24:00:00", "24:00:00.0"} {
+		assertValid(t, schema, `<t>`+v+`</t>`)
+	}
+	for _, v := range []string{"25:00:00", "24:00:01", "24:01:00", "00:60:00",
+		"00:00:60", "24:00:00.5"} {
+		assertInvalid(t, schema, `<t>`+v+`</t>`, "cvc-datatype-valid")
+	}
+}
+
+// TestGregorianLexicalRanges covers the partial calendar types, whose
+// components are bounded even though they carry no full date.
+//
+// gMonthDay has no year, so February is given 29 days: --02-29 is a date that
+// occurs, just not every year.
+func TestGregorianLexicalRanges(t *testing.T) {
+	for _, c := range []struct{ typ, good, bad string }{
+		{"gYearMonth", "2001-12", "2001-13"},
+		{"gMonth", "--12", "--13"},
+		{"gDay", "---31", "---32"},
+		{"gMonthDay", "--02-29", "--02-30"},
+	} {
+		schema := `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="v" type="xs:` + c.typ + `"/>
+		</xs:schema>`
+		assertValid(t, schema, `<v>`+c.good+`</v>`)
+		assertInvalid(t, schema, `<v>`+c.bad+`</v>`, "cvc-datatype-valid")
+	}
+}
