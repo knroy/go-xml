@@ -3,7 +3,6 @@ package xsd
 import (
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -408,12 +407,14 @@ func isAllGroup(p *Particle) bool {
 
 // modelFor returns the compiled content model for a type, building it once.
 //
-// The cache is on the validator's schema rather than on the type so that a
-// concurrently validating goroutine does not race to write the same field. A
-// schema is documented as safe to share once loaded, and that has to remain
-// true when it is used.
+// The cache lives on the Schema rather than in a package-level map. A global
+// keyed by *ComplexType is unsound: Go reuses freed addresses, so a type from a
+// discarded schema can collide with a live one and hand back the wrong
+// automaton. That is exactly the shape of bug that only appears once two
+// schemas exist in one process, which makes it a poor thing to leave for a
+// user to find.
 func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
-	if m, ok := modelCache.Load(t); ok {
+	if m, ok := v.schema.models.Load(t); ok {
 		if e, isErr := m.(error); isErr {
 			return nil, e
 		}
@@ -421,19 +422,12 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 	}
 	m, err := compileContentModel(t.Particle)
 	if err != nil {
-		modelCache.Store(t, err)
+		v.schema.models.Store(t, err)
 		return nil, err
 	}
-	modelCache.Store(t, m)
+	v.schema.models.Store(t, m)
 	return m, nil
 }
-
-// modelCache holds compiled content models, keyed by complex type.
-//
-// A sync.Map rather than a mutex-guarded map because the access pattern is
-// write-once then read-many: every validation of a document using a given type
-// reads the same entry, and after the first document there are no more writes.
-var modelCache sync.Map
 
 // matchSequence walks the automaton over an element's children.
 func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel) []icTables {

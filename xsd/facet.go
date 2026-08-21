@@ -257,6 +257,33 @@ func mergeFacets(a, b map[FacetKind]bool) map[FacetKind]bool {
 	return out
 }
 
+// primitiveOf returns a simple type's primitive, walking the base chain when
+// the field was not filled in.
+//
+// The field is set when a type is built from a base that already knew its own
+// primitive, but a redefinition is read while its base is still being resolved,
+// so the copy can be nil even though the chain leads to a primitive. Deriving
+// it on demand is what keeps a redefined type's length and bound facets
+// working — without it they were silently skipped, because the code that
+// applies them dispatches on the primitive's name.
+func primitiveOf(t *SimpleType) *SimpleType {
+	seen := 0
+	for cur := t; cur != nil; {
+		if cur.Primitive != nil {
+			return cur.Primitive
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			return nil
+		}
+		cur = base
+		if seen++; seen > 256 {
+			return nil
+		}
+	}
+	return nil
+}
+
 // FacetApplicable reports whether a facet may be applied to a simple type.
 //
 // Dispatch is on {variety} first, and the union case is the one that catches
@@ -277,7 +304,7 @@ func FacetApplicable(t *SimpleType, f FacetKind) bool {
 		return f == FacetPattern || f == FacetEnumeration
 	}
 
-	prim := t.Primitive
+	prim := primitiveOf(t)
 	if prim == nil {
 		// An atomic type with no primitive is xs:anySimpleType, which
 		// constrains nothing.

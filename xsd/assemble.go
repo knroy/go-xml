@@ -64,6 +64,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if err := a.run(); err != nil {
 		return nil, err
 	}
+	a.runRedefines()
 	if err := a.p.finish(); err != nil {
 		return nil, err
 	}
@@ -136,6 +137,18 @@ type assembler struct {
 	queue  []pending
 	p      *parser
 	count  int
+
+	// pendingRedefines are the <xs:redefine> elements whose children have
+	// still to be read. They are deferred to the end of assembly because a
+	// redefinition is defined in terms of the document it redefines, which
+	// must therefore have been read first.
+	pendingRedefines []pendingRedefine
+}
+
+// pendingRedefine is one <xs:redefine> awaiting its children being read.
+type pendingRedefine struct {
+	el  *xdm.Node
+	doc *schemaDoc
 }
 
 func (a *assembler) push(root *xdm.Node, base, chameleonNS string, redefining bool) {
@@ -234,19 +247,19 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	for _, el := range root.ChildElements() {
 		a.p.readTopLevel(el)
 	}
-	// A redefine's children are read as ordinary top-level declarations.
-	// The full redefinition semantics — the base being the old definition
-	// under a new name — are not implemented; see the note in queueRef.
-	if item.redefining {
-		for _, el := range root.ChildElements() {
-			if el.IsElement(NSSchema, "redefine") {
-				for _, c := range el.ChildElements() {
-					a.p.readTopLevel(c)
-				}
-			}
-		}
-	}
 	a.p.doc = prev
+
+	// A redefine's own children are read after the redefined document, so
+	// that a self-reference resolves to the definition being replaced
+	// rather than to the replacement. That ordering is the whole of what
+	// makes redefine work, and it is why this cannot be done while the
+	// referenced document is merely queued.
+	for _, el := range root.ChildElements() {
+		if !el.IsElement(NSSchema, "redefine") {
+			continue
+		}
+		a.pendingRedefines = append(a.pendingRedefines, pendingRedefine{el: el, doc: doc})
+	}
 	return nil
 }
 
@@ -366,3 +379,17 @@ func linkSubstitutionGroups(s *Schema) {
 // The list is empty until the schema is assembled, since a member may be
 // declared in a document read after the head.
 func (d *ElementDecl) Substitutable() []*ElementDecl { return d.substitutable }
+
+// runRedefines applies the deferred redefinitions.
+//
+// They run after every document has been read, and innermost first: a redefine
+// of a document that itself redefines another has to see the inner result. The
+// queue is in the order the documents were read, which is outermost first, so
+// it is walked backwards.
+func (a *assembler) runRedefines() {
+	for i := len(a.pendingRedefines) - 1; i >= 0; i-- {
+		r := a.pendingRedefines[i]
+		hold := a.prepareRedefine(r.el, r.doc)
+		a.applyRedefine(r.el, r.doc, hold)
+	}
+}

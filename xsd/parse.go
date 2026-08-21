@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -122,6 +123,12 @@ type Schema struct {
 	// keyref can find the one it refers to. The spec scopes these names to
 	// the whole schema, not to the element carrying the constraint.
 	identityConstraints map[xdm.QName]*IdentityConstraint
+
+	// models caches compiled content models, keyed by complex type. It is
+	// a sync.Map because the access pattern is write-once then read-many —
+	// after the first document there are no more writes — and because a
+	// Schema is documented as safe to share between goroutines once loaded.
+	models sync.Map
 }
 
 // NewSchema returns an empty schema populated with the built-in types.

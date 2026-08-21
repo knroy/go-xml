@@ -66,8 +66,8 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	// is where a value such as "abc" fails for xs:int, before any bound is
 	// consulted.
 	prim := ""
-	if t.Primitive != nil {
-		prim = t.Primitive.Name.Local
+	if p := primitiveOf(t); p != nil {
+		prim = p.Name.Local
 	}
 	if err := checkLexicalSpace(normalized, prim); err != nil {
 		return "", err
@@ -165,8 +165,8 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 // other. Comparing lexical forms would reject documents the spec accepts.
 func checkEnumeration(steps []facetStep, normalized string, t *SimpleType) error {
 	prim := ""
-	if t.Primitive != nil {
-		prim = t.Primitive.Name.Local
+	if p := primitiveOf(t); p != nil {
+		prim = p.Name.Local
 	}
 	numeric := prim == "decimal" || prim == "float" || prim == "double"
 
