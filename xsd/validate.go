@@ -741,6 +741,26 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			if !counterAllows(m, counts, prevIdx, idx) {
 				continue
 			}
+			if _, isWildcard := p.term.(*Wildcard); isWildcard {
+				// A wildcard is the last resort. Extending a
+				// type whose model ends in <xs:any maxOccurs=
+				// "unbounded"/> puts that wildcard ahead of
+				// every element the extension adds, and taking
+				// it greedily consumes the whole content — so
+				// the extension's own declarations never match
+				// and the model reports itself incomplete.
+				//
+				// Preferring the named declaration is sound
+				// because UPA has already established that at
+				// most one *element* particle matches; the
+				// remaining ambiguity is only ever between an
+				// element and a wildcard, which is the case
+				// erratum E1-29 leaves to the processor.
+				if next < 0 {
+					next = idx
+				}
+				continue
+			}
 			next = idx
 			break
 		}

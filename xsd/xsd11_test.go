@@ -2301,3 +2301,74 @@ func TestListOfUnionIDItems(t *testing.T) {
 		t.Error("a duplicate ID in a list of a union should be caught")
 	}
 }
+
+// TestInlineSimpleContentRestriction pins that an inline simpleType inside a
+// simpleContent restriction survives the base's resolution.
+//
+// The base is resolved by a deferred fixup, so a fixup that assigned the
+// content type unconditionally overwrote the inline one — a restriction
+// narrowing xs:anySimpleType to xs:float ended up validating against
+// xs:anySimpleType, which accepts anything.
+func TestInlineSimpleContentRestriction(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="any">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:anySimpleType">
+	        <xs:attribute name="type" type="xs:string"/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:complexType name="floatType">
+	    <xs:simpleContent>
+	      <xs:restriction base="any">
+	        <xs:simpleType><xs:restriction base="xs:float"/></xs:simpleType>
+	      </xs:restriction>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:element name="v" type="floatType"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<v>1.5</v>`)
+	assertInvalid(t, schema, `<v>INVALID</v>`, "cvc")
+}
+
+// TestWildcardIsLastResortInSequence pins that an element declaration is
+// preferred over a wildcard when both could match.
+//
+// Extending a type whose model ends in <xs:any maxOccurs="unbounded"/> puts
+// that wildcard ahead of every element the extension adds, so taking it
+// greedily consumed the whole content and the extension's own declarations
+// never matched — the model then reported itself incomplete for a document it
+// accepts.
+func TestWildcardIsLastResortInSequence(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base" mixed="true">
+	    <xs:sequence>
+	      <xs:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="derived" mixed="true">
+	    <xs:complexContent>
+	      <xs:extension base="base">
+	        <xs:sequence>
+	          <xs:element name="state" type="xs:string"/>
+	          <xs:element name="zip" type="xs:int"/>
+	        </xs:sequence>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="addr" type="derived"/>
+	</xs:schema>`)
+
+	if err := check11(t, s,
+		`<addr><state>TX</state><zip>75244</zip></addr>`); err != nil {
+		t.Errorf("the extension's declarations should match: %v", err)
+	}
+	// The wildcard still takes what no declaration names.
+	if err := check11(t, s,
+		`<addr><other/><state>TX</state><zip>75244</zip></addr>`); err != nil {
+		t.Errorf("the wildcard should still take unnamed content: %v", err)
+	}
+}

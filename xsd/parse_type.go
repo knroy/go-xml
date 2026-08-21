@@ -362,9 +362,26 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	if base == "" {
 		p.errs = append(p.errs, errorAt(body, "src-ct.1",
 			"a simpleContent %s must have a base", body.Name.Local))
-	} else {
+	}
+
+	// An inline simpleType inside the restriction names the content
+	// directly, and it is read first so that the deferred base resolution
+	// can leave it alone. The base is resolved later than this runs, so a
+	// fixup that assigned unconditionally would overwrite the inline type
+	// with the base's — which is how a restriction narrowing
+	// xs:anySimpleType to xs:float ended up validating against
+	// xs:anySimpleType and accepting anything.
+	inline := p.childElement(body, "simpleType")
+	if inline != nil {
+		t.SimpleContent = p.readSimpleType(inline)
+	}
+
+	if base != "" {
 		p.resolveTypeRef(body, base, func(bt Type) {
 			t.Base = bt
+			if inline != nil {
+				return
+			}
 			switch b := bt.(type) {
 			case *SimpleType:
 				// Extending a simple type gives a complex type whose
@@ -374,10 +391,6 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 				t.SimpleContent = b.SimpleContent
 			}
 		})
-	}
-
-	if inline := p.childElement(body, "simpleType"); inline != nil {
-		t.SimpleContent = p.readSimpleType(inline)
 	}
 	// An assertion may sit inside the restriction or extension of a
 	// simpleContent, where it constrains the element's value through
