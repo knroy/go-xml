@@ -61,7 +61,7 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.78%** agreement on 25,002
+Measured against the W3C XSD test suite: **99.79%** agreement on 25,002
 instance tests, and **98.04%** on its 14,405 schema-validity tests — the
 second figure is the honest one to quote, and [xsd.md](xsd.md) explains why
 earlier revisions reported neither.

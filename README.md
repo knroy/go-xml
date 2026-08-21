@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.78% of the W3C xsdtests *instance* tests (24,948 of 25,002); **98.04%** of its *schema-validity* tests (14,123 of 14,405) |
-| **XSD 1.1** | 99.77% instance (26,149 of 26,209); **97.01%** schema-validity (14,906 of 15,365); opt-in via `Version11` |
+| **XSD 1.0** | 99.79% of the W3C xsdtests *instance* tests (24,949 of 25,002); **98.04%** of its *schema-validity* tests (14,123 of 14,405) |
+| **XSD 1.1** | 99.77% instance (26,150 of 26,209); **97.01%** schema-validity (14,906 of 15,365); opt-in via `Version11` |
 | **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -652,8 +652,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,123 / 14,405 (98.04%) | 24,948 / 25,002 (99.78%) |
-| XSD 1.1 | 14,906 / 15,365 (97.01%) | 26,149 / 26,209 (99.77%) |
+| XSD 1.0 | 14,123 / 14,405 (98.04%) | 24,949 / 25,002 (99.79%) |
+| XSD 1.1 | 14,906 / 15,365 (97.01%) | 26,150 / 26,209 (99.77%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
