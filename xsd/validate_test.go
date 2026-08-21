@@ -528,3 +528,79 @@ func TestValidateMaxErrorsIsBounded(t *testing.T) {
 		t.Errorf("got %d errors, want at most 5", len(ve.Errors))
 	}
 }
+
+// TestAttributeGroupIsFlattened guards a bug that dropped every attribute
+// declared through an attribute group.
+//
+// readAttributes used to return a slice the caller assigned, while the fixup
+// that flattened a group reference appended to a *local* variable — so the
+// group's attributes were resolved and then thrown away. The schema loaded
+// cleanly and every document using one of those attributes was rejected.
+func TestAttributeGroupIsFlattened(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:attributeGroup name="g">
+	    <xs:attribute name="a" type="xs:string"/>
+	    <xs:attribute name="b" type="xs:int"/>
+	  </xs:attributeGroup>
+	  <xs:element name="root">
+	    <xs:complexType><xs:attributeGroup ref="g"/></xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema, `<root a="x" b="1"/>`)
+	assertInvalid(t, schema, `<root b="notanint"/>`, "cvc-attribute.3")
+	assertInvalid(t, schema, `<root c="x"/>`, "cvc-complex-type.3.2.2")
+}
+
+// TestAttributesAreInherited covers §3.4.2: a derived type's attribute uses
+// include the base's, for extension and restriction alike.
+//
+// Without it every attribute declared on a base type vanished from its
+// subtypes, which is silent in the same way: the schema loads and the document
+// is rejected for carrying an attribute its own base declared.
+func TestAttributesAreInherited(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:attribute name="ba" type="xs:string"/>
+	  </xs:complexType>
+	  <xs:complexType name="mid">
+	    <xs:complexContent>
+	      <xs:extension base="base"><xs:attribute name="ma" type="xs:string"/></xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:complexType name="leaf">
+	    <xs:complexContent>
+	      <xs:extension base="mid"><xs:attribute name="la" type="xs:string"/></xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="root" type="leaf"/>
+	</xs:schema>`
+
+	// Every level's attribute is available on the leaf.
+	assertValid(t, schema, `<root ba="x" ma="y" la="z"/>`)
+	assertValid(t, schema, `<root ba="x"/>`)
+	assertInvalid(t, schema, `<root zz="x"/>`, "cvc-complex-type.3.2.2")
+}
+
+// TestQNameLengthFacetIsIgnored records a deliberate divergence from the naive
+// reading.
+//
+// The length facets are measured in the value space, and a QName's value is a
+// (namespace, local name) pair rather than a string — there is no length to
+// compare. The W3C suite expects a 46-character QName to satisfy length="7",
+// which is only possible if the facet is ignored.
+func TestQNameLengthFacetIsIgnored(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="q">
+	    <xs:restriction base="xs:QName"><xs:length value="7"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="root" type="q"/>
+	</xs:schema>`
+
+	assertValid(t, schema, `<root>short</root>`)
+	assertValid(t, schema,
+		`<root xmlns:x="urn:x">x:a-considerably-longer-local-name-than-seven</root>`)
+}

@@ -238,7 +238,7 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 		return nil
 	}
 	g := &AttributeGroupDef{Name: p.qnameFor(name)}
-	g.AttributeUses, g.AttributeWildcard = p.readAttributes(el)
+	g.AttributeWildcard = p.readAttributes(el, &g.AttributeUses)
 	return g
 }
 
@@ -248,8 +248,14 @@ func (p *parser) readAttributeGroupDef(el *xdm.Node) *AttributeGroupDef {
 // References to attribute groups are flattened into the containing component's
 // uses, which is what the spec's {attribute uses} property holds: a set of
 // uses, with no record of which group they arrived through.
-func (p *parser) readAttributes(el *xdm.Node) ([]*AttributeUse, *Wildcard) {
-	var uses []*AttributeUse
+//
+// The target is passed in rather than returned because a group may be defined
+// after the reference to it, so the flattening happens in a fixup that runs
+// later. Returning a slice and letting the caller assign it would leave the
+// fixup appending to a variable nobody reads — which is exactly the bug this
+// signature exists to prevent, and which silently dropped every
+// attribute-group attribute.
+func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse) *Wildcard {
 	var wildcard *Wildcard
 
 	for _, c := range contentChildren(el) {
@@ -259,7 +265,7 @@ func (p *parser) readAttributes(el *xdm.Node) ([]*AttributeUse, *Wildcard) {
 		switch c.Name.Local {
 		case "attribute":
 			if u := p.readAttributeUse(c); u != nil {
-				uses = append(uses, u)
+				*target = append(*target, u)
 			}
 
 		case "attributeGroup":
@@ -274,10 +280,6 @@ func (p *parser) readAttributes(el *xdm.Node) ([]*AttributeUse, *Wildcard) {
 				p.errs = append(p.errs, err)
 				continue
 			}
-			// The group may be defined later, so the flattening is
-			// deferred. The slice header is captured by pointer for the
-			// same reason: appending here would write to a stale copy.
-			target := &uses
 			p.fixups = append(p.fixups, func() error {
 				g, ok := p.schema.AttributeGroups[name]
 				if !ok {
@@ -292,7 +294,7 @@ func (p *parser) readAttributes(el *xdm.Node) ([]*AttributeUse, *Wildcard) {
 			wildcard = p.readWildcard(c)
 		}
 	}
-	return uses, wildcard
+	return wildcard
 }
 
 // readWildcard reads an <xs:any> or <xs:anyAttribute>.

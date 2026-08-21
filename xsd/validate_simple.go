@@ -214,8 +214,17 @@ func checkLengthForPrimitive(steps []facetStep, normalized, prim string) error {
 		n = uint64(len(normalized) / 2)
 	case "base64Binary":
 		n = uint64(base64DecodedLen(normalized))
-	case "string", "anyURI", "QName", "NOTATION":
+	case "string", "anyURI":
 		n = uint64(len([]rune(normalized)))
+	case "QName", "NOTATION":
+		// The length facets are measured in the *value* space, and a
+		// QName's value is a (namespace, local name) pair rather than a
+		// string — there is no length to compare. Part 2 says as much
+		// and deprecates writing the facet at all; the W3C suite
+		// expects a 46-character QName to satisfy length="7", which is
+		// only possible if the facet is ignored. Measuring the literal
+		// rejected every one of those documents.
+		return nil
 	default:
 		// Length does not apply to this primitive; the schema-component
 		// constraint on facet applicability rejects it at parse time.

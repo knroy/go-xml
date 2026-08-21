@@ -291,7 +291,7 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 	if g := childElement(el, "all", "choice", "sequence", "group"); g != nil {
 		t.Particle = p.readParticle(g)
 	}
-	t.AttributeUses, t.AttributeWildcard = p.readAttributes(el)
+	t.AttributeWildcard = p.readAttributes(el, &t.AttributeUses)
 
 	switch {
 	case t.Particle == nil && mixed:
@@ -345,7 +345,8 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 	if inline := childElement(body, "simpleType"); inline != nil {
 		t.SimpleContent = p.readSimpleType(inline)
 	}
-	t.AttributeUses, t.AttributeWildcard = p.readAttributes(body)
+	t.AttributeWildcard = p.readAttributes(body, &t.AttributeUses)
+	p.inheritAttributes(t)
 }
 
 // readComplexContent reads <xs:complexContent>.
@@ -374,6 +375,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 	}
 
 	p.readTypeBody(body, t, mixed)
+	p.inheritAttributes(t)
 
 	// An extension's content model is the base's followed by the
 	// derived one. The base may not be resolved yet, so the splice is
@@ -511,4 +513,41 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 		return nil
 	}
 	return &ModelGroupDef{Name: p.qnameFor(name), Group: p.readModelGroup(inner)}
+}
+
+// inheritAttributes adds the base type's attribute uses to a derived type.
+//
+// §3.4.2 makes {attribute uses} of a derived type include the base's, for both
+// extension and restriction: an extension adds to them and a restriction may
+// narrow one, but neither starts from nothing. Without this every attribute
+// declared on a base type vanishes from its subtypes, which is silent — the
+// schema loads and the document is simply rejected for carrying an attribute
+// the base declared.
+//
+// The base may not be resolved yet, so this runs as a fixup. A use declared on
+// the derived type wins over the inherited one of the same name, which is how a
+// restriction narrows an attribute and how "prohibited" removes it.
+func (p *parser) inheritAttributes(t *ComplexType) {
+	p.fixups = append(p.fixups, func() error {
+		base, ok := t.Base.(*ComplexType)
+		if !ok || base == t {
+			return nil
+		}
+		own := make(map[xdm.QName]bool, len(t.AttributeUses))
+		for _, u := range t.AttributeUses {
+			if u.Decl != nil {
+				own[u.Decl.Name] = true
+			}
+		}
+		for _, u := range base.AttributeUses {
+			if u.Decl == nil || own[u.Decl.Name] {
+				continue
+			}
+			t.AttributeUses = append(t.AttributeUses, u)
+		}
+		if t.AttributeWildcard == nil {
+			t.AttributeWildcard = base.AttributeWildcard
+		}
+		return nil
+	})
 }
