@@ -163,9 +163,9 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 }
 
 // validateElement checks one element against a declaration.
-func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) {
+func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	if v.stopped {
-		return
+		return nil
 	}
 	v.path = append(v.path, el.Name.Local)
 	defer func() { v.path = v.path[:len(v.path)-1] }()
@@ -176,7 +176,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) {
 		v.fail(el, "cvc-elt.2",
 			"element declaration {%s}%s is abstract",
 			decl.Name.URI, decl.Name.Local)
-		return
+		return nil
 	}
 
 	typ := decl.Type
@@ -186,13 +186,13 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) {
 		t, err := v.resolveXSIType(el, xsiType.Value)
 		if err != nil {
 			v.fail(el, "cvc-elt.4.2", "%v", err)
-			return
+			return nil
 		}
 		if !v.derivedFrom(t, decl.Type) {
 			v.fail(el, "cvc-elt.4.3",
 				"xsi:type %q is not derived from the declared type",
 				xsiType.Value)
-			return
+			return nil
 		}
 		typ = t
 	}
@@ -203,7 +203,7 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) {
 		if !decl.Nillable {
 			v.fail(el, "cvc-elt.3.1",
 				"xsi:nil is present but the declaration is not nillable")
-			return
+			return nil
 		}
 		if val == "true" || val == "1" {
 			// A nilled element must be empty and must not have a
@@ -217,15 +217,20 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) {
 					"an element with xsi:nil=\"true\" may not have a "+
 						"fixed value constraint")
 			}
-			return
+			return nil
 		}
 	}
 
 	if typ == nil {
 		// The type never resolved; the schema parse reported it.
-		return
+		return nil
 	}
-	v.validateAgainstType(el, typ, decl)
+	childTables := v.validateAgainstType(el, typ, decl)
+
+	// The identity constraints run after the content, because a key is
+	// defined over the subtree and the subtree has to have been walked for
+	// its tables to exist.
+	return v.checkIdentityConstraints(el, decl, childTables)
 }
 
 // resolveXSIType expands an xsi:type value against the namespaces in scope.
@@ -281,7 +286,8 @@ func (v *validator) derivedFrom(t, want Type) bool {
 }
 
 // validateAgainstType dispatches on the kind of type.
-func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDecl) {
+func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDecl) []icTables {
+	var tables []icTables
 	switch t := typ.(type) {
 	case *SimpleType:
 		// An element with a simple type may have no element children and
@@ -294,7 +300,7 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 		v.validateSimpleContent(el, el.StringValue(), t, decl)
 
 	case *ComplexType:
-		v.validateComplexType(el, t, decl)
+		tables = v.validateComplexType(el, t, decl)
 	}
 
 	if v.opts.Annotate {
@@ -302,15 +308,16 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 			el.TypeAnnotation = n.Local
 		}
 	}
+	return tables
 }
 
 // validateComplexType checks an element against a complex type.
-func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *ElementDecl) {
+func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *ElementDecl) []icTables {
 	if t.Abstract {
 		v.fail(el, "cvc-type.2",
 			"type {%s}%s is abstract and cannot validate an element directly",
 			t.Name.URI, t.Name.Local)
-		return
+		return nil
 	}
 
 	v.validateAttributes(el, t)
@@ -345,11 +352,12 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 				"element-only content may not contain character data %q",
 				truncate(s))
 		}
-		v.validateChildren(el, t)
+		return v.validateChildren(el, t)
 
 	case ContentMixed:
-		v.validateChildren(el, t)
+		return v.validateChildren(el, t)
 	}
+	return nil
 }
 
 // nonSpaceText returns the first non-whitespace text directly inside el.
@@ -374,19 +382,18 @@ func truncate(s string) string {
 }
 
 // validateChildren matches an element's children against the content model.
-func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) {
+func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 	m, err := v.modelFor(t)
 	if err != nil {
 		v.fail(el, "", "compiling the content model: %v", err)
-		return
+		return nil
 	}
 	kids := el.ChildElements()
 
 	if isAllGroup(t.Particle) {
-		v.matchAll(el, kids, t.Particle.Term.(*ModelGroup))
-		return
+		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup))
 	}
-	v.matchSequence(el, kids, m)
+	return v.matchSequence(el, kids, m)
 }
 
 // isAllGroup reports whether a particle is an xs:all at the top of a content
@@ -429,15 +436,17 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 var modelCache sync.Map
 
 // matchSequence walks the automaton over an element's children.
-func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel) {
+func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel) []icTables {
 	if len(m.positions) == 0 {
 		if len(kids) > 0 {
 			v.fail(kids[0], "cvc-complex-type.2.4.d",
 				"element {%s}%s is not permitted here: the content model "+
 					"is empty", kids[0].Name.URI, kids[0].Name.Local)
 		}
-		return
+		return nil
 	}
+
+	var tables []icTables
 
 	// counts tracks the repetitions of each counter scope.
 	counts := make([]int, len(m.counters))
@@ -463,12 +472,14 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			v.fail(kid, "cvc-complex-type.2.4.a",
 				"element {%s}%s is not permitted here%s",
 				kid.Name.URI, kid.Name.Local, expected(m, current))
-			return
+			return tables
 		}
 
 		p := m.positions[next]
 		advanceCounters(m, counts, prevIdx, next)
-		v.validateChild(kid, p)
+		if t := v.validateChild(kid, p); t != nil {
+			tables = append(tables, t)
+		}
 
 		prev, prevIdx = p, next
 		current = m.follow[next]
@@ -483,12 +494,13 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			v.fail(el, "cvc-complex-type.2.4.b",
 				"element content is incomplete%s", expected(m, m.first))
 		}
-		return
+		return tables
 	}
 	if !contains(m.last, prevIdx) || !countersSatisfied(m, counts, prevIdx) {
 		v.fail(el, "cvc-complex-type.2.4.b",
 			"element content is incomplete%s", expected(m, m.follow[prevIdx]))
 	}
+	return tables
 }
 
 // counterAllows reports whether taking a transition to a position is permitted
@@ -597,8 +609,9 @@ func expected(m *contentModel, positions []int) string {
 // All Group Limited confines an all group to the whole content model, with
 // element particles occurring at most once, which is what makes a seen-set
 // check sound rather than needing every interleaving.
-func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup) {
+func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup) []icTables {
 	seen := make([]bool, len(g.Particles))
+	var tables []icTables
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		found := false
@@ -620,7 +633,9 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup) {
 			}
 			seen[i] = true
 			found = true
-			v.validateChild(kid, pos)
+			if t := v.validateChild(kid, pos); t != nil {
+				tables = append(tables, t)
+			}
 			break
 		}
 		if !found {
@@ -638,37 +653,38 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup) {
 				"required element %s is missing from an all group", d.Name.Local)
 		}
 	}
+	return tables
 }
 
 // validateChild validates one matched child against the position that matched
 // it.
-func (v *validator) validateChild(kid *xdm.Node, p *position) {
+func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 	name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
 		case ProcessSkip:
 			// Nothing is checked, by definition.
-			return
+			return nil
 		case ProcessLax:
 			if d, ok := v.schema.Elements[name]; ok {
-				v.validateElement(kid, d)
+				return v.validateElement(kid, d)
 			}
-			return
+			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
 			if !ok {
 				v.fail(kid, "cvc-complex-type.2.4.c",
 					"no declaration for {%s}%s, matched by a strict wildcard",
 					name.URI, name.Local)
-				return
+				return nil
 			}
-			v.validateElement(kid, d)
-			return
+			return v.validateElement(kid, d)
 		}
 	}
 
 	if d := p.resolveDecl(name); d != nil {
-		v.validateElement(kid, d)
+		return v.validateElement(kid, d)
 	}
+	return nil
 }
