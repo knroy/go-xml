@@ -464,10 +464,16 @@ func (v *validator) idOwner(n *xdm.Node) *xdm.Node {
 		}
 		return n
 	}
-	if n.Parent != nil {
+	// The owner must be an *element*. A validation root's own simple
+	// content has only the document node above it, so an ID there denotes
+	// nothing — the suite puts it as "ID on root does not denote any
+	// element". Falling back to the node itself would make the root denote
+	// itself, and a reference to that value would then resolve against a
+	// binding the spec does not create.
+	if n.Parent != nil && n.Parent.Kind == xdm.KindElement {
 		return n.Parent
 	}
-	return n
+	return nil
 }
 
 // recordIDsOwned records bindings for a value already attributed to its owning
@@ -508,6 +514,10 @@ func (v *validator) recordIDsOwned(owner *xdm.Node, value string, t *SimpleType)
 //
 // owner is the element the ID identifies — see recordIDs, which derives it.
 func (v *validator) recordID(owner *xdm.Node, value string) {
+	if owner == nil {
+		// Nothing to denote; see idOwner.
+		return
+	}
 	if v.idOwners == nil {
 		v.idOwners = map[string]*xdm.Node{}
 	}

@@ -47,8 +47,8 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.72%** on the
-suite's 1.1 instance tests (1,055 of 1,058).
+versioning attributes, and the 1.1 built-ins. It measures **99.91%** on the
+suite's 1.1 instance tests (1,057 of 1,058).
 
 The version is opt-in rather than automatic because 1.1 changes which
 documents are valid, so a 1.0 schema must not acquire its behaviour by

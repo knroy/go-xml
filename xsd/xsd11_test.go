@@ -3180,3 +3180,48 @@ func TestAssertionHasNoDocumentNode(t *testing.T) {
 		t.Errorf(".// should not reach outside the subtree: %v", err)
 	}
 }
+
+// TestRootContentIDDenotesNothing pins that an ID reached through the
+// validation root's own simple content binds nothing.
+//
+// An element-content ID denotes the element containing it, and a validation
+// root has only the document node above it — so there is no element for the
+// value to denote. The suite puts it as "ID on root does not denote any
+// element". Falling back to the root itself would make it denote itself, and a
+// reference to that value would resolve against a binding the spec does not
+// create.
+func TestRootContentIDDenotesNothing(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="ids"><xs:list itemType="xs:ID"/></xs:simpleType>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:extension base="ids">
+	          <xs:attribute name="ref" type="xs:IDREF"/>
+	        </xs:extension>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<root ref="b2">b1 b2 b3</root>`); err == nil {
+		t.Error("an ID in the root's own content denotes no element")
+	}
+
+	// One level down there is a containing element, so it does bind.
+	s2 := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="id" type="xs:ID"/>
+	        <xs:element name="ref" type="xs:IDREF"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+	if err := check11(t, s2, `<doc><id>b2</id><ref>b2</ref></doc>`); err != nil {
+		t.Errorf("an ID in a child's content should still bind: %v", err)
+	}
+}
