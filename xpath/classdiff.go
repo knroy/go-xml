@@ -194,8 +194,12 @@ func propertyRanges(name string) ([]cpRange, bool) {
 	if t, ok := unicode.Categories[name]; ok {
 		return tableRanges(t), true
 	}
-	if b, ok := unicodeBlocks[name]; ok {
-		return []cpRange{{b[0], b[1]}}, true
+	if rs, ok := unicodeBlocks[name]; ok {
+		out := make([]cpRange, 0, len(rs))
+		for _, r := range rs {
+			out = append(out, cpRange{r[0], r[1]})
+		}
+		return out, true
 	}
 	return nil, false
 }

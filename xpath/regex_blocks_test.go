@@ -118,3 +118,37 @@ func TestComplementedClassEscapes(t *testing.T) {
 		}
 	}
 }
+
+// A Unicode block is not always one contiguous range. Specials, in the
+// Unicode 3.1 definition Appendix G pins, is FEFF together with FFF0-FFFD —
+// FEFF sits on its own, separated from the rest by the Arabic Presentation
+// Forms-B block that ends at FEFE.
+//
+// The table originally held one range per block and recorded only the FEFF
+// half, so \p{IsSpecials} matched a single character and rejected every
+// codepoint the block is actually about.
+func TestSpecialsIsTwoRanges(t *testing.T) {
+	tr, err := translatePattern(`^\p{IsSpecials}+$`, false)
+	if err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	re, err := regexp.Compile(tr)
+	if err != nil {
+		t.Fatalf("compile %q: %v", tr, err)
+	}
+	for _, c := range []struct {
+		r     rune
+		match bool
+	}{
+		{0xFEFF, true},  // the lone low half
+		{0xFFF0, true},  // the start of the high half
+		{0xFFFD, true},  // its end
+		{0xFEFE, false}, // Arabic Presentation Forms-B, the block below
+		{0xFFFE, false}, // a noncharacter, outside the 3.1 block
+		{0xFFFF, false},
+	} {
+		if got := re.MatchString(string(c.r)); got != c.match {
+			t.Errorf("%U = %v, want %v", c.r, got, c.match)
+		}
+	}
+}
