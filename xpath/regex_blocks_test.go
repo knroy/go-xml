@@ -87,3 +87,34 @@ func TestSubtractionOverShorthandClasses(t *testing.T) {
 		}
 	}
 }
+
+// RE2 has no way to complement a class from inside one, and no class-level
+// complement at all, so \I, \C and \P{...} used within a class are computed
+// here and their ranges contributed bare.
+//
+// Every one of these spans the surrogate block, which is why they are also the
+// cases that pin the hex escaping: string(r) on a surrogate yields U+FFFD,
+// which silently changes the range and can make RE2 reject the class.
+func TestComplementedClassEscapes(t *testing.T) {
+	for _, c := range []struct{ pat, in string; want bool }{
+		{`^[\C]+$`, "!", true},
+		{`^[\C]+$`, "a", false},
+		{`^[\C]+$`, ":", false},
+		{`^[\C\?a-c\?]+$`, "abc", true},
+		{`^[\C\?a-c\?]+$`, "!", true},
+		{`^[\I]+$`, "1", true},
+		{`^[\I]+$`, "a", false},
+		{`^[^\P{IsBasicLatin}]$`, "a", true},
+		{`^[^\P{IsBasicLatin}]$`, "é", false},
+		{`^[\P{IsBasicLatin}]$`, "é", true},
+		{`^[\P{IsBasicLatin}]$`, "a", false},
+	} {
+		tr, err := translatePattern(c.pat, false)
+		if err != nil { t.Errorf("%q: %v", c.pat, err); continue }
+		re, err := regexp.Compile(tr)
+		if err != nil { t.Errorf("%q->%q: %v", c.pat, tr, err); continue }
+		if got := re.MatchString(c.in); got != c.want {
+			t.Errorf("%q on %q = %v want %v (%q)", c.pat, c.in, got, c.want, tr)
+		}
+	}
+}

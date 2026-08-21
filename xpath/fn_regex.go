@@ -310,14 +310,21 @@ func translatePattern(p string, dotAll bool) (string, error) {
 				sb.WriteString(classNameStart(inClass))
 			case 'I':
 				if inClass {
-					return "", fmt.Errorf("FORX0002: \\I is not supported inside a character class")
+					// RE2 has no class-level complement, so the
+					// complement is computed here and its ranges
+					// are contributed bare.
+					sb.WriteString(formatClass(
+						complementRanges(nameStartRanges())))
+					continue
 				}
 				sb.WriteString("[^" + nameStartBody + "]")
 			case 'c':
 				sb.WriteString(classNameChar(inClass))
 			case 'C':
 				if inClass {
-					return "", fmt.Errorf("FORX0002: \\C is not supported inside a character class")
+					sb.WriteString(formatClass(
+						complementRanges(nameCharRanges())))
+					continue
 				}
 				sb.WriteString("[^" + nameCharBody + "]")
 			case 'p', 'P':
@@ -351,12 +358,15 @@ func translatePattern(p string, dotAll bool) (string, error) {
 						// bracket, which RE2 reads as a literal "[".
 						sb.WriteString(r)
 					case inClass:
-						// A negated block inside a class cannot be
-						// written as a range, and RE2 has no
-						// class-level complement to fall back on.
-						return "", fmt.Errorf(
-							"FORX0002: \\P{%s} is not supported "+
-								"inside a character class", body)
+						// RE2 has no class-level complement, so the
+						// range is complemented here and its pieces
+						// are contributed bare.
+						sub, good := propertyRanges(body)
+						if !good {
+							return "", fmt.Errorf(
+								"FORX0002: unknown Unicode block %q", body)
+						}
+						sb.WriteString(formatClass(complementRanges(sub)))
 					case esc == 'p':
 						sb.WriteString("[" + r + "]")
 					default:

@@ -184,23 +184,18 @@ func readPropertyName(r []rune) (string, int, bool) {
 	return "", 0, false
 }
 
-// propertyRanges expands the Unicode properties this package can resolve
-// exactly.
+// propertyRanges expands a Unicode property into the codepoints it covers.
 //
-// Only the ones the translator itself produces are handled. A schema writing
-// \p{Lu} inside a subtraction is still refused: the general case needs every
-// category table, and a class that silently matched the wrong set would be
-// worse than an error.
+// Both the one-letter groups ("L", "P") and the two-letter categories ("Lu",
+// "Po") come from Go's own tables, so they cannot drift from Unicode. A block
+// name is resolved too, since \p{IsBasicLatin} may appear inside a subtraction
+// just as a category may.
 func propertyRanges(name string) ([]cpRange, bool) {
-	switch name {
-	case "Nd":
-		return tableRanges(unicode.Nd), true
-	case "P":
-		return tableRanges(unicode.P), true
-	case "Z":
-		return tableRanges(unicode.Z), true
-	case "C":
-		return tableRanges(unicode.C), true
+	if t, ok := unicode.Categories[name]; ok {
+		return tableRanges(t), true
+	}
+	if b, ok := unicodeBlocks[name]; ok {
+		return []cpRange{{b[0], b[1]}}, true
 	}
 	return nil, false
 }
@@ -355,8 +350,13 @@ func escapeClassRune(r rune) string {
 	case '\\', ']', '^', '-', '[':
 		return "\\" + string(r)
 	}
-	if r < 0x20 || r == 0x7F {
-		return fmt.Sprintf("\\x{%x}", r)
+	// A surrogate is not a character Go can put in a string: string(r)
+	// yields U+FFFD, which both changes the range and, where it lands on the
+	// low end of one, makes RE2 reject the class outright. Complementing any
+	// set spans the surrogate block, so this is reached by every negated
+	// class rather than being an edge case.
+	if r < 0x20 || r == 0x7F || (r >= 0xD800 && r <= 0xDFFF) || r > 0x10FFFF {
+		return fmt.Sprintf("\\x{%X}", r)
 	}
 	return string(r)
 }
@@ -364,15 +364,23 @@ func escapeClassRune(r rune) string {
 // subtractClasses computes "[left-[right]]" and returns the RE2 class for it.
 func subtractClasses(left, right string) (string, bool) {
 	lr, lneg, ok := parseClassBody(left)
-	if !ok || lneg {
-		// A negated left side would need the complement before subtracting,
-		// which is expressible but not worth the extra surface until a test
-		// asks for it.
+	if !ok {
 		return "", false
 	}
+	if lneg {
+		// "[^cde-[ag]]" subtracts from everything the left side excludes,
+		// so the complement is taken before the difference.
+		lr = complementRanges(lr)
+	}
 	rr, rneg, ok := parseClassBody(right)
-	if !ok || rneg {
+	if !ok {
 		return "", false
+	}
+	if rneg {
+		// "[a-z-[^a]]" removes everything *except* "a" from a-z, which
+		// leaves "a" — so the right side is complemented too rather than
+		// refused.
+		rr = complementRanges(rr)
 	}
 	diff := subtractRanges(lr, rr)
 	if len(diff) == 0 {

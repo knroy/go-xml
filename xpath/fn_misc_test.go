@@ -790,12 +790,22 @@ func TestRegexClassSubtraction(t *testing.T) {
 		}
 	}
 
-	// A Unicode category the translator does not itself produce still
-	// cannot be expanded: doing so means embedding every category table,
-	// and a class that silently matched the wrong set would be worse than
-	// an error.
-	if err := evalErr(t, testDoc, `matches('a', '[\p{L}-[b]]')`); err == nil {
-		t.Error("subtraction from an arbitrary Unicode category was accepted")
+	// Subtraction from an arbitrary Unicode category is computed from Go's
+	// own tables, so the left operand may be any category or block rather
+	// than only the few the translator itself produces.
+	for _, c := range []struct {
+		expr string
+		want string
+	}{
+		{`matches('a', '[\p{L}-[b]]')`, "true"},
+		{`matches('b', '[\p{L}-[b]]')`, "false"},
+		{`matches('!', '[\p{L}-[b]]')`, "false"},
+		{`matches('a', '[\w-[\p{Ll}]]')`, "false"},
+		{`matches('A', '[\w-[\p{Ll}]]')`, "true"},
+	} {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
 	}
 }
 
