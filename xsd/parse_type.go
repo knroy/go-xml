@@ -357,6 +357,13 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 	// the distinction belongs.
 	p.readAssertions(el, t)
 	p.readAttributes(el, &t.AttributeUses, &t.AttributeWildcard, nil)
+	// A type written without simpleContent or complexContent derives from
+	// xs:anyType and inherits nothing, but it still needs the pass that
+	// discards its prohibited uses — those are not {attribute uses} on any
+	// type, derived or not. Only the two derivation paths called this, so a
+	// use="prohibited" on a plain complexType survived into validation and
+	// matched the very attribute it forbids (attF001).
+	p.inheritAttributes(t)
 
 	switch {
 	case t.Particle == nil && mixed:
@@ -761,6 +768,19 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	}
 	p.attrsDone[t] = true
 	p.inheritAttributesNow(t)
+
+	// A prohibited use is never one of the type's {attribute uses}, whether
+	// or not the type derives from anything. inheritAttributesNow drops them
+	// too, but it returns early for a type with no complex base, which left
+	// a use="prohibited" on a base-less type sitting in the list and so
+	// *matching* the attribute it was written to forbid. attF001 is that
+	// shape: a lone prohibited use, an instance carrying the attribute, and
+	// no wildcard to admit it — expected invalid, and accepted before this.
+	//
+	// Dropping the use is also what keeps attZ002 valid: there the type has
+	// an anyAttribute, and once the use is gone the wildcard is free to
+	// admit the name. use="prohibited" removes the use, not the name.
+	t.AttributeUses = dropProhibited(t.AttributeUses)
 }
 
 func (p *parser) inheritAttributesNow(t *ComplexType) {
@@ -780,6 +800,13 @@ func (p *parser) inheritAttributesNow(t *ComplexType) {
 				continue
 			}
 			t.AttributeUses = append(t.AttributeUses, u)
+		}
+		// derivation-ok-restriction clauses 2 and 3 are checked here,
+		// while both sides are still in hand: after dropProhibited the
+		// evidence that a use was prohibited is gone, and clause 3 turns
+		// on exactly that.
+		if t.DerivationMethod == DerivationRestriction {
+			p.checkAttributeRestriction(t, base)
 		}
 		// The prohibited uses have done their work now that inheritance
 		// has run, and must not reach validation: a prohibited use is

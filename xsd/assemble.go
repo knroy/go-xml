@@ -396,6 +396,12 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 		return nil
 	}
 
+	// Every document reaching the assembler gets its ids checked. The
+	// single-document path in readDocument does the same; a schema built
+	// from includes never passes through it, which is where attgA006 and
+	// attgA009 live.
+	a.p.checkIDs(root)
+
 	for _, el := range root.ChildElements() {
 		if el.Name.URI != NSSchema || !includeElement(el, a.schema.Version) {
 			continue

@@ -170,7 +170,50 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 	d := &AttributeDecl{Scope: scope}
 
+	// The schema for schemas types a top-level <xs:attribute> as
+	// xs:topLevelAttribute, a restriction that prohibits ref, form and use
+	// and makes name a required NCName. A global declaration is not a use,
+	// so "how it is used" has no meaning there — attA001 (form), attF009
+	// and attJ011 (use) are each expected invalid on that ground alone.
 	name := el.AttrValue("name")
+	if scope == ScopeGlobal {
+		for _, banned := range []string{"form", "use", "ref"} {
+			if el.Attr("", banned) != nil {
+				p.errs = append(p.errs, errorAt(el, "src-attribute",
+					"a top-level attribute declaration may not "+
+						"have a %s attribute", banned))
+			}
+		}
+		if name == "" {
+			p.errs = append(p.errs, errorAt(el, "src-attribute",
+				"a top-level attribute declaration must have a name"))
+		}
+	}
+	// {name} is an NCName (§3.2.1). A colon is what the NCName production
+	// exists to exclude, so a:b is rejected here rather than resolved as a
+	// prefix — attC007 through attC010 are the shapes that reach this.
+	if name != "" && !isNCName(name) {
+		p.errs = append(p.errs, errorAt(el, "src-attribute",
+			"attribute name %q is not an NCName", name))
+	}
+	// no-xmlns (§3.2.6): the {name} of an attribute declaration must not
+	// match xmlns. Namespace declarations are not attributes a schema may
+	// govern, and there is no way to supply a default for one.
+	if name == "xmlns" {
+		p.errs = append(p.errs, errorAt(el, "no-xmlns",
+			"an attribute declaration may not be named xmlns"))
+	}
+	// form is an enumeration of exactly two values. formQualified falls back
+	// to the document default for anything it does not recognise, so a
+	// misspelling silently behaved as if form were absent — attA003 ("foo"),
+	// attA004 (""), attA005 ("Qualified") and attA006 ("Unqualified") all
+	// loaded clean before this.
+	if f := el.Attr("", "form"); f != nil &&
+		f.Value != "qualified" && f.Value != "unqualified" {
+		p.errs = append(p.errs, errorAt(el, "src-attribute",
+			"form=%q is not one of qualified or unqualified", f.Value))
+	}
+
 	if name != "" {
 		switch {
 		case scope == ScopeLocal && el.Attr("", "targetNamespace") != nil:
@@ -212,6 +255,14 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 		d.Type = p.schema.anySimpleType()
 	}
 
+	// a-props-correct.2 and .3 apply to every attribute declaration, global
+	// or local, so the check hangs off the declaration rather than off the
+	// use that may wrap it. The closure defers reading d.Type: with
+	// type= the slot is filled by a resolveTypeRef fixup that has not run
+	// yet, so reading it here would see nil for every forward reference.
+	// attO002 (fixed="abc" on xsd:integer) and attKc004 pin this.
+	p.checkValueConstraint(el, d.Constraint, func() *SimpleType { return d.Type })
+
 	return d
 }
 
@@ -233,21 +284,72 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 		// dropping it entirely let the base's use be inherited straight
 		// back, which is the opposite of prohibiting.
 		use.Prohibited = true
-	case "", "optional":
+	case "optional":
+	case "":
+		// Distinguish an absent use from one written as use="". The
+		// former takes the default of optional; the latter is a value
+		// outside the enumeration and is an error, which testing the
+		// string alone could not tell apart. attF006 pins it.
+		if el.Attr("", "use") != nil {
+			p.errs = append(p.errs, errorAt(el, "src-attribute",
+				"use=\"\" is not one of required, optional "+
+					"or prohibited"))
+		}
 	default:
-		p.errs = append(p.errs, errorAt(el, "",
+		p.errs = append(p.errs, errorAt(el, "src-attribute",
 			"use=%q is not one of required, optional or prohibited",
 			el.AttrValue("use")))
+	}
+
+	// src-attribute.2 (§3.2.3, unchanged between 1.0 and 1.1): if default and
+	// use are both present, use must be optional. The clause names default
+	// alone — fixed with use="required" is legal and common, so testing
+	// use.Constraint would wrongly reject it. attKb004 (required) and
+	// attKb005 (prohibited) pin the two halves.
+	if el.Attr("", "default") != nil {
+		if u := el.AttrValue("use"); u != "" && u != "optional" {
+			p.errs = append(p.errs, errorAt(el, "src-attribute.2",
+				"an attribute use with default may not have use=%q; "+
+					"only use=\"optional\" is allowed with default", u))
+		}
 	}
 
 	use.Constraint = p.valueConstraint(el)
 	use.Inheritable = p.boolAttr(el, "inheritable", false)
 
-	if ref := el.AttrValue("ref"); ref != "" {
+	refAttr := el.Attr("", "ref")
+	if refAttr != nil && refAttr.Value == "" {
+		// An empty ref is not "no ref": it is a ref whose value is not a
+		// QName. Testing the string against "" treated the two alike and
+		// read the element as a nameless local declaration. attE007.
+		p.errs = append(p.errs, errorAt(el, "src-attribute",
+			"ref=\"\" is not a valid QName"))
+		return nil
+	}
+	if refAttr != nil {
+		ref := refAttr.Value
 		if el.AttrValue("name") != "" {
 			p.errs = append(p.errs, errorAt(el, "src-attribute.3.1",
 				"an attribute use may not have both ref and name"))
 			return nil
+		}
+		// src-attribute.3.2: with ref present, simpleType, form and type
+		// must all be absent. The referenced declaration supplies the
+		// type and decides the form; restating either here would be a
+		// second, conflicting declaration rather than a use of the
+		// first. attKb011/attKc011 (simpleType child), attKb012/
+		// attKc012 (form) and attKb013/attKc013 (type) pin the three.
+		if p.childElement(el, "simpleType") != nil {
+			p.errs = append(p.errs, errorAt(el, "src-attribute.3.2",
+				"an attribute use with ref may not have an "+
+					"inline simpleType"))
+		}
+		for _, banned := range []string{"form", "type"} {
+			if el.Attr("", banned) != nil {
+				p.errs = append(p.errs, errorAt(el, "src-attribute.3.2",
+					"an attribute use with ref may not have a "+
+						"%s attribute", banned))
+			}
 		}
 		name, err := p.resolveQName(el, "ref", ref)
 		if err != nil {
@@ -264,6 +366,15 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 			return nil
 		})
 		return use
+	}
+
+	// src-attribute.3.1: below <xs:schema>, one of ref or name must be
+	// present. With neither there is nothing to declare and nothing to
+	// point at — attC004 writes name="" and attQ005 omits both.
+	if el.AttrValue("name") == "" {
+		p.errs = append(p.errs, errorAt(el, "src-attribute.3.1",
+			"a local attribute must have either a name or a ref"))
+		return nil
 	}
 
 	use.Decl = p.readAttributeDecl(el, ScopeLocal)
@@ -394,6 +505,71 @@ func (p *parser) readAttributes(el *xdm.Node, target *[]*AttributeUse, into **Wi
 	}
 	if wildcard != nil {
 		*into = intersectWildcards(*into, wildcard)
+	}
+
+	// ct-props-correct.4/.5 for a complex type, ag-props-correct.2/.3 for an
+	// attribute group — the same pair of constraints, stated separately in
+	// §3.4.6 and §3.6.6 because they are about different components.
+	//
+	// This is queued twice-deferred for the same reason the group flattening
+	// above is: the uses arriving through <xs:attributeGroup ref> are
+	// appended by a fixup that itself queues a fixup, so a check registered
+	// once would run against a list that is still missing every group's
+	// contribution. attQ013 needs it — its two groups collide only after
+	// both have been flattened in.
+	p.fixups = append(p.fixups, func() error {
+		p.fixups = append(p.fixups, func() error {
+			p.checkAttributeUsesConsistent(el, *target)
+			return nil
+		})
+		return nil
+	})
+}
+
+// checkAttributeUsesConsistent enforces that no two attribute uses gathered
+// into one complex type or attribute group share a name, and that at most one
+// of them has a type derived from xs:ID.
+//
+// Uses are compared by the identity of the use, not of the declaration: a
+// single global declaration reached twice through two different attribute
+// groups is one declaration but two uses, and the spec's "two distinct members
+// of the {attribute uses}" counts it as a collision. attQ008 is exactly that
+// shape — a group naming an attribute and also referencing it.
+func (p *parser) checkAttributeUsesConsistent(el *xdm.Node, uses []*AttributeUse) {
+	seen := make(map[xdm.QName]bool, len(uses))
+	id := false
+	for _, u := range uses {
+		if u == nil || u.Decl == nil || u.Prohibited {
+			// A prohibited use is not a member of {attribute uses}
+			// at all (§3.4.1), so it neither collides nor counts.
+			continue
+		}
+		name := u.Decl.Name
+		if seen[name] {
+			p.errs = append(p.errs, errorAt(el, "ct-props-correct.4",
+				"two attribute uses have the same name %q; a "+
+					"complex type or attribute group may not "+
+					"declare an attribute twice, whether "+
+					"directly or through an attribute group",
+				name.Local))
+			continue
+		}
+		seen[name] = true
+
+		// The one-ID-per-type clause is 1.0 only, dropped in 1.1 in the
+		// same relaxation that dropped a-props-correct.3.
+		// saxonData/Id/id001.xsd is a version="1.1" test expecting a
+		// valid schema and says so itself: "an element in XSD 1.1 can
+		// have more than one ID attribute".
+		if p.schema.Version == Version10 &&
+			nearestBuiltinName(u.Decl.Type) == "ID" {
+			if id {
+				p.errs = append(p.errs, errorAt(el, "ct-props-correct.5",
+					"more than one attribute has a type derived "+
+						"from xs:ID; at most one is allowed"))
+			}
+			id = true
+		}
 	}
 }
 
@@ -793,34 +969,170 @@ func (p *parser) checkValueConstraint(el *xdm.Node, vc *ValueConstraint, typ fun
 	if vc == nil {
 		return
 	}
+	// Twice-deferred. Resolving the *type* takes one pass, but a union's
+	// member slots are filled by fixups of their own, registered when the
+	// union is read. If the attribute comes first in document order its
+	// fixup runs first, and a single deferral sees a union whose members are
+	// still nil — every value then "matches no member type". id019.xsd is
+	// exactly that order: the attribute defaults to an xs:ENTITY value and
+	// names a union declared further down the file.
 	p.fixups = append(p.fixups, func() error {
-		t := typ()
-		if t == nil {
-			// The type never resolved. Whatever went wrong has
-			// already been reported where the reference was made,
-			// and validating against a missing type would only
-			// repeat it in less useful words.
-			return nil
-		}
-		// A declaration whose type is or descends from xs:ID may not
-		// fix or default the value: an ID must be unique across the
-		// document, so a value supplied by the schema would collide
-		// with itself on the second element that used it.
-		if nearestBuiltinName(t) == "ID" {
-			return errorAt(el, "a-props-correct.3",
-				"a declaration whose type is derived from xs:ID "+
-					"may not have a default or fixed value")
-		}
-		if _, err := validateSimpleValueVersion(
-			vc.Lexical, t, p.schema.Version); err != nil {
-			what := "default"
-			if vc.Fixed {
-				what = "fixed"
+		p.fixups = append(p.fixups, func() error {
+			t := typ()
+			if t == nil {
+				// The type never resolved. Whatever went wrong
+				// has already been reported where the reference
+				// was made, and validating against a missing
+				// type would only repeat it in less useful
+				// words.
+				return nil
 			}
-			return errorAt(el, "a-props-correct.2",
-				"%s=%q is not valid for the declared type: %v",
-				what, vc.Lexical, err)
-		}
+			// A declaration whose type is or descends from xs:ID
+			// may not fix or default the value: an ID must be
+			// unique across the document, so a value supplied by
+			// the schema would collide with itself on the second
+			// element that used it.
+			//
+			// XSD 1.1 dropped this clause. saxonData/Id/id010.xsd
+			// is a version="1.1" test expecting a *valid* schema
+			// and says so in its own comment — "an ID attribute in
+			// XSD 1.1 can have a default value" — under the test
+			// category
+			// xsd1_1-ID-IDREF-DefaultValsForElemOrAttrOfTypeID.
+			// Applying the 1.0 clause under 1.1 rejected 22 schemas
+			// the suite expects to load.
+			if p.schema.Version == Version10 && nearestBuiltinName(t) == "ID" {
+				return errorAt(el, "a-props-correct.3",
+					"a declaration whose type is derived "+
+						"from xs:ID may not have a "+
+						"default or fixed value")
+			}
+			if _, err := validateSimpleValueVersion(
+				vc.Lexical, t, p.schema.Version); err != nil {
+				what := "default"
+				if vc.Fixed {
+					what = "fixed"
+				}
+				return errorAt(el, "a-props-correct.2",
+					"%s=%q is not valid for the declared type: %v",
+					what, vc.Lexical, err)
+			}
+			return nil
+		})
 		return nil
 	})
+}
+
+// checkAttributeRestriction enforces the attribute half of Derivation Valid
+// (Restriction, Complex) — §3.4.6 derivation-ok-restriction clauses 2 and 3.
+//
+// It runs while the derived type still holds its own uses only, before the
+// base's have been merged in and before dropProhibited has run. Both halves
+// matter: clause 3 asks whether a required base attribute survived, which is
+// unanswerable once the prohibited marker is gone, and clause 2 must not see
+// the base's own uses as if the restriction had declared them.
+//
+// Clause 2.1.2 (R's type must derive from B's) is not checked here. The
+// complex-type derivation machinery lives in restrict.go and is another
+// concern's; adding a second, weaker copy of it would risk disagreeing with it.
+func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
+	byName := make(map[xdm.QName]*AttributeUse, len(base.AttributeUses))
+	for _, u := range base.AttributeUses {
+		if u.Decl != nil {
+			byName[u.Decl.Name] = u
+		}
+	}
+
+	prohibited := map[xdm.QName]bool{}
+	for _, r := range t.AttributeUses {
+		if r.Decl == nil {
+			continue
+		}
+		b, inBase := byName[r.Decl.Name]
+		if r.Prohibited {
+			prohibited[r.Decl.Name] = true
+			continue
+		}
+		if !inBase {
+			// Clause 2.2: an attribute the base never declared is
+			// admissible only through the base's attribute
+			// wildcard. Without one the restriction is adding an
+			// attribute, which is the opposite of restricting.
+			if base.AttributeWildcard == nil ||
+				!base.AttributeWildcard.AllowsName(r.Decl.Name, nil) {
+				p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.2",
+					"restriction adds attribute %q, which the base "+
+						"neither declares nor admits through an "+
+						"attribute wildcard", r.Decl.Name.Local))
+			}
+			continue
+		}
+		// Clause 2.1.1: a required attribute may not become optional.
+		// The instances a restriction accepts must be a subset of the
+		// base's, and dropping the requirement admits instances the
+		// base rejected. attZ006 and attZ011 pin it.
+		if b.Required && !r.Required {
+			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.1",
+				"restriction makes required attribute %q optional",
+				r.Decl.Name.Local))
+		}
+	}
+
+	// Clause 3: every attribute the base requires must still be required
+	// here. Prohibiting one removes it outright, which is how attZ012 —
+	// use="prohibited" against a base declaring use="required" — fails.
+	for _, b := range base.AttributeUses {
+		if b.Decl == nil || !b.Required {
+			continue
+		}
+		if prohibited[b.Decl.Name] {
+			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.3",
+				"restriction prohibits attribute %q, which the base "+
+					"requires", b.Decl.Name.Local))
+		}
+	}
+}
+
+// checkAttributeGroupCycles enforces src-attribute_group.3 (§3.6.3): an
+// attribute group may not reference itself, directly or at any depth.
+//
+// The refs graph is walked per group with a path set rather than a global
+// visited set, because the constraint is about a group reaching *itself*, not
+// about a group being reachable twice. A diamond — two groups both referencing
+// a third — is legal and a global visited set would not tell it from a cycle.
+//
+// Redefine needs no special case here. A redefined group's self-reference binds
+// to the definition being replaced, which is a different component from the
+// replacement, so the legal circularity §3.6.3 carves out never appears as a
+// cycle in this graph.
+//
+// The constraint is 1.0 only. attgC010 carries both answers explicitly —
+// <expected validity="invalid" version="1.0"/> beside <expected validity="valid"
+// version="1.1"/> — with the note "See bug 15795. XSD 1.1 allows circular
+// attribute group definitions." groupUses already terminates on a cycle, so
+// under 1.1 the graph is simply walked and the repetition ignored.
+func (p *parser) checkAttributeGroupCycles() {
+	if p.schema.Version != Version10 {
+		return
+	}
+	var walk func(g *AttributeGroupDef, path map[*AttributeGroupDef]bool) bool
+	walk = func(g *AttributeGroupDef, path map[*AttributeGroupDef]bool) bool {
+		if path[g] {
+			return true
+		}
+		path[g] = true
+		defer delete(path, g)
+		for _, r := range g.refs {
+			if r != nil && walk(r, path) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, g := range p.schema.AttributeGroups {
+		if walk(g, map[*AttributeGroupDef]bool{}) {
+			p.errs = append(p.errs, errorAt(nil, "src-attribute_group.3",
+				"attribute group %q references itself", g.Name.Local))
+		}
+	}
 }

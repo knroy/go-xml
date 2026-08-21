@@ -290,6 +290,10 @@ func (p *parser) finish() error {
 		}
 	}
 
+	// Circular attribute group references are diagnosed once every ref edge
+	// has been resolved, which is only true after the fixups have drained.
+	p.checkAttributeGroupCycles()
+
 	// The Part 2 facet constraints run last, once every base reference has
 	// been bound: they compare a facet against the base's primitive and
 	// against the facets the base itself set, neither of which is known
@@ -364,10 +368,54 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 		return nil
 	}
 
+	p.checkIDs(root)
+
 	for _, el := range root.ChildElements() {
 		p.readTopLevel(el)
 	}
 	return nil
+}
+
+// checkIDs validates the id attribute of every element in a schema document.
+//
+// Nearly every element in the schema for schemas carries `id = ID`, so the
+// check is one walk of the tree rather than a line in each of the twenty-odd
+// readers that would otherwise need it. Being xs:ID gives it two properties:
+// the value is an NCName, and it is unique within the document.
+//
+// The uniqueness map is per document, not per schema: xs:ID uniqueness is a
+// property of one XML document, and two included documents may each use the
+// same id without conflict. attgA005 (two attribute groups sharing id="abc" in
+// one file) is expected invalid, while attgA006 and attgA009 put the duplicate
+// across a redefine boundary and are expected invalid on the same grounds only
+// because the redefined group is pulled into this document.
+func (p *parser) checkIDs(root *xdm.Node) {
+	seen := map[string]bool{}
+	var walk func(*xdm.Node)
+	walk = func(n *xdm.Node) {
+		if n.Name.URI == NSSchema {
+			if a := n.Attr("", "id"); a != nil {
+				switch {
+				case !isNCName(a.Value):
+					p.errs = append(p.errs, errorAt(n, "",
+						"id %q is not a valid xs:ID: an "+
+							"xs:ID must be an NCName",
+						a.Value))
+				case seen[a.Value]:
+					p.errs = append(p.errs, errorAt(n, "",
+						"id %q appears more than once; an "+
+							"xs:ID must be unique within "+
+							"the document", a.Value))
+				default:
+					seen[a.Value] = true
+				}
+			}
+		}
+		for _, c := range n.ChildElements() {
+			walk(c)
+		}
+	}
+	walk(root)
 }
 
 // readTopLevel dispatches one child of <xs:schema>.

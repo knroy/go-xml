@@ -698,3 +698,278 @@ func TestParseOccursRejectsNonIntegers(t *testing.T) {
 		}
 	}
 }
+
+// loadVersion parses a schema at a chosen XSD version, for the constraints
+// whose answer differs between 1.0 and 1.1.
+func loadVersion(t *testing.T, src string, v Version) error {
+	t.Helper()
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the test schema as XML: %v", err)
+	}
+	_, err = Load(tree.Root, "s.xsd", Options{Version: v})
+	return err
+}
+
+// TestAttributeSchemaConstraints covers the schema-validity constraints on
+// attribute declarations, attribute groups and attribute uses (XSD Part 1
+// §3.2, §3.4.6 and §3.6). Each case names the suite test that pins it.
+func TestAttributeSchemaConstraints(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{{
+		// src-attribute.2, attKb004: use=required with default.
+		"required with default",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" type="xs:string" use="required" default="x"/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute.2, attKb005: prohibited is equally not optional.
+		"prohibited with default",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" type="xs:string" use="prohibited" default="x"/>
+		 </xs:complexType>`,
+	}, {
+		// a-props-correct.2, attO002: fixed must be valid for the type.
+		"fixed invalid for type",
+		`<xs:attribute name="a" type="xs:integer" fixed="abc"/>`,
+	}, {
+		// a-props-correct.2, attKc004.
+		"default invalid for type",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" type="xs:integer" default="abc"/>
+		 </xs:complexType>`,
+	}, {
+		// ct-props-correct.4, attQ009: the same name twice, once
+		// directly and once through a group.
+		"duplicate attribute through group",
+		`<xs:attributeGroup name="g">
+		   <xs:attribute name="a"/>
+		 </xs:attributeGroup>
+		 <xs:complexType name="c">
+		   <xs:attributeGroup ref="g"/>
+		   <xs:attribute name="a"/>
+		 </xs:complexType>`,
+	}, {
+		// ct-props-correct.4, attQ013: two groups colliding.
+		"duplicate attribute across two groups",
+		`<xs:attributeGroup name="g1"><xs:attribute name="a"/></xs:attributeGroup>
+		 <xs:attributeGroup name="g2"><xs:attribute name="a"/></xs:attributeGroup>
+		 <xs:complexType name="c">
+		   <xs:attributeGroup ref="g1"/>
+		   <xs:attributeGroup ref="g2"/>
+		 </xs:complexType>`,
+	}, {
+		// topLevelAttribute prohibits form, attA001.
+		"form on a global declaration",
+		`<xs:attribute name="a" form="unqualified"/>`,
+	}, {
+		// topLevelAttribute prohibits use, attF009.
+		"use on a global declaration",
+		`<xs:attribute name="a" use="required"/>`,
+	}, {
+		// form is an enumeration of two values, attA003.
+		"form not in the enumeration",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" form="foo"/>
+		 </xs:complexType>`,
+	}, {
+		// use is an enumeration of three, attF011.
+		"use not in the enumeration",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" use="foo"/>
+		 </xs:complexType>`,
+	}, {
+		// {name} is an NCName, attC007.
+		"attribute name is not an NCName",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a:b"/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute.3.1, attC004.
+		"local attribute with neither name nor ref",
+		`<xs:complexType name="c">
+		   <xs:attribute name=""/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute.3.2, attKb013: ref with type.
+		"ref with a type attribute",
+		`<xs:attribute name="a" type="xs:integer"/>
+		 <xs:complexType name="c">
+		   <xs:attribute ref="a" type="xs:string"/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute.3.2, attKb012: ref with form.
+		"ref with a form attribute",
+		`<xs:attribute name="a" type="xs:integer"/>
+		 <xs:complexType name="c">
+		   <xs:attribute ref="a" form="qualified"/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute.3.2, attKb011: ref with an inline simpleType.
+		"ref with an inline simpleType",
+		`<xs:attribute name="a" type="xs:integer"/>
+		 <xs:complexType name="c">
+		   <xs:attribute ref="a">
+		     <xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType>
+		   </xs:attribute>
+		 </xs:complexType>`,
+	}, {
+		// id is an xs:ID, so an NCName, attgA002.
+		"id is not an NCName",
+		`<xs:attributeGroup name="g" id="0"><xs:attribute name="a"/></xs:attributeGroup>`,
+	}, {
+		// xs:ID is unique per document, attgA005.
+		"duplicate id in one document",
+		`<xs:attributeGroup name="g1" id="dup"/>
+		 <xs:attributeGroup name="g2" id="dup"/>`,
+	}, {
+		// derivation-ok-restriction.2.1.1, attZ006.
+		"restriction relaxes required to optional",
+		`<xs:complexType name="b">
+		   <xs:attribute name="a" type="xs:string" use="required"/>
+		 </xs:complexType>
+		 <xs:complexType name="d">
+		   <xs:complexContent>
+		     <xs:restriction base="b">
+		       <xs:attribute name="a" type="xs:string" use="optional"/>
+		     </xs:restriction>
+		   </xs:complexContent>
+		 </xs:complexType>`,
+	}, {
+		// derivation-ok-restriction.3, attZ012: prohibiting a required
+		// attribute removes it altogether.
+		"restriction prohibits a required attribute",
+		`<xs:complexType name="b">
+		   <xs:attribute name="a" use="required"/>
+		 </xs:complexType>
+		 <xs:complexType name="d">
+		   <xs:complexContent>
+		     <xs:restriction base="b">
+		       <xs:attribute name="a" use="prohibited"/>
+		     </xs:restriction>
+		   </xs:complexContent>
+		 </xs:complexType>`,
+	}, {
+		// derivation-ok-restriction.2.2: an attribute the base neither
+		// declares nor admits through a wildcard.
+		"restriction adds an attribute the base forbids",
+		`<xs:complexType name="b">
+		   <xs:attribute name="a"/>
+		 </xs:complexType>
+		 <xs:complexType name="d">
+		   <xs:complexContent>
+		     <xs:restriction base="b">
+		       <xs:attribute name="a"/>
+		       <xs:attribute name="added"/>
+		     </xs:restriction>
+		   </xs:complexContent>
+		 </xs:complexType>`,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+				c.src + `</xs:schema>`
+			if _, err := parseSchemaString(t, src); err == nil {
+				t.Error("schema loaded, want a schema error")
+			}
+		})
+	}
+}
+
+// TestAttributeConstraintsRelaxedIn11 covers the three attribute constraints
+// XSD 1.1 dropped. Each is an error under 1.0 and must load clean under 1.1;
+// applying the 1.0 rule to 1.1 rejected schemas the suite expects to load.
+func TestAttributeConstraintsRelaxedIn11(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{{
+		// a-props-correct.3, saxonData/Id/id010.xsd: "an ID attribute
+		// in XSD 1.1 can have a default value".
+		"default on an xs:ID attribute",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" type="xs:ID" default="x"/>
+		 </xs:complexType>`,
+	}, {
+		// ct-props-correct.5, saxonData/Id/id001.xsd: "an element in
+		// XSD 1.1 can have more than one ID attribute".
+		"two xs:ID attributes on one type",
+		`<xs:complexType name="c">
+		   <xs:attribute name="a" type="xs:ID"/>
+		   <xs:attribute name="b" type="xs:ID"/>
+		 </xs:complexType>`,
+	}, {
+		// src-attribute_group.3, attgC020, which carries both answers
+		// explicitly: "XSD 1.1 allows circular attribute group
+		// definitions" (bug 15795).
+		"circular attribute group reference",
+		`<xs:complexType name="c"><xs:attributeGroup ref="g"/></xs:complexType>
+		 <xs:attributeGroup name="g"><xs:attributeGroup ref="g"/></xs:attributeGroup>`,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+				c.src + `</xs:schema>`
+			if err := loadVersion(t, src, Version10); err == nil {
+				t.Error("1.0 loaded the schema, want a schema error")
+			}
+			if err := loadVersion(t, src, Version11); err != nil {
+				t.Errorf("1.1 rejected the schema: %v", err)
+			}
+		})
+	}
+}
+
+// TestProhibitedAttributeNeedsWildcard covers the distinction between removing
+// an attribute *use* and forbidding the *name*.
+//
+// use="prohibited" takes the use out of the type's {attribute uses}. It does
+// not blacklist the name: an attribute wildcard on the same type is still free
+// to admit it. attF001 (prohibited, no wildcard, instance expected invalid) and
+// attZ002 (prohibited plus anyAttribute, instance expected valid) are the pair
+// that pins the difference, and a fix that only deletes the use — or only keeps
+// it — gets one of them wrong.
+func TestProhibitedAttributeNeedsWildcard(t *testing.T) {
+	validate := func(t *testing.T, schema, instance string) error {
+		t.Helper()
+		s := mustParseSchema(t, schema)
+		tree, err := xdm.ParseString(instance, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the instance: %v", err)
+		}
+		return s.Validate(tree.Root, ValidateOptions{})
+	}
+
+	t.Run("no wildcard rejects the attribute", func(t *testing.T) {
+		err := validate(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="e">
+		    <xs:complexType>
+		      <xs:attribute name="a" use="prohibited"/>
+		    </xs:complexType>
+		  </xs:element>
+		</xs:schema>`, `<e a="1"/>`)
+		if err == nil {
+			t.Error("a prohibited attribute was accepted with no wildcard to admit it")
+		}
+	})
+
+	t.Run("a wildcard still admits the name", func(t *testing.T) {
+		err := validate(t, `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="e">
+		    <xs:complexType>
+		      <xs:attribute name="a" use="prohibited"/>
+		      <xs:anyAttribute namespace="##local" processContents="lax"/>
+		    </xs:complexType>
+		  </xs:element>
+		</xs:schema>`, `<e a="1"/>`)
+		if err != nil {
+			t.Errorf("the wildcard should admit the name: %v", err)
+		}
+	})
+}
