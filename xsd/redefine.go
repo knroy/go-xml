@@ -26,6 +26,13 @@ type redefineHold struct {
 	types      map[xdm.QName]Type
 	groups     map[xdm.QName]*ModelGroupDef
 	attrGroups map[xdm.QName]*AttributeGroupDef
+
+	// elements, attributes and notations are only ever displaced by an
+	// xs:override: xs:redefine may replace types and groups alone, while
+	// override may replace any global component.
+	elements   map[xdm.QName]*ElementDecl
+	attributes map[xdm.QName]*AttributeDecl
+	notations  map[xdm.QName]*NotationDecl
 }
 
 // prepareRedefine displaces the components a redefine is about to replace.
@@ -38,6 +45,9 @@ func (a *assembler) prepareRedefine(el *xdm.Node, doc *schemaDoc) *redefineHold 
 		types:      map[xdm.QName]Type{},
 		groups:     map[xdm.QName]*ModelGroupDef{},
 		attrGroups: map[xdm.QName]*AttributeGroupDef{},
+		elements:   map[xdm.QName]*ElementDecl{},
+		attributes: map[xdm.QName]*AttributeDecl{},
+		notations:  map[xdm.QName]*NotationDecl{},
 	}
 
 	for _, c := range el.ChildElements() {
@@ -65,6 +75,26 @@ func (a *assembler) prepareRedefine(el *xdm.Node, doc *schemaDoc) *redefineHold 
 			if g, ok := a.schema.AttributeGroups[q]; ok {
 				hold.attrGroups[q] = g
 				delete(a.schema.AttributeGroups, q)
+			}
+
+		// An xs:override may replace any global component; xs:redefine
+		// reaches only the four above. Without displacing these, the
+		// replacement collides with the original and the whole schema
+		// fails to load on a duplicate declaration.
+		case "element":
+			if d, ok := a.schema.Elements[q]; ok {
+				hold.elements[q] = d
+				delete(a.schema.Elements, q)
+			}
+		case "attribute":
+			if d, ok := a.schema.Attributes[q]; ok {
+				hold.attributes[q] = d
+				delete(a.schema.Attributes, q)
+			}
+		case "notation":
+			if d, ok := a.schema.Notations[q]; ok {
+				hold.notations[q] = d
+				delete(a.schema.Notations, q)
 			}
 		}
 	}

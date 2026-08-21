@@ -55,6 +55,17 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// reader is consumed by the decoder. Tee it into a buffer rather than
 	// reading it all up front, so that a parse failing early on a huge
 	// document does not first pull the whole thing into memory.
+	// UTF-16 is decoded to UTF-8 first. XML 1.0 §4.3.3 makes both encodings
+	// mandatory, and encoding/xml reads only UTF-8 — so without this a
+	// UTF-16 document fails with "invalid UTF-8" rather than being read.
+	// This happens before the tee, so that position tracking counts lines
+	// in the text the decoder actually sees.
+	decoded, err := decodeReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("parse XML: %w", err)
+	}
+	r = decoded
+
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
 	if trackPos {
