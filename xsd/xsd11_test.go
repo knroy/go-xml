@@ -2253,3 +2253,51 @@ func TestDynamicEDTAgainstBaseDeclarations(t *testing.T) {
 		t.Errorf("an unrelated name through the wildcard is fine: %v", err)
 	}
 }
+
+// TestListOfUnionIDItems covers a list whose item type is a union of xs:ID and
+// something else, which the suite calls "a highly devious test in which we
+// define a list type whose items may be either IDs or IDREFs".
+//
+// The item type has to be asked about each item rather than about the whole
+// literal: a union answers differently for "aaa" than for "23", and asking with
+// the joined literal answers for neither — so every binding in such a list went
+// unrecorded and a dangling reference was invisible.
+func TestListOfUnionIDItems(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="idOrInt">
+	    <xs:union memberTypes="xs:ID xs:integer"/>
+	  </xs:simpleType>
+	  <xs:simpleType name="refOrInt">
+	    <xs:union memberTypes="xs:IDREF xs:integer"/>
+	  </xs:simpleType>
+	  <xs:simpleType name="ids"><xs:list itemType="idOrInt"/></xs:simpleType>
+	  <xs:simpleType name="refs"><xs:list itemType="refOrInt"/></xs:simpleType>
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="n" maxOccurs="unbounded">
+	          <xs:complexType>
+	            <xs:attribute name="id" type="ids"/>
+	            <xs:attribute name="ref" type="refs"/>
+	          </xs:complexType>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	// The integers are not IDs at all, so they neither define nor dangle.
+	if err := check11(t, s,
+		`<doc><n id="aaa 23 bbb"/><n ref="bbb 29 aaa"/></doc>`); err != nil {
+		t.Errorf("a mixed list should resolve its ID items: %v", err)
+	}
+	if err := check11(t, s,
+		`<doc><n id="aaa 23"/><n ref="hhh"/></doc>`); err == nil {
+		t.Error("a dangling reference in a list of a union should be caught")
+	}
+	if err := check11(t, s,
+		`<doc><n id="aaa"/><n id="aaa"/></doc>`); err == nil {
+		t.Error("a duplicate ID in a list of a union should be caught")
+	}
+}

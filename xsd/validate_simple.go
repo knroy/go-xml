@@ -460,15 +460,24 @@ func (v *validator) recordIDsOwned(owner *xdm.Node, value string, t *SimpleType)
 	switch idKind(t, value) {
 	case "ID":
 		v.recordID(owner, value)
-	case "IDS":
-		for _, item := range splitFields(value) {
-			v.recordID(owner, item)
-		}
 	case "IDREF":
 		v.idrefs = append(v.idrefs, idref{value: value, node: owner})
-	case "IDREFS":
-		for _, item := range splitFields(value) {
-			v.idrefs = append(v.idrefs, idref{value: item, node: owner})
+	case "IDS", "IDREFS", "MIXED":
+		// Each item is classified on its own. A list of a union may
+		// contribute a definition for one item and a reference for the
+		// next, so the list kind cannot decide for all of them.
+		item := t
+		if t != nil && t.Variety == VarietyList {
+			item = t.ItemType
+		}
+		for _, word := range splitFields(value) {
+			switch idKind(item, word) {
+			case "ID":
+				v.recordID(owner, word)
+			case "IDREF":
+				v.idrefs = append(v.idrefs,
+					idref{value: word, node: owner})
+			}
 		}
 	}
 }
@@ -528,13 +537,13 @@ func idKind(t *SimpleType, value string) string {
 		// a list of xs:ID — 1.0 forbade it because an element could
 		// carry only one ID, and lifting that restriction lifts this
 		// one with it — so each item is a definition.
-		switch idKind(t.ItemType, value) {
-		case "IDREF":
-			return "IDREFS"
-		case "ID":
-			return "IDS"
-		}
-		return ""
+		//
+		// The item type is asked about each item rather than about the
+		// whole literal. It matters when the item type is a union: a
+		// list of "xs:ID or xs:integer" answers differently for "aaa"
+		// than for "23", and asking with the joined literal answers for
+		// neither, so every binding in such a list went unrecorded.
+		return listItemKind(t.ItemType, value)
 	}
 
 	seen := 0
@@ -821,4 +830,34 @@ func isLanguage(v string) bool {
 		}
 	}
 	return true
+}
+
+// listItemKind classifies a list by what its items contribute.
+//
+// A list of a union may hold IDs and IDREFs at once — the suite's id007 is
+// exactly that, "a list type whose items may be either IDs or IDREFs" — so the
+// answer is per item, and this only reports whether there is anything to
+// record.
+func listItemKind(item *SimpleType, value string) string {
+	if item == nil {
+		return ""
+	}
+	sawID, sawRef := false, false
+	for _, word := range splitFields(value) {
+		switch idKind(item, word) {
+		case "ID":
+			sawID = true
+		case "IDREF":
+			sawRef = true
+		}
+	}
+	switch {
+	case sawID && sawRef:
+		return "MIXED"
+	case sawID:
+		return "IDS"
+	case sawRef:
+		return "IDREFS"
+	}
+	return ""
 }
