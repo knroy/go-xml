@@ -628,7 +628,8 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 	// content model never named, and xsi:type on top of it is how the same
 	// name ends up validated against a second unrelated type. That is the
 	// inconsistency the rule exists to catch.
-	if _, viaWildcard := p.term.(*Wildcard); viaWildcard {
+	_, viaWildcard := p.term.(*Wildcard)
+	if viaWildcard {
 		if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
 			if t, err := v.resolveXSIType(kid, xsiType.Value); err == nil {
 				got = t
@@ -667,7 +668,18 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 		v.childTypes[k] = got
 		return
 	}
-	if edtConsistent(v, prev, got) {
+	// A type reached through a wildcard has to *narrow* the one a
+	// declaration already gave the name, not merely be comparable with it.
+	// The symmetric test lets a widening through, and a widening admits
+	// values the declaration does not — which is the inconsistency the rule
+	// exists to catch. Where both types came from declarations the
+	// direction is an accident of document order, so the symmetric test is
+	// the right one there.
+	consistent := edtConsistent(v, prev, got)
+	if viaWildcard {
+		consistent = edtNarrows(v, prev, got)
+	}
+	if consistent {
 		return
 	}
 	v.fail(kid, "cvc-complex-type.2.4.k",
@@ -688,6 +700,18 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 // accident of document order rather than something the rule distinguishes.
 func edtConsistent(v *validator, a, b Type) bool {
 	return a == b || v.derivedFrom(a, b) || v.derivedFrom(b, a)
+}
+
+// edtNarrows reports whether got is consistent with prev as a *narrowing*.
+//
+// Where the second type was reached through a wildcard — from a global
+// declaration the content model never named, or from xsi:type — the direction
+// matters. A second <f xsi:type="xs:decimal"/> against a declared xs:integer
+// admits values the declaration does not, which is exactly the inconsistency
+// the rule is for, and the symmetric test lets it through since xs:integer does
+// derive from xs:decimal.
+func edtNarrows(v *validator, prev, got Type) bool {
+	return prev == got || v.derivedFrom(got, prev)
 }
 
 // isAllGroup reports whether a particle is an xs:all at the top of a content

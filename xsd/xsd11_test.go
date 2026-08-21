@@ -2914,3 +2914,44 @@ func TestWildcardUnionKeepsUnadmittedNames(t *testing.T) {
 		t.Error("a name the only branch that reaches it disallows should be refused")
 	}
 }
+
+// TestDynamicEDTIsDirectionalThroughWildcards pins that a type reached through
+// a wildcard has to narrow the one a declaration already gave the name.
+//
+// The symmetric test lets a widening through, and a widening admits values the
+// declaration does not — exactly the inconsistency the rule exists to catch. A
+// second <f xsi:type="xs:decimal"/> against a declared xs:integer is the clean
+// case: xs:integer does derive from xs:decimal, so comparing either way finds
+// them consistent.
+//
+// Where both types came from declarations the direction is an accident of
+// document order, so the symmetric test stays right there — see
+// TestDynamicEDTAllowsDerivedTypes.
+func TestDynamicEDTIsDirectionalThroughWildcards(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="e" type="xs:integer"/>
+	      <xs:element name="f" type="xs:integer"/>
+	      <xs:any namespace="##local" processContents="lax"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="doc" type="zing"/>
+	  <xs:element name="e" type="xs:decimal"/>
+	</xs:schema>`)
+
+	// The wildcard finds the global <e>, an xs:decimal, which widens the
+	// local xs:integer.
+	if err := check11(t, s, `<doc><e>-12</e><f>42</f><e>93.7</e></doc>`); err == nil {
+		t.Error("a widening type through a wildcard should be refused")
+	}
+
+	const ns = ` xmlns:xs="http://www.w3.org/2001/XMLSchema"` +
+		` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+	// The same widening spelled with xsi:type.
+	if err := check11(t, s,
+		`<doc><e>-12</e><f>42</f><f`+ns+` xsi:type="xs:decimal">12.5</f></doc>`); err == nil {
+		t.Error("a widening xsi:type through a wildcard should be refused")
+	}
+}
