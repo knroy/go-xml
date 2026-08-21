@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.13% of the W3C xsdtests suite (24,260 of 24,473 instance tests) |
-| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,058 of 1,058); opt-in via `Version11` |
+| **XSD 1.0** | 99.15% of the W3C xsdtests suite (24,273 of 24,482 instance tests) |
+| **XSD 1.1** | 100% of the suite's 1.1 instance tests (1,073 of 1,073); opt-in via `Version11` |
 | **Tests** | 499, clean under `-race` (491 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -633,17 +633,17 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**213 of 24,473 XSD 1.0 instance tests (0.87%); the 1.1 half agrees on all
-1,058.**
+**209 of 24,482 XSD 1.0 instance tests (0.85%); the 1.1 half agrees on all
+1,073.**
 
 The 1.0 remainder is a long tail with no group above ten cases, spread across
 content models, attribute resolution, identity constraints and datatype edges.
 
 Two further notes on the measurement. 227 test groups are skipped because the
 suite marks their schema invalid by design — checking those is Schema Component
-Constraint territory, not instance validation — and 24 more because a
+Constraint territory, not instance validation — and 9 more because a
 schema-level construct still fails to load, mostly regular-expression forms and
-identity-constraint references across documents. The 24 are counted as skips
+identity-constraint references across documents. The 9 are counted as skips
 rather than failures, which flatters the figure; they are listed here so that
 the number is read with that in mind.
 

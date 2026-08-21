@@ -115,6 +115,11 @@ type parser struct {
 	// read. Each returns an error naming the unresolvable reference.
 	fixups []func() error
 
+	// attrsDone marks the complex types whose inherited attributes have
+	// been resolved, so that a base shared by many derived types is walked
+	// once rather than once per derivation.
+	attrsDone map[*ComplexType]bool
+
 	// inOverride records that the components being read are the
 	// replacements inside an <xs:override>. The document's
 	// defaultAttributes and defaultOpenContent do not reach them — the
@@ -213,7 +218,7 @@ func NewSchema() *Schema {
 // about trust rather than about parsing.
 func ParseSchema(root *xdm.Node) (*Schema, error) {
 	s := NewSchema()
-	p := &parser{schema: s}
+	p := &parser{schema: s, attrsDone: map[*ComplexType]bool{}}
 	if err := p.readDocument(root, ""); err != nil {
 		return nil, err
 	}
@@ -234,6 +239,17 @@ func (p *parser) finish() error {
 	for i := 0; i < len(p.fixups); i++ {
 		if err := p.fixups[i](); err != nil {
 			p.errs = append(p.errs, err)
+		}
+	}
+
+	// A final sweep over every complex type. A redefine's replacements are
+	// read after the main pass, so the fixup their inheritAttributes queued
+	// has already been drained by the time they exist — and the type is
+	// left without the attributes its base supplies. The attrsDone guard
+	// makes this idempotent, so a type already resolved is not touched.
+	for _, t := range p.schema.Types {
+		if ct, ok := t.(*ComplexType); ok {
+			p.resolveAttributes(ct, nil)
 		}
 	}
 	if len(p.errs) == 0 {

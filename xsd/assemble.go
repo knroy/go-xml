@@ -58,7 +58,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 		schema: s,
 		opts:   opts,
 		seen:   map[docKey]bool{},
-		p:      &parser{schema: s},
+		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}},
 	}
 	// The root document is marked seen before anything else runs. Without
 	// it a schema that is imported back by one of its own imports — legal,
@@ -129,7 +129,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		schema: s,
 		opts:   opts,
 		seen:   map[docKey]bool{},
-		p:      &parser{schema: s},
+		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}},
 	}
 
 	for _, path := range paths {
@@ -165,12 +165,19 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 
 // docKey identifies a schema document for deduplication.
 //
-// The key is the location alone. Keying on (namespace, location) looks more
-// precise and is wrong: two schemas may import each other, and the second
-// reference to a document arrives with a different declared namespace than the
-// first — a.xsd entered as the root with no namespace, then again as
-// urn:a from b.xsd's import. Under a pair key those are distinct, the document
-// is read twice, and every global in it is reported as a duplicate.
+// The key is the *resolved* location, not the schemaLocation as written. A
+// modular schema set reaches the same file by different spellings — UBL's
+// Invoice imports "../common/UBL-CommonBasicComponents-2.1.xsd" while its
+// CommonAggregateComponents, sitting in that directory, imports
+// "UBL-CommonBasicComponents-2.1.xsd" — and keying on the raw string makes
+// those two documents. The file is then read twice and every global in it is
+// reported as a duplicate of itself. That is a diamond in the import graph,
+// which is the normal shape of a large schema set rather than an unusual one.
+//
+// Keying on (namespace, location) looks more precise and is wrong for a
+// different reason: two schemas may import each other, and the second reference
+// arrives with a different declared namespace than the first — a.xsd entered as
+// the root with no namespace, then again as urn:a from b.xsd's import.
 //
 // The chameleon case that a pair key seemed to serve is handled where it
 // belongs, in readOne: the adopted namespace comes from the *including*
@@ -380,12 +387,6 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 		return
 	}
 
-	key := docKey{location: location}
-	if a.seen[key] {
-		return
-	}
-	a.seen[key] = true
-
 	rc, resolved, err := a.opts.Resolver.Resolve(namespace, location, doc.baseURI)
 	if err != nil {
 		if isInclude && !redefining {
@@ -408,6 +409,17 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 		return
 	}
 	defer rc.Close()
+
+	// Deduplication happens here, once the resolver has said which file the
+	// location names. Doing it on the raw schemaLocation makes two
+	// documents of one file whenever a schema set reaches it by different
+	// spellings; see docKey.
+	key := docKey{location: resolved}
+	if a.seen[key] {
+		return
+	}
+	a.seen[key] = true
+
 	a.parseAndQueue(el, rc, resolved, namespace, doc, isInclude, redefining)
 }
 

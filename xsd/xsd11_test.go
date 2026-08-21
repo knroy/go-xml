@@ -3329,3 +3329,123 @@ func TestNestedAttributeGroupReferences(t *testing.T) {
 	assertInvalid(t, schema, `<doc deep="notanint"/>`, "cvc")
 	assertInvalid(t, schema, `<doc unknown="x"/>`, "cvc-complex-type.3.2.2")
 }
+
+// TestDiamondImportIsReadOnce covers a schema set whose import graph reaches
+// the same document by two different spellings.
+//
+// UBL 2.1 is the case that found this: its Invoice imports
+// "../common/UBL-CommonBasicComponents-2.1.xsd" while its
+// CommonAggregateComponents, sitting in that directory, imports
+// "UBL-CommonBasicComponents-2.1.xsd". Keying deduplication on the
+// schemaLocation as written makes those two documents, so the file is read
+// twice and every global in it is reported as a duplicate of itself. A diamond
+// is the normal shape of a modular schema set, not an unusual one — all 65 UBL
+// main-document schemas failed to load on it.
+func TestDiamondImportIsReadOnce(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) string {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	write("common/leaf.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:leaf" xmlns:l="urn:leaf">
+	  <xs:element name="shared" type="xs:string"/>
+	</xs:schema>`)
+	// Sits beside leaf.xsd, so it names it without a path.
+	write("common/mid.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:mid">
+	  <xs:import namespace="urn:leaf" schemaLocation="leaf.xsd"/>
+	</xs:schema>`)
+	// Reaches the same leaf by a different spelling.
+	main := write("maindoc/main.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:main" xmlns:l="urn:leaf">
+	  <xs:import namespace="urn:mid" schemaLocation="../common/mid.xsd"/>
+	  <xs:import namespace="urn:leaf" schemaLocation="../common/leaf.xsd"/>
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence><xs:element ref="l:shared"/></xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	s, err := LoadFiles([]string{main}, Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("a diamond import should not duplicate declarations: %v", err)
+	}
+	doc := `<doc xmlns="urn:main" xmlns:l="urn:leaf"><l:shared>x</l:shared></doc>`
+	tree, err := xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(tree.Root, ValidateOptions{}); err != nil {
+		t.Errorf("the shared declaration should be usable: %v", err)
+	}
+}
+
+// TestAttributesInheritAcrossDocuments covers an empty simpleContent extension
+// whose base lives in another document and carries all the attributes.
+//
+// UBL's EndpointIDType is exactly that — <xs:extension base="udt:IdentifierType"/>
+// with nothing in it — and IdentifierType supplies seven attributes through a
+// chain that resolves by fixups of its own. Scheduling inheritance on a fixed
+// number of passes left the derived type with none of them, so every real UBL
+// instance was refused for carrying schemeID. Resolving the base chain on
+// demand is what makes the depth irrelevant.
+func TestAttributesInheritAcrossDocuments(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) string {
+		path := filepath.Join(dir, rel)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	write("udt.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:udt">
+	  <xs:complexType name="IdentifierType">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:normalizedString">
+	        <xs:attribute name="schemeID" type="xs:normalizedString"/>
+	        <xs:attribute name="schemeName" type="xs:string"/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	</xs:schema>`)
+	main := write("cbc.xsd", `<?xml version="1.0"?>
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:cbc" xmlns:udt="urn:udt"
+	           xmlns:cbc="urn:cbc">
+	  <xs:import namespace="urn:udt" schemaLocation="udt.xsd"/>
+	  <xs:complexType name="EndpointIDType">
+	    <xs:simpleContent>
+	      <xs:extension base="udt:IdentifierType"/>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:element name="EndpointID" type="cbc:EndpointIDType"/>
+	</xs:schema>`)
+
+	s, err := LoadFiles([]string{main}, Options{Resolver: &FileResolver{}})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	doc := `<EndpointID xmlns="urn:cbc" schemeID="GLN" schemeName="n">1234</EndpointID>`
+	tree, err := xdm.Parse(strings.NewReader(doc), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(tree.Root, ValidateOptions{}); err != nil {
+		t.Errorf("an empty extension should inherit its base's attributes: %v", err)
+	}
+}

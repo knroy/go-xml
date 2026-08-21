@@ -674,19 +674,58 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 // the derived type wins over the inherited one of the same name, which is how a
 // restriction narrows an attribute and how "prohibited" removes it.
 func (p *parser) inheritAttributes(t *ComplexType) {
-	// Two passes. The type's own attribute groups contribute through fixups
-	// queued before this one, and those queue a second pass of their own —
-	// the group graph cannot be read until every edge between groups
-	// exists. So inheritance waits for that second pass, or it would union
-	// the base's wildcard with a slot the groups have not filled yet.
+	// Inheritance runs on demand rather than on a scheduled pass. A type's
+	// attributes depend on its base's, which depend on the base's base, and
+	// on attribute groups whose own edges resolve through fixups too. There
+	// is no fixed number of passes that covers every chain — UBL's
+	// EndpointIDType extends udt:IdentifierType across a document boundary,
+	// and counting passes left it with none of the seven attributes its
+	// base declares.
+	//
+	// Resolving the base first, recursively, makes the depth irrelevant.
+	//
+	// It is scheduled behind one more fixup so that every type's *own*
+	// attributes — the ones its attribute groups contribute, through fixups
+	// of their own — are in place before any inheritance reads them. The
+	// recursion handles depth in the base chain; this handles the one step
+	// that is not a base chain at all.
 	p.fixups = append(p.fixups, func() error {
-		p.fixups = append(p.fixups, p.inheritAttributesFixup(t))
+		p.fixups = append(p.fixups, func() error {
+			p.resolveAttributes(t, nil)
+			return nil
+		})
 		return nil
 	})
 }
 
-func (p *parser) inheritAttributesFixup(t *ComplexType) func() error {
-	return func() error {
+// resolveAttributes gives a type its inherited attributes, resolving its base
+// chain first.
+//
+// The seen set guards a cycle in the base chain, which is ill-formed but must
+// not hang. done marks a type already resolved, so a base shared by many
+// derived types is walked once.
+func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
+	if t == nil || p.attrsDone[t] {
+		return
+	}
+	if seen == nil {
+		seen = map[*ComplexType]bool{}
+	}
+	if seen[t] {
+		return
+	}
+	seen[t] = true
+
+	base, isComplex := t.Base.(*ComplexType)
+	if isComplex && base != t {
+		p.resolveAttributes(base, seen)
+	}
+	p.attrsDone[t] = true
+	p.inheritAttributesNow(t)
+}
+
+func (p *parser) inheritAttributesNow(t *ComplexType) {
+	_ = func() error {
 		base, ok := t.Base.(*ComplexType)
 		if !ok || base == t {
 			return nil
@@ -741,7 +780,7 @@ func (p *parser) inheritAttributesFixup(t *ComplexType) func() error {
 		t.OpenContent = combineOpenContent(base.OpenContent, t.OpenContent,
 			t.DerivationMethod, t.declaredOpenContent)
 		return nil
-	}
+	}()
 }
 
 // readOpenContent reads an <xs:openContent> or <xs:defaultOpenContent>.
