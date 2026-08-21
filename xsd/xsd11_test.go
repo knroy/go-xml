@@ -3602,3 +3602,54 @@ func TestElementBlockOverridesTheDefault(t *testing.T) {
 	// block="" on the element itself does.
 	assertValid(t, schema(` block=""`), doc)
 }
+
+// TestSubstitutionGroupRespectsBlock covers §3.3.6: a member belongs to a head's
+// substitution group only if the derivation taking its type to the head's is
+// not in the head's {disallowed substitutions}.
+//
+// The closure ignored blocking entirely, so block="restriction" on a head let a
+// member whose type restricts substitute anyway. It is the same set that
+// governs xsi:type, reached through a different rule.
+func TestSubstitutionGroupRespectsBlock(t *testing.T) {
+	schema := func(block string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           targetNamespace="urn:t" xmlns:t="urn:t"
+		           elementFormDefault="qualified">
+		  <xs:element name="root">
+		    <xs:complexType>
+		      <xs:sequence>
+		        <xs:element ref="t:Head" maxOccurs="unbounded"/>
+		      </xs:sequence>
+		    </xs:complexType>
+		  </xs:element>
+		  <xs:element name="Head" type="t:Type"` + block + `/>
+		  <xs:complexType name="Type"/>
+		  <xs:complexType name="restricted">
+		    <xs:complexContent><xs:restriction base="t:Type"/></xs:complexContent>
+		  </xs:complexType>
+		  <xs:complexType name="extended">
+		    <xs:complexContent><xs:extension base="t:Type"/></xs:complexContent>
+		  </xs:complexType>
+		  <xs:element name="ByRestriction" type="t:restricted"
+		              substitutionGroup="t:Head"/>
+		  <xs:element name="ByExtension" type="t:extended"
+		              substitutionGroup="t:Head"/>
+		</xs:schema>`
+	}
+	doc := func(member string) string {
+		return `<root xmlns="urn:t"><` + member + `/></root>`
+	}
+
+	// With nothing blocked, both members substitute.
+	assertValid(t, schema(``), doc("ByRestriction"))
+	assertValid(t, schema(``), doc("ByExtension"))
+
+	// block="restriction" keeps out only the one that restricts.
+	assertInvalid(t, schema(` block="restriction"`), doc("ByRestriction"),
+		"cvc-complex-type.2.4")
+	assertValid(t, schema(` block="restriction"`), doc("ByExtension"))
+
+	// The head itself is never blocked from appearing.
+	assertValid(t, schema(` block="restriction extension"`), doc("Head"))
+}

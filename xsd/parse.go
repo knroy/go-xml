@@ -225,6 +225,12 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 	if err := p.finish(); err != nil {
 		return nil, err
 	}
+	// The substitution-group closure is computed here as well as in the
+	// assembler. Without it a single-document parse leaves every group
+	// empty, so no member substitutes for its head — the feature silently
+	// does nothing on the one entry point that reads a schema from a node
+	// rather than from files.
+	linkSubstitutionGroups(s)
 	return s, nil
 }
 

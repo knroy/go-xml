@@ -478,7 +478,19 @@ func linkSubstitutionGroups(s *Schema) {
 				continue
 			}
 			seen[d] = true
-			out = append(out, d)
+			// A member is substitutable only if the derivation
+			// taking its type to the head's is not in the head's
+			// {disallowed substitutions} (§3.3.6). block= on the
+			// head element and blockDefault= on the schema are
+			// what fill that set, and ignoring it let a blocked
+			// member substitute anyway.
+			//
+			// The member is still pushed onto the stack: blocking
+			// it does not block what substitutes for *it*, since
+			// each step is judged against the head it names.
+			if !substitutionBlockedBy(head, d) {
+				out = append(out, d)
+			}
 			stack = append(stack, direct[d]...)
 		}
 		head.substitutable = out
@@ -531,4 +543,42 @@ func (a *assembler) runOverrides() {
 		}
 		a.p.doc, a.p.inOverride = prev, prevOverride
 	}
+}
+
+// substitutionBlockedBy reports whether a head's {disallowed substitutions}
+// keep a member out of its substitution group.
+//
+// The derivations examined are those from the member's type up to the head's:
+// a member two steps away goes through the intermediate type, and it is the set
+// of methods used along the way that the block applies to.
+func substitutionBlockedBy(head, member *ElementDecl) bool {
+	blocked := head.DisallowedSubstitutions
+	if ct, ok := head.Type.(*ComplexType); ok {
+		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
+	}
+	if blocked == 0 || member.Type == nil || head.Type == nil {
+		return false
+	}
+	if member.Type == head.Type {
+		return false
+	}
+
+	seen := 0
+	for cur := member.Type; cur != nil && cur != head.Type; {
+		ct, ok := cur.(*ComplexType)
+		if !ok {
+			return blocked.Has(DerivationRestriction)
+		}
+		if blocked.Has(ct.DerivationMethod) {
+			return true
+		}
+		if ct.Base == cur {
+			return false
+		}
+		cur = ct.Base
+		if seen++; seen > 64 {
+			return false
+		}
+	}
+	return false
 }
