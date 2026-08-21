@@ -342,7 +342,16 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 	}
 
 	if t.Content == ContentSimple && t.SimpleContent != nil {
-		if el.TypeAnnotation == "" {
+		// The assertion root keeps no type of its own. Its validity is
+		// what the assertion is deciding, so it has none yet — the
+		// suite states it directly: "nodes *other than* the assertion
+		// root are properly typed", and assert014 asserts
+		// not(data(.) instance of xs:date) on an element whose declared
+		// content is exactly xs:date.
+		//
+		// $value carries the typed value instead, which is how an
+		// assertion reaches it.
+		if depth > 0 && el.TypeAnnotation == "" {
 			el.TypeAnnotation = annotationName(t.SimpleContent)
 		}
 		return

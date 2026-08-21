@@ -217,8 +217,13 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 // finish runs the deferred reference resolutions and returns the accumulated
 // faults, if any.
 func (p *parser) finish() error {
-	for _, fn := range p.fixups {
-		if err := fn(); err != nil {
+	// Fixups are run in the order they were queued, and one may need what
+	// another writes — a type whose simple content comes from a base whose
+	// own is filled in later, for instance. Neither can arrange the order
+	// for itself, so a fixup that finds its input missing queues a second
+	// pass, and the loop keeps going until nothing new is queued.
+	for i := 0; i < len(p.fixups); i++ {
+		if err := p.fixups[i](); err != nil {
 			p.errs = append(p.errs, err)
 		}
 	}

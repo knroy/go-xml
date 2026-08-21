@@ -2729,3 +2729,85 @@ func TestYearMayNotBePadded(t *testing.T) {
 	assertInvalid(t, schema, `<v>012345-02</v>`, "cvc-datatype-valid")
 	assertInvalid(t, schema, `<v>000-02</v>`, "cvc-datatype-valid")
 }
+
+// TestAssertionRootIsUntyped pins that the element an assertion is checking
+// carries no type annotation of its own, while everything below it does.
+//
+// Its validity is what the assertion is deciding, so it has no type yet — the
+// suite states it directly, "nodes other than the assertion root are properly
+// typed", and pairs two schemas over one instance: one asserts
+// $value instance of xs:date and the other not(data(.) instance of xs:date),
+// both expected to hold. $value carries the typed value; the node does not.
+func TestAssertionRootIsUntyped(t *testing.T) {
+	build := func(test string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="temp">
+		    <xs:complexType>
+		      <xs:simpleContent>
+		        <xs:restriction base="datedEvent">
+		          <xs:assert test="` + test + `"/>
+		        </xs:restriction>
+		      </xs:simpleContent>
+		    </xs:complexType>
+		  </xs:element>
+		  <xs:complexType name="datedEvent">
+		    <xs:simpleContent>
+		      <xs:extension base="xs:date">
+		        <xs:attribute name="event" type="xs:dateTime"/>
+		      </xs:extension>
+		    </xs:simpleContent>
+		  </xs:complexType>
+		</xs:schema>`
+	}
+	const doc = `<temp event="2008-07-01T12:00:00">2008-07-01</temp>`
+
+	// $value is typed, so this holds.
+	if err := check11(t, load11(t, build("$value instance of xs:date")), doc); err != nil {
+		t.Errorf("$value should carry the declared type: %v", err)
+	}
+	// The node is not, so this holds too.
+	if err := check11(t, load11(t,
+		build("not(data(.) instance of xs:date)")), doc); err != nil {
+		t.Errorf("the assertion root should stay untyped: %v", err)
+	}
+	// A descendant's typed value is still available, which is the other
+	// half. It has to be atomised first: "@event instance of xs:dateTime"
+	// is false for any annotation, since an attribute node is a node and
+	// not an atomic value.
+	if err := check11(t, load11(t,
+		build("data(@event) instance of xs:dateTime")), doc); err != nil {
+		t.Errorf("an attribute's typed value should be a dateTime: %v", err)
+	}
+}
+
+// TestInheritedSimpleContentThroughRestriction pins that a restriction of a
+// complex type with simple content picks up that content even when the base's
+// own is filled in by a later deferred resolution.
+//
+// Neither fixup can arrange the order for itself, so one that finds its input
+// missing requeues and the loop keeps going until nothing new is queued.
+func TestInheritedSimpleContentThroughRestriction(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="temp">
+	    <xs:complexType>
+	      <xs:simpleContent>
+	        <xs:restriction base="datedEvent"/>
+	      </xs:simpleContent>
+	    </xs:complexType>
+	  </xs:element>
+	  <xs:complexType name="datedEvent">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:date">
+	        <xs:attribute name="event" type="xs:dateTime"/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	</xs:schema>`
+
+	assertValid(t, schema, `<temp>2008-07-01</temp>`)
+	// The inherited content type is enforced, which it could not be if the
+	// restriction had ended up with none.
+	assertInvalid(t, schema, `<temp>not-a-date</temp>`, "cvc")
+}

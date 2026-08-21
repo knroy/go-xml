@@ -391,6 +391,33 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 				t.SimpleContent = b.SimpleContent
 			}
 		})
+		if inline == nil {
+			// The base may itself be a complex type whose own
+			// simple content is filled in by a later fixup, so
+			// reading it above can find nothing. A second pass
+			// after every fixup has run walks the chain to whatever
+			// simple type is actually there — ordering between two
+			// deferred resolutions is not something either one can
+			// arrange for itself.
+			p.fixups = append(p.fixups, func() error {
+				if t.SimpleContent != nil {
+					return nil
+				}
+				if sc := inheritedSimpleContent(t); sc != nil {
+					t.SimpleContent = sc
+					return nil
+				}
+				// The base's own content is not resolved yet;
+				// try again after the fixups queued since.
+				p.fixups = append(p.fixups, func() error {
+					if t.SimpleContent == nil {
+						t.SimpleContent = inheritedSimpleContent(t)
+					}
+					return nil
+				})
+				return nil
+			})
+		}
 	}
 	// An assertion may sit inside the restriction or extension of a
 	// simpleContent, where it constrains the element's value through
@@ -1026,4 +1053,30 @@ func particleMatchesOnlyEmpty(p *Particle, depth int) bool {
 		}
 	}
 	return true
+}
+
+// inheritedSimpleContent walks a base chain for the simple type a complex type
+// with simple content is built on.
+func inheritedSimpleContent(t *ComplexType) *SimpleType {
+	seen := 0
+	for cur := Type(t); cur != nil; {
+		switch b := cur.(type) {
+		case *SimpleType:
+			return b
+		case *ComplexType:
+			if b.SimpleContent != nil {
+				return b.SimpleContent
+			}
+			if b.Base == cur {
+				return nil
+			}
+			cur = b.Base
+		default:
+			return nil
+		}
+		if seen++; seen > 64 {
+			return nil
+		}
+	}
+	return nil
 }
