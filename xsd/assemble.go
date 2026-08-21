@@ -101,7 +101,11 @@ func LoadFile(path string, opts Options) (*Schema, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing schema %q: %w", path, err)
 	}
-	return Load(tree.Root, resolved, opts)
+	s, err := Load(tree.Root, resolved, opts)
+	if s != nil {
+		s.sourcePaths = []string{path}
+	}
+	return s, err
 }
 
 // LoadFiles assembles one schema from several documents.
@@ -128,6 +132,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 
 	s := NewSchema()
 	s.Version = opts.Version
+	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
 		schema: s,
 		opts:   opts,

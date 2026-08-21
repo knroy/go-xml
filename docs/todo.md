@@ -163,8 +163,9 @@ test is the one most likely to stop being run.
 Recorded so they are not proposed again as oversights:
 
 * **Regex backreferences** — leaving RE2 costs the linear-time guarantee.
-* **`xsi:schemaLocation` in instances** — honouring it lets the document
-  choose its own schema.
+* **`xsi:schemaLocation` in instances, by default** — honouring it lets the
+  document choose its own schema. Available opt-in behind a namespace
+  allowlist; see `Schema.WithInstanceLocations`.
 * **Network resolution by default** — hands control of what this process
   fetches to whoever wrote the schema.
 * **DOCTYPE by default** — the entry point for XXE and entity expansion.

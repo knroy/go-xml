@@ -164,6 +164,13 @@ type Schema struct {
 	// are absent.
 	Version Version
 
+	// sourcePaths records the documents this schema was loaded from, so
+	// that WithInstanceLocations can assemble them again alongside the ones
+	// an instance names. A schema is not the union of its documents — a
+	// type in one may extend a type in another — so extending it means
+	// reassembling rather than merging.
+	sourcePaths []string
+
 	// models caches compiled content models, keyed by complex type. It is
 	// a sync.Map because the access pattern is write-once then read-many —
 	// after the first document there are no more writes — and because a

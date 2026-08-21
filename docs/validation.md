@@ -126,7 +126,9 @@ touches neither disk nor network, which is the right choice in a server.
 
 Note that `xsi:schemaLocation` lives in the *instance document*. Honouring it
 lets whoever supplied the document choose which schema it is judged against, so
-this library never reads it — the schema is always the one the caller loaded.
+by default this library does not read it — the schema is the one the caller
+loaded. Where you need it, `Schema.WithInstanceLocations` takes it under a
+namespace allowlist; see [xsd.md](xsd.md#xsischemalocation-is-ignored-by-default).
 
 ## xsl:import-schema
 

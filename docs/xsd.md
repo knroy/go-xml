@@ -174,12 +174,43 @@ redefines, so an unresolvable location there is an error — unless the
 `redefine` redefines nothing, in which case it asks nothing of the document
 it names.
 
-### xsi:schemaLocation is ignored
+### xsi:schemaLocation is ignored by default
 
-`xsi:schemaLocation` lives in the *instance document*. Honouring it would let
-whoever supplied the document choose which schema it is judged against, which
-defeats the purpose of validating it. The schema is always the one the caller
-loaded.
+`xsi:schemaLocation` lives in the *instance document*. Honouring it lets
+whoever supplied the document choose which schema it is judged against — a
+document that fails can name a permissive schema and pass — so by default the
+schema is the one the caller loaded and nothing else.
+
+Where you do need it, it is opt-in and gated on an allowlist:
+
+```go
+extended, err := schema.WithInstanceLocations(doc.Root, xsd.InstanceLocationPolicy{
+    AllowNamespace: func(ns string) bool { return ns == "urn:example:addenda" },
+}, xsd.Options{Resolver: myResolver})
+if err != nil {
+    return err
+}
+err = extended.Validate(doc.Root, xsd.ValidateOptions{})
+```
+
+Three things about that shape are deliberate:
+
+* **The zero policy grants nothing.** A nil `AllowNamespace` allows no
+  namespace, so a policy that merely exists does not open the door.
+  `AllowNoNamespace` is separate again, because `""` is not a namespace a
+  caller thinks about and folding it in would grant it by accident.
+* **A refused location is ignored, not an error.** §4.3.2 makes the attribute
+  a hint, so declining to take it is not a fault in the document. A reference
+  that really needed the components still fails, at the reference.
+* **The receiver is not modified.** A `Schema` is immutable and shared, so
+  this returns a new one. That means a fresh assembly per instance, which is
+  why it is a separate call rather than something `Validate` does — a caller
+  validating many documents against one schema should not pay for it.
+
+The resolver still decides what can actually be fetched. Following untrusted
+documents means pairing this with a `MapResolver`, or an `HTTPResolver` whose
+`AllowHost` refuses everything you have not vouched for: the allowlist says
+*which namespaces* an instance may extend, not *what it may reach*.
 
 ## The PSVI
 
