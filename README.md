@@ -21,8 +21,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.73% of the W3C xsdtests *instance* tests (24,824 of 24,891); **85.19%** of its *schema-validity* tests (12,271 of 14,405) |
-| **XSD 1.1** | 99.72% instance (26,017 of 26,091); **84.74%** schema-validity (13,020 of 15,365); opt-in via `Version11` |
+| **XSD 1.0** | 99.73% of the W3C xsdtests *instance* tests (24,826 of 24,892); **94.99%** of its *schema-validity* tests (13,683 of 14,405) |
+| **XSD 1.1** | 99.72% instance (26,017 of 26,090); **94.13%** schema-validity (14,463 of 15,365); opt-in via `Version11` |
 | **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -652,8 +652,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 12,271 / 14,405 (85.19%) | 24,824 / 24,891 (99.73%) |
-| XSD 1.1 | 13,020 / 15,365 (84.74%) | 26,017 / 26,091 (99.72%) |
+| XSD 1.0 | 13,683 / 14,405 (94.99%) | 24,826 / 24,892 (99.73%) |
+| XSD 1.1 | 14,463 / 15,365 (94.13%) | 26,017 / 26,090 (99.72%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -663,7 +663,11 @@ suite marks invalid by design was counted as a "skip" on the grounds that
 checking it is Schema Component Constraint territory rather than instance
 validation. But that is exactly what those groups test: the schema is *meant*
 to be rejected, and loading it without complaint is a failure. Scoring them
-turned roughly 2,200 silent passes in 1.0 into what they always were.
+turned roughly 2,200 silent passes in 1.0 into what they always were. Most
+have since been closed — the Part 2 facet constraints, the schema-for-schemas
+shape check, the XSD regex grammar, and Particle Valid (Restriction) were the
+four largest — but the figure is quoted here because the earlier one was not
+measuring them at all.
 
 *The 1.1 run scored about six per cent of its tests.* Per `common/xsts.xsd` the
 `version` attribute is a **list of tokens**, not a single string — OR-joined on
@@ -677,11 +681,13 @@ The instance figures are now close to each other and to where 1.0 stood before,
 which is the expected shape: most groups carry no version attribute and so are
 scored identically by both runs.
 
-The remaining gap is dominated by **schema false-accepts** — invalid schemas
-loaded without complaint, i.e. Schema Component Constraints not yet checked —
-spread across facet consistency, regular-expression syntax, particles and model
-groups, complex-type derivation, and identity constraints. False *rejects*,
-where a valid schema or instance is refused, number in the low tens.
+The remaining gap is still dominated by **schema false-accepts** — invalid
+schemas loaded without complaint, i.e. Schema Component Constraints not yet
+checked — now concentrated in attribute declarations, wildcards, element
+declarations and identity constraints. False *rejects*, where a valid schema or
+instance is refused, number in the low tens and are tracked separately because
+they are the more serious kind: refusing valid input breaks a caller, while
+accepting invalid input only fails to catch their mistake.
 
 Two notes on the denominator. A handful of schemas still fail to load for
 reasons that are not bugs: nine are XML 1.1 documents, which this parser does

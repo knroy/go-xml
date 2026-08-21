@@ -61,8 +61,8 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.73%** agreement on 24,891
-instance tests, and **85.19%** on its 14,405 schema-validity tests — the
+Measured against the W3C XSD test suite: **99.73%** agreement on 24,892
+instance tests, and **94.99%** on its 14,405 schema-validity tests — the
 second figure is the honest one to quote, and [xsd.md](xsd.md) explains why
 earlier revisions reported neither.
 
@@ -81,7 +81,7 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
 versioning attributes, and the 1.1 built-ins. It measures **99.72%** on the
-26,091 instance tests that apply to a 1.1 processor and **84.74%** on the
+26,090 instance tests that apply to a 1.1 processor and **94.13%** on the
 15,365 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).
