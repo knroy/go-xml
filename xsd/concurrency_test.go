@@ -364,3 +364,28 @@ func TestVersionSelectsWhetherAssertionsAreHonoured(t *testing.T) {
 			"and must not be silently ignored")
 	}
 }
+
+// <xs:all minOccurs="0"> as the whole content model says the group may be
+// absent, so an element with no children owes it nothing. The all-or-nothing
+// rule still applies once anything from the group appears.
+//
+// This was checked only for a *nested* optional all group, so the members of a
+// top-level one were each demanded individually and an empty element failed.
+func TestTopLevelOptionalAllGroup(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:all minOccurs="0">
+	        <xs:element name="t1"/>
+	        <xs:element name="t2"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+	assertValid(t, schema, `<doc/>`)                 // the group is absent
+	assertValid(t, schema, `<doc><t1/><t2/></doc>`)  // the group is present, in full
+	// Present but incomplete: minOccurs="0" makes the group optional, not
+	// each member independently so.
+	assertInvalid(t, schema, `<doc><t1/></doc>`, "cvc-complex-type.2.4.b")
+}

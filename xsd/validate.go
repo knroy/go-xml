@@ -1153,6 +1153,25 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 	// Extending an all group with an all group merges them into one, so the
 	// rule spans both branches: a document with only the base's child has
 	// made the merged group present and still owes the extension's.
+	// The whole content model may itself be an optional all group, which is
+	// the same all-or-nothing rule one level up: <xs:all minOccurs="0">
+	// says the group may be absent, so an element with no children at all
+	// owes it nothing. optionalAllMembers only looks for a *nested*
+	// optional group, so without this the members of a top-level one were
+	// each demanded individually and an empty element failed.
+	if t != nil && t.Particle != nil && t.Particle.MinOccurs == 0 {
+		anyPresent := false
+		for _, n := range counts {
+			if n > 0 {
+				anyPresent = true
+				break
+			}
+		}
+		if !anyPresent {
+			return tables
+		}
+	}
+
 	optional := optionalAllMembers(g, particles)
 	if len(optional) > 0 {
 		present, missing := 0, 0
