@@ -584,6 +584,20 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 		p.errs = append(p.errs, err)
 		return nil
 	}
+	// A particle spelled minOccurs=maxOccurs=0 "corresponds to no component
+	// at all" — the mapping rules in §3.9.2 (and the parallel wording for
+	// elements, groups and wildcards) say so explicitly, and Particle
+	// Correct clause 2.2 confirms it by requiring {max occurs} >= 1 of every
+	// particle that does exist. Returning nil here rather than a 0..0
+	// particle keeps the rest of the system from having to special-case a
+	// component the spec never creates: Particle Valid (Restriction) in
+	// particular would otherwise compare a term that can never match
+	// anything, which is how particlesJq010 (an out-of-namespace element at
+	// 0..0 under a wildcard) and mgH014 (a 0..0 alternative dropped from a
+	// choice) came to be rejected.
+	if max == 0 {
+		return nil
+	}
 	part := &Particle{MinOccurs: min, MaxOccurs: max}
 
 	switch el.Name.Local {

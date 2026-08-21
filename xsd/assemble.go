@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -569,9 +570,35 @@ func (a *assembler) linkSubstitutionGroups() {
 }
 
 func linkSubstitutionGroups(s *Schema) {
+	// Schema.Elements is a map, so ranging it directly would seed `direct`
+	// in a different order on every run and leave {substitution group}
+	// membership in a different order with it. That is not cosmetic:
+	// Particle Valid (Restriction) maps a derived choice onto a base choice
+	// with an *order-preserving* mapping (RecurseLax clause 2), so when
+	// clause 2.1 expands a substitution group head into a choice, the order
+	// of that choice decides whether a valid schema is accepted. elemZ027a
+	// — a choice over m1 and m2 restricting a ref to their head — passed or
+	// failed from run to run before this walk was made deterministic.
+	//
+	// Sorting by qualified name is enough to pin it down; the spec does not
+	// order {substitution group}, so any stable order is conformant, and
+	// document order is not available here because members may be declared
+	// across several documents read in any order.
+	names := make([]xdm.QName, 0, len(s.Elements))
+	for name := range s.Elements {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
+
 	// direct maps a head to the declarations naming it directly.
 	direct := map[*ElementDecl][]*ElementDecl{}
-	for _, d := range s.Elements {
+	for _, name := range names {
+		d := s.Elements[name]
 		heads := d.SubstitutionGroups
 		if len(heads) == 0 && d.SubstitutionGroup != nil {
 			heads = []*ElementDecl{d.SubstitutionGroup}
@@ -585,13 +612,18 @@ func linkSubstitutionGroups(s *Schema) {
 	// than by recursion, because a malformed schema can name a circular
 	// substitution group and the spec bans it rather than making it
 	// impossible to write.
-	for _, head := range s.Elements {
+	// The queue is walked front to back rather than as a stack so that
+	// members come out in the order `direct` holds them, which the sort
+	// above made deterministic; popping from the back would reverse each
+	// level and put a head's own members in descending name order.
+	for _, name := range names {
+		head := s.Elements[name]
 		var out []*ElementDecl
 		seen := map[*ElementDecl]bool{head: true}
-		stack := append([]*ElementDecl(nil), direct[head]...)
-		for len(stack) > 0 {
-			d := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
+		queue := append([]*ElementDecl(nil), direct[head]...)
+		for len(queue) > 0 {
+			d := queue[0]
+			queue = queue[1:]
 			if seen[d] {
 				continue
 			}
@@ -609,7 +641,7 @@ func linkSubstitutionGroups(s *Schema) {
 			if !substitutionBlockedBy(head, d) {
 				out = append(out, d)
 			}
-			stack = append(stack, direct[d]...)
+			queue = append(queue, direct[d]...)
 		}
 		head.substitutable = out
 	}

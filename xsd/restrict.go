@@ -476,16 +476,35 @@ func sameNamespaceSet(a, b []string) bool {
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)
 // (§3.9.6): a group restricting a wildcard.
 func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wildcard, expanded bool) error {
-	// Clause 1: every member of the group must itself restrict the
-	// wildcard. The wildcard is passed with unit occurrence because the
-	// group's own range is checked separately, in clause 2.
-	// The wildcard is compared at the base particle's own occurrence range:
-	// clause 1 says each member must be a valid restriction of "the
-	// wildcard", meaning B itself, not a unit-occurrence copy of it.
-	// Narrowing it to 1..1 would reject a member repeating within a range
-	// the base wildcard already permits.
+	// Clause 1 says each member must be a valid restriction of "the
+	// wildcard" — the {term}, not the particle B. A wildcard term carries a
+	// namespace constraint and a processContents, but no occurrence range;
+	// the range lives on the particle that contains it. So clause 1 has no
+	// occurrence range to compare against, and the only thing it can
+	// meaningfully test is namespace and processContents compatibility.
+	//
+	// Comparing against B's own range instead rejects valid schemas
+	// (particlesHa070: three unit-occurrence elements under a 3..3 wildcard,
+	// each of which individually "fails" 1 < 3). Substituting a
+	// unit-occurrence 1..1 copy is equally wrong in the other direction, and
+	// is what the spec's own test suite rules out: particlesHa080 has a base
+	// wildcard of 2..3 restricted by a three-member sequence, where a 1..1
+	// comparison passes each member yet the suite marks the schema valid
+	// only because the *total* is 3.
+	//
+	// All the counting belongs to clause 2, and clause 2 is sufficient for
+	// it. The discriminating pairs in the suite confirm this: Ha070 (total
+	// 3, valid) against Ha071 (total 2, invalid) share a 3..3 base wildcard,
+	// and Ha080 (total 3 under 2..3, valid) against Ha081 (total 3 under
+	// 2..2, invalid) differ only in the base range. In every case the
+	// effective total range decides correctly and a per-member range check
+	// decides wrongly.
+	//
+	// An unbounded range makes Occurrence Range OK vacuous for any member,
+	// which leaves exactly the namespace test clause 1 is for.
+	anyOccurs := &Particle{MinOccurs: 0, MaxOccurs: Unbounded, Term: bw}
 	for _, member := range rg.Particles {
-		if err := particleRestricts(member, b, expanded); err != nil {
+		if err := particleRestricts(member, anyOccurs, expanded); err != nil {
 			return err
 		}
 	}
