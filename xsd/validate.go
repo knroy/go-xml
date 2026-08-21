@@ -180,6 +180,13 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 
 	typ := decl.Type
 
+	// XSD 1.1 conditional type assignment runs before xsi:type, because an
+	// alternative selects the *declared* type that xsi:type must then be
+	// derived from.
+	if v.schema.Version == Version11 {
+		typ = v.selectAlternativeType(el, decl)
+	}
+
 	// xsi:type overrides the declared type, subject to the blocking rules.
 	if xsiType := el.Attr(NSInstance, "type"); xsiType != nil {
 		t, err := v.resolveXSIType(el, xsiType.Value)
@@ -321,6 +328,12 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 
 	v.validateAttributes(el, t)
 
+	// XSD 1.1 assertions are checked after the content, because an
+	// assertion is a co-constraint over content that has to exist first.
+	if v.schema.Version == Version11 {
+		defer v.checkAssertions(el, t)
+	}
+
 	switch t.Content {
 	case ContentEmpty:
 		if len(el.ChildElements()) > 0 {
@@ -392,7 +405,7 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 	if isAllGroup(t.Particle) {
 		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup))
 	}
-	return v.matchSequence(el, kids, m)
+	return v.matchSequence(el, kids, m, t)
 }
 
 // isAllGroup reports whether a particle is an xs:all at the top of a content
@@ -430,7 +443,7 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 }
 
 // matchSequence walks the automaton over an element's children.
-func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel) []icTables {
+func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentModel, t *ComplexType) []icTables {
 	if len(m.positions) == 0 {
 		if len(kids) > 0 {
 			v.fail(kids[0], "cvc-complex-type.2.4.d",
@@ -463,6 +476,18 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			break
 		}
 		if next < 0 {
+			// XSD 1.1 open content: an element the model does not
+			// name may still be permitted by the type's wildcard.
+			// In interleave mode it may appear anywhere; in suffix
+			// mode only once the model has been satisfied, which
+			// prevLast records.
+			if oc := v.openContentFor(t); oc != nil && oc.Wildcard.Allows(name.URI) &&
+				(oc.Mode == OpenInterleave || prevIdx < 0 || contains(m.last, prevIdx)) {
+				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
+					tables = append(tables, tbl)
+				}
+				continue
+			}
 			v.fail(kid, "cvc-complex-type.2.4.a",
 				"element {%s}%s is not permitted here%s",
 				kid.Name.URI, kid.Name.Local, expected(m, current))
@@ -681,4 +706,19 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 		return v.validateElement(kid, d)
 	}
 	return nil
+}
+
+// openContentFor returns the open content in force for a type, or nil.
+//
+// It is only consulted under XSD 1.1: a 1.0 schema has no open content, and a
+// 1.0 validator honouring one would accept documents the version it claims
+// rejects.
+func (v *validator) openContentFor(t *ComplexType) *OpenContent {
+	if v.schema.Version != Version11 || t == nil || t.OpenContent == nil {
+		return nil
+	}
+	if t.OpenContent.Wildcard == nil {
+		return nil
+	}
+	return t.OpenContent
 }

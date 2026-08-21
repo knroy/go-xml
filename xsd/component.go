@@ -176,6 +176,11 @@ type ElementDecl struct {
 	// IdentityConstraints holds the key, keyref and unique children.
 	IdentityConstraints []*IdentityConstraint
 
+	// Alternatives are the XSD 1.1 <xs:alternative> children, in order.
+	// The first whose test holds selects the type; conditional type
+	// assignment is the other half of what 1.1 needs XPath for.
+	Alternatives []*TypeAlternative
+
 	// substitutable caches the transitive substitution group members. It is
 	// computed after the whole schema is assembled, because a member may be
 	// declared in a document that has not been read yet.
@@ -296,9 +301,41 @@ type ComplexType struct {
 	AttributeUses     []*AttributeUse
 	AttributeWildcard *Wildcard
 
-	// XSD 1.1 would add {assertions} and {content type}'s open content here.
-	// Nothing in this package depends on the absence of those fields, so
-	// adding them later does not disturb the model.
+	// Assertions are the XSD 1.1 <xs:assert> co-constraints on this type
+	// (§3.4.1 {assertions}). They evaluate XPath 2.0 against the element
+	// being validated, which is the feature that makes XSD 1.1 unavailable
+	// to implementations without an XPath engine.
+	Assertions []*Assertion
+
+	// OpenContent is the XSD 1.1 {open content}, which permits elements the
+	// content model does not name. Nil means the type is closed.
+	OpenContent *OpenContent
+}
+
+// OpenContentMode says where an open content wildcard may match (XSD 1.1
+// §3.4.1).
+type OpenContentMode uint8
+
+// The open content modes.
+const (
+	// OpenNone is a closed content model: the default.
+	OpenNone OpenContentMode = iota
+	// OpenInterleave permits the wildcard to match anywhere among the
+	// content model's own elements.
+	OpenInterleave
+	// OpenSuffix permits it only after everything the content model
+	// requires.
+	OpenSuffix
+)
+
+// OpenContent is an <xs:openContent> or <xs:defaultOpenContent> (XSD 1.1).
+//
+// It is how 1.1 lets a schema say "and anything else may appear here" without
+// writing a wildcard into every content model, which is what makes a schema
+// forward-compatible with documents produced against a later version of it.
+type OpenContent struct {
+	Mode     OpenContentMode
+	Wildcard *Wildcard
 }
 
 // ComponentKind implements Component.

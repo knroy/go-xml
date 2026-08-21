@@ -114,6 +114,12 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 			if ic := p.readIdentityConstraint(c); ic != nil {
 				d.IdentityConstraints = append(d.IdentityConstraints, ic)
 			}
+		case "alternative":
+			// XSD 1.1 conditional type assignment. Order matters:
+			// the first alternative whose test holds wins.
+			if alt := p.readAlternative(c); alt != nil {
+				d.Alternatives = append(d.Alternatives, alt)
+			}
 		}
 	}
 

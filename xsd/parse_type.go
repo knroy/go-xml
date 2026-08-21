@@ -291,6 +291,24 @@ func (p *parser) readTypeBody(el *xdm.Node, t *ComplexType, mixed bool) {
 	if g := childElement(el, "all", "choice", "sequence", "group"); g != nil {
 		t.Particle = p.readParticle(g)
 	}
+
+	// XSD 1.1 additions. They are read whatever the version, because a
+	// schema that uses them is not made valid by pretending they are absent
+	// — Options.Version decides whether they are *honoured*, which is where
+	// the distinction belongs.
+	for _, c := range contentChildren(el) {
+		if c.Name.URI != NSSchema {
+			continue
+		}
+		switch c.Name.Local {
+		case "assert":
+			if a := p.readAssert(c); a != nil {
+				t.Assertions = append(t.Assertions, a)
+			}
+		case "openContent":
+			t.OpenContent = p.readOpenContent(c)
+		}
+	}
 	t.AttributeWildcard = p.readAttributes(el, &t.AttributeUses)
 
 	switch {
@@ -550,4 +568,30 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 		}
 		return nil
 	})
+}
+
+// readOpenContent reads an <xs:openContent> or <xs:defaultOpenContent>.
+func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
+	oc := &OpenContent{Mode: OpenInterleave}
+	switch el.AttrValue("mode") {
+	case "", "interleave":
+		oc.Mode = OpenInterleave
+	case "suffix":
+		oc.Mode = OpenSuffix
+	case "none":
+		// An explicit "none" closes a content model that a
+		// defaultOpenContent would otherwise have opened.
+		return nil
+	default:
+		p.errs = append(p.errs, errorAt(el, "src-open-content",
+			"mode=%q is not one of interleave, suffix or none",
+			el.AttrValue("mode")))
+	}
+	if w := childElement(el, "any"); w != nil {
+		oc.Wildcard = p.readWildcard(w)
+	} else {
+		// An openContent with no wildcard defaults to ##any, lax.
+		oc.Wildcard = &Wildcard{Kind: NSAny, ProcessContents: ProcessLax}
+	}
+	return oc
 }

@@ -23,6 +23,12 @@ type Options struct {
 	// to spend the process. Zero means DefaultMaxDocuments.
 	MaxDocuments int
 
+	// Version selects XSD 1.0 or 1.1. The zero value is 1.0, because a
+	// schema written for 1.0 must not acquire 1.1's relaxations by
+	// accident — 1.1 changes which schemas are legal, not only which
+	// documents are.
+	Version Version
+
 	// ParseOptions are passed to the XML parser for each schema document.
 	// The zero value refuses a DOCTYPE, which is the right default: a
 	// schema has no use for one and it is the entry point for entity
@@ -47,6 +53,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	}
 
 	s := NewSchema()
+	s.Version = opts.Version
 	a := &assembler{
 		schema: s,
 		opts:   opts,

@@ -124,11 +124,38 @@ type Schema struct {
 	// the whole schema, not to the element carrying the constraint.
 	identityConstraints map[xdm.QName]*IdentityConstraint
 
+	// Version selects XSD 1.0 or 1.1 behaviour. It governs whether the 1.1
+	// features a document may use — assertions, conditional type
+	// assignment, open content — are honoured; they are always *parsed*,
+	// because a schema that uses them is not made valid by pretending they
+	// are absent.
+	Version Version
+
 	// models caches compiled content models, keyed by complex type. It is
 	// a sync.Map because the access pattern is write-once then read-many —
 	// after the first document there are no more writes — and because a
 	// Schema is documented as safe to share between goroutines once loaded.
 	models sync.Map
+}
+
+// Version selects the XML Schema version a schema is interpreted under.
+type Version uint8
+
+// The supported versions.
+const (
+	// Version10 is XML Schema 1.0, the default.
+	Version10 Version = iota
+	// Version11 is XML Schema 1.1: assertions, conditional type
+	// assignment, open content, and the relaxed rules that come with them.
+	Version11
+)
+
+// String names the version.
+func (v Version) String() string {
+	if v == Version11 {
+		return "1.1"
+	}
+	return "1.0"
 }
 
 // NewSchema returns an empty schema populated with the built-in types.
