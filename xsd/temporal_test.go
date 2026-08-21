@@ -195,3 +195,46 @@ func TestXmlnsIsNotAQNamePrefix(t *testing.T) {
 	assertValid(t, schema, `<v xmlns:p="urn:x">p:local</v>`)
 	assertValid(t, schema, `<v>local</v>`)
 }
+
+// The lexical space of xs:anyURI differs between the versions, and the suite
+// says so outright on anyURI_b004: "In XSD 1.1, any sequence of characters is
+// allowed in xs:anyURI, so the schema becomes valid", beside expectations
+// recorded as invalid for 1.0 and valid for 1.1.
+//
+// Under 1.0 the space is the sequences that are legal URIs *after* the escaping
+// algorithm of XML Linking §5.4 has run. That algorithm percent-escapes exactly
+// the characters RFC 2396 excludes, so those are inside the lexical space, not
+// outside it — the earlier reading had the rule backwards and rejected them.
+func TestAnyURILexicalSpaceByVersion(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="v" type="xs:anyURI"/>
+	</xs:schema>`
+
+	// Characters RFC 2396 excludes are escaped, not rejected: "foo<bar"
+	// becomes "foo%3Cbar". anyURI_a014, a015 and a016 expect their schemas
+	// to load under both versions.
+	// Written as entity references so the instance is well-formed XML; the
+	// value the validator sees is the unescaped character.
+	for _, v := range []string{"foo&lt;bar", "foo&gt;bar", `foo&quot;bar`, "foo^bar", "a b"} {
+		assertValid(t, schema, `<v>`+v+`</v>`)
+		if err := check11(t, load11(t, schema), `<v>`+v+`</v>`); err != nil {
+			t.Errorf("XSD 1.1 admits %q: %v", v, err)
+		}
+	}
+
+	// What escaping cannot repair is a malformed scheme: RFC 2396 requires
+	// a scheme to start with a letter, and the colon is not escaped. Under
+	// 1.1 any sequence at all is admitted, so the same value is valid.
+	for _, v := range []string{"99anyURI:x", ":a", "1:b"} {
+		assertInvalid(t, schema, `<v>`+v+`</v>`, "cvc-datatype-valid")
+		if err := check11(t, load11(t, schema), `<v>`+v+`</v>`); err != nil {
+			t.Errorf("XSD 1.1 admits any sequence, including %q: %v", v, err)
+		}
+	}
+
+	// A relative reference has no scheme to be wrong about.
+	for _, v := range []string{"foo/bar", "a", "?q", "#frag", "http://example/x"} {
+		assertValid(t, schema, `<v>`+v+`</v>`)
+	}
+}

@@ -293,10 +293,7 @@ func lexicalOKVersion(v, primitive string, version Version) bool {
 	case "base64Binary":
 		return isBase64Binary(v)
 	case "anyURI":
-		// Almost every string is a legal anyURI; the exceptions are
-		// values with characters that cannot appear in a URI reference
-		// at all.
-		return !strings.ContainsAny(v, " \t\n\r<>\"{}|\\^`")
+		return isAnyURILexical(v, version)
 	case "QName", "NOTATION":
 		return isQNameLexical(v)
 	case "duration", "dateTime", "time", "date",
@@ -714,4 +711,82 @@ func yearOK(year string, version Version) bool {
 		return true
 	}
 	return strings.TrimLeft(strings.TrimPrefix(year, "-"), "0") != ""
+}
+
+// isAnyURILexical reports whether v is in the lexical space of xs:anyURI.
+//
+// The two versions genuinely differ here, and the suite states it in as many
+// words on anyURI_b004: "In XSD 1.1, any sequence of characters is allowed in
+// xs:anyURI, so the schema becomes valid", against expectations recorded as
+// invalid for 1.0 and valid for 1.1.
+//
+// Under 1.0 the lexical space is the sequences which are legal URIs *after* the
+// escaping algorithm of XML Linking §5.4 has been applied. That algorithm
+// percent-escapes exactly the characters RFC 2396 excludes — space, <, >, ",
+// {, }, |, \, ^, ` — so those are all in the lexical space rather than out of
+// it: "foo<bar" escapes to "foo%3Cbar" and is fine, which anyURI_a014, a015 and
+// a016 pin by expecting their schemas to load under both versions.
+//
+// What is left for 1.0 to reject is the syntax the escaping cannot repair: a
+// malformed scheme. RFC 2396 requires a scheme to begin with a letter, so
+// "99999...anyURI:" is not one, and no escaping makes it one because the colon
+// is not escaped.
+func isAnyURILexical(v string, version Version) bool {
+	if version >= Version11 {
+		return true
+	}
+	// A percent sign must introduce two hex digits; the escaping algorithm
+	// leaves an existing escape alone, so a malformed one survives into the
+	// result.
+	for i := 0; i < len(v); i++ {
+		if v[i] != '%' {
+			continue
+		}
+		if i+2 >= len(v) || !isHexByte(v[i+1]) || !isHexByte(v[i+2]) {
+			return false
+		}
+		i += 2
+	}
+	return schemeOK(v)
+}
+
+// schemeOK checks the scheme of a URI reference, if it has one.
+//
+// A colon before any slash, question mark or hash marks off a scheme, and RFC
+// 2396 requires it to be a letter followed by letters, digits, "+", "-" or ".".
+// A reference with no such colon is relative and has no scheme to check.
+func schemeOK(v string) bool {
+	for i := 0; i < len(v); i++ {
+		switch v[i] {
+		case '/', '?', '#':
+			// A relative reference: everything before here is a
+			// path segment, not a scheme.
+			return true
+		case ':':
+			if i == 0 {
+				// ":a" has an empty scheme.
+				return false
+			}
+			if !isAlphaByte(v[0]) {
+				return false
+			}
+			for j := 1; j < i; j++ {
+				c := v[j]
+				if !isAlphaByte(c) && !(c >= '0' && c <= '9') &&
+					c != '+' && c != '-' && c != '.' {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return true
+}
+
+func isAlphaByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func isHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
