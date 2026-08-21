@@ -564,3 +564,51 @@ func TestInnerBoundIsNotATotal(t *testing.T) {
 		}
 	}
 }
+
+// The integer branch narrows the lexical space, not only the value space:
+// xs:integer has no decimal point at all. fractionDigits="0" alone counts the
+// digits after the point and finds none in "+0.0", so the facet passes a
+// literal the lexical space excludes (integer006).
+func TestIntegerHasNoDecimalPoint(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="xs:integer"/>
+	</xs:schema>`
+	assertValid(t, schema, `<e>0</e>`)
+	assertValid(t, schema, `<e>+42</e>`)
+	assertValid(t, schema, `<e>-7</e>`)
+	for _, bad := range []string{`+0.0`, `1.0`, `0.`, `1e3`} {
+		if err := validateString(t, schema, `<e>`+bad+`</e>`); err == nil {
+			t.Errorf("%q accepted as xs:integer", bad)
+		}
+	}
+	// A type derived from xs:integer inherits the narrower lexical space.
+	const derived = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="t">
+	    <xs:restriction base="xs:int"><xs:maxInclusive value="99"/></xs:restriction>
+	  </xs:simpleType>
+	  <xs:element name="e" type="t"/>
+	</xs:schema>`
+	if err := validateString(t, derived, `<e>1.0</e>`); err == nil {
+		t.Error("a restriction of xs:int accepted a decimal point")
+	}
+}
+
+// Only the seconds field of a duration may carry a fraction: every other field
+// is unsigned integer digits, because a year is not a fixed number of months
+// and the fraction would have nowhere to go (duration011).
+func TestOnlyDurationSecondsAreFractional(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="xs:duration"/>
+	</xs:schema>`
+	assertValid(t, schema, `<e>PT0.5S</e>`)
+	assertValid(t, schema, `<e>P1Y2M3DT4H5M6.75S</e>`)
+	for _, bad := range []string{`P200.5Y`, `P1.5M`, `P1.5D`, `PT1.5H`,
+		`PT1.5M`, `PT.5S`, `PT1.2.3S`} {
+		if err := validateString(t, schema, `<e>`+bad+`</e>`); err == nil {
+			t.Errorf("%q accepted as xs:duration", bad)
+		}
+	}
+}

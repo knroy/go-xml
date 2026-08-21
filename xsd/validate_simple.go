@@ -123,6 +123,15 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	if err := checkLexicalSpace(normalized, prim); err != nil {
 		return "", err
 	}
+	// The integer branch narrows the *lexical* space, not only the value
+	// space: xs:integer has no decimal point at all, so "+0.0" is not an
+	// integer literal even though it denotes zero and has no fraction
+	// digits. fractionDigits="0" alone counts the digits after the point
+	// and finds none, which is why the facet does not catch it
+	// (integer006).
+	if err := checkIntegerLexical(normalized, t); err != nil {
+		return "", err
+	}
 	// The string branch's derived types narrow the lexical space rather
 	// than the value space, and they do it with patterns the spec states
 	// in prose. xs:ID is an xs:NCName, so "87123_" is not one — it starts
@@ -843,6 +852,47 @@ func checkStringSubtype(normalized string, t *SimpleType) error {
 		Code:    "cvc-datatype-valid.1.2.1",
 		Message: "\"" + truncate(normalized) + "\" is not a valid xs:" + name,
 	}
+}
+
+// checkIntegerLexical refuses a decimal point in a value whose type descends
+// from xs:integer.
+//
+// Part 2 gives the integer branch its own lexical space — an optional sign and
+// digits, nothing else — rather than deriving it from xs:decimal's by facet.
+// The fractionDigits="0" that models it constrains the value, and "+0.0" has
+// zero fraction digits, so the facet passes something the lexical space
+// excludes.
+func checkIntegerLexical(normalized string, t *SimpleType) error {
+	if !descendsFromInteger(t) {
+		return nil
+	}
+	if strings.ContainsAny(normalized, ".eE") {
+		return &ParseError{
+			Code: "cvc-datatype-valid.1.2.1",
+			Message: "\"" + truncate(normalized) +
+				"\" is not a valid integer literal",
+		}
+	}
+	return nil
+}
+
+// descendsFromInteger reports whether xs:integer is on the type's base chain.
+func descendsFromInteger(t *SimpleType) bool {
+	seen := 0
+	for cur := t; cur != nil; {
+		if cur.Name.URI == NSSchema && cur.Name.Local == "integer" {
+			return true
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			return false
+		}
+		cur = base
+		if seen++; seen > 64 {
+			return false
+		}
+	}
+	return false
 }
 
 // nearestBuiltinName returns the local name of the nearest ancestor of t that

@@ -620,14 +620,22 @@ func isDurationLexical(v string) bool {
 }
 
 // isDurationFields checks one half of a duration against its designators.
+//
+// Only the seconds field may carry a fraction. Part 2 gives every other field
+// unsigned integer digits, so "P200.5Y" is not a duration however reasonable
+// it looks — the fraction has nowhere to go, since a year is not a fixed
+// number of months (duration011).
 func isDurationFields(v, designators string) bool {
 	if v == "" {
 		return true
 	}
 	pos := 0
 	for len(v) > 0 {
-		n := 0
+		n, dots := 0, 0
 		for n < len(v) && (v[n] >= '0' && v[n] <= '9' || v[n] == '.') {
+			if v[n] == '.' {
+				dots++
+			}
 			n++
 		}
 		if n == 0 || n == len(v) {
@@ -636,6 +644,13 @@ func isDurationFields(v, designators string) bool {
 		d := strings.IndexByte(designators[pos:], v[n])
 		if d < 0 {
 			return false
+		}
+		if dots > 0 {
+			// A fraction is admitted only on seconds, and only one
+			// point, with digits on the left of it.
+			if v[n] != 'S' || dots > 1 || v[0] == '.' {
+				return false
+			}
 		}
 		pos += d + 1
 		v = v[n+1:]
