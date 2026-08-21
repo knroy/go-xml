@@ -283,6 +283,61 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 	return out
 }
 
+// scopeForAlternative returns the context element a type alternative's test is
+// evaluated against.
+//
+// This is deliberately not scopeForAssertion. An assertion runs after the
+// content has been validated and sees it: children, typed values, the lot. A
+// type alternative runs *before* the type is even chosen, so there is no
+// validated content for it to see, and XSD 1.1 gives it a much thinner context
+// — an element with the original's name, attributes and namespaces, and
+// nothing else. The suite states each consequence as a separate test:
+//
+//	cta0017  string() = '' and empty(..) and (. is root())
+//	         — no content, no parent, the element is its own root
+//	cta0022  . instance of element(*, xs:untyped)
+//	         — untyped, because nothing has been validated yet
+//	cta0021  ends-with(base-uri(.), 'cta0021.v01.xml')
+//	         — the base URI is the instance document's, so it is carried over
+//
+// Reusing the assertion scope gave the test the element's children and its
+// PSVI annotation, so string() returned the content and the untyped test
+// failed; every alternative then fell through to the xs:error default.
+func scopeForAlternative(el *xdm.Node) *xdm.Node {
+	tree := xdm.NewTree()
+	clone := &xdm.Node{
+		Kind: el.Kind,
+		Name: el.Name,
+		// The base URI is a property of the element, not of its
+		// content, and survives the copy: cta0021 asks for it.
+		BaseURI: el.BaseURI,
+		// TypeAnnotation is deliberately left zero. Conditional type
+		// assignment chooses the type; it cannot presuppose one.
+	}
+	for _, a := range el.Attrs {
+		// The attributes come across without their annotations for the
+		// same reason the element does.
+		clone.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value})
+	}
+	// Namespace bindings an ancestor declared are still in scope for the
+	// element, and a QName-valued attribute cannot be expanded without
+	// them, so the whole in-scope set is copied onto the clone.
+	for prefix, uri := range inScopeNamespaces(el) {
+		if _, declared := clone.LookupPrefix(prefix); !declared {
+			clone.AddNamespace(prefix, uri)
+		}
+	}
+	tree.Root.AppendChild(clone)
+	tree.Finalize()
+
+	// Detached from the document node for the same reason an assertion's
+	// copy is: the element must be its own root, which is what makes
+	// (. is root()) hold and "//" select nothing.
+	clone.Parent = nil
+	tree.Root.Children = nil
+	return clone
+}
+
 // selectAlternativeType applies conditional type assignment (cvc-type-alt).
 //
 // The alternatives are tried in order and the first whose test holds selects
@@ -294,7 +349,7 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 	if len(decl.Alternatives) == 0 {
 		return decl.Type
 	}
-	scoped := scopeForAssertion(el)
+	scoped := scopeForAlternative(el)
 
 	// An inheritable attribute from an ancestor is visible to the test, but
 	// only where the element does not carry one of the same name: the

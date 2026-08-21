@@ -148,6 +148,41 @@ func TestConditionalTypeAssignment(t *testing.T) {
 	}
 }
 
+// A type alternative's test sees a far thinner element than an assertion does.
+//
+// An assertion runs after the content has been validated and sees it. A type
+// alternative runs *before* the type is chosen, so there is no validated
+// content to see: XSD 1.1 hands the test an element carrying the original's
+// name, attributes and namespaces and nothing else — no children, no parent,
+// no type annotation. The suite states each half separately, and this pins
+// them together because the first implementation reused the assertion scope
+// and so gave the test the element's children and its PSVI annotation.
+func TestAlternativeTestSeesNoContent(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="when" type="xs:string">
+	    <!-- Every conjunct here is a property of the confined copy: no
+	         content, no parent, its own root, and untyped because
+	         nothing has been validated yet. -->
+	    <xs:alternative test="string() = '' and empty(..) and (. is root())
+	                          and (. instance of element(*, xs:untyped))"
+	                    type="xs:date"/>
+	    <xs:alternative type="xs:error"/>
+	  </xs:element>
+	</xs:schema>`)
+
+	// The alternative fired, so the element is an xs:date and a date is
+	// admitted. Had the test seen the content, string() would have been
+	// "2010-10-16" and the fallback xs:error would reject everything.
+	if err := check11(t, s, `<when>2010-10-16</when>`); err != nil {
+		t.Errorf("the alternative should have selected xs:date: %v", err)
+	}
+	// The same alternative fired here too, and xs:date rejects the value.
+	if err := check11(t, s, `<when>not-a-date</when>`); err == nil {
+		t.Error("xs:date should reject a value that is not a date")
+	}
+}
+
 // TestOpenContent covers <xs:openContent>, which lets a schema accept elements
 // its content model does not name — the mechanism that makes a schema
 // forward-compatible with documents produced against a later version of it.
