@@ -778,3 +778,49 @@ func formQualified(el *xdm.Node, byDefault bool) bool {
 	}
 	return byDefault
 }
+
+// checkValueConstraint enforces a-props-correct.2 and .3 (XSD 1.0 §3.2.6,
+// XSD 1.1 §3.2.6): a default or fixed value must be valid against the type it
+// is declared with, and a type derived from xs:ID may carry no value
+// constraint at all.
+//
+// The check is queued as a fixup because the type is often a forward
+// reference — <xs:attribute type="t"/> may precede the definition of t, and
+// an inline simple type is not finished until its own base resolves. Reading
+// the type slot at parse time would see nil for exactly the declarations the
+// check most needs to look at.
+func (p *parser) checkValueConstraint(el *xdm.Node, vc *ValueConstraint, typ func() *SimpleType) {
+	if vc == nil {
+		return
+	}
+	p.fixups = append(p.fixups, func() error {
+		t := typ()
+		if t == nil {
+			// The type never resolved. Whatever went wrong has
+			// already been reported where the reference was made,
+			// and validating against a missing type would only
+			// repeat it in less useful words.
+			return nil
+		}
+		// A declaration whose type is or descends from xs:ID may not
+		// fix or default the value: an ID must be unique across the
+		// document, so a value supplied by the schema would collide
+		// with itself on the second element that used it.
+		if nearestBuiltinName(t) == "ID" {
+			return errorAt(el, "a-props-correct.3",
+				"a declaration whose type is derived from xs:ID "+
+					"may not have a default or fixed value")
+		}
+		if _, err := validateSimpleValueVersion(
+			vc.Lexical, t, p.schema.Version); err != nil {
+			what := "default"
+			if vc.Fixed {
+				what = "fixed"
+			}
+			return errorAt(el, "a-props-correct.2",
+				"%s=%q is not valid for the declared type: %v",
+				what, vc.Lexical, err)
+		}
+		return nil
+	})
+}

@@ -535,3 +535,113 @@ func TestUnresolvedDefaultAttributesIsAnErrorNotACrash(t *testing.T) {
 		}
 	}
 }
+
+// TestSourceModelRejectsBadShape covers the schema for schemas itself: the
+// readers pick out the children they need by name, so before this check a
+// document could carry two <simpleContent> children, or an <annotation> after
+// the content model, and still load. Each case below is drawn from the
+// msData complexType, attribute and element suites.
+func TestSourceModelRejectsBadShape(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"two annotations", `
+		  <xs:complexType name="t">
+		    <xs:annotation><xs:documentation>a</xs:documentation></xs:annotation>
+		    <xs:annotation><xs:documentation>b</xs:documentation></xs:annotation>
+		  </xs:complexType>`},
+		{"annotation after content", `
+		  <xs:complexType name="t">
+		    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+		    <xs:annotation><xs:documentation>a</xs:documentation></xs:annotation>
+		  </xs:complexType>`},
+		{"two simpleContent", `
+		  <xs:complexType name="t">
+		    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+		    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+		  </xs:complexType>`},
+		{"simpleContent and complexContent", `
+		  <xs:complexType name="t">
+		    <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+		    <xs:complexContent><xs:restriction base="xs:anyType"/></xs:complexContent>
+		  </xs:complexType>`},
+		{"two particles in an extension", `
+		  <xs:group name="g"><xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence></xs:group>
+		  <xs:complexType name="b"><xs:sequence/></xs:complexType>
+		  <xs:complexType name="t">
+		    <xs:complexContent>
+		      <xs:extension base="b">
+		        <xs:group ref="g"/>
+		        <xs:all><xs:element name="x" type="xs:string"/></xs:all>
+		      </xs:extension>
+		    </xs:complexContent>
+		  </xs:complexType>`},
+		{"annotation after a particle in a restriction", `
+		  <xs:group name="g"><xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence></xs:group>
+		  <xs:complexType name="b"><xs:sequence><xs:any/></xs:sequence></xs:complexType>
+		  <xs:complexType name="t">
+		    <xs:complexContent>
+		      <xs:restriction base="b">
+		        <xs:group ref="g"/>
+		        <xs:annotation><xs:documentation>a</xs:documentation></xs:annotation>
+		      </xs:restriction>
+		    </xs:complexContent>
+		  </xs:complexType>`},
+		{"attribute with two simpleTypes", `
+		  <xs:attribute name="a">
+		    <xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType>
+		    <xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType>
+		  </xs:attribute>`},
+		{"element with both simpleType and complexType", `
+		  <xs:element name="e">
+		    <xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType>
+		    <xs:complexType><xs:sequence/></xs:complexType>
+		  </xs:element>`},
+		{"unique without a selector", `
+		  <xs:element name="e">
+		    <xs:complexType><xs:sequence/></xs:complexType>
+		    <xs:unique name="u"><xs:field xpath="@a"/></xs:unique>
+		  </xs:element>`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := parseSchemaString(t, `
+			<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`+
+				c.src+`</xs:schema>`)
+			if err == nil {
+				t.Error("this schema breaks the schema for schemas, " +
+					"so loading it should have failed")
+			}
+		})
+	}
+}
+
+// TestSourceModelAcceptsRefForms covers the shapes the check must not reject:
+// a <group>, <attributeGroup> or identity constraint written as a reference
+// carries no children of its own beyond an annotation. Requiring a selector
+// on every <unique> rejected the saxonData Id id040 and id043 schemas.
+func TestSourceModelAcceptsRefForms(t *testing.T) {
+	mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           targetNamespace="urn:t" xmlns:t="urn:t">
+	  <xs:element name="outer">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="inner">
+	          <xs:complexType><xs:sequence/></xs:complexType>
+	          <xs:unique name="u">
+	            <xs:selector xpath="."/>
+	            <xs:field xpath="@a"/>
+	          </xs:unique>
+	        </xs:element>
+	        <xs:element name="other">
+	          <xs:complexType><xs:sequence/></xs:complexType>
+	          <xs:unique ref="t:u"/>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+}

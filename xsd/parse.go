@@ -386,6 +386,18 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 			el.Name.URI, el.Name.Local))
 		return
 	}
+
+	// The readers below pick out the children they need by name and ignore
+	// whatever else they find, which is what lets one reader serve several
+	// element shapes — but it also means a document that breaks the schema
+	// for schemas loads without complaint. Checking the subtree's shape
+	// first turns a second <simpleContent>, or an <annotation> after the
+	// content model, into the fault it is rather than a silently discarded
+	// element. This is the one place every path into the readers passes
+	// through: the assembler reaches the top level here too, for included
+	// documents and for the replacements inside <redefine> and <override>.
+	p.checkSourceModel(el)
+
 	switch el.Name.Local {
 	case "annotation":
 		// Annotations carry documentation and application information.
