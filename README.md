@@ -22,7 +22,7 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 99.81% of the W3C QT3 suite (14,692 of 14,720 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.09% of the W3C xsdtests suite (24,250 of 24,473 instance tests) |
-| **XSD 1.1** | 99.53% of the suite's 1.1 instance tests (1,053 of 1,058); opt-in via `Version11` |
+| **XSD 1.1** | 99.72% of the suite's 1.1 instance tests (1,055 of 1,058); opt-in via `Version11` |
 | **Tests** | 493, clean under `-race` (485 from a fresh clone; the rest need the corpora below) |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -633,15 +633,14 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2a. Where the XSD suite still disagrees
 
-**223 of 24,473 XSD 1.0 instance tests (0.91%) and 5 of 1,058 XSD 1.1 tests
-(0.47%).** Every 1.1 disagreement is now a document *accepted* that the suite
+**223 of 24,473 XSD 1.0 instance tests (0.91%) and 3 of 1,058 XSD 1.1 tests
+(0.28%).** Every 1.1 disagreement is now a document *accepted* that the suite
 expects refused; there are no false rejects left in that half of the suite.
 
-The five remaining 1.1 cases:
+The three remaining 1.1 cases:
 
 | cases | what it is |
 |---:|---|
-| 2 | an assertion's `//` reaching further than the confined subtree the spec allows |
 | 2 | an ID that denotes no element, where the value comes from the element's own content |
 | 1 | a defaulted `xs:ENTITY` naming no declared unparsed entity — this parser refuses a `DOCTYPE` by default, so it records none to check against |
 

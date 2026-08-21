@@ -168,10 +168,21 @@ func (v *validator) checkAssertions(el *xdm.Node, t *ComplexType) {
 	for _, a := range t.Assertions {
 		ctx := newAssertContext(scoped)
 		ctx.Vars = map[string]xdm.Sequence{"value": value}
+		// An error during evaluation is a false result, not a separate
+		// kind of outcome: XSD 1.1 says so, and the suite makes a
+		// category of it ("errors in XPath evaluation are treated as a
+		// false result"). The distinction matters because an assertion
+		// context has no document node, so a leading "/" raises
+		// XPDY0050 — and a schema writing count(//x) eq 0 is relying on
+		// that path selecting nothing.
+		//
+		// The error text is still reported, since a schema author
+		// reading "not satisfied" wants to know the reason was a type
+		// error rather than a value that failed the test.
 		ok, err := a.Test.EvalBool(ctx)
 		if err != nil {
-			v.fail(el, "cvc-assertion.2",
-				"assertion %q could not be evaluated: %v", a.Source, err)
+			v.fail(el, "cvc-assertion.3",
+				"assertion %q is not satisfied: %v", a.Source, err)
 			continue
 		}
 		if !ok {
@@ -223,6 +234,20 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 	}
 	tree.Root.AppendChild(clone)
 	tree.Finalize()
+
+	// The element is then detached from the document node it was finalised
+	// under. XSD 1.1 gives an assertion a context with *no* document node
+	// (§3.13.4.2), which is what makes "//" return the empty sequence
+	// there: it abbreviates a path from fn:root, and a parentless element
+	// is its own root with nothing above it for the leading "/" to select.
+	// The suite states the consequence directly — "'//' returns empty
+	// sequence" — and pairs it with an assertion that holds only if it does
+	// not.
+	//
+	// Detaching after finalising keeps the document order the tree assigned,
+	// which the clone still needs for any positional predicate.
+	clone.Parent = nil
+	tree.Root.Children = nil
 	return clone
 }
 

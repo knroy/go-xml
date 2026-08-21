@@ -3122,3 +3122,61 @@ func TestDocumentDefaultsDoNotReachOverrides(t *testing.T) {
 		t.Error("an override's type should not take the default attributes")
 	}
 }
+
+// TestAssertionHasNoDocumentNode covers the context XSD 1.1 gives an
+// assertion: the element being validated, with no document node above it
+// (§3.13.4.2).
+//
+// That is what makes "//" return the empty sequence inside one. It abbreviates
+// a path from fn:root, and a parentless element is its own root with nothing
+// above it for the leading "/" to select. The suite states the consequence
+// directly — "'//' returns empty sequence" — and pairs it with an assertion
+// that holds only if it does not.
+func TestAssertionHasNoDocumentNode(t *testing.T) {
+	schema := func(test string) string {
+		return `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="root" type="rootType"/>
+		  <xs:complexType name="rootType">
+		    <xs:sequence>
+		      <xs:element name="ele1" type="elementType1" minOccurs="0"
+		                  maxOccurs="unbounded"/>
+		      <xs:element name="ele2" type="elementType2" minOccurs="0"
+		                  maxOccurs="unbounded"/>
+		    </xs:sequence>
+		  </xs:complexType>
+		  <xs:complexType name="elementType1">
+		    <xs:sequence>
+		      <xs:element name="subElement1" type="rootType" minOccurs="0"
+		                  maxOccurs="unbounded"/>
+		    </xs:sequence>
+		    <xs:attribute name="attr1" type="xs:string"/>
+		  </xs:complexType>
+		  <xs:complexType name="elementType2">
+		    <xs:sequence>
+		      <xs:element name="subElement2" type="rootType" minOccurs="0"
+		                  maxOccurs="unbounded"/>
+		    </xs:sequence>
+		    <xs:assert test="` + test + `"/>
+		  </xs:complexType>
+		</xs:schema>`
+	}
+	const doc = `<root><ele1 attr1="1"><subElement1><ele2>` +
+		`<subElement2><ele1 attr1="2"/></subElement2>` +
+		`</ele2></subElement1></ele1></root>`
+
+	// The subtree below ele2 holds one @attr1, but // does not reach it:
+	// with no document node the leading "/" has nothing to select, so the
+	// path raises XPDY0050 — which XSD 1.1 treats as a false result.
+	if err := check11(t, load11(t, schema("count(//@attr1) eq 1")), doc); err == nil {
+		t.Error("// should not reach the subtree in an assertion")
+	}
+	// The relative form does reach it, which is the distinction.
+	if err := check11(t, load11(t, schema(".//@attr1 = '2'")), doc); err != nil {
+		t.Errorf(".// should still reach the subtree: %v", err)
+	}
+	// And it reaches only the subtree: attr1="1" is on an ancestor.
+	if err := check11(t, load11(t, schema("count(.//@attr1) eq 1")), doc); err != nil {
+		t.Errorf(".// should not reach outside the subtree: %v", err)
+	}
+}
