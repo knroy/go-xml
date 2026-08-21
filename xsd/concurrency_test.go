@@ -1,0 +1,300 @@
+package xsd
+
+import (
+	"sync"
+	"testing"
+
+	"github.com/knroy/go-xml/xdm"
+)
+
+// A Schema is documented as safe to share once loaded, and the content-model
+// cache is a sync.Map on the strength of that. This exercises the claim under
+// -race: many goroutines validating against one Schema, including types whose
+// models are compiled lazily on first use, so the cache is written and read
+// concurrently rather than only read.
+func TestSchemaSharedAcrossGoroutines(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a" type="xs:int" maxOccurs="unbounded"/>
+	        <xs:element name="b" minOccurs="0">
+	          <xs:complexType>
+	            <xs:choice maxOccurs="unbounded">
+	              <xs:element name="x" type="xs:string"/>
+	              <xs:element name="y" type="xs:date"/>
+	            </xs:choice>
+	          </xs:complexType>
+	        </xs:element>
+	      </xs:sequence>
+	      <xs:attribute name="id" type="xs:ID"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	s, err := parseSchemaString(t, src)
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	docs := []struct {
+		xml   string
+		valid bool
+	}{
+		{`<root id="i1"><a>1</a><a>2</a></root>`, true},
+		{`<root><a>1</a><b><x>s</x><y>2020-01-01</y></b></root>`, true},
+		{`<root><a>notanint</a></root>`, false},
+		{`<root><b/></root>`, false}, // "a" is required
+		{`<root><a>3</a><b><y>2020-13-01</y></b></root>`, false},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := docs[i%len(docs)]
+			tree, err := xdm.ParseString(c.xml, xdm.ParseOptions{})
+			if err != nil {
+				t.Errorf("parse %q: %v", c.xml, err)
+				return
+			}
+			err = s.Validate(tree.Root, ValidateOptions{})
+			if c.valid && err != nil {
+				t.Errorf("%q: unexpected error: %v", c.xml, err)
+			}
+			if !c.valid && err == nil {
+				t.Errorf("%q: expected an error", c.xml)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// The harder case: every goroutine reaches a *cold* schema at once, so the
+// content-model cache is written by competing goroutines rather than read from
+// a warm one. A schema validated once before being shared would never exercise
+// that path.
+func TestSchemaColdStartUnderConcurrency(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a" maxOccurs="unbounded">
+	          <xs:complexType>
+	            <xs:sequence>
+	              <xs:element name="deep" type="xs:string" maxOccurs="unbounded"/>
+	            </xs:sequence>
+	          </xs:complexType>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	for round := 0; round < 20; round++ {
+		s, err := parseSchemaString(t, src)
+		if err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start // release them together, onto a cold cache
+				tree, err := xdm.ParseString(
+					`<root><a><deep>x</deep><deep>y</deep></a></root>`,
+					xdm.ParseOptions{})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := s.Validate(tree.Root, ValidateOptions{}); err != nil {
+					t.Errorf("valid document rejected: %v", err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+	}
+}
+
+// Identity constraints and ID/IDREF accumulate state across a whole document —
+// key tables, the set of IDs seen, unresolved references. If any of that were
+// held on the Schema rather than per-validation, two documents validated at
+// once would see each other's identifiers: the first would poison the second
+// with a duplicate-ID error for an ID it never contained.
+func TestIdentityStateIsPerValidation(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="item" maxOccurs="unbounded">
+	          <xs:complexType>
+	            <xs:attribute name="id" type="xs:ID" use="required"/>
+	            <xs:attribute name="ref" type="xs:IDREF"/>
+	          </xs:complexType>
+	        </xs:element>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:key name="k">
+	      <xs:selector xpath="item"/>
+	      <xs:field xpath="@id"/>
+	    </xs:key>
+	  </xs:element>
+	</xs:schema>`
+
+	s, err := parseSchemaString(t, src)
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	// Every goroutine uses the *same* identifiers. Shared state shows up as
+	// a spurious duplicate-ID or duplicate-key failure.
+	const doc = `<root><item id="a" ref="b"/><item id="b"/></root>`
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := s.Validate(tree.Root, ValidateOptions{}); err != nil {
+				t.Errorf("identity state leaked between validations: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
+// XSD 1.1 assertions evaluate XPath, which reaches the compiled-expression and
+// regex caches shared across the process. They also annotate a subtree with
+// type information before evaluating, which is the kind of thing that would be
+// unsafe if it wrote back into the shared schema.
+func TestAssertionsUnderConcurrency(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="lo" type="xs:int"/>
+	        <xs:element name="hi" type="xs:int"/>
+	      </xs:sequence>
+	      <xs:assert test="xs:int(lo) le xs:int(hi)"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	s := load11(t, src)
+
+	cases := []struct {
+		doc   string
+		valid bool
+	}{
+		{`<root><lo>1</lo><hi>2</hi></root>`, true},
+		{`<root><lo>5</lo><hi>5</hi></root>`, true},
+		{`<root><lo>9</lo><hi>2</hi></root>`, false},
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := cases[i%len(cases)]
+			<-start
+			tree, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			err = s.Validate(tree.Root, ValidateOptions{})
+			if c.valid && err != nil {
+				t.Errorf("%q: unexpected error: %v", c.doc, err)
+			}
+			if !c.valid && err == nil {
+				t.Errorf("%q: expected the assertion to fail", c.doc)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+}
+
+// Loading is the other half of the claim. Several goroutines building separate
+// schemas at once share the built-in tables, which are behind a sync.Once, and
+// each writes its own component maps — so this catches a built-in table being
+// mutated by a schema that declares over it, as the XML namespace's attributes
+// may be.
+func TestConcurrentSchemaLoading(t *testing.T) {
+	srcs := []string{
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		   <xs:element name="a" type="xs:string"/>
+		 </xs:schema>`,
+		// Declares the XML namespace's own attributes, which are
+		// otherwise supplied as built-ins.
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		            targetNamespace="http://www.w3.org/XML/1998/namespace">
+		   <xs:attribute name="lang" type="xs:string"/>
+		   <xs:attribute name="base" type="xs:string"/>
+		 </xs:schema>`,
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		   <xs:simpleType name="t">
+		     <xs:restriction base="xs:int"><xs:maxInclusive value="9"/></xs:restriction>
+		   </xs:simpleType>
+		   <xs:element name="b" type="t"/>
+		 </xs:schema>`,
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			src := srcs[i%len(srcs)]
+			<-start
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := Load(tree.Root, "s.xsd", Options{}); err != nil {
+				t.Errorf("concurrent load failed: %v", err)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	// A schema loaded afterwards must still see the built-in declarations
+	// unchanged — the one that declared over them must not have written
+	// into the shared table.
+	s, err := parseSchemaString(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="xs:string"/>
+	</xs:schema>`)
+	if err != nil {
+		t.Fatalf("later load: %v", err)
+	}
+	d, ok := s.Attributes[xdm.QName{URI: NSXML, Local: "lang"}]
+	if !ok {
+		t.Fatal("the built-in xml:lang went missing")
+	}
+	if d.Type == nil || d.Type.TypeName().Local != "language" {
+		t.Errorf("built-in xml:lang was overwritten: %v", d.Type)
+	}
+}

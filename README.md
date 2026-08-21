@@ -345,6 +345,17 @@ The concurrency tests had covered key indexes, `xsl:message` and the regex cache
 — everything that looked like shared state — and missed this because it did not
 look like state at all.
 
+A loaded `xsd.Schema` is the same kind of value: immutable once assembled, safe
+to validate from many goroutines. Its one piece of lazily-built state, the
+content-model cache, is a `sync.Map` for that reason. The tests exercise the
+claim under `-race` rather than asserting it — validating cold schemas from
+sixteen goroutines released together, so the cache is written under contention
+rather than read from a warm one, and validating documents that carry the same
+`xs:ID` values concurrently, since identity and ID/IDREF tables are the state
+most likely to have been hung off the schema by mistake. Loading is covered
+too, including a schema that declares over the built-in XML-namespace
+attributes while others load beside it.
+
 Per-transform state lives on a runtime struct that is copied on every focus
 change. Anything that must survive those copies — `xsl:message` output,
 `xsl:result-document` results — is held through a pointer, and there are tests
