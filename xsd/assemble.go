@@ -633,7 +633,18 @@ func substitutionBlockedBy(head, member *ElementDecl) bool {
 	if ct, ok := head.Type.(*ComplexType); ok {
 		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
 	}
-	if blocked == 0 || member.Type == nil || head.Type == nil {
+	if blocked == 0 {
+		return false
+	}
+	// block="substitution" blocks substitution itself, whatever the types
+	// do. It is not a derivation method, so it never appears on the chain
+	// walked below — particlesDc004 has an abstract head with
+	// block="substitution" and members of the same (absent) type, where
+	// there is no chain to walk at all.
+	if blocked.Has(DerivationSubstitution) {
+		return true
+	}
+	if member.Type == nil || head.Type == nil {
 		return false
 	}
 	if member.Type == head.Type {
