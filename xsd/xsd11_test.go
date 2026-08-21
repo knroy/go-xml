@@ -1093,3 +1093,141 @@ func TestValueBoundInComplexAssertion(t *testing.T) {
 		t.Error("the $value assertion should fail for 3")
 	}
 }
+
+// TestOpenContentExtensionUnions covers §3.4.2.3.3 clause 3: an extension's
+// open content is the union of the base's and its own, not a replacement.
+//
+// An extension may only widen what its base accepts. A derived openContent that
+// replaced the base's would let an extension close content the base had opened,
+// which is a restriction wearing an extension's spelling.
+func TestOpenContentExtensionUnions(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="B">
+	    <xs:openContent mode="interleave">
+	      <xs:any namespace="urn:one" processContents="skip"/>
+	    </xs:openContent>
+	    <xs:sequence>
+	      <xs:element name="a"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="R">
+	    <xs:complexContent>
+	      <xs:extension base="B">
+	        <xs:openContent mode="interleave">
+	          <xs:any namespace="urn:two" processContents="skip"/>
+	        </xs:openContent>
+	        <xs:sequence/>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="R"/>
+	</xs:schema>`)
+
+	// The base's namespace is still open, which is the part a replacement
+	// would have lost.
+	if err := check11(t, s, `<doc><a/><x xmlns="urn:one"/></doc>`); err != nil {
+		t.Errorf("the base's open content should survive extension: %v", err)
+	}
+	if err := check11(t, s, `<doc><a/><x xmlns="urn:two"/></doc>`); err != nil {
+		t.Errorf("the extension's open content should apply: %v", err)
+	}
+	if err := check11(t, s, `<doc><a/><x xmlns="urn:three"/></doc>`); err == nil {
+		t.Error("a namespace neither wildcard admits should still be refused")
+	}
+}
+
+// TestOpenContentNoneKeepsBase pins that mode="none" on an extension leaves the
+// base's open content in force.
+//
+// It says the type declares none of its own, not that the base's is revoked —
+// an extension cannot take away what its base allowed.
+func TestOpenContentNoneKeepsBase(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="B">
+	    <xs:openContent mode="interleave">
+	      <xs:any namespace="urn:one" processContents="skip"/>
+	    </xs:openContent>
+	    <xs:sequence>
+	      <xs:element name="a"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="R">
+	    <xs:complexContent>
+	      <xs:extension base="B">
+	        <xs:openContent mode="none"/>
+	        <xs:sequence/>
+	      </xs:extension>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="R"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><a/><x xmlns="urn:one"/></doc>`); err != nil {
+		t.Errorf("mode=none should not revoke the base's open content: %v", err)
+	}
+}
+
+// TestOpenContentSuffixIsASuffix pins that suffix mode means the wildcard runs
+// to the end of the content, not merely that the model could have stopped.
+//
+// Admitting a model element after the suffix has begun makes suffix mean
+// interleave with extra steps, which is the distinction the mode exists for.
+func TestOpenContentSuffixIsASuffix(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:openContent mode="suffix">
+	        <xs:any namespace="urn:o" processContents="skip"/>
+	      </xs:openContent>
+	      <xs:sequence>
+	        <xs:element name="a"/>
+	        <xs:element name="b" minOccurs="0"/>
+	        <xs:element name="c" minOccurs="0"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><a/><b/><c/><x xmlns="urn:o"/></doc>`); err != nil {
+		t.Errorf("a genuine suffix should be admitted: %v", err)
+	}
+	// The model may end after b, but c follows the wildcard, so this is not
+	// a suffix.
+	if err := check11(t, s, `<doc><a/><b/><x xmlns="urn:o"/><c/></doc>`); err == nil {
+		t.Error("a model element after the suffix should be refused")
+	}
+}
+
+// TestDefaultOpenContentAppliesToEmpty covers appliesToEmpty="false" against a
+// type whose content model matches only the empty sequence.
+//
+// The attribute asks about the content, not how it was spelled: <xs:sequence/>
+// is an element-only type admitting nothing but the empty sequence, and testing
+// only for the empty content kind misses it — the default open content then
+// opens a type the schema said to leave closed.
+func TestDefaultOpenContentAppliesToEmpty(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:defaultOpenContent mode="interleave" appliesToEmpty="false">
+	    <xs:any namespace="urn:o" processContents="skip"/>
+	  </xs:defaultOpenContent>
+	  <xs:element name="empty">
+	    <xs:complexType><xs:sequence/></xs:complexType>
+	  </xs:element>
+	  <xs:element name="nonEmpty">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="a"/></xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<empty><x xmlns="urn:o"/></empty>`); err == nil {
+		t.Error("appliesToEmpty=false should leave an empty model closed")
+	}
+	if err := check11(t, s, `<nonEmpty><a/><x xmlns="urn:o"/></nonEmpty>`); err != nil {
+		t.Errorf("a non-empty model should still be opened: %v", err)
+	}
+}

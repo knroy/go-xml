@@ -517,11 +517,20 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 	var prev *position
 	prevIdx := -1
 
+	// inSuffix latches once a suffix-mode wildcard has matched. From then
+	// on the content model is over: an element it names appearing after the
+	// suffix has begun is not a suffix at all, and admitting it would make
+	// suffix mean interleave with extra steps.
+	inSuffix := false
+
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		next := -1
 		for _, idx := range current {
 			p := m.positions[idx]
+			if inSuffix {
+				break
+			}
 			if !p.matches(name, v.elementDefined) {
 				continue
 			}
@@ -547,6 +556,9 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				prevIdx >= 0 && contains(m.last, prevIdx)
 			if oc := v.openContentFor(t); oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) &&
 				(oc.Mode == OpenInterleave || satisfied) {
+				if oc.Mode == OpenSuffix {
+					inSuffix = true
+				}
 				if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 					tables = append(tables, tbl)
 				}

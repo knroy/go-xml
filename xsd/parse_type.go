@@ -621,13 +621,15 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 		if t.AttributeWildcard == nil {
 			t.AttributeWildcard = base.AttributeWildcard
 		}
-		// XSD 1.1 open content is inherited the same way: a type
-		// extending one with open content is open too, unless it
-		// declares its own. Without this a derived type silently closed
-		// a content model its base had opened.
-		if !t.declaredOpenContent && t.OpenContent == nil {
-			t.OpenContent = base.OpenContent
-		}
+		// XSD 1.1 open content is inherited, but for an extension it is
+		// combined rather than replaced (§3.4.2.3.3 clause 3): the
+		// result admits what either the base or the extension admits.
+		// An extension may only widen what its base accepts, so a
+		// derived openContent that replaced the base's would let an
+		// extension close content the base had opened — which is a
+		// restriction wearing an extension's spelling.
+		t.OpenContent = combineOpenContent(base.OpenContent, t.OpenContent,
+			t.DerivationMethod, t.declaredOpenContent)
 		return nil
 	})
 }
@@ -715,7 +717,7 @@ func (p *parser) applyDefaultOpenContent(t *ComplexType) {
 	if t.declaredOpenContent || p.doc.defaultOpenContent == nil {
 		return
 	}
-	if t.Content == ContentEmpty && !p.doc.appliesToEmpty {
+	if !p.doc.appliesToEmpty && isEmptyContent(t) {
 		return
 	}
 	if t.Content == ContentSimple {
@@ -786,4 +788,195 @@ func optionalIf(optional bool, ps []*Particle) []*Particle {
 		out[i] = &c
 	}
 	return out
+}
+
+// combineOpenContent merges a base type's open content with a derived type's.
+//
+// For a restriction the derived declaration stands alone: a restriction may
+// narrow what it accepts, so replacing is right and declaring none closes the
+// content. For an extension the two are unioned, because an extension may only
+// widen — the base's wildcard keeps admitting what it always did, and the
+// extension's adds to it.
+//
+// mode="none" on an extension is the one case that does not union: it is how a
+// type says it declares no open content of its own, so what remains is the
+// base's alone rather than nothing.
+func combineOpenContent(base, own *OpenContent, method Derivation, declared bool) *OpenContent {
+	if method != DerivationExtension {
+		if !declared && own == nil {
+			return base
+		}
+		return own
+	}
+	if base == nil || base.Wildcard == nil {
+		return own
+	}
+	if own == nil || own.Wildcard == nil {
+		// Either nothing was declared, or mode="none" was: both leave
+		// the base's open content in force.
+		return base
+	}
+	return &OpenContent{
+		// interleave is the weaker constraint — it admits the wildcard
+		// anywhere rather than only after the model is satisfied — so a
+		// union that either side allows anywhere allows anywhere.
+		Mode:     combineOpenMode(base.Mode, own.Mode),
+		Wildcard: unionWildcards(base.Wildcard, own.Wildcard),
+	}
+}
+
+func combineOpenMode(a, b OpenContentMode) OpenContentMode {
+	if a == OpenInterleave || b == OpenInterleave {
+		return OpenInterleave
+	}
+	return OpenSuffix
+}
+
+// unionWildcards combines two wildcards into one admitting what either admits
+// (§3.10.6 "Attribute Wildcard Union").
+//
+// The spec allows a union to be inexpressible as a single namespace
+// constraint — two disjoint negations, for instance, whose union is everything
+// — and where that happens this returns the wider ##any rather than failing.
+// A union that admitted less than either operand would reject documents the
+// base type accepted, which for an extension is the one thing that must not
+// happen.
+func unionWildcards(a, b *Wildcard) *Wildcard {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+
+	// processContents takes the weaker of the two: the union admits names
+	// neither operand alone did, and checking them strictly because one
+	// side happened to be strict would reject what the union permits.
+	pc := a.ProcessContents
+	if b.ProcessContents > pc {
+		pc = b.ProcessContents
+	}
+
+	out := &Wildcard{ProcessContents: pc}
+
+	// A name is disallowed by the union only if both operands disallow it:
+	// either one admitting it is enough.
+	out.DisallowedNames = intersectNames(a, b)
+	out.DisallowDefined = a.DisallowDefined && b.DisallowDefined
+	out.DisallowDefinedSibling = a.DisallowDefinedSibling && b.DisallowDefinedSibling
+
+	switch {
+	case a.Kind == NSAny || b.Kind == NSAny:
+		out.Kind = NSAny
+		return out
+
+	case a.Kind == NSEnumerated && b.Kind == NSEnumerated:
+		out.Kind = NSEnumerated
+		seen := map[string]bool{}
+		for _, ns := range append(append([]string{}, a.Namespace...), b.Namespace...) {
+			if !seen[ns] {
+				seen[ns] = true
+				out.Namespace = append(out.Namespace, ns)
+			}
+		}
+		return out
+
+	case a.Kind == NSNot && b.Kind == NSNot:
+		// The union of two negations excludes only what both exclude.
+		out.Kind = NSNot
+		out.ExcludesAbsent = a.ExcludesAbsent && b.ExcludesAbsent
+		for _, ns := range a.Namespace {
+			if !b.Allows(ns) {
+				out.Namespace = append(out.Namespace, ns)
+			}
+		}
+		return out
+	}
+
+	// One negation and one enumeration: the negation loses whatever the
+	// enumeration lists, since those are now admitted by the other side.
+	not, enum := a, b
+	if b.Kind == NSNot {
+		not, enum = b, a
+	}
+	out.Kind = NSNot
+	out.ExcludesAbsent = not.ExcludesAbsent
+	listed := map[string]bool{}
+	for _, ns := range enum.Namespace {
+		listed[ns] = true
+		if ns == "" {
+			out.ExcludesAbsent = false
+		}
+	}
+	for _, ns := range not.Namespace {
+		if !listed[ns] {
+			out.Namespace = append(out.Namespace, ns)
+		}
+	}
+	return out
+}
+
+// intersectNames returns the disallowed names both wildcards refuse.
+func intersectNames(a, b *Wildcard) []xdm.QName {
+	if len(a.DisallowedNames) == 0 || len(b.DisallowedNames) == 0 {
+		return nil
+	}
+	inB := make(map[xdm.QName]bool, len(b.DisallowedNames))
+	for _, n := range b.DisallowedNames {
+		inB[n] = true
+	}
+	var out []xdm.QName
+	for _, n := range a.DisallowedNames {
+		if inB[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// isEmptyContent reports whether a type's content model admits nothing but the
+// empty sequence.
+//
+// appliesToEmpty asks about the content, not about how it was spelled:
+// <xs:sequence/> is an element-only type whose particle matches only the empty
+// sequence, and it is empty content in every sense that matters here. Testing
+// only for ContentEmpty misses it, and the default open content then opens a
+// type the schema said to leave closed.
+func isEmptyContent(t *ComplexType) bool {
+	if t.Content == ContentEmpty {
+		return true
+	}
+	if t.Content != ContentElementOnly {
+		return false
+	}
+	return particleMatchesOnlyEmpty(t.Particle, 0)
+}
+
+// particleMatchesOnlyEmpty reports whether a particle admits nothing but the
+// empty sequence.
+//
+// The depth bound guards a model group that reaches itself, which is legal to
+// write; the content-model compiler reports it, but this runs first.
+func particleMatchesOnlyEmpty(p *Particle, depth int) bool {
+	if p == nil {
+		return true
+	}
+	if depth > 32 {
+		return false
+	}
+	if p.MaxOccurs == 0 {
+		return true
+	}
+	g, ok := p.Term.(*ModelGroup)
+	if !ok {
+		// An element or wildcard particle admits something unless it
+		// cannot occur at all.
+		return false
+	}
+	for _, child := range g.Particles {
+		if !particleMatchesOnlyEmpty(child, depth+1) {
+			return false
+		}
+	}
+	return true
 }
