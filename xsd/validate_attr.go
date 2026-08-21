@@ -158,7 +158,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	if decl == nil || decl.Type == nil {
 		return
 	}
-	normalized, err := validateSimpleValue(a.Value, decl.Type)
+	normalized, err := validateSimpleValueVersion(a.Value, decl.Type, v.schema.Version)
 	if err != nil {
 		v.fail(a, "cvc-attribute.3",
 			"attribute %s: %v", attrName(decl.Name), err)
@@ -248,11 +248,15 @@ func (v *validator) checkNoForeignAttributes(el *xdm.Node, uses []*AttributeUse,
 // that a value accepted here is one the XPath layer would produce the same
 // value for. Writing a second set would be a way for the two to disagree.
 func checkLexicalSpace(value, primitive string) error {
+	return checkLexicalSpaceVersion(value, primitive, Version10)
+}
+
+func checkLexicalSpaceVersion(value, primitive string, version Version) error {
 	if primitive == "" {
 		// xs:anySimpleType, whose lexical space is unconstrained.
 		return nil
 	}
-	if ok := lexicalOK(value, primitive); !ok {
+	if ok := lexicalOKVersion(value, primitive, version); !ok {
 		return &ParseError{
 			Code:    "cvc-datatype-valid.1.2.1",
 			Message: "\"" + truncate(value) + "\" is not a valid xs:" + primitive,
@@ -263,6 +267,10 @@ func checkLexicalSpace(value, primitive string) error {
 
 // lexicalOK dispatches to the per-primitive lexical check.
 func lexicalOK(v, primitive string) bool {
+	return lexicalOKVersion(v, primitive, Version10)
+}
+
+func lexicalOKVersion(v, primitive string, version Version) bool {
 	switch primitive {
 	case "string":
 		return true
@@ -271,7 +279,7 @@ func lexicalOK(v, primitive string) bool {
 	case "decimal":
 		return isDecimalLexical(v)
 	case "float", "double":
-		return isFloatLexical(v)
+		return isFloatLexical(v, version)
 	case "hexBinary":
 		return isHexBinary(v)
 	case "base64Binary":
@@ -318,17 +326,17 @@ func isDecimalLexical(v string) bool {
 }
 
 // isFloatLexical reports whether v is an xs:float or xs:double literal.
-func isFloatLexical(v string) bool {
+func isFloatLexical(v string, version Version) bool {
 	switch v {
 	case "INF", "-INF", "NaN":
 		return true
 	case "+INF":
 		// XSD 1.1 added the leading plus to the lexical space of the
-		// two floating types; 1.0 admitted only "INF". It is accepted
-		// unconditionally because a 1.0 schema cannot reach a value
-		// space the version does not define — the worst case is
-		// admitting one extra spelling of a value 1.0 already has.
-		return true
+		// two floating types; 1.0 admits only "INF". Accepting it under
+		// 1.0 was one extra spelling of a value 1.0 already has — but
+		// the suite checks the lexical space rather than the value, and
+		// float018 and double018 both expect it refused there.
+		return version >= Version11
 	}
 	if v == "" {
 		return false

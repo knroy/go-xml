@@ -19,7 +19,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	if t == nil {
 		return
 	}
-	normalized, err := validateSimpleValue(lexical, t)
+	normalized, err := validateSimpleValueVersion(lexical, t, v.schema.Version)
 	if err != nil {
 		v.fail(n, "cvc-datatype-valid.1", "%v", err)
 		return
@@ -84,6 +84,17 @@ func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType
 // validateSimpleValue checks a lexical form against a simple type and returns
 // the normalised value.
 func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
+	return validateSimpleValueVersion(lexical, t, Version10)
+}
+
+// validateSimpleValueVersion is validateSimpleValue with the schema version,
+// which a few lexical spaces depend on.
+//
+// Threading it as a parameter rather than storing it on the type is not an
+// aesthetic choice: the built-in types are a process-wide singleton behind a
+// sync.Once, so two schemas of different versions share the same *SimpleType
+// and a version stored there would be whichever schema loaded last.
+func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -100,11 +111,15 @@ func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
 	case VarietyUnion:
 		return validateUnionValue(lexical, t)
 	}
-	return validateAtomicValue(lexical, t)
+	return validateAtomicValueVersion(lexical, t, version)
 }
 
 // validateAtomicValue checks an atomic value.
 func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
+	return validateAtomicValueVersion(lexical, t, Version10)
+}
+
+func validateAtomicValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
 	ws := EffectiveWhiteSpace(t)
 	normalized := ws.Normalize(lexical)
 
@@ -120,7 +135,7 @@ func validateAtomicValue(lexical string, t *SimpleType) (string, error) {
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
-	if err := checkLexicalSpace(normalized, prim); err != nil {
+	if err := checkLexicalSpaceVersion(normalized, prim, version); err != nil {
 		return "", err
 	}
 	// The integer branch narrows the *lexical* space, not only the value

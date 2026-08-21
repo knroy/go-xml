@@ -612,3 +612,29 @@ func TestOnlyDurationSecondsAreFractional(t *testing.T) {
 		}
 	}
 }
+
+// XSD 1.1 added the leading plus to the lexical space of xs:float and
+// xs:double; 1.0 admits only "INF". Accepting it under 1.0 was defended as
+// harmless — one extra spelling of a value 1.0 already has — but the suite
+// checks the lexical space rather than the value, and float018 and double018
+// both expect it refused there.
+//
+// The version is threaded as a parameter rather than stored on the type,
+// because the built-in types are a process-wide singleton: two schemas of
+// different versions share the same *SimpleType, so a version stored there
+// would be whichever schema loaded last.
+func TestPlusINFIsVersionDependent(t *testing.T) {
+	const schema = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e" type="xs:double"/>
+	</xs:schema>`
+	assertValid(t, schema, `<e>INF</e>`)
+	assertValid(t, schema, `<e>-INF</e>`)
+	assertValid(t, schema, `<e>NaN</e>`)
+	if err := validateString(t, schema, `<e>+INF</e>`); err == nil {
+		t.Error("+INF accepted under XSD 1.0")
+	}
+	if err := check11(t, load11(t, schema), `<e>+INF</e>`); err != nil {
+		t.Errorf("+INF refused under XSD 1.1: %v", err)
+	}
+}
