@@ -68,8 +68,33 @@ func decodeReader(r io.Reader) (io.Reader, error) {
 		// The same in big-endian.
 		return newUTF16Reader(br, true), nil
 	}
-	return br, nil
+	return utf8VersionReader(br)
 }
+
+// utf8VersionReader restates an XML 1.1 declaration as 1.0 on a UTF-8 stream.
+//
+// Only the declaration is buffered — it is bounded and sits at the very start —
+// so the rest of the document still streams. A document with no declaration, or
+// one already naming 1.0, is handed back unchanged and unbuffered.
+func utf8VersionReader(br *bufio.Reader) (io.Reader, error) {
+	head, err := br.Peek(declPeek)
+	if err != nil && err != io.EOF && !errIsShort(err) {
+		return nil, err
+	}
+	if declaredVersion(string(head)) != "1.1" {
+		return br, nil
+	}
+	end := strings.Index(string(head), "?>") + len("?>")
+	if _, err := br.Discard(end); err != nil {
+		return nil, err
+	}
+	return io.MultiReader(strings.NewReader(rewriteVersionDecl(string(head[:end]))), br), nil
+}
+
+// declPeek bounds how far decodeReader looks for the XML declaration. An
+// declaration cannot reasonably exceed this, and Peek must not exceed the
+// reader's buffer.
+const declPeek = 256
 
 func errIsShort(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "buffer")
@@ -141,7 +166,7 @@ func (u *utf16Reader) fill() error {
 	}
 
 	text := string(utf16.Decode(units))
-	u.buf.WriteString(rewriteEncodingDecl(text))
+	u.buf.WriteString(rewriteVersionDecl(rewriteEncodingDecl(text)))
 	u.err = io.EOF
 	return nil
 }
@@ -178,6 +203,65 @@ func rewriteEncodingDecl(s string) string {
 	}
 	cut := i + len("encoding") + q + 1 + closeAt + 1
 	return strings.TrimRight(decl[:i], " \t") + decl[cut:] + s[end:]
+}
+
+// declaredVersion returns the version named by an XML declaration, or "" if the
+// document has no declaration or no version pseudo-attribute.
+func declaredVersion(s string) string {
+	if !strings.HasPrefix(s, "<?xml") {
+		return ""
+	}
+	end := strings.Index(s, "?>")
+	if end < 0 {
+		return ""
+	}
+	decl := s[:end]
+	i := strings.Index(decl, "version")
+	if i < 0 {
+		return ""
+	}
+	rest := decl[i+len("version"):]
+	q := strings.IndexAny(rest, `"'`)
+	if q < 0 {
+		return ""
+	}
+	quote := rest[q]
+	closeAt := strings.IndexByte(rest[q+1:], quote)
+	if closeAt < 0 {
+		return ""
+	}
+	return rest[q+1 : q+1+closeAt]
+}
+
+// rewriteVersionDecl restates an XML 1.1 declaration as 1.0.
+//
+// encoding/xml is used as a tokeniser, and it refuses any version but 1.0
+// outright — so a schema document written in XML 1.1 never reaches the parser
+// at all. The saxonData XmlVersions tests (xv001..xv009) are exactly that: each
+// declares version="1.1" and is otherwise an ordinary schema, with every
+// 1.1-only character appearing inside an attribute value as a character
+// reference, which the tokeniser accepts either way.
+//
+// Rewriting the declaration is deliberately all this does. The genuine 1.1
+// differences — the wider NameStartChar and NameChar ranges, NEL and LINE
+// SEPARATOR as line ends, and the stricter treatment of C0 controls — live
+// inside the tokeniser, which is not ours to change. A document that actually
+// depends on one of them still fails, and fails in the tokeniser as before;
+// this only stops the version string alone from being the obstacle. Nothing
+// about XML 1.0 parsing changes, because a 1.0 declaration is left untouched.
+func rewriteVersionDecl(s string) string {
+	if declaredVersion(s) != "1.1" {
+		return s
+	}
+	end := strings.Index(s, "?>")
+	decl := s[:end]
+	i := strings.Index(decl, "version")
+	rest := decl[i+len("version"):]
+	q := strings.IndexAny(rest, `"'`)
+	quote := rest[q]
+	closeAt := strings.IndexByte(rest[q+1:], quote)
+	valAt := i + len("version") + q + 1
+	return s[:valAt] + "1.0" + s[valAt+closeAt:]
 }
 
 // validUTF8Prefix reports whether the first bytes of a document are valid

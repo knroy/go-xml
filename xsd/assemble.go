@@ -505,7 +505,16 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			// entirely, rather than losing only what that document
 			// would have contributed. Any reference that really
 			// needed those components still fails, at the
-			// reference, naming what is missing.
+			// reference, naming what is missing — unless the whole
+			// namespace went missing with the document, which §5.3
+			// Missing Sub-components makes an absent value rather
+			// than a fault. absentNamespace explains that case.
+			if !isInclude && namespace != "" {
+				if a.p.unresolvedImports == nil {
+					a.p.unresolvedImports = map[string]bool{}
+				}
+				a.p.unresolvedImports[namespace] = true
+			}
 			return
 		}
 		if err == nil {

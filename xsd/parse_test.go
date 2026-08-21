@@ -1,6 +1,8 @@
 package xsd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1032,5 +1034,155 @@ func TestFixedValueMayNotBeChanged(t *testing.T) {
 		`<xs:attribute name="a" type="xs:string" default="one"/>`,
 		`<xs:attribute name="a" type="xs:string" fixed="two"/>`)); err != nil {
 		t.Errorf("a base default does not fix the value: %v", err)
+	}
+}
+
+
+// TestSchemaIDMustBeAnNCName covers the id= attribute the schema for schemas
+// gives nearly every XSD element as `id = ID`. ID means NCName, so a value that
+// is not one is a representation fault. MS-IdentityConstraint idA006 writes the
+// empty string and MS-Notations notatA005 writes "25".
+func TestSchemaIDMustBeAnNCName(t *testing.T) {
+	for _, id := range []string{"", "25", "foo:bar", "-2.5foo", " "} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element id="` + id + `" name="e" type="xs:string"/>
+		</xs:schema>`
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(tree.Root, "s.xsd", Options{}); err == nil {
+			t.Errorf("id=%q is not an NCName and should be refused", id)
+		}
+	}
+}
+
+// TestSchemaIDMustBeUniqueInItsDocument covers the other half of xs:ID.
+//
+// Two elements in one document may not share an id. MS-IdentityConstraint
+// idA002 puts the same id on an element declaration and on the constraint
+// beside it, which is the case this reproduces.
+func TestSchemaIDMustBeUniqueInItsDocument(t *testing.T) {
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element id="foo123" name="a" type="xs:string"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	    <xs:unique id="foo123" name="u">
+	      <xs:selector xpath=".//a"/>
+	      <xs:field xpath="."/>
+	    </xs:unique>
+	  </xs:element>
+	</xs:schema>`
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{}); err == nil {
+		t.Fatal("one id used twice in a document should be refused")
+	}
+}
+
+// TestSchemaIDIsScopedToOneDocument is the boundary the uniqueness check must
+// not overrun. ID uniqueness is an XML document property, so the same id may
+// appear once in an including document and once in what it includes.
+// MS-ComplexType ctA029 and MS-Group groupA006 are both exactly this, and
+// scoping the check to the assembled schema wrongly rejected them.
+func TestSchemaIDIsScopedToOneDocument(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "main.xsd")
+	other := filepath.Join(dir, "other.xsd")
+
+	if err := os.WriteFile(other, []byte(
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		   <xs:complexType id="foo123" name="otherType"/>
+		 </xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(main, []byte(
+		`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		   <xs:include schemaLocation="other.xsd"/>
+		   <xs:complexType id="foo123" name="mainType"/>
+		 </xs:schema>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFiles([]string{main}, Options{}); err != nil {
+		t.Fatalf("the same id in two documents is not a clash:\n%v", err)
+	}
+}
+
+// TestNotationRepresentation covers the XML Representation Summary in §3.12.2,
+// which is the whole of what an <xs:notation> may be written as:
+//
+//	<notation id = ID  name = NCName  public = token  system = anyURI
+//	          {any attributes with non-schema namespace . . .}>
+//	  Content: (annotation?)
+//	</notation>
+//
+// None of it was enforced, which let the MS-Notations set through almost
+// entirely. Each case below names the test that pins it.
+func TestNotationRepresentation(t *testing.T) {
+	cases := []struct {
+		name, decl string
+	}{
+		{"notatB008: name is a QName, not an NCName",
+			`<xsd:notation name="foo:bar" public="p" system="s"/>`},
+		{"notatB009: name begins with a colon",
+			`<xsd:notation name=":bar" public="p" system="s"/>`},
+		{"notatB013: name begins with a digit-ish character",
+			`<xsd:notation name="-2.5foo" public="p" system="s"/>`},
+		{"notatB001: neither a public nor a system identifier",
+			`<xsd:notation name="foo"/>`},
+		{"notatE003: an attribute in no namespace that is not one of the four",
+			`<xsd:notation foo="bar" name="jpeg" public="p" system="s"/>`},
+		{"notatE002: an attribute in the schema namespace",
+			`<xsd:notation xmlns:a="http://www.w3.org/2001/XMLSchema" a:b="c" ` +
+				`name="jpeg" public="p" system="s"/>`},
+		{"notatG001: character content",
+			`<xsd:notation name="jpeg" public="p" system="s">Some Text</xsd:notation>`},
+		{"notatG002: an element child that is not an annotation",
+			`<xsd:notation name="jpeg" public="p" system="s"><a/></xsd:notation>`},
+	}
+
+	for _, c := range cases {
+		src := `<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">` +
+			c.decl + `</xsd:schema>`
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if _, err := Load(tree.Root, "s.xsd", Options{}); err == nil {
+			t.Errorf("%s: should be a schema error", c.name)
+		}
+	}
+}
+
+// TestNotationWellFormedIsAccepted is the boundary: the checks above must not
+// refuse the shape the spec's own example uses, with or without an annotation
+// and with either identifier alone.
+func TestNotationWellFormedIsAccepted(t *testing.T) {
+	for _, decl := range []string{
+		`<xsd:notation name="jpeg" public="image/jpeg" system="viewer.exe"/>`,
+		`<xsd:notation name="jpeg" public="image/jpeg"/>`,
+		`<xsd:notation name="jpeg" system="viewer.exe"/>`,
+		`<xsd:notation id="n1" name="jpeg" public="image/jpeg"/>`,
+		`<xsd:notation xmlns:o="urn:other" o:x="y" name="jpeg" public="image/jpeg"/>`,
+		`<xsd:notation name="jpeg" public="image/jpeg">` +
+			`<xsd:annotation><xsd:documentation>ok</xsd:documentation></xsd:annotation>` +
+			`</xsd:notation>`,
+	} {
+		src := `<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">` +
+			decl + `</xsd:schema>`
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", decl, err)
+		}
+		if _, err := Load(tree.Root, "s.xsd", Options{}); err != nil {
+			t.Errorf("%s should load:\n%v", decl, err)
+		}
 	}
 }

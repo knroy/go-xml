@@ -782,6 +782,12 @@ type IdentityConstraint struct {
 	// Refer is the key or unique that a keyref points at. It is nil for
 	// ICKey and ICUnique.
 	Refer *IdentityConstraint
+
+	// resolved is set on the placeholder standing for an XSD 1.1
+	// <xs:key ref="..."/> once the name it references has been found. The
+	// parser then substitutes the named component for the placeholder, so
+	// that no copy of a constraint ever reaches validation.
+	resolved *IdentityConstraint
 }
 
 // ComponentKind implements Component.

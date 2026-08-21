@@ -281,6 +281,18 @@ func isNameChar(c byte) bool {
 	return false
 }
 
+// icKindOf maps the local name of an identity-constraint element to its
+// category.
+func icKindOf(local string) IdentityConstraintKind {
+	switch local {
+	case "keyref":
+		return ICKeyref
+	case "unique":
+		return ICUnique
+	}
+	return ICKey
+}
+
 // readIdentityConstraint reads an <xs:key>, <xs:keyref> or <xs:unique>.
 func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 	// XSD 1.1 lets a declaration reference a constraint declared elsewhere
@@ -294,11 +306,21 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 				"an identity constraint may not have both name and ref"))
 			return nil
 		}
+		// A ref= reuses a whole constraint, so there is nothing left for this
+		// element to say about it. refer= in particular belongs to the keyref
+		// being referenced, not to the reference. ibmData S2_2_4 s2_2_4si07
+		// pins this with <keyref ref="v01:keyref" refer="v01:uniqueKey"/>.
+		if el.AttrValue("refer") != "" {
+			p.errs = append(p.errs, errorAt(el, "src-identity-constraint",
+				"an identity constraint with ref may not also have refer"))
+			return nil
+		}
 		target, err := p.resolveQName(el, "ref", ref)
 		if err != nil {
 			p.errs = append(p.errs, err)
 			return nil
 		}
+		want := icKindOf(el.Name.Local)
 		// The reference is a placeholder until the constraint it names
 		// has been read, which may be in a document not yet seen.
 		placeholder := &IdentityConstraint{Name: target}
@@ -308,7 +330,18 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 				return errorAt(el, "src-resolve",
 					"identity constraint ref %q names no key or unique", ref)
 			}
-			*placeholder = *found
+			// XSD 1.1 §3.11.3 requires the category of the constraint named by
+			// ref to match the element doing the naming: <xs:key ref="..."/>
+			// may only name a key. ibmData S2_2_4 s2_2_4si02 pins this.
+			if found.Kind != want {
+				return errorAt(el, "src-identity-constraint",
+					"%s ref=%q names a %s", el.Name.Local, ref, found.Kind)
+			}
+			// The reference resolves to the named component itself. Recording
+			// it here lets resolveICRefs replace the placeholder in the
+			// element's list, so validation keys its node table by the same
+			// pointer the referring keyref's Refer holds.
+			placeholder.resolved = found
 			return nil
 		})
 		return placeholder
@@ -321,15 +354,17 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 		return nil
 	}
 
-	ic := &IdentityConstraint{Name: p.qnameFor(name)}
-	switch el.Name.Local {
-	case "key":
-		ic.Kind = ICKey
-	case "unique":
-		ic.Kind = ICUnique
-	case "keyref":
-		ic.Kind = ICKeyref
+	// The representation summary gives every identity constraint `name =
+	// NCName`, so a name carrying a prefix or opening with a digit is a
+	// representation fault rather than a constraint in some namespace.
+	// MS-IdentityConstraint idA030 writes "a:b" and idA032 writes "1foo".
+	if !isNCName(name) {
+		p.errs = append(p.errs, errorAt(el, "src-identity-constraint",
+			"identity constraint name %q is not an NCName", name))
+		return nil
 	}
+
+	ic := &IdentityConstraint{Name: p.qnameFor(name), Kind: icKindOf(el.Name.Local)}
 
 	sel := p.childElement(el, "selector")
 	if sel == nil {
@@ -395,14 +430,19 @@ func (p *parser) readIdentityConstraint(el *xdm.Node) *IdentityConstraint {
 			ic.Refer = key
 			return nil
 		})
-	} else {
-		if prev, ok := p.schema.identityConstraints[ic.Name]; ok && prev != ic {
-			p.errs = append(p.errs, errorAt(el, "sch-props-correct.2",
-				"duplicate identity constraint %s", name))
-			return nil
-		}
-		p.schema.identityConstraints[ic.Name] = ic
 	}
+
+	// Key, keyref and unique share one symbol space (XSD 1.1 Structures 3.11),
+	// so a keyref is registered under its name like any other constraint. That
+	// is what lets <xs:keyref ref="a:kr1"/> find it; the refer= fixup above
+	// keeps its own guard against a keyref naming another keyref, so admitting
+	// keyrefs here does not weaken that check.
+	if prev, ok := p.schema.identityConstraints[ic.Name]; ok && prev != ic {
+		p.errs = append(p.errs, errorAt(el, "sch-props-correct.2",
+			"duplicate identity constraint %s", name))
+		return nil
+	}
+	p.schema.identityConstraints[ic.Name] = ic
 
 	return ic
 }
@@ -436,6 +476,16 @@ func (p *parser) resolveICPath(el *xdm.Node, path *ICPath) {
 			if step.Name.Prefix != "" {
 				if uri, ok := el.LookupPrefix(step.Name.Prefix); ok {
 					step.Name.URI = uri
+				} else {
+					// src-resolve: a prefix in a selector or field must be
+					// bound, exactly as in any other QName in a schema
+					// document. Leaving it unresolved silently retargeted
+					// the step at the absent namespace, where it matched
+					// nothing and the schema still loaded.
+					// MS-IdentityConstraint idI010 and idJ011 pin it.
+					p.errs = append(p.errs, errorAt(el, "src-resolve",
+						"identity-constraint path %q uses unbound prefix %q",
+						path.Source, step.Name.Prefix))
 				}
 				continue
 			}

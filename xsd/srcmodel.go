@@ -217,6 +217,8 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 		return
 	}
 
+	p.checkElementID(el)
+
 	if terms, ok := srcModelFor(el, el.Parent); ok {
 		p.matchSourceModel(el, terms)
 	}
@@ -284,4 +286,37 @@ func matchesName(c *xdm.Node, names []string) bool {
 		}
 	}
 	return false
+}
+
+// checkElementID applies the xs:ID rules to an id= attribute.
+//
+// Almost every element in the schema for schemas carries `id = ID`, and ID
+// means two things: the value is an NCName, and it is unique within the
+// document that writes it — not across the assembled schema, which is why the
+// set lives on schemaDoc. Neither was checked, which let a large part of MS-IdentityConstraint
+// through — idA002 and idB002 write one id= on an element declaration and the
+// same id= on a constraint beside it, idA006 writes the empty string. The same
+// rule covers notatA005..A007 in MS-Notations.
+//
+// This sits in the source-model walk because that walk already visits every
+// schema-namespace element exactly once, on every path into the readers.
+func (p *parser) checkElementID(el *xdm.Node) {
+	a := el.Attr("", "id")
+	if a == nil || p.doc == nil {
+		return
+	}
+	if !isNCName(a.Value) {
+		p.errs = append(p.errs, errorAt(el, "src-resolve",
+			"id %q is not an NCName", a.Value))
+		return
+	}
+	if p.doc.ids[a.Value] {
+		p.errs = append(p.errs, errorAt(el, "src-resolve",
+			"id %q is already used in this schema", a.Value))
+		return
+	}
+	if p.doc.ids == nil {
+		p.doc.ids = map[string]bool{}
+	}
+	p.doc.ids[a.Value] = true
 }

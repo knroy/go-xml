@@ -45,6 +45,13 @@ type schemaDoc struct {
 	// baseURI locates this document, for resolving include and import.
 	baseURI string
 
+	// ids records the xs:ID-typed id= attributes seen in this document, so
+	// that a repeat can be reported. ID uniqueness is scoped to one XML
+	// document, not to the assembled schema: MS-Additional addA002 and
+	// MS-Group groupA006 each write one id= in the including document and
+	// the same id= in the document it pulls in, and both are valid.
+	ids map[string]bool
+
 	// defaultAttributes is the XSD 1.1 schema-level attribute group applied
 	// to every complex type in this document, unless the type opts out with
 	// defaultAttributesApply="false".
@@ -119,6 +126,16 @@ type parser struct {
 	// fixups are deferred resolutions, run after every document has been
 	// read. Each returns an error naming the unresolvable reference.
 	fixups []func() error
+
+	// icRefs records each <xs:key|keyref|unique ref="..."/> placeholder and
+	// where it sits, so finish can swap in the component it names.
+	icRefs []icRefSlot
+
+	// unresolvedImports holds the namespaces an <xs:import> named but whose
+	// schemaLocation could not be fetched. A reference into one of them
+	// cannot be resolved and cannot be an assembly error either — see
+	// absentNamespace.
+	unresolvedImports map[string]bool
 
 	// attrsDone marks the complex types whose inherited attributes have
 	// been resolved, so that a base shared by many derived types is walked
@@ -265,6 +282,34 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 	return s, nil
 }
 
+// absentNamespace reports whether a QName that failed to resolve names a
+// namespace that was imported but whose document could not be fetched.
+//
+// §5.3 Missing Sub-components makes this case explicitly not a schema error:
+// an unresolvable QName leaves the property · absent ·, and the consequence is
+// deferred to validation, where it acts as if clause 1 of Attribute Locally
+// Valid or Element Locally Valid had failed. Assembly must therefore carry on.
+//
+// The suite's own metadata schema, common/xsts.xsd, is the case in point: it
+// imports the XLink namespace from an http:// URL that this processor does not
+// fetch, then writes <xsd:attribute ref="xlink:type"/>. Failing there rejected
+// a schema every conforming processor loads.
+//
+// This is deliberately narrow. Only a namespace an import actually named is
+// eligible, so a plain typo in a prefix bound to a local namespace still fails
+// at the reference, which is what makes most missing-reference tests work.
+func (p *parser) absentNamespace(ns string) bool {
+	return p.unresolvedImports[ns]
+}
+
+// icRefSlot locates one ref= identity-constraint placeholder in the list of
+// the element declaration that carries it.
+type icRefSlot struct {
+	decl *ElementDecl
+	slot int
+	ic   *IdentityConstraint
+}
+
 // finish runs the deferred reference resolutions and returns the accumulated
 // faults, if any.
 func (p *parser) finish() error {
@@ -276,6 +321,16 @@ func (p *parser) finish() error {
 	for i := 0; i < len(p.fixups); i++ {
 		if err := p.fixups[i](); err != nil {
 			p.errs = append(p.errs, err)
+		}
+	}
+
+	// Substitute the referenced component for every ref= placeholder, now
+	// that the fixups above have resolved them. This runs after the whole
+	// fixup drain because a placeholder may name a keyref whose own refer=
+	// is bound by a fixup queued later than the one that found it.
+	for _, r := range p.icRefs {
+		if r.ic.resolved != nil {
+			r.decl.IdentityConstraints[r.slot] = r.ic.resolved
 		}
 	}
 

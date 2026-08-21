@@ -754,6 +754,22 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	if t == nil || p.attrsDone[t] {
 		return
 	}
+	// A built-in is never resolved here, and the guard has to sit at the
+	// top rather than at the call site: the base chain of a user type ends
+	// at xs:anyType, so the recursion below reaches a built-in even when
+	// the caller did not.
+	//
+	// The built-ins come from a process-wide singleton, so one *ComplexType
+	// for xs:anyType is shared by every schema ever loaded, and the tail of
+	// this function *writes* to the type. Two concurrent Load calls
+	// therefore wrote to one shared value. p.attrsDone cannot prevent it:
+	// it is per-parser, so each Load believes it is the first.
+	//
+	// Nothing is lost. A built-in carries no attribute uses a schema
+	// document wrote, which is what this walk exists to resolve.
+	if t.Name.URI == NSSchema {
+		return
+	}
 	if seen == nil {
 		seen = map[*ComplexType]bool{}
 	}

@@ -638,3 +638,43 @@ func TestPlusINFIsVersionDependent(t *testing.T) {
 		t.Errorf("+INF refused under XSD 1.1: %v", err)
 	}
 }
+
+// Loading two schemas at once must not mutate anything they share.
+//
+// Schema.Types is seeded from a process-wide singleton, so the *ComplexType
+// for xs:anyType is reachable from every schema ever loaded. The final
+// attribute-resolution sweep in parser.finish *writes* to each type it visits,
+// so before the built-ins were excluded two concurrent Load calls wrote to that
+// one shared value. The attrsDone guard did not help: it is per-parser, so each
+// Load believed it was the first to touch the type.
+//
+// The race is invisible without -race and invisible without concurrency, which
+// is why it survived the plain test run.
+func TestConcurrentLoadDoesNotMutateBuiltins(t *testing.T) {
+	// A type with a prohibited use, since dropping those is what the sweep
+	// writes, and one deriving from a built-in so the walk reaches it.
+	const src = `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="t">
+	    <xs:attribute name="a" type="xs:string" use="prohibited"/>
+	  </xs:complexType>
+	  <xs:element name="e" type="t"/>
+	</xs:schema>`
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if _, err := Load(tree.Root, "s.xsd", Options{}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+}

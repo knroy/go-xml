@@ -3702,3 +3702,102 @@ func TestSubstitutionGroupRespectsBlock(t *testing.T) {
 	// The head itself is never blocked from appearing.
 	assertValid(t, schema(` block="restriction extension"`), doc("Head"))
 }
+
+// icRefSchema states one key, one keyref and one unique on "hi1", then reuses
+// all three on "hi2" through ref=. It is ibmData S2_2_4 s2_2_4v01 in miniature.
+const icRefSchema = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:a="a" targetNamespace="a"
+           elementFormDefault="qualified">
+  <xs:complexType name="t0">
+    <xs:sequence>
+      <xs:element name="e1" maxOccurs="unbounded" type="a:t1"/>
+      <xs:element name="e2" maxOccurs="unbounded" type="a:t1"/>
+      <xs:element name="e3" maxOccurs="unbounded" type="a:t1"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="t1"><xs:attribute name="a1" type="xs:integer"/></xs:complexType>
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="hi1" type="a:t0">
+          <xs:unique name="u1"><xs:selector xpath="a:e1"/><xs:field xpath="@a1"/></xs:unique>
+          <xs:key name="k1"><xs:selector xpath="a:e2"/><xs:field xpath="@a1"/></xs:key>
+          <xs:keyref name="kr1" refer="a:k1">
+            <xs:selector xpath="a:e3"/><xs:field xpath="@a1"/>
+          </xs:keyref>
+        </xs:element>
+        <xs:element name="hi2" type="a:t0">
+          <xs:unique ref="a:u1"/>
+          <xs:key ref="a:k1"/>
+          <xs:keyref ref="a:kr1"/>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`
+
+// TestIdentityConstraintRef covers XSD 1.1's ref= on key, keyref and unique.
+//
+// Two things have to hold. The schema must load at all, which needs keyrefs to
+// live in the same symbol space as keys and uniques so that ref="a:kr1" finds
+// one. And a keyref reached through ref= must resolve against the key reached
+// through ref= beside it: node tables are keyed by component identity, so the
+// reference has to yield the referenced component itself rather than a copy of
+// it. A copy loads fine and then fails validation with "no k1 is in scope",
+// which is how this was originally wrong. ibmData S2_2_4 s2_2_4v01 pins both.
+func TestIdentityConstraintRef(t *testing.T) {
+	s := load11(t, icRefSchema)
+
+	const valid = `<root xmlns="a">
+	  <hi1><e1 a1="1"/><e2 a1="1"/><e3 a1="1"/></hi1>
+	  <hi2><e1 a1="2"/><e2 a1="2"/><e3 a1="2"/></hi2>
+	</root>`
+	if err := check11(t, s, valid); err != nil {
+		t.Errorf("document should be valid:\n%v", err)
+	}
+
+	// The referenced keyref still constrains: e3 under hi2 names a key that
+	// hi2's own e2 does not supply.
+	const dangling = `<root xmlns="a">
+	  <hi1><e1 a1="1"/><e2 a1="1"/><e3 a1="1"/></hi1>
+	  <hi2><e1 a1="2"/><e2 a1="2"/><e3 a1="9"/></hi2>
+	</root>`
+	err := check11(t, s, dangling)
+	if err == nil {
+		t.Fatal("a keyref reached through ref= should still be enforced")
+	}
+	if !strings.Contains(err.Error(), "cvc-identity-constraint.4.3") {
+		t.Errorf("error %q does not cite cvc-identity-constraint.4.3", err)
+	}
+}
+
+// TestIdentityConstraintRefCategoryMustMatch covers XSD 1.1 §3.11.3: the
+// category of the constraint named by ref must match the element naming it, so
+// <xs:key ref="..."/> may only name a key. ibmData S2_2_4 s2_2_4si02 pins it.
+func TestIdentityConstraintRefCategoryMustMatch(t *testing.T) {
+	src := strings.Replace(icRefSchema,
+		`<xs:key ref="a:k1"/>`, `<xs:key ref="a:kr1"/>`, 1)
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err == nil {
+		t.Fatal("xs:key ref= naming a keyref should be a schema error")
+	}
+}
+
+// TestIdentityConstraintRefRejectsRefer covers the same clause from the other
+// side: ref= reuses a whole constraint, so there is nothing left for the
+// referring element to say, and refer= in particular belongs to the keyref
+// being referenced. ibmData S2_2_4 s2_2_4si07 pins it.
+func TestIdentityConstraintRefRejectsRefer(t *testing.T) {
+	src := strings.Replace(icRefSchema,
+		`<xs:keyref ref="a:kr1"/>`, `<xs:keyref ref="a:kr1" refer="a:k1"/>`, 1)
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err == nil {
+		t.Fatal("ref= together with refer= should be a schema error")
+	}
+}

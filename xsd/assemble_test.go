@@ -420,3 +420,72 @@ func TestChameleonIncludeOfDocumentAlsoLoadedDirectly(t *testing.T) {
 		t.Error("the directly loaded document lost its absent-namespace group")
 	}
 }
+
+// TestUnresolvedImportLeavesReferencesAbsent covers §5.3 Missing Sub-components.
+//
+// schemaLocation is a hint, so an import naming a document this processor will
+// not fetch — an http:// URL with no network resolver — contributes nothing and
+// is not itself an error. The references into that namespace are then
+// unresolvable, and §5.3 is explicit that this leaves the property · absent ·
+// and defers the consequence to validation, rather than failing assembly.
+//
+// The suite's own metadata schema, common/xsts.xsd, is exactly this: it imports
+// XLink from a URL and then writes <xsd:attribute ref="xlink:type"/>. Treating
+// that as a schema error rejected a schema every conforming processor loads,
+// and took the whole introspection test set down with it.
+func TestUnresolvedImportLeavesReferencesAbsent(t *testing.T) {
+	const src = `
+	<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+	            xmlns:xlink="http://www.w3.org/1999/xlink">
+	  <xsd:import namespace="http://www.w3.org/1999/xlink"
+	              schemaLocation="http://www.w3.org/XML/2008/06/xlink.xsd"/>
+	  <xsd:element name="e">
+	    <xsd:complexType>
+	      <xsd:attribute ref="xlink:href"/>
+	    </xsd:complexType>
+	  </xsd:element>
+	</xsd:schema>`
+
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(tree.Root, "s.xsd", Options{})
+	if err != nil {
+		t.Fatalf("a reference into an unfetched imported namespace should not "+
+			"fail assembly:\n%v", err)
+	}
+
+	// The absent use must not act as a required attribute, and must not be
+	// dereferenced while validating.
+	doc, err := xdm.ParseString(`<e/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(doc.Root, ValidateOptions{}); err != nil {
+		t.Errorf("an element omitting the absent attribute should be valid:\n%v", err)
+	}
+}
+
+// TestUnresolvedReferenceStillFails is the other half: the relaxation above is
+// scoped to namespaces an import actually named and failed to fetch. A
+// reference that simply names nothing must still be a schema error, or every
+// misspelt ref would load silently.
+func TestUnresolvedReferenceStillFails(t *testing.T) {
+	const src = `
+	<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	  <xsd:element name="e">
+	    <xsd:complexType>
+	      <xsd:attribute ref="xsd:noSuchAttribute"/>
+	    </xsd:complexType>
+	  </xsd:element>
+	</xsd:schema>`
+
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{}); err == nil {
+		t.Fatal("an attribute ref naming nothing should still be a schema error")
+	}
+}

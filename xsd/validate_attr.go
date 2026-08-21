@@ -52,6 +52,14 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 	}
 
 	for _, use := range t.AttributeUses {
+		if use.Decl == nil {
+			// The declaration this use names is · absent · : it lives in a
+			// namespace that was imported but never fetched. §5.3 Missing
+			// Sub-components defers such a reference to validation rather
+			// than making it a schema error, and there is nothing here to
+			// require or to default from.
+			continue
+		}
 		if use.Required && !matched[use] {
 			v.fail(el, "cvc-complex-type.4",
 				"required attribute %s is missing", attrName(use.Decl.Name))

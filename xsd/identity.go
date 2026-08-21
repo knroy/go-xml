@@ -413,6 +413,28 @@ func (v *validator) keyString(n *xdm.Node) string {
 	if c, ok := canonicalValue(kv.normalized, kv.primitive); ok {
 		return c
 	}
+	// A QName's value is its namespace URI and local name; the prefix is only
+	// a way of spelling the URI. Two prefixes bound to one namespace therefore
+	// denote the same value, so the prefix is resolved away here rather than
+	// compared literally. sunData IdentityTestSuite/002 test.2.v pins this: the
+	// key is written p:abc and the keyref q:abc, with both prefixes bound to
+	// "abc". Resolution needs the node's in-scope namespaces, which is why this
+	// lives here and not in canonicalValue.
+	if kv.primitive == "QName" || kv.primitive == "NOTATION" {
+		local := kv.normalized
+		prefix := ""
+		if i := strings.IndexByte(local, ':'); i >= 0 {
+			prefix, local = local[:i], local[i+1:]
+		}
+		// An unresolvable prefix cannot arise from a value that validated, but
+		// falling back to the lexical form keeps this total.
+		if uri, ok := n.LookupPrefix(prefix); ok {
+			return kv.primitive + "/{" + uri + "}" + local
+		}
+		if prefix == "" {
+			return kv.primitive + "/{}" + local
+		}
+	}
 	// The primitive is part of the key. Values drawn from different
 	// primitives are never equal, whatever their spellings do: idF012 has
 	// the boolean 1 beside the decimal 1 and expects no duplicate.

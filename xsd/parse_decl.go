@@ -152,7 +152,16 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		switch c.Name.Local {
 		case "key", "keyref", "unique":
 			if ic := p.readIdentityConstraint(c); ic != nil {
+				slot := len(d.IdentityConstraints)
 				d.IdentityConstraints = append(d.IdentityConstraints, ic)
+				// A ref= reference resolves to the very component it names, not
+				// a copy of it. Node tables are keyed by component identity, so
+				// a keyref reached through ref= must see the same pointer its
+				// Refer holds; a copy would key a second table the keyref could
+				// never find. p.icRefs records the slot for the fixup below.
+				if c.AttrValue("ref") != "" {
+					p.icRefs = append(p.icRefs, icRefSlot{decl: d, slot: slot, ic: ic})
+				}
 			}
 		case "alternative":
 			// XSD 1.1 conditional type assignment. Order matters:
@@ -359,6 +368,9 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 		p.fixups = append(p.fixups, func() error {
 			decl, ok := p.schema.Attributes[name]
 			if !ok {
+				if p.absentNamespace(name.URI) {
+					return nil
+				}
 				return errorAt(el, "src-resolve",
 					"attribute ref %q names no attribute declaration", ref)
 			}
@@ -401,6 +413,18 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 }
 
 // readNotation reads an <xs:notation>.
+// The XML Representation Summary in §3.12.2 is the whole of what a <xs:notation>
+// may be written as:
+//
+//	<notation id = ID  name = NCName  public = token  system = anyURI
+//	          {any attributes with non-schema namespace . . .}>
+//	  Content: (annotation?)
+//	</notation>
+//
+// Nothing else was checked here, which let the whole MS-Notations set through:
+// notatB008..B013 write names that are not NCNames, notatE002/E003 write
+// attributes the summary does not admit, notatG001..G003 give the element
+// content, and notatB001 omits both identifiers.
 func (p *parser) readNotation(el *xdm.Node) *NotationDecl {
 	name := el.AttrValue("name")
 	if name == "" {
@@ -408,10 +432,64 @@ func (p *parser) readNotation(el *xdm.Node) *NotationDecl {
 			"a notation declaration must have a name"))
 		return nil
 	}
+	if !isNCName(name) {
+		p.errs = append(p.errs, errorAt(el, "src-notation",
+			"notation name %q is not an NCName", name))
+		return nil
+	}
+
+	p.checkNotationAttrs(el)
+
+	// Content is (annotation?) — no character data, and no other element.
+	if nonSpaceText(el) != "" {
+		p.errs = append(p.errs, errorAt(el, "src-notation",
+			"a notation declaration may not have character content"))
+	}
+	for _, c := range p.contentChildren(el) {
+		p.errs = append(p.errs, errorAt(el, "src-notation",
+			"%s is not permitted inside a notation declaration",
+			c.Name.Local))
+		break
+	}
+
+	// {system identifier} is "optional if {public identifier} is present"
+	// and vice versa, so a declaration with neither has no identifier at
+	// all. notatB001 pins it.
+	if el.Attr("", "public") == nil && el.Attr("", "system") == nil {
+		p.errs = append(p.errs, errorAt(el, "src-notation",
+			"a notation declaration must have a public or a system identifier"))
+	}
+
 	return &NotationDecl{
 		Name:   p.qnameFor(name),
 		Public: el.AttrValue("public"),
 		System: el.AttrValue("system"),
+	}
+}
+
+// checkNotationAttrs applies the attribute half of the representation summary.
+//
+// Only id, name, public and system are named, plus "any attributes with
+// non-schema namespace". An unqualified attribute is in no namespace rather
+// than in a non-schema one, so it is not admitted either — which is what
+// notatE003's foo="bar" tests, alongside notatE002's attribute placed in the
+// schema namespace itself.
+func (p *parser) checkNotationAttrs(el *xdm.Node) {
+	for _, a := range el.Attrs {
+		if a.Name.URI == "" {
+			switch a.Name.Local {
+			case "id", "name", "public", "system":
+				continue
+			}
+			p.errs = append(p.errs, errorAt(el, "src-notation",
+				"%q is not an attribute of a notation declaration", a.Name.Local))
+			continue
+		}
+		if a.Name.URI == NSSchema {
+			p.errs = append(p.errs, errorAt(el, "src-notation",
+				"a notation declaration may not carry %q from the schema namespace",
+				a.Name.Local))
+		}
 	}
 }
 
