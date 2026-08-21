@@ -596,16 +596,44 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t 
 			// type and cannot conflict with one.
 			return
 		}
-		d, ok := v.schema.Elements[name]
-		if !ok {
+		if d, ok := v.schema.Elements[name]; ok {
+			got = d.Type
+		} else if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
+			// A lax wildcard with no global declaration to find
+			// still assesses the element when xsi:type names a
+			// type. That is the only thing assigning this name a
+			// type here, so it is the one the rule compares.
+			t, err := v.resolveXSIType(kid, xsiType.Value)
+			if err != nil {
+				return
+			}
+			got = t
+		} else {
 			return
 		}
-		got = d.Type
 	default:
 		return
 	}
 	if got == nil {
 		return
+	}
+
+	// xsi:type is honoured only where the name reached its declaration
+	// through a wildcard. Element Declarations Consistent is about
+	// declarations, and two elements of one name choosing different members
+	// of the same declared type is what xsi:type is for — so overriding
+	// there would reject documents the schema plainly permits.
+	//
+	// A wildcard is different: the declaration it finds is a global one the
+	// content model never named, and xsi:type on top of it is how the same
+	// name ends up validated against a second unrelated type. That is the
+	// inconsistency the rule exists to catch.
+	if _, viaWildcard := p.term.(*Wildcard); viaWildcard {
+		if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
+			if t, err := v.resolveXSIType(kid, xsiType.Value); err == nil {
+				got = t
+			}
+		}
 	}
 
 	// A restriction's model may omit a declaration its base names, but the

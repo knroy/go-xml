@@ -2610,3 +2610,72 @@ func TestRestrictionClosesOpenContent(t *testing.T) {
 		t.Error("a restriction declaring no open content should close it")
 	}
 }
+
+// TestDynamicEDTHonoursXSIType covers xsi:type reaching Element Declarations
+// Consistent through a wildcard.
+//
+// xsi:type is honoured only where the name reached its declaration through a
+// wildcard. The rule is about declarations, and two elements of one name
+// choosing different members of the same declared type is what xsi:type is for
+// — overriding there would reject documents the schema plainly permits. A
+// wildcard is different: the declaration it finds, or fails to find, was never
+// named by the content model, and xsi:type on top of it is how the same name
+// ends up validated against a second unrelated type.
+func TestDynamicEDTHonoursXSIType(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="e" type="xs:date"/>
+	      <xs:element name="f" type="xs:string"/>
+	      <xs:any namespace="##local" processContents="lax"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="doc" type="zing"/>
+	</xs:schema>`)
+
+	const ns = ` xmlns:xs="http://www.w3.org/2001/XMLSchema"` +
+		` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+
+	// The third child is <f> again, taken by the wildcard; there is no
+	// global f, so xsi:type is the only thing assigning it a type — and it
+	// disagrees with the declared xs:string the first <f> got.
+	if err := check11(t, s,
+		`<doc><e>2008-11-03</e><f/><f`+ns+` xsi:type="xs:time">12:20:02</f></doc>`); err == nil {
+		t.Error("two types for one name through a wildcard should be refused")
+	}
+	// A different name through the wildcard is no conflict.
+	if err := check11(t, s,
+		`<doc><e>2008-11-03</e><f/><g`+ns+` xsi:type="xs:time">12:20:02</g></doc>`); err != nil {
+		t.Errorf("a distinct name through the wildcard is fine: %v", err)
+	}
+}
+
+// TestXSITypeOnRepeatedElementIsNotEDT pins the other side: two elements of one
+// name choosing different members of the same declared union is exactly what
+// xsi:type is for, and is not an Element Declarations Consistent violation.
+func TestXSITypeOnRepeatedElementIsNotEDT(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base"/>
+	  <xs:complexType name="a"><xs:complexContent>
+	    <xs:extension base="base"><xs:attribute name="x"/></xs:extension>
+	  </xs:complexContent></xs:complexType>
+	  <xs:complexType name="b"><xs:complexContent>
+	    <xs:extension base="base"><xs:attribute name="y"/></xs:extension>
+	  </xs:complexContent></xs:complexType>
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="item" type="base" maxOccurs="unbounded"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	const xsi = ` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`
+	if err := check11(t, s,
+		`<root`+xsi+`><item xsi:type="a" x="1"/><item xsi:type="b" y="2"/></root>`); err != nil {
+		t.Errorf("xsi:type choosing different derived types is legal: %v", err)
+	}
+}
