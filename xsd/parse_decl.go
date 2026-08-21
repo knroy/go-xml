@@ -541,15 +541,31 @@ func intersectWildcards(a, b *Wildcard) *Wildcard {
 		pc = b.ProcessContents
 	}
 
+	// {disallowed names} unions: an attribute has to be admitted by both
+	// operands, so either one refusing a name is enough to refuse it. That
+	// is the opposite of the union case, where a name survives only if both
+	// refuse it, and getting it backwards admits every name only one side
+	// disallowed.
+	disallowed := unionNames(a, b)
+	definedToo := a.DisallowDefined || b.DisallowDefined
+	siblingToo := a.DisallowDefinedSibling || b.DisallowDefinedSibling
+
+	withNames := func(w *Wildcard) *Wildcard {
+		w.DisallowedNames = disallowed
+		w.DisallowDefined = definedToo
+		w.DisallowDefinedSibling = siblingToo
+		return w
+	}
+
 	switch {
 	case a.Kind == NSAny:
 		out := *b
 		out.ProcessContents = pc
-		return &out
+		return withNames(&out)
 	case b.Kind == NSAny:
 		out := *a
 		out.ProcessContents = pc
-		return &out
+		return withNames(&out)
 	}
 
 	// An enumerated set against anything: keep the members the other
@@ -565,7 +581,8 @@ func intersectWildcards(a, b *Wildcard) *Wildcard {
 				kept = append(kept, ns)
 			}
 		}
-		return &Wildcard{Kind: NSEnumerated, Namespace: kept, ProcessContents: pc}
+		return withNames(&Wildcard{
+			Kind: NSEnumerated, Namespace: kept, ProcessContents: pc})
 	}
 
 	// Both negations: the union of what each excludes.
@@ -579,6 +596,25 @@ func intersectWildcards(a, b *Wildcard) *Wildcard {
 		if !seen[ns] {
 			seen[ns] = true
 			out.Namespace = append(out.Namespace, ns)
+		}
+	}
+	return withNames(out)
+}
+
+// unionNames returns every name either wildcard disallows.
+func unionNames(a, b *Wildcard) []xdm.QName {
+	if len(a.DisallowedNames) == 0 {
+		return b.DisallowedNames
+	}
+	if len(b.DisallowedNames) == 0 {
+		return a.DisallowedNames
+	}
+	seen := make(map[xdm.QName]bool, len(a.DisallowedNames)+len(b.DisallowedNames))
+	var out []xdm.QName
+	for _, n := range append(append([]xdm.QName{}, a.DisallowedNames...), b.DisallowedNames...) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
 		}
 	}
 	return out

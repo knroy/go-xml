@@ -1470,3 +1470,101 @@ func TestDurationKeyComparesByValue(t *testing.T) {
 		t.Error("P30D should not resolve against P1M")
 	}
 }
+
+// TestWildcardIntersectionUnionsDisallowedNames pins that intersecting two
+// attribute wildcards unions their {disallowed names}.
+//
+// An attribute has to be admitted by both operands, so either one refusing a
+// name is enough to refuse it. That is the opposite of the union case, where a
+// name survives only if both refuse it, and getting it backwards admits every
+// name only one side disallowed.
+func TestWildcardIntersectionUnionsDisallowedNames(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:attributeGroup name="a">
+	    <xs:anyAttribute namespace="##local" processContents="skip" notQName="a b c"/>
+	  </xs:attributeGroup>
+	  <xs:attributeGroup name="b">
+	    <xs:anyAttribute namespace="##local" processContents="skip" notQName="c d e"/>
+	  </xs:attributeGroup>
+	  <xs:element name="computer">
+	    <xs:complexType>
+	      <xs:sequence/>
+	      <xs:attributeGroup ref="a"/>
+	      <xs:attributeGroup ref="b"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<computer z="1"/>`); err != nil {
+		t.Errorf("a name neither group disallows should be admitted: %v", err)
+	}
+	// Disallowed by only one side each — the intersection refuses both.
+	if err := check11(t, s, `<computer a="1"/>`); err == nil {
+		t.Error("a name the first group disallows should be refused")
+	}
+	if err := check11(t, s, `<computer d="1"/>`); err == nil {
+		t.Error("a name the second group disallows should be refused")
+	}
+	if err := check11(t, s, `<computer c="1"/>`); err == nil {
+		t.Error("a name both groups disallow should be refused")
+	}
+}
+
+// TestDynamicElementDeclarationsConsistent covers cvc-complex-type.2.4.k: two
+// elements of one name in one content model may not be matched with different
+// types.
+//
+// Element Declarations Consistent is mostly a schema-time rule, but a wildcard
+// can only break it at validation time — the schema cannot know which global
+// declaration a lax wildcard will pick up. The type has to come from the
+// position that actually matched: scanning the model's positions finds the
+// local declaration for both children and sees no conflict.
+func TestDynamicElementDeclarationsConsistent(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="e" type="xs:date"/>
+	      <xs:element name="f" type="xs:string"/>
+	      <xs:any namespace="##local" processContents="lax"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="doc" type="zing"/>
+	  <xs:element name="e" type="xs:time"/>
+	</xs:schema>`
+
+	s := load11(t, schema)
+	// The first <e> takes the local declaration (xs:date), the second the
+	// global one through the wildcard (xs:time). One name, two types.
+	if err := check11(t, s,
+		`<doc><e>2008-11-03</e><f/><e>12:20:02</e></doc>`); err == nil {
+		t.Error("two types for one name in a content model should be refused")
+	}
+	// A different name through the wildcard is no conflict.
+	if err := check11(t, s,
+		`<doc><e>2008-11-03</e><f/><g>anything</g></doc>`); err != nil {
+		t.Errorf("a distinct name through the wildcard is fine: %v", err)
+	}
+
+	// XSD 1.0 has no dynamic half to the rule, and accepts it.
+	assertValid(t, schema, `<doc><e>2008-11-03</e><f/><e>12:20:02</e></doc>`)
+}
+
+// TestPlusINFIsAFloat covers the XSD 1.1 addition of a leading plus to the
+// lexical space of xs:float and xs:double. XSD 1.0 admitted only "INF".
+func TestPlusINFIsAFloat(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="n" type="xs:float"/>
+	</xs:schema>`)
+
+	for _, v := range []string{"+INF", "INF", "-INF", "NaN"} {
+		if err := check11(t, s, `<n>`+v+`</n>`); err != nil {
+			t.Errorf("%q should be a valid xs:float: %v", v, err)
+		}
+	}
+	if err := check11(t, s, `<n>++INF</n>`); err == nil {
+		t.Error("++INF should not be a valid xs:float")
+	}
+}

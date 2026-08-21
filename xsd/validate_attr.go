@@ -272,6 +272,13 @@ func isFloatLexical(v string) bool {
 	switch v {
 	case "INF", "-INF", "NaN":
 		return true
+	case "+INF":
+		// XSD 1.1 added the leading plus to the lexical space of the
+		// two floating types; 1.0 admitted only "INF". It is accepted
+		// unconditionally because a 1.0 schema cannot reach a value
+		// space the version does not define — the worst case is
+		// admitting one extra spelling of a value 1.0 already has.
+		return true
 	}
 	if v == "" {
 		return false

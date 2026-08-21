@@ -140,6 +140,10 @@ type validator struct {
 	// constraint may have to compare by value rather than by spelling.
 	keyValues map[*xdm.Node]keyValue
 
+	// childTypes records the type each child name was matched with, per
+	// parent, for the dynamic Element Declarations Consistent check.
+	childTypes map[edtKey]Type
+
 	// inherited holds the XSD 1.1 inheritable attributes in scope, innermost
 	// last. Conditional type assignment on a descendant sees them, which is
 	// how an ancestor's xml:lang can choose a nested element's type.
@@ -165,6 +169,13 @@ func (v *validator) elementDefined(name xdm.QName) bool {
 func (v *validator) attributeDefined(name xdm.QName) bool {
 	_, ok := v.schema.Attributes[name]
 	return ok
+}
+
+// edtKey identifies one element name within one content model, which is the
+// scope Element Declarations Consistent applies to.
+type edtKey struct {
+	parent *xdm.Node
+	name   xdm.QName
 }
 
 // keyValue is a node's schema-normalized value and the primitive it belongs
@@ -466,6 +477,73 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 		return v.matchAll(el, kids, t.Particle.Term.(*ModelGroup), t)
 	}
 	return v.matchSequence(el, kids, m, t)
+}
+
+// noteChildType applies the XSD 1.1 dynamic Element Declarations Consistent
+// check (cvc-complex-type.2.4.k).
+//
+// Element Declarations Consistent forbids two element declarations with the
+// same name and different types in one content model. A wildcard can only break
+// it at validation time, because the schema cannot know which global
+// declaration a lax wildcard will pick up — so the rule has a dynamic half, and
+// this is it: two <e> in one content model, one matched by a local declaration
+// of type xs:date and the other by the global declaration of type xs:time, is
+// the inconsistency the static rule exists to prevent.
+//
+// The type is taken from the position that actually matched, which is the whole
+// point: a scan of the model's positions finds the local declaration for both
+// children and sees no conflict. A 1.0 processor accepts this, so the check is
+// version-gated — the suite's wild061 is annotated "valid in 1.0, invalid in
+// 1.1".
+func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position) {
+	if v.schema.Version != Version11 {
+		return
+	}
+	var got Type
+	switch term := p.term.(type) {
+	case *ElementDecl:
+		d := p.resolveDecl(name)
+		if d == nil {
+			return
+		}
+		got = d.Type
+	case *Wildcard:
+		if term.ProcessContents == ProcessSkip {
+			// Skipped content is not assessed, so it asserts no
+			// type and cannot conflict with one.
+			return
+		}
+		d, ok := v.schema.Elements[name]
+		if !ok {
+			return
+		}
+		got = d.Type
+	default:
+		return
+	}
+	if got == nil {
+		return
+	}
+
+	// The scope is one content model, which is one parent element.
+	parent := kid.Parent
+	if parent == nil {
+		return
+	}
+	if v.childTypes == nil {
+		v.childTypes = map[edtKey]Type{}
+	}
+	k := edtKey{parent: parent, name: name}
+	prev, seen := v.childTypes[k]
+	if !seen {
+		v.childTypes[k] = got
+		return
+	}
+	if prev != got {
+		v.fail(kid, "cvc-complex-type.2.4.k",
+			"element {%s}%s is matched with two different types in one "+
+				"content model", name.URI, name.Local)
+	}
 }
 
 // isAllGroup reports whether a particle is an xs:all at the top of a content
@@ -830,6 +908,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 // it.
 func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 	name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
+	v.noteChildType(kid, name, p)
 
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
