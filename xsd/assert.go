@@ -444,11 +444,11 @@ func typedValueFor(normalized string, t *SimpleType) xdm.Item {
 // data() yields "2 4 6 8 10" and the arithmetic raises FORG0001 rather than
 // running over five numbers.
 func typedSequenceFor(normalized string, t *SimpleType) xdm.Sequence {
-	if t != nil && t.Variety == VarietyList && t.ItemType != nil {
+	if item := listItemTypeOf(t); item != nil {
 		items := splitFields(normalized)
 		out := make(xdm.Sequence, 0, len(items))
 		for _, item := range items {
-			out = append(out, typedValueFor(item, t.ItemType))
+			out = append(out, typedValueFor(item, listItemTypeOf(t)))
 		}
 		return out
 	}
@@ -489,4 +489,31 @@ func annotationName(t Type) string {
 		return p.Name.Local
 	}
 	return ""
+}
+
+// listItemTypeOf returns the item type of a list, seeing through restrictions.
+//
+// A restriction of a list type is itself of the list variety but carries no
+// item type of its own: the item type is the one it inherits. Reading only the
+// type's own field left an assertion on such a restriction with $value bound to
+// the whole literal as one item, so count($value) was always 1.
+func listItemTypeOf(t *SimpleType) *SimpleType {
+	seen := 0
+	for cur := t; cur != nil; {
+		if cur.Variety != VarietyList {
+			return nil
+		}
+		if cur.ItemType != nil {
+			return cur.ItemType
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			return nil
+		}
+		cur = base
+		if seen++; seen > 64 {
+			return nil
+		}
+	}
+	return nil
 }

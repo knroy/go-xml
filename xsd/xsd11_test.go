@@ -2372,3 +2372,69 @@ func TestWildcardIsLastResortInSequence(t *testing.T) {
 		t.Errorf("the wildcard should still take unnamed content: %v", err)
 	}
 }
+
+// TestAssertionOnListRestriction covers xs:assertion on a restriction of a list
+// type, where $value is the sequence of items.
+//
+// Two things had to hold for this. Assertions were run only for the atomic
+// variety, so a list's were skipped entirely; and a restriction of a list is
+// itself of the list variety but carries no item type of its own, so binding
+// $value from the type's own field gave one item holding the whole literal and
+// count($value) was always 1.
+func TestAssertionOnListRestriction(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="ints"><xs:list itemType="xs:integer"/></xs:simpleType>
+	  <xs:element name="list">
+	    <xs:simpleType>
+	      <xs:restriction base="ints">
+	        <xs:assertion test="count($value) eq count(distinct-values($value))"/>
+	      </xs:restriction>
+	    </xs:simpleType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<list>1 3 5 7 9</list>`); err != nil {
+		t.Errorf("a list with no duplicates should pass: %v", err)
+	}
+	if err := check11(t, s, `<list>2 4 6 6 10</list>`); err == nil {
+		t.Error("a list with a duplicate should fail the assertion")
+	}
+	// A single item and an empty list both have distinct values trivially.
+	if err := check11(t, s, `<list>1</list>`); err != nil {
+		t.Errorf("a one-item list should pass: %v", err)
+	}
+}
+
+// TestAssertionOnUnionRestriction covers xs:assertion on a restriction of a
+// union.
+//
+// The assertion is not a member-selection criterion: the member has already
+// been chosen, and the assertion then either holds or the value is invalid.
+// Treating a failed assertion as "try the next member" would let a value slip
+// through as a member the schema did not intend.
+func TestAssertionOnUnionRestriction(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:simpleType name="dateOrDateTime">
+	    <xs:union memberTypes="xs:date xs:dateTime"/>
+	  </xs:simpleType>
+	  <xs:element name="v">
+	    <xs:simpleType>
+	      <xs:restriction base="dateOrDateTime">
+	        <xs:assertion test="starts-with(string($value), '2008')"/>
+	      </xs:restriction>
+	    </xs:simpleType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<v>2008-06-11</v>`); err != nil {
+		t.Errorf("a 2008 date should pass: %v", err)
+	}
+	if err := check11(t, s, `<v>2008-06-12T12:00:00</v>`); err != nil {
+		t.Errorf("a 2008 dateTime should pass: %v", err)
+	}
+	if err := check11(t, s, `<v>2009-06-13Z</v>`); err == nil {
+		t.Error("a 2009 value should fail the assertion")
+	}
+}

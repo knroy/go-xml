@@ -218,6 +218,14 @@ func validateListValue(lexical string, t *SimpleType) (string, error) {
 			}
 		}
 	}
+
+	// XSD 1.1 permits xs:assertion on a list, where $value is the sequence
+	// of items — "count($value) eq count(distinct-values($value))" is how a
+	// schema says a list has no duplicates. Running assertions only for the
+	// atomic variety skipped every one of them.
+	if err := checkSimpleAssertions(steps, normalized, t); err != nil {
+		return "", err
+	}
 	return normalized, nil
 }
 
@@ -246,6 +254,14 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 		}
 		if err := checkEnumeration(steps, normalized, t); err != nil {
 			continue
+		}
+		// An assertion on a union is not a member-selection criterion:
+		// the member has already been chosen, and the assertion then
+		// either holds for the value or the value is invalid. Treating
+		// a failed assertion as "try the next member" would let a value
+		// slip through as a member the schema did not intend.
+		if err := checkSimpleAssertions(steps, normalized, t); err != nil {
+			return "", err
 		}
 		return normalized, nil
 	}
