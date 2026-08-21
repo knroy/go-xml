@@ -927,5 +927,6 @@ func clampBound(body string, max int) (string, bool) {
 // span the whole value. A caller using this for a pattern facet has to wrap the
 // result — see the xsd package, which does so with \A(?:...)\z.
 func TranslateSchemaRegexp(pattern string) (string, error) {
-	return translatePattern(pattern, false)
+	return translatePattern(escapeSchemaAnchors(pattern), false)
 }
+
