@@ -34,16 +34,48 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.26%** agreement on 20,131
-instance tests. XSD **1.1** — assertions, conditional type assignment, open
-content — is not implemented.
+Measured against the W3C XSD test suite: **99.28%** agreement on 20,140
+instance tests.
 
-Two schema-component constraints are not checked: Unique Particle Attribution
-and Particle Valid (Restriction). Both are opt-in in Xerces
-(`schema-full-checking` defaults to false) and neither is implemented at all in
-libxml2, so this is where the mature implementations sit too — but it means a
-schema that is itself invalid in those specific ways will be accepted rather
-than reported.
+XSD **1.1** is implemented and opt-in:
+
+```go
+xsd.Options{Version: xsd.Version11}
+```
+
+That brings in `xs:assert`, conditional type assignment with
+`xs:alternative` and inheritable attributes, `xs:openContent` and
+`xs:defaultOpenContent`, `xs:override`, the `notNamespace` wildcard form,
+`explicitTimezone`, and the 1.1 built-ins. It measures **78.38%** on the
+suite's 1.1 instance tests — usable, not finished; a third of the 1.1 test
+groups still skip because some schema-level construct fails to load.
+
+The version is opt-in rather than automatic because 1.1 changes which
+documents are valid, so a 1.0 schema must not acquire its behaviour by
+accident. The 1.1 constructs are always *parsed* — a schema that uses one is
+not made valid by pretending it is absent — but only honoured under
+`Version11`.
+
+### Checking the schema itself
+
+Unique Particle Attribution and Element Declarations Consistent are checked on
+request:
+
+```go
+if err := schema.CheckConstraints(xsd.CheckOptions{}); err != nil {
+    return err
+}
+```
+
+They are a separate call because they are the expensive half and say nothing
+about whether an instance document is valid — the same reason Xerces gates
+them behind `schema-full-checking`, default false. `CheckOptions.LaxUPA`
+selects the permissive reading Saxon and XSV use, where only the element
+declaration need be identifiable rather than the particle.
+
+Particle Valid (Restriction) is **not** checked. libxml2 does not implement it
+at all and Xerces leaves it off by default, so a schema invalid in that
+specific way is accepted here rather than reported.
 
 ### Resolving schemaLocation
 
