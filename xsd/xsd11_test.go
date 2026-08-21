@@ -1802,3 +1802,96 @@ func TestTimeWrapsAtMidnight(t *testing.T) {
 		t.Error("a different time should not resolve")
 	}
 }
+
+// TestAssertionsAccumulateOnDerivation covers §3.4.2.4: a derived type has to
+// satisfy its base's assertions as well as its own.
+//
+// Without this a restriction could widen what its base accepted just by
+// declaring an assertion of its own, which is the opposite of restricting.
+func TestAssertionsAccumulateOnDerivation(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:simpleContent>
+	      <xs:extension base="xs:integer">
+	        <xs:assert test=". = (1 to 10, 20, 30)"/>
+	      </xs:extension>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:complexType name="derived">
+	    <xs:simpleContent>
+	      <xs:restriction base="base">
+	        <xs:assert test=". mod 2 = 0"/>
+	      </xs:restriction>
+	    </xs:simpleContent>
+	  </xs:complexType>
+	  <xs:element name="e" type="derived"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<e>4</e>`); err != nil {
+		t.Errorf("4 satisfies both assertions: %v", err)
+	}
+	// Satisfies the derived assertion but not the base's.
+	if err := check11(t, s, `<e>80</e>`); err == nil {
+		t.Error("80 should fail the base's assertion")
+	}
+	// Satisfies the base's but not the derived one.
+	if err := check11(t, s, `<e>7</e>`); err == nil {
+		t.Error("7 should fail the derived assertion")
+	}
+}
+
+// TestAllGroupSuffixIsASuffix pins that suffix mode is enforced inside an all
+// group too: the members may come in any order, but a suffix is still at the
+// end.
+func TestAllGroupSuffixIsASuffix(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:defaultOpenContent mode="suffix" appliesToEmpty="false">
+	    <xs:any namespace="urn:o" processContents="skip"/>
+	  </xs:defaultOpenContent>
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:all>
+	        <xs:element name="a" maxOccurs="2"/>
+	        <xs:element name="b" minOccurs="0"/>
+	      </xs:all>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><b/><a/><x xmlns="urn:o"/></doc>`); err != nil {
+		t.Errorf("a genuine suffix should be admitted: %v", err)
+	}
+	if err := check11(t, s, `<doc><b/><x xmlns="urn:o"/><a/></doc>`); err == nil {
+		t.Error("a group member after the suffix should be refused")
+	}
+}
+
+// TestMinOccursCheckedForEveryCounter covers a counter bug that affected both
+// versions.
+//
+// Completeness checked only the counters enclosing the *final* position. In
+// <a minOccurs="5"/><b minOccurs="0"/> the last position is b, which is in none
+// of a's scopes, so a's minimum was never looked at and four <a/> passed.
+func TestMinOccursCheckedForEveryCounter(t *testing.T) {
+	schema := `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a" minOccurs="5" maxOccurs="10"/>
+	        <xs:element name="b" minOccurs="0"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`
+
+	assertValid(t, schema, `<doc><a/><a/><a/><a/><a/><b/></doc>`)
+	assertInvalid(t, schema, `<doc><a/><a/><a/><a/><b/></doc>`,
+		"cvc-complex-type.2.4.b")
+	// The trailing optional element is what hid it; without one the final
+	// position was inside a's counter and the check worked.
+	assertInvalid(t, schema, `<doc><a/><a/><a/><a/></doc>`,
+		"cvc-complex-type.2.4.b")
+}

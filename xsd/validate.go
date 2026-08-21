@@ -823,6 +823,21 @@ func countersSatisfied(m *contentModel, counts []int, at int) bool {
 			return false
 		}
 	}
+	// Every counter that was entered has to have met its minimum, not only
+	// those enclosing the final position. In <a minOccurs="5"/><b
+	// minOccurs="0"/> the last position is b, which is in none of a's
+	// scopes — so checking only the final position's counters never looked
+	// at a's minimum at all, and four <a/> passed.
+	//
+	// A counter still at zero is one whose particle was never entered, and
+	// that is not a shortfall: an optional repetition that did not occur is
+	// satisfied by the surrounding model accepting its absence, which the
+	// automaton has already decided by reaching an accepting position.
+	for c, n := range counts {
+		if n > 0 && n < m.counters[c].min {
+			return false
+		}
+	}
 	return true
 }
 
@@ -877,6 +892,11 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 	counts := make([]int, len(particles))
 	var tables []icTables
 
+	// inSuffix latches once a suffix-mode wildcard has matched, exactly as
+	// in matchSequence: an all group's members may come in any order, but a
+	// suffix still has to be at the end.
+	inSuffix := false
+
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		found := false
@@ -888,6 +908,9 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 		// bound violation for content the group accepts.
 		exhausted := -1
 		for i, p := range particles {
+			if inSuffix {
+				break
+			}
 			pos := &position{term: p.Term, particle: p}
 			if !pos.matches(name, v.elementDefined) {
 				continue
@@ -920,6 +943,9 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 		// XSD 1.1 open content applies to an all group too: the
 		// wildcard admits what the group does not name.
 		if oc := v.openContentFor(t); oc != nil && oc.Wildcard.AllowsName(name, v.elementDefined) {
+			if oc.Mode == OpenSuffix {
+				inSuffix = true
+			}
 			if tbl := v.validateChild(kid, &position{term: oc.Wildcard}); tbl != nil {
 				tables = append(tables, tbl)
 			}

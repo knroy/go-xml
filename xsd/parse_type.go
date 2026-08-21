@@ -618,6 +618,16 @@ func (p *parser) inheritAttributes(t *ComplexType) {
 			}
 			t.AttributeUses = append(t.AttributeUses, u)
 		}
+		// Assertions accumulate down a derivation chain: a derived type
+		// has to satisfy its base's as well as its own, whether it
+		// extends or restricts. §3.4.2.4 makes {assertions} the base's
+		// followed by the type's, and without it a restriction could
+		// widen what its base accepted just by declaring an assertion
+		// of its own — which is the opposite of restricting.
+		if len(base.Assertions) > 0 {
+			t.Assertions = append(append([]*Assertion{}, base.Assertions...),
+				t.Assertions...)
+		}
 		// The attribute wildcard combines the way open content does:
 		// unioned for an extension, since an extension may only widen
 		// what its base admits, and replaced for a restriction. Taking
