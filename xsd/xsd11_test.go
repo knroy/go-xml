@@ -2574,3 +2574,39 @@ func TestAssertionQNameAtomization(t *testing.T) {
 		t.Error("the same local name in another namespace should fail")
 	}
 }
+
+// TestRestrictionClosesOpenContent pins that a restriction declaring no
+// <xs:openContent> closes it, where an extension inherits its base's.
+//
+// That is the point of restricting: the derived type accepts a subset, and
+// inheriting the base's wildcard would keep admitting everything the base did.
+// The suite's open014 puts it as "a valid restriction: base has open content,
+// derived does not", with the instance that uses it expected invalid.
+func TestRestrictionClosesOpenContent(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="B">
+	    <xs:openContent mode="suffix">
+	      <xs:any namespace="urn:o" processContents="skip"/>
+	    </xs:openContent>
+	    <xs:sequence>
+	      <xs:element name="a" maxOccurs="unbounded"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="R">
+	    <xs:complexContent>
+	      <xs:restriction base="B">
+	        <xs:sequence><xs:element name="a"/></xs:sequence>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="R"/>
+	</xs:schema>`)
+
+	if err := check11(t, s, `<doc><a/></doc>`); err != nil {
+		t.Errorf("the restricted model should still accept its own content: %v", err)
+	}
+	if err := check11(t, s, `<doc><a/><x xmlns="urn:o"/></doc>`); err == nil {
+		t.Error("a restriction declaring no open content should close it")
+	}
+}

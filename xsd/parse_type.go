@@ -842,9 +842,17 @@ func allGroupOf(p *Particle) *ModelGroup {
 // base's alone rather than nothing.
 func combineOpenContent(base, own *OpenContent, method Derivation, declared bool) *OpenContent {
 	if method != DerivationExtension {
-		if !declared && own == nil {
-			return base
-		}
+		// A restriction declaring no open content closes it. That is
+		// the point of restricting: the derived type accepts a subset,
+		// and inheriting the base's wildcard would keep admitting
+		// everything the base did. The suite's open014 pins it —
+		// "a valid restriction: base has open content, derived does
+		// not", with the instance that uses it expected invalid.
+		//
+		// The defaultOpenContent still applies where the type declares
+		// nothing, which is what declared records: it is applied
+		// separately, and reaching here with own == nil means neither
+		// the type nor the document supplied one.
 		return own
 	}
 	if base == nil || base.Wildcard == nil {
