@@ -2210,3 +2210,46 @@ func TestEffectivelyEmptyContentRejectsWhitespace(t *testing.T) {
 	</xs:schema>`
 	assertValid(t, withContent, "<doc>\n  <a/>\n</doc>")
 }
+
+// TestDynamicEDTAgainstBaseDeclarations covers Element Declarations Consistent
+// reaching into a restricted type's base chain.
+//
+// A restriction may leave a declaration out of its model, but the two models
+// are not independent: the derived one describes a subset of what the base
+// admits, so a name the base declares keeps the type the base gave it. A
+// wildcard in the derived model that picks up a different type for that name is
+// the inconsistency the rule forbids — and it is invisible to a check that only
+// compares the children present against each other, since the name appears once.
+func TestDynamicEDTAgainstBaseDeclarations(t *testing.T) {
+	s := load11(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="zing">
+	    <xs:sequence>
+	      <xs:element name="e" type="xs:date" minOccurs="0"/>
+	      <xs:element name="f" type="xs:integer"/>
+	      <xs:any namespace="##local" processContents="lax"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:complexType name="zang">
+	    <xs:complexContent>
+	      <xs:restriction base="zing">
+	        <xs:sequence>
+	          <xs:element name="f" type="xs:integer"/>
+	          <xs:any namespace="##local" processContents="lax"/>
+	        </xs:sequence>
+	      </xs:restriction>
+	    </xs:complexContent>
+	  </xs:complexType>
+	  <xs:element name="doc" type="zang"/>
+	  <xs:element name="e" type="xs:duration"/>
+	</xs:schema>`)
+
+	// The global <e> is an xs:duration; the base declares <e> as xs:date.
+	if err := check11(t, s, `<doc><f>42</f><e>PT12H</e></doc>`); err == nil {
+		t.Error("a wildcard type conflicting with the base's should be refused")
+	}
+	// A name the base does not declare is no conflict.
+	if err := check11(t, s, `<doc><f>42</f><g>x</g></doc>`); err != nil {
+		t.Errorf("an unrelated name through the wildcard is fine: %v", err)
+	}
+}

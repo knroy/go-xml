@@ -144,6 +144,11 @@ type validator struct {
 	// parent, for the dynamic Element Declarations Consistent check.
 	childTypes map[edtKey]Type
 
+	// currentType is the complex type whose content model is being walked,
+	// needed by the dynamic Element Declarations Consistent check to reach
+	// the base chain's declarations.
+	currentType *ComplexType
+
 	// openContents caches the per-type copy of an open content whose
 	// wildcard uses ##definedSibling, since the component itself may be
 	// shared across types and must not be written to.
@@ -530,6 +535,14 @@ func truncate(s string) string {
 
 // validateChildren matches an element's children against the content model.
 func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
+	// The type is recorded for the duration of the walk so that the dynamic
+	// Element Declarations Consistent check can reach its base chain. It is
+	// saved and restored rather than assigned, because validating a child
+	// re-enters here for the child's own type.
+	saved := v.currentType
+	v.currentType = t
+	defer func() { v.currentType = saved }()
+
 	m, err := v.modelFor(t)
 	if err != nil {
 		v.fail(el, "", "compiling the content model: %v", err)
@@ -559,7 +572,7 @@ func (v *validator) validateChildren(el *xdm.Node, t *ComplexType) []icTables {
 // children and sees no conflict. A 1.0 processor accepts this, so the check is
 // version-gated — the suite's wild061 is annotated "valid in 1.0, invalid in
 // 1.1".
-func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position) {
+func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position, t *ComplexType) {
 	if v.schema.Version != Version11 {
 		return
 	}
@@ -587,6 +600,23 @@ func (v *validator) noteChildType(kid *xdm.Node, name xdm.QName, p *position) {
 	}
 	if got == nil {
 		return
+	}
+
+	// A restriction's model may omit a declaration its base names, but the
+	// two are still declarations of the same name in one content model as
+	// far as Element Declarations Consistent is concerned — the derived
+	// type's model is a subset of the base's, not a separate one. So a
+	// wildcard picking up a global declaration has to agree with the base
+	// chain's local declarations too, which is what wild068 turns on: the
+	// restricted model names only <f>, and the conflict is between the
+	// global <e> the wildcard finds and the <e> the base declares.
+	if w, isWildcard := p.term.(*Wildcard); isWildcard && w.ProcessContents != ProcessSkip {
+		if base := v.baseDeclaredType(t, name); base != nil && !edtConsistent(v, base, got) {
+			v.fail(kid, "cvc-complex-type.2.4.k",
+				"element {%s}%s is matched with a type inconsistent with "+
+					"the one its base type declares", name.URI, name.Local)
+			return
+		}
 	}
 
 	// The scope is one content model, which is one parent element.
@@ -1014,7 +1044,7 @@ func (v *validator) matchAll(el *xdm.Node, kids []*xdm.Node, g *ModelGroup, t *C
 // it.
 func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 	name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
-	v.noteChildType(kid, name, p)
+	v.noteChildType(kid, name, p, v.currentType)
 
 	if w, ok := p.term.(*Wildcard); ok {
 		switch w.ProcessContents {
@@ -1217,4 +1247,34 @@ func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
 		out = append(out, p)
 	}
 	return out
+}
+
+// baseDeclaredType returns the type some ancestor of t declares for an element
+// name in its own content model, or nil.
+//
+// A restriction may leave a declaration out of its model, but the two models
+// are not independent: the derived one describes a subset of what the base
+// admits, so a name the base declares keeps the type the base gave it. A
+// wildcard in the derived model that picks up a different type for that name
+// is the inconsistency Element Declarations Consistent forbids.
+func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
+	seen := 0
+	for cur := t; cur != nil; {
+		base, ok := cur.Base.(*ComplexType)
+		if !ok || base == cur {
+			return nil
+		}
+		if base.Particle != nil {
+			decls := map[xdm.QName]*ElementDecl{}
+			collectElementDecls(base.Particle, decls, 0)
+			if d, found := decls[name]; found && d.Type != nil {
+				return d.Type
+			}
+		}
+		cur = base
+		if seen++; seen > 64 {
+			return nil
+		}
+	}
+	return nil
 }
