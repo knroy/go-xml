@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Datatype decides whether a string is a legal value, and when two values are
+// datatype decides whether a string is a legal value, and when two values are
 // equal.
 //
 // RELAX NG defines exactly two built-in types — string and token — and leaves
@@ -13,9 +13,9 @@ import (
 // differ only in equality: string compares literally, token compares after
 // whitespace normalisation, which is why the same document can be valid
 // against one and not the other.
-type Datatype interface {
+type datatype interface {
 	// check reports whether value is legal, given the parameters.
-	check(value string, params []Param) error
+	check(value string, params []param) error
 	// equal reports whether two values are the same, which <value> needs and
 	// <data> does not.
 	equal(a, b string) bool
@@ -49,7 +49,7 @@ const xsdLibrary = "http://www.w3.org/2001/XMLSchema-datatypes"
 // literal.
 type stringType struct{}
 
-func (stringType) check(_ string, params []Param) error { return noParams("string", params) }
+func (stringType) check(_ string, params []param) error { return noParams("string", params) }
 func (stringType) equal(a, b string) bool               { return a == b }
 
 // tokenType is the built-in "token": every string is legal, and equality
@@ -60,7 +60,7 @@ func (stringType) equal(a, b string) bool               { return a == b }
 // choice for a value written across lines.
 type tokenType struct{}
 
-func (tokenType) check(_ string, params []Param) error { return noParams("token", params) }
+func (tokenType) check(_ string, params []param) error { return noParams("token", params) }
 func (tokenType) equal(a, b string) bool {
 	return normalizeToken(a) == normalizeToken(b)
 }
@@ -71,7 +71,7 @@ func (tokenType) equal(a, b string) bool {
 // one is asking for a check that cannot happen. Ignoring it would accept
 // values the author meant to exclude — which is the failure a validator
 // exists to prevent, arriving quietly.
-func noParams(name string, params []Param) error {
+func noParams(name string, params []param) error {
 	if len(params) == 0 {
 		return nil
 	}
@@ -90,7 +90,7 @@ func normalizeToken(s string) string {
 // naming a library this does not implement asks for checks that would not
 // happen, and silently accepting everything is the failure mode a validator
 // exists to prevent.
-func lookupDatatype(library, name string) (Datatype, error) {
+func lookupDatatype(library, name string) (datatype, error) {
 	switch library {
 	case builtinLibrary:
 		switch name {
@@ -115,7 +115,7 @@ func lookupDatatype(library, name string) (Datatype, error) {
 // parameter is meaningful for a type is a property of the schema, not of any
 // document, and finding out only when a document happens to reach it is
 // finding out too late.
-func checkParams(dt Datatype, library, name string, params []Param) error {
+func checkParams(dt datatype, library, name string, params []param) error {
 	if len(params) == 0 {
 		return nil
 	}

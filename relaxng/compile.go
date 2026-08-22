@@ -105,9 +105,9 @@ type compiler struct {
 	// reaching itself becomes a lazy reference rather than an infinite
 	// expansion.
 	expanding map[string]bool
-	// lazy holds one Ref per name, so that a definition reached twice yields
+	// lazy holds one refPat per name, so that a definition reached twice yields
 	// the same object and the walks over a compiled pattern can recognise it.
-	lazy map[string]*Ref
+	lazy map[string]*refPat
 	// elementDepth counts the <element> boundaries crossed so far, and
 	// expandingAt records the depth at which each definition began. A
 	// definition reaching itself at the same depth has not crossed one.
@@ -144,7 +144,7 @@ const startKey = "<start>"
 // only catches a definition that refers to itself with nothing in between.
 const maxRefDepth = 500
 
-func (c *compiler) compileTop(root *xdm.Node) (Pattern, error) {
+func (c *compiler) compileTop(root *xdm.Node) (pattern, error) {
 	if root.Name.Local == "grammar" {
 		return c.compileGrammar(root)
 	}
@@ -153,7 +153,7 @@ func (c *compiler) compileTop(root *xdm.Node) (Pattern, error) {
 
 // compileGrammar reads <grammar>, collecting its definitions before compiling
 // <start>, so that a <ref> may name a definition that appears later.
-func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
+func (c *compiler) compileGrammar(g *xdm.Node) (pattern, error) {
 	var start *xdm.Node
 	var collect func(n *xdm.Node) error
 	collect = func(n *xdm.Node) error {
@@ -262,7 +262,7 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 }
 
 // joinStarts combines the further <start> elements onto the first.
-func (c *compiler) joinStarts(p Pattern, how string) (Pattern, error) {
+func (c *compiler) joinStarts(p pattern, how string) (pattern, error) {
 	join := choice
 	if how == "interleave" {
 		join = interleave
@@ -344,11 +344,11 @@ func (c *compiler) checkUnreferenced(n *xdm.Node) error {
 				return fmt.Errorf("relaxng: <%s>: %w", kid.Name.Local, err)
 			}
 			if kid.Name.Local == "data" {
-				var params []Param
+				var params []param
 				for _, p := range kid.ChildElements() {
 					if p.Name.URI == NS && p.Name.Local == "param" {
 						params = append(params,
-							Param{Name: p.AttrValue("name"), Value: p.StringValue()})
+							param{Name: p.AttrValue("name"), Value: p.StringValue()})
 					}
 				}
 				if err := checkParams(dt, lib, name, params); err != nil {
@@ -469,7 +469,7 @@ func definedNames(g *xdm.Node) map[string]bool {
 // Several RELAX NG elements take a sequence of patterns and mean their group:
 // <start>, <define>, <element> and <group> all do. Writing that once is what
 // keeps the individual cases short.
-func (c *compiler) compileChildren(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileChildren(n *xdm.Node) (pattern, error) {
 	kids := patternChildren(n)
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name.Local)
@@ -514,18 +514,18 @@ func patternChildren(n *xdm.Node) []*xdm.Node {
 	return out
 }
 
-func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 	if n.Name.URI != NS {
 		return nil, fmt.Errorf("relaxng: {%s}%s is not a RELAX NG pattern",
 			n.Name.URI, n.Name.Local)
 	}
 	switch n.Name.Local {
 	case "empty":
-		return Empty{}, nil
+		return emptyPat{}, nil
 	case "notAllowed":
-		return NotAllowed{}, nil
+		return notAllowedPat{}, nil
 	case "text":
-		return Text{}, nil
+		return textPat{}, nil
 
 	case "element":
 		nc, err := c.nameClass(n)
@@ -538,7 +538,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return Element{Name: nc, Pattern: body}, nil
+		return elementPat{Name: nc, Pattern: body}, nil
 
 	case "attribute":
 		nc, err := c.nameClass(n)
@@ -546,14 +546,14 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 			return nil, err
 		}
 		kids := patternChildren(n)
-		var body Pattern = Text{}
+		var body pattern = textPat{}
 		if len(kids) > 0 {
 			body, err = c.compileChildren(n)
 			if err != nil {
 				return nil, err
 			}
 		}
-		return Attribute{Name: nc, Pattern: body}, nil
+		return attributePat{Name: nc, Pattern: body}, nil
 
 	case "group", "div":
 		// <div> groups for documentation and has no effect on the grammar,
@@ -571,14 +571,14 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return choice(p, Empty{}), nil
+		return choice(p, emptyPat{}), nil
 
 	case "zeroOrMore":
 		p, err := c.compileChildren(n)
 		if err != nil {
 			return nil, err
 		}
-		return choice(oneOrMore(p), Empty{}), nil
+		return choice(oneOrMore(p), emptyPat{}), nil
 
 	case "oneOrMore":
 		p, err := c.compileChildren(n)
@@ -593,14 +593,14 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		if err != nil {
 			return nil, err
 		}
-		return interleave(Text{}, p), nil
+		return interleave(textPat{}, p), nil
 
 	case "list":
 		p, err := c.compileChildren(n)
 		if err != nil {
 			return nil, err
 		}
-		return List{Pattern: p}, nil
+		return listPat{Pattern: p}, nil
 
 	case "value":
 		return c.compileValue(n)
@@ -635,7 +635,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		n.Name.Local)
 }
 
-func (c *compiler) combine(n *xdm.Node, f func(a, b Pattern) Pattern) (Pattern, error) {
+func (c *compiler) combine(n *xdm.Node, f func(a, b pattern) pattern) (pattern, error) {
 	kids := patternChildren(n)
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("relaxng: <%s> has no pattern", n.Name.Local)
@@ -654,11 +654,11 @@ func (c *compiler) combine(n *xdm.Node, f func(a, b Pattern) Pattern) (Pattern, 
 	return p, nil
 }
 
-func (c *compiler) compileRef(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 	return c.compileRefNamed(normalizeToken(n.AttrValue("name")))
 }
 
-func (c *compiler) compileRefNamed(name string) (Pattern, error) {
+func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	def, ok := c.defines[name]
 	if !ok {
 		return nil, fmt.Errorf("relaxng: <ref> names %q, which no <define> provides", name)
@@ -732,7 +732,7 @@ func (c *compiler) compileRefNamed(name string) (Pattern, error) {
 // It exists because a nested <grammar> is a fresh scope: its definitions do
 // not collide with the outer grammar's, which is what makes a grammar safe to
 // nest. parentRef is the one door between the two.
-func (c *compiler) compileParentRef(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileParentRef(n *xdm.Node) (pattern, error) {
 	name := normalizeToken(n.AttrValue("name"))
 	if c.parent == nil {
 		return nil, fmt.Errorf(
@@ -895,7 +895,7 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 
 // compileExternalRef compiles the schema an <externalRef> names, as a pattern
 // standing where the externalRef stands.
-func (c *compiler) compileExternalRef(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 	root, href, err := c.fetch(n)
 	if err != nil {
 		return nil, err
@@ -939,23 +939,23 @@ func rootElement(doc *xdm.Node) *xdm.Node {
 // lazyRef makes a reference that compiles the definition when it is first
 // needed.
 //
-// One Ref is kept per name, and it is the same object every time. That matters
+// One refPat is kept per name, and it is the same object every time. That matters
 // as much as the laziness: the checks that walk a compiled pattern stop when
 // they meet a reference they have already followed, and they recognise it by
-// identity. A fresh Ref each time would defeat that and recurse forever.
+// identity. A fresh refPat each time would defeat that and recurse forever.
 //
 // The compiler is captured rather than the pattern, because the definition
 // cannot be compiled yet — it is the one being compiled, several frames up.
-func (c *compiler) lazyRef(name string) Pattern {
+func (c *compiler) lazyRef(name string) pattern {
 	if c.lazy == nil {
-		c.lazy = map[string]*Ref{}
+		c.lazy = map[string]*refPat{}
 	}
 	if r, ok := c.lazy[name]; ok {
 		return r
 	}
-	r := &Ref{name: name}
+	r := &refPat{name: name}
 	c.lazy[name] = r
-	r.resolve = func() (Pattern, error) {
+	r.resolve = func() (pattern, error) {
 		sub := &compiler{
 			defines: c.defines, combined: c.combined, how: c.how,
 			parent: c.parent, opts: c.opts, includeDepth: c.includeDepth,
@@ -967,7 +967,7 @@ func (c *compiler) lazyRef(name string) Pattern {
 	return r
 }
 
-func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileValue(n *xdm.Node) (pattern, error) {
 	lib, name := datatypeOf(n, "")
 	if name == "" {
 		// §4.16: a <value> with no type= is the built-in token, whatever
@@ -980,10 +980,10 @@ func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: <value>: %w", err)
 	}
-	// The schema's own prefixes travel with the value: a QName written here
+	// The schema's own prefixes travel with the value: a qnamePat written here
 	// means what this document's bindings say, and the instance's bindings
 	// are a different set entirely.
-	return Value{
+	return valuePat{
 		Type:     dt,
 		Value:    n.StringValue(),
 		Ns:       c.nsFor(n),
@@ -991,7 +991,7 @@ func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
 	}, nil
 }
 
-func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {
+func (c *compiler) compileData(n *xdm.Node) (pattern, error) {
 	lib, name := datatypeOf(n, "")
 	if name == "" {
 		return nil, fmt.Errorf("relaxng: <data> has no type")
@@ -1000,7 +1000,7 @@ func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: <data>: %w", err)
 	}
-	d := Data{Type: dt}
+	d := dataPat{Type: dt}
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI != NS {
 			continue
@@ -1011,7 +1011,7 @@ func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {
 			if pn == "" {
 				return nil, fmt.Errorf("relaxng: <param> has no name")
 			}
-			d.Params = append(d.Params, Param{Name: pn, Value: kid.StringValue()})
+			d.Params = append(d.Params, param{Name: pn, Value: kid.StringValue()})
 		case "except":
 			// Several patterns inside one <except> mean their choice: a data
 			// excepting x, y and z admits nothing that matches any of them.
@@ -1058,14 +1058,14 @@ func datatypeOf(n *xdm.Node, dflt string) (library, name string) {
 //
 // The name may be written as an attribute — name="foo" — or as a child
 // element, which is the form that allows anyName and nsName.
-func (c *compiler) nameClass(n *xdm.Node) (NameClass, error) {
+func (c *compiler) nameClass(n *xdm.Node) (nameClass, error) {
 	if v := n.AttrValue("name"); v != "" {
-		// The attribute is declared xsd:QName in the schema for schemas, so
+		// The attribute is declared xsd:qnamePat in the schema for schemas, so
 		// it is whitespace-normalised: name=" foo " names foo.
 		if n.Name.Local == "attribute" {
-			return QName{Name: c.resolveAttrNameAttr(n, normalizeToken(v))}, nil
+			return qnamePat{Name: c.resolveAttrNameAttr(n, normalizeToken(v))}, nil
 		}
-		return QName{Name: c.resolveName(n, normalizeToken(v))}, nil
+		return qnamePat{Name: c.resolveName(n, normalizeToken(v))}, nil
 	}
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI != NS {
@@ -1079,13 +1079,13 @@ func (c *compiler) nameClass(n *xdm.Node) (NameClass, error) {
 	return nil, fmt.Errorf("relaxng: <%s> has no name class", n.Name.Local)
 }
 
-func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
+func (c *compiler) compileNameClass(n *xdm.Node) (nameClass, error) {
 	switch n.Name.Local {
 	case "name":
-		return QName{Name: c.resolveName(n, normalizeToken(n.StringValue()))}, nil
+		return qnamePat{Name: c.resolveName(n, normalizeToken(n.StringValue()))}, nil
 
 	case "anyName":
-		nc := AnyName{}
+		nc := anyNamePat{}
 		e, err := c.exceptClass(n)
 		if err != nil {
 			return nil, err
@@ -1094,7 +1094,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 		return nc, nil
 
 	case "nsName":
-		nc := NsName{Ns: c.nsFor(n)}
+		nc := nsNamePat{Ns: c.nsFor(n)}
 		e, err := c.exceptClass(n)
 		if err != nil {
 			return nil, err
@@ -1103,7 +1103,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 		return nc, nil
 
 	case "choice":
-		var out NameClass
+		var out nameClass
 		for _, kid := range n.ChildElements() {
 			if kid.Name.URI != NS {
 				continue
@@ -1115,7 +1115,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 			if out == nil {
 				out = k
 			} else {
-				out = NameChoice{Left: out, Right: k}
+				out = nameChoicePat{Left: out, Right: k}
 			}
 		}
 		if out == nil {
@@ -1148,7 +1148,7 @@ func exceptOf(n *xdm.Node) []*xdm.Node {
 }
 
 // exceptClass compiles the contents of a name-class <except> as one class.
-func (c *compiler) exceptClass(n *xdm.Node) (NameClass, error) {
+func (c *compiler) exceptClass(n *xdm.Node) (nameClass, error) {
 	kids := exceptOf(n)
 	if len(kids) == 0 {
 		return nil, nil
@@ -1162,7 +1162,7 @@ func (c *compiler) exceptClass(n *xdm.Node) (NameClass, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = NameChoice{Left: out, Right: k}
+		out = nameChoicePat{Left: out, Right: k}
 	}
 	return out, nil
 }
@@ -1190,7 +1190,7 @@ func (c *compiler) resolveAttrNameAttr(n *xdm.Node, lexical string) xdm.QName {
 	return xdm.QName{Local: lexical}
 }
 
-// resolveName turns a lexical name into a QName using the ns= in force.
+// resolveName turns a lexical name into a qnamePat using the ns= in force.
 //
 // RELAX NG does not use the document's namespace bindings for pattern names:
 // ns= is an attribute inherited down the schema, and an unprefixed name means

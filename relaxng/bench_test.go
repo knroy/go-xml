@@ -66,7 +66,7 @@ func BenchmarkValidateSequence(b *testing.B) {
 	}
 }
 
-// Interleave is the construct that makes RELAX NG more expressive than an XSD
+// interleavePat is the construct that makes RELAX NG more expressive than an XSD
 // all group, and the one where a naive implementation blows up: each item may
 // go to either branch, so the pattern doubles unless the constructors
 // simplify it back down.
@@ -96,7 +96,7 @@ func BenchmarkValidateInterleave(b *testing.B) {
 }
 
 // A recursive definition, expanded lazily. Each level of nesting costs one
-// expansion, and the Ref cache is what keeps it from costing more.
+// expansion, and the refPat cache is what keeps it from costing more.
 func BenchmarkValidateRecursive(b *testing.B) {
 	s := benchSchema(b, `<grammar`+benchNS+`>
 		<start><element name="root"><ref name="n"/></element></start>

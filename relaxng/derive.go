@@ -10,152 +10,152 @@ import "github.com/knroy/go-xml/xdm"
 // remaining pattern is nullable.
 //
 // The constructors below are not plain struct literals. Each one simplifies as
-// it builds — a choice with a NotAllowed branch is the other branch, a group
-// with an Empty branch is the other branch — and that is what keeps the
+// it builds — a choice with a notAllowedPat branch is the other branch, a group
+// with an emptyPat branch is the other branch — and that is what keeps the
 // pattern from growing without bound as the derivative is taken over a long
 // document. Without it the algorithm is correct and unusable.
 
-func choice(a, b Pattern) Pattern {
-	if _, ok := a.(NotAllowed); ok {
+func choice(a, b pattern) pattern {
+	if _, ok := a.(notAllowedPat); ok {
 		return b
 	}
-	if _, ok := b.(NotAllowed); ok {
+	if _, ok := b.(notAllowedPat); ok {
 		return a
 	}
-	return Choice{a, b}
+	return choicePat{a, b}
 }
 
-func group(a, b Pattern) Pattern {
-	if _, ok := a.(NotAllowed); ok {
-		return NotAllowed{}
+func group(a, b pattern) pattern {
+	if _, ok := a.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	if _, ok := b.(NotAllowed); ok {
-		return NotAllowed{}
+	if _, ok := b.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	if _, ok := a.(Empty); ok {
+	if _, ok := a.(emptyPat); ok {
 		return b
 	}
-	if _, ok := b.(Empty); ok {
+	if _, ok := b.(emptyPat); ok {
 		return a
 	}
-	return Group{a, b}
+	return groupPat{a, b}
 }
 
-func interleave(a, b Pattern) Pattern {
-	if _, ok := a.(NotAllowed); ok {
-		return NotAllowed{}
+func interleave(a, b pattern) pattern {
+	if _, ok := a.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	if _, ok := b.(NotAllowed); ok {
-		return NotAllowed{}
+	if _, ok := b.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	if _, ok := a.(Empty); ok {
+	if _, ok := a.(emptyPat); ok {
 		return b
 	}
-	if _, ok := b.(Empty); ok {
+	if _, ok := b.(emptyPat); ok {
 		return a
 	}
-	return Interleave{a, b}
+	return interleavePat{a, b}
 }
 
-func after(a, b Pattern) Pattern {
-	if _, ok := a.(NotAllowed); ok {
-		return NotAllowed{}
+func after(a, b pattern) pattern {
+	if _, ok := a.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	if _, ok := b.(NotAllowed); ok {
-		return NotAllowed{}
+	if _, ok := b.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	return After{a, b}
+	return afterPat{a, b}
 }
 
-func oneOrMore(p Pattern) Pattern {
-	if _, ok := p.(NotAllowed); ok {
-		return NotAllowed{}
+func oneOrMore(p pattern) pattern {
+	if _, ok := p.(notAllowedPat); ok {
+		return notAllowedPat{}
 	}
-	return OneOrMore{p}
+	return oneOrMorePat{p}
 }
 
 // startTagOpenDeriv is the derivative with respect to an element's start tag.
 //
 // It descends into every branch that could admit the name, replacing the
-// matching Element with an After: the element's own content pattern, followed
+// matching elementPat with an afterPat: the element's own content pattern, followed
 // by whatever must come once that element closes. That pairing is what lets
 // one recursion handle arbitrary nesting.
-func startTagOpenDeriv(p Pattern, name xdm.QName) Pattern {
+func startTagOpenDeriv(p pattern, name xdm.QName) pattern {
 	switch t := expand(p).(type) {
-	case Choice:
+	case choicePat:
 		return choice(startTagOpenDeriv(t.Left, name), startTagOpenDeriv(t.Right, name))
-	case Element:
+	case elementPat:
 		if !t.Name.contains(name) {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
-		return after(t.Pattern, Empty{})
-	case Interleave:
+		return after(t.Pattern, emptyPat{})
+	case interleavePat:
 		return choice(
-			applyAfter(func(x Pattern) Pattern { return interleave(x, t.Right) },
+			applyAfter(func(x pattern) pattern { return interleave(x, t.Right) },
 				startTagOpenDeriv(t.Left, name)),
-			applyAfter(func(x Pattern) Pattern { return interleave(t.Left, x) },
+			applyAfter(func(x pattern) pattern { return interleave(t.Left, x) },
 				startTagOpenDeriv(t.Right, name)))
-	case OneOrMore:
+	case oneOrMorePat:
 		return applyAfter(
-			func(x Pattern) Pattern {
-				return group(x, choice(oneOrMore(t.Pattern), Empty{}))
+			func(x pattern) pattern {
+				return group(x, choice(oneOrMore(t.Pattern), emptyPat{}))
 			},
 			startTagOpenDeriv(t.Pattern, name))
-	case Group:
-		d := applyAfter(func(x Pattern) Pattern { return group(x, t.Right) },
+	case groupPat:
+		d := applyAfter(func(x pattern) pattern { return group(x, t.Right) },
 			startTagOpenDeriv(t.Left, name))
 		if t.Left.nullable() {
 			return choice(d, startTagOpenDeriv(t.Right, name))
 		}
 		return d
-	case After:
-		return applyAfter(func(x Pattern) Pattern { return after(x, t.Right) },
+	case afterPat:
+		return applyAfter(func(x pattern) pattern { return after(x, t.Right) },
 			startTagOpenDeriv(t.Left, name))
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
-// expand resolves a Ref to the pattern it stands for.
+// expand resolves a refPat to the pattern it stands for.
 //
 // Every function that examines a pattern calls this first, so that a lazily
 // compiled definition behaves exactly like the pattern it names. Expanding
 // here rather than at compile time is what lets a definition refer to itself:
 // the expansion happens once per level of nesting the document actually has,
 // instead of unboundedly while compiling.
-func expand(p Pattern) Pattern {
+func expand(p pattern) pattern {
 	for {
-		r, ok := p.(*Ref)
+		r, ok := p.(*refPat)
 		if !ok {
 			return p
 		}
 		q, err := r.get()
 		if err != nil {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		p = q
 	}
 }
 
-// applyAfter rewrites the continuation of every After inside p.
+// applyAfter rewrites the continuation of every afterPat inside p.
 //
 // The derivative of a compound pattern has to remember what follows the
 // element being opened, and that "what follows" lives in the right half of an
-// After. Rewriting it in place is what threads the context through without a
+// afterPat. Rewriting it in place is what threads the context through without a
 // separate stack.
-func applyAfter(f func(Pattern) Pattern, p Pattern) Pattern {
+func applyAfter(f func(pattern) pattern, p pattern) pattern {
 	switch t := expand(p).(type) {
-	case After:
+	case afterPat:
 		return after(t.Left, f(t.Right))
-	case Choice:
+	case choicePat:
 		return choice(applyAfter(f, t.Left), applyAfter(f, t.Right))
-	case NotAllowed:
-		return NotAllowed{}
+	case notAllowedPat:
+		return notAllowedPat{}
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
 // attsDeriv is the derivative with respect to an element's attributes.
-func attsDeriv(p Pattern, attrs []attr, ctx nsContext) Pattern {
+func attsDeriv(p pattern, attrs []attr, ctx nsContext) pattern {
 	for _, a := range attrs {
 		p = attDeriv(p, a, ctx)
 	}
@@ -167,30 +167,30 @@ type attr struct {
 	value string
 }
 
-func attDeriv(p Pattern, a attr, ctx nsContext) Pattern {
+func attDeriv(p pattern, a attr, ctx nsContext) pattern {
 	switch t := expand(p).(type) {
-	case After:
+	case afterPat:
 		return after(attDeriv(t.Left, a, ctx), t.Right)
-	case Choice:
+	case choicePat:
 		return choice(attDeriv(t.Left, a, ctx), attDeriv(t.Right, a, ctx))
-	case Group:
+	case groupPat:
 		return choice(
 			group(attDeriv(t.Left, a, ctx), t.Right),
 			group(t.Left, attDeriv(t.Right, a, ctx)))
-	case Interleave:
+	case interleavePat:
 		return choice(
 			interleave(attDeriv(t.Left, a, ctx), t.Right),
 			interleave(t.Left, attDeriv(t.Right, a, ctx)))
-	case OneOrMore:
+	case oneOrMorePat:
 		return group(attDeriv(t.Pattern, a, ctx),
-			choice(oneOrMore(t.Pattern), Empty{}))
-	case Attribute:
+			choice(oneOrMore(t.Pattern), emptyPat{}))
+	case attributePat:
 		if !t.Name.contains(a.name) || !valueMatch(t.Pattern, a.value, ctx) {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
-		return Empty{}
+		return emptyPat{}
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
 // valueMatch reports whether a string satisfies a pattern.
@@ -198,101 +198,101 @@ func attDeriv(p Pattern, a attr, ctx nsContext) Pattern {
 // An attribute value and a text node are both just a string, so the same
 // question is asked of both. The empty string is special: it matches a
 // nullable pattern, which is how <empty/> admits an absent value.
-func valueMatch(p Pattern, s string, ctx nsContext) bool {
+func valueMatch(p pattern, s string, ctx nsContext) bool {
 	if p.nullable() && whitespaceOnly(s) {
 		return true
 	}
 	return !isNotAllowed(textDeriv(p, s, ctx))
 }
 
-func isNotAllowed(p Pattern) bool {
-	_, ok := p.(NotAllowed)
+func isNotAllowed(p pattern) bool {
+	_, ok := p.(notAllowedPat)
 	return ok
 }
 
 // textDeriv is the derivative with respect to a string of character data.
-func textDeriv(p Pattern, s string, ctx nsContext) Pattern {
+func textDeriv(p pattern, s string, ctx nsContext) pattern {
 	switch t := expand(p).(type) {
-	case Choice:
+	case choicePat:
 		return choice(textDeriv(t.Left, s, ctx), textDeriv(t.Right, s, ctx))
-	case Interleave:
+	case interleavePat:
 		return choice(
 			interleave(textDeriv(t.Left, s, ctx), t.Right),
 			interleave(t.Left, textDeriv(t.Right, s, ctx)))
-	case Group:
+	case groupPat:
 		d := group(textDeriv(t.Left, s, ctx), t.Right)
 		if t.Left.nullable() {
 			return choice(d, textDeriv(t.Right, s, ctx))
 		}
 		return d
-	case After:
+	case afterPat:
 		return after(textDeriv(t.Left, s, ctx), t.Right)
-	case OneOrMore:
+	case oneOrMorePat:
 		return group(textDeriv(t.Pattern, s, ctx),
-			choice(oneOrMore(t.Pattern), Empty{}))
-	case Text:
-		// Text consumes any amount of character data and remains itself,
+			choice(oneOrMore(t.Pattern), emptyPat{}))
+	case textPat:
+		// textPat consumes any amount of character data and remains itself,
 		// which is what makes it match a run of text nodes.
 		return t
-	case Value:
-		// A QName value is compared by what its prefix means on each side,
+	case valuePat:
+		// A qnamePat value is compared by what its prefix means on each side,
 		// so the datatype is asked with both contexts when it has an opinion.
 		if ct, ok := t.Type.(contextualType); ok {
 			if ct.equalIn(t.Value, nsContext{prefixes: t.Prefixes, dflt: t.Ns},
 				s, ctx) {
-				return Empty{}
+				return emptyPat{}
 			}
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		if t.Type.equal(t.Value, s) {
-			return Empty{}
+			return emptyPat{}
 		}
-		return NotAllowed{}
-	case Data:
+		return notAllowedPat{}
+	case dataPat:
 		if err := t.Type.check(s, t.Params); err != nil {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		if t.Except != nil && valueMatch(t.Except, s, ctx) {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
-		return Empty{}
-	case List:
+		return emptyPat{}
+	case listPat:
 		return listDeriv(t.Pattern, splitTokens(s), ctx)
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
 // listDeriv applies a pattern to the tokens of a whitespace-separated list.
-func listDeriv(p Pattern, tokens []string, ctx nsContext) Pattern {
+func listDeriv(p pattern, tokens []string, ctx nsContext) pattern {
 	for _, tok := range tokens {
 		p = textDeriv(p, tok, ctx)
 	}
 	if p.nullable() {
-		return Empty{}
+		return emptyPat{}
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
 // startTagCloseDeriv discards the attribute patterns that were never matched.
 //
 // An attribute is optional in the sense that the pattern may offer one the
 // document did not carry; reaching the end of the start tag with such a
-// pattern still live means it went unused, and an unused Attribute cannot be
+// pattern still live means it went unused, and an unused attributePat cannot be
 // satisfied later.
-func startTagCloseDeriv(p Pattern) Pattern {
+func startTagCloseDeriv(p pattern) pattern {
 	switch t := expand(p).(type) {
-	case After:
+	case afterPat:
 		return after(startTagCloseDeriv(t.Left), t.Right)
-	case Choice:
+	case choicePat:
 		return choice(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
-	case Group:
+	case groupPat:
 		return group(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
-	case Interleave:
+	case interleavePat:
 		return interleave(startTagCloseDeriv(t.Left), startTagCloseDeriv(t.Right))
-	case OneOrMore:
+	case oneOrMorePat:
 		return oneOrMore(startTagCloseDeriv(t.Pattern))
-	case Attribute:
-		return NotAllowed{}
+	case attributePat:
+		return notAllowedPat{}
 	}
 	return p
 }
@@ -300,19 +300,19 @@ func startTagCloseDeriv(p Pattern) Pattern {
 // endTagDeriv is the derivative with respect to an element's end tag.
 //
 // The element's content is complete, so what remains is the continuation
-// stored in the After — but only if the content pattern is nullable, meaning
+// stored in the afterPat — but only if the content pattern is nullable, meaning
 // everything it required was supplied.
-func endTagDeriv(p Pattern) Pattern {
+func endTagDeriv(p pattern) pattern {
 	switch t := expand(p).(type) {
-	case Choice:
+	case choicePat:
 		return choice(endTagDeriv(t.Left), endTagDeriv(t.Right))
-	case After:
+	case afterPat:
 		if t.Left.nullable() {
 			return t.Right
 		}
-		return NotAllowed{}
+		return notAllowedPat{}
 	}
-	return NotAllowed{}
+	return notAllowedPat{}
 }
 
 func whitespaceOnly(s string) bool {

@@ -17,7 +17,7 @@ import (
 // diverge.
 type xsdType struct{ name string }
 
-func xsdDatatype(name string) (Datatype, error) {
+func xsdDatatype(name string) (datatype, error) {
 	if xsd.BuiltinType(name) == nil {
 		return nil, fmt.Errorf(
 			"the XML Schema datatype library has no type named %q", name)
@@ -25,7 +25,7 @@ func xsdDatatype(name string) (Datatype, error) {
 	return xsdType{name: name}, nil
 }
 
-func (t xsdType) check(value string, params []Param) error {
+func (t xsdType) check(value string, params []param) error {
 	canon, err := xsd.CheckBuiltinValue(t.name, value)
 	if err != nil {
 		return err
@@ -40,7 +40,7 @@ func (t xsdType) check(value string, params []Param) error {
 // direct. Only the facets the conformance suite exercises are implemented; an
 // unrecognised one is an error rather than ignored, because a parameter that
 // is silently dropped is a constraint the caller believes is enforced.
-func (t xsdType) checkParams(value string, params []Param) error {
+func (t xsdType) checkParams(value string, params []param) error {
 	for _, p := range params {
 		switch p.Name {
 		case "length", "minLength", "maxLength":
@@ -96,7 +96,7 @@ func (t xsdType) equal(a, b string) bool {
 	return ca == cb
 }
 
-func atoiParam(p Param) (int, error) {
+func atoiParam(p param) (int, error) {
 	n := 0
 	s := strings.TrimSpace(p.Value)
 	if s == "" {
@@ -114,7 +114,7 @@ func atoiParam(p Param) (int, error) {
 // equalIn compares two QNames by what they mean rather than how they are
 // spelled.
 //
-// A QName is a prefix and a local name, and the prefix is only a pointer to a
+// A qnamePat is a prefix and a local name, and the prefix is only a pointer to a
 // namespace. "e:x" written in a schema and "f:x" written in a document are the
 // same value when e and f are bound to the same namespace, and different when
 // they are not — which is why comparing the lexical forms gives the wrong
@@ -128,7 +128,7 @@ func (t xsdType) equalIn(a string, actx nsContext, b string, bctx nsContext) boo
 	return aok && bok && an == bn
 }
 
-// resolveQName splits a lexical QName and resolves its prefix.
+// resolveQName splits a lexical qnamePat and resolves its prefix.
 //
 // An unresolvable prefix is not an error here but a mismatch: the value simply
 // does not name anything, so it equals nothing.
@@ -154,7 +154,7 @@ func resolveQName(s string, ctx nsContext) (xdm.QName, bool) {
 // and both below 1, which string ordering gets wrong in a way that would
 // accept and reject arbitrary values. Only the numeric types are ordered this
 // way, and a bound on anything else is refused rather than guessed at.
-func (t xsdType) checkBound(value string, p Param) error {
+func (t xsdType) checkBound(value string, p param) error {
 	v, ok := parseNumber(value)
 	if !ok {
 		return fmt.Errorf("%s applies to numbers, and %q is not one",

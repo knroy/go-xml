@@ -15,91 +15,91 @@ package relaxng
 
 import "github.com/knroy/go-xml/xdm"
 
-// Pattern is a RELAX NG pattern.
+// pattern is a RELAX NG pattern.
 //
 // The set is closed and small, which is the language's chief virtue: eleven
 // cases cover everything, and validation is one function over them.
-type Pattern interface {
+type pattern interface {
 	// nullable reports whether the pattern matches the empty sequence. It is
 	// the accept test, and it is what every derivative is finally asked.
 	nullable() bool
 }
 
-// NotAllowed matches nothing. It is the failure value: a derivative that
+// notAllowedPat matches nothing. It is the failure value: a derivative that
 // reaches it can never recover, which is what lets the whole computation stop
 // short rather than carry a doomed branch forward.
-type NotAllowed struct{}
+type notAllowedPat struct{}
 
-// Empty matches only the empty sequence.
-type Empty struct{}
+// emptyPat matches only the empty sequence.
+type emptyPat struct{}
 
-// Text matches any sequence of text nodes, including none.
-type Text struct{}
+// textPat matches any sequence of text nodes, including none.
+type textPat struct{}
 
-// Choice matches either branch.
-type Choice struct{ Left, Right Pattern }
+// choicePat matches either branch.
+type choicePat struct{ Left, Right pattern }
 
-// Interleave matches both branches with their items in any interleaving.
+// interleavePat matches both branches with their items in any interleaving.
 //
 // This is the construct that makes RELAX NG more expressive than a DTD or an
 // XSD all group: the branches may be arbitrary patterns, not just elements,
 // and they interleave rather than merely being unordered.
-type Interleave struct{ Left, Right Pattern }
+type interleavePat struct{ Left, Right pattern }
 
-// Group matches the left branch followed by the right.
-type Group struct{ Left, Right Pattern }
+// groupPat matches the left branch followed by the right.
+type groupPat struct{ Left, Right pattern }
 
-// OneOrMore matches its pattern one or more times.
-type OneOrMore struct{ Pattern Pattern }
+// oneOrMorePat matches its pattern one or more times.
+type oneOrMorePat struct{ Pattern pattern }
 
-// Element matches one element whose name the class admits and whose content
+// elementPat matches one element whose name the class admits and whose content
 // matches the pattern.
-type Element struct {
-	Name    NameClass
-	Pattern Pattern
+type elementPat struct {
+	Name    nameClass
+	Pattern pattern
 }
 
-// Attribute matches one attribute whose name the class admits and whose value
+// attributePat matches one attribute whose name the class admits and whose value
 // matches the pattern.
-type Attribute struct {
-	Name    NameClass
-	Pattern Pattern
+type attributePat struct {
+	Name    nameClass
+	Pattern pattern
 }
 
-// Value matches a single string equal to the given value, compared according
+// valuePat matches a single string equal to the given value, compared according
 // to the datatype's rules.
-type Value struct {
-	Type  Datatype
+type valuePat struct {
+	Type  datatype
 	Value string
 	// Ns is the namespace in force where the value was written, which the
-	// QName datatype needs to resolve an unprefixed name.
+	// qnamePat datatype needs to resolve an unprefixed name.
 	Ns string
 	// Prefixes are the namespace bindings in scope where the value was
-	// written. A QName value is compared by what its prefix *means*, not by
+	// written. A qnamePat value is compared by what its prefix *means*, not by
 	// how it is spelled, so both sides need their own bindings: the schema's
 	// live here and the document's arrive with the text being matched.
 	Prefixes map[string]string
 }
 
-// Data matches a string the datatype accepts, optionally excluding a pattern.
-type Data struct {
-	Type   Datatype
-	Params []Param
-	Except Pattern
+// dataPat matches a string the datatype accepts, optionally excluding a pattern.
+type dataPat struct {
+	Type   datatype
+	Params []param
+	Except pattern
 }
 
-// List matches a whitespace-separated list of tokens against a pattern.
-type List struct{ Pattern Pattern }
+// listPat matches a whitespace-separated list of tokens against a pattern.
+type listPat struct{ Pattern pattern }
 
-// After is an internal pattern: it matches the first pattern, then continues
+// afterPat is an internal Pattern: it matches the first pattern, then continues
 // with the second.
 //
 // It has no syntax — it arises only while computing a derivative, to remember
 // what must follow once an element's content is complete. Keeping it a pattern
 // rather than a separate stack is what makes the algorithm one recursion.
-type After struct{ Left, Right Pattern }
+type afterPat struct{ Left, Right pattern }
 
-// Ref is a definition not yet expanded.
+// refPat is a definition not yet expanded.
 //
 // A definition may refer to itself — a <bar> whose content optionally holds
 // another <bar> is the ordinary way to write a nested structure — and
@@ -107,12 +107,12 @@ type After struct{ Left, Right Pattern }
 // an element boundary becomes this instead, and is expanded only when a
 // derivative actually needs it, which happens once per level of nesting the
 // document actually has.
-type Ref struct {
+type refPat struct {
 	// resolve produces the pattern, and is called at most once.
-	resolve func() (Pattern, error)
+	resolve func() (pattern, error)
 	// cached is the result, kept so that a definition reached many times is
 	// compiled once.
-	cached Pattern
+	cached pattern
 	err    error
 	done   bool
 	// name is for error messages.
@@ -120,43 +120,43 @@ type Ref struct {
 }
 
 // get expands the reference.
-func (r *Ref) get() (Pattern, error) {
+func (r *refPat) get() (pattern, error) {
 	if !r.done {
 		r.done = true
 		r.cached, r.err = r.resolve()
 		if r.cached == nil && r.err == nil {
-			r.cached = NotAllowed{}
+			r.cached = notAllowedPat{}
 		}
 	}
 	return r.cached, r.err
 }
 
-// Param is one <param> on a data pattern.
-type Param struct {
+// param is one <param> on a data pattern.
+type param struct {
 	Name  string
 	Value string
 }
 
-func (NotAllowed) nullable() bool   { return false }
-func (Empty) nullable() bool        { return true }
-func (Text) nullable() bool         { return true }
-func (p Choice) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
-func (p Interleave) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
-func (p Group) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
-func (p OneOrMore) nullable() bool  { return p.Pattern.nullable() }
-func (Element) nullable() bool      { return false }
-func (Attribute) nullable() bool    { return false }
-func (Value) nullable() bool        { return false }
-func (Data) nullable() bool         { return false }
-func (List) nullable() bool         { return false }
-func (After) nullable() bool        { return false }
+func (notAllowedPat) nullable() bool   { return false }
+func (emptyPat) nullable() bool        { return true }
+func (textPat) nullable() bool         { return true }
+func (p choicePat) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
+func (p interleavePat) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
+func (p groupPat) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
+func (p oneOrMorePat) nullable() bool  { return p.Pattern.nullable() }
+func (elementPat) nullable() bool      { return false }
+func (attributePat) nullable() bool    { return false }
+func (valuePat) nullable() bool        { return false }
+func (dataPat) nullable() bool         { return false }
+func (listPat) nullable() bool         { return false }
+func (afterPat) nullable() bool        { return false }
 
 // nullable expands the reference.
 //
 // A definition that cannot be expanded matches nothing, which is the safe
 // reading: the failure is reported when the schema is compiled, and by the
 // time a derivative is asking, refusing is right.
-func (r *Ref) nullable() bool {
+func (r *refPat) nullable() bool {
 	p, err := r.get()
 	if err != nil {
 		return false
@@ -164,39 +164,39 @@ func (r *Ref) nullable() bool {
 	return p.nullable()
 }
 
-// NameClass decides which names a pattern admits.
-type NameClass interface {
+// nameClass decides which names a pattern admits.
+type nameClass interface {
 	contains(name xdm.QName) bool
 }
 
-// AnyName matches every name, less an exception.
-type AnyName struct{ Except NameClass }
+// anyNamePat matches every name, less an exception.
+type anyNamePat struct{ Except nameClass }
 
-// NsName matches every name in one namespace, less an exception.
-type NsName struct {
+// nsNamePat matches every name in one namespace, less an exception.
+type nsNamePat struct {
 	Ns     string
-	Except NameClass
+	Except nameClass
 }
 
-// QName matches exactly one name.
-type QName struct{ Name xdm.QName }
+// qnamePat matches exactly one name.
+type qnamePat struct{ Name xdm.QName }
 
-// NameChoice matches either class.
-type NameChoice struct{ Left, Right NameClass }
+// nameChoicePat matches either class.
+type nameChoicePat struct{ Left, Right nameClass }
 
-func (c AnyName) contains(n xdm.QName) bool {
+func (c anyNamePat) contains(n xdm.QName) bool {
 	return c.Except == nil || !c.Except.contains(n)
 }
 
-func (c NsName) contains(n xdm.QName) bool {
+func (c nsNamePat) contains(n xdm.QName) bool {
 	if n.URI != c.Ns {
 		return false
 	}
 	return c.Except == nil || !c.Except.contains(n)
 }
 
-func (c QName) contains(n xdm.QName) bool { return n == c.Name }
+func (c qnamePat) contains(n xdm.QName) bool { return n == c.Name }
 
-func (c NameChoice) contains(n xdm.QName) bool {
+func (c nameChoicePat) contains(n xdm.QName) bool {
 	return c.Left.contains(n) || c.Right.contains(n)
 }

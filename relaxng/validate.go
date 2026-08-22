@@ -13,7 +13,7 @@ import (
 // compiled XSD schema: validation takes derivatives of the pattern rather than
 // mutating it.
 type Schema struct {
-	start Pattern
+	start pattern
 }
 
 // Error is one validity failure.
@@ -27,7 +27,7 @@ func (e *Error) Error() string { return e.Path + ": " + e.Message }
 // Validate checks a document against the schema.
 //
 // The result is a single error rather than a list, which is the shape the
-// derivative algorithm gives: a pattern that reaches NotAllowed carries no
+// derivative algorithm gives: a pattern that reaches notAllowedPat carries no
 // record of the alternatives it tried, so there is one failure and it is the
 // point at which every branch died. Reporting the *last* place the document
 // was still viable is more useful than reporting the root.
@@ -138,7 +138,7 @@ func (v *validator) note(msg string) {
 
 // nsContextOf reads the namespace bindings in scope at an element.
 //
-// A QName in a document means what the document's prefixes say it means, and
+// A qnamePat in a document means what the document's prefixes say it means, and
 // the schema's prefixes are a separate set — so the comparison needs both, and
 // this supplies the document half.
 func nsContextOf(n *xdm.Node) nsContext {
@@ -150,7 +150,7 @@ func nsContextOf(n *xdm.Node) nsContext {
 }
 
 // textDeriv takes the derivative over a run of character data.
-func (v *validator) textDeriv(p Pattern, s string, ctx nsContext) Pattern {
+func (v *validator) textDeriv(p pattern, s string, ctx nsContext) pattern {
 	if whitespaceOnly(s) {
 		// Whitespace between elements is not content unless the pattern asks
 		// for text: a document written across lines must not fail because of
@@ -163,7 +163,7 @@ func (v *validator) textDeriv(p Pattern, s string, ctx nsContext) Pattern {
 }
 
 // childDeriv takes the derivative with respect to one node of content.
-func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
+func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 	switch n.Kind {
 	case xdm.KindText:
 		return v.textDeriv(p, n.Value, nsContextOf(n))
@@ -183,7 +183,7 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 			// only the last few are kept: what identifies the failure is the
 			// depth, which the message states, not the route to it.
 			v.deepPath = tailPath(v.path, n.Name.Local)
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		v.depth++
 		v.path = append(v.path, n.Name.Local)
@@ -196,22 +196,22 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 		p1 := startTagOpenDeriv(p, name)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		p1 = attsDeriv(p1, elementAttrs(n), nsContextOf(n))
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name.Local))
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		p1 = startTagCloseDeriv(p1)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is missing a required attribute",
 				n.Name.Local))
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		p1 = v.childrenDeriv(p1, n)
 		if isNotAllowed(p1) {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 		p2 := endTagDeriv(p1)
 		if isNotAllowed(p2) {
@@ -226,7 +226,7 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 }
 
 // childrenDeriv takes the derivative over an element's children.
-func (v *validator) childrenDeriv(p Pattern, el *xdm.Node) Pattern {
+func (v *validator) childrenDeriv(p pattern, el *xdm.Node) pattern {
 	kids := contentChildren(el)
 	if len(kids) == 0 {
 		// An empty element and one containing "" are the same document, so a
@@ -240,12 +240,12 @@ func (v *validator) childrenDeriv(p Pattern, el *xdm.Node) Pattern {
 		// this leaves <foo/> failing against a schema that plainly admits it.
 		//
 		// The derivative is only taken when it helps. For a pattern that
-		// wanted an element it is NotAllowed either way, and taking it would
+		// wanted an element it is notAllowedPat either way, and taking it would
 		// replace a useful failure with a bare one.
 		//
 		// "Helps" is judged by what the end tag will make of it, not by
-		// nullability: at this point the pattern is inside an After, whose
-		// continuation is the rest of the enclosing content, and an After is
+		// nullability: at this point the pattern is inside an afterPat, whose
+		// continuation is the rest of the enclosing content, and an afterPat is
 		// never nullable however well its left half matched.
 		if d := textDeriv(p, "", nsContextOf(el)); !isNotAllowed(endTagDeriv(d)) {
 			return d
@@ -271,7 +271,7 @@ func (v *validator) childrenDeriv(p Pattern, el *xdm.Node) Pattern {
 			p = v.childDeriv(p, c)
 		}
 		if isNotAllowed(p) {
-			return NotAllowed{}
+			return notAllowedPat{}
 		}
 	}
 	return p

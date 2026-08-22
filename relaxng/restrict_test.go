@@ -555,7 +555,7 @@ func TestElementCannotMatchWhereAStringDoes(t *testing.T) {
 // so a pattern that matches strings must match <foo/>.
 //
 // This is easy to get wrong in the direction that rejects: the pattern at that
-// point sits inside an After, which is never nullable however well its left
+// point sits inside an afterPat, which is never nullable however well its left
 // half matched, so asking whether the derivative is nullable answers no even
 // when the content is fine. What decides it is what the end tag makes of it.
 func TestEmptyElementMatchesTheEmptyString(t *testing.T) {
@@ -596,7 +596,7 @@ func TestEmptyElementMatchesTheEmptyString(t *testing.T) {
 	}
 }
 
-// A QName value is compared by what its prefix means, not by how it is
+// A qnamePat value is compared by what its prefix means, not by how it is
 // spelled. The schema's prefixes and the document's are separate sets, and
 // comparing the lexical forms gives the wrong answer in both directions.
 func TestQNameValuesCompareByNamespace(t *testing.T) {
