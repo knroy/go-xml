@@ -121,6 +121,12 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		return nil
 	}
 
+	if local == "attribute" {
+		if err := checkInfiniteAttributeName(n, stack); err != nil {
+			return err
+		}
+	}
+
 	if !transparent(n, local) {
 		if err := matchProhibited(append(append([]string{}, stack...), local)); err != nil {
 			return err
@@ -759,4 +765,44 @@ func errStringSequence() error {
 	return fmt.Errorf(
 		"relaxng: a pattern matching a single string is sequenced with a " +
 			"pattern matching content; they must be alternatives (section 7.2)")
+}
+
+// checkInfiniteAttributeName applies the second clause of §7.3.
+//
+// An <attribute> whose name class is infinite — anyName or nsName, which admit
+// unboundedly many names — must sit under a <oneOrMore>. Without one the
+// pattern says "exactly one attribute, of any name", and an element carrying
+// two would match it twice over with nothing to say which. Under a oneOrMore
+// the intent is unambiguous: as many as the document has.
+func checkInfiniteAttributeName(n *xdm.Node, stack []string) error {
+	if !hasInfiniteNameClass(n) {
+		return nil
+	}
+	for _, s := range stack {
+		if s == "oneOrMore" {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"relaxng: <attribute> with an open name class needs a <oneOrMore> " +
+			"ancestor to say how many it matches (section 7.3)")
+}
+
+// hasInfiniteNameClass reports whether an attribute's name class admits
+// unboundedly many names.
+func hasInfiniteNameClass(n *xdm.Node) bool {
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		switch kid.Name.Local {
+		case "anyName", "nsName":
+			return true
+		case "choice":
+			if findDescendant(kid, []string{"anyName", "nsName"}) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

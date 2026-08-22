@@ -314,3 +314,53 @@ func TestCombineJoinsDefinitions(t *testing.T) {
 		}
 	}
 }
+
+// Section 4.16: what a name class may exclude.
+func TestNameClassExcept(t *testing.T) {
+	// The commonest use of except must work: every name but a few.
+	mustAccept(t, "anyName excepting several names",
+		`<element`+rngNS+`><anyName><except>
+			<name>a</name><name>b</name><name>c</name>
+		</except></anyName><empty/></element>`)
+
+	// Excepting everything admitted leaves nothing, which notAllowed says
+	// plainly and this does not.
+	for _, src := range []string{
+		`<element` + rngNS + `><anyName><except><anyName/></except></anyName>
+			<empty/></element>`,
+		`<element` + rngNS + `><nsName ns=""><except><nsName ns=""/></except>
+			</nsName><empty/></element>`,
+		`<element` + rngNS + `><nsName ns=""><except><anyName/></except>
+			</nsName><empty/></element>`,
+		// At most one except per name class.
+		`<element` + rngNS + `><anyName>
+			<except><name>a</name></except>
+			<except><name>b</name></except></anyName><empty/></element>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("schema was accepted; it breaks section 4.16:\n%s", src)
+		}
+	}
+}
+
+// An except names what is excluded, so the xmlns rule does not apply inside
+// one: excepting xmlns is how "any attribute but a namespace declaration" is
+// written, and refusing it would leave that unsayable.
+func TestExceptingXmlnsIsAllowed(t *testing.T) {
+	mustAccept(t, "anyName excepting xmlns",
+		`<element`+rngNS+` name="foo"><oneOrMore><attribute>
+			<anyName><except><name>xmlns</name></except></anyName>
+			<text/></attribute></oneOrMore></element>`)
+}
+
+// Section 7.3: an attribute with an open name class must say how many it
+// matches.
+func TestOpenAttributeNameNeedsRepetition(t *testing.T) {
+	mustReject(t, "anyName attribute alone", "7.3",
+		`<element`+rngNS+` name="foo"><attribute><anyName/><text/>
+			</attribute></element>`)
+
+	mustAccept(t, "anyName attribute under oneOrMore",
+		`<element`+rngNS+` name="foo"><oneOrMore><attribute>
+			<anyName/><text/></attribute></oneOrMore></element>`)
+}

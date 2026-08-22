@@ -102,6 +102,9 @@ func checkSyntax(n *xdm.Node) error {
 	if err := checkChildren(n, spec); err != nil {
 		return err
 	}
+	if err := checkNameClassExcept(n); err != nil {
+		return err
+	}
 	if spec.maxExcept > 0 {
 		var n_except int
 		for _, kid := range n.ChildElements() {
@@ -229,6 +232,18 @@ func checkChildren(n *xdm.Node, spec elementSpec) error {
 		return nil
 	}
 	count := len(patternChildren(n))
+	if n.Name.Local == "except" && isNameClassExcept(n) {
+		// An <except> inside a name class holds name classes, which are not
+		// patterns. Counting patterns here would reject every anyName that
+		// excludes a name — the commonest thing an except is used for.
+		count = 0
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI == NS && (isNameClass(kid.Name.Local) ||
+				kid.Name.Local == "choice") {
+				count++
+			}
+		}
+	}
 	if count < spec.minPatterns {
 		return fmt.Errorf("relaxng: <%s> requires at least %d pattern",
 			n.Name.Local, spec.minPatterns)
@@ -287,9 +302,11 @@ func checkAttrValues(n *xdm.Node) error {
 				strings.TrimSpace(n.StringValue()))
 		}
 		// A <name> inside an <attribute> names an attribute, so the same
-		// rules apply as to attribute name=.
-		if p := n.Parent; p != nil && p.Kind == xdm.KindElement &&
-			p.Name.URI == NS && p.Name.Local == "attribute" {
+		// rules apply as to attribute name=. A name inside an <except> is
+		// excluded rather than named, so the rule does not reach it: an
+		// attribute class that *excepts* xmlns is exactly the right way to
+		// write "any attribute but a namespace declaration".
+		if namesAnAttribute(n) {
 			if err := checkAttributeName(n, normalizeToken(n.StringValue()),
 				nsInForce(n)); err != nil {
 				return err
@@ -384,6 +401,95 @@ func checkDatatypeLibrary(v string) error {
 
 func isHex(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// namesAnAttribute reports whether a <name> element gives an attribute's name,
+// as opposed to excluding one.
+//
+// §4.16 phrases this as "the first child of an attribute element, or the
+// descendant of the first child" — that is, within the name class itself, and
+// not below an <except>, which negates rather than names.
+func namesAnAttribute(n *xdm.Node) bool {
+	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
+		if cur.Name.URI != NS {
+			return false
+		}
+		switch cur.Name.Local {
+		case "except":
+			return false
+		case "attribute":
+			return true
+		case "choice", "anyName", "nsName":
+			// still inside the name class
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// isNameClassExcept reports whether an <except> belongs to a name class
+// rather than to a <data>.
+func isNameClassExcept(n *xdm.Node) bool {
+	p := n.Parent
+	if p == nil || p.Kind != xdm.KindElement || p.Name.URI != NS {
+		return false
+	}
+	return p.Name.Local == "anyName" || p.Name.Local == "nsName"
+}
+
+// checkNameClassExcept applies §4.16 to <anyName> and <nsName>.
+//
+// A name class may exclude names, but not in a way that leaves nothing or
+// says nothing: <anyName><except><anyName/></except></anyName> excludes every
+// name it admits, and an nsName that excepts an anyName does the same within
+// its namespace. Both are refused because the result matches nothing, which
+// notAllowed already says plainly.
+func checkNameClassExcept(n *xdm.Node) error {
+	if n.Name.Local != "anyName" && n.Name.Local != "nsName" {
+		return nil
+	}
+	var excepts int
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS || kid.Name.Local != "except" {
+			continue
+		}
+		excepts++
+		if excepts > 1 {
+			return fmt.Errorf(
+				"relaxng: <%s> has more than one <except>", n.Name.Local)
+		}
+		// anyName may hold no anyName below its except; nsName may hold
+		// neither.
+		bad := []string{"anyName"}
+		if n.Name.Local == "nsName" {
+			bad = append(bad, "nsName")
+		}
+		if found := findDescendant(kid, bad); found != "" {
+			return fmt.Errorf(
+				"relaxng: <%s> excepts <%s>, which excludes everything it "+
+					"admits (section 4.16)", n.Name.Local, found)
+		}
+	}
+	return nil
+}
+
+// findDescendant returns the first of names found at or below n.
+func findDescendant(n *xdm.Node, names []string) string {
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		for _, want := range names {
+			if kid.Name.Local == want {
+				return want
+			}
+		}
+		if found := findDescendant(kid, names); found != "" {
+			return found
+		}
+	}
+	return ""
 }
 
 // isQName reports whether s is an NCName or prefix:NCName.

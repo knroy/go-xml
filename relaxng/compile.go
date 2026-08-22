@@ -475,24 +475,20 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 
 	case "anyName":
 		nc := AnyName{}
-		if ex := exceptOf(n); ex != nil {
-			e, err := c.compileNameClass(ex)
-			if err != nil {
-				return nil, err
-			}
-			nc.Except = e
+		e, err := c.exceptClass(n)
+		if err != nil {
+			return nil, err
 		}
+		nc.Except = e
 		return nc, nil
 
 	case "nsName":
 		nc := NsName{Ns: nsInForce(n)}
-		if ex := exceptOf(n); ex != nil {
-			e, err := c.compileNameClass(ex)
-			if err != nil {
-				return nil, err
-			}
-			nc.Except = e
+		e, err := c.exceptClass(n)
+		if err != nil {
+			return nil, err
 		}
+		nc.Except = e
 		return nc, nil
 
 	case "choice":
@@ -520,18 +516,44 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 }
 
 // exceptOf finds the <except> child of a name class, and returns the name
-// class inside it.
-func exceptOf(n *xdm.Node) *xdm.Node {
+// classes inside it.
+//
+// An except may exclude several names at once, and they mean their choice:
+// <anyName><except><name>a</name><name>b</name></except></anyName> is every
+// name but those two.
+func exceptOf(n *xdm.Node) []*xdm.Node {
 	for _, kid := range n.ChildElements() {
 		if kid.Name.URI == NS && kid.Name.Local == "except" {
+			var out []*xdm.Node
 			for _, g := range kid.ChildElements() {
 				if g.Name.URI == NS {
-					return g
+					out = append(out, g)
 				}
 			}
+			return out
 		}
 	}
 	return nil
+}
+
+// exceptClass compiles the contents of a name-class <except> as one class.
+func (c *compiler) exceptClass(n *xdm.Node) (NameClass, error) {
+	kids := exceptOf(n)
+	if len(kids) == 0 {
+		return nil, nil
+	}
+	out, err := c.compileNameClass(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, kid := range kids[1:] {
+		k, err := c.compileNameClass(kid)
+		if err != nil {
+			return nil, err
+		}
+		out = NameChoice{Left: out, Right: k}
+	}
+	return out, nil
 }
 
 // resolveName turns a lexical name into a QName using the ns= in force.
