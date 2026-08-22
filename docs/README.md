@@ -6,6 +6,9 @@
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
   limits, the PSVI, concurrency, and where conformance stands.
+* **[Known gaps](known-gaps.md)** — every measured failure and why it is still
+  open: deliberate refusals, the two engine limits with their reverted fix
+  attempts, and the unimplemented rules.
 * **[TODO](todo.md)** — what is left: features, the measured bug tail, and
   the non-goals recorded so they are not proposed again as oversights.
 * **[Recipes](recipes.md)** — batch validation, splitting documents, reporting

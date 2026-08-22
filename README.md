@@ -71,6 +71,9 @@ Four packages, each usable on its own:
   a complete validator service, timeouts, limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
   rendering, parameters, custom resolvers, standalone XPath.
+* **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
+  it is still open, including the fix attempts that were reverted because they
+  cost more than they gained.
 
 ## Architecture
 
