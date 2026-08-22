@@ -252,6 +252,12 @@ func checkAttrValues(n *xdm.Node) error {
 					"relaxng: <%s> name %q is not a QName", n.Name.Local, v)
 			}
 		}
+		if n.Name.Local == "attribute" {
+			if err := checkAttributeName(n, normalizeToken(n.AttrValue("name")),
+				nsInForce(n)); err != nil {
+				return err
+			}
+		}
 	case "ref", "parentRef", "define":
 		if v := n.AttrValue("name"); v != "" {
 			if !xdm.IsNCName(normalizeToken(v)) {
@@ -264,6 +270,49 @@ func checkAttrValues(n *xdm.Node) error {
 			return fmt.Errorf("relaxng: <name> %q is not a QName",
 				strings.TrimSpace(n.StringValue()))
 		}
+		// A <name> inside an <attribute> names an attribute, so the same
+		// rules apply as to attribute name=.
+		if p := n.Parent; p != nil && p.Kind == xdm.KindElement &&
+			p.Name.URI == NS && p.Name.Local == "attribute" {
+			if err := checkAttributeName(n, normalizeToken(n.StringValue()),
+				nsInForce(n)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// xmlnsNS is the namespace reserved for namespace declarations. No attribute
+// a schema declares may live in it.
+const xmlnsNS = "http://www.w3.org/2000/xmlns"
+
+// checkAttributeName applies §4.10: an <attribute> may not name a namespace
+// declaration.
+//
+// A namespace declaration is not an attribute as far as validation is
+// concerned — it is consumed by the XML parser and never reaches the pattern —
+// so a schema that declares one is describing something that cannot occur.
+// The rule catches it at both spellings: the name xmlns with no namespace, and
+// any name in the xmlns namespace.
+func checkAttributeName(n *xdm.Node, name, ns string) error {
+	if name == "" {
+		return nil
+	}
+	local := name
+	prefixed := false
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		local, prefixed = name[i+1:], true
+	}
+	if !prefixed && local == "xmlns" && ns == "" {
+		return fmt.Errorf(
+			"relaxng: <attribute> names xmlns, which is a namespace " +
+				"declaration rather than an attribute (section 4.10)")
+	}
+	if ns == xmlnsNS || ns == xmlnsNS+"/" {
+		return fmt.Errorf(
+			"relaxng: <attribute> is in the namespace-declaration namespace %q "+
+				"(section 4.10)", ns)
 	}
 	return nil
 }

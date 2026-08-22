@@ -43,10 +43,25 @@ func Compile(doc *xdm.Node) (*Schema, error) {
 	if err := checkSyntax(root); err != nil {
 		return nil, err
 	}
+	// The restrictions of section 7 are a separate pass because they are
+	// contextual: whether a construct is legal depends on what encloses it,
+	// which the structural check above does not track.
+	if err := checkRestrictions(root); err != nil {
+		return nil, err
+	}
 
 	c := &compiler{defines: map[string]*xdm.Node{}}
 	p, err := c.compileTop(root)
 	if err != nil {
+		return nil, err
+	}
+	// Sections 7.3 and 7.4 are checked on the compiled pattern rather than
+	// the syntax: they ask whether two name classes overlap, which is a
+	// question about the classes, not about how they were written.
+	if err := checkCompetition(p); err != nil {
+		return nil, err
+	}
+	if err := checkStringSequences(p); err != nil {
 		return nil, err
 	}
 	return &Schema{start: p}, nil

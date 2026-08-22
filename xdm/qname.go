@@ -63,6 +63,12 @@ func IsNCName(s string) bool {
 		return false
 	}
 	for i, r := range s {
+		// The colon is in XML's NameStartChar and NameChar productions, and
+		// excluded here: that exclusion is the whole of what "non-colonised"
+		// means.
+		if r == ':' {
+			return false
+		}
 		if i == 0 {
 			if !isNameStartRune(r) {
 				return false
@@ -77,15 +83,44 @@ func IsNCName(s string) bool {
 }
 
 // isNameStartRune and isNameRune are the XML NameStartChar and NameChar
-// productions. The ranges above Latin-1 are contiguous enough that excluding
-// the two punctuation characters covers them.
+// productions of XML 1.0 fifth edition, transcribed.
+//
+// The ranges are written out rather than approximated by "anything above
+// Latin-1". The difference matters: NameStartChar deliberately excludes the
+// combining marks and the digits, so U+0E35 THAI CHARACTER SARA II is a legal
+// character *within* a name and an illegal one to begin it. A schema language
+// that gets this wrong accepts names no conforming parser will produce.
 func isNameStartRune(r rune) bool {
 	switch {
-	case r == '_':
+	case r == ':' || r == '_':
+		// The colon is in the production; callers that forbid it — NCName —
+		// reject it before reaching here.
 		return true
-	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
 		return true
-	case r >= 0xC0 && r != 0xD7 && r != 0xF7:
+	case r >= 0xC0 && r <= 0xD6:
+		return true
+	case r >= 0xD8 && r <= 0xF6:
+		return true
+	case r >= 0xF8 && r <= 0x2FF:
+		return true
+	case r >= 0x370 && r <= 0x37D:
+		return true
+	case r >= 0x37F && r <= 0x1FFF:
+		return true
+	case r >= 0x200C && r <= 0x200D:
+		return true
+	case r >= 0x2070 && r <= 0x218F:
+		return true
+	case r >= 0x2C00 && r <= 0x2FEF:
+		return true
+	case r >= 0x3001 && r <= 0xD7FF:
+		return true
+	case r >= 0xF900 && r <= 0xFDCF:
+		return true
+	case r >= 0xFDF0 && r <= 0xFFFD:
+		return true
+	case r >= 0x10000 && r <= 0xEFFFF:
 		return true
 	}
 	return false
@@ -96,9 +131,13 @@ func isNameRune(r rune) bool {
 		return true
 	}
 	switch {
+	case r == '-', r == '.', r == 0xB7:
+		return true
 	case r >= '0' && r <= '9':
 		return true
-	case r == '-', r == '.', r == 0xB7:
+	case r >= 0x300 && r <= 0x36F:
+		return true
+	case r >= 0x203F && r <= 0x2040:
 		return true
 	}
 	return false
