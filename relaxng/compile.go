@@ -629,7 +629,11 @@ func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {
 			}
 			d.Params = append(d.Params, Param{Name: pn, Value: kid.StringValue()})
 		case "except":
-			ex, err := c.compileChildren(kid)
+			// Several patterns inside one <except> mean their choice: a data
+			// excepting x, y and z admits nothing that matches any of them.
+			// compileChildren would group them instead, which excludes only
+			// the concatenation and so excludes nothing at all.
+			ex, err := c.combine(kid, choice)
 			if err != nil {
 				return nil, err
 			}
@@ -671,6 +675,9 @@ func (c *compiler) nameClass(n *xdm.Node) (NameClass, error) {
 	if v := n.AttrValue("name"); v != "" {
 		// The attribute is declared xsd:QName in the schema for schemas, so
 		// it is whitespace-normalised: name=" foo " names foo.
+		if n.Name.Local == "attribute" {
+			return QName{Name: c.resolveAttrNameAttr(n, normalizeToken(v))}, nil
+		}
 		return QName{Name: c.resolveName(n, normalizeToken(v))}, nil
 	}
 	for _, kid := range n.ChildElements() {
@@ -771,6 +778,29 @@ func (c *compiler) exceptClass(n *xdm.Node) (NameClass, error) {
 		out = NameChoice{Left: out, Right: k}
 	}
 	return out, nil
+}
+
+// resolveAttrNameAttr resolves the name= attribute of an <attribute>.
+//
+// §4.10 treats the two spellings of an attribute's name differently, and the
+// difference is not decoration. An unprefixed name written as name= is in no
+// namespace unless that same <attribute> carries ns=; an inherited ns= does
+// not reach it, because XML's own rule is that an unprefixed attribute is in
+// no namespace however the surrounding document declares defaults.
+//
+// Written as a <name> child, the name is an ordinary name class and does
+// inherit ns= from wherever it was declared. The suite tests both spellings
+// against the same schema shape, which is how the asymmetry shows up at all.
+func (c *compiler) resolveAttrNameAttr(n *xdm.Node, lexical string) xdm.QName {
+	if strings.IndexByte(lexical, ':') >= 0 {
+		return c.resolveName(n, lexical)
+	}
+	for _, a := range n.Attrs {
+		if a.Name.URI == "" && a.Name.Local == "ns" {
+			return xdm.QName{URI: a.Value, Local: lexical}
+		}
+	}
+	return xdm.QName{Local: lexical}
 }
 
 // resolveName turns a lexical name into a QName using the ns= in force.

@@ -216,3 +216,83 @@ func TestParentRefNeedsAnEnclosingGrammar(t *testing.T) {
 		t.Fatal("a parentRef at the outermost grammar should be refused")
 	}
 }
+
+// Section 4.10: an attribute's name takes its namespace differently
+// depending on which of the two spellings the schema uses.
+//
+// name= does not inherit ns= from an ancestor — XML's own rule is that an
+// unprefixed attribute is in no namespace, however the surrounding document
+// declares defaults. A <name> child is an ordinary name class and does
+// inherit. Getting either wrong is invisible until a namespaced schema is
+// used, at which point whole classes of attribute become unmatchable.
+func TestAttributeNamespaceRules(t *testing.T) {
+	const eg = "http://www.example.com"
+	cases := []struct {
+		name, schema, doc string
+		want              bool
+	}{
+		{"name= does not inherit ns=",
+			`<element` + rngNS + ` ns="` + eg + `" name="foo">
+				<attribute name="bar"/></element>`,
+			`<eg:foo xmlns:eg="` + eg + `" bar="x"/>`, true},
+
+		{"name= with an inherited ns does not match a prefixed attribute",
+			`<element` + rngNS + ` ns="` + eg + `" name="foo">
+				<attribute name="bar"/></element>`,
+			`<eg:foo xmlns:eg="` + eg + `" eg:bar="x"/>`, false},
+
+		{"ns= on the attribute itself does apply",
+			`<element` + rngNS + ` name="foo">
+				<attribute ns="` + eg + `" name="bar"/></element>`,
+			`<foo xmlns:eg="` + eg + `" eg:bar="x"/>`, true},
+
+		{"a <name> child inherits ns=",
+			`<element` + rngNS + ` ns="` + eg + `" name="foo">
+				<attribute><name>bar</name></attribute></element>`,
+			`<eg:foo xmlns:eg="` + eg + `" eg:bar="x"/>`, true},
+
+		{"a <name> child inheriting ns does not match an unprefixed attribute",
+			`<element` + rngNS + ` ns="` + eg + `" name="foo">
+				<attribute><name>bar</name></attribute></element>`,
+			`<eg:foo xmlns:eg="` + eg + `" bar="x"/>`, false},
+	}
+	for _, c := range cases {
+		s, err := compileSrc(t, c.schema)
+		if err != nil {
+			t.Errorf("%s: compile: %v", c.name, err)
+			continue
+		}
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Several patterns in one <except> mean their choice. Grouping them instead
+// excludes only the concatenation, which excludes nothing at all — a data
+// excepting x, y and z would still admit y.
+func TestDataExceptIsAChoice(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+` name="foo">
+		<data type="token"><except>
+			<value>x</value><value>y</value><value>z</value>
+		</except></data></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		text string
+		want bool
+	}{{"y", false}, {"x", false}, {"z", false}, {"other", true}} {
+		doc, err := xdm.ParseString("<foo>"+c.text+"</foo>", xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("<foo>%s</foo>: valid=%v, want %v", c.text, got, c.want)
+		}
+	}
+}
