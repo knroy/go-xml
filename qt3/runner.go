@@ -156,6 +156,19 @@ func specIncludesXP20(v string) bool {
 
 // loadDoc parses and caches a source document.
 func (r *Runner) loadDoc(file string) (*xdm.Node, error) {
+	return r.loadDocURI(file, "")
+}
+
+// loadDocURI is loadDoc for a document the environment gave a URI.
+//
+// The URI becomes the document's base URI, which is what fn:document-uri
+// returns and what fn:doc-available is asked about. Falling back to the
+// filesystem path made document-uri(/) answer with a path that fn:doc could
+// not then resolve, so doc-available(document-uri(/)) was false.
+//
+// The cache key stays the file, so one document is one node however it is
+// reached; the first load decides the URI.
+func (r *Runner) loadDocURI(file, uri string) (*xdm.Node, error) {
 	if n, ok := r.docs[file]; ok {
 		return n, nil
 	}
@@ -163,8 +176,12 @@ func (r *Runner) loadDoc(file string) (*xdm.Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	base := filepath.Join(r.Root, file)
+	if uri != "" {
+		base = uri
+	}
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
-		BaseURI: filepath.Join(r.Root, file),
+		BaseURI: base,
 		// The suite's documents legitimately carry DOCTYPEs, and they are
 		// files shipped with the suite rather than untrusted input.
 		AllowDOCTYPE: true,
@@ -298,7 +315,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	var ctxItem xdm.Item
 	vars := map[string]xdm.Sequence{}
 	for _, src := range env.Sources {
-		doc, err := r.loadDoc(src.File)
+		doc, err := r.loadDocURI(src.File, src.URI)
 		if err != nil {
 			rep.Outcome, rep.Reason = Skip, "source unavailable: "+err.Error()
 			return rep
@@ -686,6 +703,12 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 	if collapseWS(g) == collapseWS(w) {
 		return true, ""
 	}
+	// The expected XML is written by hand, so it varies in ways that are the
+	// same document: "<a/>" against "<a></a>", and "<a />" against "<a/>".
+	// Comparing those as text reports a difference that does not exist.
+	if normalizeXML(g) == normalizeXML(w) {
+		return true, ""
+	}
 	if len(g) > 120 {
 		g = g[:120] + "..."
 	}
@@ -705,6 +728,16 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 		}
 	case xdm.KindElement:
 		sb.WriteString("<" + n.Name.Lexical())
+		// Namespace declarations are part of the serialised element. Omitting
+		// them made a correct result compare unequal to the expected XML,
+		// which reads as an engine bug and is not one.
+		for _, ns := range n.Namespaces {
+			if ns.Name.Local == "" {
+				sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+			} else {
+				sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+			}
+		}
 		for _, a := range n.Attrs {
 			sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
 		}
@@ -834,7 +867,7 @@ func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	if !ok {
 		return nil, fmt.Errorf("no document %q", uri)
 	}
-	node, err := d.r.loadDoc(file)
+	node, err := d.r.loadDocURI(file, uri)
 	if err != nil {
 		return nil, err
 	}
@@ -843,4 +876,42 @@ func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 		return nil, fmt.Errorf("document %q has no tree", uri)
 	}
 	return t, nil
+}
+
+// normalizeXML puts serialised XML into a form where two spellings of the same
+// document compare equal.
+//
+// It folds "<a/>" and "<a></a>" together, and drops the optional space before
+// "/>". Both appear in hand-written assert-xml values, and neither is a
+// difference in the document.
+func normalizeXML(s string) string {
+	s = strings.ReplaceAll(s, " />", "/>")
+	// Rewrite every empty-element tag to the long form, so the two spellings
+	// meet in the middle. The name ends at the first space or slash.
+	var sb strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '<' {
+			sb.WriteByte(s[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i:], '>')
+		if end < 0 {
+			sb.WriteString(s[i:])
+			break
+		}
+		tag := s[i : i+end+1]
+		if len(tag) > 3 && strings.HasSuffix(tag, "/>") && !strings.HasPrefix(tag, "<?") {
+			inner := tag[1 : len(tag)-2]
+			name := inner
+			if j := strings.IndexAny(name, " \t\n\r"); j >= 0 {
+				name = name[:j]
+			}
+			sb.WriteString("<" + inner + "></" + name + ">")
+		} else {
+			sb.WriteString(tag)
+		}
+		i += end + 1
+	}
+	return collapseWS(sb.String())
 }
