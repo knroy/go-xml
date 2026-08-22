@@ -697,3 +697,37 @@ func TestNestedGrammarNeedsAStart(t *testing.T) {
 		t.Error("a nested grammar with no start was accepted")
 	}
 }
+
+// The ordering facets compare numerically, not lexically. "0.90" and "0.9"
+// are the same value and both below 1, which string ordering gets wrong in a
+// way that would accept and reject arbitrary values.
+func TestOrderingFacets(t *testing.T) {
+	const lib = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	s, err := compileSrc(t, `<element`+rngNS+lib+` name="foo">
+		<data type="double">
+			<param name="minInclusive">0</param>
+			<param name="maxInclusive">1</param>
+		</data></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		text string
+		want bool
+	}{
+		{"0.5", true},
+		{"0", true},
+		{"1", true},
+		{"0.90", true},
+		{"1.1", false},
+		{"-0.9", false},
+	} {
+		doc, err := xdm.ParseString("<foo>"+c.text+"</foo>", xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("<foo>%s</foo>: valid=%v, want %v", c.text, got, c.want)
+		}
+	}
+}

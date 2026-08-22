@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -69,6 +70,10 @@ func (t xsdType) checkParams(value string, params []Param) error {
 			}
 			if !re.Matches(value) {
 				return fmt.Errorf("value does not match pattern %q", p.Value)
+			}
+		case "minInclusive", "maxInclusive", "minExclusive", "maxExclusive":
+			if err := t.checkBound(value, p); err != nil {
+				return err
 			}
 		default:
 			return fmt.Errorf("unsupported parameter %q", p.Name)
@@ -141,4 +146,50 @@ func resolveQName(s string, ctx nsContext) (xdm.QName, bool) {
 		return xdm.QName{URI: uri, Local: local}, true
 	}
 	return xdm.QName{URI: ctx.dflt, Local: s}, true
+}
+
+// checkBound applies one of the four ordering facets.
+//
+// The comparison is numeric, not lexical: "0.9" and "0.90" are the same value
+// and both below 1, which string ordering gets wrong in a way that would
+// accept and reject arbitrary values. Only the numeric types are ordered this
+// way, and a bound on anything else is refused rather than guessed at.
+func (t xsdType) checkBound(value string, p Param) error {
+	v, ok := parseNumber(value)
+	if !ok {
+		return fmt.Errorf("%s applies to numbers, and %q is not one",
+			p.Name, value)
+	}
+	b, ok := parseNumber(p.Value)
+	if !ok {
+		return fmt.Errorf("%s = %q is not a number", p.Name, p.Value)
+	}
+	switch p.Name {
+	case "minInclusive":
+		if v < b {
+			return fmt.Errorf("%v is below minInclusive %v", v, b)
+		}
+	case "maxInclusive":
+		if v > b {
+			return fmt.Errorf("%v exceeds maxInclusive %v", v, b)
+		}
+	case "minExclusive":
+		if v <= b {
+			return fmt.Errorf("%v is not above minExclusive %v", v, b)
+		}
+	case "maxExclusive":
+		if v >= b {
+			return fmt.Errorf("%v is not below maxExclusive %v", v, b)
+		}
+	}
+	return nil
+}
+
+// parseNumber reads a value as a float for comparison.
+func parseNumber(s string) (float64, bool) {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
 }
