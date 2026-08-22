@@ -334,6 +334,25 @@ Diagnosed individually rather than by cluster:
   `MS-SimpleType/stE054`, `MS-Regex/reK6`, `Complex/complex022`,
   `CTA/cta0006` — one-off cases, each needing its own diagnosis.
 
+### `xs:decimal` keeps more precision than it prints
+
+`K2-Literals-7` — a decimal literal with 359 leading zeros after the point.
+
+Not a formatting bug on its own, but an inconsistency between the value and its
+lexical form. `decimalScale` caps rendering at 18 fractional digits, which is
+what XPath 2.0 requires an implementation to support, so the literal prints as
+`0`. The *value* keeps full precision, so `0.000…1 eq 0` is **false** while
+`string(0.000…1)` is `"0"`. The suite offers three acceptable answers — `0`,
+the full lexical form, or `FOCA0006` — and this matches none of them, because
+each assertion matches a different half of the disagreement.
+
+Making the two agree means rounding the value to the same 18 digits the lexical
+form claims, at construction. That is a change to decimal semantics reaching
+every arithmetic result, and it would give up exact decimal arithmetic that
+works today, for one test where the spec explicitly permits a less precise
+answer. Not done, and not a silent gap: the inconsistency is the part worth
+knowing about.
+
 ### Singleton XPath failures
 
 Six remain, one per set, each needing its own diagnosis: `fn-doc-29`

@@ -390,6 +390,12 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	got, evalErr := xpath.Eval(tc.Test, ctx, ns)
 
 	want, err := ParseAssert(tc.Result.Raw)
+	// An assert-xml may hold its expected value in a separate file, named
+	// relative to the test-set. Reading it here keeps check() a pure function
+	// of the assertion tree.
+	if err == nil {
+		loadAssertFiles(r, ts, &want)
+	}
 	if err != nil {
 		rep.Outcome, rep.Reason = Skip, "unparsable result: "+err.Error()
 		return rep
@@ -633,10 +639,16 @@ func assertExpression(got xdm.Sequence, expr string) (bool, string) {
 	if err != nil {
 		return false, "assert " + strings.TrimSpace(expr) + ": " + err.Error()
 	}
-	if len(res) == 1 {
-		if b, ok := res[0].(*xdm.Atomic); ok && b.Type == xdm.TypeBoolean && b.Bool() {
-			return true, ""
-		}
+	// The assertion holds when the expression's *effective boolean value* is
+	// true, not only when it returns the boolean true. "$result[1][self::price]"
+	// returns the node when it matches, which is an assertion that passed —
+	// requiring a literal boolean scored those as failures.
+	ok, err := xpath.EffectiveBooleanValue(res)
+	if err != nil {
+		return false, "assert " + strings.TrimSpace(expr) + ": " + err.Error()
+	}
+	if ok {
+		return true, ""
 	}
 	return false, "assert " + strings.TrimSpace(expr) + " was not true"
 }
@@ -693,7 +705,12 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 	for _, it := range got {
 		switch v := it.(type) {
 		case *xdm.Node:
-			writeNodeXML(&sb, v)
+			// A result element serialised on its own carries the namespaces
+			// in scope on it, not only the ones declared on it: taking
+			// fs:FileName out of its document does not leave the fs prefix
+			// undefined. Only the top level needs this — descendants inherit
+			// from the element being written.
+			writeNodeXMLTop(&sb, v)
 		case *xdm.Atomic:
 			sb.WriteString(escapeText(v.String()))
 		}
@@ -931,4 +948,81 @@ func normalizeXML(s string) string {
 		i += end + 1
 	}
 	return collapseWS(sb.String())
+}
+
+// writeNodeXMLTop writes n as a standalone result, declaring the namespaces in
+// scope on it rather than only those declared on it.
+//
+// A node deep in a document inherits prefix bindings from its ancestors. Lift
+// it out on its own and those bindings have to travel with it, or the
+// serialised form uses a prefix nothing defines — which is what a conforming
+// serialiser emits and what the expected XML in the suite shows.
+func writeNodeXMLTop(sb *strings.Builder, n *xdm.Node) {
+	if n.Kind != xdm.KindElement {
+		writeNodeXML(sb, n)
+		return
+	}
+	scope := n.InScopeNamespaces()
+	// Only prefixes the element does not already declare need adding; the
+	// ordinary writer emits those.
+	declared := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		declared[ns.Name.Local] = true
+	}
+	extra := make([]string, 0, len(scope))
+	for prefix := range scope {
+		if prefix == "xml" || declared[prefix] {
+			continue
+		}
+		extra = append(extra, prefix)
+	}
+	if len(extra) == 0 {
+		writeNodeXML(sb, n)
+		return
+	}
+	sort.Strings(extra)
+
+	sb.WriteString("<" + n.Name.Lexical())
+	for _, ns := range n.Namespaces {
+		if ns.Name.Local == "" {
+			sb.WriteString(" xmlns=\"" + escapeAttr(ns.Value) + "\"")
+		} else {
+			sb.WriteString(" xmlns:" + ns.Name.Local + "=\"" + escapeAttr(ns.Value) + "\"")
+		}
+	}
+	for _, prefix := range extra {
+		if prefix == "" {
+			sb.WriteString(" xmlns=\"" + escapeAttr(scope[prefix]) + "\"")
+		} else {
+			sb.WriteString(" xmlns:" + prefix + "=\"" + escapeAttr(scope[prefix]) + "\"")
+		}
+	}
+	for _, a := range n.Attrs {
+		sb.WriteString(" " + a.Name.Lexical() + "=\"" + escapeAttr(a.Value) + "\"")
+	}
+	if len(n.Children) == 0 {
+		sb.WriteString("/>")
+		return
+	}
+	sb.WriteString(">")
+	for _, c := range n.Children {
+		writeNodeXML(sb, c)
+	}
+	sb.WriteString("</" + n.Name.Lexical() + ">")
+}
+
+// loadAssertFiles fills in the Value of any assertion whose expected result is
+// held in a separate document.
+//
+// A file that cannot be read leaves Value empty, which fails the comparison
+// rather than passing it: a missing expectation must not look like agreement.
+func loadAssertFiles(r *Runner, ts *TestSet, a *Assertion) {
+	if a.File != "" && a.Value == "" {
+		if b, err := os.ReadFile(filepath.Join(r.Root, srcPath(ts.Dir, a.File))); err == nil {
+			a.Value = string(b)
+		}
+	}
+	for i := range a.Children {
+		loadAssertFiles(r, ts, &a.Children[i])
+	}
 }

@@ -149,6 +149,11 @@ type Assertion struct {
 	Value string
 	// Code is the @code of an <error>, and @type of an assert-type.
 	Code string
+	// File is the @file of an assert-xml whose expected value is held in a
+	// separate document rather than inline. Without it the comparison ran
+	// against an empty string, which reported every such case as a mismatch
+	// against "".
+	File string
 	// Children are the operands of all-of / any-of / not.
 	Children []Assertion
 }
@@ -173,6 +178,8 @@ func ParseAssert(raw []byte) (Assertion, error) {
 				switch at.Name.Local {
 				case "code", "type", "value":
 					a.Code = at.Value
+				case "file":
+					a.File = at.Value
 				}
 			}
 			parent := stack[len(stack)-1]
