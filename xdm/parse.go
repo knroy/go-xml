@@ -240,6 +240,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// resolves an external identifier, or reads a file, so this does
 			// not widen what AllowDOCTYPE admits.
 			if strings.HasPrefix(d, "DOCTYPE") {
+				// Retained so a caller can validate against the document's
+				// own DTD; see Tree.DocType.
+				tree.DocType = d
 				attDefaults = append(attDefaults, parseAttListDefaults(d)...)
 				// Internal general entities are declared here and referenced
 				// in content, so the table has to be installed before the

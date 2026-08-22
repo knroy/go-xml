@@ -129,6 +129,15 @@ func (n *Node) Position() (line, col int, ok bool) {
 // Tree owns a document and the counter used to assign document order.
 type Tree struct {
 	Root *Node
+	// DocType is the DOCTYPE declaration's text, when the document had one
+	// and AllowDOCTYPE permitted it. Empty otherwise.
+	//
+	// It is retained because the internal subset is the only place a
+	// document's own DTD lives, and validating against it needs the text —
+	// encoding/xml hands the declaration over as one opaque token and keeps
+	// nothing. The dtd package parses it; this package applies only the two
+	// declarations whose absence is visible in the data model.
+	DocType string
 	// src is the document text, retained only when the caller asks for
 	// positions. It is what makes Position able to count lines.
 	src string
