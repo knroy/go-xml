@@ -11,7 +11,7 @@ Current position:
 | XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,208 (99.79%) |
 | XPath 2.0 | 99.84% — 14,697 of 14,720 in scope (23 failing) |
 | Schemas that fail to load | 19, most of them correctly |
-| Tests | 526, clean under `-race` |
+| Tests | 647, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what

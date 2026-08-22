@@ -23,7 +23,7 @@ Requires Go 1.26 or later.
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,002); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,208); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
-| **Tests** | 526, clean under `-race` (522 from a fresh clone; the rest need the corpora below) |
+| **Tests** | 647, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -864,7 +864,7 @@ had let something through.
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (526) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (647) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 14,720 cases | XSLT (it is an XPath suite) |
