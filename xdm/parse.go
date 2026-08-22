@@ -75,9 +75,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	dec := xml.NewDecoder(r)
 	// Leave Strict on: a validator must not silently accept malformed input.
 	dec.Strict = true
-	// Entity expansion is limited to the predefined five unless a DOCTYPE is
-	// allowed; see the CharsetReader note below.
-	dec.Entity = xml.HTMLEntity
+	// Entity is left nil so that only the five entities XML predefines —
+	// &amp; &lt; &gt; &quot; &apos; — are recognised; encoding/xml handles
+	// those itself. Setting it to xml.HTMLEntity, as this once did, defines
+	// 252 HTML entities instead, so "&nbsp;" and "&copy;" expanded in a
+	// document that declares no DTD at all. A conforming XML parser must
+	// reject an undeclared entity, and silently inventing 252 of them is a
+	// difference between what this validator accepts and what the document's
+	// next consumer will.
+	//
+	// CharsetReader is likewise left nil, which makes a document declaring
+	// any encoding other than UTF-8 an error rather than routing it through
+	// a converter this package does not control.
 
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {

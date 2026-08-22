@@ -270,3 +270,40 @@ func TestCommentsAndPIs(t *testing.T) {
 		t.Errorf("string value = %q, want %q (comments/PIs must not contribute)", got, "text")
 	}
 }
+
+// TestOnlyPredefinedEntities pins which entity references a document may use
+// without declaring them.
+//
+// XML predefines exactly five. This once set the decoder's entity map to
+// xml.HTMLEntity, which defines 252, so "&nbsp;" and "&copy;" expanded in a
+// document carrying no DTD at all — input a conforming parser rejects, and
+// which the next consumer of the document would reject too. Leaving the map
+// nil is what restricts expansion to the five; encoding/xml knows those
+// itself.
+func TestOnlyPredefinedEntities(t *testing.T) {
+	tree, err := ParseString(`<r>&amp;&lt;&gt;&quot;&apos;</r>`, ParseOptions{})
+	if err != nil {
+		t.Fatalf("the five predefined entities must parse: %v", err)
+	}
+	if got := tree.Root.StringValue(); got != `&<>"'` {
+		t.Errorf("predefined entities gave %q, want %q", got, `&<>"'`)
+	}
+
+	// Anything else is undeclared, whatever HTML would make of it.
+	for _, ent := range []string{"nbsp", "copy", "eacute", "mdash", "AMP"} {
+		if _, err := ParseString("<r>&"+ent+";</r>", ParseOptions{}); err == nil {
+			t.Errorf("&%s; was accepted; only the five predefined entities "+
+				"may be used without a DTD", ent)
+		}
+	}
+
+	// A numeric reference that decodes to "&" does not start a second round
+	// of expansion — the result is the literal text, not a nested entity.
+	tree, err = ParseString(`<r>&#38;#60;</r>`, ParseOptions{})
+	if err != nil {
+		t.Fatalf("numeric character reference: %v", err)
+	}
+	if got := tree.Root.StringValue(); got != "&#60;" {
+		t.Errorf("nested expansion gave %q, want the literal %q", got, "&#60;")
+	}
+}
