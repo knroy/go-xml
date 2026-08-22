@@ -33,49 +33,51 @@ import (
 // attribute inside a nested element is not inside the outer oneOrMore for
 // these purposes. barrier below marks where a path stops climbing.
 
-// path is one prohibited path, outermost step first.
-type path []string
+// steps is one prohibited path, outermost step first.
+type steps []string
 
 // prohibited is §7.1, transcribed.
 var prohibited = []struct {
-	steps path
+	steps steps
 	why   string
 }{
-	{path{"attribute", "attribute"}, "7.1.1"},
+	{steps{"attribute", "attribute"}, "7.1.1"},
+	{steps{"attribute", "parentRef"}, "7.1.1"},
 
-	{path{"oneOrMore", "group", "attribute"}, "7.1.2"},
-	{path{"oneOrMore", "interleave", "attribute"}, "7.1.2"},
+	{steps{"oneOrMore", "group", "attribute"}, "7.1.2"},
+	{steps{"oneOrMore", "interleave", "attribute"}, "7.1.2"},
 
-	{path{"list", "list"}, "7.1.3"},
-	{path{"list", "attribute"}, "7.1.3"},
-	{path{"list", "text"}, "7.1.3"},
-	{path{"list", "interleave"}, "7.1.3"},
+	{steps{"list", "list"}, "7.1.3"},
+	{steps{"list", "parentRef"}, "7.1.3"},
+	{steps{"list", "attribute"}, "7.1.3"},
+	{steps{"list", "text"}, "7.1.3"},
+	{steps{"list", "interleave"}, "7.1.3"},
 
-	{path{"data", "except", "attribute"}, "7.1.4"},
-	{path{"data", "except", "text"}, "7.1.4"},
-	{path{"data", "except", "list"}, "7.1.4"},
-	{path{"data", "except", "group"}, "7.1.4"},
-	{path{"data", "except", "interleave"}, "7.1.4"},
-	{path{"data", "except", "oneOrMore"}, "7.1.4"},
-	{path{"data", "except", "empty"}, "7.1.4"},
+	{steps{"data", "except", "attribute"}, "7.1.4"},
+	{steps{"data", "except", "text"}, "7.1.4"},
+	{steps{"data", "except", "list"}, "7.1.4"},
+	{steps{"data", "except", "group"}, "7.1.4"},
+	{steps{"data", "except", "interleave"}, "7.1.4"},
+	{steps{"data", "except", "oneOrMore"}, "7.1.4"},
+	{steps{"data", "except", "empty"}, "7.1.4"},
 
-	{path{"start", "attribute"}, "7.1.5"},
-	{path{"start", "data"}, "7.1.5"},
-	{path{"start", "value"}, "7.1.5"},
-	{path{"start", "text"}, "7.1.5"},
-	{path{"start", "list"}, "7.1.5"},
-	{path{"start", "group"}, "7.1.5"},
-	{path{"start", "interleave"}, "7.1.5"},
-	{path{"start", "oneOrMore"}, "7.1.5"},
-	{path{"start", "empty"}, "7.1.5"},
+	{steps{"start", "attribute"}, "7.1.5"},
+	{steps{"start", "data"}, "7.1.5"},
+	{steps{"start", "value"}, "7.1.5"},
+	{steps{"start", "text"}, "7.1.5"},
+	{steps{"start", "list"}, "7.1.5"},
+	{steps{"start", "group"}, "7.1.5"},
+	{steps{"start", "interleave"}, "7.1.5"},
+	{steps{"start", "oneOrMore"}, "7.1.5"},
+	{steps{"start", "empty"}, "7.1.5"},
 }
 
 // data/except is the one path whose first two steps must be parent and child
 // rather than ancestor and descendant: "data/except//attribute". Recording it
 // keeps the matcher from accepting an <except> that belongs to a name class
 // several levels below a <data>.
-func directStep(steps path, i int) bool {
-	return len(steps) == 3 && steps[0] == "data" && i == 1
+func directStep(s steps, i int) bool {
+	return len(s) == 3 && s[0] == "data" && i == 1
 }
 
 // checkRestrictions applies §7 to a schema document.
@@ -256,7 +258,7 @@ func matchProhibited(stack []string) error {
 
 // matchSteps reports whether steps appear in order within stack, with the
 // final step of a data/except path required to be the immediate parent.
-func matchSteps(stack []string, steps path) bool {
+func matchSteps(stack []string, steps steps) bool {
 	if len(steps) == 0 {
 		return true
 	}

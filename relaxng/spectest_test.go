@@ -1,12 +1,63 @@
 package relaxng
 
 import (
+	"fmt"
 	"os"
+	"path"
 	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
 )
+
+// suiteResolver serves the schemas a test case bundles.
+//
+// The suite does not ship the documents that <externalRef> and <include> name
+// as files; it carries them inline, as <resource name="x"> elements, nested in
+// <dir name="sub"> to give them paths. So a case that tests external
+// references is only exercised when the harness serves them, and a harness
+// that does not is measuring the wrong thing — it reports the engine failing
+// at something it was never asked to do.
+type suiteResolver struct{ files map[string]*xdm.Node }
+
+func (r *suiteResolver) ResolveSchema(href string) (*xdm.Node, error) {
+	if doc, ok := r.files[href]; ok {
+		return doc, nil
+	}
+	// The suite writes hrefs relative to the case, and this map is keyed the
+	// same way; a leading "./" from URI resolution is not significant.
+	if doc, ok := r.files[path.Clean(href)]; ok {
+		return doc, nil
+	}
+	return nil, fmt.Errorf("no such resource %q", href)
+}
+
+// collectResources walks a testCase for the resources it bundles.
+func collectResources(tc *xdm.Node) *suiteResolver {
+	r := &suiteResolver{files: map[string]*xdm.Node{}}
+	var walk func(n *xdm.Node, dir string)
+	walk = func(n *xdm.Node, dir string) {
+		for _, kid := range n.ChildElements() {
+			switch kid.Name.Local {
+			case "resource":
+				name := kid.AttrValue("name")
+				if name == "" {
+					continue
+				}
+				if doc := firstElement(kid); doc != nil {
+					r.files[path.Join(dir, name)] = doc
+				}
+			case "dir":
+				walk(kid, path.Join(dir, kid.AttrValue("name")))
+			}
+		}
+	}
+	walk(tc, "")
+	if len(r.files) == 0 {
+		return nil
+	}
+	return r
+}
 
 // The RELAX NG conformance suite, James Clark's spectest.xml.
 //
@@ -94,12 +145,18 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 		}
 	}
 
+	res := collectResources(tc)
+	opts := Options{}
+	if res != nil {
+		opts.Resolver = res
+	}
+
 	if incorrect != nil {
 		schema := firstElement(incorrect)
 		if schema == nil {
 			return 0, 0, "", ""
 		}
-		if _, err := Compile(schema); err == nil {
+		if _, err := CompileWithOptions(schema, opts); err == nil {
 			return 0, 1, "incorrect", "incorrect schema accepted: " + summarise(schema)
 		}
 		return 1, 0, "", ""
@@ -112,7 +169,7 @@ func runCase(t *testing.T, tc *xdm.Node) (pass, fail int, kind, why string) {
 	if schema == nil {
 		return 0, 0, "", ""
 	}
-	s, err := Compile(schema)
+	s, err := CompileWithOptions(schema, opts)
 	if err != nil {
 		// One assertion, not one per document: a schema that will not compile
 		// is a single failure, and counting the documents it would have

@@ -18,6 +18,17 @@ const NS = "http://relaxng.org/ns/structure/1.0"
 // attribute, a text inside a list — and catching those at the point of use
 // gives an error that names the construct.
 func Compile(doc *xdm.Node) (*Schema, error) {
+	return CompileWithOptions(doc, Options{})
+}
+
+// CompileWithOptions builds a schema, with a Resolver for <externalRef> and
+// <include>.
+//
+// Compile is this with no options, which refuses both. Splitting them keeps
+// the safe thing the short thing to write: reaching outside the schema
+// document is something a caller opts into, not something a schema can decide
+// for itself.
+func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	root := doc
 	if root.Kind == xdm.KindDocument {
 		root = nil
@@ -52,7 +63,8 @@ func Compile(doc *xdm.Node) (*Schema, error) {
 	}
 
 	c := &compiler{defines: map[string]*xdm.Node{},
-		combined: map[string][]*xdm.Node{}, how: map[string]string{}}
+		combined: map[string][]*xdm.Node{}, how: map[string]string{},
+		opts: opts}
 	p, err := c.compileTop(root)
 	if err != nil {
 		return nil, err
@@ -77,6 +89,14 @@ type compiler struct {
 	starts []*xdm.Node
 	// how records the combine method agreed for each name.
 	how map[string]string
+	// parent is the compiler of the enclosing <grammar>, which <parentRef>
+	// names. A grammar nested inside another may refer outward to it, and
+	// that is the only way the two scopes ever meet.
+	parent *compiler
+	// opts carries the Resolver and base URI.
+	opts Options
+	// includeDepth bounds a chain of includes, which may otherwise cycle.
+	includeDepth int
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -135,6 +155,10 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 				// effect on the grammar, so its children are collected as if
 				// written in its parent.
 				if err := collect(kid); err != nil {
+					return err
+				}
+			case "include":
+				if err := c.collectInclude(kid, collect); err != nil {
 					return err
 				}
 			}
@@ -255,7 +279,9 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		}
 		return Attribute{Name: nc, Pattern: body}, nil
 
-	case "group":
+	case "group", "div":
+		// <div> groups for documentation and has no effect on the grammar,
+		// so as a pattern it is simply its children.
 		return c.compileChildren(n)
 
 	case "interleave":
@@ -312,18 +338,22 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 	case "grammar":
 		sub := &compiler{defines: map[string]*xdm.Node{},
 			combined: map[string][]*xdm.Node{}, how: map[string]string{},
-			depth: c.depth}
+			depth: c.depth, parent: c, opts: c.opts,
+			includeDepth: c.includeDepth}
 		return sub.compileGrammar(n)
 
-	case "externalRef", "include", "parentRef":
-		// Each of these reaches outside the document. externalRef and include
-		// name a file, which is the fetch AllowDOCTYPE-style gating exists to
-		// refuse; parentRef needs a grammar stack this compiler does not
-		// keep. Refusing is honest — silently ignoring one would validate
-		// against a schema the author did not write.
+	case "parentRef":
+		return c.compileParentRef(n)
+
+	case "externalRef":
+		return c.compileExternalRef(n)
+
+	case "include":
+		// An <include> may only appear inside a <grammar>, where
+		// compileGrammar handles it. Reaching one here means it was written
+		// where a pattern belongs.
 		return nil, fmt.Errorf(
-			"relaxng: <%s> is not supported; it reaches outside the schema document",
-			n.Name.Local)
+			"relaxng: <include> is only allowed inside <grammar>")
 	}
 	return nil, fmt.Errorf("relaxng: <%s> is not a RELAX NG pattern",
 		n.Name.Local)
@@ -349,7 +379,10 @@ func (c *compiler) combine(n *xdm.Node, f func(a, b Pattern) Pattern) (Pattern, 
 }
 
 func (c *compiler) compileRef(n *xdm.Node) (Pattern, error) {
-	name := normalizeToken(n.AttrValue("name"))
+	return c.compileRefNamed(normalizeToken(n.AttrValue("name")))
+}
+
+func (c *compiler) compileRefNamed(name string) (Pattern, error) {
 	def, ok := c.defines[name]
 	if !ok {
 		return nil, fmt.Errorf("relaxng: <ref> names %q, which no <define> provides", name)
@@ -379,6 +412,190 @@ func (c *compiler) compileRef(n *xdm.Node) (Pattern, error) {
 		p = join(p, q)
 	}
 	return p, nil
+}
+
+// compileParentRef resolves a <parentRef>, which names a definition in the
+// grammar enclosing this one.
+//
+// It exists because a nested <grammar> is a fresh scope: its definitions do
+// not collide with the outer grammar's, which is what makes a grammar safe to
+// nest. parentRef is the one door between the two.
+func (c *compiler) compileParentRef(n *xdm.Node) (Pattern, error) {
+	name := normalizeToken(n.AttrValue("name"))
+	if c.parent == nil {
+		return nil, fmt.Errorf(
+			"relaxng: <parentRef name=%q> has no enclosing <grammar>", name)
+	}
+	if c.depth >= maxRefDepth {
+		return nil, fmt.Errorf(
+			"relaxng: definition %q recurses more than %d deep", name, maxRefDepth)
+	}
+	// The definition is compiled in the *parent's* scope, so that a <ref>
+	// inside it resolves there rather than here.
+	c.parent.depth = c.depth + 1
+	defer func() { c.parent.depth = 0 }()
+	return c.parent.compileRefNamed(name)
+}
+
+// fetch resolves an href through the configured Resolver.
+func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
+	href, err := resolveHref(n, n.AttrValue("href"), c.opts.BaseURI)
+	if err != nil {
+		return nil, "", err
+	}
+	if c.opts.Resolver == nil {
+		return nil, "", fmt.Errorf(
+			"relaxng: <%s href=%q> needs a Resolver; none was configured",
+			n.Name.Local, href)
+	}
+	if c.includeDepth >= maxIncludeDepth {
+		return nil, "", fmt.Errorf(
+			"relaxng: schemas include one another more than %d deep at %q",
+			maxIncludeDepth, href)
+	}
+	doc, err := c.opts.Resolver.ResolveSchema(href)
+	if err != nil {
+		return nil, "", fmt.Errorf("relaxng: <%s href=%q>: %w",
+			n.Name.Local, href, err)
+	}
+	if doc == nil {
+		return nil, "", fmt.Errorf(
+			"relaxng: <%s href=%q>: the resolver returned nothing",
+			n.Name.Local, href)
+	}
+	return rootElement(doc), href, nil
+}
+
+// collectInclude merges the grammar an <include> names into this one.
+//
+// The subtlety is override: a <define> written inside the <include> element
+// replaces the definition of that name in the included grammar rather than
+// combining with it. That is what makes include useful — a schema adopts
+// another and changes the parts it needs — and it is also why the included
+// definitions cannot simply be collected first. They are filtered.
+func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) error {
+	root, href, err := c.fetch(inc)
+	if err != nil {
+		return err
+	}
+	if root == nil {
+		return fmt.Errorf(
+			"relaxng: <include href=%q>: the document has no root element", href)
+	}
+	if root.Name.URI != NS || root.Name.Local != "grammar" {
+		return fmt.Errorf(
+			"relaxng: <include href=%q> names a <%s>, not a <grammar>",
+			href, root.Name.Local)
+	}
+	if err := checkSyntax(root); err != nil {
+		return err
+	}
+
+	// What the include overrides: the names it defines itself, and whether it
+	// replaces <start>.
+	overridden := map[string]bool{}
+	var overridesStart bool
+	var scanOverrides func(n *xdm.Node)
+	scanOverrides = func(n *xdm.Node) {
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI != NS {
+				continue
+			}
+			switch kid.Name.Local {
+			case "define":
+				overridden[normalizeToken(kid.AttrValue("name"))] = true
+			case "start":
+				overridesStart = true
+			case "div":
+				scanOverrides(kid)
+			}
+		}
+	}
+	scanOverrides(inc)
+
+	// The included grammar's own definitions, less the overridden ones.
+	filtered := *root
+	filtered.Children = nil
+	var keep func(n *xdm.Node) []*xdm.Node
+	keep = func(n *xdm.Node) []*xdm.Node {
+		var out []*xdm.Node
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI != NS {
+				continue
+			}
+			switch kid.Name.Local {
+			case "define":
+				if overridden[normalizeToken(kid.AttrValue("name"))] {
+					continue
+				}
+			case "start":
+				if overridesStart {
+					continue
+				}
+			case "div":
+				out = append(out, keep(kid)...)
+				continue
+			}
+			out = append(out, kid)
+		}
+		return out
+	}
+	filtered.Children = keep(root)
+
+	// The included definitions are collected in a compiler whose base URI is
+	// the included document's, so that an href inside it resolves there.
+	was := c.opts.BaseURI
+	wasDepth := c.includeDepth
+	c.opts.BaseURI = href
+	c.includeDepth++
+	err = collect(&filtered)
+	c.opts.BaseURI = was
+	c.includeDepth = wasDepth
+	if err != nil {
+		return err
+	}
+	// Then the overriding definitions written inside the <include> itself.
+	return collect(inc)
+}
+
+// compileExternalRef compiles the schema an <externalRef> names, as a pattern
+// standing where the externalRef stands.
+func (c *compiler) compileExternalRef(n *xdm.Node) (Pattern, error) {
+	root, href, err := c.fetch(n)
+	if err != nil {
+		return nil, err
+	}
+	if root == nil {
+		return nil, fmt.Errorf(
+			"relaxng: <externalRef href=%q>: the document has no root element",
+			href)
+	}
+	if err := checkSyntax(root); err != nil {
+		return nil, err
+	}
+	if err := checkRestrictions(root); err != nil {
+		return nil, err
+	}
+	// The referenced schema is a document of its own: its definitions are its
+	// own, and an ns= written here does not reach into it.
+	sub := &compiler{defines: map[string]*xdm.Node{},
+		combined: map[string][]*xdm.Node{}, how: map[string]string{},
+		opts:         Options{Resolver: c.opts.Resolver, BaseURI: href},
+		includeDepth: c.includeDepth + 1, depth: c.depth}
+	return sub.compileTop(root)
+}
+
+// rootElement returns the document element of a parsed schema.
+func rootElement(doc *xdm.Node) *xdm.Node {
+	if doc.Kind != xdm.KindDocument {
+		return doc
+	}
+	for _, kid := range doc.Children {
+		if kid.Kind == xdm.KindElement {
+			return kid
+		}
+	}
+	return nil
 }
 
 func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
