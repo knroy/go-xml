@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.84% — 14,697 of 14,720 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.82% — 15,153 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -243,31 +243,43 @@ Individually diagnosed cases in Particle Valid (Restriction) rather than one
 cluster. `particlesZ001` and `addB183` failing in both versions makes them the
 best entry point: they are bugs in the shared logic, not 1.1-specific gaps.
 
-### `fn:collection()` — implemented, suite result unverified (XPath)
+### `fn:collection()` — 5 of 7 fixed (XPath)
 
-7 cases in QT3 `fn-collection` (`collection-001` through `-007`).
+2 cases remain in QT3 `fn-collection` (`collection-006`, `-007`), down from 7.
 
-**Implemented, both halves.** `xpath.CollectionResolver` and
-`Context.Collections` mirror `DocumentResolver`/`Docs`;
-`xslt.TransformOptions.Collections` threads it through a transform; and the
-harness parses `<collection>` environments (`Environment.Collections`) and
-builds a resolver over their sources, loading through `Runner.loadDoc` so that
-node identity and `fn:collection` stability hold.
+`xpath.CollectionResolver` and `Context.Collections` mirror
+`DocumentResolver`/`Docs`; `xslt.TransformOptions.Collections` threads it
+through a transform; and the harness parses `<collection>` environments,
+loading through `Runner.loadDoc` so node identity and collection stability hold
+across calls.
 
-**The suite number is not yet re-measured.** The QT3 checkout was not available
-when this was written, so the path was verified against a synthetic suite in
-the real catalog layout — three cases covering count, content and node identity
-across two calls, all passing, and all failing when the wiring is removed. That
-proves the mechanism, not the 7. Re-run the suite to confirm:
+Measured against the real suite, not inferred: 7 failures before, 2 after. The
+remaining two assert over `all-of` groups and need individual diagnosis.
 
-```
-GOXSLT_QT3=/path/to/qt3tests go test ./qt3/ -run TestQT3 -v
-```
+`cta0022` is unaffected. With no resolver configured the default is still
+`FODC0002`, which is the point.
 
-Two related FOTS features stay on the skip list: `collection-stability` and
-`non_empty_sequence_collection`. They are optional features with their own
-semantics, and removing a skip without the suite present would count cases that
-were never checked.
+### Harness source paths were resolved against the wrong directory (fixed)
+
+Not an engine bug, but it was suppressing 461 cases, so it belongs in the
+record.
+
+A `<source file="...">` path is relative to the document that names it. The
+catalog writes `docs/atomic.xml` from the suite root; a test-set writes
+`../docs/bib.xml` from its own directory. The runner joined every path against
+the root, so each test-set-relative path escaped above it, the document was not
+found, and the case was skipped as "source unavailable" rather than counted.
+
+Resolution now happens during the environment merge, where the origin is still
+known — after the merge a source no longer records which document named it.
+In-scope cases went from 14,720 to 15,181.
+
+Two consequences worth noting. `fn:doc` needed a resolver in the harness for
+the same reason `fn:collection` did — environments name documents by URI, and
+without one those cases failed closed. And two genuine `fn-doc` serialisation
+bugs are now visible that were never previously exercised: an empty element
+with a non-ASCII name, and namespace declarations on a document read through
+`fn:doc`.
 
 ### Instance validation gaps (XSD)
 

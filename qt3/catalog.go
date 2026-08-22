@@ -54,6 +54,14 @@ type TestSet struct {
 	Environments []Environment `xml:"environment"`
 	Dependencies []Dependency  `xml:"dependency"`
 	Cases        []TestCase    `xml:"test-case"`
+
+	// Dir is the test-set file's directory, relative to the suite root.
+	//
+	// Source paths are relative to the test-set file, not to the root:
+	// fn/collection.xml names "../docs/bib.xml". Joining those against the
+	// root walks above it and the file is not found, so the directory has to
+	// travel with the parsed set.
+	Dir string `xml:"-"`
 }
 
 type Environment struct {
@@ -221,6 +229,7 @@ func LoadTestSet(root, file string) (*TestSet, error) {
 	if err := decode(data, &ts); err != nil {
 		return nil, err
 	}
+	ts.Dir = filepath.Dir(file)
 	return &ts, nil
 }
 

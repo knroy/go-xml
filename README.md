@@ -19,7 +19,7 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.84% of the W3C QT3 suite (14,697 of 14,720 in scope) |
+| **XPath 2.0** | 99.82% of the W3C QT3 suite (15,153 of 15,181 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,002); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,208); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
@@ -646,14 +646,22 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**28 of 14,720 in-scope cases fail (0.19%).** They no longer form clusters:
+**28 of 15,181 in-scope cases fail (0.18%).** One cluster and a long tail:
 
 | cases | set | what it is |
 |---:|---|---|
 | 12 | `fn-matches` | regex backreferences, which RE2 does not have |
-| 7 | `fn-collection` | the harness configures no collection |
-| 5 | `xs-dateTimeStamp` | an XSLT 3.0 type this engine does not claim |
-| 4 | four different sets, one case each | the long tail |
+| 2 | `fn-collection` | down from 7; a resolver hook closed the rest |
+| 2 | `fn-doc` | serialisation of an empty element and of namespace declarations |
+| 2 | `fn-in-scope-prefixes` | |
+| 2 | `prod-Comment` | |
+| 8 | eight sets, one case each | the long tail |
+
+The denominator grew by 461 in the course of this: source paths in a test-set
+environment are relative to the test-set file, not to the suite root, and
+resolving them against the root skipped every case whose environment named
+`../docs/…`. Those cases now run, which is also why two `fn-doc` bugs are
+newly visible — they were never being exercised.
 
 ### 2a. Where the XSD suite still disagrees
 
@@ -867,7 +875,7 @@ had let something through.
 | **Unit tests** (647) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
-| **W3C QT3 suite** | systematic conformance across 14,720 cases | XSLT (it is an XPath suite) |
+| **W3C QT3 suite** | systematic conformance across 15,181 cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 26,069 instance tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 

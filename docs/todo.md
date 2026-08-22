@@ -9,7 +9,7 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,002 (99.80%) |
 | XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,208 (99.79%) |
-| XPath 2.0 | 99.84% — 14,697 of 14,720 in scope (23 failing) |
+| XPath 2.0 | 99.82% — 15,153 of 15,181 in scope (28 failing) |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 647, clean under `-race` |
 
@@ -137,14 +137,15 @@ Mostly not fixable, and worth stating why so nobody re-litigates it:
 | cases | cause | fixable |
 |---:|---|---|
 | 12 | regex backreferences (`\1`) | **no** — see below |
-| 7 | `fn:collection` | **done** — resolver hook added; suite not re-measured |
+| 2 | `fn:collection` | yes — was 7; a resolver hook fixed 5 |
 | 5 | `xs:dateTimeStamp` | no — an XSLT 3.0 type this engine does not claim |
 | 4 | ordinary bugs, one per set | yes |
 
-Only those 4 remain as ordinary bugs. The `fn:collection` 7 were the one
-capability gap and are now implemented — `xpath.CollectionResolver` plus
-harness support; see [known-gaps.md](known-gaps.md). The suite has not been
-re-run since, so the 99.84% above still counts them as failing.
+The `fn:collection` 7 were the one capability gap and are now largely closed:
+`xpath.CollectionResolver` plus harness support took them to 2. Fixing the
+harness's source-path resolution at the same time brought **461 previously
+skipped cases into scope**, which is why the denominator moved from 14,720 to
+15,181 and the percentage dipped slightly — more of the suite now runs.
 
 **The backreference 12, in full, because the obvious fix does not work.** Two
 separate points, and the first is the one usually missed:

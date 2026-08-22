@@ -176,35 +176,67 @@ func (r *Runner) loadDoc(file string) (*xdm.Node, error) {
 	return tree.Root, nil
 }
 
+// srcPath resolves a source path against the directory it was written in.
+//
+// A path is relative to the file that names it, and the suite uses both
+// origins: catalog.xml names "docs/atomic.xml" from the root, while
+// fn/collection.xml names "../docs/bib.xml" from fn/. Resolving everything
+// against one of the two breaks the other, so dir is the directory of the
+// document the environment came from — "" for the catalog.
+//
+// Cleaning normalises the result, so a document reached from two different
+// test-sets is one cache entry and therefore one node identity, which
+// fn:collection stability depends on.
+func srcPath(dir, file string) string {
+	if dir == "" || dir == "." {
+		return filepath.Clean(file)
+	}
+	return filepath.Clean(filepath.Join(dir, file))
+}
+
 // resolveEnv merges the environments a case references into one.
 func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 	var out Environment
-	merge := func(e Environment) {
-		out.Sources = append(out.Sources, e.Sources...)
+	// dir is the directory the environment was written in, which is what its
+	// source paths are relative to. Paths are rewritten here, at the point
+	// where that is still known: after the merge a source no longer records
+	// which document named it.
+	merge := func(e Environment, dir string) {
+		for _, src := range e.Sources {
+			src.File = srcPath(dir, src.File)
+			out.Sources = append(out.Sources, src)
+		}
+		for _, c := range e.Collections {
+			rc := Collection{URI: c.URI}
+			for _, src := range c.Sources {
+				src.File = srcPath(dir, src.File)
+				rc.Sources = append(rc.Sources, src)
+			}
+			out.Collections = append(out.Collections, rc)
+		}
 		out.Params = append(out.Params, e.Params...)
 		out.Namespaces = append(out.Namespaces, e.Namespaces...)
 		out.Schemas = append(out.Schemas, e.Schemas...)
 		out.Collations = append(out.Collations, e.Collations...)
 		out.StaticBaseURI = append(out.StaticBaseURI, e.StaticBaseURI...)
-		out.Collections = append(out.Collections, e.Collections...)
 	}
 	for _, ref := range tc.Environments {
 		if ref.Ref == "" {
-			merge(ref)
+			merge(ref, ts.Dir)
 			continue
 		}
 		// A reference resolves against the test set first, then the catalog.
 		found := false
 		for _, e := range ts.Environments {
 			if e.Name == ref.Ref {
-				merge(e)
+				merge(e, ts.Dir)
 				found = true
 				break
 			}
 		}
 		if !found {
 			if e, ok := r.envs[ref.Ref]; ok {
-				merge(e)
+				merge(e, "")
 				found = true
 			}
 		}
@@ -297,6 +329,12 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// A <collection> environment supplies the documents fn:collection
 	// returns. Without this the function has no resolver and refuses, which
 	// is the correct default but not what these cases are testing.
+	// A <source> with a uri attribute is reachable through fn:doc under that
+	// URI. Without a resolver the function refuses — correct by default, but
+	// not what these cases are testing.
+	if docs := envDocs(r, env); docs != nil {
+		ctx.Docs = docs
+	}
 	if len(env.Collections) > 0 {
 		cr := &envCollections{r: r, byURI: map[string][]string{}}
 		for _, c := range env.Collections {
@@ -766,4 +804,43 @@ func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, erro
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+// envDocs resolves fn:doc against the documents an environment names by URI.
+//
+// Loading goes through Runner.loadDoc so that a document reachable both as the
+// context item and through fn:doc is the same node: "doc('x') is doc('x')" is
+// required to be true, and re-parsing would break it.
+type envDocResolver struct {
+	r     *Runner
+	byURI map[string]string
+}
+
+func envDocs(r *Runner, env Environment) *envDocResolver {
+	byURI := map[string]string{}
+	for _, src := range env.Sources {
+		if src.URI != "" {
+			byURI[src.URI] = src.File
+		}
+	}
+	if len(byURI) == 0 {
+		return nil
+	}
+	return &envDocResolver{r: r, byURI: byURI}
+}
+
+func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+	file, ok := d.byURI[uri]
+	if !ok {
+		return nil, fmt.Errorf("no document %q", uri)
+	}
+	node, err := d.r.loadDoc(file)
+	if err != nil {
+		return nil, err
+	}
+	t := node.Tree()
+	if t == nil {
+		return nil, fmt.Errorf("document %q has no tree", uri)
+	}
+	return t, nil
 }
