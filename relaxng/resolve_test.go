@@ -296,3 +296,59 @@ func TestDataExceptIsAChoice(t *testing.T) {
 		}
 	}
 }
+
+// The ns= in force where a reference is written reaches into the schema it
+// names, when that schema sets none of its own. This is how one schema is
+// written once and used in several namespaces.
+func TestReferencedSchemaInheritsNs(t *testing.T) {
+	const eg = "http://www.example.com"
+	r := &mapResolver{docs: map[string]string{
+		"x": `<element` + rngNS + ` name="foo"><empty/></element>`,
+	}}
+	s, err := compileWith(t, `<externalRef`+rngNS+` href="x" ns="`+eg+`"/>`,
+		Options{Resolver: r})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	cases := []struct {
+		doc  string
+		want bool
+	}{
+		{`<foo xmlns="` + eg + `"/>`, true},
+		{`<foo/>`, false},
+	}
+	for _, c := range cases {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.want)
+		}
+	}
+}
+
+// The xml prefix is bound whether or not a schema declares it, because XML
+// Namespaces binds it by fiat.
+func TestXmlPrefixIsAlwaysBound(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+` name="foo">
+		<attribute name="xml:lang"/></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		doc  string
+		want bool
+	}{
+		{`<foo xml:lang="en"/>`, true},
+		{`<foo lang="en"/>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.want)
+		}
+	}
+}

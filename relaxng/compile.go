@@ -109,6 +109,9 @@ type compiler struct {
 	// definition reaching itself at the same depth has not crossed one.
 	elementDepth int
 	expandingAt  map[string]int
+	// inheritedNs is the ns= in force where an <externalRef> or <include>
+	// brought this schema in, used when the schema itself sets none.
+	inheritedNs string
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -690,11 +693,14 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (Pattern, error) {
 		return nil, err
 	}
 	// The referenced schema is a document of its own: its definitions are its
-	// own, and an ns= written here does not reach into it.
+	// own. But the ns= in force where the reference is written *does* reach
+	// into it, when the referenced schema does not set one itself — that is
+	// how a schema is written once and used in several namespaces.
 	sub := &compiler{defines: map[string]*xdm.Node{},
 		combined: map[string][]*xdm.Node{}, how: map[string]string{},
 		opts:         Options{Resolver: c.opts.Resolver, BaseURI: href},
-		includeDepth: c.includeDepth + 1, depth: c.depth}
+		includeDepth: c.includeDepth + 1, depth: c.depth,
+		inheritedNs: inheritedNs(n, c.inheritedNs)}
 	return sub.compileTop(root)
 }
 
@@ -854,7 +860,7 @@ func (c *compiler) compileNameClass(n *xdm.Node) (NameClass, error) {
 		return nc, nil
 
 	case "nsName":
-		nc := NsName{Ns: nsInForce(n)}
+		nc := NsName{Ns: c.nsFor(n)}
 		e, err := c.exceptClass(n)
 		if err != nil {
 			return nil, err
@@ -962,9 +968,42 @@ func (c *compiler) resolveName(n *xdm.Node, lexical string) xdm.QName {
 		if uri, ok := n.InScopeNamespaces()[prefix]; ok {
 			return xdm.QName{URI: uri, Local: local}
 		}
+		// The xml prefix is bound whether or not anything declares it — XML
+		// Namespaces binds it by fiat — so xml:lang names the attribute it
+		// always names, in a schema that never mentions the binding.
+		if prefix == "xml" {
+			return xdm.QName{URI: xdm.NSXML, Local: local}
+		}
 		return xdm.QName{Local: local}
 	}
-	return xdm.QName{URI: nsInForce(n), Local: lexical}
+	return xdm.QName{URI: c.nsFor(n), Local: lexical}
+}
+
+// inheritedNs is the ns= that a referenced schema inherits: the one written on
+// the reference itself, or failing that the one in force around it.
+func inheritedNs(n *xdm.Node, outer string) string {
+	for _, a := range n.Attrs {
+		if a.Name.URI == "" && a.Name.Local == "ns" {
+			return a.Value
+		}
+	}
+	if ns := nsInForce(n); ns != "" {
+		return ns
+	}
+	return outer
+}
+
+// nsFor is the ns= that applies at n, falling back to the one this schema
+// inherited from the reference that brought it in.
+//
+// The fallback is what lets a schema be written once and used in several
+// namespaces: <externalRef ns="..."/> supplies a namespace to a document that
+// names none of its own.
+func (c *compiler) nsFor(n *xdm.Node) string {
+	if ns := nsInForce(n); ns != "" {
+		return ns
+	}
+	return c.inheritedNs
 }
 
 // nsInForce reads the nearest ns= attribute on or above n.
