@@ -250,3 +250,67 @@ func TestStringSequences(t *testing.T) {
 		`<element`+rngNS+` name="foo"><list>
 			<data type="string"/><data type="string"/></list></element>`)
 }
+
+// Section 4.17: a name may be defined more than once, which is how a schema
+// extends one it did not write.
+func TestCombine(t *testing.T) {
+	// Two plain definitions are a mistake: one would be silently lost.
+	mustReject(t, "two plain definitions", "4.17",
+		`<grammar`+rngNS+`><start><ref name="x"/></start>
+			<define name="x"><element name="a"><empty/></element></define>
+			<define name="x"><element name="b"><empty/></element></define>
+		</grammar>`)
+
+	mustReject(t, "two plain starts", "4.17",
+		`<grammar`+rngNS+`>
+			<start><element name="a"><empty/></element></start>
+			<start><element name="b"><empty/></element></start>
+		</grammar>`)
+
+	// Definitions must agree on how they combine.
+	mustReject(t, "choice and interleave disagree", "4.17",
+		`<grammar`+rngNS+`><start><ref name="x"/></start>
+			<define name="x"><element name="a"><empty/></element></define>
+			<define name="x" combine="choice">
+				<element name="b"><empty/></element></define>
+			<define name="x" combine="interleave">
+				<element name="c"><empty/></element></define>
+		</grammar>`)
+
+	// Exactly one definition may omit combine=: it is the base being
+	// extended, and the others say how they extend it.
+	mustAccept(t, "one plain definition among combining ones",
+		`<grammar`+rngNS+`><start><ref name="x"/></start>
+			<define name="x" combine="choice">
+				<element name="a"><empty/></element></define>
+			<define name="x" combine="choice">
+				<element name="b"><empty/></element></define>
+			<define name="x"><element name="c"><empty/></element></define>
+		</grammar>`)
+}
+
+// Combining must actually join the definitions, not merely permit them: a
+// schema that declares three alternatives and validates only the first is
+// worse than one that refuses to compile.
+func TestCombineJoinsDefinitions(t *testing.T) {
+	const src = `<grammar` + rngNS + `>
+		<start><element name="root"><ref name="x"/></element></start>
+		<define name="x"><element name="a"><empty/></element></define>
+		<define name="x" combine="choice">
+			<element name="b"><empty/></element></define>
+	</grammar>`
+	s, err := compileSrc(t, src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, doc := range []string{`<root><a/></root>`, `<root><b/></root>`} {
+		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(tree.Root); err != nil {
+			t.Errorf("%s should be valid against the combined definition: %v",
+				doc, err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package relaxng
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -50,7 +51,8 @@ func Compile(doc *xdm.Node) (*Schema, error) {
 		return nil, err
 	}
 
-	c := &compiler{defines: map[string]*xdm.Node{}}
+	c := &compiler{defines: map[string]*xdm.Node{},
+		combined: map[string][]*xdm.Node{}, how: map[string]string{}}
 	p, err := c.compileTop(root)
 	if err != nil {
 		return nil, err
@@ -68,6 +70,13 @@ func Compile(doc *xdm.Node) (*Schema, error) {
 }
 
 type compiler struct {
+	// combined holds the further definitions of a name beyond the first, to
+	// be joined by the combine= method they all agreed on.
+	combined map[string][]*xdm.Node
+	// starts holds further <start> elements, likewise.
+	starts []*xdm.Node
+	// how records the combine method agreed for each name.
+	how map[string]string
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -103,20 +112,23 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 			}
 			switch kid.Name.Local {
 			case "start":
-				if start == nil {
-					start = kid
+				if start != nil {
+					c.starts = append(c.starts, kid)
+					break
 				}
+				start = kid
 			case "define":
 				name := normalizeToken(kid.AttrValue("name"))
 				if name == "" {
 					return fmt.Errorf("relaxng: <define> has no name")
 				}
-				// A repeated <define> without combine= is an error, but
-				// reporting it needs the combine machinery; the first
-				// definition binds, matching how the rest of this file
-				// resolves ambiguity.
+				// Section 4.17 is checked once the whole grammar has been
+				// read, since it constrains the *set* of definitions of a
+				// name rather than any pair of them.
 				if _, dup := c.defines[name]; !dup {
 					c.defines[name] = kid
+				} else {
+					c.combined[name] = append(c.combined[name], kid)
 				}
 			case "div":
 				// <div> groups definitions for documentation and has no
@@ -132,10 +144,39 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 	if err := collect(g); err != nil {
 		return nil, err
 	}
+	// Section 4.17, applied to each name once the grammar has been read.
+	for name, first := range c.defines {
+		how, err := agreedCombine("definition of "+strconv.Quote(name),
+			append([]*xdm.Node{first}, c.combined[name]...))
+		if err != nil {
+			return nil, err
+		}
+		c.how[name] = how
+	}
 	if start == nil {
 		return nil, fmt.Errorf("relaxng: <grammar> has no <start>")
 	}
-	return c.compileChildren(start)
+	startCombine, err := agreedCombine("<start>",
+		append([]*xdm.Node{start}, c.starts...))
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.compileChildren(start)
+	if err != nil {
+		return nil, err
+	}
+	join := choice
+	if startCombine == "interleave" {
+		join = interleave
+	}
+	for _, extra := range c.starts {
+		q, err := c.compileChildren(extra)
+		if err != nil {
+			return nil, err
+		}
+		p = join(p, q)
+	}
+	return p, nil
 }
 
 // compileChildren compiles an element's pattern children as a group.
@@ -269,7 +310,9 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		return c.compileRef(n)
 
 	case "grammar":
-		sub := &compiler{defines: map[string]*xdm.Node{}, depth: c.depth}
+		sub := &compiler{defines: map[string]*xdm.Node{},
+			combined: map[string][]*xdm.Node{}, how: map[string]string{},
+			depth: c.depth}
 		return sub.compileGrammar(n)
 
 	case "externalRef", "include", "parentRef":
@@ -317,7 +360,25 @@ func (c *compiler) compileRef(n *xdm.Node) (Pattern, error) {
 	}
 	c.depth++
 	defer func() { c.depth-- }()
-	return c.compileChildren(def)
+	p, err := c.compileChildren(def)
+	if err != nil {
+		return nil, err
+	}
+	// The further definitions of this name are joined by the method they all
+	// declared. Combining is what makes a grammar extensible: a schema may
+	// add an alternative to a definition it did not write.
+	join := choice
+	if c.how[name] == "interleave" {
+		join = interleave
+	}
+	for _, extra := range c.combined[name] {
+		q, err := c.compileChildren(extra)
+		if err != nil {
+			return nil, err
+		}
+		p = join(p, q)
+	}
+	return p, nil
 }
 
 func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
@@ -500,4 +561,49 @@ func nsInForce(n *xdm.Node) string {
 		}
 	}
 	return ""
+}
+
+// agreedCombine applies §4.17 to the definitions of one name.
+//
+// A name may be defined more than once, which is how a schema extends one it
+// did not write. The rule that makes that safe is that the definitions must
+// agree: at most one may omit combine=, since that one is the base being
+// extended, and every other must name the same method. Two plain definitions
+// are a mistake rather than an extension — one of them would be silently lost.
+func agreedCombine(what string, defs []*xdm.Node) (string, error) {
+	if len(defs) < 2 {
+		return "", nil
+	}
+	var how string
+	var plain int
+	for _, d := range defs {
+		c := normalizeToken(d.AttrValue("combine"))
+		if c == "" {
+			plain++
+			continue
+		}
+		if c != "choice" && c != "interleave" {
+			return "", fmt.Errorf(
+				"relaxng: %s has combine=%q, which is neither choice nor interleave",
+				what, c)
+		}
+		if how == "" {
+			how = c
+		} else if how != c {
+			return "", fmt.Errorf(
+				"relaxng: %s is combined both by %s and by %s (section 4.17)",
+				what, how, c)
+		}
+	}
+	if plain > 1 {
+		return "", fmt.Errorf(
+			"relaxng: %s appears %d times without combine= (section 4.17)",
+			what, plain)
+	}
+	if how == "" {
+		return "", fmt.Errorf(
+			"relaxng: %s appears more than once without combine= (section 4.17)",
+			what)
+	}
+	return how, nil
 }

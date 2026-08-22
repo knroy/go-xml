@@ -35,6 +35,9 @@ type elementSpec struct {
 	// textOnly says the element's content is character data, so a child
 	// element is an error.
 	textOnly bool
+	// maxExcept bounds the <except> children. Zero means unbounded here,
+	// since only <data> constrains it.
+	maxExcept int
 }
 
 // specs is the grammar of the XML syntax, one entry per element.
@@ -55,7 +58,7 @@ var specs = map[string]elementSpec{
 	"text":        {maxPatterns: 0},
 	"notAllowed":  {maxPatterns: 0},
 	"value":       {attrs: []string{"type"}, maxPatterns: 0, textOnly: true},
-	"data":        {attrs: []string{"type"}, required: []string{"type"}, maxPatterns: -1},
+	"data":        {attrs: []string{"type"}, required: []string{"type"}, maxPatterns: -1, maxExcept: 1},
 	"externalRef": {attrs: []string{"href"}, required: []string{"href"}, maxPatterns: 0},
 	"grammar":     {maxPatterns: -1},
 	"start":       {attrs: []string{"combine"}, minPatterns: 1, maxPatterns: -1},
@@ -98,6 +101,19 @@ func checkSyntax(n *xdm.Node) error {
 	}
 	if err := checkChildren(n, spec); err != nil {
 		return err
+	}
+	if spec.maxExcept > 0 {
+		var n_except int
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI == NS && kid.Name.Local == "except" {
+				n_except++
+			}
+		}
+		if n_except > spec.maxExcept {
+			return fmt.Errorf(
+				"relaxng: <%s> has %d <except> children; at most %d is allowed",
+				n.Name.Local, n_except, spec.maxExcept)
+		}
 	}
 	for _, kid := range n.ChildElements() {
 		if err := checkSyntax(kid); err != nil {
@@ -334,6 +350,11 @@ func checkDatatypeLibrary(v string) error {
 	i := strings.IndexByte(v, ':')
 	if i <= 0 {
 		return fmt.Errorf("relaxng: datatypeLibrary %q is not an absolute URI", v)
+	}
+	// A scheme alone is not a URI: "foo:" names no library.
+	if i == len(v)-1 {
+		return fmt.Errorf(
+			"relaxng: datatypeLibrary %q is a scheme with no path", v)
 	}
 	// The scheme is ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
 	scheme := v[:i]
