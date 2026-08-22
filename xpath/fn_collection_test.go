@@ -139,6 +139,40 @@ func TestCollectionNonStringArgument(t *testing.T) {
 	}
 }
 
+// A relative URI resolves against the static base URI — the base of the
+// expression — not against the context item's document. Resolving is the
+// resolver's job; what is checked here is which base the engine hands it.
+func TestCollectionUsesStaticBaseURI(t *testing.T) {
+	r := &testCollections{docs: map[string][]string{"books": {`<b>one</b>`}}}
+	ctx := collCtx(t, r)
+	ctx.StaticBaseURI = "http://example.com/base/"
+	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
+		t.Fatalf("collection: %v", err)
+	}
+	if r.lastBase != "http://example.com/base/" {
+		t.Errorf("resolver got base %q, want the static base URI", r.lastBase)
+	}
+}
+
+// With no static base URI the context item's document base is the fallback, so
+// a caller who set neither is not left with nothing to resolve against.
+func TestCollectionFallsBackToItemBase(t *testing.T) {
+	r := &testCollections{docs: map[string][]string{"books": {`<b>one</b>`}}}
+	tree, err := xdm.ParseString(`<catalog/>`,
+		xdm.ParseOptions{BaseURI: "http://example.com/doc.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewContext(tree.Root, Builtins())
+	ctx.Collections = r
+	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
+		t.Fatalf("collection: %v", err)
+	}
+	if r.lastBase != "http://example.com/doc.xml" {
+		t.Errorf("resolver got base %q, want the document base URI", r.lastBase)
+	}
+}
+
 // Setting Docs must not enable collections, and vice versa. The two are
 // separate switches on purpose.
 func TestCollectionIndependentOfDocs(t *testing.T) {

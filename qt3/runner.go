@@ -1,6 +1,7 @@
 package qt3
 
 import (
+	"net/url"
 	"context"
 	"fmt"
 	"math/big"
@@ -826,6 +827,18 @@ type envCollections struct {
 
 func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, error) {
 	files, ok := c.byURI[uri]
+	// A relative URI resolves against the static base URI the environment
+	// declared: collection-006 asks for "collection1" against
+	// "http://www.w3.org/2010/09/qt-fots-catalog/". Resolving is the
+	// resolver's job — the engine hands over the base and does not guess what
+	// a URI means to the caller.
+	if !ok && base != "" {
+		if b, err := url.Parse(base); err == nil {
+			if u, err := url.Parse(uri); err == nil {
+				files, ok = c.byURI[b.ResolveReference(u).String()]
+			}
+		}
+	}
 	if !ok {
 		// The default collection is the empty URI. A case that asks for a
 		// collection the environment did not declare gets an error, which is

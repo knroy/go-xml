@@ -589,9 +589,19 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if ctx.Collections == nil {
 		return nil, fmt.Errorf("FODC0002: collections are not configured")
 	}
-	base := ""
-	if n, ok := ctx.Item.(*xdm.Node); ok {
-		base = n.BaseURI
+	// A relative URI resolves against the *static* base URI — the base of the
+	// expression itself — not against the context item's document. Passing
+	// the item's base made collection("collection1") ask the resolver for
+	// "collection1" with whatever document happened to be in focus, which is
+	// not what the expression named.
+	//
+	// The context item's base URI is the fallback, for a caller who set no
+	// static base but whose document has one.
+	base := ctx.StaticBaseURI
+	if base == "" {
+		if n, ok := ctx.Item.(*xdm.Node); ok {
+			base = n.BaseURI
+		}
 	}
 	seq, err := ctx.Collections.ResolveCollection(uri, base)
 	if err != nil {
