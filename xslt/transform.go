@@ -23,6 +23,16 @@ type TransformOptions struct {
 	// lists shipped beside them.
 	Documents xpath.DocumentResolver
 
+	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
+	// negative value means no limit.
+	//
+	// The bound catches a stylesheet that recurses without a base case,
+	// which is the common authoring mistake. But it also counts the ordinary
+	// descent of an identity transform, so a limit below the parser's left
+	// this refusing documents it had just accepted: at the old fixed 300, a
+	// legal 500-deep document could be parsed and not transformed.
+	MaxDepth int
+
 	// InitialMode names the mode for the initial apply-templates.
 	InitialMode string
 

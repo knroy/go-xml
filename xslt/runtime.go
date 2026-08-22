@@ -28,6 +28,8 @@ type runtime struct {
 	// depth bounds apply-templates recursion, which the spec does not bound
 	// and which a stylesheet with a cycle would otherwise run forever.
 	depth int
+	// maxDepth is the ceiling depth may reach, from TransformOptions.
+	maxDepth int
 
 	// secondary collects xsl:result-document outputs. Like messages it is a
 	// pointer, because the runtime struct is copied on every focus change:
@@ -72,13 +74,16 @@ type keyCacheKey struct {
 	tree *xdm.Tree
 }
 
-// maxDepth bounds template recursion.
-const maxDepth = 300
+// DefaultMaxDepth bounds template recursion when TransformOptions.MaxDepth is
+// zero. It matches xdm.DefaultMaxDepth so that a document the parser accepts is
+// one an identity transform can copy: the recursion counted here is the
+// ordinary descent through the tree, not only a stylesheet calling itself.
+const DefaultMaxDepth = 1000
 
 func (rt *runtime) descend() error {
 	rt.depth++
-	if rt.depth > maxDepth {
-		return fmt.Errorf("template recursion exceeded %d levels", maxDepth)
+	if rt.maxDepth > 0 && rt.depth > rt.maxDepth {
+		return fmt.Errorf("template recursion exceeded %d levels", rt.maxDepth)
 	}
 	return nil
 }
@@ -329,8 +334,13 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
+	maxDepth := opts.MaxDepth
+	if maxDepth == 0 {
+		maxDepth = DefaultMaxDepth
+	}
 	rt := &runtime{
 		sheet:     s,
+		maxDepth:  maxDepth,
 		keyIndex:  map[keyCacheKey]map[string]xdm.Sequence{},
 		tunnel:    map[string]xdm.Sequence{},
 		messages:  new([]string),

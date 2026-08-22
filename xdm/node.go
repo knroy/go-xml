@@ -76,7 +76,23 @@ type Node struct {
 	// then an integer compare rather than a walk to the common ancestor,
 	// which matters because union, "except", "intersect", and every
 	// path expression that must return nodes in document order sort by it.
-	order int
+	//
+	// int32 rather than int: this struct is allocated once per element,
+	// attribute and text run, so four bytes saved here is four bytes per
+	// node of a document. Two billion nodes is far past what the rest of
+	// the design survives, and Order() still returns int so no caller sees
+	// the narrower type.
+	order int32
+
+	// A byte offset is stored rather than a line and column because it is one
+	// int32 rather than two ints on a struct that a large document allocates
+	// hundreds of thousands of. Position resolves it on demand, which happens
+	// only for the handful of nodes an error actually names.
+	//
+	// It sits beside order so that the two int32 fields share a single
+	// eight-byte word. Separated, each was padded out to its own word and
+	// the narrowing bought nothing.
+	offset int32
 
 	// tree identifies the containing tree, so that nodes from different
 	// documents compare consistently (the spec requires a stable but
@@ -98,11 +114,6 @@ type Node struct {
 	// silently claim to start at line 1, and a new construction site added
 	// later would inherit the same bug without anyone noticing.
 	//
-	// A byte offset is stored rather than a line and column because it is one
-	// int32 rather than two ints on a struct that a large document allocates
-	// hundreds of thousands of. Position resolves it on demand, which happens
-	// only for the handful of nodes an error actually names.
-	offset int32
 }
 
 // Position returns the 1-based line and column where the node starts, and
@@ -130,8 +141,12 @@ type Tree struct {
 	// id orders nodes from different trees against each other. The spec
 	// requires only that the order be stable within a transform.
 	id      int
-	counter int
+	counter int32
+
+
 }
+
+
 
 func (n *Node) isItem() {}
 
@@ -145,7 +160,7 @@ func (n *Node) TypeName() string {
 
 // Order returns the document-order index. Only meaningful against nodes from
 // the same tree; use Compare for the general case.
-func (n *Node) Order() int { return n.order }
+func (n *Node) Order() int { return int(n.order) }
 
 // Tree returns the containing tree.
 func (n *Node) Tree() *Tree { return n.tree }

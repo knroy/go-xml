@@ -307,3 +307,48 @@ func TestOnlyPredefinedEntities(t *testing.T) {
 		t.Errorf("nested expansion gave %q, want the literal %q", got, "&#60;")
 	}
 }
+
+// TestParseLimits pins the two bounds on how much a single parse may consume.
+//
+// Neither alone is a memory bound. A node costs a fixed ~200 bytes whatever it
+// holds, so the heap a document needs follows its node count, not its length:
+// a megabyte of "<a/>" measured 53 times the memory of a megabyte of text.
+// MaxBytes bounds the read; MaxNodes bounds what the read can allocate.
+func TestParseLimits(t *testing.T) {
+	doc := "<r>" + strings.Repeat("<a/>", 100) + "</r>"
+
+	if _, err := ParseString(doc, ParseOptions{}); err != nil {
+		t.Fatalf("a small document should parse at the defaults: %v", err)
+	}
+
+	// The byte limit is on the read, so it fires whether or not the caller
+	// knows how long the document is.
+	if _, err := ParseString(doc, ParseOptions{MaxBytes: 50}); err == nil {
+		t.Error("a document over MaxBytes should be refused")
+	}
+	// Exactly at the limit is allowed; one byte under it is not. Reading one
+	// byte past the cap is what makes the two distinguishable.
+	if _, err := ParseString(doc, ParseOptions{MaxBytes: int64(len(doc))}); err != nil {
+		t.Errorf("a document of exactly MaxBytes should parse: %v", err)
+	}
+	if _, err := ParseString(doc, ParseOptions{MaxBytes: int64(len(doc)) - 1}); err == nil {
+		t.Error("a document one byte over MaxBytes should be refused")
+	}
+
+	// The node limit counts attributes and namespaces too, since a document
+	// of few elements carrying many attributes allocates most of its memory
+	// in those.
+	if _, err := ParseString(doc, ParseOptions{MaxNodes: 10}); err == nil {
+		t.Error("a document over MaxNodes should be refused")
+	}
+	attrs := `<r><a x="1" y="2" z="3"/><a x="1" y="2" z="3"/></r>`
+	if _, err := ParseString(attrs, ParseOptions{MaxNodes: 5}); err == nil {
+		t.Error("attributes should count against MaxNodes")
+	}
+
+	// A negative limit disables the check, for a caller reading input it
+	// produced itself.
+	if _, err := ParseString(doc, ParseOptions{MaxBytes: -1, MaxNodes: -1}); err != nil {
+		t.Errorf("negative limits should disable the checks: %v", err)
+	}
+}

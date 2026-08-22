@@ -38,10 +38,39 @@ type ParseOptions struct {
 	// drive a recursive descent into stack exhaustion, so the limit is
 	// enforced during construction rather than left to the runtime.
 	MaxDepth int
+
+	// MaxBytes bounds the source document. Zero means DefaultMaxBytes;
+	// a negative value means no limit, for a caller reading input it
+	// produced itself.
+	MaxBytes int64
+
+	// MaxNodes bounds the tree. Zero means DefaultMaxNodes; a negative
+	// value means no limit.
+	//
+	// Both limits exist because neither alone is a memory bound. A node
+	// costs a fixed ~200 bytes whatever it contains, so the heap a document
+	// needs depends on how many nodes it has rather than how long it is:
+	// a megabyte of "<a/>" is fifty times the memory of a megabyte of text.
+	// MaxBytes bounds the read; MaxNodes bounds what the read can allocate.
+	MaxNodes int
 }
 
-// DefaultMaxDepth is the nesting limit applied when MaxDepth is zero.
-const DefaultMaxDepth = 1000
+// Limits applied when the corresponding ParseOptions field is zero.
+const (
+	// DefaultMaxDepth is the nesting limit.
+	DefaultMaxDepth = 1000
+
+	// DefaultMaxBytes is the source-size limit: 64 MB, far above any
+	// schema or stylesheet and above most real instance documents, while
+	// still bounding what a single parse can be asked to read.
+	DefaultMaxBytes int64 = 64 << 20
+
+	// DefaultMaxNodes is the node-count limit. At roughly 200 bytes a node
+	// this bounds a tree to about 2 GB, which is the point of it: the
+	// number is chosen to bound *memory*, and it is the limit that actually
+	// binds on the documents designed to be expensive.
+	DefaultMaxNodes = 10_000_000
+)
 
 // Parse builds an XDM tree from an XML document.
 //
@@ -65,6 +94,20 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
 	r = decoded
+
+	// The byte limit wraps the reader, so it bounds what is read rather
+	// than what a caller remembered to check. One byte over the limit is
+	// read deliberately: hitting it is then distinguishable from a document
+	// that happens to be exactly the maximum size.
+	maxBytes := opts.MaxBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxBytes
+	}
+	var counted *countingReader
+	if maxBytes > 0 {
+		counted = &countingReader{r: io.LimitReader(r, maxBytes+1), max: maxBytes}
+		r = counted
+	}
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
@@ -92,6 +135,11 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	if maxDepth <= 0 {
 		maxDepth = DefaultMaxDepth
 	}
+	maxNodes := opts.MaxNodes
+	if maxNodes == 0 {
+		maxNodes = DefaultMaxNodes
+	}
+	nodes := 0
 
 	tree := NewTree()
 	tree.Root.BaseURI = opts.BaseURI
@@ -124,6 +172,14 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				sawRoot = true
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
+			// Attributes and namespaces are nodes too, and a document made
+			// of elements carrying many attributes allocates most of its
+			// memory in them, so they count against the limit.
+			nodes += 1 + len(el.Attrs) + len(el.Namespaces)
+			if maxNodes > 0 && nodes > maxNodes {
+				return nil, fmt.Errorf(
+					"parse XML: document exceeds %d nodes", maxNodes)
+			}
 			cur.AppendChild(el)
 			cur = el
 
@@ -323,4 +379,24 @@ func encodeOffset(off int64, track bool) int32 {
 		return 0
 	}
 	return int32(off + 1)
+}
+
+
+// countingReader fails the read that passes the byte limit, rather than
+// truncating silently. A truncated document would either fail to parse with a
+// confusing syntax error or, worse, parse as a smaller well-formed document
+// than the one that was sent.
+type countingReader struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if c.n > c.max {
+		return n, fmt.Errorf("document exceeds %d bytes", c.max)
+	}
+	return n, err
 }

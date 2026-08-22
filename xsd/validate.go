@@ -73,10 +73,25 @@ type ValidateOptions struct {
 	// XSLT layers consume. It is off by default because it mutates the
 	// tree the caller passed in.
 	Annotate bool
+
+	// MaxDepth bounds how deep validation will recurse. Zero means
+	// DefaultMaxDepth; a negative value means no limit.
+	//
+	// This is not the parser's limit. A tree can be built by a transform
+	// rather than parsed, and a caller who raises xdm.ParseOptions.MaxDepth
+	// to accept a deep document has not thereby agreed to let the validator
+	// recurse that far — see validateElement for why exceeding it is fatal
+	// rather than recoverable.
+	MaxDepth int
 }
 
 // DefaultMaxErrors bounds a run that does not set MaxErrors.
 const DefaultMaxErrors = 100
+
+// DefaultMaxDepth bounds validation recursion when MaxDepth is zero. It
+// matches xdm.DefaultMaxDepth, so a document the parser accepts is one the
+// validator will not refuse for depth alone.
+const DefaultMaxDepth = 1000
 
 // Validate checks a document against the schema.
 //
@@ -94,6 +109,9 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 	}
 	if opts.MaxErrors == 0 {
 		opts.MaxErrors = DefaultMaxErrors
+	}
+	if opts.MaxDepth == 0 {
+		opts.MaxDepth = DefaultMaxDepth
 	}
 	v := &validator{schema: s, opts: opts, ids: map[string]int{}}
 
@@ -243,6 +261,23 @@ func (v *validator) result() error {
 	return &ValidationErrors{Errors: v.errs}
 }
 
+// pathString renders the path to the node being validated.
+//
+// A deep document makes the full path useless as a diagnostic — a failure at
+// depth 50,000 produced a line of fifty thousand "/r" segments, which no one
+// can read and which costs more memory than the error it decorates. The ends
+// are what identify the location, so a long path keeps them and elides the
+// middle.
+func (v *validator) pathString() string {
+	const keep = 12
+	if len(v.path) <= 2*keep {
+		return "/" + strings.Join(v.path, "/")
+	}
+	head := strings.Join(v.path[:keep], "/")
+	tail := strings.Join(v.path[len(v.path)-keep:], "/")
+	return fmt.Sprintf("/%s/…(%d more)…/%s", head, len(v.path)-2*keep, tail)
+}
+
 // fail records a validation failure.
 func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 	if len(v.errs) >= v.opts.MaxErrors {
@@ -252,7 +287,7 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 	e := &ValidationError{
 		Code:    code,
 		Message: fmt.Sprintf(format, args...),
-		Path:    "/" + strings.Join(v.path, "/"),
+		Path:    v.pathString(),
 	}
 	if n != nil {
 		if line, col, ok := n.Position(); ok {
@@ -265,6 +300,22 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 // validateElement checks one element against a declaration.
 func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	if v.stopped {
+		return nil
+	}
+	// The validator recurses once per element depth, at roughly 3 kB of
+	// stack a level. Go's stack limit is reached at a few hundred thousand
+	// levels and exceeding it is `fatal error: stack overflow`, which
+	// recover() cannot catch — so it kills the process rather than failing
+	// the request. Counting the depth here turns that into an ordinary
+	// validation error.
+	//
+	// The parser's MaxDepth normally keeps this far out of reach, but it is
+	// a separate knob on a separate call, and a caller who raises it to
+	// accept a legitimately deep document should not thereby arm a crash.
+	if maxDepth := v.opts.MaxDepth; maxDepth > 0 && len(v.path) >= maxDepth {
+		v.fail(el, "cvc-elt.1",
+			"element nesting exceeds %d levels", maxDepth)
+		v.stopped = true
 		return nil
 	}
 	v.path = append(v.path, el.Name.Local)

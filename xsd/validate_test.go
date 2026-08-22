@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -688,5 +689,59 @@ func TestNilArgumentsReturnErrors(t *testing.T) {
 	}
 	if _, err := ParseSchema(nil); err == nil {
 		t.Error("ParseSchema(nil) should return an error")
+	}
+}
+
+// TestValidateMaxDepth pins the validator's own recursion bound.
+//
+// It is not the parser's. Validation recurses once per element depth at
+// roughly 3 kB of stack a level, and exceeding Go's stack limit is a
+// `fatal error: stack overflow` that recover() cannot catch — so it kills the
+// process rather than failing the request. A caller who raises
+// xdm.ParseOptions.MaxDepth to accept a legitimately deep document has not
+// thereby agreed to arm that crash, so the two limits are separate knobs.
+func TestValidateMaxDepth(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="r" type="R"/>
+	  <xs:complexType name="R"><xs:sequence>
+	    <xs:element name="r" type="R" minOccurs="0"/>
+	  </xs:sequence></xs:complexType></xs:schema>`
+	tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ParseSchema(tree.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const depth = 3000
+	doc := strings.Repeat("<r>", depth) + strings.Repeat("</r>", depth)
+	dt, err := xdm.ParseString(doc, xdm.ParseOptions{MaxDepth: depth + 10, MaxBytes: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Past the default, validation fails rather than recursing on.
+	err = s.Validate(dt.Root, ValidateOptions{})
+	if err == nil {
+		t.Error("nesting past the default MaxDepth should be refused")
+	} else if !strings.Contains(err.Error(), "nesting exceeds") {
+		t.Errorf("error %q does not say the nesting limit was reached", err)
+	}
+
+	// A caller who means it can raise the bound.
+	if err := s.Validate(dt.Root, ValidateOptions{MaxDepth: depth + 10}); err != nil {
+		t.Errorf("a raised MaxDepth should allow the document: %v", err)
+	}
+
+	// The reported path is bounded too: a failure at depth 3000 must not
+	// produce three thousand path segments no one can read.
+	err = s.Validate(dt.Root, ValidateOptions{})
+	var ve *ValidationErrors
+	if errors.As(err, &ve) && len(ve.Errors) > 0 {
+		if n := len(ve.Errors[0].Path); n > 200 {
+			t.Errorf("error path is %d characters; it should be elided", n)
+		}
 	}
 }

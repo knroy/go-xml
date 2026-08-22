@@ -699,3 +699,35 @@ func TestCompileNilReturnsError(t *testing.T) {
 		t.Error("Compile(nil) should return an error")
 	}
 }
+
+// TestTransformMaxDepth pins that the transform bound is high enough for an
+// ordinary document and still catches a stylesheet with no base case.
+//
+// The bound was a fixed 300, below the parser's 1000, and it counts the
+// ordinary descent of an identity transform rather than only a template
+// calling itself. So a legal 500-deep document could be parsed and then not
+// transformed. The default now matches the parser's.
+func TestTransformMaxDepth(t *testing.T) {
+	identity := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:template match="node()"><xsl:copy><xsl:apply-templates select="node()"/></xsl:copy></xsl:template>` +
+		`</xsl:stylesheet>`
+
+	// A document the parser accepts is one the identity transform can copy.
+	deep := strings.Repeat("<a>", 900) + strings.Repeat("</a>", 900)
+	if _, err := runErr(t, identity, deep); err != nil {
+		t.Errorf("a 900-deep document should transform: %v", err)
+	}
+
+	// A template with no base case is still caught.
+	runaway := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:template name="loop"><xsl:call-template name="loop"/></xsl:template>` +
+		`<xsl:template match="/"><xsl:call-template name="loop"/></xsl:template></xsl:stylesheet>`
+	_, err := runErr(t, runaway, `<d/>`)
+	if err == nil {
+		t.Fatal("unbounded template recursion should be refused")
+	}
+	if !strings.Contains(err.Error(), "recursion exceeded") {
+		t.Errorf("error %q does not name the recursion limit", err)
+	}
+}
