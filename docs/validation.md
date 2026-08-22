@@ -8,16 +8,27 @@ Being precise about which one you need saves the most time:
 |---|---|---|
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
 | the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
-| the XML matches a **DTD** | a validating parser | ❌ a DOCTYPE is parsed past, never applied |
+| the XML matches a **DTD** | a validating parser | ⚠️ attribute defaults and internal entities are applied; content models are not |
 | the XML matches a **RELAX NG** schema | a different validator | ❌ not implemented |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
 
 ### DTD and RELAX NG
 
-Neither is implemented, and the DTD case has a trap worth naming. A `DOCTYPE`
-is refused by default; set `ParseOptions.AllowDOCTYPE` and it is *parsed past*
-rather than applied. A document that violates its own internal DTD parses
-without complaint, and entities the DTD declares are not expanded:
+Neither is implemented as *validation*, and the DTD case needs care because
+part of it now is.
+
+A `DOCTYPE` is refused by default. With `ParseOptions.AllowDOCTYPE` set, two
+declarations are applied — the two whose absence is visible in the data model:
+
+* **`<!ATTLIST>` defaults.** A `#FIXED` or literal default is added to every
+  matching element, including a namespace declaration, since
+  `xmlns:p CDATA #FIXED "..."` is how a DTD supplies a binding.
+* **`<!ENTITY>` internal general entities.** `&name;` expands. External
+  entities — `SYSTEM` or `PUBLIC` — are never resolved, and expansion is
+  bounded; see [security.md](security.md).
+
+Everything else is still parsed past. **`<!ELEMENT>` content models are not
+checked**, so a document that violates its own DTD parses without complaint:
 
 ```go
 // <!DOCTYPE r [ <!ELEMENT r (a)> ]>  <r><b>wrong</b></r>
@@ -25,9 +36,12 @@ _, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
 // err is nil — the content model is never checked
 ```
 
-So `AllowDOCTYPE` buys tolerance, not validation. If a document's constraints
-live in a DTD and you need them enforced, this is not the library for that
-document — convert the DTD to XSD, or use a validating parser.
+Nor are `ID`/`IDREF` attribute *types*, which is why `fn:id` falls back to
+`xml:id` and a conventional `id` attribute.
+
+So `AllowDOCTYPE` buys parseability, not validation. If a document's
+constraints live in a DTD and you need them enforced, convert the DTD to XSD or
+use a validating parser.
 
 The default is off for a reason beyond that: a DTD is the entry point for
 entity expansion and XXE, so permitting one is a decision to make per document
@@ -36,7 +50,7 @@ source rather than globally.
 RELAX NG is a larger absence: it validates by a different model — derivatives
 over patterns rather than a finite automaton — so it is a separate engine
 rather than a use of the one here, and its `interleave` is the part that makes
-it so.
+it so. See [todo.md](todo.md) for what each of these would cost.
 
 ## XSD
 
