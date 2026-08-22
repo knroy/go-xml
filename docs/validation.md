@@ -8,14 +8,14 @@ Being precise about which one you need saves the most time:
 |---|---|---|
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
 | the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
-| the XML matches a **DTD** | a validating parser | ⚠️ attribute defaults and internal entities are applied; content models are not |
+| the XML matches a **DTD** | a validating parser | ✅ `dtd.Parse` + `dtd.Validate` (internal subset only) |
 | the XML matches a **RELAX NG** schema | a different validator | ❌ not implemented |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
 
 ### DTD and RELAX NG
 
-Neither is implemented as *validation*, and the DTD case needs care because
-part of it now is.
+DTD validation is implemented; RELAX NG is not. The DTD case needs care because
+the work is split between parsing and validating.
 
 A `DOCTYPE` is refused by default. With `ParseOptions.AllowDOCTYPE` set, two
 declarations are applied — the two whose absence is visible in the data model:
@@ -27,21 +27,42 @@ declarations are applied — the two whose absence is visible in the data model:
   entities — `SYSTEM` or `PUBLIC` — are never resolved, and expansion is
   bounded; see [security.md](security.md).
 
-Everything else is still parsed past. **`<!ELEMENT>` content models are not
-checked**, so a document that violates its own DTD parses without complaint:
+**Parsing still does not check anything else.** `AllowDOCTYPE` buys
+parseability, not validation — a document that violates its own DTD parses
+without complaint:
 
 ```go
 // <!DOCTYPE r [ <!ELEMENT r (a)> ]>  <r><b>wrong</b></r>
-_, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
-// err is nil — the content model is never checked
+tree, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
+// err is nil — parsing does not apply the content model
 ```
 
-Nor are `ID`/`IDREF` attribute *types*, which is why `fn:id` falls back to
-`xml:id` and a conventional `id` attribute.
+Validation is a separate call, in the [`dtd`](../dtd) package:
 
-So `AllowDOCTYPE` buys parseability, not validation. If a document's
-constraints live in a DTD and you need them enforced, convert the DTD to XSD or
-use a validating parser.
+```go
+d, err := dtd.Parse(tree.DocType)
+err = dtd.Validate(tree.Root, d, dtd.Options{})
+// /r: element b is not permitted here in the content of r
+```
+
+That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
+`#FIXED`), enumerated values, and `ID`/`IDREF`. The content models go through
+the same Glushkov automaton the XSD validator uses — a DTD model is a strict
+subset of what an `xsd.Particle` expresses, so there is no second engine.
+
+Two things to know before relying on it:
+
+* **An external subset is never fetched.** Fetching one is the attack
+  `AllowDOCTYPE` exists to gate. `DTD.HasExternalSubset` records that one was
+  named, so a caller knows the check was partial rather than clean.
+* **A partial internal subset is common.** A document declaring a few things
+  locally and naming an external DTD for the rest reports every other element
+  as undeclared, which is strictly correct and useless. `Options.AllowUndeclared`
+  skips those; what *is* declared stays enforced.
+
+`ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
+are not fed back into the data model, which is why `fn:id` still falls back to
+`xml:id` and a conventional `id` attribute.
 
 The default is off for a reason beyond that: a DTD is the entry point for
 entity expansion and XXE, so permitting one is a decision to make per document
