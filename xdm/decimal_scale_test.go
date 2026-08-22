@@ -13,7 +13,10 @@ import (
 // literal with 360 fractional digits printed as "0" while comparing unequal to
 // zero. Whichever answer a caller trusted, the other contradicted it.
 func TestDecimalRendersExactly(t *testing.T) {
-	cases := []struct{ num, den int64; want string }{
+	cases := []struct {
+		num, den int64
+		want     string
+	}{
 		{1995, 100, "19.95"},
 		{1, 8, "0.125"},
 		{-1, 4, "-0.25"},

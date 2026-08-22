@@ -151,11 +151,7 @@ type Tree struct {
 	// requires only that the order be stable within a transform.
 	id      int
 	counter int32
-
-
 }
-
-
 
 func (n *Node) isItem() {}
 

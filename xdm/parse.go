@@ -420,7 +420,6 @@ func encodeOffset(off int64, track bool) int32 {
 	return int32(off + 1)
 }
 
-
 // countingReader fails the read that passes the byte limit, rather than
 // truncating silently. A truncated document would either fail to parse with a
 // confusing syntax error or, worse, parse as a smaller well-formed document

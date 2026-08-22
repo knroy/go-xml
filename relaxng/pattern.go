@@ -100,19 +100,19 @@ type Param struct {
 	Value string
 }
 
-func (NotAllowed) nullable() bool  { return false }
-func (Empty) nullable() bool       { return true }
-func (Text) nullable() bool        { return true }
-func (p Choice) nullable() bool    { return p.Left.nullable() || p.Right.nullable() }
+func (NotAllowed) nullable() bool   { return false }
+func (Empty) nullable() bool        { return true }
+func (Text) nullable() bool         { return true }
+func (p Choice) nullable() bool     { return p.Left.nullable() || p.Right.nullable() }
 func (p Interleave) nullable() bool { return p.Left.nullable() && p.Right.nullable() }
-func (p Group) nullable() bool     { return p.Left.nullable() && p.Right.nullable() }
-func (p OneOrMore) nullable() bool { return p.Pattern.nullable() }
-func (Element) nullable() bool     { return false }
-func (Attribute) nullable() bool   { return false }
-func (Value) nullable() bool       { return false }
-func (Data) nullable() bool        { return false }
-func (List) nullable() bool        { return false }
-func (After) nullable() bool       { return false }
+func (p Group) nullable() bool      { return p.Left.nullable() && p.Right.nullable() }
+func (p OneOrMore) nullable() bool  { return p.Pattern.nullable() }
+func (Element) nullable() bool      { return false }
+func (Attribute) nullable() bool    { return false }
+func (Value) nullable() bool        { return false }
+func (Data) nullable() bool         { return false }
+func (List) nullable() bool         { return false }
+func (After) nullable() bool        { return false }
 
 // NameClass decides which names a pattern admits.
 type NameClass interface {
