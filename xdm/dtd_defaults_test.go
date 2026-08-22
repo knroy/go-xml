@@ -90,7 +90,7 @@ func TestAttListDefaultIsPerElement(t *testing.T) {
 // attack surface AllowDOCTYPE exists to gate, and none of it is opened here.
 func TestAttListDefaultsExpandNothing(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// A default whose text looks like an entity reference is inserted
+		// A default whose text names an *external* entity is inserted
 		// literally. Expanding it would be an XXE with extra steps.
 		{"entity in default",
 			`<!DOCTYPE r [<!ATTLIST r x CDATA #FIXED "&file;">` +
@@ -117,11 +117,15 @@ func TestAttListDefaultsExpandNothing(t *testing.T) {
 // five predefined entities are the only ones that exist.
 func TestDOCTYPEStillRefusesEntities(t *testing.T) {
 	for _, src := range []string{
+		// External: fetching this is XXE, which is the attack AllowDOCTYPE
+		// exists to gate. It stays refused however the flag is set.
 		`<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><r>&x;</r>`,
-		`<!DOCTYPE r [<!ENTITY a "aa"><!ENTITY b "&a;&a;">]><r>&b;</r>`,
+		`<!DOCTYPE r [<!ENTITY x PUBLIC "-//x" "http://127.0.0.1/">]><r>&x;</r>`,
+		// Undeclared: a conforming parser must not invent one.
+		`<!DOCTYPE r [<!ENTITY a "z">]><r>&nope;</r>`,
 	} {
 		if _, err := ParseString(src, ParseOptions{AllowDOCTYPE: true}); err == nil {
-			t.Errorf("an undeclared entity reference should be refused: %s", src)
+			t.Errorf("should have been refused: %s", src)
 		}
 	}
 }

@@ -116,11 +116,15 @@ func TestDOCTYPEIsToleratedNotApplied(t *testing.T) {
 			"if the content model is now enforced, the docs need updating", err)
 	}
 
-	// An entity the DTD declares is not expanded either.
+	// An *internal* entity the DTD declares is expanded, which some schemas
+	// need — the W3C's own RFC 3986 type library composes its regexes this
+	// way. See dtd_entities.go for the bounds that keeps safe.
 	const entity = `<!DOCTYPE r [<!ENTITY x "EXPANDED">]><r>&x;</r>`
-	if _, err := ParseString(entity, ParseOptions{AllowDOCTYPE: true}); err == nil {
-		t.Error("a DTD-declared entity resolved; entity expansion is " +
-			"deliberately limited to the predefined five")
+	tree, err := ParseString(entity, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Errorf("an internal entity should expand: %v", err)
+	} else if got := tree.Root.StringValue(); got != "EXPANDED" {
+		t.Errorf("entity expanded to %q, want EXPANDED", got)
 	}
 }
 

@@ -274,6 +274,35 @@ patterns, and one that guesses is not safe at any setting. Since `fn:matches`
 takes its pattern from the stylesheet, and a stylesheet may be caller-supplied,
 that distinction is a security property rather than a conformance preference.
 
+### Internal entities expand; external ones never do
+
+`AllowDOCTYPE` now also enables **internal general entities** — the
+`<!ENTITY name "text">` form declared in a document's own subset. Some schemas
+need them: the W3C's RFC 3986 type library composes its URI regexes out of
+fifty entities named after the grammar's productions, and without expansion the
+document cannot be parsed at all.
+
+The line that does not move is **external** entities. One declared `SYSTEM` or
+`PUBLIC` names something outside the document, and fetching it is XXE. Those
+are recorded as refused rather than resolved, so a reference to one is an error
+and never a fetch — including when reached indirectly through an internal
+entity. Parameter entities are not read either.
+
+Expansion is bounded three ways, because nesting is exactly how billion-laughs
+works:
+
+| bound | value | why |
+|---|---|---|
+| depth | 100 levels | past anything hand-written, far short of a bomb |
+| one entity | 64 KB | the largest legitimate expansion measured is 9,569 bytes |
+| all entities | 1 MB | a bomb split across many entities cannot add up |
+
+A cycle — direct or mutual — is detected and refused rather than recursed.
+
+The per-entity figure is measured rather than chosen: a first attempt used
+1 MB, and a five-level billion-laughs reaching 100,000 bytes parsed cleanly
+through it. The regression test that caught that is `TestEntityExpansionBlowupIsRefused`.
+
 ### All resolution defaults are closed
 
 `doc()`, `document()`, `collection()`, `xsl:include` and `xsl:import` all refuse

@@ -241,6 +241,23 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			// not widen what AllowDOCTYPE admits.
 			if strings.HasPrefix(d, "DOCTYPE") {
 				attDefaults = append(attDefaults, parseAttListDefaults(d)...)
+				// Internal general entities are declared here and referenced
+				// in content, so the table has to be installed before the
+				// decoder reads any. encoding/xml consults dec.Entity lazily,
+				// which makes that possible: the DOCTYPE is always the first
+				// token.
+				//
+				// Only internal entities are expanded. One declared SYSTEM or
+				// PUBLIC is recorded as refused, so referencing it is an
+				// error rather than a fetch — this does not open XXE.
+				if ents := parseInternalEntities(d); ents != nil {
+					if dec.Entity == nil {
+						dec.Entity = map[string]string{}
+					}
+					for k, v := range ents.entityMap() {
+						dec.Entity[k] = v
+					}
+				}
 			}
 		}
 	}
