@@ -81,7 +81,7 @@ func oneOrMore(p Pattern) Pattern {
 // by whatever must come once that element closes. That pairing is what lets
 // one recursion handle arbitrary nesting.
 func startTagOpenDeriv(p Pattern, name xdm.QName) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case Choice:
 		return choice(startTagOpenDeriv(t.Left, name), startTagOpenDeriv(t.Right, name))
 	case Element:
@@ -115,6 +115,27 @@ func startTagOpenDeriv(p Pattern, name xdm.QName) Pattern {
 	return NotAllowed{}
 }
 
+// expand resolves a Ref to the pattern it stands for.
+//
+// Every function that examines a pattern calls this first, so that a lazily
+// compiled definition behaves exactly like the pattern it names. Expanding
+// here rather than at compile time is what lets a definition refer to itself:
+// the expansion happens once per level of nesting the document actually has,
+// instead of unboundedly while compiling.
+func expand(p Pattern) Pattern {
+	for {
+		r, ok := p.(*Ref)
+		if !ok {
+			return p
+		}
+		q, err := r.get()
+		if err != nil {
+			return NotAllowed{}
+		}
+		p = q
+	}
+}
+
 // applyAfter rewrites the continuation of every After inside p.
 //
 // The derivative of a compound pattern has to remember what follows the
@@ -122,7 +143,7 @@ func startTagOpenDeriv(p Pattern, name xdm.QName) Pattern {
 // After. Rewriting it in place is what threads the context through without a
 // separate stack.
 func applyAfter(f func(Pattern) Pattern, p Pattern) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case After:
 		return after(t.Left, f(t.Right))
 	case Choice:
@@ -147,7 +168,7 @@ type attr struct {
 }
 
 func attDeriv(p Pattern, a attr) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case After:
 		return after(attDeriv(t.Left, a), t.Right)
 	case Choice:
@@ -191,7 +212,7 @@ func isNotAllowed(p Pattern) bool {
 
 // textDeriv is the derivative with respect to a string of character data.
 func textDeriv(p Pattern, s string) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case Choice:
 		return choice(textDeriv(t.Left, s), textDeriv(t.Right, s))
 	case Interleave:
@@ -250,7 +271,7 @@ func listDeriv(p Pattern, tokens []string) Pattern {
 // pattern still live means it went unused, and an unused Attribute cannot be
 // satisfied later.
 func startTagCloseDeriv(p Pattern) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case After:
 		return after(startTagCloseDeriv(t.Left), t.Right)
 	case Choice:
@@ -273,7 +294,7 @@ func startTagCloseDeriv(p Pattern) Pattern {
 // stored in the After — but only if the content pattern is nullable, meaning
 // everything it required was supplied.
 func endTagDeriv(p Pattern) Pattern {
-	switch t := p.(type) {
+	switch t := expand(p).(type) {
 	case Choice:
 		return choice(endTagDeriv(t.Left), endTagDeriv(t.Right))
 	case After:

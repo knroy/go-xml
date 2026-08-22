@@ -427,6 +427,24 @@ func checkCompetition(p Pattern) error {
 // whether two branches of a group conflict, both branches must first be
 // summarised, and summarising a branch means recursing into it.
 func competing(p Pattern) (nameSet, error) {
+	return competingSeen(p, map[*Ref]bool{})
+}
+
+func competingSeen(p Pattern, seen map[*Ref]bool) (nameSet, error) {
+	if r, ok := p.(*Ref); ok {
+		// A recursive definition is visited once: what it can match is
+		// already accounted for by the visit in progress, and following it
+		// again would not terminate.
+		if seen[r] {
+			return nameSet{}, nil
+		}
+		seen[r] = true
+		q, err := r.get()
+		if err != nil {
+			return nameSet{}, err
+		}
+		return competingSeen(q, seen)
+	}
 	switch t := p.(type) {
 	case Attribute:
 		// The attribute's own content is a separate world — §7.1 has already
@@ -437,7 +455,7 @@ func competing(p Pattern) (nameSet, error) {
 		// An element's content is checked, but its names do not escape: two
 		// sibling elements named bar are fine, it is two *branches* offering
 		// bar to the same interleave that is not.
-		if _, err := competing(t.Pattern); err != nil {
+		if _, err := competingSeen(t.Pattern, seen); err != nil {
 			return nameSet{}, err
 		}
 		return nameSet{elems: []NameClass{t.Name}}, nil
@@ -446,11 +464,11 @@ func competing(p Pattern) (nameSet, error) {
 		return nameSet{text: true}, nil
 
 	case Group:
-		l, err := competing(t.Left)
+		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
-		r, err := competing(t.Right)
+		r, err := competingSeen(t.Right, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
@@ -465,11 +483,11 @@ func competing(p Pattern) (nameSet, error) {
 		return l, nil
 
 	case Interleave:
-		l, err := competing(t.Left)
+		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
-		r, err := competing(t.Right)
+		r, err := competingSeen(t.Right, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
@@ -495,11 +513,11 @@ func competing(p Pattern) (nameSet, error) {
 
 	case Choice:
 		// Alternatives do not compete: only one of them runs.
-		l, err := competing(t.Left)
+		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
-		r, err := competing(t.Right)
+		r, err := competingSeen(t.Right, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
@@ -507,7 +525,7 @@ func competing(p Pattern) (nameSet, error) {
 		return l, nil
 
 	case OneOrMore:
-		s, err := competing(t.Pattern)
+		s, err := competingSeen(t.Pattern, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
@@ -519,14 +537,14 @@ func competing(p Pattern) (nameSet, error) {
 		return s, nil
 
 	case List:
-		return competing(t.Pattern)
+		return competingSeen(t.Pattern, seen)
 
 	case After:
-		l, err := competing(t.Left)
+		l, err := competingSeen(t.Left, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
-		r, err := competing(t.Right)
+		r, err := competingSeen(t.Right, seen)
 		if err != nil {
 			return nameSet{}, err
 		}
@@ -664,6 +682,21 @@ func checkStringSequences(p Pattern) error {
 //
 // inList suspends the rule, and is set when descending into a List.
 func contentOf(p Pattern, inList bool) (contentKind, error) {
+	return contentOfSeen(p, inList, map[*Ref]bool{})
+}
+
+func contentOfSeen(p Pattern, inList bool, seen map[*Ref]bool) (contentKind, error) {
+	if r, ok := p.(*Ref); ok {
+		if seen[r] {
+			return kindNothing, nil
+		}
+		seen[r] = true
+		q, err := r.get()
+		if err != nil {
+			return 0, err
+		}
+		return contentOfSeen(q, inList, seen)
+	}
 	switch t := p.(type) {
 	case Data:
 		return kindString, nil
@@ -672,7 +705,7 @@ func contentOf(p Pattern, inList bool) (contentKind, error) {
 	case List:
 		// The list itself is a string as far as its parent is concerned; its
 		// contents are checked with the rule suspended.
-		if _, err := contentOf(t.Pattern, true); err != nil {
+		if _, err := contentOfSeen(t.Pattern, true, seen); err != nil {
 			return 0, err
 		}
 		return kindString, nil
@@ -682,7 +715,7 @@ func contentOf(p Pattern, inList bool) (contentKind, error) {
 	case Element:
 		// The element's own content is a fresh scope: what it holds does not
 		// sequence with what stands beside it.
-		if _, err := contentOf(t.Pattern, false); err != nil {
+		if _, err := contentOfSeen(t.Pattern, false, seen); err != nil {
 			return 0, err
 		}
 		if inList {
@@ -699,31 +732,31 @@ func contentOf(p Pattern, inList bool) (contentKind, error) {
 	case Attribute:
 		// An attribute's value is a scope of its own too, and the attribute
 		// contributes nothing to the element's content.
-		if _, err := contentOf(t.Pattern, false); err != nil {
+		if _, err := contentOfSeen(t.Pattern, false, seen); err != nil {
 			return 0, err
 		}
 		return kindNothing, nil
 
 	case Group:
-		return sequenced(t.Left, t.Right, inList)
+		return sequencedSeen(t.Left, t.Right, inList, seen)
 	case Interleave:
-		return sequenced(t.Left, t.Right, inList)
+		return sequencedSeen(t.Left, t.Right, inList, seen)
 
 	case Choice:
 		// Alternatives: the rule does not apply, and the choice contributes
 		// whatever either branch might.
-		l, err := contentOf(t.Left, inList)
+		l, err := contentOfSeen(t.Left, inList, seen)
 		if err != nil {
 			return 0, err
 		}
-		r, err := contentOf(t.Right, inList)
+		r, err := contentOfSeen(t.Right, inList, seen)
 		if err != nil {
 			return 0, err
 		}
 		return l | r, nil
 
 	case OneOrMore:
-		k, err := contentOf(t.Pattern, inList)
+		k, err := contentOfSeen(t.Pattern, inList, seen)
 		if err != nil {
 			return 0, err
 		}
@@ -735,18 +768,18 @@ func contentOf(p Pattern, inList bool) (contentKind, error) {
 		return k, nil
 
 	case After:
-		return sequenced(t.Left, t.Right, inList)
+		return sequencedSeen(t.Left, t.Right, inList, seen)
 	}
 	return kindNothing, nil
 }
 
 // sequenced checks the two halves of a group or interleave against §7.2.
-func sequenced(a, b Pattern, inList bool) (contentKind, error) {
-	l, err := contentOf(a, inList)
+func sequencedSeen(a, b Pattern, inList bool, seen map[*Ref]bool) (contentKind, error) {
+	l, err := contentOfSeen(a, inList, seen)
 	if err != nil {
 		return 0, err
 	}
-	r, err := contentOf(b, inList)
+	r, err := contentOfSeen(b, inList, seen)
 	if err != nil {
 		return 0, err
 	}

@@ -89,6 +89,12 @@ func checkSyntax(n *xdm.Node) error {
 	if !known {
 		return fmt.Errorf("relaxng: <%s> is not a RELAX NG element", n.Name.Local)
 	}
+	// A <choice> of name classes is not a pattern, so the pattern spec does
+	// not describe it: it holds names, and requiring a pattern child would
+	// reject every element that offers two names for itself.
+	if n.Name.Local == "choice" && isNameClassChoice(n) {
+		spec = elementSpec{minPatterns: 0, maxPatterns: -1}
+	}
 
 	if err := checkAttrs(n, spec); err != nil {
 		return err

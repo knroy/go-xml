@@ -364,3 +364,106 @@ func TestOpenAttributeNameNeedsRepetition(t *testing.T) {
 		`<element`+rngNS+` name="foo"><oneOrMore><attribute>
 			<anyName/><text/></attribute></oneOrMore></element>`)
 }
+
+// Section 4.19: a definition may reach itself only through an <element>.
+//
+// Each level of such a recursion consumes an element, so a document ends it.
+// One that reaches itself without crossing an element boundary describes
+// nothing finite — there is no input that would stop it.
+func TestRecursionNeedsAnElement(t *testing.T) {
+	// Legal, and the ordinary way to write arbitrarily deep nesting.
+	s, err := compileSrc(t, `<grammar`+rngNS+`>
+		<start><element name="foo"><ref name="bar"/></element></start>
+		<define name="bar">
+			<element name="bar"><optional><ref name="bar"/></optional></element>
+		</define></grammar>`)
+	if err != nil {
+		t.Fatalf("recursion through an element should compile: %v", err)
+	}
+	for _, doc := range []string{
+		`<foo><bar/></foo>`,
+		`<foo><bar><bar/></bar></foo>`,
+		`<foo><bar><bar><bar/></bar></bar></foo>`,
+	} {
+		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(tree.Root); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
+
+	// Illegal: the recursion crosses no element.
+	mustReject(t, "recursion with no element between", "4.19",
+		`<grammar`+rngNS+`>
+			<start><element name="foo"><ref name="bar"/></element></start>
+			<define name="bar">
+				<optional><element name="bar"><empty/></element>
+					<ref name="bar"/></optional>
+			</define></grammar>`)
+}
+
+// A definition nothing refers to is still part of the schema, so a datatype
+// it names must exist. Finding that out only when a document happens to reach
+// it is finding out too late.
+func TestUnreferencedDefinitionsAreChecked(t *testing.T) {
+	for _, src := range []string{
+		`<grammar` + rngNS + `>
+			<start><element name="foo"><empty/></element></start>
+			<define name="unused"><data type="nosuchtype"/></define></grammar>`,
+		`<grammar` + rngNS + `>
+			<start><element name="foo"><empty/></element></start>
+			<define name="unused">
+				<data type="token"><param name="minLength">2</param></data>
+			</define></grammar>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("a broken unreferenced definition was accepted:\n%s", src)
+		}
+	}
+
+	// But an unreferenced definition that merely refers to itself is legal:
+	// nothing expands it, so nothing fails to terminate.
+	mustAccept(t, "unreferenced self-reference",
+		`<grammar`+rngNS+`>
+			<start><element name="foo"><empty/></element></start>
+			<define name="unused"><ref name="unused"/></define></grammar>`)
+}
+
+// The built-in library defines no parameters, so a schema giving one is
+// asking for a check that cannot happen.
+func TestBuiltinTypesTakeNoParams(t *testing.T) {
+	for _, typ := range []string{"string", "token"} {
+		src := `<element` + rngNS + ` name="foo">
+			<data type="` + typ + `"><param name="minLength">2</param></data>
+		</element>`
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("a param on the built-in %q was accepted", typ)
+		}
+	}
+}
+
+// An <element> may offer several names for itself, written as a choice of
+// name classes. Reading that choice as a choice of patterns loses the name and
+// then reports the element as having no content.
+func TestNameClassChoice(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+`>
+		<choice><name ns="">foo</name><name ns="">bar</name></choice>
+		<empty/></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		doc  string
+		want bool
+	}{{`<foo/>`, true}, {`<bar/>`, true}, {`<baz/>`, false}} {
+		tree, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(tree.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.want)
+		}
+	}
+}

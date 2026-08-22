@@ -94,6 +94,38 @@ type List struct{ Pattern Pattern }
 // rather than a separate stack is what makes the algorithm one recursion.
 type After struct{ Left, Right Pattern }
 
+// Ref is a definition not yet expanded.
+//
+// A definition may refer to itself — a <bar> whose content optionally holds
+// another <bar> is the ordinary way to write a nested structure — and
+// expanding that while compiling would not terminate. So a reference through
+// an element boundary becomes this instead, and is expanded only when a
+// derivative actually needs it, which happens once per level of nesting the
+// document actually has.
+type Ref struct {
+	// resolve produces the pattern, and is called at most once.
+	resolve func() (Pattern, error)
+	// cached is the result, kept so that a definition reached many times is
+	// compiled once.
+	cached Pattern
+	err    error
+	done   bool
+	// name is for error messages.
+	name string
+}
+
+// get expands the reference.
+func (r *Ref) get() (Pattern, error) {
+	if !r.done {
+		r.done = true
+		r.cached, r.err = r.resolve()
+		if r.cached == nil && r.err == nil {
+			r.cached = NotAllowed{}
+		}
+	}
+	return r.cached, r.err
+}
+
 // Param is one <param> on a data pattern.
 type Param struct {
 	Name  string
@@ -113,6 +145,19 @@ func (Value) nullable() bool        { return false }
 func (Data) nullable() bool         { return false }
 func (List) nullable() bool         { return false }
 func (After) nullable() bool        { return false }
+
+// nullable expands the reference.
+//
+// A definition that cannot be expanded matches nothing, which is the safe
+// reading: the failure is reported when the schema is compiled, and by the
+// time a derivative is asking, refusing is right.
+func (r *Ref) nullable() bool {
+	p, err := r.get()
+	if err != nil {
+		return false
+	}
+	return p.nullable()
+}
 
 // NameClass decides which names a pattern admits.
 type NameClass interface {

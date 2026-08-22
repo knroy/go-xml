@@ -31,8 +31,8 @@ const xsdLibrary = "http://www.w3.org/2001/XMLSchema-datatypes"
 // literal.
 type stringType struct{}
 
-func (stringType) check(string, []Param) error { return nil }
-func (stringType) equal(a, b string) bool      { return a == b }
+func (stringType) check(_ string, params []Param) error { return noParams("string", params) }
+func (stringType) equal(a, b string) bool               { return a == b }
 
 // tokenType is the built-in "token": every string is legal, and equality
 // ignores leading, trailing and repeated whitespace.
@@ -42,9 +42,24 @@ func (stringType) equal(a, b string) bool      { return a == b }
 // choice for a value written across lines.
 type tokenType struct{}
 
-func (tokenType) check(string, []Param) error { return nil }
+func (tokenType) check(_ string, params []Param) error { return noParams("token", params) }
 func (tokenType) equal(a, b string) bool {
 	return normalizeToken(a) == normalizeToken(b)
+}
+
+// noParams refuses a <param> on a built-in type.
+//
+// §4.16: the built-in library defines no parameters, so a schema that gives
+// one is asking for a check that cannot happen. Ignoring it would accept
+// values the author meant to exclude — which is the failure a validator
+// exists to prevent, arriving quietly.
+func noParams(name string, params []Param) error {
+	if len(params) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"the built-in type %q takes no parameters, and %q was given",
+		name, params[0].Name)
 }
 
 func normalizeToken(s string) string {
@@ -73,4 +88,25 @@ func lookupDatatype(library, name string) (Datatype, error) {
 		return xsdDatatype(name)
 	}
 	return nil, fmt.Errorf("unknown datatype library %q", library)
+}
+
+// checkParams validates a <data>'s parameters against its type, without a
+// value to check them on.
+//
+// It exists so that a definition nothing refers to is still checked: whether a
+// parameter is meaningful for a type is a property of the schema, not of any
+// document, and finding out only when a document happens to reach it is
+// finding out too late.
+func checkParams(dt Datatype, library, name string, params []Param) error {
+	if len(params) == 0 {
+		return nil
+	}
+	if library == builtinLibrary {
+		return noParams(name, params)
+	}
+	// A library type's parameters are checked against a value, and there is
+	// no value here. Leaving them is the honest choice: reporting a facet
+	// violation for a value the schema never mentions would be wrong.
+	_ = dt
+	return nil
 }

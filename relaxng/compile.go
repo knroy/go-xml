@@ -97,6 +97,18 @@ type compiler struct {
 	opts Options
 	// includeDepth bounds a chain of includes, which may otherwise cycle.
 	includeDepth int
+	// expanding names the definitions currently being compiled, so that one
+	// reaching itself becomes a lazy reference rather than an infinite
+	// expansion.
+	expanding map[string]bool
+	// lazy holds one Ref per name, so that a definition reached twice yields
+	// the same object and the walks over a compiled pattern can recognise it.
+	lazy map[string]*Ref
+	// elementDepth counts the <element> boundaries crossed so far, and
+	// expandingAt records the depth at which each definition began. A
+	// definition reaching itself at the same depth has not crossed one.
+	elementDepth int
+	expandingAt  map[string]int
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -200,7 +212,62 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 		}
 		p = join(p, q)
 	}
+	// Every definition is checked, not only the reachable ones: a <define>
+	// naming a type that does not exist is broken whether or not anything
+	// refers to it. Checking is not compiling, though — a definition may
+	// legitimately refer to itself, and expanding one that nothing reaches
+	// would not terminate.
+	if err := c.checkUnreferenced(g); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// checkUnreferenced validates the parts of each definition that can be checked
+// without expanding it.
+//
+// A <define> nothing refers to is still part of the schema, and the suite
+// tests that a definition naming a datatype that does not exist is refused
+// even when unreachable. Expanding it is the wrong way to find that out: a
+// definition may refer to itself, which is legal and would not terminate.
+// So the datatypes are resolved directly instead.
+func (c *compiler) checkUnreferenced(n *xdm.Node) error {
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		switch kid.Name.Local {
+		case "data", "value":
+			dflt := ""
+			if kid.Name.Local == "value" {
+				dflt = "token"
+			}
+			lib, name := datatypeOf(kid, dflt)
+			if name == "" {
+				return fmt.Errorf("relaxng: <data> has no type")
+			}
+			dt, err := lookupDatatype(lib, name)
+			if err != nil {
+				return fmt.Errorf("relaxng: <%s>: %w", kid.Name.Local, err)
+			}
+			if kid.Name.Local == "data" {
+				var params []Param
+				for _, p := range kid.ChildElements() {
+					if p.Name.URI == NS && p.Name.Local == "param" {
+						params = append(params,
+							Param{Name: p.AttrValue("name"), Value: p.StringValue()})
+					}
+				}
+				if err := checkParams(dt, lib, name, params); err != nil {
+					return fmt.Errorf("relaxng: <data>: %w", err)
+				}
+			}
+		}
+		if err := c.checkUnreferenced(kid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // compileChildren compiles an element's pattern children as a group.
@@ -230,12 +297,25 @@ func (c *compiler) compileChildren(n *xdm.Node) (Pattern, error) {
 func patternChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
 	for _, kid := range n.ChildElements() {
-		if kid.Name.URI == NS && kid.Name.Local != "param" &&
-			kid.Name.Local != "except" && kid.Name.Local != "name" &&
-			kid.Name.Local != "anyName" && kid.Name.Local != "nsName" &&
-			kid.Name.Local != "choice-name" {
-			out = append(out, kid)
+		if kid.Name.URI != NS {
+			continue
 		}
+		switch kid.Name.Local {
+		case "param", "except", "name", "anyName", "nsName":
+			continue
+		case "choice":
+			// A <choice> directly inside an <element> or <attribute> may be a
+			// choice of *names* rather than of patterns — <element><choice>
+			// <name>a</name><name>b</name></choice>...</element> names two
+			// alternatives for one element. Treating it as a pattern loses
+			// the name and then reports the choice as empty, since a name
+			// class holds no patterns.
+			if isNameClassChoice(kid) && (n.Name.Local == "element" ||
+				n.Name.Local == "attribute") {
+				continue
+			}
+		}
+		out = append(out, kid)
 	}
 	return out
 }
@@ -258,7 +338,9 @@ func (c *compiler) compilePattern(n *xdm.Node) (Pattern, error) {
 		if err != nil {
 			return nil, err
 		}
+		c.elementDepth++
 		body, err := c.compileChildren(n)
+		c.elementDepth--
 		if err != nil {
 			return nil, err
 		}
@@ -387,12 +469,43 @@ func (c *compiler) compileRefNamed(name string) (Pattern, error) {
 	if !ok {
 		return nil, fmt.Errorf("relaxng: <ref> names %q, which no <define> provides", name)
 	}
+	// A definition already being compiled is being reached recursively. That
+	// is legal — a <bar> whose content may hold another <bar> is the ordinary
+	// way to write a nested structure — and expanding it here would not
+	// terminate, so it becomes a reference resolved on demand instead. The
+	// recursion then unfolds once per level the document actually has.
+	if c.expanding == nil {
+		c.expanding = map[string]bool{}
+	}
+	if c.expanding[name] {
+		// §4.19: a definition may reach itself only through an <element>. A
+		// <bar> whose content may hold another <bar> describes arbitrarily
+		// deep nesting, and each level consumes an element, so a document
+		// ends the recursion. One that reaches itself without crossing an
+		// element boundary describes nothing finite — there is no input that
+		// would stop it — and is refused.
+		if c.elementDepth <= c.expandingAt[name] {
+			return nil, fmt.Errorf(
+				"relaxng: definition %q refers to itself without an "+
+					"intervening <element> (section 4.19)", name)
+		}
+		return c.lazyRef(name), nil
+	}
 	if c.depth >= maxRefDepth {
 		return nil, fmt.Errorf(
 			"relaxng: definition %q recurses more than %d deep", name, maxRefDepth)
 	}
+	if c.expandingAt == nil {
+		c.expandingAt = map[string]int{}
+	}
+	c.expanding[name] = true
+	c.expandingAt[name] = c.elementDepth
 	c.depth++
-	defer func() { c.depth-- }()
+	defer func() {
+		c.depth--
+		delete(c.expanding, name)
+		delete(c.expandingAt, name)
+	}()
 	p, err := c.compileChildren(def)
 	if err != nil {
 		return nil, err
@@ -598,6 +711,37 @@ func rootElement(doc *xdm.Node) *xdm.Node {
 	return nil
 }
 
+// lazyRef makes a reference that compiles the definition when it is first
+// needed.
+//
+// One Ref is kept per name, and it is the same object every time. That matters
+// as much as the laziness: the checks that walk a compiled pattern stop when
+// they meet a reference they have already followed, and they recognise it by
+// identity. A fresh Ref each time would defeat that and recurse forever.
+//
+// The compiler is captured rather than the pattern, because the definition
+// cannot be compiled yet — it is the one being compiled, several frames up.
+func (c *compiler) lazyRef(name string) Pattern {
+	if c.lazy == nil {
+		c.lazy = map[string]*Ref{}
+	}
+	if r, ok := c.lazy[name]; ok {
+		return r
+	}
+	r := &Ref{name: name}
+	c.lazy[name] = r
+	r.resolve = func() (Pattern, error) {
+		sub := &compiler{
+			defines: c.defines, combined: c.combined, how: c.how,
+			parent: c.parent, opts: c.opts, includeDepth: c.includeDepth,
+			expanding: map[string]bool{}, expandingAt: map[string]int{},
+			lazy: c.lazy,
+		}
+		return sub.compileRefNamed(name)
+	}
+	return r
+}
+
 func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
 	lib, name := datatypeOf(n, "token")
 	dt, err := lookupDatatype(lib, name)
@@ -639,6 +783,9 @@ func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {
 			}
 			d.Except = ex
 		}
+	}
+	if err := checkParams(dt, lib, name, d.Params); err != nil {
+		return nil, fmt.Errorf("relaxng: <data>: %w", err)
 	}
 	return d, nil
 }
