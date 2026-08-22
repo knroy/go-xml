@@ -154,6 +154,29 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPST0080: cast target must be an atomic type, got %s", e.Type)
 	}
 
+	// Casting to xs:QName is defined only from a *literal* string: a QName's
+	// namespace comes from the static context, and only a literal is folded
+	// where the prefix bindings are in scope. A computed string has no such
+	// context, so "$var castable as xs:QName" is false however well-formed
+	// the value looks — CastableAs648 is `for $var in "ABC" return $var
+	// castable as xs:QName`, which was answering true.
+	//
+	// This is a static property of the operand, which is why it is decided
+	// here rather than in CastToDerived: that function sees a value and
+	// cannot tell a literal from a variable that happens to hold one.
+	// The restriction is on *strings*: a value that is already an xs:QName
+	// casts to xs:QName whatever expression produced it, since it carries its
+	// own namespace binding and needs nothing from the static context.
+	// K-SeqExprCastable-18 is `QName("", "lname") castable as xs:QName`.
+	srcIsQName := atoms[0].(*xdm.Atomic).Type == xdm.TypeQName
+	if e.Type.AtomicType == xdm.TypeQName && !srcIsQName && !isLiteralOperand(e.Operand) {
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(false)), nil
+		}
+		return nil, xdm.ErrType(
+			"cast: only a literal string is castable to xs:QName")
+	}
+
 	out, err := CastToDerived(atoms[0].(*xdm.Atomic), e.Type.AtomicType, e.Type.FacetName)
 	if e.Castable {
 		// "castable as" is precisely "would cast succeed", so the error is
@@ -180,4 +203,29 @@ func (e *TreatExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPDY0050: value does not match the treat type %s", e.Type)
 	}
 	return v, nil
+}
+
+// isLiteralOperand reports whether e is a string literal, for the xs:QName
+// cast rule.
+//
+// A parenthesised literal is still a literal — "('ABC') cast as xs:QName" is
+// the same expression — so the wrapper is unwrapped rather than treated as a
+// computed value.
+func isLiteralOperand(e Expr) bool {
+	for {
+		switch t := e.(type) {
+		case *Literal:
+			return true
+		case *SequenceExpr:
+			// Parentheses fold into a one-item SequenceExpr, and
+			// "('ABC') cast as xs:QName" is the same expression as the bare
+			// literal. More than one item is not a single literal.
+			if len(t.Items) != 1 {
+				return false
+			}
+			e = t.Items[0]
+		default:
+			return false
+		}
+	}
 }

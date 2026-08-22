@@ -122,6 +122,14 @@ func registerQNameFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// The parameter is declared element(), so a document node is a type
+		// error rather than something to walk. in-scope-prefixes(/) was
+		// answering with the root element's prefixes, which is a different
+		// question from the one asked and hides the mistake.
+		if el.Kind != xdm.KindElement {
+			return nil, xdm.ErrType(
+				"in-scope-prefixes(): expected an element, got %s", el.Kind)
+		}
 		// InScopeNamespaces returns a map, and Go randomises map
 		// iteration, so the prefixes are sorted before they are
 		// returned. XPath leaves the order implementation-dependent, so

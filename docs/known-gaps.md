@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.83% — 15,155 of 15,181 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.86% — 15,159 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -235,6 +235,31 @@ conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
 
+### Particle restriction: the occurrence-carrying wrapper (attempted, reverted)
+
+`particlesZ001` is a `<sequence>` whose `<element name="element" minOccurs="0"
+maxOccurs="unbounded"/>` restricts a base `<choice minOccurs="0"
+maxOccurs="unbounded">` containing that element. It is valid under both
+versions and is refused.
+
+The cause is visible: `recurseAsIfGroup` wraps the element in a group of one
+and hardcodes the wrapper at `1..1`, discarding the element's own occurrence
+range. A once-only group is then compared against a repeating one, so the
+repetition the base allows looks like something the restriction dropped.
+
+**Moving the range onto the wrapper fixes the case and loses ground overall.**
+Measured: `particlesZ001` and `particlesZ023`/`Z024` start loading, but schema
+agreement falls 14,204 → 14,194 on 1.0 and 15,045 → 15,038 on 1.1 — about
+eleven invalid schemas newly accepted for each valid one recovered. Reverted.
+
+The reason is that the wrapper's range is doing two jobs. For the mapping in
+clause 2 it should repeat; for the *effective total range* check it should not,
+because a group of one repeating N times contributes N elements where the
+original particle contributed its own range. Carrying the range fixes the first
+and breaks the second. A correct fix needs the two separated rather than one
+range serving both — which is a change to `effectiveTotalRange`'s contract, not
+a change to this wrapper.
+
 ### Particle restriction edge cases (XSD)
 
 `addB118`, `addB183`, `particlesHa161`, `particlesT002`, `particlesT009`,
@@ -245,9 +270,9 @@ Individually diagnosed cases in Particle Valid (Restriction) rather than one
 cluster. `particlesZ001` and `addB183` failing in both versions makes them the
 best entry point: they are bugs in the shared logic, not 1.1-specific gaps.
 
-### `fn:collection()` — 5 of 7 fixed (XPath)
+### `fn:collection()` — fixed (XPath)
 
-2 cases remain in QT3 `fn-collection` (`collection-006`, `-007`), down from 7.
+All 7 QT3 `fn-collection` failures are closed; the set is 17 of 17.
 
 `xpath.CollectionResolver` and `Context.Collections` mirror
 `DocumentResolver`/`Docs`; `xslt.TransformOptions.Collections` threads it
@@ -255,8 +280,15 @@ through a transform; and the harness parses `<collection>` environments,
 loading through `Runner.loadDoc` so node identity and collection stability hold
 across calls.
 
-Measured against the real suite, not inferred: 7 failures before, 2 after. The
-remaining two assert over `all-of` groups and need individual diagnosis.
+The last two were a relative collection URI. `fn:collection` passed the
+*context item's* base URI to the resolver, so `collection("collection1")` asked
+about whichever document was in focus rather than what the expression named;
+the spec resolves the argument against the **static** base URI. The item's base
+remains the fallback for a caller who set no static base, and resolving stays
+the resolver's job — the engine hands over the base and does not guess what a
+URI means to the caller.
+
+Measured against the real suite, not inferred: 7 failures before, 0 after.
 
 `cta0022` is unaffected. With no resolver configured the default is still
 `FODC0002`, which is the point.
@@ -304,11 +336,30 @@ Diagnosed individually rather than by cluster:
 
 ### Singleton XPath failures
 
-`fn-doc-available-5`, `fn-in-scope-prefixes-23`, `CastableAs648`,
-`K2-Literals-7` — 4 unrelated cases, each needing individual diagnosis. Not
-grouped because they share no cause.
+Six remain, one per set, each needing its own diagnosis: `fn-doc-29`
+(namespace declarations dropped on a document read through `fn:doc`),
+`op-concatenate-mix-args-019`, `fn-union-node-args-003`, `ForExpr013`,
+`CondExpr017`, `K2-Literals-7` (a decimal literal with 79 leading zeros).
 
----
+Two of the four listed here previously are fixed:
+
+* **`fn-in-scope-prefixes-23`** — `in-scope-prefixes(/)` answered with the root
+  element's prefixes. The parameter is `element()`, so a document node is
+  `XPTY0004`; answering a different question hid the mistake.
+* **`CastableAs648`** — `for $var in "ABC" return $var castable as xs:QName`
+  answered true. Casting to `xs:QName` is defined only from a *literal* string,
+  because the namespace comes from the static context and only a literal is
+  folded where the prefix bindings are in scope. This is a static property of
+  the operand, so it is decided in `CastExpr.Eval` rather than in
+  `CastToDerived`, which sees a value and cannot tell a literal from a variable
+  holding one. A value that is already an `xs:QName` is exempt — it carries its
+  own binding — which `K-SeqExprCastable-18` pins.
+
+`fn-doc-available-5` and `functx-fn-doc-available-1` are **not** engine bugs:
+their environment declares no `uri` for the source, so `fn:document-uri`
+correctly answers with a filesystem path that no resolver knows.
+`fn-in-scope-prefixes-25` needs a namespace declared through a DTD default
+attribute, which `encoding/xml` never parses.
 
 ---
 
@@ -395,12 +446,14 @@ Of what remains:
 - **12** are regex backreferences, which RE2 does not have. Not fixable without
   a second engine; see §2.3 of [todo.md](todo.md) for why capture groups plus
   an explicit comparison does not work.
-- **4** are the test harness rather than the engine — a document whose
-  environment declares no URI, and unused namespace declarations in a
-  hand-written `assert-xml`.
-- **10** are ordinary bugs across eight sets, each needing its own diagnosis.
+- **4** are the test harness or the suite's own environment data rather than
+  the engine — two documents whose environment declares no URI (so
+  `fn:document-uri` correctly answers with a path no resolver knows), one
+  needing a namespace declared through a DTD default attribute, and unused
+  namespace declarations in a hand-written `assert-xml`.
+- **6** are ordinary bugs across six sets, each needing its own diagnosis.
 
-**Cost: ten small diagnoses. Buys: 10 cases and 99.83% → ~99.90%.**
+**Cost: a diagnosis each. Buys: the remaining 10, and 99.86% → ~99.93%.**
 
 ### Recommended order
 
