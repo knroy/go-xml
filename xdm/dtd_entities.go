@@ -54,6 +54,17 @@ type entityTable struct {
 	// total is the expanded size of everything resolved so far, so that a
 	// bomb divided among many entities cannot slip under the per-entity cap.
 	total int
+	// reparsed says the expansion feeds a second *parse* rather than the
+	// decoder's substitution map.
+	//
+	// It decides whether "&amp;" in replacement text is decoded here. Through
+	// dec.Entity it must be, because the decoder substitutes that map's values
+	// without re-scanning them, so "&amp;" would otherwise reach a value as
+	// five characters. Through the rewrite it must not be, because the
+	// rewritten source *is* scanned again and the decoder will decode it —
+	// doing it here as well turns "&amp;lt;" into "<", manufacturing markup
+	// out of data the document escaped.
+	reparsed bool
 }
 
 // parseInternalEntities reads the <!ENTITY ...> declarations out of a DOCTYPE
@@ -221,6 +232,19 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 		// text it reads directly, but replacement text arriving through
 		// dec.Entity is substituted rather than re-scanned, so "&#xA0;" in an
 		// entity would otherwise reach the value literally.
+		// A character reference is always decoded, on both paths.
+		//
+		// Through dec.Entity it must be, since the decoder does not re-scan
+		// replacement text. Through the rewrite it must be too, and for a
+		// different reason: a character reference may form part of a *name*,
+		// as <!ENTITY dii "<&#xE14;&#xE35;/>"> does, and a name is not a
+		// place a reference can survive to be decoded later. Leaving it
+		// encoded produces "<&#xE14;" — not an element at all.
+		//
+		// This is the opposite of what the five predefined entities need
+		// below, and the difference is exactly that: a character reference
+		// denotes a character, while "&amp;" denotes escaped data whose
+		// escaping the second parse will undo.
 		if name != "" && name[0] == '#' {
 			if r, ok := decodeCharRef(name); ok {
 				sb.WriteRune(r)
@@ -241,7 +265,13 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			continue
 		}
 		if r, ok := predefinedRune(name); ok {
-			sb.WriteRune(r)
+			if t.reparsed {
+				// The second parse decodes it, so it is left alone. Decoding
+				// here too would turn "&amp;lt;" into "<".
+				sb.WriteString(s[i : i+j+1])
+			} else {
+				sb.WriteRune(r)
+			}
 			i += j + 1
 			continue
 		}
@@ -331,14 +361,65 @@ func decodeCharRef(name string) (rune, bool) {
 // answer is almost always no: an entity holding "&#xA0;" or a boilerplate
 // phrase is text, and text is what encoding/xml's dec.Entity handles well.
 func (t *entityTable) hasMarkup() bool {
+	// Resolving for this test caches the expansion under the rewrite's rules,
+	// which differ from dec.Entity's. The cache is therefore discarded on the
+	// way out: a document that turns out not to need the rewrite must not
+	// then be handed values memoised for it.
+	t.reparsed = true
+	defer func() {
+		t.reparsed = false
+		t.expanded = map[string]string{}
+		// The total is reset with the cache. This test resolves *every*
+		// declared entity, including ones the document never references, and
+		// charging those against the shared budget would let a subset full of
+		// large unused declarations exhaust it — so a legitimate reference
+		// then failed with an error about the wrong thing. The bound that
+		// matters is on what a document actually expands, which the
+		// substitution and the decoder each charge for themselves.
+		t.total = 0
+	}()
 	for name := range t.raw {
-		s, err := t.resolve(name)
-		if err != nil {
-			continue
-		}
-		if strings.ContainsRune(s, '<') {
+		// The raw text is checked first, and the expansion only when it might
+		// change the answer. Resolving every declaration to ask this question
+		// makes the answer depend on map order: a subset whose large entities
+		// happen to be visited first exhausts the budget, resolve fails, and
+		// an entity that does hold markup is never reached — so the same
+		// document parses differently from run to run.
+		if declaresMarkup(t.raw[name]) {
 			return true
 		}
+	}
+	// Nesting needs no separate check: markup reaches an entity only from a
+	// declaration that contains it, and the loop above sees every
+	// declaration. What it cannot see is an *external* entity's text, which
+	// is never resolved at all.
+	return false
+}
+
+// declaresMarkup reports whether replacement text yields a "<" that starts
+// markup.
+//
+// A literal "<" does, and so does a character reference to it: expansion
+// turns "&#x3C;b/&#x3E;" into "<b/>", which XML then parses as an element.
+// "&lt;" does not — that is an escaped character and stays one. libxml2 draws
+// the line in the same place, which is worth knowing because the three look
+// interchangeable and are not.
+func declaresMarkup(raw string) bool {
+	if strings.ContainsRune(raw, '<') {
+		return true
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '&' || i+1 >= len(raw) || raw[i+1] != '#' {
+			continue
+		}
+		j := strings.IndexByte(raw[i:], ';')
+		if j < 0 {
+			continue
+		}
+		if r, ok := decodeCharRef(raw[i+1 : i+j]); ok && r == '<' {
+			return true
+		}
+		i += j
 	}
 	return false
 }
@@ -363,6 +444,7 @@ func (t *entityTable) hasMarkup() bool {
 // document may substitute, since each is cheap individually and a document
 // made of nothing else would otherwise be unbounded.
 func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
+	t.reparsed = true
 	// The internal subset declares the entities and may mention them in
 	// default values; substituting there would change the declarations
 	// themselves. Everything after it is content.
@@ -374,6 +456,20 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 
 	var count, written int
 	for i := start; i < len(src); {
+		// CDATA sections, comments and processing instructions are regions
+		// where XML does *not* recognise an entity reference: inside them
+		// "&e;" is five characters and nothing else. Copying them across
+		// untouched is not a nicety — a scanner without this state rewrites
+		// them, and replacement text that closes the region and opens a new
+		// one ("]]><evil/><![CDATA[") becomes document structure. That turns
+		// entity text into markup, which is the thing this whole file exists
+		// to bound.
+		if skip := unscannedRegion(src, i); skip > i {
+			sb.WriteString(src[i:skip])
+			written += skip - i
+			i = skip
+			continue
+		}
 		c := src[i]
 		if c != '&' {
 			sb.WriteByte(c)
@@ -466,4 +562,36 @@ func endOfInternalSubset(src string) int {
 		}
 	}
 	return 0
+}
+
+// unscannedRegion reports the end of the CDATA section, comment or processing
+// instruction beginning at i, or i itself when none begins there.
+//
+// These are the three constructs XML defines as not recognising an entity
+// reference. A rewrite that does not know about them does two wrong things at
+// once: it expands a reference the document meant literally, and — worse — it
+// lets replacement text close the region and reopen it, so an entity's
+// contents become markup. Both are silent.
+//
+// An unterminated region runs to the end of the source. That is malformed XML
+// and the decoder will say so on the second parse; consuming the rest here is
+// the safe reading, since the alternative is to resume scanning inside a
+// construct whose end was never found.
+func unscannedRegion(src string, i int) int {
+	rest := src[i:]
+	for _, r := range []struct{ open, close string }{
+		{"<![CDATA[", "]]>"},
+		{"<!--", "-->"},
+		{"<?", "?>"},
+	} {
+		if !strings.HasPrefix(rest, r.open) {
+			continue
+		}
+		end := strings.Index(rest[len(r.open):], r.close)
+		if end < 0 {
+			return len(src)
+		}
+		return i + len(r.open) + end + len(r.close)
+	}
+	return i
 }

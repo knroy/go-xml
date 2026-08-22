@@ -233,3 +233,213 @@ func TestTextEntitiesAreUnaffected(t *testing.T) {
 		t.Errorf("expanded to %q, want %q", got, "plain text")
 	}
 }
+
+// CDATA sections, comments and processing instructions are the three regions
+// where XML does not recognise an entity reference: inside them "&e;" is five
+// characters and nothing else.
+//
+// A rewrite that does not know this does two wrong things at once. It expands
+// a reference the document meant literally — and, worse, it lets replacement
+// text close the region and open a new one, so "]]><evil/><![CDATA[" turns an
+// entity's contents into document structure. Both are silent, and both change
+// what a validator concludes: a document valid per spec was rejected, and
+// markup could be smuggled past a validator whose downstream consumer parses
+// CDATA correctly.
+//
+// Found by audit, not by the conformance suite, which has no case for it.
+func TestEntityReferencesAreNotRecognisedInCDATACommentsOrPIs(t *testing.T) {
+	cases := []struct{ name, src, wantText string }{
+		{"a reference inside CDATA is literal",
+			`<!DOCTYPE r [<!ENTITY e "<b/>">]><r><![CDATA[&e;]]></r>`, "&e;"},
+
+		{"replacement text cannot break out of CDATA",
+			`<!DOCTYPE r [<!ENTITY e "]]><evil/><![CDATA[">]>` +
+				`<r><![CDATA[&e;]]></r>`, "&e;"},
+
+		{"a reference inside a comment is not expanded",
+			`<!DOCTYPE r [<!ENTITY e "--><evil/><!--">]><r><!--&e;--></r>`, ""},
+
+		{"a reference inside a PI is not expanded",
+			`<!DOCTYPE r [<!ENTITY e "?><evil/><?p ">]><r><?p &e;?></r>`, ""},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue(); got != c.wantText {
+			t.Errorf("%s: text is %q, want %q", c.name, got, c.wantText)
+		}
+		// The breakout cases are the point: no element may appear inside <r>
+		// that the document did not write.
+		for _, el := range r.ChildElements() {
+			t.Errorf("%s: an element %q was manufactured from entity text",
+				c.name, el.Name.Local)
+		}
+	}
+}
+
+// The same entity must expand to the same thing whether or not some *other*
+// entity happens to contain markup.
+//
+// Replacement text is decoded once, not twice. Through dec.Entity the decoder
+// substitutes without re-scanning, so "&amp;" has to be decoded during
+// expansion; through the rewrite the text is scanned again, so decoding it
+// during expansion as well turns "&amp;lt;" into "<" — manufacturing markup
+// characters out of data the document deliberately escaped.
+//
+// A character reference is the opposite case and is decoded on both paths: it
+// may form part of a *name*, as <!ENTITY dii "<&#xE14;&#xE35;/>"> does, and a
+// name is not a place a reference survives to be decoded later.
+func TestReplacementTextIsDecodedOnce(t *testing.T) {
+	// The declaration's literal value is "&amp;lt;evil/&amp;gt;". XML §4.4.5
+	// expands "&amp;" at declaration time, so the replacement text is
+	// "&lt;evil/&gt;" — and those are *not* expanded again, so the text value
+	// is those twelve characters.
+	//
+	// Confirmed against xmllint, which serialises this document's content as
+	// "&amp;lt;evil/&amp;gt;" — the escaping of a value that is literally
+	// "&lt;evil/&gt;". Decoding twice would give "<evil/>", which is the bug
+	// this test exists to catch.
+	const want = "&lt;evil/&gt;"
+	cases := []struct{ name, src string }{
+		{"without a markup entity",
+			`<!DOCTYPE r [<!ENTITY e "&amp;lt;evil/&amp;gt;">]><r>&e;</r>`},
+		{"with a markup entity forcing the rewrite",
+			`<!DOCTYPE r [<!ENTITY m "<b/>"><!ENTITY e "&amp;lt;evil/&amp;gt;">]>` +
+				`<r>&e;</r>`},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := r.StringValue(); got != want {
+			t.Errorf("%s: expanded to %q, want %q", c.name, got, want)
+		}
+		for _, el := range r.ChildElements() {
+			t.Errorf("%s: escaped text became an element %q",
+				c.name, el.Name.Local)
+		}
+	}
+}
+
+// Entities the document never references must not consume the expansion
+// budget. Testing whether any entity holds markup resolves every declaration,
+// and charging those would let a subset full of large unused entities exhaust
+// the budget — so a legitimate reference then failed with an error about
+// something else entirely.
+func TestUnusedEntitiesDoNotConsumeTheBudget(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`<!DOCTYPE r [`)
+	big := strings.Repeat("x", 60000)
+	for i := 0; i < 30; i++ {
+		sb.WriteString(`<!ENTITY unused`)
+		sb.WriteString(itoaTest(i))
+		sb.WriteString(` "`)
+		sb.WriteString(big)
+		sb.WriteString(`">`)
+	}
+	sb.WriteString(`<!ENTITY m "<b/>"><!ENTITY used "ok">]><r>&m;&used;</r>`)
+
+	tree, err := ParseString(sb.String(),
+		ParseOptions{AllowDOCTYPE: true, MaxBytes: -1})
+	if err != nil {
+		t.Fatalf("unused declarations exhausted the budget: %v", err)
+	}
+	// &m; is an element and &used; is text, so the string value of <r> is
+	// just the text: the point is that both expanded at all.
+	r := tree.Root.ChildElements()[0]
+	if got := r.StringValue(); got != "ok" {
+		t.Errorf("expanded to %q, want %q", got, "ok")
+	}
+	if len(r.ChildElements()) != 1 {
+		t.Errorf("the markup entity did not expand to an element")
+	}
+}
+
+func itoaTest(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [8]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
+// A character reference to "<" starts markup; "&lt;" does not.
+//
+// Expansion turns "&#x3C;b/&#x3E;" into "<b/>", which is then parsed as an
+// element — while "&lt;b/&gt;" is an escaped character and stays text. The
+// three spellings look interchangeable and are not, and libxml2 draws the
+// line in the same place; these expectations were checked against it.
+func TestCharacterReferenceToAngleBracketIsMarkup(t *testing.T) {
+	cases := []struct {
+		name, src   string
+		wantElement bool
+		wantText    string
+	}{
+		{"a hex character reference",
+			`<!DOCTYPE r [<!ENTITY a "&#x3C;b/&#x3E;">]><r>&a;</r>`, true, ""},
+		{"a decimal character reference",
+			`<!DOCTYPE r [<!ENTITY a "&#60;b/&#62;">]><r>&a;</r>`, true, ""},
+		{"an escaped angle bracket stays text",
+			`<!DOCTYPE r [<!ENTITY a "&lt;b/&gt;">]><r>&a;</r>`, false, "<b/>"},
+		{"markup reached only through nesting",
+			`<!DOCTYPE r [<!ENTITY a "<b/>"><!ENTITY c "&a;">]><r>&c;</r>`,
+			true, ""},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		r := tree.Root.ChildElements()[0]
+		if got := len(r.ChildElements()) > 0; got != c.wantElement {
+			t.Errorf("%s: produced an element = %v, want %v",
+				c.name, got, c.wantElement)
+		}
+		if got := r.StringValue(); got != c.wantText {
+			t.Errorf("%s: text is %q, want %q", c.name, got, c.wantText)
+		}
+	}
+}
+
+// Whether an entity holds markup must not depend on map iteration order.
+//
+// Deciding it by resolving every declaration made the answer order-dependent:
+// a subset whose large entities happened to be visited first exhausted the
+// budget, resolution failed, and the entity that did hold markup was never
+// reached — so the same document parsed differently from run to run. The test
+// repeats because that is the only way a map-order bug shows itself.
+func TestMarkupDetectionIsDeterministic(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`<!DOCTYPE r [`)
+	big := strings.Repeat("x", 60000)
+	for i := 0; i < 30; i++ {
+		sb.WriteString(`<!ENTITY unused` + itoaTest(i) + ` "` + big + `">`)
+	}
+	sb.WriteString(`<!ENTITY m "<b/>">]><r>&m;</r>`)
+	src := sb.String()
+
+	for i := 0; i < 20; i++ {
+		tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true, MaxBytes: -1})
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		r := tree.Root.ChildElements()[0]
+		if len(r.ChildElements()) != 1 {
+			t.Fatalf("run %d: the markup entity did not expand to an element", i)
+		}
+	}
+}
