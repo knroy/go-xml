@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The fast gate: build, vet, unit tests, race. Runs on every push and needs
+  # nothing external, so a broken commit is caught in about a minute.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+      # gofmt is reported, not enforced: the tree has pre-existing drift that
+      # predates this job, and failing the build on it would mean either
+      # reformatting unrelated files in the same commit or turning the check
+      # off. Reporting keeps it visible without either.
+      - name: gofmt (advisory)
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^testdata/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "::warning::not gofmt'd:"
+            echo "$unformatted"
+          fi
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -count=1
+      - run: go test ./... -race -count=1
+
+  # The conformance gate. These suites are third-party and are not vendored,
+  # so CI fetches them — which is also the only place they are fetched
+  # reproducibly. Without this job the published percentages depend on someone
+  # remembering to run tests/check.sh, and a number nobody re-measures is a
+  # number that quietly stops being true.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Cache the conformance suites
+        id: suites
+        uses: actions/cache@v4
+        with:
+          path: testdata
+          key: suites-v1
+
+      - name: Fetch the conformance suites
+        if: steps.suites.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          mkdir -p testdata
+          git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
+          git clone --depth 1 https://github.com/w3c/xsdtests.git testdata/xsdtests
+          mkdir -p testdata/relaxng
+          git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
+          cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
+
+      # check.sh treats a suite that is present but silent as a failure, which
+      # is the property that matters: a check that did not run must not look
+      # like a check that passed.
+      - name: tests/check.sh
+        run: tests/check.sh
