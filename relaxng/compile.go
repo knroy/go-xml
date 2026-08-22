@@ -223,6 +223,9 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 	if err := c.checkUnreferenced(g); err != nil {
 		return nil, err
 	}
+	if err := c.checkRefsResolve(g); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -271,6 +274,107 @@ func (c *compiler) checkUnreferenced(n *xdm.Node) error {
 		}
 	}
 	return nil
+}
+
+// checkRefsResolve reports a <ref> that names nothing, wherever it stands.
+//
+// A definition nothing refers to is still part of the schema, so a reference
+// inside it to a name that does not exist is an error. Compiling the
+// definition to find that out is not an option — it may refer to itself — so
+// the names are checked directly.
+//
+// A nested <grammar> is a scope of its own, so its refs are checked against
+// its own definitions, and a <parentRef> inside it against this one.
+func (c *compiler) checkRefsResolve(g *xdm.Node) error {
+	var walk func(n *xdm.Node, defs map[string]bool, outer map[string]bool) error
+	walk = func(n *xdm.Node, defs, outer map[string]bool) error {
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI != NS {
+				continue
+			}
+			switch kid.Name.Local {
+			case "ref":
+				name := normalizeToken(kid.AttrValue("name"))
+				if !defs[name] {
+					return fmt.Errorf(
+						"relaxng: <ref> names %q, which no <define> provides",
+						name)
+				}
+			case "parentRef":
+				name := normalizeToken(kid.AttrValue("name"))
+				if outer == nil {
+					return fmt.Errorf(
+						"relaxng: <parentRef name=%q> has no enclosing <grammar>",
+						name)
+				}
+				if !outer[name] {
+					return fmt.Errorf(
+						"relaxng: <parentRef> names %q, which the enclosing "+
+							"<grammar> does not define", name)
+				}
+			case "grammar":
+				inner := definedNames(kid)
+				if err := walk(kid, inner, defs); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := walk(kid, defs, outer); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	defs := map[string]bool{}
+	for name := range c.defines {
+		defs[name] = true
+	}
+	var outer map[string]bool
+	if c.parent != nil {
+		outer = map[string]bool{}
+		for name := range c.parent.defines {
+			outer[name] = true
+		}
+	}
+	return walk(g, defs, outer)
+}
+
+// hasStart reports whether a grammar provides a <start>.
+func hasStart(g *xdm.Node) bool {
+	for _, kid := range g.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		if kid.Name.Local == "start" {
+			return true
+		}
+		if kid.Name.Local == "div" && hasStart(kid) {
+			return true
+		}
+	}
+	return false
+}
+
+// definedNames collects the names a <grammar> defines, including through
+// <div> and <include>.
+func definedNames(g *xdm.Node) map[string]bool {
+	out := map[string]bool{}
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		for _, kid := range n.ChildElements() {
+			if kid.Name.URI != NS {
+				continue
+			}
+			switch kid.Name.Local {
+			case "define":
+				out[normalizeToken(kid.AttrValue("name"))] = true
+			case "div", "include":
+				walk(kid)
+			}
+		}
+	}
+	walk(g)
+	return out
 }
 
 // compileChildren compiles an element's pattern children as a group.
@@ -628,6 +732,24 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 		}
 	}
 	scanOverrides(inc)
+
+	// §4.7: an override must have something to override. A <define> inside an
+	// <include> that names nothing in the included grammar is a mistake — most
+	// often a typo — and treating it as an addition would silently leave the
+	// definition the author meant to replace in force.
+	included := definedNames(root)
+	for name := range overridden {
+		if !included[name] {
+			return fmt.Errorf(
+				"relaxng: <include href=%q> overrides %q, which it does not define",
+				href, name)
+		}
+	}
+	if overridesStart && !hasStart(root) {
+		return fmt.Errorf(
+			"relaxng: <include href=%q> overrides <start>, which it does not define",
+			href)
+	}
 
 	// The included grammar's own definitions, less the overridden ones.
 	filtered := *root

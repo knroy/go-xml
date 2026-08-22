@@ -78,6 +78,62 @@ var specs = map[string]elementSpec{
 // permitted everywhere rather than only where they take effect.
 var commonAttrs = map[string]bool{"ns": true, "datatypeLibrary": true}
 
+// grammarChildren are the only elements a <grammar> may hold.
+//
+// §4.18: a grammar is definitions, not patterns. An <element> written
+// directly inside one is not a start — it is nothing, and reading past it
+// validates against a grammar with no content where the author thought they
+// had written some.
+var grammarChildren = map[string]bool{
+	"start": true, "define": true, "div": true, "include": true,
+}
+
+// checkGrammarChildren applies §4.18 to <grammar> and <div>.
+func checkGrammarChildren(n *xdm.Node) error {
+	switch n.Name.Local {
+	case "grammar":
+	case "div":
+		// A <div> groups whatever its parent groups. Inside a grammar it
+		// holds definitions; written where a pattern belongs it holds
+		// patterns, and the grammar rule does not apply to it.
+		if !inGrammar(n) {
+			return nil
+		}
+	default:
+		return nil
+	}
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		if !grammarChildren[kid.Name.Local] {
+			return fmt.Errorf(
+				"relaxng: <%s> holds <%s>; a grammar takes only <start>, "+
+					"<define>, <div> and <include> (section 4.18)",
+				n.Name.Local, kid.Name.Local)
+		}
+	}
+	return nil
+}
+
+// inGrammar reports whether n sits inside a <grammar>, with only <div>
+// between.
+func inGrammar(n *xdm.Node) bool {
+	for cur := n.Parent; cur != nil && cur.Kind == xdm.KindElement; cur = cur.Parent {
+		if cur.Name.URI != NS {
+			return false
+		}
+		switch cur.Name.Local {
+		case "grammar", "include":
+			return true
+		case "div":
+			continue
+		}
+		return false
+	}
+	return false
+}
+
 // checkSyntax walks a schema document and reports the first violation.
 func checkSyntax(n *xdm.Node) error {
 	if n.Name.URI != NS {
@@ -109,6 +165,9 @@ func checkSyntax(n *xdm.Node) error {
 		return err
 	}
 	if err := checkNameClassExcept(n); err != nil {
+		return err
+	}
+	if err := checkGrammarChildren(n); err != nil {
 		return err
 	}
 	if spec.maxExcept > 0 {

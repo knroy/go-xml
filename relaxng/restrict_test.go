@@ -467,3 +467,68 @@ func TestNameClassChoice(t *testing.T) {
 		}
 	}
 }
+
+// A grammar holds definitions, not patterns. An <element> written directly
+// inside one is not a start — it is nothing, and reading past it validates
+// against a grammar with no content where the author thought they had
+// written some.
+func TestGrammarHoldsOnlyDefinitions(t *testing.T) {
+	mustReject(t, "element directly in a grammar", "4.18",
+		`<grammar`+rngNS+`>
+			<element name="foo"><empty/></element>
+			<start><element name="foo"><empty/></element></start></grammar>`)
+
+	// A <div> outside a grammar groups patterns, so the rule does not reach
+	// it.
+	mustAccept(t, "div grouping patterns",
+		`<element`+rngNS+` name="foo"><div><empty/></div></element>`)
+}
+
+// A reference that names nothing is an error wherever it stands, including in
+// a definition nothing refers to.
+func TestUnresolvedRefsAreFound(t *testing.T) {
+	for _, src := range []string{
+		`<grammar` + rngNS + `>
+			<start><element name="foo"><empty/></element></start>
+			<define name="unused"><ref name="nosuch"/></define></grammar>`,
+		`<grammar` + rngNS + `>
+			<start><element name="foo"><empty/></element></start>
+			<define name="unused">
+				<grammar><start><parentRef name="nosuch"/></start></grammar>
+			</define></grammar>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("an unresolved reference was accepted:\n%s", src)
+		}
+	}
+}
+
+// A schema that is not a grammar is a pattern standing where a start would,
+// so section 7.1.5 constrains it the same way.
+func TestBarePatternSchemaIsAStart(t *testing.T) {
+	mustReject(t, "a schema that is only text", "7.1.5",
+		`<text`+rngNS+`/>`)
+}
+
+// An attribute's value is a string, so its pattern may match one — but an
+// element has nowhere to be inside it. The same holds for a data's except.
+func TestElementCannotMatchWhereAStringDoes(t *testing.T) {
+	for _, src := range []string{
+		`<element` + rngNS + ` name="foo"><attribute name="bar">
+			<element name="baz"><empty/></element></attribute></element>`,
+		`<element` + rngNS + ` name="foo"><attribute name="bar">
+			<choice><element name="baz"><empty/></element><text/></choice>
+		</attribute></element>`,
+		`<element` + rngNS + ` name="foo"><data type="string"><except>
+			<element name="bar"><empty/></element></except></data></element>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("an element was accepted where only a string matches:\n%s", src)
+		}
+	}
+
+	// <text/> is the ordinary content of an attribute and must stay legal.
+	mustAccept(t, "text inside an attribute",
+		`<element`+rngNS+` name="foo">
+			<attribute name="bar"><text/></attribute></element>`)
+}

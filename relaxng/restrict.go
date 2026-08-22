@@ -84,7 +84,14 @@ func directStep(s steps, i int) bool {
 func checkRestrictions(root *xdm.Node) error {
 	r := &restrictor{defines: map[string]*xdm.Node{}}
 	r.collect(root)
-	return r.walk(root, nil)
+	// A schema that is not a <grammar> is a pattern standing where a <start>
+	// would: §7.1.5 constrains it the same way, so a schema that is simply
+	// <text/> is refused for the reason a <start><text/></start> is.
+	stack := []string(nil)
+	if root.Name.URI == NS && root.Name.Local != "grammar" {
+		stack = []string{"start"}
+	}
+	return r.walk(root, stack)
 }
 
 type restrictor struct {
@@ -699,6 +706,11 @@ func contentOfSeen(p Pattern, inList bool, seen map[*Ref]bool) (contentKind, err
 	}
 	switch t := p.(type) {
 	case Data:
+		if t.Except != nil {
+			if _, err := contentOfSeen(t.Except, true, seen); err != nil {
+				return 0, err
+			}
+		}
 		return kindString, nil
 	case Value:
 		return kindString, nil
@@ -719,22 +731,25 @@ func contentOfSeen(p Pattern, inList bool, seen map[*Ref]bool) (contentKind, err
 			return 0, err
 		}
 		if inList {
-			// A list matches a whitespace-separated string, which has no
-			// children to give. The suspension inside a list is of the
-			// sequencing rule, not of the fact that there is nothing here
-			// for an element to match.
+			// A list, an attribute value and a data except all match a
+			// string, which has no children to give. The suspension of the
+			// sequencing rule in those places is not a suspension of the
+			// fact that there is nothing here for an element to match.
 			return 0, fmt.Errorf(
-				"relaxng: <element> inside <list>; a list matches strings, " +
-					"not elements (section 7.2)")
+				"relaxng: an <element> stands where only a string can " +
+					"match (section 7.2)")
 		}
 		return kindChild, nil
 
 	case Attribute:
-		// An attribute's value is a scope of its own too, and the attribute
-		// contributes nothing to the element's content.
-		if _, err := contentOfSeen(t.Pattern, false, seen); err != nil {
+		// An attribute's value is a string. Its pattern may match one, and
+		// <text/> is the ordinary way to say "any string" — what it may not
+		// hold is an element, which has nowhere to be. inString says so.
+		if _, err := contentOfSeen(t.Pattern, true, seen); err != nil {
 			return 0, err
 		}
+		// The attribute contributes nothing to the enclosing element's
+		// content: it is not a child.
 		return kindNothing, nil
 
 	case Group:

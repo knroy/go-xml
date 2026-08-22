@@ -352,3 +352,33 @@ func TestXmlPrefixIsAlwaysBound(t *testing.T) {
 		}
 	}
 }
+
+// An override must have something to override. A <define> inside an <include>
+// naming nothing in the included grammar is a mistake — usually a typo — and
+// treating it as an addition silently leaves the definition the author meant
+// to replace in force.
+func TestIncludeOverrideMustExist(t *testing.T) {
+	r := &mapResolver{docs: map[string]string{
+		"x": `<grammar` + rngNS + `>
+			<define name="foo"><element name="foo"><empty/></element></define>
+		</grammar>`,
+	}}
+	// Overriding <start>, which the included grammar does not define.
+	_, err := compileWith(t, `<grammar`+rngNS+`>
+		<include href="x"><start><ref name="foo"/></start></include></grammar>`,
+		Options{Resolver: r})
+	if err == nil {
+		t.Error("overriding a start the included grammar does not define was accepted")
+	}
+
+	// Overriding a name it does not define.
+	_, err = compileWith(t, `<grammar`+rngNS+`>
+		<include href="x">
+			<define name="nosuch"><element name="a"><empty/></element></define>
+		</include>
+		<start><ref name="foo"/></start></grammar>`,
+		Options{Resolver: r})
+	if err == nil {
+		t.Error("overriding an undefined name was accepted")
+	}
+}
