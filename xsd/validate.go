@@ -83,6 +83,15 @@ const DefaultMaxErrors = 100
 // It returns nil when the document is valid. The error, when there is one, is a
 // *ValidationErrors holding every failure found up to the limit.
 func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
+	// A nil root is a caller's mistake rather than an attack, but a library
+	// that panics on one takes the caller's process down with it — and this
+	// one is meant to run inside servers, where a nil from a failed parse
+	// upstream is exactly how it arrives.
+	if root == nil {
+		return &ValidationErrors{Errors: []*ValidationError{{
+			Code: "cvc-elt.1", Message: "no document to validate",
+		}}}
+	}
 	if opts.MaxErrors == 0 {
 		opts.MaxErrors = DefaultMaxErrors
 	}

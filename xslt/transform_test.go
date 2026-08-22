@@ -690,3 +690,12 @@ func TestUnionPattern(t *testing.T) {
 		t.Errorf("got %q, want 6 matches from the union pattern", got)
 	}
 }
+
+// TestCompileNilReturnsError is the xslt half of
+// xsd.TestNilArgumentsReturnErrors: a nil stylesheet document is an error, not
+// a panic that takes the caller's process down.
+func TestCompileNilReturnsError(t *testing.T) {
+	if _, err := Compile(nil, CompileOptions{}); err == nil {
+		t.Error("Compile(nil) should return an error")
+	}
+}

@@ -132,6 +132,11 @@ type Instruction interface {
 
 // Compile compiles a stylesheet from a parsed XSLT document.
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
+	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
+	// library that panics on one takes the caller's process with it.
+	if doc == nil {
+		return nil, fmt.Errorf("no stylesheet document to compile")
+	}
 	c := &compiler{
 		opts: opts,
 		sheet: &Stylesheet{

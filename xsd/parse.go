@@ -284,6 +284,10 @@ func NewSchema() *Schema {
 // schemaLocation means fetching whatever the schema names, which is a decision
 // about trust rather than about parsing.
 func ParseSchema(root *xdm.Node) (*Schema, error) {
+	// See Schema.Validate on why this is an error rather than a panic.
+	if root == nil {
+		return nil, fmt.Errorf("no schema document to parse")
+	}
 	s := NewSchema()
 	p := &parser{schema: s, attrsDone: map[*ComplexType]bool{}}
 	if err := p.readDocument(root, ""); err != nil {

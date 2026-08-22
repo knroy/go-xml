@@ -674,3 +674,19 @@ func TestElementDefaultAppliesToEmptyContent(t *testing.T) {
 	assertInvalid(t, schema, `<root><price>notanumber</price></root>`,
 		"cvc-datatype-valid")
 }
+
+// TestNilArgumentsReturnErrors pins that the package's entry points refuse a
+// nil document rather than dereferencing it.
+//
+// A nil root is a caller's mistake, not an attack. But this library is meant
+// to run inside servers, where a nil arriving from a failed parse upstream is
+// exactly how it happens — and a panic there takes down every other request in
+// the process, not just the one that caused it.
+func TestNilArgumentsReturnErrors(t *testing.T) {
+	if err := NewSchema().Validate(nil, ValidateOptions{}); err == nil {
+		t.Error("Validate(nil) should return an error")
+	}
+	if _, err := ParseSchema(nil); err == nil {
+		t.Error("ParseSchema(nil) should return an error")
+	}
+}
