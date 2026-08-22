@@ -505,7 +505,22 @@ The figures in this file were measured against `qt3tests` at `201a6e46`
 (2026-05-14) and `xsdtests` at `7bc3365c` (2026-04-01). Both are updated from
 time to time, so a later checkout can move a denominator.
 
-QT3 runs from the test suite directly:
+`tests/check.sh` runs everything below in one go, and is what to use after any
+substantive change:
+
+```
+GOXSLT_UBL=<ubl-dir> GOXSLT_CII=<cii-dir> tests/check.sh
+tests/check.sh fast     # build, vet, unit tests, race only
+```
+
+It reports a missing suite as skipped and a present-but-silent suite as a
+failure, because a check that did not run must not look like one that
+succeeded. That distinction is not theoretical: the first run of this script
+caught a relative `GOXSLT_QT3` resolving against `./qt3/` rather than the
+repository root, which made the suite skip itself while `go test` reported
+PASS.
+
+QT3 also runs from the test suite directly:
 
 ```
 GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -run TestQT3 -v
@@ -516,10 +531,10 @@ and `GOXSLT_QT3_SET=<substring>` to run only the matching test sets — the
 percentage is then labelled as filtered rather than quoted as the suite
 result.
 
-The XSD driver and the corpora runners are **not** in the repository; they are
-rebuilt from the suite each time. See the README's *W3C xsdtests suite* section
-for the three metadata rules that decide whether the resulting numbers mean
-anything — each one silently inflated an earlier measurement here.
+The XSD driver and the corpora runners live in [`tests/`](../tests): they were
+rebuilt from scratch each time before that, which is how three metadata rules
+came to silently inflate earlier measurements. See the README's *W3C xsdtests
+suite* section for what those rules are.
 
 Before accepting any change that adds a schema-validity rule, load the
 production corpora — 65 UBL 2.1 entry points and 427 UN/CEFACT CII schemas.

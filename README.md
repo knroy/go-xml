@@ -41,12 +41,24 @@ See [docs/security.md](docs/security.md) for the threat model and
 [docs/server.md](docs/server.md) for a validating HTTP endpoint measured
 against XXE, billion-laughs and resource exhaustion.
 
-### Building
+### Building and checking
 
 ```
 go build ./...
 go test -race ./...
 ```
+
+`tests/check.sh` runs everything that has to pass before a change is done —
+build, vet, unit tests, race, both W3C suites and the production corpora:
+
+```
+tests/check.sh fast                                  # no external suites
+GOXSLT_UBL=<dir> GOXSLT_CII=<dir> tests/check.sh     # everything
+```
+
+A missing suite is reported as skipped; a suite that is present but produces no
+result is a **failure**. A check that did not run must not look like one that
+succeeded.
 
 One dependency: `golang.org/x/text`, for Unicode normalisation and
 language-sensitive collation. Nothing else is outside the standard library.
