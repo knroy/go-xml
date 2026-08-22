@@ -44,10 +44,11 @@ comparable to a suite percentage, and neither should be quoted as one.
 | instance false reject | 5 | 5 |
 | instance false accept | 45 | 49 |
 
-Of those, the W3C itself flags 49 cases in 1.0 and 48 in 1.1 as `queried` or
+Of those, the W3C itself flags 48 cases in 1.0 and 47 in 1.1 as `queried` or
 tied to an open bug — its own suite disputes, not necessarily defects here.
-(Counted by scanning each test's `<current status=...>`; an earlier figure of
-52/52 was an estimate.)
+Counted by scanning each test's `<current status=...>`; an earlier figure of
+52/52 was an estimate. See *What 100% would take* below for why this sets the
+reachable ceiling below 100%.
 
 ---
 
@@ -484,6 +485,90 @@ producing it.
 XML 1.1 support sits outside this list and unlocks 38 instance tests plus nine
 schemas that do not parse today; it is a larger piece of work and is described
 in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
+
+---
+
+## What 100% would take
+
+Measured 2026-08-21 with both suites present. The short answer: **XPath can
+reach 100% only by leaving RE2, and XSD cannot reach 100% at all** — part of
+the remaining gap is the suite disagreeing with itself.
+
+### The ceiling that is not ours
+
+| | XSD 1.0 | XSD 1.1 |
+|---|---:|---:|
+| disagreements | 251 | 374 |
+| of those, W3C-flagged `queried` or tied to an open bug | 48 | 47 |
+
+Those are cases where the W3C's own metadata records a dispute about the
+expected result. Nineteen of them are one cause: bug 4113, the `\p{Lu}`,
+`\p{Ll}` and `\p{Lo}` tests, written against Unicode 3.1 before characters such
+as U+1D7A8 moved between general categories. Passing them means freezing a
+Unicode 3.1 table and being wrong about modern text. **They are a reason to
+stop short of 100%, not a defect to fix.**
+
+So the reachable ceiling is roughly **99.5% on 1.0 and 99.1% on 1.1**, not 100.
+
+### XPath: 12 cases, one cause
+
+Every remaining failure is a regex backreference in `fn-matches`. Closing them
+means a second, backtracking regex engine with a step budget and a dispatch
+rule — roughly 800–1,500 lines plus a fuzz target — and it reintroduces the
+catastrophic-backtracking DoS class that [security.md](security.md) otherwise
+keeps out of this tree. RE2 returns one match and cannot enumerate alternative
+submatch assignments, so the obvious design (captures plus an explicit
+comparison) does not work; §2.3 of [todo.md](todo.md) has the detail.
+
+**100% is available here and costs the linear-time guarantee.** That is the
+whole trade.
+
+### XSD schema-validity: 174 (1.0) and 285 (1.1) that are ours
+
+All false *accepts* — invalid schemas that load. They cluster in
+`MS-Particles` (46), `MS-Schema` (44), `MS-SimpleType` (21), `MS-ComplexType`
+(18), and for 1.1 also `Wild` (17), `Simple` (16) and `CTA` (16).
+
+Each is an unwritten Schema Component Constraint. There is no single change
+here: it is one rule at a time, indefinitely, and **every rule added is a
+chance to reject a schema real systems depend on**. The conformance suite
+cannot catch that — it scores agreement with W3C labels, so an over-strict rule
+shows up only if the suite happens to contain a valid schema exercising it.
+`tests/check.sh` re-loads the corpora for exactly this reason.
+
+### XSD schema-validity: 21 false rejects, one subsystem
+
+The ones that matter, because a false reject breaks a working caller. **Every
+one is Particle Valid (Restriction)** apart from `iri-001`, which needs a
+DOCTYPE and is refused by design.
+
+One attempt is recorded above as reverted: carrying the element's occurrence
+range onto `recurseAsIfGroup`'s wrapper fixes `particlesZ001`, `Z023` and
+`Z024` and costs about eleven false accepts for each — the wrapper's range
+serves two jobs that want opposite answers. A correct fix separates them, which
+is a change to `effectiveTotalRange`'s contract.
+
+### XSD instance: 5 false rejects
+
+`idc006.nogen` (keyref across a subtree boundary), `gMonth002_2061` and
+`gMonth004_2063` (the old `--MM--` form, W3C bug 6901), `particlesZ040` (the
+greedy content-model matcher, two reverted attempts recorded above), and
+`cta0022`.
+
+### Honest summary
+
+| | now | reachable | what stands in the way |
+|---|---|---|---|
+| XPath 2.0 | 99.92% | **100%** | a backtracking regex engine, and the DoS class it brings back |
+| XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
+| XSD 1.1 instance | 99.79% | ~99.9% | same |
+| XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
+| XSD 1.1 schema | 97.92% | ~99.9% | 285 constraints, one at a time |
+
+Nothing here is blocked on a missing idea. The XPath 12 are a deliberate trade,
+the XSD false accepts are volume rather than difficulty, and the false rejects
+are one subsystem that needs its occurrence handling reworked rather than
+patched.
 
 ## Related
 
