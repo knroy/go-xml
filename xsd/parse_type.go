@@ -1206,7 +1206,6 @@ func allGroupOf(p *Particle) *ModelGroup {
 	return nil
 }
 
-
 // combineOpenContent merges a base type's open content with a derived type's.
 //
 // For a restriction the derived declaration stands alone: a restriction may

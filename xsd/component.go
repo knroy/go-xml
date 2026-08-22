@@ -171,8 +171,8 @@ type ValueConstraint struct {
 
 // ElementDecl is an Element Declaration (§3.3.1).
 type ElementDecl struct {
-	Name       xdm.QName
-	Type       Type
+	Name xdm.QName
+	Type Type
 	// unresolved names a type reference that no definition matched. The
 	// spec makes this an error only where the declaration is actually used
 	// (missing001: "Error only if the element declaration is needed for

@@ -648,7 +648,6 @@ func TestSourceModelAcceptsRefForms(t *testing.T) {
 	</xs:schema>`)
 }
 
-
 // TestParseOccursAcceptsHugeValues covers msData's particlesZ033_a, whose
 // minOccurs is 79228162514244337593543950335.
 //
@@ -1037,7 +1036,6 @@ func TestFixedValueMayNotBeChanged(t *testing.T) {
 	}
 }
 
-
 // TestSchemaIDMustBeAnNCName covers the id= attribute the schema for schemas
 // gives nearly every XSD element as `id = ID`. ID means NCName, so a value that
 // is not one is a representation fault. MS-IdentityConstraint idA006 writes the
@@ -1187,7 +1185,6 @@ func TestNotationWellFormedIsAccepted(t *testing.T) {
 	}
 }
 
-
 // wrapAny puts attrs on an <xs:any> inside a content model, so that the tests
 // below differ only in the wildcard attributes under test.
 func wrapAny(attrs string) string {
@@ -1226,12 +1223,12 @@ func TestNamespaceListSyntax(t *testing.T) {
 	}
 
 	invalid := []string{
-		`namespace="##any ##other"`,          // wildC049
+		`namespace="##any ##other"`,            // wildC049
 		`namespace="##any http://example.com"`, // wildC066
-		`namespace="##other http://a"`,       // wildF006
-		`namespace="##target"`,               // wildC035, a misspelling
-		`namespace="##anyAttribute"`,         // wildK002
-		`namespace="##anyAttribute ##other"`, // wildK020
+		`namespace="##other http://a"`,         // wildF006
+		`namespace="##target"`,                 // wildC035, a misspelling
+		`namespace="##anyAttribute"`,           // wildK002
+		`namespace="##anyAttribute ##other"`,   // wildK020
 	}
 	for _, attrs := range invalid {
 		if _, err := parseSchemaString(t, wrapAny(attrs)); err == nil {
@@ -1333,8 +1330,8 @@ func TestEmptyAttributeValueIsNotTheDefault(t *testing.T) {
 // written for — the schema loads and then nothing can ever use it.
 func TestNameMustBeNCName(t *testing.T) {
 	bad := []string{
-		`<xs:group name="1"><xs:sequence/></xs:group>`,     // groupA010
-		`<xs:group name="a:b"><xs:sequence/></xs:group>`,   // groupA012
+		`<xs:group name="1"><xs:sequence/></xs:group>`,   // groupA010
+		`<xs:group name="a:b"><xs:sequence/></xs:group>`, // groupA012
 		`<xs:element name="x y"/>`,
 	}
 	for _, decl := range bad {
@@ -1380,9 +1377,9 @@ func TestElementRefExcludesDeclarationAttributes(t *testing.T) {
 	}
 
 	for _, attrs := range []string{
-		`name="Local"`,        // name00401m3/m4/m5: clause 2.1
-		`type="xs:boolean"`,   // name00501m12
-		`block="#all"`,        // name00501m10
+		`name="Local"`,      // name00401m3/m4/m5: clause 2.1
+		`type="xs:boolean"`, // name00501m12
+		`block="#all"`,      // name00501m10
 		`form="qualified"`,
 		`nillable="true"`,
 		`default="x"`,
@@ -1506,9 +1503,9 @@ func TestAllGroupOccursLimited(t *testing.T) {
 		</xs:schema>`
 	}
 	for _, attrs := range []string{
-		`maxOccurs="2"`,          // mgAb004
-		`maxOccurs="9999999999"`, // mgAb006
-		`maxOccurs="unbounded"`,  // mgAb007
+		`maxOccurs="2"`,               // mgAb004
+		`maxOccurs="9999999999"`,      // mgAb006
+		`maxOccurs="unbounded"`,       // mgAb007
 		`minOccurs="0" maxOccurs="2"`, // mgO003
 	} {
 		if _, err := parseSchemaString(t, inType(attrs)); err == nil {
@@ -1573,10 +1570,10 @@ func TestFinalAndBlockTokensDiffer(t *testing.T) {
 		  <xs:element name="foo" ` + attrs + `/></xs:schema>`
 	}
 	for _, attrs := range []string{
-		`final="substitution"`,                        // elemF004
-		`final="restriction substitution"`,            // elemF006
-		`final="substitution extension"`,              // elemF007
-		`final="extension restriction substitution"`,  // elemF008
+		`final="substitution"`,                       // elemF004
+		`final="restriction substitution"`,           // elemF006
+		`final="substitution extension"`,             // elemF007
+		`final="extension restriction substitution"`, // elemF008
 	} {
 		if _, err := parseSchemaString(t, decl(attrs)); err == nil {
 			t.Errorf("%s should be rejected", attrs)
@@ -1621,10 +1618,10 @@ func TestBooleanAttributeRejectsEmptyValue(t *testing.T) {
 // and elemH006 (two tokens) are values outside the enumeration.
 func TestFormDefaultIsAnEnumeration(t *testing.T) {
 	for _, attrs := range []string{
-		`elementFormDefault=""`,                       // elemH003
-		`elementFormDefault="Qualified"`,              // elemH004
-		`elementFormDefault="Unqualified"`,            // elemH005
-		`elementFormDefault="qualified unqualified"`,  // elemH006
+		`elementFormDefault=""`,                      // elemH003
+		`elementFormDefault="Qualified"`,             // elemH004
+		`elementFormDefault="Unqualified"`,           // elemH005
+		`elementFormDefault="qualified unqualified"`, // elemH006
 		`attributeFormDefault="Qualified"`,
 	} {
 		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" ` + attrs + `>

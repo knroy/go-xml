@@ -293,7 +293,3 @@ func resolveVersioningQName(el *xdm.Node, value string) (xdm.QName, bool) {
 	}
 	return xdm.QName{URI: uri, Local: local}, true
 }
-
-
-
-

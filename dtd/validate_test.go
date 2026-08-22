@@ -42,8 +42,8 @@ func TestContentModel(t *testing.T) {
 		}
 	}
 	invalid := []string{
-		`<r><b/></r>`,        // a is required first
-		`<r></r>`,            // a is required
+		`<r><b/></r>`,         // a is required first
+		`<r></r>`,             // a is required
 		`<r><a/><c/><d/></r>`, // the choice occurs at most once
 		`<r><a/><b/><a/></r>`, // a may not repeat
 	}

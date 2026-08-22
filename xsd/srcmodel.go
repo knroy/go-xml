@@ -66,35 +66,35 @@ var facetNames = []string{
 // <complexContent> are three different grammars — so those are resolved by the
 // parent's name in srcModelFor rather than listed here.
 var srcModels = map[string][]srcTerm{
-	"complexType":  nil, // resolved in srcModelFor: three-way choice
-	"simpleType":   {annot, one("restriction", "list", "union")},
-	"simpleContent": {annot, one("restriction", "extension")},
+	"complexType":    nil, // resolved in srcModelFor: three-way choice
+	"simpleType":     {annot, one("restriction", "list", "union")},
+	"simpleContent":  {annot, one("restriction", "extension")},
 	"complexContent": {annot, one("restriction", "extension")},
-	"attribute":    {annot, opt("simpleType")},
+	"attribute":      {annot, opt("simpleType")},
 	"element": {annot, opt("simpleType", "complexType"),
 		star("alternative"), star("unique", "key", "keyref")},
-	"attributeGroup": nil, // resolved in srcModelFor: ref vs. definition
-	"group":          nil, // resolved in srcModelFor: ref vs. definition
-	"all":            {annot, star("element", "any", "group")},
-	"choice":         {annot, star("element", "group", "choice", "sequence", "any")},
-	"sequence":       {annot, star("element", "group", "choice", "sequence", "any")},
-	"any":            {annot},
-	"anyAttribute":   {annot},
-	"unique":         nil, // resolved in srcModelFor: ref vs. definition
-	"key":            nil,
-	"keyref":         nil,
-	"selector":       {annot},
-	"field":          {annot},
-	"notation":       {annot},
-	"include":        {annot},
-	"import":         {annot},
-	"list":           {annot, opt("simpleType")},
-	"union":          {annot, star("simpleType")},
-	"openContent":    {annot, opt("any")},
+	"attributeGroup":     nil, // resolved in srcModelFor: ref vs. definition
+	"group":              nil, // resolved in srcModelFor: ref vs. definition
+	"all":                {annot, star("element", "any", "group")},
+	"choice":             {annot, star("element", "group", "choice", "sequence", "any")},
+	"sequence":           {annot, star("element", "group", "choice", "sequence", "any")},
+	"any":                {annot},
+	"anyAttribute":       {annot},
+	"unique":             nil, // resolved in srcModelFor: ref vs. definition
+	"key":                nil,
+	"keyref":             nil,
+	"selector":           {annot},
+	"field":              {annot},
+	"notation":           {annot},
+	"include":            {annot},
+	"import":             {annot},
+	"list":               {annot, opt("simpleType")},
+	"union":              {annot, star("simpleType")},
+	"openContent":        {annot, opt("any")},
 	"defaultOpenContent": {annot, one("any")},
-	"alternative":    {annot, opt("simpleType", "complexType")},
-	"assert":         {annot},
-	"assertion":      {annot},
+	"alternative":        {annot, opt("simpleType", "complexType")},
+	"assert":             {annot},
+	"assertion":          {annot},
 
 	// Every constraining facet takes an annotation and nothing else. The
 	// facets were absent from this table, so <xs:notation> nested inside
@@ -171,24 +171,24 @@ var srcAttrs = map[string][]string{
 		"notNamespace", "notQName"},
 	"anyAttribute": {"namespace", "processContents",
 		"notNamespace", "notQName"},
-	"unique":      {"name", "ref"},
-	"key":         {"name", "ref"},
-	"keyref":      {"name", "refer", "ref"},
-	"selector":    {"xpath", "xpathDefaultNamespace"},
-	"field":       {"xpath", "xpathDefaultNamespace"},
-	"notation":    {"name", "public", "system"},
-	"include":     {"schemaLocation"},
-	"import":      {"namespace", "schemaLocation"},
-	"redefine":    {"schemaLocation"},
-	"override":    {"schemaLocation"},
-	"list":        {"itemType"},
-	"union":       {"memberTypes"},
-	"annotation":  {},
-	"openContent": {"mode"},
+	"unique":             {"name", "ref"},
+	"key":                {"name", "ref"},
+	"keyref":             {"name", "refer", "ref"},
+	"selector":           {"xpath", "xpathDefaultNamespace"},
+	"field":              {"xpath", "xpathDefaultNamespace"},
+	"notation":           {"name", "public", "system"},
+	"include":            {"schemaLocation"},
+	"import":             {"namespace", "schemaLocation"},
+	"redefine":           {"schemaLocation"},
+	"override":           {"schemaLocation"},
+	"list":               {"itemType"},
+	"union":              {"memberTypes"},
+	"annotation":         {},
+	"openContent":        {"mode"},
 	"defaultOpenContent": {"mode", "appliesToEmpty"},
-	"alternative": {"test", "type", "xpathDefaultNamespace"},
-	"assert":      {"test", "xpathDefaultNamespace"},
-	"assertion":   {"test", "xpathDefaultNamespace"},
+	"alternative":        {"test", "type", "xpathDefaultNamespace"},
+	"assert":             {"test", "xpathDefaultNamespace"},
+	"assertion":          {"test", "xpathDefaultNamespace"},
 }
 
 // checkAttrs reports attributes el carries that the schema for schemas does
@@ -442,4 +442,3 @@ func matchesName(c *xdm.Node, names []string) bool {
 	}
 	return false
 }
-

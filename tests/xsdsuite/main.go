@@ -19,7 +19,6 @@ func href(n *xdm.Node) string {
 	return n.AttrValue("href")
 }
 
-
 // Version tokens, per common/xsts.xsd.
 //
 // The version attribute is a *list* of tokens naming versions, features and

@@ -96,7 +96,10 @@ func TestSubtractionOverShorthandClasses(t *testing.T) {
 // cases that pin the hex escaping: string(r) on a surrogate yields U+FFFD,
 // which silently changes the range and can make RE2 reject the class.
 func TestComplementedClassEscapes(t *testing.T) {
-	for _, c := range []struct{ pat, in string; want bool }{
+	for _, c := range []struct {
+		pat, in string
+		want    bool
+	}{
 		{`^[\C]+$`, "!", true},
 		{`^[\C]+$`, "a", false},
 		{`^[\C]+$`, ":", false},
@@ -110,9 +113,15 @@ func TestComplementedClassEscapes(t *testing.T) {
 		{`^[\P{IsBasicLatin}]$`, "a", false},
 	} {
 		tr, err := translatePattern(c.pat, false)
-		if err != nil { t.Errorf("%q: %v", c.pat, err); continue }
+		if err != nil {
+			t.Errorf("%q: %v", c.pat, err)
+			continue
+		}
 		re, err := regexp.Compile(tr)
-		if err != nil { t.Errorf("%q->%q: %v", c.pat, tr, err); continue }
+		if err != nil {
+			t.Errorf("%q->%q: %v", c.pat, tr, err)
+			continue
+		}
 		if got := re.MatchString(c.in); got != c.want {
 			t.Errorf("%q on %q = %v want %v (%q)", c.pat, c.in, got, c.want, tr)
 		}

@@ -91,8 +91,8 @@ func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 		dtd:        d,
 		max:        max,
 		allowUndec: opts.AllowUndeclared,
-		matchers: map[string]*xsd.SequenceMatcher{},
-		ids:      map[string]bool{},
+		matchers:   map[string]*xsd.SequenceMatcher{},
+		ids:        map[string]bool{},
 	}
 	root := doc
 	if root.Kind == xdm.KindDocument {
@@ -115,8 +115,8 @@ type validator struct {
 	dtd        *DTD
 	max        int
 	allowUndec bool
-	errs     []*Error
-	matchers map[string]*xsd.SequenceMatcher
+	errs       []*Error
+	matchers   map[string]*xsd.SequenceMatcher
 	// ids are every ID value seen, for uniqueness and for resolving IDREF.
 	ids map[string]bool
 	// refs are IDREF values and where they appeared, checked once the whole

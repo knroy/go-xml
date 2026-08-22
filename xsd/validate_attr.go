@@ -559,7 +559,6 @@ func isDatePart(v string, version Version) bool {
 // an astronomical year number: 0 is 1 BCE and -1 is 2 BCE, which is why year 0
 // is a leap year and year -3 is not.
 
-
 func isTimePart(v string) bool {
 	if len(v) < 8 || v[2] != ':' || v[5] != ':' {
 		return false

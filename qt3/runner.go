@@ -1,10 +1,10 @@
 package qt3
 
 import (
-	"net/url"
 	"context"
 	"fmt"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"

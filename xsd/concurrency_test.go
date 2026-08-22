@@ -384,8 +384,8 @@ func TestTopLevelOptionalAllGroup(t *testing.T) {
 	    </xs:complexType>
 	  </xs:element>
 	</xs:schema>`
-	assertValid(t, schema, `<doc/>`)                 // the group is absent
-	assertValid(t, schema, `<doc><t1/><t2/></doc>`)  // the group is present, in full
+	assertValid(t, schema, `<doc/>`)                // the group is absent
+	assertValid(t, schema, `<doc><t1/><t2/></doc>`) // the group is present, in full
 	// Present but incomplete: minOccurs="0" makes the group optional, not
 	// each member independently so.
 	assertInvalid(t, schema, `<doc><t1/></doc>`, "cvc-complex-type.2.4.b")
