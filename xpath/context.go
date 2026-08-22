@@ -72,6 +72,11 @@ type Context struct {
 	// and file-disclosure vector.
 	Docs DocumentResolver
 
+	// Collections resolves fn:collection URIs. Nil disables it, for the same
+	// reason nil disables Docs, and setting Docs does not set this: see
+	// CollectionResolver.
+	Collections CollectionResolver
+
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
 	Depth int
@@ -129,6 +134,24 @@ const MaxItems = 5_000_000
 type DocumentResolver interface {
 	// ResolveDocument returns the tree for uri, resolved against base.
 	ResolveDocument(uri, base string) (*xdm.Tree, error)
+}
+
+// CollectionResolver loads a named set of documents for fn:collection.
+//
+// It is deliberately separate from DocumentResolver rather than an extra
+// method on it. A caller who wants fn:doc for the code lists shipped beside a
+// stylesheet does not thereby want fn:collection to enumerate a directory, and
+// folding the two together would make enabling one enable the other.
+//
+// The empty uri is the default collection — fn:collection() with no argument.
+// A resolver that has no default should return an error for it rather than an
+// empty sequence, for the reason given on fnCollection.
+type CollectionResolver interface {
+	// ResolveCollection returns the documents in uri, resolved against base.
+	//
+	// The result is a sequence rather than a []*xdm.Tree because a collection
+	// is permitted to contain items that are not document nodes.
+	ResolveCollection(uri, base string) (xdm.Sequence, error)
 }
 
 // FunctionLibrary resolves and calls functions.

@@ -261,7 +261,11 @@ nested quantifiers or 200-deep groups.
 ### All resolution defaults are closed
 
 `doc()`, `document()`, `collection()`, `xsl:include` and `xsl:import` all refuse
-when no resolver is configured. `unparsed-text()` is disabled *unconditionally*
+when no resolver is configured. `collection()` has its own switch —
+`Collections`, separate from `Documents` — so enabling `fn:doc` for a known
+code list does not also let a stylesheet enumerate whatever a collection URI
+names; a resolver that accepts one should validate the URI it is handed, which
+arrives from the stylesheet. `unparsed-text()` is disabled *unconditionally*
 — it cannot read a file even with a resolver set. `xsl:result-document` never
 writes to disk; the engine returns secondary results to the caller as data.
 XInclude is not implemented.

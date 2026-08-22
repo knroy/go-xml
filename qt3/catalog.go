@@ -70,6 +70,8 @@ type Environment struct {
 	// what fn:static-base-uri returns and what fn:resolve-uri resolves
 	// against.
 	StaticBaseURI []StaticBaseURI `xml:"static-base-uri"`
+	// Collections are the document sets fn:collection returns.
+	Collections []Collection `xml:"collection"`
 }
 
 type StaticBaseURI struct {
@@ -220,4 +222,15 @@ func LoadTestSet(root, file string) (*TestSet, error) {
 		return nil, err
 	}
 	return &ts, nil
+}
+
+// Collection is a named set of documents an environment supplies to
+// fn:collection.
+//
+// The sources carry the same role/file/uri attributes as a context source,
+// but role is unused: membership in the collection is the point, not the name
+// it is bound to.
+type Collection struct {
+	URI     string   `xml:"uri,attr"`
+	Sources []Source `xml:"source"`
 }

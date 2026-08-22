@@ -77,7 +77,11 @@ documents and report success, which is worse than an error. `FODC0002` stands.
 
 The 7 QT3 cases are a different matter and are listed under *Open* below: they
 supply real documents through a `<collection>` environment, so they are a
-capability gap rather than a disagreement.
+capability gap rather than a disagreement. That gap is now closed, in the
+engine and in the harness.
+
+Note that `cta0022` is unaffected by the hook. With no resolver configured the
+default is still `FODC0002`, which is the point.
 
 ### Unicode category drift (bug 4113)
 
@@ -239,15 +243,31 @@ Individually diagnosed cases in Particle Valid (Restriction) rather than one
 cluster. `particlesZ001` and `addB183` failing in both versions makes them the
 best entry point: they are bugs in the shared logic, not 1.1-specific gaps.
 
-### `fn:collection()` has no resolver hook (XPath)
+### `fn:collection()` — implemented, suite result unverified (XPath)
 
 7 cases in QT3 `fn-collection` (`collection-001` through `-007`).
 
-These supply two real documents through a `<collection>` environment, so a
-conforming processor should return them. There is a `DocumentResolver`
-interface for `fn:doc`, but no collection equivalent, and no way for a caller
-to inject one. This is an API addition, not a bug fix — worth doing, but it
-changes the public surface.
+**Implemented, both halves.** `xpath.CollectionResolver` and
+`Context.Collections` mirror `DocumentResolver`/`Docs`;
+`xslt.TransformOptions.Collections` threads it through a transform; and the
+harness parses `<collection>` environments (`Environment.Collections`) and
+builds a resolver over their sources, loading through `Runner.loadDoc` so that
+node identity and `fn:collection` stability hold.
+
+**The suite number is not yet re-measured.** The QT3 checkout was not available
+when this was written, so the path was verified against a synthetic suite in
+the real catalog layout — three cases covering count, content and node identity
+across two calls, all passing, and all failing when the wiring is removed. That
+proves the mechanism, not the 7. Re-run the suite to confirm:
+
+```
+GOXSLT_QT3=/path/to/qt3tests go test ./qt3/ -run TestQT3 -v
+```
+
+Two related FOTS features stay on the skip list: `collection-stability` and
+`non_empty_sequence_collection`. They are optional features with their own
+semantics, and removing a skip without the suite present would count cases that
+were never checked.
 
 ### Instance validation gaps (XSD)
 

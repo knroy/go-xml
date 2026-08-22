@@ -350,6 +350,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx := xpath.NewContext(root, s.funcs)
 	xctx.Ctx = ctx
 	xctx.Docs = opts.Documents
+	xctx.Collections = opts.Collections
 	xctx.ImplicitTimezone = opts.ImplicitTimezone
 	// One clock reading per transform, so fn:current-dateTime is stable
 	// across every call the stylesheet makes.

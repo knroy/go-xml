@@ -241,6 +241,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 |---|---|---|---|
 | `Params` | `map[string]xdm.Sequence` | none | Values for top-level `xsl:param`, keyed by Clark name (`{uri}local`, or plain `local` for no namespace). |
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
+| `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit. Catches a stylesheet with no base case. |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
@@ -293,14 +294,60 @@ seq, err := xpath.Eval(`$n * 2`, ctx, nil)   // [6]
 | `Ctx` | `context.Context` | Cancellation. Set it for untrusted expressions. |
 | `Now`, `HasNow` | `time.Time`, `bool` | Fixes `fn:current-dateTime`. `HasNow` distinguishes "midnight 1 January year 1" from "not set". |
 | `ImplicitTimezone` | `int` | Offset in minutes for values with no timezone. |
+| `Collections` | `CollectionResolver` | Resolves `fn:collection`. Nil disables it. Independent of `Docs`. |
 | `Parent` | `*Context` | The enclosing context, for nested evaluation. |
 | `Depth` | `int` | Recursion depth, maintained by the engine. |
 
-### fn:collection and fn:unparsed-text
+### fn:collection
 
-Neither is configurable. `fn:collection()` raises `FODC0002` because returning
-an empty sequence would let a stylesheet silently process no documents and
-report success. `fn:unparsed-text()` is disabled unconditionally — it cannot
+`Collections` enables `fn:collection`, and it is a **separate switch from
+`Docs`**. Setting one does not set the other: a caller who wants `fn:doc` for
+the code lists shipped beside a stylesheet does not thereby want a collection
+URI enumerated.
+
+```go
+type Codelists struct{ dir string }
+
+func (c Codelists) ResolveCollection(uri, base string) (xdm.Sequence, error) {
+    // uri is "" for the default collection — fn:collection() with no
+    // argument. Return an error rather than an empty sequence if you have
+    // no default.
+    files, err := filepath.Glob(filepath.Join(c.dir, uri, "*.xml"))
+    if err != nil {
+        return nil, err
+    }
+    var out xdm.Sequence
+    for _, f := range files {
+        b, err := os.ReadFile(f)
+        if err != nil {
+            return nil, err
+        }
+        tree, err := xdm.ParseString(string(b), xdm.ParseOptions{})
+        if err != nil {
+            return nil, err
+        }
+        out = append(out, tree.Root)
+    }
+    return out, nil
+}
+
+ctx.Collections = Codelists{dir: "lists"}   // xpath
+opts.Collections = Codelists{dir: "lists"}  // xslt.TransformOptions
+```
+
+With none configured, `fn:collection()` raises `FODC0002` rather than
+returning an empty sequence — a stylesheet that iterates a collection and
+finds nothing cannot tell "no documents" from "collections are switched off",
+and silently processing zero documents looks like success. Return an error
+from the resolver for the same reason.
+
+Validate the URI inside your resolver. It arrives from the stylesheet, so
+treat it as untrusted input: constrain it to a set you control, and do not
+join it into a path without checking for traversal.
+
+### fn:unparsed-text
+
+Not configurable. `fn:unparsed-text()` is disabled unconditionally — it cannot
 read a file even with `Docs` set.
 
 ---

@@ -779,8 +779,11 @@ func TestRegexDialectRules(t *testing.T) {
 		{`matches("abc", "a\nb")`, "false", ""},
 		{`matches("a.c", "a\.c")`, "true", ""},
 
-		// A backreference is valid XML Schema but RE2 does not implement one,
-		// so it is refused rather than mis-compiled.
+		// A backreference is *not* part of the XML Schema regular expression
+		// language — Appendix F's atom production has no form for one — so
+		// refusing it here is conformance rather than a shortfall. XPath 2.0
+		// does define them, and RE2 has none, so those cases are refused too:
+		// see the note in schema_grammar.go.
 		{`matches("abab", "(a)\1")`, "", "FORX0002"},
 
 		// "." excludes both newline characters. RE2's excludes only \n, so a

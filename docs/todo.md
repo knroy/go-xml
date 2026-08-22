@@ -136,14 +136,41 @@ Mostly not fixable, and worth stating why so nobody re-litigates it:
 
 | cases | cause | fixable |
 |---:|---|---|
-| 12 | regex backreferences (`\1`) | **no** — RE2 has none by design |
-| 7 | `fn:collection` | no — the harness configures no collection |
+| 12 | regex backreferences (`\1`) | **no** — see below |
+| 7 | `fn:collection` | **done** — resolver hook added; suite not re-measured |
 | 5 | `xs:dateTimeStamp` | no — an XSLT 3.0 type this engine does not claim |
 | 4 | ordinary bugs, one per set | yes |
 
-Only those 4 are work. The backreference 12 are the one genuine architectural
-ceiling in the project: supporting them means leaving RE2, and RE2's linear
-time guarantee is worth more than twelve tests.
+Only those 4 remain as ordinary bugs. The `fn:collection` 7 were the one
+capability gap and are now implemented — `xpath.CollectionResolver` plus
+harness support; see [known-gaps.md](known-gaps.md). The suite has not been
+re-run since, so the 99.84% above still counts them as failing.
+
+**The backreference 12, in full, because the obvious fix does not work.** Two
+separate points, and the first is the one usually missed:
+
+*They are an XPath-only question.* A backreference is not part of the XML
+Schema regular expression language — Appendix F's `atom` production has no form
+for one. Every schema pattern facet goes through
+`xpath.TranslateSchemaRegexpVersion` (see `xsd/pattern.go`), which rejects `\1`
+under both 1.0 and 1.1. That rejection is conformance, not a gap, so none of
+this touches the XSD validator. XPath 2.0 does define backreferences, and that
+is where the 12 sit.
+
+*RE2 plus capture groups plus an explicit comparison does not rescue it.* This
+is the natural design and it is worth writing down why it falls short: RE2
+returns **one** match. When the captured text fails the backreference
+comparison, a correct engine must retry with a different assignment of the same
+groups, and RE2 cannot enumerate alternative submatch assignments. `(a*)\1`
+against a run of `a`s hands back the greedy split, fails, and needs every other
+split — which is the backtracking the design was trying to avoid, with
+`(a+)+\1` and friends behind it.
+
+So the real cost is a second, backtracking engine with a step budget, a
+dispatch rule choosing between the two, and a new failure mode when the budget
+trips — roughly 800–1,500 lines plus a fuzz target, and it reintroduces exactly
+the catastrophic-backtracking DoS class that [security.md](security.md)
+otherwise keeps out of this tree. Twelve tests do not pay for that.
 
 ### 2.4 Remaining load failures
 
@@ -203,7 +230,9 @@ refused include.
 
 Recorded so they are not proposed again as oversights:
 
-* **Regex backreferences** — leaving RE2 costs the linear-time guarantee.
+* **Regex backreferences** — an XPath-only construct (XML Schema has no form
+  for one), and leaving RE2 costs the linear-time guarantee. Capture groups
+  plus an explicit comparison do not avoid this; see 2.3.
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.

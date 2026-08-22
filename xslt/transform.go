@@ -23,6 +23,12 @@ type TransformOptions struct {
 	// lists shipped beside them.
 	Documents xpath.DocumentResolver
 
+	// Collections resolves fn:collection. Nil disables it, which is the
+	// default, and setting Documents does not set this: enabling fn:doc for
+	// a known code list should not also let a stylesheet enumerate whatever
+	// a collection URI happens to name.
+	Collections xpath.CollectionResolver
+
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
 	//

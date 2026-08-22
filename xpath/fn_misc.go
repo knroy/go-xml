@@ -70,12 +70,7 @@ func registerMiscFuncs(l *Library) {
 		return xdm.One(xdm.NewDateTime(&out, xdm.TypeDateTime)), nil
 	})
 
-	l.registerFn("collection", []int{0, 1}, func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		// A collection is a named set of documents supplied by the caller.
-		// Nothing configures one here, and inventing an empty collection
-		// would let a stylesheet silently process no documents.
-		return nil, fmt.Errorf("FODC0002: collections are not configured")
-	})
+	l.registerFn("collection", []int{0, 1}, fnCollection)
 
 }
 
@@ -557,4 +552,50 @@ func romanNum(n int64) string {
 		}
 	}
 	return sb.String()
+}
+
+// fnCollection implements fn:collection.
+//
+// It fails closed for the same reason fn:doc does: a collection URI that can
+// name a directory is a file-disclosure vector, and a stylesheet has no
+// business enumerating one unless the caller said so. With no resolver
+// configured every URI is refused, including the default collection.
+//
+// The refusal is FODC0002 rather than an empty sequence deliberately. A
+// stylesheet that iterates a collection and finds nothing cannot tell "there
+// were no documents" from "collections are switched off", and silently
+// processing zero documents is the worse of the two failures — it looks like
+// success. Returning the error means a misconfiguration is reported instead of
+// producing an empty result that appears legitimate.
+func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	// fn:collection() with no argument is the default collection, which the
+	// resolver sees as the empty URI. The one-argument form is declared
+	// xs:string?, so an empty sequence means the default collection too
+	// rather than being a type error.
+	uri := ""
+	if len(args) > 0 && len(args[0]) != 0 {
+		s, err := argStringRequired(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		uri = s
+		// An unusable URI is reported before access is attempted, matching
+		// fn:doc: whether a resolver is configured does not come into it.
+		if err := validAnyURI(uri); err != nil ||
+			strings.HasPrefix(strings.TrimSpace(uri), ":") {
+			return nil, fmt.Errorf("FODC0004: %q is not a valid collection URI", uri)
+		}
+	}
+	if ctx.Collections == nil {
+		return nil, fmt.Errorf("FODC0002: collections are not configured")
+	}
+	base := ""
+	if n, ok := ctx.Item.(*xdm.Node); ok {
+		base = n.BaseURI
+	}
+	seq, err := ctx.Collections.ResolveCollection(uri, base)
+	if err != nil {
+		return nil, fmt.Errorf("FODC0002: cannot retrieve collection %q: %w", uri, err)
+	}
+	return seq, nil
 }

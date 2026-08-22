@@ -186,6 +186,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 		out.Schemas = append(out.Schemas, e.Schemas...)
 		out.Collations = append(out.Collations, e.Collations...)
 		out.StaticBaseURI = append(out.StaticBaseURI, e.StaticBaseURI...)
+		out.Collections = append(out.Collections, e.Collections...)
 	}
 	for _, ref := range tc.Environments {
 		if ref.Ref == "" {
@@ -293,6 +294,18 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// clock is used rather than the wall clock so that a rerun of the suite
 	// gives the same answers.
 	ctx = ctx.WithNow(SuiteClock)
+	// A <collection> environment supplies the documents fn:collection
+	// returns. Without this the function has no resolver and refuses, which
+	// is the correct default but not what these cases are testing.
+	if len(env.Collections) > 0 {
+		cr := &envCollections{r: r, byURI: map[string][]string{}}
+		for _, c := range env.Collections {
+			for _, src := range c.Sources {
+				cr.byURI[c.URI] = append(cr.byURI[c.URI], src.File)
+			}
+		}
+		ctx.Collections = cr
+	}
 	for name, seq := range vars {
 		ctx = ctx.WithVar(xdm.QName{Local: name}, seq)
 	}
@@ -723,4 +736,34 @@ func (caseBlind) IndexOf(s, sub string) int {
 	// while folding preserves length — which it does for the cases the suite
 	// uses. Anything else would need a rune-by-rune walk.
 	return strings.Index(strings.ToLower(s), strings.ToLower(sub))
+}
+
+// envCollections resolves fn:collection against the documents a <collection>
+// environment names.
+//
+// Loading goes through Runner.loadDoc, which caches by file, so a document
+// that is both the context item and a collection member is the same node —
+// fn:collection stability and node identity both depend on that.
+type envCollections struct {
+	r     *Runner
+	byURI map[string][]string
+}
+
+func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, error) {
+	files, ok := c.byURI[uri]
+	if !ok {
+		// The default collection is the empty URI. A case that asks for a
+		// collection the environment did not declare gets an error, which is
+		// what a conforming processor does.
+		return nil, fmt.Errorf("no collection %q", uri)
+	}
+	var out xdm.Sequence
+	for _, f := range files {
+		doc, err := c.r.loadDoc(f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, doc)
+	}
+	return out, nil
 }
