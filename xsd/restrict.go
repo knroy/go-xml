@@ -156,8 +156,15 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 	// choosing a cell, because an unstripped <sequence> wrapping one
 	// element lands in a Recurse cell where the element itself would land
 	// in NameAndTypeOK.
-	r = stripPointless(r)
-	b = stripPointless(b)
+	// Under 1.1 a one-member choice keeps its identity when the base is also
+	// a choice, because the table dispatches on the compositor and the pair
+	// decides the cell. Against any other base the choice has nothing to
+	// preserve and stripping it is what lets the derivation reach a cell at
+	// all: particlesR001 restricts a sequence-with-wildcard by a one-member
+	// choice, which is valid only once the choice is gone.
+	keepChoice := v >= Version11 && bothChoices(r, b)
+	r = stripPointless(r, keepChoice)
+	b = stripPointless(b, keepChoice)
 
 	// Clause 2.2.1 makes an empty <sequence> or <all> — and an empty
 	// <choice> under a particle with {min occurs} of 0 — pointless, so it
@@ -284,10 +291,29 @@ func particleKind(p *Particle) string {
 // one-member all group be stripped regardless of the containing particle's
 // occurrence range, because an all group of one particle imposes no ordering
 // to lose.
-func stripPointless(p *Particle) *Particle {
+func stripPointless(p *Particle, keepChoice bool) *Particle {
 	for {
 		g, ok := p.Term.(*ModelGroup)
 		if !ok || len(g.Particles) != 1 {
+			return p
+		}
+		// Under 1.1 a one-member *choice* keeps its identity. The table
+		// dispatches on the compositor, so stripping one turns a
+		// choice-restricting-choice derivation into a sequence restricting a
+		// choice — a different cell with a different rule. particlesZ023 and
+		// Z024 are exactly that: a derived <choice> holding one three-element
+		// sequence, restricting a base <choice> of two such sequences. Read
+		// as Recurse the derivation drops one alternative and is valid; read
+		// as MapAndSum it is rejected for "maxOccurs 3 exceeds the base's 1",
+		// the three elements having been summed against a choice that admits
+		// one branch.
+		//
+		// Under 1.0 the stripping is *correct* and the derivation really is
+		// invalid: the suite marks Z023 and Z024 invalid under 1.0 and valid
+		// under 1.1, which is the 1.1 relaxation from a structural table to
+		// language inclusion. Removing the strip unconditionally therefore
+		// fixed two 1.1 cases and broke the same two under 1.0.
+		if keepChoice && g.Compositor == CompositorChoice {
 			return p
 		}
 		inner := g.Particles[0]
@@ -1219,4 +1245,32 @@ func qnameLess(a, b xdm.QName) bool {
 		return a.URI < b.URI
 	}
 	return a.Local < b.Local
+}
+
+// bothChoices reports whether r and b are both choice groups, ignoring any
+// pointless wrapping that stripPointless would remove from a non-choice.
+//
+// The question is asked before stripping, so a <sequence> holding one <choice>
+// counts: that sequence is pointless and the choice underneath it is what the
+// table will see.
+func bothChoices(r, b *Particle) bool {
+	return choiceUnder(r) && choiceUnder(b)
+}
+
+func choiceUnder(p *Particle) bool {
+	for {
+		g, ok := p.Term.(*ModelGroup)
+		if !ok {
+			return false
+		}
+		if g.Compositor == CompositorChoice {
+			return true
+		}
+		// Only a pointless wrapper is looked through, matching what
+		// stripPointless would itself remove.
+		if len(g.Particles) != 1 || p.MinOccurs != 1 || p.MaxOccurs != 1 {
+			return false
+		}
+		p = g.Particles[0]
+	}
 }

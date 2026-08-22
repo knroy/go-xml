@@ -71,7 +71,7 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
-| **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
+| **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.93%** schema-validity (15,047 of 15,365); opt-in via `Version11` |
 | **Tests** | 671, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
@@ -733,7 +733,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
-| XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
+| XSD 1.1 | 15,047 / 15,365 (97.93%) | 26,155 / 26,209 (99.79%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -1312,7 +1312,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
-| XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
+| XSD 1.1 | 15,047 / 15,365 (97.93%) | 26,155 / 26,209 (99.79%) |
 
 Every failure and the reason it is open is catalogued in
 [docs/known-gaps.md](docs/known-gaps.md).

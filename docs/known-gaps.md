@@ -25,7 +25,7 @@ kind — they break working documents — so they are listed first throughout.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.93% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
 | XDM | *no public suite* | exercised through the three above |
 
@@ -39,7 +39,7 @@ comparable to a suite percentage, and neither should be quoted as one.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| schema false reject | 6 | 15 |
+| schema false reject | 6 | 13 |
 | schema false accept | 195 | 305 |
 | instance false reject | 5 | 5 |
 | instance false accept | 45 | 49 |
@@ -256,6 +256,32 @@ conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
 
+### A one-member choice is not pointless under 1.1 (fixed)
+
+`particlesZ023` and `particlesZ024`: a derived `<choice>` holding one
+three-element sequence, restricting a base `<choice>` of two such sequences —
+a valid dropping of one alternative.
+
+`stripPointless` removed *any* one-member group wrapper, choices included. That
+turned a choice-restricting-choice derivation into a sequence restricting a
+choice, a different cell of §3.9.6's table with a different rule, and it was
+rejected for "maxOccurs 3 exceeds the base's 1" — the three elements summed
+against a choice that admits one branch.
+
+Two conditions, both learned by measuring:
+
+* **Version.** The suite marks these invalid under 1.0 and valid under 1.1, so
+  the strip is *correct* for the 1.0 table and wrong only for 1.1's language
+  inclusion. Removing it unconditionally fixed two 1.1 cases and broke the same
+  two under 1.0, for a net loss of 3.
+* **The base's compositor.** Keeping every one-member choice under 1.1 then
+  turned `particlesR001` into a false reject: a one-member choice restricting a
+  sequence-with-wildcard is valid, and only reaches a cell once the wrapper is
+  gone. The wrapper is preserved only when *both* sides are choices, where the
+  pair decides the cell.
+
+1.1 schema agreement 15,045 → 15,047, with 1.0 unchanged.
+
 ### Particle restriction: the occurrence-carrying wrapper (attempted, reverted)
 
 `particlesZ001` is a `<sequence>` whose `<element name="element" minOccurs="0"
@@ -284,7 +310,7 @@ a change to this wrapper.
 ### Particle restriction edge cases (XSD)
 
 `addB118`, `addB183`, `particlesHa161`, `particlesT002`, `particlesT009`,
-`particlesZ001`, `particlesZ023`, `particlesZ024` — 8 schema false rejects in
+`particlesZ001` — 6 schema false rejects in
 1.1, 2 of which (`addB183`, `particlesZ001`) also fail in 1.0.
 
 Individually diagnosed cases in Particle Valid (Restriction) rather than one
@@ -410,7 +436,7 @@ not by cluster size — several of the largest clusters are the least worth doin
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
 | schema false accept | 195 | 305 |
-| schema false reject | 6 | 15 |
+| schema false reject | 6 | 13 |
 | instance false accept | 45 | 49 |
 | instance false reject | 5 | 5 |
 | *of those, W3C-disputed* | *49* | *48* |
@@ -587,7 +613,7 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
 | XSD 1.1 instance | 99.79% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
-| XSD 1.1 schema | 97.92% | ~99.9% | 285 constraints, one at a time |
+| XSD 1.1 schema | 97.93% | ~99.9% | 285 constraints, one at a time |
 
 Nothing here is blocked on a missing idea. XPath's last case is a deliberate
 refusal, the XSD false accepts are volume rather than difficulty, and the false
