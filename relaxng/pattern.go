@@ -72,8 +72,13 @@ type Value struct {
 	Type  Datatype
 	Value string
 	// Ns is the namespace in force where the value was written, which the
-	// QName datatype needs to resolve a prefix.
+	// QName datatype needs to resolve an unprefixed name.
 	Ns string
+	// Prefixes are the namespace bindings in scope where the value was
+	// written. A QName value is compared by what its prefix *means*, not by
+	// how it is spelled, so both sides need their own bindings: the schema's
+	// live here and the document's arrive with the text being matched.
+	Prefixes map[string]string
 }
 
 // Data matches a string the datatype accepts, optionally excluding a pattern.

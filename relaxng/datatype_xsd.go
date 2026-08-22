@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xsd"
 )
 
@@ -103,4 +104,41 @@ func atoiParam(p Param) (int, error) {
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
+}
+
+// equalIn compares two QNames by what they mean rather than how they are
+// spelled.
+//
+// A QName is a prefix and a local name, and the prefix is only a pointer to a
+// namespace. "e:x" written in a schema and "f:x" written in a document are the
+// same value when e and f are bound to the same namespace, and different when
+// they are not — which is why comparing the lexical forms gives the wrong
+// answer in both directions.
+func (t xsdType) equalIn(a string, actx nsContext, b string, bctx nsContext) bool {
+	if t.name != "QName" && t.name != "NOTATION" {
+		return t.equal(a, b)
+	}
+	an, aok := resolveQName(strings.TrimSpace(a), actx)
+	bn, bok := resolveQName(strings.TrimSpace(b), bctx)
+	return aok && bok && an == bn
+}
+
+// resolveQName splits a lexical QName and resolves its prefix.
+//
+// An unresolvable prefix is not an error here but a mismatch: the value simply
+// does not name anything, so it equals nothing.
+func resolveQName(s string, ctx nsContext) (xdm.QName, bool) {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		prefix, local := s[:i], s[i+1:]
+		uri, ok := ctx.prefixes[prefix]
+		if !ok {
+			if prefix == "xml" {
+				uri = xdm.NSXML
+			} else {
+				return xdm.QName{}, false
+			}
+		}
+		return xdm.QName{URI: uri, Local: local}, true
+	}
+	return xdm.QName{URI: ctx.dflt, Local: s}, true
 }

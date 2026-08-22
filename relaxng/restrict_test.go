@@ -577,3 +577,63 @@ func TestEmptyElementMatchesTheEmptyString(t *testing.T) {
 		t.Error("<foo/> should not satisfy a schema requiring a child element")
 	}
 }
+
+// A QName value is compared by what its prefix means, not by how it is
+// spelled. The schema's prefixes and the document's are separate sets, and
+// comparing the lexical forms gives the wrong answer in both directions.
+func TestQNameValuesCompareByNamespace(t *testing.T) {
+	const xsdLib = ` datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes"`
+	const schema = `<element` + rngNS + ` xmlns:s="http://example.com/ns"
+		name="foo"><value type="QName"` + xsdLib + `>s:x</value></element>`
+	s, err := compileSrc(t, schema)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	cases := []struct {
+		name, doc string
+		want      bool
+	}{
+		{"a different prefix for the same namespace",
+			`<foo xmlns:d="http://example.com/ns">d:x</foo>`, true},
+		{"the same prefix spelling, a different namespace",
+			`<foo xmlns:s="http://example.com/other">s:x</foo>`, false},
+		{"an unbound prefix names nothing",
+			`<foo>s:x</foo>`, false},
+		{"a different local name",
+			`<foo xmlns:d="http://example.com/ns">d:y</foo>`, false},
+	}
+	for _, c := range cases {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// An element's character data is one string, however the parser split it.
+// Deriving over each piece separately consumes the pattern on the first and
+// fails on the second, so a document differing only in where its comments sit
+// would validate differently.
+func TestCharacterDataIsOneString(t *testing.T) {
+	s, err := compileSrc(t, `<element`+rngNS+` name="foo">
+		<data type="string"/></element>`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, doc := range []string{
+		`<foo>abc</foo>`,
+		`<foo>a<!--c-->bc</foo>`,
+		`<foo>a<?pi?>b<!--x-->c</foo>`,
+	} {
+		tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(tree.Root); err != nil {
+			t.Errorf("%s should be valid: %v", doc, err)
+		}
+	}
+}

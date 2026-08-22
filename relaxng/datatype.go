@@ -21,6 +21,24 @@ type Datatype interface {
 	equal(a, b string) bool
 }
 
+// nsContext is what a value needs to be understood beyond its own characters.
+//
+// Only QName and NOTATION need it, and they need it badly: "e:x" and "f:x"
+// are the same value when the two prefixes are bound to the same namespace,
+// and different values when they are not. Nothing about the strings says so.
+type nsContext struct {
+	// prefixes maps a prefix to a namespace.
+	prefixes map[string]string
+	// dflt is the namespace an unprefixed name takes.
+	dflt string
+}
+
+// contextualType is a datatype whose values depend on namespace bindings.
+type contextualType interface {
+	// equalIn compares two values, each read in its own context.
+	equalIn(a string, actx nsContext, b string, bctx nsContext) bool
+}
+
 // The built-in library, which is the empty datatypeLibrary URI.
 const builtinLibrary = ""
 

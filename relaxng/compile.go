@@ -876,7 +876,15 @@ func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: <value>: %w", err)
 	}
-	return Value{Type: dt, Value: n.StringValue()}, nil
+	// The schema's own prefixes travel with the value: a QName written here
+	// means what this document's bindings say, and the instance's bindings
+	// are a different set entirely.
+	return Value{
+		Type:     dt,
+		Value:    n.StringValue(),
+		Ns:       c.nsFor(n),
+		Prefixes: n.InScopeNamespaces(),
+	}, nil
 }
 
 func (c *compiler) compileData(n *xdm.Node) (Pattern, error) {

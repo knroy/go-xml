@@ -82,19 +82,37 @@ func (v *validator) note(msg string) {
 	}
 }
 
+// nsContextOf reads the namespace bindings in scope at an element.
+//
+// A QName in a document means what the document's prefixes say it means, and
+// the schema's prefixes are a separate set — so the comparison needs both, and
+// this supplies the document half.
+func nsContextOf(n *xdm.Node) nsContext {
+	ctx := nsContext{prefixes: n.InScopeNamespaces()}
+	if uri, ok := ctx.prefixes[""]; ok {
+		ctx.dflt = uri
+	}
+	return ctx
+}
+
+// textDeriv takes the derivative over a run of character data.
+func (v *validator) textDeriv(p Pattern, s string, ctx nsContext) Pattern {
+	if whitespaceOnly(s) {
+		// Whitespace between elements is not content unless the pattern asks
+		// for text: a document written across lines must not fail because of
+		// its own indentation.
+		if isNotAllowed(textDeriv(p, s, ctx)) {
+			return p
+		}
+	}
+	return textDeriv(p, s, ctx)
+}
+
 // childDeriv takes the derivative with respect to one node of content.
 func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 	switch n.Kind {
 	case xdm.KindText:
-		if whitespaceOnly(n.Value) {
-			// Whitespace between elements is not content unless the pattern
-			// asks for text: a schema written across lines must not fail
-			// because of its own indentation.
-			if isNotAllowed(textDeriv(p, n.Value)) {
-				return p
-			}
-		}
-		return textDeriv(p, n.Value)
+		return v.textDeriv(p, n.Value, nsContextOf(n))
 
 	case xdm.KindElement:
 		v.path = append(v.path, n.Name.Local)
@@ -106,7 +124,7 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))
 			return NotAllowed{}
 		}
-		p1 = attsDeriv(p1, elementAttrs(n))
+		p1 = attsDeriv(p1, elementAttrs(n), nsContextOf(n))
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("the attributes of %s do not match", n.Name.Local))
 			return NotAllowed{}
@@ -155,13 +173,29 @@ func (v *validator) childrenDeriv(p Pattern, el *xdm.Node) Pattern {
 		// nullability: at this point the pattern is inside an After, whose
 		// continuation is the rest of the enclosing content, and an After is
 		// never nullable however well its left half matched.
-		if d := textDeriv(p, ""); !isNotAllowed(endTagDeriv(d)) {
+		if d := textDeriv(p, "", nsContextOf(el)); !isNotAllowed(endTagDeriv(d)) {
 			return d
 		}
 		return p
 	}
-	for _, c := range kids {
-		p = v.childDeriv(p, c)
+	// Consecutive text nodes are one string. The data model splits character
+	// data wherever a comment or an entity boundary falls, and a pattern like
+	// <data type="string"/> matches a *value*, not a run of nodes: deriving
+	// over each piece separately consumes the pattern on the first and then
+	// fails on the second, so a document differing only in where its comments
+	// sit would validate differently.
+	for i := 0; i < len(kids); i++ {
+		c := kids[i]
+		if c.Kind == xdm.KindText {
+			var sb strings.Builder
+			for ; i < len(kids) && kids[i].Kind == xdm.KindText; i++ {
+				sb.WriteString(kids[i].Value)
+			}
+			i--
+			p = v.textDeriv(p, sb.String(), nsContextOf(el))
+		} else {
+			p = v.childDeriv(p, c)
+		}
 		if isNotAllowed(p) {
 			return NotAllowed{}
 		}

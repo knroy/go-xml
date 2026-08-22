@@ -155,9 +155,9 @@ func applyAfter(f func(Pattern) Pattern, p Pattern) Pattern {
 }
 
 // attsDeriv is the derivative with respect to an element's attributes.
-func attsDeriv(p Pattern, attrs []attr) Pattern {
+func attsDeriv(p Pattern, attrs []attr, ctx nsContext) Pattern {
 	for _, a := range attrs {
-		p = attDeriv(p, a)
+		p = attDeriv(p, a, ctx)
 	}
 	return p
 }
@@ -167,25 +167,25 @@ type attr struct {
 	value string
 }
 
-func attDeriv(p Pattern, a attr) Pattern {
+func attDeriv(p Pattern, a attr, ctx nsContext) Pattern {
 	switch t := expand(p).(type) {
 	case After:
-		return after(attDeriv(t.Left, a), t.Right)
+		return after(attDeriv(t.Left, a, ctx), t.Right)
 	case Choice:
-		return choice(attDeriv(t.Left, a), attDeriv(t.Right, a))
+		return choice(attDeriv(t.Left, a, ctx), attDeriv(t.Right, a, ctx))
 	case Group:
 		return choice(
-			group(attDeriv(t.Left, a), t.Right),
-			group(t.Left, attDeriv(t.Right, a)))
+			group(attDeriv(t.Left, a, ctx), t.Right),
+			group(t.Left, attDeriv(t.Right, a, ctx)))
 	case Interleave:
 		return choice(
-			interleave(attDeriv(t.Left, a), t.Right),
-			interleave(t.Left, attDeriv(t.Right, a)))
+			interleave(attDeriv(t.Left, a, ctx), t.Right),
+			interleave(t.Left, attDeriv(t.Right, a, ctx)))
 	case OneOrMore:
-		return group(attDeriv(t.Pattern, a),
+		return group(attDeriv(t.Pattern, a, ctx),
 			choice(oneOrMore(t.Pattern), Empty{}))
 	case Attribute:
-		if !t.Name.contains(a.name) || !valueMatch(t.Pattern, a.value) {
+		if !t.Name.contains(a.name) || !valueMatch(t.Pattern, a.value, ctx) {
 			return NotAllowed{}
 		}
 		return Empty{}
@@ -198,11 +198,11 @@ func attDeriv(p Pattern, a attr) Pattern {
 // An attribute value and a text node are both just a string, so the same
 // question is asked of both. The empty string is special: it matches a
 // nullable pattern, which is how <empty/> admits an absent value.
-func valueMatch(p Pattern, s string) bool {
+func valueMatch(p Pattern, s string, ctx nsContext) bool {
 	if p.nullable() && whitespaceOnly(s) {
 		return true
 	}
-	return !isNotAllowed(textDeriv(p, s))
+	return !isNotAllowed(textDeriv(p, s, ctx))
 }
 
 func isNotAllowed(p Pattern) bool {
@@ -211,30 +211,39 @@ func isNotAllowed(p Pattern) bool {
 }
 
 // textDeriv is the derivative with respect to a string of character data.
-func textDeriv(p Pattern, s string) Pattern {
+func textDeriv(p Pattern, s string, ctx nsContext) Pattern {
 	switch t := expand(p).(type) {
 	case Choice:
-		return choice(textDeriv(t.Left, s), textDeriv(t.Right, s))
+		return choice(textDeriv(t.Left, s, ctx), textDeriv(t.Right, s, ctx))
 	case Interleave:
 		return choice(
-			interleave(textDeriv(t.Left, s), t.Right),
-			interleave(t.Left, textDeriv(t.Right, s)))
+			interleave(textDeriv(t.Left, s, ctx), t.Right),
+			interleave(t.Left, textDeriv(t.Right, s, ctx)))
 	case Group:
-		d := group(textDeriv(t.Left, s), t.Right)
+		d := group(textDeriv(t.Left, s, ctx), t.Right)
 		if t.Left.nullable() {
-			return choice(d, textDeriv(t.Right, s))
+			return choice(d, textDeriv(t.Right, s, ctx))
 		}
 		return d
 	case After:
-		return after(textDeriv(t.Left, s), t.Right)
+		return after(textDeriv(t.Left, s, ctx), t.Right)
 	case OneOrMore:
-		return group(textDeriv(t.Pattern, s),
+		return group(textDeriv(t.Pattern, s, ctx),
 			choice(oneOrMore(t.Pattern), Empty{}))
 	case Text:
 		// Text consumes any amount of character data and remains itself,
 		// which is what makes it match a run of text nodes.
 		return t
 	case Value:
+		// A QName value is compared by what its prefix means on each side,
+		// so the datatype is asked with both contexts when it has an opinion.
+		if ct, ok := t.Type.(contextualType); ok {
+			if ct.equalIn(t.Value, nsContext{prefixes: t.Prefixes, dflt: t.Ns},
+				s, ctx) {
+				return Empty{}
+			}
+			return NotAllowed{}
+		}
 		if t.Type.equal(t.Value, s) {
 			return Empty{}
 		}
@@ -243,20 +252,20 @@ func textDeriv(p Pattern, s string) Pattern {
 		if err := t.Type.check(s, t.Params); err != nil {
 			return NotAllowed{}
 		}
-		if t.Except != nil && valueMatch(t.Except, s) {
+		if t.Except != nil && valueMatch(t.Except, s, ctx) {
 			return NotAllowed{}
 		}
 		return Empty{}
 	case List:
-		return listDeriv(t.Pattern, splitTokens(s))
+		return listDeriv(t.Pattern, splitTokens(s), ctx)
 	}
 	return NotAllowed{}
 }
 
 // listDeriv applies a pattern to the tokens of a whitespace-separated list.
-func listDeriv(p Pattern, tokens []string) Pattern {
+func listDeriv(p Pattern, tokens []string, ctx nsContext) Pattern {
 	for _, tok := range tokens {
-		p = textDeriv(p, tok)
+		p = textDeriv(p, tok, ctx)
 	}
 	if p.nullable() {
 		return Empty{}
