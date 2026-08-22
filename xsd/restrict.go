@@ -954,7 +954,7 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// guessing: a derived wildcard spanning two base buckets is invalid
 	// precisely because of how its occurrences may be split between them.
 	budget := map[xdm.QName]*occBudget{}
-	for _, bp := range bg.Particles {
+	for _, bp := range flattenAllGroups(bg.Particles) {
 		bd, ok := bp.Term.(*ElementDecl)
 		if !ok {
 			return nil, false
@@ -1273,4 +1273,33 @@ func choiceUnder(p *Particle) bool {
 		}
 		p = g.Particles[0]
 	}
+}
+
+// flattenAllGroups inlines a nested all group into its parent's particle list.
+//
+// XSD 1.1 §3.8.6 requires a group reference inside an all group to refer to a
+// group whose model is itself an all group, and an all group of all groups
+// admits exactly the interleaving of their members. So the nesting carries no
+// information the flat list does not, and flattening it lets allSubsumes see
+// element declarations where it would otherwise find a group particle and give
+// up — falling back to the 1.0 table, which calls the derivation Forbidden.
+//
+// all206 is the case: a base <all> holding <group ref="abc"/> and an element,
+// restricted by an <all> holding that element and a narrower group.
+//
+// Only a nested group occurring exactly once is inlined. A repeating one would
+// multiply its members' occurrence ranges, and folding that into the parent
+// would compare the wrong budgets — the ambiguity allSubsumes exists to avoid.
+func flattenAllGroups(ps []*Particle) []*Particle {
+	var out []*Particle
+	for _, p := range ps {
+		g, ok := p.Term.(*ModelGroup)
+		if !ok || g.Compositor != CompositorAll ||
+			p.MinOccurs != 1 || p.MaxOccurs != 1 {
+			out = append(out, p)
+			continue
+		}
+		out = append(out, flattenAllGroups(g.Particles)...)
+	}
+	return out
 }

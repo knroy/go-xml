@@ -25,7 +25,7 @@ kind — they break working documents — so they are listed first throughout.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.93% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.94% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
 | XDM | *no public suite* | exercised through the three above |
 
@@ -39,7 +39,7 @@ comparable to a suite percentage, and neither should be quoted as one.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| schema false reject | 6 | 13 |
+| schema false reject | 6 | 12 |
 | schema false accept | 195 | 305 |
 | instance false reject | 5 | 5 |
 | instance false accept | 45 | 49 |
@@ -256,6 +256,26 @@ conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
 
+### A nested all group is flattened before budgeting (fixed)
+
+`all206`: a base `<all>` holding `<group ref>` and an element, restricted by an
+`<all>` holding that element and a narrower group.
+
+`allSubsumes` gave up on any base particle that was not an element
+declaration, so a nested group sent the derivation to the 1.0 table, which
+calls it Forbidden. XSD 1.1 requires a group reference inside an all group to
+name a group whose model is itself an all group, and an all group of all groups
+admits exactly the interleaving of their members — so the nesting carries no
+information the flat list does not.
+
+Only a group occurring **exactly once** is inlined. A repeating one multiplies
+its members' occurrence ranges, and folding that into the parent would compare
+the wrong budgets — the ambiguity `allSubsumes` exists to refuse rather than
+guess at.
+
+1.1 schema agreement 15,047 → 15,048, with 1.0 and both instance figures
+unchanged.
+
 ### A one-member choice is not pointless under 1.1 (fixed)
 
 `particlesZ023` and `particlesZ024`: a derived `<choice>` holding one
@@ -436,7 +456,7 @@ not by cluster size — several of the largest clusters are the least worth doin
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
 | schema false accept | 195 | 305 |
-| schema false reject | 6 | 13 |
+| schema false reject | 6 | 12 |
 | instance false accept | 45 | 49 |
 | instance false reject | 5 | 5 |
 | *of those, W3C-disputed* | *49* | *48* |
@@ -613,7 +633,7 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
 | XSD 1.1 instance | 99.79% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
-| XSD 1.1 schema | 97.93% | ~99.9% | 285 constraints, one at a time |
+| XSD 1.1 schema | 97.94% | ~99.9% | 285 constraints, one at a time |
 
 Nothing here is blocked on a missing idea. XPath's last case is a deliberate
 refusal, the XSD false accepts are volume rather than difficulty, and the false

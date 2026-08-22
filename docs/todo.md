@@ -8,7 +8,7 @@ Current position:
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
-| XSD 1.1 | 15,047 / 15,365 (97.93%) | 26,155 / 26,209 (99.79%) |
+| XSD 1.1 | 15,048 / 15,365 (97.94%) | 26,155 / 26,209 (99.79%) |
 | XPath 2.0 | 99.99% — 15,180 of 15,181 in scope (1 failing) |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 671, clean under `-race` |

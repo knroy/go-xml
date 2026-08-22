@@ -101,3 +101,74 @@ func TestOneMemberChoiceAgainstSequenceStillStrips(t *testing.T) {
 		}
 	}
 }
+
+// A group reference inside an all group is flattened before the occurrence
+// budget is built.
+//
+// XSD 1.1 requires such a reference to name a group whose model is itself an
+// all group, and an all group of all groups admits exactly the interleaving of
+// their members — so the nesting carries no information the flat list does
+// not. Without flattening, allSubsumes finds a group particle where it expects
+// an element declaration, gives up, and falls back to the 1.0 table, which
+// calls the derivation Forbidden. all206 is that shape.
+func TestNestedAllGroupIsFlattened(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:complexType name="b">
+  <xs:all>
+   <xs:group ref="abc"/>
+   <xs:element name="d" minOccurs="1" maxOccurs="1"/>
+  </xs:all>
+ </xs:complexType>
+ <xs:group name="abc">
+  <xs:all>
+   <xs:element name="a" minOccurs="0" maxOccurs="5"/>
+   <xs:element name="b" minOccurs="1" maxOccurs="5"/>
+   <xs:element name="c" minOccurs="2" maxOccurs="unbounded"/>
+  </xs:all>
+ </xs:group>
+ <xs:complexType name="r">
+  <xs:complexContent><xs:restriction base="b">
+   <xs:all>
+    <xs:element name="d" minOccurs="1" maxOccurs="1"/>
+    <xs:group ref="bc"/>
+   </xs:all>
+  </xs:restriction></xs:complexContent>
+ </xs:complexType>
+ <xs:group name="bc">
+  <xs:all>
+   <xs:element name="b" minOccurs="3" maxOccurs="4"/>
+   <xs:element name="c" minOccurs="2" maxOccurs="4"/>
+  </xs:all>
+ </xs:group>
+</xs:schema>`
+	if err := loadSrc(t, src, Version11); err != nil {
+		t.Errorf("1.1 should accept a narrowed nested all group: %v", err)
+	}
+}
+
+// Flattening must not lose the occurrence range of a *repeating* nested group:
+// its members' ranges would be multiplied, and folding them into the parent
+// would compare the wrong budgets. Such a group is left in place, which makes
+// allSubsumes fall back rather than guess.
+func TestRepeatingNestedAllGroupIsNotFlattened(t *testing.T) {
+	ps := []*Particle{
+		{MinOccurs: 1, MaxOccurs: 1, Term: &ModelGroup{
+			Compositor: CompositorAll,
+			Particles:  []*Particle{{MinOccurs: 1, MaxOccurs: 1, Term: &ElementDecl{}}},
+		}},
+		{MinOccurs: 0, MaxOccurs: 3, Term: &ModelGroup{
+			Compositor: CompositorAll,
+			Particles:  []*Particle{{MinOccurs: 1, MaxOccurs: 1, Term: &ElementDecl{}}},
+		}},
+	}
+	got := flattenAllGroups(ps)
+	if len(got) != 2 {
+		t.Fatalf("got %d particles, want 2", len(got))
+	}
+	if _, isElem := got[0].Term.(*ElementDecl); !isElem {
+		t.Error("the once-occurring group should have been flattened")
+	}
+	if _, isGroup := got[1].Term.(*ModelGroup); !isGroup {
+		t.Error("the repeating group should have been left in place")
+	}
+}
