@@ -14,14 +14,15 @@ exposed.
 
 If you parse untrusted XML with default options, the dangerous classes are
 closed: no XXE, no entity expansion, no network access, no file access, no
-stylesheet-driven writes. The two things you must still do yourself are **bound
-the input size** and **sanitise URLs if you render transform output as HTML**.
+stylesheet-driven writes. Input size, node count, nesting depth and recursion
+depth are all bounded by default. The one thing you must still do yourself is
+**sanitise URLs if you render transform output as HTML**.
 
 ---
 
 ## Fixed in this audit
 
-Six issues, each with a regression test that was verified to fail without its
+Nine issues, each with a regression test that was verified to fail without its
 fix.
 
 ### Only the five predefined entities expand
@@ -112,31 +113,65 @@ argument immediately. A caller's mistake rather than an attack — but in a
 server, a nil arriving from a failed parse upstream takes down every other
 request in the process, not just the one that caused it.
 
+### Input size and node count are bounded
+
+`xdm.ParseOptions` had `MaxDepth` but no byte or node cap, and a node costs a
+fixed ~200 bytes whatever it holds — so the heap a document needs follows its
+node count, not its length:
+
+| document | input | heap | amplification |
+|---|---|---|---|
+| `<a/>` repeated | 0.8 MB | 40.7 MB | **53.3x** |
+| invoice-like | 11.9 MB | 284.7 MB | 23.9x |
+| text-heavy | 39.5 MB | 74.2 MB | 1.9x |
+
+`MaxBytes` (default 64 MB) bounds the read; `MaxNodes` (default 10 million,
+about 2 GB of tree) bounds what the read can allocate. Neither alone is a memory
+bound, which is why there are two: across a 1.9x–53x spread, a byte cap says
+little about the heap. Attributes and namespaces count, because a document of
+few elements carrying many attributes allocates most of its memory in those.
+
+The byte limit wraps the reader rather than trusting the caller to check, and
+reads one byte past the cap so hitting it is distinguishable from a document of
+exactly the maximum size. A negative value disables either check.
+
+**Micro-optimisation was tried first and did not work.** Slab-allocating nodes
+cut allocation *count* 13% but raised total bytes, because slabs over-allocate;
+interning names gave nothing, because Go already shares the decoder's string
+storage. The `Node` struct is 39.7 MB of the 41.6 MB a 200,000-element document
+costs, so the limits are the defence. `Node` did lose 8 bytes — `order` narrowed
+to `int32` and moved beside `offset` so the two share a word — for about 3%.
+
+### Validation depth is bounded separately from parsing
+
+The XSD validator recurses once per element depth at roughly 3 kB of stack a
+level. Exceeding Go's stack limit is `fatal error: stack overflow`, which
+**`recover()` cannot catch** — it kills the process, not the request.
+
+`ValidateOptions.MaxDepth` (default 1000) makes that an ordinary validation
+error. It is deliberately a separate knob from the parser's: a caller who raises
+`xdm.ParseOptions.MaxDepth` to accept a legitimately deep document has not
+thereby agreed to arm a crash.
+
+The reported error path is elided in the middle as well — a failure at depth
+50,000 produced fifty thousand `/r` segments, which is unreadable and costs more
+memory than the error it decorates.
+
+### The transform bound no longer refuses legal documents
+
+XSLT recursion was capped at a fixed 300, below the parser's 1000 — and that
+bound counts the ordinary descent of an identity transform, not only a template
+calling itself. So a legal 500-deep document could be parsed and then not
+transformed.
+
+`TransformOptions.MaxDepth` now defaults to 1000, matching the parser. A
+stylesheet with no base case is still caught.
+
 ---
 
 ## Open findings
 
-### HIGH — no input size limit; up to 53x memory amplification
-
-`xdm.ParseOptions` has `MaxDepth` but no byte or node cap. Every node costs a
-flat ~212 bytes of heap regardless of content, so amplification is driven by
-node density:
-
-| document | input | heap | amplification |
-|---|---|---|---|
-| `<a/>` repeated | 52.4 MB | 2.77 GB | **52.8x** |
-| invoice-like | 52.4 MB | 1.24 GB | 23.6x |
-| text-heavy | 52.4 MB | 286 MB | 5.5x |
-
-A 100 MB body of empty elements is roughly 5.3 GB of **live retained** heap.
-
-**A caller must bound the input itself** — `http.MaxBytesReader` or an
-`io.LimitReader` around the request body. Nothing in the library does it for
-you. A byte cap alone is a loose bound given the 5.5x–53x spread; a node cap
-would convert directly into a memory bound, and adding `MaxBytes`/`MaxNodes` to
-`ParseOptions` is the right fix.
-
-### HIGH — identity constraints are quadratic on recursive elements
+### Open: identity constraints are quadratic on recursive elements
 
 Reachable from a hostile instance with default settings, but it needs a schema
 where a **recursive** element carries an identity constraint with a `.//`
@@ -149,35 +184,30 @@ selector. Independently reproduced:
 | 240 | 28.9 KB | 79 ms | 82 MB |
 | 480 | 58.7 KB | 304 ms | 332 MB |
 
-Doubling the depth quadruples both. **59 KB of input buys 332 MB of allocation
-churn**; at larger depths the reported figures reach 25 s and 9.6 GB for 371 KB.
+Doubling the depth quadruples both.
 
-The cause is structural, not a hot loop: profiling attributes the cost across
-`selectNodes` → `buildNodeTable` → `copyEntries`. A constraint on a recursive
-element runs at every level of the recursion, and each run selects the whole
-remaining subtree *and builds a key table for it*.
+**The default `MaxDepth` of 1000 bounds it.** At that ceiling the worst case
+measured is 111 KB of input costing 1.2 s and 1.2 GB of allocation churn — bad,
+but finite, and peak *live* heap stays low, so this starves a service of CPU
+rather than OOM-killing it. Raising `MaxDepth` removes that bound.
 
-A narrower `selectNodes` (walking descendants once for a single-step `.//a`
-rather than re-walking from every descendant) was tried and **reverted**: it cut
-allocations about 11% and left the curve quadratic, which is not worth a second
-code path. The real fix is to compute each subtree's key table once and reuse it
-up the recursion.
+Two fixes were tried and **both reverted**:
 
-Peak *live* heap stays low (~29 MB), so this starves a service of CPU rather
-than OOM-killing it.
+- A narrower `selectNodes`, walking descendants once for a single-step `.//a`
+  rather than re-walking from every descendant: cut allocations ~11% and left
+  the curve quadratic.
+- Memoising selector evaluation per (element, constraint): no effect at all,
+  because each level of the recursion is a *different* element, so the cache
+  never hits.
 
-### MEDIUM — a raised `MaxDepth` arms an uncatchable stack overflow
-
-The XSD validator recurses per element depth at roughly 2.9 KB of stack per
-level. At the default `MaxDepth` of 1000 this is irrelevant. A caller who raises
-it to accommodate a legitimately deep document silently arms a crash: depth
-300,000 (a 2.1 MB document) exhausts Go's 1 GB stack limit and produces
-`fatal error: stack overflow`, which **`recover()` cannot catch** — it kills the
-process, not the request.
-
-`MaxDepth` reads as a parser knob, but it is also the only thing standing
-between the validator and that crash. The fix is an explicit depth counter in
-the validator so exceeding it is a returnable error.
+The reason it resists a local fix is that **cross-level duplicate detection
+needs the whole-subtree walk**. A key at depth 1 and the same key at depth 2 must
+collide, and only the ancestor's full walk sees both — verified: that document
+is correctly rejected today. `mergeTables` cannot be reused for this, because it
+*drops* conflicting entries by design (the spec's rule for tables merged from
+below) where `buildNodeTable` must *report* them. A bottom-up rewrite would have
+to reproduce that difference exactly, along with per-target error reporting.
+That is a redesign of identity-constraint evaluation, not an optimisation.
 
 ### INFO — `javascript:` URLs pass through
 
@@ -191,12 +221,6 @@ attributes yourself.**
 `escapeText` escapes `&`, `<` and `>` but not `\r`. XML parsers normalise a
 literal CR to LF, so an identity transform silently changes the data.
 `escapeAttr` handles this correctly with `&#13;`.
-
-### LOW — XSLT refuses documents the parser accepts
-
-The XSLT recursion bound is 300; the parser's depth bound is 1000. An identity
-transform over a legal 999-deep document fails with `template recursion exceeded
-300 levels`. An availability gap between two limits, not an attack.
 
 ---
 
@@ -290,8 +314,10 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
 
 ## What a caller must do
 
-1. **Bound the input.** `http.MaxBytesReader` on the request body. Nothing in
-   this library caps document size, and the amplification is up to 53x.
+1. **Consider the defaults deliberately.** `MaxBytes` (64 MB), `MaxNodes` (10
+   million), `MaxDepth` (1000 in each of the three layers) are set for a
+   general-purpose service. If you know your documents are smaller, lower them:
+   they are the bound on what one request can cost you.
 2. **Leave `AllowDOCTYPE` off** unless a schema you control needs it. Turning it
    on does not reopen XXE, but it is still the wider setting.
 3. **Sanitise URLs** if you serve transform output as HTML. XSLT does not, and
@@ -299,9 +325,11 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
 4. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
    either resolves locations an attacker can influence.
 5. **Set a timeout** on the request. The identity-constraint finding above is
-   CPU exhaustion, and a `context` deadline is what bounds it today.
-6. **Keep `MaxDepth` at its default** unless you have measured the consequence;
-   raising it far past 1000 trades a clean error for an uncatchable crash.
+   CPU exhaustion; the depth limit caps it, but a `context` deadline is what
+   bounds the general case.
+6. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
+   the XSD validator trades a clean error for an uncatchable stack overflow,
+   and raising it also removes the ceiling on the identity-constraint cost.
 
 ## Re-running the audit
 
