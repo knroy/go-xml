@@ -146,6 +146,14 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	// fresh context, so an attribute inside it is not inside any enclosing
 	// oneOrMore or list. <define> and <grammar> likewise start fresh, since a
 	// definition is checked in the context of each <ref> that reaches it.
+	if local == "grammar" && n.Parent != nil {
+		// A nested <grammar> is a scope of its own, so a <ref> inside it
+		// names that grammar's definitions rather than these. Following one
+		// against the outer definitions finds a different pattern under the
+		// same name, and reports a restriction the schema does not break.
+		return r.walkNested(n)
+	}
+
 	var kids []string
 	switch local {
 	case "element", "grammar", "define", "div":
@@ -194,6 +202,21 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 	// and illegal from inside a <list>.
 	if local == "ref" {
 		return r.followRef(n, stack)
+	}
+	return nil
+}
+
+// walkNested checks a nested <grammar> against its own definitions.
+func (r *restrictor) walkNested(g *xdm.Node) error {
+	sub := &restrictor{defines: map[string]*xdm.Node{}}
+	sub.collect(g)
+	for _, kid := range g.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		if err := sub.walk(kid, nil); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -382,3 +382,63 @@ func TestIncludeOverrideMustExist(t *testing.T) {
 		t.Error("overriding an undefined name was accepted")
 	}
 }
+
+// ns= on an <include> reaches the definitions it brings in, the same way it
+// reaches an <externalRef>'s schema.
+//
+// The definitions are collected while that ns is in force and compiled later,
+// when it is not, so the namespace has to be recorded per definition rather
+// than held in a field that has moved on by then.
+func TestIncludeInheritsNs(t *testing.T) {
+	const eg = "http://www.example.com"
+	r := &mapResolver{docs: map[string]string{
+		"x": `<grammar` + rngNS + `>
+			<start><element name="foo"><empty/></element></start></grammar>`,
+	}}
+	s, err := compileWith(t, `<grammar`+rngNS+`>
+		<include href="x" ns="`+eg+`"/></grammar>`, Options{Resolver: r})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, c := range []struct {
+		doc  string
+		want bool
+	}{
+		{`<foo xmlns="` + eg + `"/>`, true},
+		{`<foo/>`, false},
+	} {
+		doc, err := xdm.ParseString(c.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Validate(doc.Root) == nil; got != c.want {
+			t.Errorf("%s: valid=%v, want %v", c.doc, got, c.want)
+		}
+	}
+}
+
+// A nested <grammar> is a scope of its own, so a <ref> inside it names that
+// grammar's definitions. Checking one against the outer definitions finds a
+// different pattern under the same name.
+func TestNestedGrammarIsItsOwnScope(t *testing.T) {
+	mustAccept(t, "same name defined in both grammars",
+		`<grammar`+rngNS+`>
+			<start><ref name="foo"/></start>
+			<define name="foo">
+				<grammar>
+					<start><ref name="foo"/></start>
+					<define name="foo">
+						<element name="foo"><empty/></element></define>
+				</grammar>
+			</define></grammar>`)
+}
+
+// A <value> with no type= is the built-in token, whatever datatypeLibrary is
+// in force: the library names where a *named* type comes from, and a plain
+// <value> asks it for nothing.
+func TestValueWithoutTypeIgnoresTheLibrary(t *testing.T) {
+	mustAccept(t, "value under an unknown library",
+		`<element`+rngNS+` name="foo">
+			<value datatypeLibrary="http://example.com/nonexistent">bar</value>
+		</element>`)
+}

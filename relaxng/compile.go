@@ -112,6 +112,10 @@ type compiler struct {
 	// inheritedNs is the ns= in force where an <externalRef> or <include>
 	// brought this schema in, used when the schema itself sets none.
 	inheritedNs string
+	// defineNs records the inherited ns for definitions that arrived through
+	// an <include>, since they are collected while that ns is in force and
+	// compiled later, when it is not.
+	defineNs map[string]string
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -120,6 +124,10 @@ type compiler struct {
 	// self-referential.
 	depth int
 }
+
+// startKey is the key under which a <start>'s inherited namespace is kept. It
+// cannot collide with a definition name, since a name is an NCName.
+const startKey = "<start>"
 
 // maxRefDepth bounds how deep a chain of <ref> may go while compiling.
 //
@@ -152,6 +160,12 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 					break
 				}
 				start = kid
+				if c.inheritedNs != "" {
+					if c.defineNs == nil {
+						c.defineNs = map[string]string{}
+					}
+					c.defineNs[startKey] = c.inheritedNs
+				}
 			case "define":
 				name := normalizeToken(kid.AttrValue("name"))
 				if name == "" {
@@ -164,6 +178,14 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 					c.defines[name] = kid
 				} else {
 					c.combined[name] = append(c.combined[name], kid)
+				}
+				if c.inheritedNs != "" {
+					if c.defineNs == nil {
+						c.defineNs = map[string]string{}
+					}
+					if _, seen := c.defineNs[name]; !seen {
+						c.defineNs[name] = c.inheritedNs
+					}
 				}
 			case "div":
 				// <div> groups definitions for documentation and has no
@@ -200,6 +222,16 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 	if err != nil {
 		return nil, err
 	}
+	if ns, ok := c.defineNs[startKey]; ok && c.inheritedNs == "" {
+		was := c.inheritedNs
+		c.inheritedNs = ns
+		p0, err := c.compileChildren(start)
+		c.inheritedNs = was
+		if err != nil {
+			return nil, err
+		}
+		return c.joinStarts(p0, startCombine)
+	}
 	p, err := c.compileChildren(start)
 	if err != nil {
 		return nil, err
@@ -215,18 +247,39 @@ func (c *compiler) compileGrammar(g *xdm.Node) (Pattern, error) {
 		}
 		p = join(p, q)
 	}
+	if err := c.checkAll(g); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// joinStarts combines the further <start> elements onto the first.
+func (c *compiler) joinStarts(p Pattern, how string) (Pattern, error) {
+	join := choice
+	if how == "interleave" {
+		join = interleave
+	}
+	for _, extra := range c.starts {
+		q, err := c.compileChildren(extra)
+		if err != nil {
+			return nil, err
+		}
+		p = join(p, q)
+	}
+	return p, nil
+}
+
+// checkAll runs the whole-grammar checks.
+func (c *compiler) checkAll(g *xdm.Node) error {
 	// Every definition is checked, not only the reachable ones: a <define>
 	// naming a type that does not exist is broken whether or not anything
 	// refers to it. Checking is not compiling, though — a definition may
 	// legitimately refer to itself, and expanding one that nothing reaches
 	// would not terminate.
 	if err := c.checkUnreferenced(g); err != nil {
-		return nil, err
+		return err
 	}
-	if err := c.checkRefsResolve(g); err != nil {
-		return nil, err
-	}
-	return p, nil
+	return c.checkRefsResolve(g)
 }
 
 // checkUnreferenced validates the parts of each definition that can be checked
@@ -244,12 +297,13 @@ func (c *compiler) checkUnreferenced(n *xdm.Node) error {
 		}
 		switch kid.Name.Local {
 		case "data", "value":
-			dflt := ""
-			if kid.Name.Local == "value" {
-				dflt = "token"
-			}
-			lib, name := datatypeOf(kid, dflt)
+			lib, name := datatypeOf(kid, "")
 			if name == "" {
+				if kid.Name.Local == "value" {
+					// A <value> with no type is the built-in token, and the
+					// library in force does not come into it.
+					continue
+				}
 				return fmt.Errorf("relaxng: <data> has no type")
 			}
 			dt, err := lookupDatatype(lib, name)
@@ -605,6 +659,11 @@ func (c *compiler) compileRefNamed(name string) (Pattern, error) {
 	if c.expandingAt == nil {
 		c.expandingAt = map[string]int{}
 	}
+	if ns, ok := c.defineNs[name]; ok && c.inheritedNs == "" {
+		was := c.inheritedNs
+		c.inheritedNs = ns
+		defer func() { c.inheritedNs = was }()
+	}
 	c.expanding[name] = true
 	c.expandingAt[name] = c.elementDepth
 	c.depth++
@@ -784,11 +843,16 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	// the included document's, so that an href inside it resolves there.
 	was := c.opts.BaseURI
 	wasDepth := c.includeDepth
+	wasNs := c.inheritedNs
 	c.opts.BaseURI = href
 	c.includeDepth++
+	// The ns= written on the <include> reaches the definitions it brings in,
+	// the same way it reaches an <externalRef>'s schema.
+	c.inheritedNs = inheritedNs(inc, c.inheritedNs)
 	err = collect(&filtered)
 	c.opts.BaseURI = was
 	c.includeDepth = wasDepth
+	c.inheritedNs = wasNs
 	if err != nil {
 		return err
 	}
@@ -871,7 +935,14 @@ func (c *compiler) lazyRef(name string) Pattern {
 }
 
 func (c *compiler) compileValue(n *xdm.Node) (Pattern, error) {
-	lib, name := datatypeOf(n, "token")
+	lib, name := datatypeOf(n, "")
+	if name == "" {
+		// §4.16: a <value> with no type= is the built-in token, whatever
+		// datatypeLibrary happens to be in force. The library only names
+		// where a *named* type comes from, so a schema that sets one and then
+		// writes a plain <value> is not asking for anything from it.
+		lib, name = builtinLibrary, "token"
+	}
 	dt, err := lookupDatatype(lib, name)
 	if err != nil {
 		return nil, fmt.Errorf("relaxng: <value>: %w", err)
