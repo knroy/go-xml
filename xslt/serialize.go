@@ -86,8 +86,10 @@ type serializer struct {
 	// charset meta is suppressed.
 	inHead bool
 	// rawText marks that serialisation is inside an HTML element whose
-	// content is CDATA rather than parsed character data.
-	rawText bool
+	// content is CDATA rather than parsed character data. rawTextName is
+	// which one, so that the error naming it can say so.
+	rawText     bool
+	rawTextName string
 	// charMap substitutes individual characters for arbitrary strings,
 	// bypassing escaping. Declared by xsl:character-map.
 	charMap map[rune]string
@@ -135,6 +137,23 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			// unescaped: these elements hold CDATA in HTML, so escaping "&"
 			// and ">" would corrupt a CSS child selector or a JavaScript
 			// comparison rather than protect anything.
+			//
+			// The rule the spec pairs with that one was missing. Since the
+			// text is written raw, a value containing "</" closes the element
+			// early and everything after it is markup — the standard XSS
+			// primitive, reachable from any document value that reaches a
+			// <script> body. Escaping is not an option here, so the spec
+			// makes it a serialization error, as it does for "--" in a
+			// comment and "?>" in a processing instruction.
+			if strings.Contains(n.Value, "</") {
+				if s.err == nil {
+					s.err = fmt.Errorf(
+						"SERE0007: %s content contains '</', which would end "+
+							"the element; it cannot be escaped in the html "+
+							"output method", s.rawTextName)
+				}
+				return
+			}
 			s.writeString(n.Value)
 			return
 		}
@@ -231,9 +250,9 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// The HTML method adds the content-type meta so the encoding survives
 	// being served without a charset header.
 	if s.html && isRawTextElement(n.Name.Local) {
-		saved := s.rawText
-		s.rawText = true
-		defer func() { s.rawText = saved }()
+		saved, savedName := s.rawText, s.rawTextName
+		s.rawText, s.rawTextName = true, n.Name.Local
+		defer func() { s.rawText, s.rawTextName = saved, savedName }()
 	}
 	if s.html && strings.EqualFold(n.Name.Local, "head") {
 		s.inHead = true

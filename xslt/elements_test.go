@@ -826,3 +826,113 @@ func TestUnparsedTextIsRefusedInStylesheet(t *testing.T) {
 		t.Errorf("unparsed-text-available said %q, want false", got)
 	}
 }
+
+// TestComputedNamesAreValidated covers the names xsl:element, xsl:attribute
+// and xsl:processing-instruction compute at run time from document data.
+//
+// Only "the local part is non-empty" was checked, and a computed name is
+// written to the output verbatim. So a name holding markup produced markup:
+// xsl:element name="a&gt;&lt;evil/&gt;&lt;x" serialised as
+// <a><evil/><x>t</a><evil/><x>, and the processing-instruction target was not
+// checked at all — a target of "a?><evil/><?b" closed the instruction, opened
+// an element, and the result reparsed cleanly as a silently different tree.
+func TestComputedNamesAreValidated(t *testing.T) {
+	elem := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:template match="/"><r><xsl:element name="{/d/n}">t</xsl:element></r>` +
+		`</xsl:template></xsl:stylesheet>`
+	attr := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:template match="/"><r><xsl:attribute name="{/d/n}">v</xsl:attribute></r>` +
+		`</xsl:template></xsl:stylesheet>`
+	pi := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:template match="/"><r>` +
+		`<xsl:processing-instruction name="{/d/n}">v</xsl:processing-instruction></r>` +
+		`</xsl:template></xsl:stylesheet>`
+
+	// A name that is not an NCName is refused, whatever it would have
+	// produced. "a b" and "1abc" are not attacks but are not names either.
+	bad := []string{
+		`a&gt;&lt;evil/&gt;&lt;x`,
+		`a b`,
+		`1abc`,
+		`a&lt;b`,
+	}
+	for _, sheet := range []string{elem, attr} {
+		for _, n := range bad {
+			if _, err := runErr(t, sheet, `<d><n>`+n+`</n></d>`); err == nil {
+				t.Errorf("computed name %q was accepted", n)
+			}
+		}
+	}
+	// The PI target has the same rule plus the reserved name.
+	for _, n := range append(bad, `xml`, `XML`, `a?&gt;&lt;evil/&gt;&lt;?b`) {
+		if _, err := runErr(t, pi, `<d><n>`+n+`</n></d>`); err == nil {
+			t.Errorf("processing instruction target %q was accepted", n)
+		}
+	}
+
+	// A valid name still works in each of the three. The PI case is checked
+	// through runErr rather than run, because the shared helper trims
+	// everything up to the first "?>" — which for a PI is its own terminator.
+	for _, c := range []struct{ sheet, want string }{
+		{elem, `<r><ok>t</ok></r>`},
+		{attr, `<r ok="v"/>`},
+	} {
+		if got := run(t, c.sheet, `<d><n>ok</n></d>`); got != c.want {
+			t.Errorf("got %q, want %q", got, c.want)
+		}
+	}
+	if _, err := runErr(t, pi, `<d><n>ok</n></d>`); err != nil {
+		t.Errorf("a valid processing instruction target should work: %v", err)
+	}
+}
+
+// TestRawTextCannotEndItsElement covers the HTML output method's <script> and
+// <style>, whose content is written unescaped because they hold CDATA in HTML.
+//
+// Escaping there would corrupt a JavaScript comparison, so the spec instead
+// makes it a serialization error when the content holds "</" — the sequence
+// that would end the element early and turn the rest into markup. That
+// companion rule was missing, so a document value reaching a <script> body was
+// the standard XSS primitive.
+func TestRawTextCannotEndItsElement(t *testing.T) {
+	sheet := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output method="html"/>` +
+		`<xsl:template match="/"><html><body>` +
+		`<script>var u = "<xsl:value-of select="/d/n"/>";</script>` +
+		`</body></html></xsl:template></xsl:stylesheet>`
+
+	stree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(stree.Root, CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialize := func(doc string) error {
+		t.Helper()
+		d, err := xdm.ParseString(doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Transform(context.Background(), d.Root, TransformOptions{})
+		if err != nil {
+			return err
+		}
+		var sb strings.Builder
+		return res.Serialize(&sb)
+	}
+
+	if err := serialize(`<d><n>&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;</n></d>`); err == nil {
+		t.Error(`script content containing "</" should be a serialization error`)
+	}
+
+	// The point of writing raw text is that JavaScript keeps working, so
+	// "<", ">" and "&&" must still pass through untouched.
+	if err := serialize(`<d><n>a &lt; b &amp;&amp; c &gt; d</n></d>`); err != nil {
+		t.Errorf("ordinary script content should serialise: %v", err)
+	}
+}

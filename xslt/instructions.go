@@ -264,7 +264,13 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 // context otherwise.
 func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
 	prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
-	if local == "" {
+	// Both halves have to be names, not merely non-empty. A computed name is
+	// written to the output as-is, so an unchecked one is a hole rather than
+	// a laxity: a name holding "><script>" serialises as markup, producing
+	// output that is malformed or — under the HTML method — carries an
+	// element the stylesheet never wrote. XTDE0820 is the error the spec
+	// gives for a name that is not a QName.
+	if !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return xdm.QName{}, fmt.Errorf("XTDE0820: computed name %q is not a valid QName", lex)
 	}
 	if i.namespace != nil {
@@ -350,6 +356,17 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// The content was checked for "?>" but the target was not checked at all,
+	// and it is written to the output verbatim. A target of "a?><evil/><?b"
+	// closed the instruction and opened an element, and the result *reparsed
+	// cleanly* — a silently different tree, which is worse than malformed
+	// output because nothing downstream notices. "xml" in any case is
+	// reserved by the XML specification.
+	target = strings.TrimSpace(target)
+	if !xdm.IsNCName(target) || strings.EqualFold(target, "xml") {
+		return fmt.Errorf(
+			"XTDE0890: %q is not a valid processing instruction target", target)
+	}
 	sub := newOutputBuilder()
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
@@ -360,7 +377,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	out.appendNode(&xdm.Node{
 		Kind:  xdm.KindPI,
-		Name:  xdm.QName{Local: strings.TrimSpace(target)},
+		Name:  xdm.QName{Local: target},
 		Value: text,
 	})
 	return nil

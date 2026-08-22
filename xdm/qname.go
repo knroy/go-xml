@@ -49,6 +49,61 @@ func SplitQName(s string) (prefix, local string) {
 	return "", s
 }
 
+// IsNCName reports whether s is an XML non-colonised name: a name with no
+// prefix, which is what an element, attribute or processing-instruction name
+// must be once the prefix has been split off.
+//
+// It lives here rather than in a consumer because more than one caller needs
+// it, and because the cost of *not* checking is that a computed name reaches
+// the serialiser unvalidated. A name is written to output as-is, so a name
+// holding "><script>" produces markup rather than a name — output that is
+// either malformed or, in HTML, an injected element.
+func IsNCName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if !isNameStartRune(r) {
+				return false
+			}
+			continue
+		}
+		if !isNameRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// isNameStartRune and isNameRune are the XML NameStartChar and NameChar
+// productions. The ranges above Latin-1 are contiguous enough that excluding
+// the two punctuation characters covers them.
+func isNameStartRune(r rune) bool {
+	switch {
+	case r == '_':
+		return true
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		return true
+	case r >= 0xC0 && r != 0xD7 && r != 0xF7:
+		return true
+	}
+	return false
+}
+
+func isNameRune(r rune) bool {
+	if isNameStartRune(r) {
+		return true
+	}
+	switch {
+	case r >= '0' && r <= '9':
+		return true
+	case r == '-', r == '.', r == 0xB7:
+		return true
+	}
+	return false
+}
+
 // Well-known namespace URIs used throughout the engine.
 const (
 	NSXSL    = "http://www.w3.org/1999/XSL/Transform"
