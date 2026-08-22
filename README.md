@@ -68,7 +68,7 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.92% of the W3C QT3 suite (15,169 of 15,181 in scope) |
+| **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
@@ -697,7 +697,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**12 of 15,181 in-scope cases fail (0.08%).** One cluster and a long tail:
+**1 of 15,181 in-scope cases fails (0.01%).** One cluster and a long tail:
 
 | cases | set | what it is |
 |---:|---|---|
@@ -1109,7 +1109,7 @@ unaffected.
 $ git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
 $ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -v -timeout 1800s
 QT3: 31821 cases, 15181 in scope, 16640 skipped
-in-scope: 15169 passed, 12 failed (99.92%)
+in-scope: 15180 passed, 1 failed (99.99%)
 ```
 
 Two environment variables make a failure workable:

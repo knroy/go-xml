@@ -26,6 +26,15 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// A pattern with a backreference takes a separate path: RE2 has none,
+		// but the fixed-width subset can be decided exactly by comparison.
+		// Anything outside that subset still raises FORX0002, so no answer is
+		// ever guessed. See regex_backref.go.
+		if br, err := compileArgBackref(args, 1, 2); err != nil {
+			return nil, err
+		} else if br != nil {
+			return boolSeq(br.MatchString(matchInput(s, flags))), nil
+		}
 		re, err := compileArgRegexp(args, 1, 2)
 		if err != nil {
 			return nil, err

@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.92% — 15,169 of 15,181 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -177,19 +177,39 @@ attempt was zero: one false reject fixed, one false accept introduced.
 Deciding both needs the base read as *(empty) | (every budget met)* — two
 alternatives checked separately.
 
-### Regular expression backreferences
+### Regular expression backreferences — the variable-width case
 
-12 cases in QT3 `fn-matches` (`fn-matches-29`, `-30`, `-36`, `-51`, `-53`,
-`K2-MatchesFunc-17`, `cbcl-matches-003` and others).
+One case remains: `fn-matches-51`,
+`fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`.
 
-All 12 fail with `FORX0002: backreference \1 is not supported`. Go's `regexp`
-is RE2, which guarantees linear time by refusing constructs that need
-backtracking — backreferences among them. Supporting them means a second regex
-engine with its own matcher, and accepting the exponential blowup RE2 exists to
-prevent. The XSD pattern facet does not permit backreferences at all, so this
-affects `fn:matches` and `fn:replace` only, never schema validation.
+**The rest are implemented.** RE2 has no backreference, but it does return
+capture positions, and a backreference is only *hard* when the group it names
+can match more than one width. RE2 returns a single submatch assignment — the
+greedy one — and cannot enumerate alternatives, so for `(a*)\1` against `"aa"`
+it reports the group as `"aa"`, leaving nothing for the backreference, and a
+comparison against that answers **false** where the correct answer is true (the
+split is `"a"` + `"a"`). The information needed was discarded before the
+comparison ran.
 
----
+When every group a backreference names has a *fixed* width, the greedy
+assignment is the only assignment. There is nothing to enumerate, so
+capture-and-compare is not an approximation — it is exact, and it runs in RE2's
+linear time with one comparison pass per candidate position. Measured on
+`([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs.
+
+So the split is by what can be *decided*, not by what a caller asked for. A
+fixed-width backreference is resolved; a variable-width one still raises
+`FORX0002`. That is why this needs no option to enable — an engine that answers
+correctly or says it cannot is safe to have on always, where one that guesses
+is not safe at any setting. The linear-time guarantee is intact, and no
+backtracking engine was added.
+
+`fn-matches-51` names `([)(]*)`, a variable-width group, *and* puts the
+backreference mid-pattern, which would need the comparison to feed back into
+the automaton. Both are refused.
+
+The XML Schema pattern facet is unaffected: Appendix F's `atom` production has
+no form for a backreference, so `xsd` still rejects `\1` under both versions.
 
 ## Open
 

@@ -9,7 +9,7 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
 | XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
-| XPath 2.0 | 99.92% — 15,169 of 15,181 in scope (26 failing) |
+| XPath 2.0 | 99.99% — 15,180 of 15,181 in scope (26 failing) |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 647, clean under `-race` |
 
@@ -130,69 +130,34 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: 12 in-scope failures
+### 2.3 XPath: 1 in-scope failure
 
 Mostly not fixable, and worth stating why so nobody re-litigates it:
 
-**Every remaining failure is a regex backreference.** All twelve are in
-`fn-matches`, and they are the one architectural ceiling here — see below for
-why the obvious fix does not work. Nothing else in the suite disagrees.
+**One case remains**, `fn-matches-51`, and it is the one shape this
+deliberately refuses.
 
-**The denominator moved this round, so the percentage is not comparable to
-earlier figures.** Source paths in a test-set environment are relative to the
-test-set file, not the suite root; resolving them against the root silently
-skipped every case whose environment named `../docs/…`. Fixing it brought 461
-cases into scope, 14,720 → 15,181.
+Backreferences are now resolved where doing so is exact. RE2 has none, but it
+returns capture positions, and a backreference is only hard when the group it
+names can match more than one width: RE2 gives a single submatch assignment —
+the greedy one — so for `(a*)\1` against `"aa"` it reports the group as `"aa"`,
+leaving nothing for the backreference, and a comparison answers **false** where
+the truth is *true* (`"a"` + `"a"`).
 
-The `fn:collection` 7 were the one capability gap and are now fully closed:
-`xpath.CollectionResolver`, harness support, and resolving a relative URI
-against the static base URI.
+When every named group has a *fixed* width there is nothing to enumerate, the
+greedy assignment is the only assignment, and capture-and-compare is exact. It
+runs in RE2's linear time — measured, 64,000 characters in 567 µs — so **no
+backtracking engine was added and the linear-time guarantee is intact**.
 
-**Every remaining failure is structural.** The ordinary bugs are gone, and five
-of the last six turned out to be the QT3 harness rather than the engine —
-assertions requiring a literal boolean where the spec asks for an effective
-boolean value, a serialiser dropping in-scope namespaces, and an `assert-xml`
-whose expected value lives in a file the parser ignored. A conformance number
-is only as honest as the harness producing it, which is why those are recorded
-in [known-gaps.md](known-gaps.md) rather than quietly absorbed.
+The split is therefore by what can be decided, not by what a caller asked for,
+which is why there is no option to turn this on: an engine that answers
+correctly or says it cannot is safe on always; one that guesses is not safe at
+any setting. A variable-width group, or a backreference that is not last, still
+raises `FORX0002`. `fn-matches-51` is both.
 
-**The backreference 12, in full, because the obvious fix does not work.** Two
-separate points, and the first is the one usually missed:
-
-*They are an XPath-only question.* A backreference is not part of the XML
-Schema regular expression language — Appendix F's `atom` production has no form
-for one. Every schema pattern facet goes through
-`xpath.TranslateSchemaRegexpVersion` (see `xsd/pattern.go`), which rejects `\1`
-under both 1.0 and 1.1. That rejection is conformance, not a gap, so none of
-this touches the XSD validator. XPath 2.0 does define backreferences, and that
-is where the 12 sit.
-
-*RE2 plus capture groups plus an explicit comparison does not rescue it.* This
-is the natural design and it is worth writing down why it falls short: RE2
-returns **one** match. When the captured text fails the backreference
-comparison, a correct engine must retry with a different assignment of the same
-groups, and RE2 cannot enumerate alternative submatch assignments. `(a*)\1`
-against a run of `a`s hands back the greedy split, fails, and needs every other
-split — which is the backtracking the design was trying to avoid, with
-`(a+)+\1` and friends behind it.
-
-So the real cost is a second, backtracking engine with a step budget, a
-dispatch rule choosing between the two, and a new failure mode when the budget
-trips — roughly 800–1,500 lines plus a fuzz target, and it reintroduces exactly
-the catastrophic-backtracking DoS class that [security.md](security.md)
-otherwise keeps out of this tree. Twelve tests do not pay for that.
-
-### 2.4 Remaining load failures
-
-Most are correct behaviour rather than bugs — nine XML 1.1 documents (item
-1.1), two needing a DOCTYPE that is refused by default, several naming
-deliberately absent files. The chameleon-include and huge-occurrence cases that
-used to sit here have been fixed.
-
-The genuinely open one: `common/xsts.xsd`, the suite's own harness file, needs
-a remote XLink schema. Not a bug — network resolution is off by default — but
-it could be resolved by shipping a `MapResolver` for the well-known W3C
-namespaces.
+An earlier version of this file argued the whole thing was not worth doing,
+having reasoned about capture-and-compare in general and missed that the
+fixed-width case is not a guess. See [known-gaps.md](known-gaps.md).
 
 ---
 
@@ -240,9 +205,11 @@ refused include.
 
 Recorded so they are not proposed again as oversights:
 
-* **Regex backreferences** — an XPath-only construct (XML Schema has no form
-  for one), and leaving RE2 costs the linear-time guarantee. Capture groups
-  plus an explicit comparison do not avoid this; see 2.3.
+* **Backreferences to a variable-width group** — resolving one means
+  enumerating submatch assignments RE2 does not offer, so it needs a
+  backtracking engine and gives up the linear-time guarantee. The fixed-width
+  case is *not* in this list: it has one possible assignment, so comparison is
+  exact, and it is implemented. See 2.3.
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.
