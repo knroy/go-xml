@@ -41,6 +41,10 @@ type Report struct {
 	Set, Case string
 	Outcome   Outcome
 	Reason    string
+	// Expr is the expression the case evaluated. A failure line naming only
+	// the case means opening the catalog to find out what it ran; carrying it
+	// here makes the report reproducible by hand.
+	Expr string
 }
 
 // resolver binds the namespaces an environment declares.
@@ -270,7 +274,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 // the run: a crash is the most severe kind of conformance failure, and losing
 // the other 28,000 results to it would hide everything behind the first one.
 func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
-	rep = Report{Set: ts.Name, Case: tc.Name}
+	rep = Report{Set: ts.Name, Case: tc.Name, Expr: strings.TrimSpace(tc.Test)}
 	defer func() {
 		if p := recover(); p != nil {
 			rep.Outcome = Fail

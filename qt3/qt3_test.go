@@ -28,7 +28,17 @@ func TestQT3(t *testing.T) {
 	skipReasons := map[string]int{}
 	var failures []Report
 
+	// GOXSLT_QT3_SET narrows the run to test sets whose name contains the
+	// value, which is how a single failure is worked on without waiting for
+	// the other thirty thousand cases. The reported percentage is then over
+	// that subset, so it is labelled as filtered rather than quoted as the
+	// suite result.
+	only := os.Getenv("GOXSLT_QT3_SET")
+
 	for _, ref := range cat.TestSets {
+		if only != "" && !strings.Contains(ref.Name, only) {
+			continue
+		}
 		ts, err := LoadTestSet(root, ref.File)
 		if err != nil {
 			// A test-set that will not parse is reported, not ignored: it
@@ -54,6 +64,9 @@ func TestQT3(t *testing.T) {
 
 	total := pass + fail + skip
 	inScope := pass + fail
+	if only != "" {
+		t.Logf("QT3 (filtered to test sets matching %q)", only)
+	}
 	t.Logf("QT3: %d cases, %d in scope, %d skipped", total, inScope, skip)
 	if inScope > 0 {
 		t.Logf("in-scope: %d passed, %d failed (%.2f%%)",
@@ -72,6 +85,12 @@ func TestQT3(t *testing.T) {
 	if os.Getenv("GOXSLT_QT3_VERBOSE") != "" {
 		for _, f := range failures {
 			t.Logf("FAIL %s/%s: %s", f.Set, f.Case, f.Reason)
+			// The expression makes the line reproducible without opening the
+			// catalog. Long ones are elided rather than dropped: a truncated
+			// expression still identifies the construct.
+			if e := oneLine(f.Expr, 160); e != "" {
+				t.Logf("     expr: %s", e)
+			}
 		}
 	}
 
@@ -116,3 +135,18 @@ func topN(m map[string]int, n int) []kv {
 }
 
 var _ = fmt.Sprint
+
+// oneLine flattens an expression onto a single line and elides the middle when
+// it is longer than max.
+//
+// The middle rather than the tail: an XPath expression's distinguishing part is
+// as often at the end as at the start, and a trailing cut hides which of a set
+// of similar cases this is.
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= max {
+		return s
+	}
+	half := (max - 3) / 2
+	return s[:half] + "..." + s[len(s)-half:]
+}

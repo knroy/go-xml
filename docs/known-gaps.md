@@ -423,14 +423,33 @@ support — are entries there as features rather than bugs.
 
 ## How to re-measure
 
-The XSD driver and the corpora runners are not in the repository; they are
-rebuilt from the suite each time. QT3 runs from the test suite directly:
+Neither suite is vendored — both belong to the W3C, and `testdata/` is
+gitignored. Clone them where the commands below expect:
 
 ```
-GOXSLT_QT3=/path/to/qt3tests go test ./qt3/ -run TestQT3 -v
+git clone --depth 1 https://github.com/w3c/qt3tests.git   testdata/qt3tests
+git clone --depth 1 https://github.com/w3c/xsdtests.git   testdata/xsdtests
 ```
 
-Set `GOXSLT_QT3_VERBOSE=1` to list every failure rather than the summary.
+The figures in this file were measured against `qt3tests` at `201a6e46`
+(2026-05-14) and `xsdtests` at `7bc3365c` (2026-04-01). Both are updated from
+time to time, so a later checkout can move a denominator.
+
+QT3 runs from the test suite directly:
+
+```
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -run TestQT3 -v
+```
+
+Set `GOXSLT_QT3_VERBOSE=1` to list every failure with the expression it ran,
+and `GOXSLT_QT3_SET=<substring>` to run only the matching test sets — the
+percentage is then labelled as filtered rather than quoted as the suite
+result.
+
+The XSD driver and the corpora runners are **not** in the repository; they are
+rebuilt from the suite each time. See the README's *W3C xsdtests suite* section
+for the three metadata rules that decide whether the resulting numbers mean
+anything — each one silently inflated an earlier measurement here.
 
 Before accepting any change that adds a schema-validity rule, load the
 production corpora — 65 UBL 2.1 entry points and 427 UN/CEFACT CII schemas.

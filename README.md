@@ -1,10 +1,47 @@
 # go-xml
 
-XPath 2.0 and XSLT 2.0 in pure Go. No cgo, no JVM, no libxml2.
+**XML Schema 1.0/1.1 validation, XPath 2.0 and XSLT 2.0 in pure Go.** No cgo,
+no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 
 ```
 go get github.com/knroy/go-xml
 ```
+
+Validate a document against a schema:
+
+```go
+schema, err := xsd.LoadFile("schemas/invoice.xsd", xsd.Options{})
+tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+err = schema.Validate(tree.Root, xsd.ValidateOptions{})
+```
+
+Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
+`/invoice/total` — not just "invalid".
+
+### The four packages
+
+| | |
+|---|---|
+| [`xdm`](xdm/) | the parser and the XDM tree everything else reads |
+| [`xsd`](xsd/) | XML Schema 1.0 and 1.1: assembly, validation, PSVI annotation |
+| [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, `fn:` library |
+| [`xslt`](xslt/) | XSLT 2.0: templates, modes, keys, grouping, serialisation |
+
+### Safe by default
+
+Aimed at input arriving over the wire, so the defaults are the settings you
+would choose for untrusted documents. `Options{}` is already hardened:
+
+* **DOCTYPE is refused**, which closes XXE and entity expansion at the door
+* **No network access** — a `schemaLocation` cannot make this process fetch
+* **`xsi:schemaLocation` is ignored**, so a document cannot pick its own schema
+* **Size, node-count and depth limits** are on, sized for a general service
+
+See [docs/security.md](docs/security.md) for the threat model and
+[docs/server.md](docs/server.md) for a validating HTTP endpoint measured
+against XXE, billion-laughs and resource exhaustion.
+
+### Building
 
 ```
 go build ./...
@@ -1051,20 +1088,45 @@ both engines.
 ### The W3C QT3 suite
 
 The official W3C test suite for XPath — QT3, also called FOTS — runs against
-this engine. It is not vendored (it is ~18MB and belongs to the W3C): clone
-[w3c/qt3tests](https://github.com/w3c/qt3tests), point `GOXSLT_QT3` at it, and
-the [`qt3`](qt3/) package runs it. Without the variable those tests skip, so
-the ordinary `go test ./...` is unaffected.
+this engine. It is not vendored: it belongs to the W3C, and `testdata/` is
+gitignored for that reason. Clone it and point `GOXSLT_QT3` at the checkout;
+without the variable those tests skip, so the ordinary `go test ./...` is
+unaffected.
 
 ```
-$ GOXSLT_QT3=/path/to/qt3tests go test ./qt3/ -v -timeout 1800s
-QT3: 31821 cases, 14682 in scope, 17139 skipped
-in-scope: 14655 passed, 27 failed (99.82%)
+$ git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
+$ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -v -timeout 1800s
+QT3: 31821 cases, 15181 in scope, 16640 skipped
+in-scope: 15155 passed, 26 failed (99.83%)
 ```
+
+Two environment variables make a failure workable:
+
+```
+GOXSLT_QT3_VERBOSE=1              # list every failure, with the expression it ran
+GOXSLT_QT3_SET=fn-collection      # run only test sets whose name contains this
+```
+
+`GOXSLT_QT3_SET` narrows a 31,821-case run to the handful you are working on;
+the percentage is then labelled as filtered rather than quoted as the suite
+result. Verbose output carries the expression, so a failure is reproducible
+without opening the catalog:
+
+```
+FAIL fn-collection/collection-006: none of {all-of,error} held
+     expr: collection("collection1")
+```
+
+The figures above were measured against
+[w3c/qt3tests](https://github.com/w3c/qt3tests) at commit `201a6e46`
+(2026-05-14), ~78 MB checked out. The suite is updated from time to time, so a
+later checkout can move the denominator — see
+[docs/known-gaps.md](docs/known-gaps.md) for how a path-resolution fix moved it
+by 461 in one step.
 
 **Skips are reported separately and are never counted as passes.** The suite is
 FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1; this is an XPath 2.0
-processor, so 17,139 cases are out of scope — 13,500 of them requiring XQuery
+processor, so 16,640 cases are out of scope — 15,545 of them requiring XQuery
 or a later XPath. Failing a test for a language the engine does not claim to
 implement would say nothing about conformance, and counting those as passes is
 how a conformance number becomes meaningless.
@@ -1156,10 +1218,70 @@ Saxon differential corpora above. If you are putting this in front of a rule
 set that matters, diff its output against Saxon on your own corpus first —
 which is exactly how the earlier bugs were found.
 
+### The W3C xsdtests suite
+
+The official W3C test suite for XML Schema. Like QT3 it is not vendored — it
+belongs to the W3C and is ~230 MB checked out:
+
+```
+git clone --depth 1 https://github.com/w3c/xsdtests.git testdata/xsdtests
+```
+
+Unlike QT3 there is **no `go test` integration**: the driver is not in the
+repository, because it is a throwaway that walks `suite.xml`, loads each
+`schemaTest`, validates each `instanceTest`, and compares against the
+`<expected>` validity. The figures quoted in this file were produced by such a
+driver built against the tree at HEAD.
+
+If you are reproducing them, three details decide whether your numbers mean
+anything, and each one silently inflated an earlier measurement here:
+
+* **`version` is a list of tokens**, not a string. On `testSet`, `testGroup`,
+  `schemaTest` and `instanceTest` the tokens are joined by OR — run the test if
+  you support any of them. On `<expected>` the connector is AND. Comparing the
+  attribute to `"1.0"` scores the multi-token spellings as neither version.
+* **`status` lives on `<current>`**, not on `<expected>`. A test marked
+  `queried` is one the W3C's own suite disputes; 49 of the 1.0 disagreements
+  and 48 of the 1.1 ones are in that category.
+* **Invalid-by-design schemas are the point**, not something to skip. Skipping
+  them was a measurement bug here that hid roughly 14,000 real tests.
+
+Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
+`7bc3365c` (2026-04-01):
+
+| | schema-validity | instance |
+|---|---|---|
+| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
+| XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
+
+Every failure and the reason it is open is catalogued in
+[docs/known-gaps.md](docs/known-gaps.md).
+
+### Production corpora
+
+The highest-yield fixture, and the only guard against a schema-validity rule
+that is stricter than the spec — the conformance suite scores agreement with
+W3C labels, so a rule that is merely *too strict* shows up only if the suite
+happens to contain a valid schema exercising it. Real schemas catch it.
+
+| corpus | source | result |
+|---|---|---|
+| UBL 2.1 | [OASIS UBL 2.1](http://docs.oasis-open.org/ubl/os-UBL-2.1/) | 65 of 65 schemas load clean |
+| UN/CEFACT CII, EN 16931 | [ConnectingEurope/eInvoicing-EN16931](https://github.com/ConnectingEurope/eInvoicing-EN16931) | 427 of 427 load clean |
+| Factur-X / ZUGFeRD (all profiles) | [factur-x](https://github.com/akretion/factur-x) | 21 load; samples validate clean |
+| Peppol BIS Billing 3.0 | [OpenPEPPOL](https://docs.peppol.eu/poacc/billing/3.0/) | 24 UBL instances validate clean |
+
+UBL needs `ParseOptions{AllowDOCTYPE: true}`: its dependency graph reaches the
+W3C XML Signature schema, which carries a DOCTYPE, and without the flag all 65
+fail with a cascade of unresolved `ds:` references from the one refused
+include.
+
+
 ## Where this is going
 
-The conformance tail is no longer the interesting work: 24 of the 28 remaining
-QT3 failures are structural, and the other four are one case each. Three
+The conformance tail is no longer the interesting work: 16 of the 26 remaining
+QT3 failures are structural or harness artifacts, and the other ten are one
+case each. Three
 larger things are open, in rough order of how much they would change:
 
 * **Receiver-based output.** The runtime builds a result tree and serialises
