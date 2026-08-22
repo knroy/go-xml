@@ -331,7 +331,7 @@ Measured against the W3C xsdtests suite:
 | | schema-validity | instance |
 |---|---|---|
 | **XSD 1.0** | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
-| **XSD 1.1** | 15,048 / 15,365 (97.94%) | 26,155 / 26,209 (99.79%) |
+| **XSD 1.1** | 15,051 / 15,365 (97.96%) | 26,155 / 26,209 (99.79%) |
 
 **Earlier revisions reported 99.56% and "1.1: 100%". Both were measured
 wrongly.** Two bugs in the test driver, both of which flattered the result:

@@ -474,9 +474,35 @@ func nsCompat(r *Particle, rd *ElementDecl, b *Particle, bw *Wildcard) error {
 // (§3.9.6): an element restricting a group is checked as a one-member group of
 // the base's variety.
 func recurseAsIfGroup(r *Particle, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+	inner, outerMin, outerMax := r, 1, 1
+	// An *optional* element against a non-repeating choice puts its own range
+	// on the wrapper. particlesHa161 is <element name="a" minOccurs="0"/>
+	// restricting <choice minOccurs="0"> whose branches are 1..1: comparing
+	// the element's 0..1 against a branch's 1..1 rejects a valid derivation,
+	// because the optionality belongs to the choice, not to the alternative
+	// inside it.
+	//
+	// Version-gated: Ha161 is marked invalid under 1.0 and valid under 1.1,
+	// the same split as the reordered choice above, and relaxing it for both
+	// cost two 1.0 cases. Confined further to a base that occurs at most
+	// once, and to a derived particle that occurs at most once. The derived
+	// minimum must also already satisfy the base's: without that, moving a
+	// minOccurs of 0 onto the wrapper made it violate a base requiring 1,
+	// which turned ctF007 into a false reject for exactly one case gained. Where the base *repeats*, moving the range is
+	// what broke particlesV020: the wrapper's range also feeds
+	// effectiveTotalRange, where a group of one repeating N times contributes
+	// N elements, so one range cannot serve both uses. A non-repeating base
+	// has no such sum to get wrong.
+	if v >= Version11 && bg.Compositor == CompositorChoice &&
+		b.MaxOccurs != Unbounded && b.MaxOccurs <= 1 &&
+		r.MaxOccurs != Unbounded && r.MaxOccurs <= 1 &&
+		r.MinOccurs >= b.MinOccurs {
+		outerMin, outerMax = r.MinOccurs, r.MaxOccurs
+		inner = &Particle{MinOccurs: 1, MaxOccurs: 1, Term: r.Term}
+	}
 	wrapped := &Particle{
-		MinOccurs: 1, MaxOccurs: 1,
-		Term: &ModelGroup{Compositor: bg.Compositor, Particles: []*Particle{r}},
+		MinOccurs: outerMin, MaxOccurs: outerMax,
+		Term: &ModelGroup{Compositor: bg.Compositor, Particles: []*Particle{inner}},
 	}
 	switch bg.Compositor {
 	case CompositorChoice:
@@ -683,6 +709,18 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("choice group: %w", err)
 	}
+	// Under 1.1 the alternatives may be reordered. A choice imposes no order
+	// on what it admits, so a derived choice offering the base's alternatives
+	// in a different sequence accepts exactly the same language — which is
+	// what 1.1's Content type restricts (Complex Content) asks about.
+	//
+	// 1.0's RecurseLax is written as an order-preserving walk and really does
+	// forbid it: particlesT002 and T009 are marked invalid under 1.0 and valid
+	// under 1.1, and they are the base's two alternatives swapped. So the
+	// relaxation is version-gated, exactly like the one-member-choice strip.
+	if v >= Version11 {
+		return recurseLaxUnordered(rg, b, bg, expanded, v)
+	}
 	bi := 0
 	for _, rp := range rg.Particles {
 		matched := false
@@ -690,6 +728,39 @@ func recurseLax(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expand
 			bp := bg.Particles[bi]
 			bi++
 			if particleRestricts(rp, bp, expanded, v) == nil {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("choice group: %s is not one of the base's alternatives",
+				particleKind(rp))
+		}
+	}
+	return nil
+}
+
+// recurseLaxUnordered is recurseLax without the ordering requirement.
+//
+// Each derived alternative must be a restriction of *some* base alternative,
+// and each base alternative may be used once — a derived choice may drop
+// alternatives but not merge two of its own onto one of the base's, since that
+// would let it admit a sequence twice where the base admits it once.
+//
+// The assignment is a bipartite matching, done greedily with a retry: taking
+// the first free base alternative that fits is enough when each derived
+// alternative fits only one, and the fallback scan handles the case where an
+// earlier choice consumed the only match a later one had.
+func recurseLaxUnordered(rg *ModelGroup, b *Particle, bg *ModelGroup, expanded bool, v Version) error {
+	used := make([]bool, len(bg.Particles))
+	for _, rp := range rg.Particles {
+		matched := false
+		for i, bp := range bg.Particles {
+			if used[i] {
+				continue
+			}
+			if particleRestricts(rp, bp, expanded, v) == nil {
+				used[i] = true
 				matched = true
 				break
 			}

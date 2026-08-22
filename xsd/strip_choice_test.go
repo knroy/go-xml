@@ -172,3 +172,94 @@ func TestRepeatingNestedAllGroupIsNotFlattened(t *testing.T) {
 		t.Error("the repeating group should have been left in place")
 	}
 }
+
+// Under 1.1 a derived choice may offer the base's alternatives in a different
+// order: a choice imposes no order on what it admits, so the language is the
+// same. 1.0's RecurseLax is an order-preserving walk and forbids it, which is
+// why particlesT002 is marked invalid under 1.0 and valid under 1.1.
+func TestReorderedChoiceAlternatives(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:complexType name="b"><xs:sequence>
+  <xs:choice>
+   <xs:element name="c1"/>
+   <xs:element name="c2"/>
+  </xs:choice>
+ </xs:sequence></xs:complexType>
+ <xs:complexType name="r"><xs:complexContent><xs:restriction base="b">
+  <xs:sequence>
+   <xs:choice>
+    <xs:element name="c2"/>
+    <xs:element name="c1"/>
+   </xs:choice>
+  </xs:sequence>
+ </xs:restriction></xs:complexContent></xs:complexType>
+</xs:schema>`
+	if err := loadSrc(t, src, Version11); err != nil {
+		t.Errorf("1.1 should accept reordered alternatives: %v", err)
+	}
+	if err := loadSrc(t, src, Version10); err == nil {
+		t.Error("1.0's ordered RecurseLax forbids this")
+	}
+}
+
+// Each base alternative may back at most one derived alternative: merging two
+// onto one would let the restriction admit a sequence twice where the base
+// admits it once.
+func TestChoiceAlternativesAreNotReused(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:complexType name="b"><xs:sequence>
+  <xs:choice><xs:element name="c1"/></xs:choice>
+ </xs:sequence></xs:complexType>
+ <xs:complexType name="r"><xs:complexContent><xs:restriction base="b">
+  <xs:sequence>
+   <xs:choice>
+    <xs:element name="c1"/>
+    <xs:element name="c1"/>
+   </xs:choice>
+  </xs:sequence>
+ </xs:restriction></xs:complexContent></xs:complexType>
+</xs:schema>`
+	if err := loadSrc(t, src, Version11); err == nil {
+		t.Error("two derived alternatives must not share one base alternative")
+	}
+}
+
+// An optional element restricting a non-repeating optional choice puts its own
+// range on the wrapper: the optionality belongs to the choice, not to the
+// alternative inside it. particlesHa161 is that shape.
+func TestOptionalElementRestrictsOptionalChoice(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:complexType name="base"><xs:sequence>
+  <xs:choice minOccurs="0">
+   <xs:element name="a" type="xs:string"/>
+   <xs:element name="b" type="xs:string"/>
+  </xs:choice>
+ </xs:sequence></xs:complexType>
+ <xs:complexType name="derived"><xs:complexContent><xs:restriction base="base">
+  <xs:sequence><xs:element name="a" type="xs:string" minOccurs="0"/></xs:sequence>
+ </xs:restriction></xs:complexContent></xs:complexType>
+</xs:schema>`
+	if err := loadSrc(t, src, Version11); err != nil {
+		t.Errorf("1.1 should accept an optional element here: %v", err)
+	}
+}
+
+// The derived minimum must already satisfy the base's. Without that guard,
+// moving a minOccurs of 0 onto the wrapper made it violate a base requiring
+// one occurrence — ctF007 became a false reject for exactly one case gained.
+func TestOptionalElementCannotWeakenARequiredChoice(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+ <xs:complexType name="base"><xs:sequence>
+  <xs:choice minOccurs="1">
+   <xs:element name="a" type="xs:string"/>
+   <xs:element name="b" type="xs:string"/>
+  </xs:choice>
+ </xs:sequence></xs:complexType>
+ <xs:complexType name="derived"><xs:complexContent><xs:restriction base="base">
+  <xs:sequence><xs:element name="a" type="xs:string" minOccurs="0"/></xs:sequence>
+ </xs:restriction></xs:complexContent></xs:complexType>
+</xs:schema>`
+	if err := loadSrc(t, src, Version11); err == nil {
+		t.Error("an optional element must not restrict a required choice")
+	}
+}

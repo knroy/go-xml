@@ -25,7 +25,7 @@ kind — they break working documents — so they are listed first throughout.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.94% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
 | XDM | *no public suite* | exercised through the three above |
 
@@ -39,7 +39,7 @@ comparable to a suite percentage, and neither should be quoted as one.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| schema false reject | 6 | 12 |
+| schema false reject | 6 | 9 |
 | schema false accept | 195 | 305 |
 | instance false reject | 5 | 5 |
 | instance false accept | 45 | 49 |
@@ -256,6 +256,42 @@ conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
 
+### A choice is unordered under 1.1 (fixed)
+
+`particlesT002`, `particlesT009`: the derived choice offers the base's
+alternatives swapped. A choice imposes no order on what it admits, so the
+language is identical — but `recurseLax` walked the base list left to right and
+could not go back.
+
+1.0's RecurseLax really is written as an order-preserving walk, and the suite
+marks both cases invalid under 1.0 and valid under 1.1, so the relaxation is
+version-gated. Under 1.1 the assignment is a matching instead: each derived
+alternative must restrict *some* unused base alternative. Each base alternative
+backs at most one, since merging two would let the restriction admit a sequence
+twice where the base admits it once.
+
+### An optional element may restrict an optional choice (fixed)
+
+`particlesHa161`: `<element name="a" minOccurs="0"/>` restricting
+`<choice minOccurs="0">` whose branches are `1..1`. `recurseAsIfGroup` wrapped
+the element at a fixed `1..1`, so its optionality was compared against a
+branch's `1..1` and rejected — but the optionality belongs to the choice, not
+to the alternative inside it.
+
+Three conditions, and the third was learned the hard way:
+
+* **Version.** Marked invalid under 1.0, valid under 1.1, like the reorder.
+* **A non-repeating base.** Where the base repeats, moving the range is what
+  broke `particlesV020`: the wrapper's range also feeds `effectiveTotalRange`,
+  where a group of one repeating N times contributes N elements. One range
+  cannot serve both uses.
+* **The derived minimum must already satisfy the base's.** Without it, moving a
+  `minOccurs` of 0 onto the wrapper made it violate a base requiring 1, and
+  `ctF007` became a false reject for exactly one case gained.
+
+1.1 schema agreement 15,048 → 15,051 across these two entries, with 1.0 and
+both instance figures unchanged.
+
 ### A nested all group is flattened before budgeting (fixed)
 
 `all206`: a base `<all>` holding `<group ref>` and an element, restricted by an
@@ -456,7 +492,7 @@ not by cluster size — several of the largest clusters are the least worth doin
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
 | schema false accept | 195 | 305 |
-| schema false reject | 6 | 12 |
+| schema false reject | 6 | 9 |
 | instance false accept | 45 | 49 |
 | instance false reject | 5 | 5 |
 | *of those, W3C-disputed* | *49* | *48* |
@@ -633,7 +669,7 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
 | XSD 1.1 instance | 99.79% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
-| XSD 1.1 schema | 97.94% | ~99.9% | 285 constraints, one at a time |
+| XSD 1.1 schema | 97.96% | ~99.9% | 285 constraints, one at a time |
 
 Nothing here is blocked on a missing idea. XPath's last case is a deliberate
 refusal, the XSD false accepts are volume rather than difficulty, and the false
