@@ -70,8 +70,8 @@ source rather than globally.
 
 ## RELAX NG
 
-`relaxng` validates against RELAX NG's XML syntax, at 99.90% of James Clark's
-conformance suite (964 of 965 assertions).
+`relaxng` validates against RELAX NG's XML syntax, at 100% of James Clark's
+conformance suite (965 of 965 assertions).
 
 ```go
 schema, err := xdm.ParseString(rngSource, xdm.ParseOptions{})
@@ -129,9 +129,10 @@ always works.
   names that were not — among them any name beginning with a combining mark —
   and `xdm` implements the fifth, as an XML parser should. The two differ
   deliberately; see `relaxng/ncname.go`.
-* **The one suite failure** needs markup inside an entity's replacement text
-  (`<!ENTITY dii "<ดี/>">`), which `xdm` expands as characters rather than
-  parsing as an element. That is a parser gap rather than a validator one.
+* **Validation depth is bounded separately from the parser's.** Taking
+  derivatives over a nested document costs time and memory quadratic in the
+  depth, so `ValidateOptions.MaxDepth` bounds it at 1000 by default — raising
+  `xdm`'s parser limit does not raise this one.
 
 ## XSD
 

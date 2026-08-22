@@ -72,9 +72,9 @@ Requires Go 1.26 or later.
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
-| **RELAX NG** | 99.90% of James Clark's spectest (964 of 965 assertions); XML syntax |
+| **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 742, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -134,9 +134,13 @@ Six packages, each usable on its own:
 * **[docs/options.md](docs/options.md)** — every option in `xdm`, `xpath`,
   `xsd` and `xslt`: what each field does, what the zero value means, and the
   limits that bound a parse, a validation and a transform.
+* **[SECURITY.md](SECURITY.md)** — how to report a vulnerability, and what
+  counts as one.
 * **[docs/security.md](docs/security.md)** — threat model and audit results:
   XXE and entity expansion are closed even with `AllowDOCTYPE` on, and the two
   things a caller must still do themselves.
+* **[CHANGELOG.md](CHANGELOG.md)** — what each release contains, and what is
+  still allowed to change while the API is pre-1.0.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.

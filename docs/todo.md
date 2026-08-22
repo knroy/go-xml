@@ -61,7 +61,7 @@ wild, with real reuse of what is here.
 
 ### 1.3 RELAX NG — done, XML syntax only
 
-**Implemented**, at 99.90% of James Clark's suite (964 of 965 assertions).
+**Implemented**, at 100% of James Clark's suite (965 of 965 assertions).
 It is a separate engine, as expected: derivatives over patterns rather than a
 finite automaton, because `interleave` is not a Glushkov construction. The
 datatype library delegates to the XSD types, which was the reuse the earlier
@@ -78,8 +78,8 @@ algorithm, which is short.
 * **The compact syntax** is not implemented. It is a second parser over the
   same model, so it costs a parser and nothing else — the compiler, the
   restrictions and the validator are all reached through the same tree.
-* **The one suite failure** needs markup inside an entity's replacement text,
-  which is a gap in `xdm` rather than in the validator.
+* Nothing in the suite. The last failure needed markup inside an entity's
+  replacement text, which was a gap in `xdm` and is fixed.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 

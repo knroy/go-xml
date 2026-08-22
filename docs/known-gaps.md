@@ -26,7 +26,7 @@ kind — they break working documents — so they are listed first throughout.
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
-| RELAX NG | James Clark's spectest | 99.90% — 964 of 965 assertions |
+| RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
 | XDM | *no public suite* | exercised through the three above |
@@ -54,22 +54,13 @@ reachable ceiling below 100%.
 
 ### RELAX NG
 
-One assertion fails, and it is not a validator defect. The case needs markup
-inside an entity's replacement text:
+No assertion fails. The last one to do so needed markup inside an entity's
+replacement text, which was a gap in `xdm`'s parser rather than in the
+validator; it is fixed, and the fix is described in
+[security.md](security.md#fixed-in-the-second-audit) because getting it wrong
+was a vulnerability.
 
-```xml
-<!ENTITY dii "<&#xE14;&#xE35;/>">
-...
-<foo>&dii;</foo>
-```
-
-`xdm` expands an internal entity as *characters*, so `<ดี/>` reaches the tree
-as text rather than as an element. Fixing it means re-scanning replacement
-text as markup during the parse, which is a change to the parser and its
-entity-expansion bounds — the ones that close billion-laughs — rather than
-anything the validator does. It is deliberately not attempted for one test.
-
-Two further limits, neither measured by the suite:
+Two limits remain, neither measured by the suite:
 
 * **The compact syntax is not implemented.** Only the XML syntax is parsed. It
   would be a second parser over the same model and nothing else, since the
