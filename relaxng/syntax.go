@@ -365,7 +365,7 @@ func checkAttrValues(n *xdm.Node) error {
 		}
 	case "ref", "parentRef", "define":
 		if v := n.AttrValue("name"); v != "" {
-			if !xdm.IsNCName(normalizeToken(v)) {
+			if !isNCName4(normalizeToken(v)) {
 				return fmt.Errorf(
 					"relaxng: <%s> name %q is not an NCName", n.Name.Local, v)
 			}
@@ -571,7 +571,7 @@ func findDescendant(n *xdm.Node, names []string) string {
 // isQName reports whether s is an NCName or prefix:NCName.
 func isQName(s string) bool {
 	if i := strings.IndexByte(s, ':'); i >= 0 {
-		return xdm.IsNCName(s[:i]) && xdm.IsNCName(s[i+1:])
+		return isNCName4(s[:i]) && isNCName4(s[i+1:])
 	}
-	return xdm.IsNCName(s)
+	return isNCName4(s)
 }

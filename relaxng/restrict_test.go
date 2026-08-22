@@ -731,3 +731,35 @@ func TestOrderingFacets(t *testing.T) {
 		}
 	}
 }
+
+// A schema's names follow XML 1.0 fourth edition, which is the edition RELAX
+// NG was specified against — not the fifth, which xdm implements.
+//
+// The fifth edition replaced the fourth's explicit character classes with
+// broad ranges and made legal a great many names that were not, among them
+// any name beginning with a combining mark. Both readings are right for their
+// own purpose: an XML parser should accept what a conforming parser produces,
+// and a schema language should accept what its own specification defines.
+func TestSchemaNamesFollowFourthEdition(t *testing.T) {
+	// U+0E35 THAI CHARACTER SARA II is a combining mark: legal within a name,
+	// not at the start of one.
+	for _, src := range []string{
+		`<element` + rngNS + ` name="&#xE35;"><empty/></element>`,
+		`<element` + rngNS + `><name>&#xE35;</name><empty/></element>`,
+		`<element` + rngNS + ` name="foo">
+			<attribute name="&#xE35;"/><empty/></element>`,
+		`<element` + rngNS + ` name="x:&#xE35;"><empty/></element>`,
+		`<grammar` + rngNS + `><start><ref name="&#xE35;"/></start>
+			<define name="&#xE35;">
+				<element name="foo"><empty/></element></define></grammar>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("a name beginning with a combining mark was accepted:\n%s", src)
+		}
+	}
+
+	// The same character after a letter is a legal name.
+	mustAccept(t, "a combining mark after a letter",
+		`<element`+rngNS+` name="foo">
+			<element name="&#xE14;&#xE35;"><empty/></element></element>`)
+}
