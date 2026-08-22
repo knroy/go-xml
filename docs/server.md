@@ -194,6 +194,160 @@ func (v *Validator) Reload(path, rulesDir string) error {
 Compile the replacement *before* storing it. A rule set that fails to compile
 should leave the service running on the previous version, not take it down.
 
+---
+
+## Validating XML against a schema in a server
+
+The XSLT service above transforms; this one **validates**. It is the shape to
+copy when you accept XML from outside and need to know whether it conforms to a
+schema you control.
+
+Everything below is compiled and exercised — including against XXE and
+billion-laughs — before being written here.
+
+### The rule
+
+**Every default in this library is already the safe one.** You are not
+hardening a permissive parser; you are choosing limits that fit your documents.
+The two settings that matter most are the ones you do *not* change:
+`AllowDOCTYPE` stays off, and no `HTTPResolver` is configured.
+
+### Load the schema once, at startup
+
+```go
+// A *Schema is immutable and safe to share across every request and every
+// goroutine. Loading per request would dominate the cost of validating.
+//
+// FileResolver.Root confines every schemaLocation to one directory, so an
+// import cannot reach elsewhere on disk. No HTTPResolver, so nothing is
+// fetched over the network — the schema graph is exactly what you shipped.
+schema, err := xsd.LoadFile("schemas/main.xsd", xsd.Options{
+    Version:      xsd.Version11,
+    Resolver:     &xsd.FileResolver{Root: "schemas"},
+    MaxDocuments: 64,
+    // Needed only if your schema graph contains a DOCTYPE, as UBL's does.
+    // This is a file you ship, not caller input; see the note below.
+    ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true},
+})
+```
+
+`AllowDOCTYPE` here applies to **your schema files**, which you control. It
+must not be set on the parse of an incoming document.
+
+### Size the limits to your documents
+
+```go
+const (
+    maxRequestBytes = 4 << 20 // 4 MB of XML
+    maxNodes        = 200_000 // an invoice is thousands of nodes, not millions
+    maxDepth        = 200     // real business documents nest tens deep
+    maxErrors       = 50      // enough to fix a document, not a DoS amplifier
+    requestTimeout  = 10 * time.Second
+)
+```
+
+The defaults (64 MB, 10M nodes, depth 1000) are sized for a general-purpose
+library. If you know you are receiving invoices rather than archives, these are
+far tighter and cost you nothing.
+
+`maxNodes` is the one that actually bounds memory. A node costs ~200 bytes
+whatever it holds, so heap follows node count, not byte count — and the ratio
+between them ranges from 1.9x to 53x depending on document shape. A byte cap
+alone does not bound your memory.
+
+### The handler
+
+```go
+func (s *server) handle(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "POST an XML document", http.StatusMethodNotAllowed)
+        return
+    }
+
+    ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+    defer cancel()
+
+    // Bound the read itself. MaxBytesReader makes the limit the server's,
+    // not the client's Content-Length claim.
+    body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+    if err != nil {
+        http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+        return
+    }
+
+    // Parse with every default left closed: no DOCTYPE, so no entity
+    // expansion and no external entity; explicit caps on size, nodes, depth.
+    tree, err := xdm.ParseString(string(body), xdm.ParseOptions{
+        MaxBytes: maxRequestBytes,
+        MaxNodes: maxNodes,
+        MaxDepth: maxDepth,
+    })
+    if err != nil {
+        writeResult(w, http.StatusBadRequest, "not well-formed", []string{err.Error()})
+        return
+    }
+
+    // Annotate is deliberately off: it writes type annotations into the tree,
+    // which would make this handler mutate state shared across goroutines.
+    err = s.schema.Validate(tree.Root, xsd.ValidateOptions{
+        MaxErrors: maxErrors,
+        MaxDepth:  maxDepth,
+    })
+    if err == nil {
+        writeResult(w, http.StatusOK, "valid", nil)
+        return
+    }
+
+    // ValidationErrors is the collection; ValidationError is one failure.
+    var verr *xsd.ValidationErrors
+    if errors.As(err, &verr) {
+        msgs := make([]string, 0, len(verr.Errors))
+        for _, e := range verr.Errors {
+            msgs = append(msgs, e.Error())
+        }
+        writeResult(w, http.StatusUnprocessableEntity, "invalid", msgs)
+        return
+    }
+    writeResult(w, http.StatusInternalServerError, "error", []string{err.Error()})
+}
+```
+
+Note the status codes. **400 is "not XML", 422 is "XML but not conforming".** A
+caller can act on that difference: the first is a bug in their serialiser, the
+second is a bug in their data.
+
+### What this refuses, measured
+
+Each of these was run against the handler above:
+
+| input | result |
+|---|---|
+| valid invoice | `200 {"status":"valid","errors":[]}` |
+| `<total>NOT</total>` | `422` with `cvc-datatype-valid.1` and the path |
+| truncated document | `400 not well-formed` |
+| **XXE** — `<!ENTITY x SYSTEM "file:///etc/passwd">` | `400 DOCTYPE declaration rejected` |
+| **billion laughs** — nested entity expansion | `400 DOCTYPE declaration rejected` |
+| 5,000-deep nesting | `400 nesting exceeds 200 levels` |
+| 500,000 nodes | `400 document exceeds 200000 nodes` |
+
+Both entity attacks are stopped at the same place, before any expansion is
+attempted, because the DOCTYPE never gets parsed. That is why `AllowDOCTYPE`
+defaults off and why it must stay off for caller input.
+
+### Checklist
+
+- [ ] Schema loaded **once** at startup, shared across goroutines
+- [ ] `FileResolver{Root: ...}` set — never a bare `FileResolver{}` for
+      caller-influenced locations
+- [ ] No `HTTPResolver` unless you need one, and then with `AllowHost`
+- [ ] `AllowDOCTYPE` **off** for request bodies (on for your own schemas only
+      if they need it)
+- [ ] `MaxBytes`, `MaxNodes`, `MaxDepth` sized to your documents
+- [ ] `MaxBytesReader` bounding the read, not just the parse
+- [ ] `Annotate` off, or a fresh tree per goroutine if on
+- [ ] Server-level `ReadTimeout`/`WriteTimeout`/`MaxHeaderBytes` set
+- [ ] 400 and 422 distinguished in the response
+
 ## Security posture
 
 Every remote-reference mechanism is off unless you turn it on, but the

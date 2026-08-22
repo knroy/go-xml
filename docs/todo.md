@@ -9,7 +9,7 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
 | XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
-| XPath 2.0 | 99.82% — 15,153 of 15,181 in scope (28 failing) |
+| XPath 2.0 | 99.83% — 15,155 of 15,181 in scope (26 failing) |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 647, clean under `-race` |
 
@@ -130,22 +130,31 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: 28 in-scope failures
+### 2.3 XPath: 26 in-scope failures
 
 Mostly not fixable, and worth stating why so nobody re-litigates it:
 
 | cases | cause | fixable |
 |---:|---|---|
-| 12 | regex backreferences (`\1`) | **no** — see below |
-| 2 | `fn:collection` | yes — was 7; a resolver hook fixed 5 |
-| 5 | `xs:dateTimeStamp` | no — an XSLT 3.0 type this engine does not claim |
-| 4 | ordinary bugs, one per set | yes |
+| 12 | regex backreferences (`\1`) in `fn-matches` | **no** — see below |
+| 2 | `fn:collection` (`collection-006`, `-007`) | yes |
+| 2 | `fn:doc-available` of a document with no declared URI | harness, not engine |
+| 2 | `fn:in-scope-prefixes` | yes |
+| 2 | unused namespace declarations in `assert-xml` | harness, not engine |
+| 6 | six sets, one case each | yes, individually |
+
+**The denominator moved this round, so the percentage is not comparable to
+earlier figures.** Source paths in a test-set environment are relative to the
+test-set file, not the suite root; resolving them against the root silently
+skipped every case whose environment named `../docs/…`. Fixing it brought 461
+cases into scope, 14,720 → 15,181.
 
 The `fn:collection` 7 were the one capability gap and are now largely closed:
-`xpath.CollectionResolver` plus harness support took them to 2. Fixing the
-harness's source-path resolution at the same time brought **461 previously
-skipped cases into scope**, which is why the denominator moved from 14,720 to
-15,181 and the percentage dipped slightly — more of the suite now runs.
+`xpath.CollectionResolver` plus harness support took them to 2.
+
+Four of the remaining failures are the harness rather than the engine, and are
+listed as such rather than quietly counted as conformance defects. See
+[known-gaps.md](known-gaps.md).
 
 **The backreference 12, in full, because the obvious fix does not work.** Two
 separate points, and the first is the one usually missed:

@@ -19,7 +19,7 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.82% of the W3C QT3 suite (15,153 of 15,181 in scope) |
+| **XPath 2.0** | 99.83% of the W3C QT3 suite (15,155 of 15,181 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
@@ -67,8 +67,10 @@ Four packages, each usable on its own:
 * **[docs/xsd.md](docs/xsd.md)** — the schema validator in detail: 1.0 versus
   1.1, resolvers and what they will fetch, the PSVI, limits, concurrency, and
   what the conformance figures cover.
-* **[docs/server.md](docs/server.md)** — compile once, transform per request:
-  a complete validator service, timeouts, limits, hot-reloading rule sets.
+* **[docs/server.md](docs/server.md)** — compile once, transform or validate
+  per request: a complete XSLT service, a hardened XSD validation endpoint
+  (measured against XXE, billion-laughs and resource exhaustion), timeouts,
+  limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
   rendering, parameters, custom resolvers, standalone XPath.
 * **[docs/options.md](docs/options.md)** — every option in `xdm`, `xpath`,
@@ -646,7 +648,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**28 of 15,181 in-scope cases fail (0.18%).** One cluster and a long tail:
+**26 of 15,181 in-scope cases fail (0.17%).** One cluster and a long tail:
 
 | cases | set | what it is |
 |---:|---|---|

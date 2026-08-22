@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.82% — 15,153 of 15,181 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.83% — 15,155 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -44,8 +44,10 @@ comparable to a suite percentage, and neither should be quoted as one.
 | instance false reject | 5 | 5 |
 | instance false accept | 45 | 49 |
 
-Of those, the W3C itself flags 52 cases in 1.0 and 52 in 1.1 as `queried` or
+Of those, the W3C itself flags 49 cases in 1.0 and 48 in 1.1 as `queried` or
 tied to an open bug — its own suite disputes, not necessarily defects here.
+(Counted by scanning each test's `<current status=...>`; an earlier figure of
+52/52 was an estimate.)
 
 ---
 
@@ -307,6 +309,111 @@ Diagnosed individually rather than by cluster:
 grouped because they share no cause.
 
 ---
+
+---
+
+## What would move the numbers
+
+Measured on 2026-08-21 with both suites present. Ordered by cases-per-unit-work,
+not by cluster size — several of the largest clusters are the least worth doing.
+
+### The shape of what is left
+
+| | XSD 1.0 | XSD 1.1 |
+|---|---:|---:|
+| schema false accept | 195 | 305 |
+| schema false reject | 6 | 15 |
+| instance false accept | 45 | 49 |
+| instance false reject | 5 | 5 |
+| *of those, W3C-disputed* | *49* | *48* |
+
+Roughly a sixth of every disagreement is a test the W3C's own metadata marks
+`queried` or ties to an open bug. Those are not defects to fix.
+
+### XSD: the 21 schema false rejects are the whole story
+
+A false reject breaks a working caller; a false accept only fails to catch
+someone else's mistake. They are not symmetric, and a single percentage hides
+that. **Every one of the 21 is Particle Valid (Restriction)** — one subsystem:
+
+| cause | cases |
+|---|---:|
+| a group has no corresponding particle in the base | 5 |
+| the base requires a group the restriction omits | 4 |
+| all-group restricted by a wildcard or a sequence | 5 |
+| `notQName` needs XSD 1.1 (correct under 1.0) | 3 |
+| occurrence-budget disagreements | 2 |
+| other | 2 |
+
+`particlesZ001` and `addB183` fail under **both** versions, which makes them
+the best entry point: they are bugs in shared logic rather than 1.1-specific
+gaps. The all-group cases (`all206`, `all218`, `all237`, `wild049`, `wild050`)
+need `allSubsumes` extended to wildcards, where deciding how a wildcard's
+occurrences split across the names it spans is the hard part — `all244` shows
+it is not a simple count.
+
+**Cost: small, one subsystem. Buys: 21 cases and, more importantly, correctness
+for valid schemas this refuses today.** Do this first.
+
+### XSD: the 500 schema false accepts are the largest number and the worst ratio
+
+They cluster in `MS-Particles` (47/46), `MS-Schema` (45/44), `MS-SimpleType`,
+`MS-ComplexType`, and for 1.1 also `Wild`, `CTA` and `Open`. Each is an
+unwritten Schema Component Constraint: a schema that should be rejected loads.
+
+Two reasons this is not the obvious next move despite being the biggest number.
+
+First, **no valid schema is affected**, which is why the false-reject count is
+two orders of magnitude smaller.
+
+Second, **each rule added is a chance to reject a schema real systems depend
+on**, and the conformance suite cannot catch that — it scores agreement with
+W3C labels, so a rule that is merely *too strict* only shows up if the suite
+happens to contain a valid schema exercising it. The production corpora are the
+only guard. Re-load them after every rule:
+
+```
+65 of 65 UBL 2.1 and 427 of 427 CII/EN16931 schemas must still load clean.
+```
+
+**Cost: high and open-ended, one rule at a time. Buys: the percentage, and
+little else.**
+
+### XSD instance: 10 false rejects, individually diagnosed
+
+`idc006.nogen` is keyref resolution across a subtree boundary. `gMonth002_2061`
+and `gMonth004_2063` are the old `--MM--` lexical form (W3C bug 6901).
+`particlesZ040` is the greedy content-model matcher, already documented as
+resisting a targeted fix. `attP031` and `cta0022` are one-offs.
+
+**Cost: five separate diagnoses. Buys: 10 cases, all of them false rejects.**
+
+### XPath: 12 of the 26 are architectural, 4 are the harness
+
+Of what remains:
+
+- **12** are regex backreferences, which RE2 does not have. Not fixable without
+  a second engine; see §2.3 of [todo.md](todo.md) for why capture groups plus
+  an explicit comparison does not work.
+- **4** are the test harness rather than the engine — a document whose
+  environment declares no URI, and unused namespace declarations in a
+  hand-written `assert-xml`.
+- **10** are ordinary bugs across eight sets, each needing its own diagnosis.
+
+**Cost: ten small diagnoses. Buys: 10 cases and 99.83% → ~99.90%.**
+
+### Recommended order
+
+1. **XSD particle restriction** — 21 false rejects, one subsystem, real callers
+   affected today.
+2. **XPath singletons** — 10 cases, independent, each small.
+3. **XSD instance false rejects** — 10 cases, five diagnoses.
+4. **Schema Component Constraints** — the 500, one rule at a time, corpora
+   re-loaded after each.
+
+XML 1.1 support sits outside this list and unlocks 38 instance tests plus nine
+schemas that do not parse today; it is a larger piece of work and is described
+in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
 
 ## Related
 

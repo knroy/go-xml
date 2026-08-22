@@ -1,7 +1,8 @@
 # Documentation
 
-* **[Using go-xml in a server](server.md)** — compile once, transform per
-  request; timeouts, limits, and the mistakes that matter under load.
+* **[Using go-xml in a server](server.md)** — compile once, transform or
+  validate per request; a hardened XSD validation endpoint, timeouts, limits,
+  and the mistakes that matter under load.
 * **[Validating XML](validation.md)** — what this engine can and cannot check,
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
