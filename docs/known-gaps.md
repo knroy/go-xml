@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.86% — 15,159 of 15,181 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.89% — 15,164 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -465,14 +465,21 @@ Of what remains:
 - **12** are regex backreferences, which RE2 does not have. Not fixable without
   a second engine; see §2.3 of [todo.md](todo.md) for why capture groups plus
   an explicit comparison does not work.
-- **4** are the test harness or the suite's own environment data rather than
-  the engine — two documents whose environment declares no URI (so
-  `fn:document-uri` correctly answers with a path no resolver knows), one
-  needing a namespace declared through a DTD default attribute, and unused
-  namespace declarations in a hand-written `assert-xml`.
-- **6** are ordinary bugs across six sets, each needing its own diagnosis.
+- **2** need a namespace declared through a DTD `#FIXED` attribute default
+  (`fn-doc-29`, `fn-in-scope-prefixes-25`). `encoding/xml` never parses the
+  internal subset, so the binding never reaches the tree.
+- **2** ask `fn:doc-available(document-uri(/))` where the environment declares
+  no `uri` for the source, so `document-uri` correctly answers with a
+  filesystem path no resolver knows.
+- **1** is `K2-Literals-7`, where `xs:decimal` keeps more precision than it
+  prints; see above for why the fix is not worth its cost.
 
-**Cost: a diagnosis each. Buys: the remaining 10, and 99.86% → ~99.93%.**
+Nothing here is an ordinary bug any more. The six that were have been fixed —
+five of them turned out to be the harness rather than the engine, which is
+worth stating plainly: a conformance number is only as honest as the harness
+producing it.
+
+**Cost: a diagnosis each. Buys: little — 12 of the 17 are backreferences and 4 more are outside the engine.**
 
 ### Recommended order
 
