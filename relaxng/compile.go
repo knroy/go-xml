@@ -72,6 +72,10 @@ func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	// Sections 7.3 and 7.4 are checked on the compiled pattern rather than
 	// the syntax: they ask whether two name classes overlap, which is a
 	// question about the classes, not about how they were written.
+	if len(c.unbound) > 0 {
+		return nil, fmt.Errorf(
+			"relaxng: prefix %q is not declared in the schema", c.unbound[0])
+	}
 	if err := checkCompetition(p); err != nil {
 		return nil, err
 	}
@@ -116,6 +120,10 @@ type compiler struct {
 	// an <include>, since they are collected while that ns is in force and
 	// compiled later, when it is not.
 	defineNs map[string]string
+	// unbound collects prefixes used in a name that nothing declares. They
+	// are reported once the schema is read, so that the message names the
+	// prefix rather than the place.
+	unbound []string
 	// defines maps a name to the <define> that provides it, so that <ref>
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
@@ -279,7 +287,32 @@ func (c *compiler) checkAll(g *xdm.Node) error {
 	if err := c.checkUnreferenced(g); err != nil {
 		return err
 	}
+	if err := checkNestedGrammars(g); err != nil {
+		return err
+	}
 	return c.checkRefsResolve(g)
+}
+
+// checkNestedGrammars requires a <start> of every grammar written inside this
+// one.
+//
+// The outer grammar's start is checked when it is compiled. A nested one may
+// sit in a definition nothing refers to, so nothing would compile it — but a
+// grammar with no start describes nothing, and is a mistake wherever it is
+// written.
+func checkNestedGrammars(n *xdm.Node) error {
+	for _, kid := range n.ChildElements() {
+		if kid.Name.URI != NS {
+			continue
+		}
+		if kid.Name.Local == "grammar" && !hasStart(kid) {
+			return fmt.Errorf("relaxng: <grammar> has no <start>")
+		}
+		if err := checkNestedGrammars(kid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkUnreferenced validates the parts of each definition that can be checked
@@ -1175,6 +1208,10 @@ func (c *compiler) resolveName(n *xdm.Node, lexical string) xdm.QName {
 		if prefix == "xml" {
 			return xdm.QName{URI: xdm.NSXML, Local: local}
 		}
+		// An unbound prefix names nothing. Dropping it and keeping the local
+		// name would silently match elements in no namespace, which is not
+		// what foo:bar was written to mean.
+		c.unbound = append(c.unbound, prefix)
 		return xdm.QName{Local: local}
 	}
 	return xdm.QName{URI: c.nsFor(n), Local: lexical}

@@ -200,6 +200,15 @@ func checkAttrs(n *xdm.Node, spec elementSpec) error {
 		allowed["name"] = true
 	}
 	for _, a := range n.Attrs {
+		// An attribute in the RELAX NG namespace is not foreign: the language
+		// puts its own attributes in no namespace, so an r:a= is a
+		// misspelling of the language rather than an annotation from
+		// somewhere else, and passing it over hides the mistake.
+		if a.Name.URI == NS {
+			return fmt.Errorf(
+				"relaxng: <%s> has no attribute %q; RELAX NG's own attributes "+
+					"are in no namespace", n.Name.Local, a.Name.Local)
+		}
 		// A foreign-namespaced attribute is permitted and ignored, which is
 		// how a schema carries annotations. xml:base and friends likewise.
 		if a.Name.URI != "" {
@@ -367,10 +376,11 @@ func checkAttrValues(n *xdm.Node) error {
 				strings.TrimSpace(n.StringValue()))
 		}
 		// A <name> inside an <attribute> names an attribute, so the same
-		// rules apply as to attribute name=. A name inside an <except> is
-		// excluded rather than named, so the rule does not reach it: an
-		// attribute class that *excepts* xmlns is exactly the right way to
-		// write "any attribute but a namespace declaration".
+		// rules apply as to attribute name=. That includes a name inside an
+		// <except>: xmlns is not an attribute at all in the data model RELAX
+		// NG validates, so it is not a name a schema can mention there
+		// either — there is nothing to exclude, and writing it suggests the
+		// author believes an attribute class would otherwise match one.
 		if namesAnAttribute(n) {
 			if err := checkAttributeName(n, normalizeToken(n.StringValue()),
 				nsInForce(n)); err != nil {
@@ -480,10 +490,11 @@ func namesAnAttribute(n *xdm.Node) bool {
 			return false
 		}
 		switch cur.Name.Local {
-		case "except":
-			return false
 		case "attribute":
 			return true
+		case "except":
+			// An except below an attribute's name class still names
+			// attributes: keep walking.
 		case "choice", "anyName", "nsName":
 			// still inside the name class
 		default:

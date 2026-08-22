@@ -343,14 +343,32 @@ func TestNameClassExcept(t *testing.T) {
 	}
 }
 
-// An except names what is excluded, so the xmlns rule does not apply inside
-// one: excepting xmlns is how "any attribute but a namespace declaration" is
-// written, and refusing it would leave that unsayable.
-func TestExceptingXmlnsIsAllowed(t *testing.T) {
-	mustAccept(t, "anyName excepting xmlns",
-		`<element`+rngNS+` name="foo"><oneOrMore><attribute>
+// xmlns is not an attribute in the data model RELAX NG validates, so it is
+// not a name a schema may mention where attribute names go — including inside
+// an <except>.
+//
+// Excluding it looks reasonable and is not: there is nothing to exclude, and
+// writing it suggests the author believes an open attribute class would
+// otherwise match a namespace declaration. It would not.
+func TestXmlnsCannotBeNamedInAnAttributeClass(t *testing.T) {
+	for _, src := range []string{
+		`<element` + rngNS + ` name="foo"><oneOrMore><attribute>
 			<anyName><except><name>xmlns</name></except></anyName>
-			<text/></attribute></oneOrMore></element>`)
+			<text/></attribute></oneOrMore></element>`,
+		`<element` + rngNS + ` name="foo"><oneOrMore><attribute>
+			<nsName ns=""><except><name>xmlns</name></except></nsName>
+			<text/></attribute></oneOrMore></element>`,
+	} {
+		if _, err := compileSrc(t, src); err == nil {
+			t.Errorf("xmlns was accepted as an attribute name:\n%s", src)
+		}
+	}
+
+	// An element name class may except anything, xmlns included: element
+	// names have no such restriction.
+	mustAccept(t, "an element class excepting xmlns",
+		`<element`+rngNS+`><anyName><except><name>xmlns</name></except>
+			</anyName><empty/></element>`)
 }
 
 // Section 7.3: an attribute with an open name class must say how many it
@@ -635,5 +653,47 @@ func TestCharacterDataIsOneString(t *testing.T) {
 		if err := s.Validate(tree.Root); err != nil {
 			t.Errorf("%s should be valid: %v", doc, err)
 		}
+	}
+}
+
+// An attribute in the RELAX NG namespace is not foreign. The language puts
+// its own attributes in no namespace, so r:a= is a misspelling of RELAX NG
+// rather than an annotation from somewhere else, and passing it over as a
+// foreign attribute hides the mistake.
+func TestRelaxNgNamespacedAttributeIsNotForeign(t *testing.T) {
+	const src = `<r:element xmlns:r="http://relaxng.org/ns/structure/1.0"
+		name="foo" r:a="val"><r:empty/></r:element>`
+	if _, err := compileSrc(t, src); err == nil {
+		t.Error("an attribute in the RELAX NG namespace was ignored as foreign")
+	}
+
+	// One from an actual foreign namespace is an annotation and is ignored.
+	mustAccept(t, "a foreign annotation",
+		`<element`+rngNS+` xmlns:a="http://example.com/anno" name="foo"
+			a:note="hello"><empty/></element>`)
+}
+
+// An unbound prefix names nothing. Dropping it and keeping the local name
+// would silently match elements in no namespace, which is not what foo:bar
+// was written to mean.
+func TestUnboundPrefixIsRefused(t *testing.T) {
+	if _, err := compileSrc(t, `<element`+rngNS+` name="foo:bar">
+		<empty/></element>`); err == nil {
+		t.Error("a name with an undeclared prefix was accepted")
+	}
+}
+
+// A grammar with no start describes nothing, wherever it is written —
+// including in a definition nothing refers to, which nothing would otherwise
+// compile.
+func TestNestedGrammarNeedsAStart(t *testing.T) {
+	if _, err := compileSrc(t, `<grammar`+rngNS+`>
+		<start><element name="foo"><empty/></element></start>
+		<define name="unused">
+			<grammar>
+				<define name="foo"><element name="foo"><empty/></element></define>
+			</grammar>
+		</define></grammar>`); err == nil {
+		t.Error("a nested grammar with no start was accepted")
 	}
 }
