@@ -121,6 +121,24 @@ func TestCollectionInvalidURI(t *testing.T) {
 	}
 }
 
+// The argument is xs:string?, so a non-string is a type error rather than a
+// URI to stringify — the same rule fn:doc follows. Checked because the
+// alternative, silently accepting xs:integer(2) as the URI "2", would turn a
+// mistake into a lookup.
+func TestCollectionNonStringArgument(t *testing.T) {
+	r := &testCollections{docs: map[string][]string{"2": {`<a/>`}}}
+	_, err := Eval(`collection(xs:integer(2))`, collCtx(t, r), testNS{})
+	if err == nil {
+		t.Fatal("a non-string collection URI should be a type error")
+	}
+	if !strings.Contains(err.Error(), "XPTY0004") {
+		t.Errorf("error = %v, want XPTY0004", err)
+	}
+	if r.lastURI != "" {
+		t.Errorf("resolver was consulted with %q; it should not have been called", r.lastURI)
+	}
+}
+
 // Setting Docs must not enable collections, and vice versa. The two are
 // separate switches on purpose.
 func TestCollectionIndependentOfDocs(t *testing.T) {
