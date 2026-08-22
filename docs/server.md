@@ -61,6 +61,13 @@ var ErrMalformed = errors.New("document is not well-formed XML")
 func (v *Validator) Validate(ctx context.Context, doc []byte) (*xslt.Result, error) {
 	tree, err := xdm.ParseString(string(doc), xdm.ParseOptions{
 		TrackPositions: true, // so the report can name a line
+		// The body is already bounded below, but MaxNodes is the limit
+		// that matters: a node costs a fixed ~200 bytes whatever it
+		// holds, so a megabyte of "<a/>" is fifty times the heap of a
+		// megabyte of text. A byte cap alone does not bound memory.
+		MaxBytes: 4 << 20,
+		MaxNodes: 200_000,
+		MaxDepth: 200,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
@@ -199,6 +206,23 @@ defaults deserve stating explicitly for a server:
 | `xsl:include` / `import` | **refused** | `CompileOptions.Resolver` |
 | network access | **none, at all** | not available |
 | `xsl:result-document` | returned on `Result.Secondary`, never written to disk | you write them |
+
+Resource limits are on by default too, and a server should tighten them to what
+its documents actually look like rather than leave the general-purpose numbers:
+
+| | default | why |
+|---|---|---|
+| `ParseOptions.MaxBytes` | 64 MB | bounds one read |
+| `ParseOptions.MaxNodes` | 10,000,000 | bounds the tree, ~2 GB — the limit that actually binds |
+| `ParseOptions.MaxDepth` | 1000 | bounds parser stack use |
+| `ValidateOptions.MaxDepth` | 1000 | bounds validator stack use, separately |
+| `TransformOptions.MaxDepth` | 1000 | catches a template with no base case |
+| `ValidateOptions.MaxErrors` | 100 | bounds the report, not the work |
+
+`MaxNodes` is the one to think about. A node costs a fixed ~200 bytes whatever
+it holds, so a byte cap is a loose bound on memory: a megabyte of `<a/>`
+elements is fifty times the heap of a megabyte of text. Set both, and set them
+from your own corpus — [options.md](options.md) has the measurements.
 
 **Treat a stylesheet as code, not data.** Inside the permitted roots it can
 read any file, and it can spend your whole timeout doing it. Never compile a

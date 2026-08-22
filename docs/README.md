@@ -6,6 +6,9 @@
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,
   limits, the PSVI, concurrency, and where conformance stands.
+* **[Options](options.md)** — every configuration field in the four packages,
+  what its zero value means, and worked examples. Start here when you want to
+  know what you can change.
 * **[Security](security.md)** — the threat model, what is verified safe (XXE,
   entity expansion, regex backtracking), what a caller must still do, and the
   findings from the audit that produced them.

@@ -71,6 +71,9 @@ Four packages, each usable on its own:
   a complete validator service, timeouts, limits, hot-reloading rule sets.
 * **[docs/recipes.md](docs/recipes.md)** — batching, splitting, HTML
   rendering, parameters, custom resolvers, standalone XPath.
+* **[docs/options.md](docs/options.md)** — every option in `xdm`, `xpath`,
+  `xsd` and `xslt`: what each field does, what the zero value means, and the
+  limits that bound a parse, a validation and a transform.
 * **[docs/security.md](docs/security.md)** — threat model and audit results:
   XXE and entity expansion are closed even with `AllowDOCTYPE` on, and the two
   things a caller must still do themselves.

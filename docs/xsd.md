@@ -236,12 +236,32 @@ like any other:
 |---|---|---|
 | `Options.MaxDocuments` | 512 | documents one assembly may read |
 | `Options.ParseOptions` | refuses DOCTYPE | entity expansion in schema documents |
+| `ParseOptions.MaxBytes` | 64 MB | the size of one document read |
+| `ParseOptions.MaxNodes` | 10,000,000 | the size of one tree, ~2 GB |
+| `ParseOptions.MaxDepth` | 1000 | nesting, and so parser stack use |
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
+| `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
 
 `MaxDocuments` exists because a schema that includes a generator of schemas
 would otherwise be a way to spend the process. `MaxErrors` exists because a
 document that is wrong in every element would otherwise produce an error for
 each, which helps nobody and costs memory proportional to the document.
+
+`MaxBytes` and `MaxNodes` are two limits rather than one because neither alone
+bounds memory. A node costs a fixed ~200 bytes whatever it holds, so a megabyte
+of `<a/>` elements measures 53 times the heap of a megabyte of text — a byte cap
+says little about what a document will cost. `MaxBytes` bounds the read;
+`MaxNodes` bounds what the read can allocate. Every limit takes `-1` to disable
+it, for input this process produced itself.
+
+`ValidateOptions.MaxDepth` is deliberately separate from the parser's. The
+validator recurses once per element depth, and exceeding Go's stack limit is a
+`fatal error: stack overflow` that `recover()` cannot catch — it would take the
+process down rather than fail the request. Raising `ParseOptions.MaxDepth` to
+accept a legitimately deep document is a different decision from letting the
+validator descend that far, so if you need both, set both.
+
+[options.md](options.md) is the full field-by-field reference.
 
 The DOCTYPE default is worth naming: a schema document has no use for one, and
 it is the entry point for entity expansion attacks. Set
