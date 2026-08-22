@@ -14,6 +14,8 @@
 #
 #   GOXSLT_QT3=<dir>    github.com/w3c/qt3tests    (default testdata/qt3tests)
 #   GOXSLT_XSDTS=<dir>  github.com/w3c/xsdtests    (default testdata/xsdtests)
+#   GOXSLT_RNG=<file>   spectest.xml from relaxng/jing-trang
+#                                                  (default testdata/relaxng/spectest.xml)
 #   GOXSLT_UBL=<dir>    UBL 2.1, the directory holding maindoc/
 #   GOXSLT_CII=<dir>    UN/CEFACT CII or EN 16931 schemas
 #
@@ -44,6 +46,7 @@ abspath() {
 
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
+RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
 UBL="${GOXSLT_UBL:-}"
 CII="${GOXSLT_CII:-}"
 [ -n "$UBL" ] && UBL=$(abspath "$UBL")
@@ -107,6 +110,21 @@ if [ -f "$XSDTS/suite.xml" ]; then
 else
 	skip "xsdtests not at $XSDTS
     git clone --depth 1 https://github.com/w3c/xsdtests.git $XSDTS"
+fi
+
+section "RELAX NG (James Clark's spectest)"
+if [ -f "$RNG" ]; then
+	out=$(GOXSLT_RNG="$RNG" $GO test ./relaxng/ -count=1 -run TestSpectest -v 2>&1) || true
+	if printf '%s' "$out" | grep -q 'spectest:'; then
+		printf '%s\n' "$out" | grep -E 'spectest:|failing'
+	else
+		fail "spectest ran but reported no summary"
+		printf '%s\n' "$out" | tail -5
+	fi
+else
+	skip "spectest.xml not at $RNG
+    git clone --depth 1 https://github.com/relaxng/jing-trang.git
+    cp jing-trang/mod/rng-validate/test/spectest.xml $RNG"
 fi
 
 section "production corpora"
