@@ -20,7 +20,76 @@ depth are all bounded by default. The one thing you must still do yourself is
 
 ---
 
-## Fixed in this audit
+## Fixed in the second audit
+
+Four issues, all in code added after the first audit: the entity-markup
+rewrite in `xdm`, and the RELAX NG validator. Each has a regression test.
+
+### Entity references were expanded inside CDATA, comments and PIs
+
+**High.** The rewrite that lets an entity hold markup was a flat byte scan for
+`&` with no lexical state, so it expanded references in the three regions XML
+defines as *not* recognising one. That was wrong twice over: it expanded a
+reference the document meant literally, and it let replacement text close the
+region and open a new one.
+
+```xml
+<!DOCTYPE r [<!ENTITY e "]]><evil/><![CDATA[">]><r><![CDATA[&e;]]></r>
+```
+
+produced a real `<evil/>` element. Entity text became document structure,
+silently, and it moved validation verdicts in both directions — a document
+valid per spec was rejected, and structure could be smuggled past a validator
+whose downstream consumer parses CDATA correctly. The trigger was cheap: any
+one entity containing `<` switched the whole document onto that path.
+
+Fixed by giving the scanner the three regions to skip. Verified against
+libxml2, which agrees the reference stays literal.
+
+### Replacement text was decoded twice
+
+**Medium.** Expansion decoded `&amp;` because `dec.Entity` substitutes without
+re-scanning — but on the rewrite path the text *is* scanned again, so
+`&amp;lt;evil/&amp;gt;` became `<evil/>`, manufacturing markup from data the
+document had escaped. The same entity gave different results depending on
+whether an unrelated entity happened to contain `<`.
+
+A character reference is the opposite case and is still decoded on both paths:
+it may form part of a *name*, and a name is not a place a reference survives to
+be decoded later.
+
+### Unused entity declarations consumed the expansion budget
+
+**Low.** Testing whether any entity held markup resolved every declaration,
+charging unused ones against the shared cap — so a subset full of large unused
+entities made a legitimate reference fail with an error about something else.
+It also made the result depend on map iteration order, so the same document
+parsed differently from run to run. The check now reads the raw text and
+resolves nothing.
+
+### RELAX NG validation was quadratic in depth with no bound of its own
+
+**Medium.** Each level of nesting carries the pattern remaining at every level
+above it, so cost grows with the square of the depth: 8000 levels cost 487ms
+and 911MB, and doubling the depth quadrupled both. `xdm`'s `MaxDepth` capped it
+by accident. `relaxng.ValidateOptions.MaxDepth` now bounds it deliberately,
+matching what `xsd` already had — a caller who raises the parser's limit, or
+builds a tree by transform rather than parsing, has not agreed to spend a
+gigabyte validating it.
+
+### Checked and clean
+
+XXE stays closed through the new path — file, HTTP, `PUBLIC`, parameter
+entities and external entities reached indirectly through an internal markup
+entity were all refused, with a canary HTTP server recording zero hits. Entity
+bombs remain bounded through the rewrite, including the many-small-references
+case. `MaxBytes`, `MaxNodes` and `MaxDepth` are re-applied to the expanded
+text, which was the suspected bypass and is not one. The re-parse cannot
+recurse. RELAX NG `Compile` with no resolver refuses every `href`.
+
+---
+
+## Fixed in the first audit
 
 Nine issues, each with a regression test that was verified to fail without its
 fix.
@@ -364,21 +433,27 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
 ## What a caller must do
 
 1. **Consider the defaults deliberately.** `MaxBytes` (64 MB), `MaxNodes` (10
-   million), `MaxDepth` (1000 in each of the three layers) are set for a
-   general-purpose service. If you know your documents are smaller, lower them:
-   they are the bound on what one request can cost you.
+   million), `MaxDepth` (1000, separately in `xdm`, `xsd`, `relaxng` and
+   `xslt`) are set for a general-purpose service. If you know your documents
+   are smaller, lower them: they are the bound on what one request can cost
+   you.
 2. **Leave `AllowDOCTYPE` off** unless a schema you control needs it. Turning it
    on does not reopen XXE, but it is still the wider setting.
 3. **Sanitise URLs** if you serve transform output as HTML. XSLT does not, and
    is not supposed to.
 4. **Set a `Root`** on `FileResolver`, and an `AllowHost` on `HTTPResolver`, if
-   either resolves locations an attacker can influence.
+   either resolves locations an attacker can influence. A `relaxng.Resolver` is
+   your own code and has no such field: it receives the href with `..` intact
+   and the scheme filled in, so it must do its own containment check. See the
+   interface's documentation for measured examples.
 5. **Set a timeout** on the request. The identity-constraint finding above is
    CPU exhaustion; the depth limit caps it, but a `context` deadline is what
    bounds the general case.
 6. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
    the XSD validator trades a clean error for an uncatchable stack overflow,
-   and raising it also removes the ceiling on the identity-constraint cost.
+   and raising it also removes the ceiling on the identity-constraint cost. In
+   `relaxng` the cost of depth is *quadratic*, so raising it there is the most
+   expensive of the four.
 
 ## Re-running the audit
 
