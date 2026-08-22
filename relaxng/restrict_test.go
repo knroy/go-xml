@@ -532,3 +532,48 @@ func TestElementCannotMatchWhereAStringDoes(t *testing.T) {
 		`<element`+rngNS+` name="foo">
 			<attribute name="bar"><text/></attribute></element>`)
 }
+
+// An empty element and one containing the empty string are the same document,
+// so a pattern that matches strings must match <foo/>.
+//
+// This is easy to get wrong in the direction that rejects: the pattern at that
+// point sits inside an After, which is never nullable however well its left
+// half matched, so asking whether the derivative is nullable answers no even
+// when the content is fine. What decides it is what the end tag makes of it.
+func TestEmptyElementMatchesTheEmptyString(t *testing.T) {
+	cases := []struct{ name, schema string }{
+		{"data", `<element` + rngNS + ` name="foo"><data type="string"/></element>`},
+		{"value", `<element` + rngNS + ` name="foo"><value type="string"/></element>`},
+		{"empty value", `<element` + rngNS + ` name="foo"><value/></element>`},
+		{"list of nothing",
+			`<element` + rngNS + ` name="foo"><list><empty/></list></element>`},
+	}
+	for _, c := range cases {
+		s, err := compileSrc(t, c.schema)
+		if err != nil {
+			t.Errorf("%s: compile: %v", c.name, err)
+			continue
+		}
+		doc, err := xdm.ParseString(`<foo/>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Validate(doc.Root); err != nil {
+			t.Errorf("%s: <foo/> should match the empty string: %v", c.name, err)
+		}
+	}
+
+	// A pattern that wanted an element is still not satisfied by emptiness.
+	s, err := compileSrc(t, `<element`+rngNS+` name="foo">
+		<element name="bar"><empty/></element></element>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := xdm.ParseString(`<foo/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(doc.Root); err == nil {
+		t.Error("<foo/> should not satisfy a schema requiring a child element")
+	}
+}

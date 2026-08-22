@@ -137,9 +137,27 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 func (v *validator) childrenDeriv(p Pattern, el *xdm.Node) Pattern {
 	kids := contentChildren(el)
 	if len(kids) == 0 {
-		// An element with no content still has to admit the empty sequence,
-		// which textDeriv on "" does not express — an empty element and one
-		// containing "" are the same document.
+		// An empty element and one containing "" are the same document, so a
+		// pattern that admits the empty sequence already matches.
+		if p.nullable() {
+			return p
+		}
+		// If it does not, the element's content is the empty string, and a
+		// pattern that matches strings may still accept it: <data
+		// type="string"/> matches "" as readily as any other value. Skipping
+		// this leaves <foo/> failing against a schema that plainly admits it.
+		//
+		// The derivative is only taken when it helps. For a pattern that
+		// wanted an element it is NotAllowed either way, and taking it would
+		// replace a useful failure with a bare one.
+		//
+		// "Helps" is judged by what the end tag will make of it, not by
+		// nullability: at this point the pattern is inside an After, whose
+		// continuation is the rest of the enclosing content, and an After is
+		// never nullable however well its left half matched.
+		if d := textDeriv(p, ""); !isNotAllowed(endTagDeriv(d)) {
+			return d
+		}
 		return p
 	}
 	for _, c := range kids {
