@@ -130,3 +130,106 @@ func TestPredefinedEntitiesUnaffected(t *testing.T) {
 		t.Errorf("got %q, want a&b", got)
 	}
 }
+
+// An entity whose replacement text is markup is parsed as markup.
+//
+// encoding/xml cannot do this: dec.Entity maps a name to a string and the
+// decoder substitutes that string as character data without re-scanning it, so
+// <!ENTITY e "<b/>"> would reach the tree as the four characters "<b/>". XML
+// says the replacement text is parsed, which is what makes an entity a way to
+// factor out a fragment rather than only a phrase.
+func TestEntityHoldingMarkupIsParsed(t *testing.T) {
+	tree, err := ParseString(
+		`<!DOCTYPE d [<!ENTITY e "<b/>">]><d>&e;</d>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	kids := tree.Root.ChildElements()
+	if len(kids) != 1 {
+		t.Fatalf("root has %d element children, want 1", len(kids))
+	}
+	inner := kids[0].ChildElements()
+	if len(inner) != 1 || inner[0].Name.Local != "b" {
+		t.Fatalf("entity expanded to %v, want an element named b", inner)
+	}
+}
+
+// A declaration ends at the first ">" outside a quoted value.
+//
+// Scanning for a bare ">" truncates the replacement text of any entity that
+// contains one, silently: the entity still expands, to less than it says. It
+// is how <!ENTITY e "<b/>"> came to hold the value "<b/".
+func TestEntityValueMayContainAngleBrackets(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"a greater-than in text",
+			`<!DOCTYPE d [<!ENTITY e "a > b">]><d>&e;</d>`, "a > b"},
+		{"a quoted greater-than after another declaration",
+			`<!DOCTYPE d [<!ENTITY x "plain"><!ENTITY e "1 > 0">]><d>&e;</d>`,
+			"1 > 0"},
+		{"apostrophe-quoted value",
+			`<!DOCTYPE d [<!ENTITY e 'a > b'>]><d>&e;</d>`, "a > b"},
+	}
+	for _, c := range cases {
+		tree, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true})
+		if err != nil {
+			t.Errorf("%s: parse: %v", c.name, err)
+			continue
+		}
+		if got := tree.Root.StringValue(); got != c.want {
+			t.Errorf("%s: expanded to %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Substituting markup must not widen what the entity bounds admit. Each of
+// these takes the markup path, which is a different code path from the one
+// the other expansion tests cover.
+func TestMarkupEntityExpansionIsStillBounded(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"a billion-laughs built from elements", `<!DOCTYPE d [
+			<!ENTITY a "<x/><x/><x/><x/><x/><x/><x/><x/><x/><x/>">
+			<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+			<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+			<!ENTITY e "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+			<!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">
+			]><d>&f;</d>`},
+
+		{"an entity that refers to itself",
+			`<!DOCTYPE d [<!ENTITY r "<x/>&r;">]><d>&r;</d>`},
+
+		{"an external entity beside a markup one",
+			`<!DOCTYPE d [<!ENTITY x SYSTEM "/etc/passwd">` +
+				`<!ENTITY m "<b/>">]><d>&m;&x;</d>`},
+	}
+	for _, c := range cases {
+		if _, err := ParseString(c.src, ParseOptions{AllowDOCTYPE: true}); err == nil {
+			t.Errorf("%s: was accepted; it should be refused", c.name)
+		}
+	}
+
+	// Many references, each individually small, are bounded by count.
+	var sb strings.Builder
+	sb.WriteString(`<!DOCTYPE d [<!ENTITY m "<b/>">]><d>`)
+	for i := 0; i < maxEntityCount+1; i++ {
+		sb.WriteString("&m;")
+	}
+	sb.WriteString(`</d>`)
+	if _, err := ParseString(sb.String(), ParseOptions{AllowDOCTYPE: true}); err == nil {
+		t.Error("a document of nothing but entity references was accepted")
+	}
+}
+
+// The markup path must not change what a text entity does, and must not run
+// for a document that has none.
+func TestTextEntitiesAreUnaffected(t *testing.T) {
+	tree, err := ParseString(
+		`<!DOCTYPE d [<!ENTITY t "plain text">]><d>&t;</d>`,
+		ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := tree.Root.StringValue(); got != "plain text" {
+		t.Errorf("expanded to %q, want %q", got, "plain text")
+	}
+}

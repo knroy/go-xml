@@ -75,7 +75,11 @@ func parseInternalEntities(subset string) *entityTable {
 			break
 		}
 		rest = rest[i+len("<!ENTITY"):]
-		end := strings.IndexByte(rest, '>')
+		// The declaration ends at the first ">" *outside* a quoted value.
+		// Scanning for a bare ">" truncates any entity whose replacement text
+		// contains one — which is every entity that holds markup, and the
+		// reason <!ENTITY e "<b/>"> was read as the value "<b/".
+		end := endOfDeclaration(rest)
 		if end < 0 {
 			break
 		}
@@ -119,6 +123,28 @@ func parseInternalEntities(subset string) *entityTable {
 		return nil
 	}
 	return t
+}
+
+// endOfDeclaration returns the offset of the ">" that closes a declaration,
+// skipping any inside a quoted value, or -1 if there is none.
+func endOfDeclaration(s string) int {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+		case '>':
+			return i
+		}
+	}
+	return -1
 }
 
 func isEntityName(s string) bool {
@@ -296,4 +322,148 @@ func decodeCharRef(name string) (rune, bool) {
 		return 0, false
 	}
 	return rune(n), true
+}
+
+// hasMarkup reports whether any declared entity's replacement text contains
+// markup rather than only characters.
+//
+// This decides whether a document needs the substitution pass below, and the
+// answer is almost always no: an entity holding "&#xA0;" or a boilerplate
+// phrase is text, and text is what encoding/xml's dec.Entity handles well.
+func (t *entityTable) hasMarkup() bool {
+	for name := range t.raw {
+		s, err := t.resolve(name)
+		if err != nil {
+			continue
+		}
+		if strings.ContainsRune(s, '<') {
+			return true
+		}
+	}
+	return false
+}
+
+// substituteMarkupEntities replaces entity references in a document with their
+// replacement text, so that markup inside an entity is parsed as markup.
+//
+// encoding/xml cannot do this. Its dec.Entity is a map to *strings*, and the
+// decoder substitutes the value as character data without re-scanning it — so
+// <!ENTITY e "<b/>"> followed by &e; yields the four characters "<b/>" rather
+// than an element. XML says the replacement text is parsed, which is what
+// makes an entity a way to factor out a fragment rather than only a phrase.
+//
+// So a document that needs it is rewritten before the decoder sees it. This
+// runs only when hasMarkup says some entity holds markup, because the rewrite
+// costs a copy of the document and the common case does not need one.
+//
+// The expansion bounds are the table's own — the per-entity cap, the total
+// cap, the depth limit — so this adds no new limit to get wrong, and a
+// billion-laughs is refused here for the same reason and by the same code as
+// everywhere else. What it does add is a bound on how many references one
+// document may substitute, since each is cheap individually and a document
+// made of nothing else would otherwise be unbounded.
+func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
+	// The internal subset declares the entities and may mention them in
+	// default values; substituting there would change the declarations
+	// themselves. Everything after it is content.
+	start := endOfInternalSubset(src)
+
+	var sb strings.Builder
+	sb.Grow(len(src))
+	sb.WriteString(src[:start])
+
+	var count, written int
+	for i := start; i < len(src); {
+		c := src[i]
+		if c != '&' {
+			sb.WriteByte(c)
+			i++
+			written++
+			continue
+		}
+		j := strings.IndexByte(src[i:], ';')
+		if j < 0 {
+			sb.WriteByte(c)
+			i++
+			written++
+			continue
+		}
+		name := src[i+1 : i+j]
+		// A character reference and the five predefined entities are left
+		// alone: the decoder handles both, and rewriting them here would
+		// turn "&amp;lt;" into something the document did not say.
+		if name == "" || name[0] == '#' {
+			sb.WriteString(src[i : i+j+1])
+			i += j + 1
+			written += j + 1
+			continue
+		}
+		if _, ok := predefinedRune(name); ok {
+			sb.WriteString(src[i : i+j+1])
+			i += j + 1
+			written += j + 1
+			continue
+		}
+		rep, err := t.resolve(name)
+		if err != nil {
+			// An entity that cannot be expanded is left as written, so the
+			// decoder reports the reference. Its error names the entity and
+			// the position, which is more use than one from here.
+			sb.WriteString(src[i : i+j+1])
+			i += j + 1
+			written += j + 1
+			continue
+		}
+		count++
+		if count > maxEntityCount {
+			return "", fmt.Errorf(
+				"document references more than %d entities", maxEntityCount)
+		}
+		written += len(rep)
+		if written > maxTotalEntityBytes {
+			return "", fmt.Errorf(
+				"entity expansion exceeds %d bytes", maxTotalEntityBytes)
+		}
+		sb.WriteString(rep)
+		i += j + 1
+	}
+	return sb.String(), nil
+}
+
+// endOfInternalSubset returns the offset just past the DOCTYPE declaration, or
+// zero when there is none.
+//
+// The scan tracks quotes and nesting because an internal subset may contain
+// both: a default value may hold "]" and a declaration may hold ">".
+func endOfInternalSubset(src string) int {
+	i := strings.Index(src, "<!DOCTYPE")
+	if i < 0 {
+		return 0
+	}
+	var quote byte
+	depth := 0
+	for j := i; j < len(src); j++ {
+		c := src[j]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			quote = c
+		case '[':
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		case '>':
+			if depth == 0 {
+				return j + 1
+			}
+		}
+	}
+	return 0
 }

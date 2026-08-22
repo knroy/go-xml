@@ -53,6 +53,15 @@ type ParseOptions struct {
 	// a megabyte of "<a/>" is fifty times the memory of a megabyte of text.
 	// MaxBytes bounds the read; MaxNodes bounds what the read can allocate.
 	MaxNodes int
+
+	// entitiesExpanded marks the second parse of a document whose entities
+	// held markup: their references are already substituted, so the DOCTYPE's
+	// entity declarations must not be applied again.
+	//
+	// It is unexported because it is not a choice a caller makes. Without it
+	// the second parse would re-expand text that is already expanded, and an
+	// entity whose replacement mentions another would double.
+	entitiesExpanded bool
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -111,7 +120,19 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
-	if trackPos {
+	// The source is kept when positions are tracked, and also when a DOCTYPE
+	// is permitted: an entity whose replacement text holds markup forces a
+	// re-parse of the substituted source, and by the time that is known the
+	// reader is partly consumed and the decoder has buffered ahead into it.
+	//
+	// The cost is a second copy of the document for the length of the parse,
+	// paid by every caller that sets AllowDOCTYPE rather than only those who
+	// turn out to need it. Dropping it once the DOCTYPE is read would mean
+	// replacing the decoder mid-stream, which loses its lookahead — so the
+	// copy stays. entitiesExpanded marks the second parse, which has no
+	// entities left to find and so needs no copy at all.
+	keepSrc := trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)
+	if keepSrc {
 		r = io.TeeReader(r, &srcBuf)
 	}
 
@@ -253,7 +274,36 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// Only internal entities are expanded. One declared SYSTEM or
 				// PUBLIC is recorded as refused, so referencing it is an
 				// error rather than a fetch — this does not open XXE.
-				if ents := parseInternalEntities(d); ents != nil {
+				if ents := parseInternalEntities(d); ents != nil &&
+					!opts.entitiesExpanded {
+					// An entity whose replacement text holds markup cannot go
+					// through dec.Entity at all: encoding/xml substitutes that
+					// map's values as character data and never re-scans them,
+					// so <!ENTITY e "<b/>"> would reach the tree as the four
+					// characters "<b/>". XML says the replacement text is
+					// parsed, which is what makes an entity a way to factor
+					// out a fragment rather than only a phrase.
+					//
+					// So such a document is rewritten and parsed again. The
+					// check is cheap and almost always false, and the restart
+					// happens at the DOCTYPE — before any content has been
+					// built — so nothing is thrown away but the directive.
+					if ents.hasMarkup() {
+						// The decoder buffers ahead, so srcBuf holds an
+						// unpredictable prefix and the reader holds the
+						// remainder — but the decoder's own buffer holds the
+						// piece between them. Recovering that is fragile, so
+						// the source is re-read from the start instead: the
+						// caller's reader is spent, and the tee has whatever
+						// it consumed, which together with the rest of the
+						// reader is the whole document only if nothing was
+						// buffered. Reading the tee to completion first makes
+						// it so.
+						if _, err := io.Copy(io.Discard, r); err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
+						return parseExpanded(srcBuf.String(), ents, opts)
+					}
 					if dec.Entity == nil {
 						dec.Entity = map[string]string{}
 					}
@@ -437,4 +487,29 @@ func (c *countingReader) Read(p []byte) (int, error) {
 		return n, fmt.Errorf("document exceeds %d bytes", c.max)
 	}
 	return n, err
+}
+
+// parseExpanded re-parses a document whose entities hold markup.
+//
+// It exists because encoding/xml cannot expand such an entity: dec.Entity maps
+// a name to a string and the decoder substitutes that string as character
+// data, without re-scanning it. An entity declared as "<b/>" therefore reaches
+// the tree as four characters rather than as an element, which is not what XML
+// says an entity is.
+//
+// The substitution is done on the source and the document parsed again. The
+// second parse declares no entities — they are already substituted — so it
+// cannot recurse back into here, and a document that references an entity the
+// subset does not declare still fails in the decoder, where the error names
+// the reference.
+func parseExpanded(src string, ents *entityTable, opts ParseOptions) (*Tree, error) {
+	expanded, err := ents.substituteMarkupEntities(src)
+	if err != nil {
+		return nil, fmt.Errorf("parse XML: %w", err)
+	}
+	// The expansion bounds have already been applied by the substitution, so
+	// the re-parse is of text of a size this package has agreed to.
+	sub := opts
+	sub.entitiesExpanded = true
+	return Parse(strings.NewReader(expanded), sub)
 }
