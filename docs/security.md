@@ -258,6 +258,22 @@ n=24 to n=40. Go also *rejects* repeat counts over 1000, so `{1,1000000}` cannot
 be used to force an expansion; the XSD pattern translator allocates nothing on
 nested quantifiers or 200-deep groups.
 
+**Backreferences do not change this.** XPath 2.0 has them and RE2 does not, and
+the usual way to bridge that is a backtracking engine — which is exactly the
+denial-of-service vector RE2 exists to remove. This engine does not add one. A
+backreference is resolved only when every group it names has a *fixed* width,
+where RE2's single submatch assignment is the only assignment and one
+comparison decides the answer; the whole match stays linear in the input.
+Measured on `([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs.
+
+A backreference to a variable-width group — `(a*)\1` — is refused with
+`FORX0002` rather than answered, because deciding it needs alternatives RE2
+cannot enumerate. There is deliberately **no option to relax this**: an engine
+that answers correctly or says it cannot is safe to expose to untrusted
+patterns, and one that guesses is not safe at any setting. Since `fn:matches`
+takes its pattern from the stylesheet, and a stylesheet may be caller-supplied,
+that distinction is a security property rather than a conformance preference.
+
 ### All resolution defaults are closed
 
 `doc()`, `document()`, `collection()`, `xsl:include` and `xsl:import` all refuse

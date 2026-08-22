@@ -530,18 +530,22 @@ stop short of 100%, not a defect to fix.**
 
 So the reachable ceiling is roughly **99.5% on 1.0 and 99.1% on 1.1**, not 100.
 
-### XPath: 12 cases, one cause
+### XPath: one case, refused on purpose
 
-Every remaining failure is a regex backreference in `fn-matches`. Closing them
-means a second, backtracking regex engine with a step budget and a dispatch
-rule — roughly 800–1,500 lines plus a fuzz target — and it reintroduces the
-catastrophic-backtracking DoS class that [security.md](security.md) otherwise
-keeps out of this tree. RE2 returns one match and cannot enumerate alternative
-submatch assignments, so the obvious design (captures plus an explicit
-comparison) does not work; §2.3 of [todo.md](todo.md) has the detail.
+`fn-matches-51` names a group whose width can vary *and* places the
+backreference mid-pattern. Both are refused: RE2 returns a single submatch
+assignment, so for a variable-width group the split it reports may not be the
+one that matches, and a comparison against it would answer confidently and
+wrongly.
 
-**100% is available here and costs the linear-time guarantee.** That is the
-whole trade.
+Eleven of the twelve backreference cases that used to sit here are fixed. When
+every named group has a **fixed** width the greedy assignment is the only
+assignment, so comparison is exact and stays linear — no backtracking engine,
+and the DoS class [security.md](security.md) keeps out stays out. The full
+reasoning is under *Regular expression backreferences* above.
+
+**Closing the last one would cost the linear-time guarantee**, which is a worse
+trade than the case is worth.
 
 ### XSD schema-validity: 174 (1.0) and 285 (1.1) that are ours
 
@@ -579,16 +583,22 @@ greedy content-model matcher, two reverted attempts recorded above), and
 
 | | now | reachable | what stands in the way |
 |---|---|---|---|
-| XPath 2.0 | 99.92% | **100%** | a backtracking regex engine, and the DoS class it brings back |
+| XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
 | XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
 | XSD 1.1 instance | 99.79% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
 | XSD 1.1 schema | 97.92% | ~99.9% | 285 constraints, one at a time |
 
-Nothing here is blocked on a missing idea. The XPath 12 are a deliberate trade,
-the XSD false accepts are volume rather than difficulty, and the false rejects
-are one subsystem that needs its occurrence handling reworked rather than
-patched.
+Nothing here is blocked on a missing idea. XPath's last case is a deliberate
+refusal, the XSD false accepts are volume rather than difficulty, and the false
+rejects are one subsystem that needs its occurrence handling reworked rather
+than patched.
+
+**Note that reaching 100% on XSD is not possible and not desirable.** 48 of the
+1.0 disagreements and 47 of the 1.1 ones are cases the W3C's own metadata
+records a dispute about; nineteen are the bug 4113 general-category tests,
+where passing means freezing a Unicode 3.1 table and being wrong about modern
+text.
 
 ## Related
 

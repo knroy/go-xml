@@ -72,7 +72,7 @@ Requires Go 1.26 or later.
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.92%** schema-validity (15,045 of 15,365); opt-in via `Version11` |
-| **Tests** | 647, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 671, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
@@ -85,9 +85,14 @@ true here:
    Both versions otherwise measure above 99% on their part of the suite; the
    remaining disagreements are listed in *Where it fails*, along with what the
    suite skips and why.
-2. **Regular-expression backreferences are unsupported and always will be.**
-   RE2 has none by design, which is also why no pattern can hang this engine.
-   Everything else in the XML Schema regex flavour is implemented.
+2. **A backreference to a variable-width group is refused, by design.** RE2
+   has no backreferences, which is also why no pattern can hang this engine.
+   Where the group has a *fixed* width the backreference is resolved exactly,
+   in linear time — that covers `(a)\1`, `([md])[aeiou]\1` and the like. Where
+   it can vary, `(a*)\1`, there is more than one way to split the match and RE2
+   reports only one, so the answer is `FORX0002` rather than a guess. The XML
+   Schema pattern facet has no backreference at all and rejects them outright,
+   which is conformant: Appendix F's grammar has no form for one.
 3. **The XSLT layer has no conformance suite behind it.** The W3C's XSLT tests
    target 3.0 and do not carry over. Its evidence is a differential against
    Saxon on real rule sets — strong, but corpus-shaped rather than systematic.
@@ -683,7 +688,8 @@ different reasons.
 Each errors rather than doing something plausible. An XSLT processor that
 accepts an instruction and quietly ignores it is the worst failure mode,
 because the output looks fine and is wrong. See *What is not* below for the
-full list — `fn:collection`, `fn:unparsed-text`, and regex backreferences.
+full list — `fn:unparsed-text`, a backreference to a variable-width group, and
+`fn:collection` or `fn:doc` when the caller has configured no resolver.
 
 **Malformed stylesheets are refused too**, which is the same principle applied
 one level up. An unknown element in the `xsl:` namespace is `XTSE0010` rather
@@ -697,22 +703,28 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**1 of 15,181 in-scope cases fails (0.01%).** One cluster and a long tail:
+**1 of 15,181 in-scope cases fails (0.01%).**
 
-| cases | set | what it is |
-|---:|---|---|
-| 12 | `fn-matches` | regex backreferences, which RE2 does not have |
-| 2 | `fn-collection` | down from 7; a resolver hook closed the rest |
-| 2 | `fn-doc` | serialisation of an empty element and of namespace declarations |
-| 2 | `fn-in-scope-prefixes` | |
-| 2 | `prod-Comment` | |
-| 8 | eight sets, one case each | the long tail |
+`fn-matches-51`:
+`fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
+`([)(]*)`, a group whose width can vary, *and* places the backreference in the
+middle of the pattern. Both are refused deliberately — see *The hard floor*
+below.
 
-The denominator grew by 461 in the course of this: source paths in a test-set
-environment are relative to the test-set file, not to the suite root, and
-resolving them against the root skipped every case whose environment named
-`../docs/…`. Those cases now run, which is also why two `fn-doc` bugs are
-newly visible — they were never being exercised.
+Two things about how that number was reached are worth more than the number
+itself.
+
+**The denominator grew by 461.** Source paths in a test-set environment are
+relative to the test-set file, not to the suite root; resolving them against
+the root silently skipped every case whose environment named `../docs/…`. They
+were never counted as failures — they were never counted at all.
+
+**Five of the last seventeen failures were the harness, not the engine.**
+Assertions required a literal boolean where the spec asks for an effective
+boolean value; the result serialiser dropped in-scope namespace declarations;
+an `assert-xml` whose expected value lived in a file compared against the empty
+string. A conformance number is only as honest as the harness producing it,
+which is why those are written down rather than quietly absorbed.
 
 ### 2a. Where the XSD suite still disagrees
 
@@ -791,20 +803,28 @@ disagreeing on purpose.
 
 ### Is 100% reachable?
 
-Not with this architecture. Sorting the 28 by *why* they fail:
+For XPath, effectively yes: one case remains, and it is refused on purpose.
 
-| cases | cause | fixable? |
-|---:|---|---|
-| 12 | **regex backreferences** (`\1`) | **no** — see below |
-| 7 | `fn:collection` | no — the harness configures no collection |
-| 5 | `xs:dateTimeStamp` | no — an XSLT 3.0 type this engine does not claim |
-| 4 | ordinary bugs, one per test set | yes, one at a time |
+The route there is the useful part, because most of it was not what the
+failures looked like. Of the seventeen that remained after the ordinary bugs,
+**five were the test harness rather than the engine**, two needed DTD attribute
+defaulting, two needed a document to be retrievable under the URI
+`fn:document-uri` reports for it, one was a lexical form that disagreed with
+its own value, and eleven were backreferences that turned out to be decidable.
 
-**24 of the 28 are structural.** One of the remaining four is the only
-*genuine* static-typing case in the suite: `for $var in "ABC" return $var
-castable as xs:QName` is false while the same expression with `let` is true,
-because a QName's namespace comes from the static context and only a
-statically-known operand has one.
+Two of those are worth stating on their own.
+
+`for $var in "ABC" return $var castable as xs:QName` is false while the same
+expression with a literal is true, because a QName's namespace comes from the
+static context and only a statically-known operand has one. That is a static
+property of the operand, so it has to be decided where the expression is
+visible — not in the cast, which sees a value and cannot tell a literal from a
+variable holding one.
+
+`xs:decimal` kept more precision than it printed. A literal with 360
+fractional digits rendered as `0` while comparing unequal to zero, so
+`0.000…1 eq 0` was false and `string(0.000…1)` was `"0"`. Both cannot be right;
+the value is the one that must not move.
 
 Three themes recur through everything that was fixed, because each is the same
 mistake made repeatedly:
@@ -852,12 +872,32 @@ typing pass. That was wrong, and worth recording: when the cases were actually
 read rather than inferred from their error codes, all but one turned out to be
 ordinary missing validation.
 
-The hard floor is **regex**. RE2 has no backreferences by design — that is the
-trade that buys linear-time matching and the reason a pathological pattern
-cannot hang this engine. Twelve cases are unreachable without swapping in
-a backtracking engine, which would reintroduce catastrophic backtracking as a
-denial-of-service vector. That is a bad trade for a validator, so those cases
-stay failed on purpose.
+The one remaining case is **regex**, and the reasoning is worth setting out
+because the obvious fix is wrong.
+
+RE2 has no backreferences by design — the trade that buys linear-time matching
+and the reason a pathological pattern cannot hang this engine. The natural
+workaround is to capture the groups and compare the text explicitly. That fails
+silently: RE2 returns a *single* submatch assignment, the greedy one, so
+`(a*)\1` against `"aa"` reports the group as `"aa"`, leaves nothing for the
+backreference, and answers **false** where the truth is true — the split is
+`"a"` + `"a"`. The information needed was discarded before the comparison ran.
+
+But when every group a backreference names has a **fixed** width, the greedy
+assignment is the *only* assignment. There is nothing to enumerate, so
+comparison is exact rather than approximate, and it runs in RE2's linear time:
+measured on `([a-z])\1*`, 4,000 characters in 53 µs and 64,000 in 567 µs.
+
+So the split is by what can be **decided**, not by what a caller asked for.
+`(a)\1` and `([md])[aeiou]\1` are resolved; `(a*)\1` raises `FORX0002`. There
+is deliberately no option to switch this on — an engine that answers correctly
+or says it cannot is safe to have on always, where one that guesses is not safe
+at any setting. No backtracking engine was added and the linear-time guarantee
+is intact.
+
+`fn-matches-51` is the case that stays: it names a variable-width group *and*
+puts the backreference mid-pattern, which would need the comparison to feed
+back into the automaton.
 
 Everything else about the XML Schema regex flavour *is* implemented, and most
 of it had to be, because RE2 silently disagrees rather than refusing: XML
@@ -900,10 +940,19 @@ rather than doing something plausible** — an XSLT processor that accepts an
 instruction and quietly ignores it is the worst possible failure mode, because
 the output looks fine and is wrong.
 
-* **`fn:collection` and `fn:unparsed-text`** — no collection is configured, and
-  reading arbitrary files named by a stylesheet is disabled by design.
-* **Regular-expression backreferences** (`\1`) — RE2 has none, by the design
-  choice that also makes catastrophic backtracking impossible. Character-class
+* **`fn:unparsed-text`** — reading arbitrary files named by a stylesheet is
+  disabled by design, unconditionally.
+* **`fn:collection` and `fn:doc` without a resolver** — both fail closed rather
+  than returning nothing, so a misconfiguration is reported instead of looking
+  like a document set that happened to be empty. Supply a
+  `CollectionResolver` or `DocumentResolver` to enable them; they are separate
+  switches, so enabling `fn:doc` for a known code list does not also let a
+  stylesheet enumerate a directory.
+* **A backreference to a variable-width group** (`(a*)\1`) — RE2 returns one
+  submatch assignment, and for a group whose width can vary that assignment may
+  be the wrong split, so the answer is `FORX0002` rather than a guess. A
+  fixed-width backreference (`(a)\1`) *is* resolved, exactly and in linear
+  time. Character-class
   subtraction (`[a-z-[aeiou]]`) *is* implemented, by expanding both sides into
   codepoint ranges and taking the difference; only subtraction from a shorthand
   class (`[\i-[:]]`) is refused, because that needs the Unicode tables defining
@@ -923,11 +972,11 @@ had let something through.
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (647) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (671) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,181 cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 26,069 instance tests | schemas nobody writes by hand |
+| **W3C xsdtests suite** | systematic XSD conformance across 25,003 instance and 14,405 schema-validity tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 
 **The production schema sets are the newest of the five and found the most per
@@ -1183,21 +1232,19 @@ Together with the four crashes and hangs above, that took the in-scope pass
 rate from **92.42% to 98.16%** — measured with the harness's original loose
 error check, which accepted any error where a specific code was expected.
 Tightening that check later dropped the honest figure to 96.22%, and grinding
-the tail down from there brought it to **99.82%**; see below.
+the tail down from there brought it to **99.99%**; see below.
 
-**What the remaining failures are** is covered under *Where it fails* above.
-In short: the largest group is regular expressions, where RE2 and the XML
-Schema flavour genuinely differ.
-Backreferences (`\11`) do not exist in RE2 at all, which is architectural
-rather than a bug to fix; every other divergence has since been implemented,
-because RE2 tends to disagree silently rather than refuse. Character-class
-subtraction *is* implemented, by
+**What the one remaining failure is** is covered under *Where it fails* above:
+a backreference to a group whose width can vary, which RE2 cannot resolve and
+this refuses rather than guesses at.
+
+Every other divergence between RE2 and the XML Schema flavour has been
+implemented, and most of them had to be, because RE2 tends to disagree
+*silently* rather than refuse. Character-class subtraction is implemented by
 expanding both classes into codepoint ranges and taking the difference, but
 only where both sides are literal characters and ranges — subtracting from
 `\d` or `\p{L}` would need the Unicode tables that define them and is still
-refused rather than approximated. The rest are scattered edges in casting and
-type checking, each a real divergence but none reached by the production
-corpora.
+refused rather than approximated.
 
 **Known weaknesses of the harness itself**, stated because a conformance number
 is only as honest as what it measures:
@@ -1213,8 +1260,9 @@ is only as honest as what it measures:
   and count as failures**, not skips. This *understates* the pass rate.
   `assert-xml`, `assert-permutation` and expression-valued `assert` are
   implemented.
-* **503 cases skip** because a source document the catalog references is
-  missing from the upstream checkout.
+* **Every skip is now a spec or feature dependency**, not a missing file. An
+  earlier run reported 503 cases skipped for an unavailable source; those were
+  the path-resolution bug above, not the checkout.
 * Two assertion conventions are honoured that a naive harness gets wrong: the
   catalog's `code="*"` wildcard means "an error, unspecified" rather than a
   code spelled `*`, and an `xsd-version` dependency selects between 1.0/1.1

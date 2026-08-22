@@ -350,6 +350,39 @@ join it into a path without checking for traversal.
 Not configurable. `fn:unparsed-text()` is disabled unconditionally — it cannot
 read a file even with `Docs` set.
 
+### Regular-expression backreferences
+
+Not configurable, and deliberately so. `fn:matches` resolves a backreference
+when every group it names has a **fixed** width:
+
+```
+matches("aa", "(a)\1")              → true
+matches("Mum", "([md])[aeiou]\1", "i") → true
+matches("A", "([A-Z])\1*")           → true
+```
+
+A group whose width can vary raises `FORX0002` instead:
+
+```
+matches("aa", "(a*)\1")             → FORX0002
+```
+
+The reason is that Go's `regexp` is RE2, which returns a *single* submatch
+assignment — the greedy one. For a fixed-width group that is the only possible
+assignment, so comparing the captured text is exact and runs in linear time.
+For a variable-width group there are several splits and RE2 reports one, so a
+comparison would answer confidently and wrongly: `(a*)` against `"aa"` does
+match, by the split `"a"` + `"a"`, but the greedy assignment leaves nothing for
+the backreference.
+
+There is no option to relax this. An engine that answers correctly or says it
+cannot is safe to point at untrusted patterns; one that guesses is not safe at
+any setting, and `fn:matches` takes its pattern from the stylesheet. See
+[security.md](security.md#regular-expressions-cannot-backtrack-catastrophically).
+
+The XML Schema pattern facet has no backreference at all — Appendix F's grammar
+has no form for one — so `xsd` rejects them outright under both versions.
+
 ---
 
 ## Putting it together: a validating service
