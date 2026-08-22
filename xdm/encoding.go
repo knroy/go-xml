@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 	"unicode/utf16"
-	"unicode/utf8"
 )
 
 // Character encoding detection and decoding.
@@ -262,20 +261,4 @@ func rewriteVersionDecl(s string) string {
 	closeAt := strings.IndexByte(rest[q+1:], quote)
 	valAt := i + len("version") + q + 1
 	return s[:valAt] + "1.0" + s[valAt+closeAt:]
-}
-
-// validUTF8Prefix reports whether the first bytes of a document are valid
-// UTF-8, used to give a clearer error than the decoder's.
-func validUTF8Prefix(b []byte) bool {
-	if len(b) > 64 {
-		b = b[:64]
-	}
-	for len(b) > 0 {
-		r, size := utf8.DecodeRune(b)
-		if r == utf8.RuneError && size == 1 {
-			return false
-		}
-		b = b[size:]
-	}
-	return true
 }

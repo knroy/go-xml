@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"unicode/utf16"
 )
 
@@ -148,5 +149,51 @@ func TestRewriteVersionDecl(t *testing.T) {
 		if got := rewriteVersionDecl(c.in); got != c.want {
 			t.Errorf("rewriteVersionDecl(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// A document shorter than the four bytes decodeReader peeks at must still be
+// read rather than being reported as a read error.
+//
+// bufio returns a "buffer full"-family error for a short Peek, which is not a
+// failure of the underlying reader — it means the document ended. Treating it
+// as an error would make every document under four bytes unparseable, and the
+// shortest legal one is well under that.
+func TestShortDocumentIsNotAReadError(t *testing.T) {
+	cases := []struct {
+		name, src string
+		wantErr   bool
+	}{
+		{"a minimal document", `<a/>`, false},
+		{"shorter than the peek", `<a/`, true}, // malformed, but not a read error
+		{"empty", ``, true},
+		{"one byte", `<`, true},
+	}
+	for _, c := range cases {
+		_, err := ParseString(c.src, ParseOptions{})
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, want error = %v", c.name, err, c.wantErr)
+			continue
+		}
+		// Whatever the outcome, it must be an XML complaint rather than a
+		// read failure: the reader did its job.
+		if err != nil && strings.Contains(err.Error(), "buffer") {
+			t.Errorf("%s: reported a buffer error: %v", c.name, err)
+		}
+	}
+}
+
+// A reader that returns fewer bytes per call than the peek wants exercises the
+// same path as a short document, and must not change the result. An io.Reader
+// is permitted to return one byte at a time.
+func TestDripFedReaderParses(t *testing.T) {
+	const src = `<a><b>text</b></a>`
+	tree, err := Parse(iotest.OneByteReader(strings.NewReader(src)),
+		ParseOptions{})
+	if err != nil {
+		t.Fatalf("a one-byte-at-a-time reader failed: %v", err)
+	}
+	if got := tree.Root.StringValue(); got != "text" {
+		t.Errorf("parsed to %q, want %q", got, "text")
 	}
 }
