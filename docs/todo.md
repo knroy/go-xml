@@ -59,16 +59,27 @@ posture is the design, not a footnote on it.
 Cost: ~1,500–2,500 lines plus a corpus. Buys: a format still common in the
 wild, with real reuse of what is here.
 
-### 1.3 RELAX NG
+### 1.3 RELAX NG — done, XML syntax only
 
-A different validation model, not another DTD: derivatives over patterns
-rather than a finite automaton, so it is a separate engine rather than a use
-of the existing one. `interleave` is where implementations get slow or wrong.
-Two syntaxes to parse — XML and compact — though the datatype library can
-delegate to the XSD types already here.
+**Implemented**, at 99.90% of James Clark's suite (964 of 965 assertions).
+It is a separate engine, as expected: derivatives over patterns rather than a
+finite automaton, because `interleave` is not a Glushkov construction. The
+datatype library delegates to the XSD types, which was the reuse the earlier
+estimate hoped for.
 
-Cost: ~4,000–6,000 lines, and it needs James Clark's suite to be trustworthy.
-Buys: breadth. Recommend only after 1.1 and 1.2.
+The cost estimate was roughly right for the engine and badly wrong about where
+the work would go. Over half the conformance suite is schemas that must be
+*rejected*, so most of the effort was the restriction rules of section 7 and
+the scattered constraints of sections 4.16–4.19 — not the derivative
+algorithm, which is short.
+
+**What is left:**
+
+* **The compact syntax** is not implemented. It is a second parser over the
+  same model, so it costs a parser and nothing else — the compiler, the
+  restrictions and the validator are all reached through the same tree.
+* **The one suite failure** needs markup inside an entity's replacement text,
+  which is a gap in `xdm` rather than in the validator.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 

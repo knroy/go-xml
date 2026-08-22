@@ -9,13 +9,13 @@ Being precise about which one you need saves the most time:
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
 | the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
 | the XML matches a **DTD** | a validating parser | ✅ `dtd.Parse` + `dtd.Validate` (internal subset only) |
-| the XML matches a **RELAX NG** schema | a different validator | ❌ not implemented |
+| the XML matches a **RELAX NG** schema | a different validator | ✅ `relaxng.Compile` + `Schema.Validate` |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
 
-### DTD and RELAX NG
+### DTD
 
-DTD validation is implemented; RELAX NG is not. The DTD case needs care because
-the work is split between parsing and validating.
+The DTD case needs care because the work is split between parsing and
+validating.
 
 A `DOCTYPE` is refused by default. With `ParseOptions.AllowDOCTYPE` set, two
 declarations are applied — the two whose absence is visible in the data model:
@@ -68,10 +68,70 @@ The default is off for a reason beyond that: a DTD is the entry point for
 entity expansion and XXE, so permitting one is a decision to make per document
 source rather than globally.
 
-RELAX NG is a larger absence: it validates by a different model — derivatives
-over patterns rather than a finite automaton — so it is a separate engine
-rather than a use of the one here, and its `interleave` is the part that makes
-it so. See [todo.md](todo.md) for what each of these would cost.
+## RELAX NG
+
+`relaxng` validates against RELAX NG's XML syntax, at 99.90% of James Clark's
+conformance suite (964 of 965 assertions).
+
+```go
+schema, err := xdm.ParseString(rngSource, xdm.ParseOptions{})
+if err != nil {
+    return err
+}
+s, err := relaxng.Compile(schema.Root)
+if err != nil {
+    return err
+}
+doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+if err != nil {
+    return err
+}
+err = s.Validate(doc.Root)
+```
+
+It is a separate engine rather than a use of the XSD automaton, because RELAX
+NG validates by a different model: a schema *is* a pattern, and validation
+computes the derivative of that pattern with respect to each item of input,
+accepting when what remains matches the empty sequence. There is no finite
+automaton to build, and `interleave` — which admits its branches in any order,
+with arbitrary patterns rather than single elements — is not something a
+Glushkov construction expresses.
+
+What is reused is what the two languages genuinely share: RELAX NG names XSD's
+types through its datatype library, and its `pattern` parameter is the XML
+Schema regex flavour, so both go through `xsd`.
+
+### Reaching outside the schema document
+
+`<externalRef>` and `<include>` name another file. Following one is a fetch,
+and it is gated the way every other outward read in this project is:
+
+```go
+s, err := relaxng.CompileWithOptions(schema.Root, relaxng.Options{
+    Resolver: myResolver, // nil refuses every href
+    BaseURI:  "file:///schemas/invoice.rng",
+})
+```
+
+`Compile` supplies no resolver, so every `href` is refused with an error
+naming it. There is no default implementation: where a schema is allowed to
+reach is the caller's decision, not the schema author's. A cycle of includes is
+bounded — with a resolver reading from the network, that is a request loop
+rather than merely a hang.
+
+`<parentRef>` needs no resolver, reaching only into the enclosing grammar, and
+always works.
+
+### Two things to know
+
+* **A schema's names follow XML 1.0 fourth edition**, which is the edition
+  RELAX NG was specified against. The fifth edition made legal a great many
+  names that were not — among them any name beginning with a combining mark —
+  and `xdm` implements the fifth, as an XML parser should. The two differ
+  deliberately; see `relaxng/ncname.go`.
+* **The one suite failure** needs markup inside an entity's replacement text
+  (`<!ENTITY dii "<ดี/>">`), which `xdm` expands as characters rather than
+  parsing as an element. That is a parser gap rather than a validator one.
 
 ## XSD
 

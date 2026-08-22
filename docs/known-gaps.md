@@ -26,6 +26,8 @@ kind — they break working documents — so they are listed first throughout.
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
+| RELAX NG | James Clark's spectest | 99.90% — 964 of 965 assertions |
+| DTD | *no public suite* | unit tests only; see below |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
 | XDM | *no public suite* | exercised through the three above |
 
@@ -49,6 +51,41 @@ tied to an open bug — its own suite disputes, not necessarily defects here.
 Counted by scanning each test's `<current status=...>`; an earlier figure of
 52/52 was an estimate. See *What 100% would take* below for why this sets the
 reachable ceiling below 100%.
+
+### RELAX NG
+
+One assertion fails, and it is not a validator defect. The case needs markup
+inside an entity's replacement text:
+
+```xml
+<!ENTITY dii "<&#xE14;&#xE35;/>">
+...
+<foo>&dii;</foo>
+```
+
+`xdm` expands an internal entity as *characters*, so `<ดี/>` reaches the tree
+as text rather than as an element. Fixing it means re-scanning replacement
+text as markup during the parse, which is a change to the parser and its
+entity-expansion bounds — the ones that close billion-laughs — rather than
+anything the validator does. It is deliberately not attempted for one test.
+
+Two further limits, neither measured by the suite:
+
+* **The compact syntax is not implemented.** Only the XML syntax is parsed. It
+  would be a second parser over the same model and nothing else, since the
+  compiler, restrictions and validator all work from the tree.
+* **A schema's names follow XML 1.0 fourth edition**, which is what RELAX NG
+  specifies, while `xdm` follows the fifth, which is what XML now is. The two
+  differ deliberately; `relaxng/ncname.go` says why.
+
+### DTD
+
+There is no public DTD conformance suite comparable to the others, so the DTD
+validator's evidence is its own unit tests. It checks content models,
+attribute presence and defaults, enumerated values, and `ID`/`IDREF`, over the
+internal subset only — an external subset is never fetched, which is the
+attack `AllowDOCTYPE` exists to gate. `DTD.HasExternalSubset` records that one
+was named, so a caller knows a check was partial rather than clean.
 
 ---
 

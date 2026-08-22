@@ -5,10 +5,9 @@ are deciding *whether* XSD is the right tool at all, read
 [validation.md](validation.md) first — it starts with what schema validation
 cannot check, which is the part most likely to save you time.
 
-XSD is the only schema language implemented. A DTD is parsed past rather than
-applied, and RELAX NG is not implemented at all; see
-[validation.md](validation.md#dtd-and-relax-ng) for what that means in
-practice.
+XSD is one of three schema languages here. DTD content models are validated by
+the [`dtd`](../dtd) package, and RELAX NG by [`relaxng`](../relaxng); see
+[validation.md](validation.md) for when each applies.
 
 ## Loading and validating
 

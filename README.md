@@ -71,20 +71,22 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
 | **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
-| **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.93%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
-| **Tests** | 671, clean under `-race` (a few subtests skip without the corpora below) |
+| **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
+| **RELAX NG** | 99.90% of James Clark's spectest (964 of 965 assertions); XML syntax |
+| **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
+| **Tests** | 742, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | pre-1.0; the shape is settled but not frozen |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Particle Valid (Restriction) is not checked** in either version, so a
-   schema invalid in that specific way is accepted rather than reported —
-   libxml2 does not implement it either and Xerces leaves it off by default.
-   Both versions otherwise measure above 99% on their part of the suite; the
-   remaining disagreements are listed in *Where it fails*, along with what the
-   suite skips and why.
+1. **Schema-validity is the weakest of the measured numbers**, at 98.60% (1.0)
+   and 97.96% (1.1) — a schema invalid in one of the remaining ways is
+   accepted rather than reported. Instance validation, which is what most
+   callers actually do, is above 99.7% in both versions. The remaining
+   disagreements are listed in *Where it fails*, along with what the suite
+   skips and why; a substantial share are cases the W3C itself disputes.
 2. **A backreference to a variable-width group is refused, by design.** RE2
    has no backreferences, which is also why no pattern can hang this engine.
    Where the group has a *fixed* width the backreference is resolved exactly,
@@ -103,21 +105,23 @@ unless enabled; see [Security defaults](#security-defaults).
 
 ## What this is
 
-Four packages, each usable on its own:
+Six packages, each usable on its own:
 
 | Package | What it holds |
 |---|---|
 | [`xdm`](xdm/) | The XQuery/XPath data model: typed atomic values, the node tree, an XML parser |
 | [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, and the `fn:` function library |
 | [`xslt`](xslt/) | XSLT 2.0: pattern matching, the stylesheet compiler, the transform runtime, serialisation |
-| [`xsd`](xsd/) | XML Schema 1.0: the component model, schema assembly, content models, facets, identity constraints |
+| [`xsd`](xsd/) | XML Schema 1.0 and 1.1: the component model, schema assembly, content models, facets, identity constraints |
+| [`dtd`](dtd/) | DTD validation: content models, attribute defaults, `ID`/`IDREF` |
+| [`relaxng`](relaxng/) | RELAX NG: the derivative algorithm, the section 7 restrictions, the XSD datatype library |
 | [`cmd/go-xml`](cmd/go-xml/) | A command-line transformer |
 
 ## Documentation
 
-* **[docs/validation.md](docs/validation.md)** — XSD validation, Schematron,
-  and which kind of "valid" you actually need. Start here if you came to check
-  a document against an `.xsd`.
+* **[docs/validation.md](docs/validation.md)** — XSD, DTD and RELAX NG
+  validation, Schematron, and which kind of "valid" you actually need. Start
+  here if you came to check a document against a schema.
 * **[docs/xsd.md](docs/xsd.md)** — the schema validator in detail: 1.0 versus
   1.1, resolvers and what they will fetch, the PSVI, limits, concurrency, and
   what the conformance figures cover.
