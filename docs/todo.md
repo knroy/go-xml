@@ -9,7 +9,7 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
 | XSD 1.1 | 15,045 / 15,365 (97.92%) | 26,155 / 26,209 (99.79%) |
-| XPath 2.0 | 99.89% — 15,164 of 15,181 in scope (26 failing) |
+| XPath 2.0 | 99.92% — 15,169 of 15,181 in scope (26 failing) |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 647, clean under `-race` |
 
@@ -130,16 +130,13 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: 17 in-scope failures
+### 2.3 XPath: 12 in-scope failures
 
 Mostly not fixable, and worth stating why so nobody re-litigates it:
 
-| cases | cause | fixable |
-|---:|---|---|
-| 12 | regex backreferences (`\1`) in `fn-matches` | **no** — see below |
-| 2 | a namespace declared through a DTD `#FIXED` default | no — `encoding/xml` never parses the internal subset |
-| 2 | `fn:doc-available` of a source with no declared URI | no — suite environment data, not the engine |
-| 1 | `xs:decimal` prints fewer digits than it keeps | not worth its cost; see known-gaps |
+**Every remaining failure is a regex backreference.** All twelve are in
+`fn-matches`, and they are the one architectural ceiling here — see below for
+why the obvious fix does not work. Nothing else in the suite disagrees.
 
 **The denominator moved this round, so the percentage is not comparable to
 earlier figures.** Source paths in a test-set environment are relative to the

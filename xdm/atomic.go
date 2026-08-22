@@ -357,9 +357,25 @@ func formatDecimal(r *big.Rat) string {
 	return s
 }
 
+// maxDecimalScale bounds how many fractional digits are rendered for a value
+// whose denominator terminates.
+//
+// A terminating decimal is rendered in full up to this, so the lexical form
+// says what the value is. The bound exists only so that a rational built by
+// repeated division cannot make formatting allocate without limit; a value
+// needing more digits than this is rendered at the old 18 and is
+// indistinguishable from any other approximation, which is what the previous
+// unconditional cap made *every* long decimal.
+const maxDecimalScale = 1024
+
 // decimalScale returns the number of fractional digits needed to render r
-// exactly, capped at 18 (the minimum precision XPath 2.0 requires an
-// implementation to support for xs:decimal).
+// exactly, or 18 — the minimum precision XPath 2.0 requires an implementation
+// to support — when r does not terminate within maxDecimalScale digits.
+//
+// Capping unconditionally at 18 made the lexical form disagree with the value:
+// a literal with 360 fractional digits printed as "0" while comparing unequal
+// to zero, so "0.000…1 eq 0" was false and "string(0.000…1)" was "0". The two
+// answers cannot both be right, and the value is the one that must not move.
 func decimalScale(r *big.Rat) int {
 	d := new(big.Int).Set(r.Denom())
 	two, five := big.NewInt(2), big.NewInt(5)
@@ -372,7 +388,7 @@ func decimalScale(r *big.Rat) int {
 		}
 		d = q
 		a++
-		if a > 18 {
+		if a > maxDecimalScale {
 			break
 		}
 	}
@@ -383,7 +399,7 @@ func decimalScale(r *big.Rat) int {
 		}
 		d = q
 		b++
-		if b > 18 {
+		if b > maxDecimalScale {
 			break
 		}
 	}
@@ -391,7 +407,10 @@ func decimalScale(r *big.Rat) int {
 	if b > n {
 		n = b
 	}
-	if d.Cmp(big.NewInt(1)) != 0 || n > 18 {
+	// A denominator with a factor other than 2 or 5 does not terminate — 1/3
+	// is the everyday case — and neither does one needing more digits than
+	// the bound. Both are rendered at the required minimum precision.
+	if d.Cmp(big.NewInt(1)) != 0 || n > maxDecimalScale {
 		return 18
 	}
 	if n == 0 {

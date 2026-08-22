@@ -889,6 +889,12 @@ func envDocs(r *Runner, env Environment) *envDocResolver {
 		if src.URI != "" {
 			byURI[src.URI] = src.File
 		}
+		// A document is also retrievable under the URI fn:document-uri
+		// reports for it, which is its base URI. Keying only on a declared
+		// uri made "doc-available(document-uri(/))" false for every source
+		// that had none: document-uri answered with the path the parser was
+		// given, and the resolver had never heard of it.
+		byURI[filepath.Join(r.Root, src.File)] = src.File
 	}
 	if len(byURI) == 0 {
 		return nil

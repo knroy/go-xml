@@ -23,7 +23,7 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.89% — 15,164 of 15,181 in scope |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.92% — 15,169 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.92% schema-validity |
 | XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
@@ -334,24 +334,21 @@ Diagnosed individually rather than by cluster:
   `MS-SimpleType/stE054`, `MS-Regex/reK6`, `Complex/complex022`,
   `CTA/cta0006` — one-off cases, each needing its own diagnosis.
 
-### `xs:decimal` keeps more precision than it prints
+### `xs:decimal` printed fewer digits than it kept (fixed)
 
 `K2-Literals-7` — a decimal literal with 359 leading zeros after the point.
 
-Not a formatting bug on its own, but an inconsistency between the value and its
-lexical form. `decimalScale` caps rendering at 18 fractional digits, which is
-what XPath 2.0 requires an implementation to support, so the literal prints as
-`0`. The *value* keeps full precision, so `0.000…1 eq 0` is **false** while
-`string(0.000…1)` is `"0"`. The suite offers three acceptable answers — `0`,
-the full lexical form, or `FOCA0006` — and this matches none of them, because
-each assertion matches a different half of the disagreement.
+`decimalScale` capped rendering at 18 fractional digits, so the literal printed
+as `0` while the value kept full precision: `0.000…1 eq 0` was **false** and
+`string(0.000…1)` was `"0"`. Whichever answer a caller trusted, the other
+contradicted it.
 
-Making the two agree means rounding the value to the same 18 digits the lexical
-form claims, at construction. That is a change to decimal semantics reaching
-every arithmetic result, and it would give up exact decimal arithmetic that
-works today, for one test where the spec explicitly permits a less precise
-answer. Not done, and not a silent gap: the inconsistency is the part worth
-knowing about.
+A terminating decimal is now rendered in full. The bound moved rather than
+disappearing — a rational that does not terminate, which is what division
+produces, is still rendered at the 18 digits XPath 2.0 requires, and so is one
+needing more than 1,024 digits, so formatting cannot be made to allocate
+without limit. The *value* did not move; only its lexical form now says what it
+is.
 
 ### Singleton XPath failures
 
@@ -465,18 +462,12 @@ Of what remains:
 - **12** are regex backreferences, which RE2 does not have. Not fixable without
   a second engine; see §2.3 of [todo.md](todo.md) for why capture groups plus
   an explicit comparison does not work.
-- **2** need a namespace declared through a DTD `#FIXED` attribute default
-  (`fn-doc-29`, `fn-in-scope-prefixes-25`). `encoding/xml` never parses the
-  internal subset, so the binding never reaches the tree.
-- **2** ask `fn:doc-available(document-uri(/))` where the environment declares
-  no `uri` for the source, so `document-uri` correctly answers with a
-  filesystem path no resolver knows.
-- **1** is `K2-Literals-7`, where `xs:decimal` keeps more precision than it
-  prints; see above for why the fix is not worth its cost.
-
-Nothing here is an ordinary bug any more. The six that were have been fixed —
-five of them turned out to be the harness rather than the engine, which is
-worth stating plainly: a conformance number is only as honest as the harness
+That is the whole list. Every other disagreement has been fixed, and the route
+there is worth recording: of the seventeen that remained after the ordinary
+bugs, **five were the QT3 harness rather than the engine**, two needed DTD
+attribute defaulting, two needed a document to be retrievable under the URI
+`fn:document-uri` reports for it, and one was a lexical form that disagreed
+with its own value. A conformance number is only as honest as the harness
 producing it.
 
 **Cost: a diagnosis each. Buys: little — 12 of the 17 are backreferences and 4 more are outside the engine.**
