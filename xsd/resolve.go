@@ -74,6 +74,23 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		if err != nil {
 			return nil, "", err
 		}
+		// Symlinks are resolved on both sides before the comparison, or a
+		// link planted inside the root reads whatever it points at: the
+		// path passes the containment check and os.Open then follows the
+		// link out. xslt's FileResolver has always done this; this one
+		// documented it and did not.
+		//
+		// A path that does not exist keeps its unresolved form so that the
+		// failure is a clean "no such file" from os.Open rather than an
+		// error from EvalSymlinks. The root is resolved the same way, since
+		// a root reached through a symlink would otherwise never match the
+		// resolved target.
+		if x, err := filepath.EvalSymlinks(root); err == nil {
+			root = x
+		}
+		if x, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = x
+		}
 		// The separator matters: without it, a Root of "/srv/a" would
 		// also admit "/srv/anything".
 		if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
@@ -188,10 +205,45 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		}
 		client = &http.Client{Timeout: timeout}
 	}
+	// A redirect is a second request to a host the caller never named, so
+	// AllowHost has to run again on every hop. Checking only the URL written
+	// in the schema left the policy trivially bypassed: a document on a
+	// permitted host that answers 302 had the redirect followed and the body
+	// returned, which is exactly the SSRF AllowHost exists to prevent.
+	//
+	// The check is installed on a copy, because r.Client may be a caller's
+	// client used elsewhere and CheckRedirect is a field on the client
+	// rather than the request.
+	if r.AllowHost != nil {
+		c := *client
+		outer := c.CheckRedirect
+		c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if !r.AllowHost(req.URL.Hostname()) {
+				return fmt.Errorf(
+					"schemaLocation %q: redirected to host %q, which is not permitted",
+					location, req.URL.Hostname())
+			}
+			if outer != nil {
+				return outer(req, via)
+			}
+			// net/http's own default, which this replaces.
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		}
+		client = &c
+	}
 
 	resp, err := client.Get(abs)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetching schema %q: %w", abs, err)
+	}
+	// The document's real origin, not the location that named it: a redirect
+	// changes where relative references inside it resolve against, and a
+	// caller logging the returned path should see where the bytes came from.
+	if resp.Request != nil && resp.Request.URL != nil {
+		abs = resp.Request.URL.String()
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

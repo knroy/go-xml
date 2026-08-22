@@ -1,6 +1,9 @@
 package xsd
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -291,6 +294,23 @@ func TestFileResolverConfinesToRoot(t *testing.T) {
 	if _, _, err := r.Resolve("", "/etc/passwd", ""); err == nil {
 		t.Error("an absolute path outside the root should be refused")
 	}
+
+	// A symlink inside the root pointing out of it is the same escape by
+	// another route: the path passed the containment check and os.Open then
+	// followed the link. The doc comment on Root claimed symlinks were
+	// refused; only "..", absolutes and file: URLs actually were.
+	outside := filepath.Join(t.TempDir(), "secret.xsd")
+	if err := os.WriteFile(outside, []byte(`<secret/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.xsd")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if rc, _, err := r.Resolve("", "link.xsd", filepath.Join(dir, "main.xsd")); err == nil {
+		rc.Close()
+		t.Error("a symlink leading outside the root should be refused")
+	}
 }
 
 // TestFileResolverRefusesRemote records that network resolution is off unless
@@ -316,6 +336,69 @@ func TestHTTPResolverHostPolicy(t *testing.T) {
 	r := &HTTPResolver{AllowHost: func(host string) bool { return host == "good.example" }}
 	if _, _, err := r.Resolve("", "http://bad.example/s.xsd", ""); err == nil {
 		t.Error("a host outside the policy should be refused")
+	}
+}
+
+// TestHTTPResolverChecksRedirectHosts pins that AllowHost governs every host
+// actually contacted, not only the one the schema names.
+//
+// A redirect is a second request to a host the caller never wrote down, and
+// the check ran once, before the first request. So a document on a permitted
+// host that answered 302 had the redirect followed and the body returned —
+// the SSRF the field exists to prevent, reachable through any open redirector
+// on an allowed host. The returned path was the original URL too, so a caller
+// logging it never learned where the bytes came from.
+func TestHTTPResolverChecksRedirectHosts(t *testing.T) {
+	secret := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `<a/>`)
+		}))
+	defer secret.Close()
+
+	// httptest binds 127.0.0.1; "localhost" is the same address under a
+	// name the policy refuses, which is the point — the hop is what is
+	// being checked, not the address.
+	denied := strings.Replace(secret.URL, "127.0.0.1", "localhost", 1)
+	open := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, denied+"/secret.xsd", http.StatusFound)
+		}))
+	defer open.Close()
+
+	var asked []string
+	r := &HTTPResolver{AllowHost: func(h string) bool {
+		asked = append(asked, h)
+		return h == "127.0.0.1"
+	}}
+
+	if _, _, err := r.Resolve("", open.URL+"/a.xsd", ""); err == nil {
+		t.Error("a redirect to a host outside the policy should be refused")
+	} else if !strings.Contains(err.Error(), "localhost") {
+		t.Errorf("error %q does not name the host that was refused", err)
+	}
+	if len(asked) < 2 {
+		t.Errorf("AllowHost was consulted for %v; it must run on every hop", asked)
+	}
+
+	// A redirect that stays inside the policy still works, and the path
+	// reports where the document actually came from.
+	inside := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/a.xsd" {
+				http.Redirect(w, r, "/real.xsd", http.StatusFound)
+				return
+			}
+			io.WriteString(w, `<a/>`)
+		}))
+	defer inside.Close()
+
+	rc, path, err := r.Resolve("", inside.URL+"/a.xsd", "")
+	if err != nil {
+		t.Fatalf("a redirect within the policy should be followed: %v", err)
+	}
+	rc.Close()
+	if !strings.HasSuffix(path, "/real.xsd") {
+		t.Errorf("path is %q, want the document's real origin", path)
 	}
 }
 
