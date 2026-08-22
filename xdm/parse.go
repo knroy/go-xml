@@ -146,6 +146,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
+	// Attribute defaults declared by an ATTLIST in the internal subset. Kept
+	// as a slice because a document rarely declares more than a handful, and
+	// the common case is none at all.
+	var attDefaults []attDefault
 
 	for {
 		// InputOffset after Token() is the position *after* the token, so the
@@ -170,6 +174,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					return nil, fmt.Errorf("parse XML: multiple root elements")
 				}
 				sawRoot = true
+			}
+			if len(attDefaults) > 0 {
+				t = applyAttDefaults(t, attDefaults)
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
 			// Attributes and namespaces are nodes too, and a document made
@@ -222,6 +229,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if strings.HasPrefix(d, "DOCTYPE") && !opts.AllowDOCTYPE {
 				return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
 					"(set AllowDOCTYPE to permit; it enables XXE and entity expansion)")
+			}
+			// An ATTLIST may give an attribute a #FIXED or literal default,
+			// which a processor is required to add to every matching element
+			// — including a namespace declaration, since "xmlns:p CDATA
+			// #FIXED '...'" is how a DTD supplies a binding. Without this the
+			// prefix is simply absent from the tree.
+			//
+			// Only defaults are read. Nothing here expands an entity,
+			// resolves an external identifier, or reads a file, so this does
+			// not widen what AllowDOCTYPE admits.
+			if strings.HasPrefix(d, "DOCTYPE") {
+				attDefaults = append(attDefaults, parseAttListDefaults(d)...)
 			}
 		}
 	}
