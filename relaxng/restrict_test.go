@@ -763,3 +763,66 @@ func TestSchemaNamesFollowFourthEdition(t *testing.T) {
 		`<element`+rngNS+` name="foo">
 			<element name="&#xE14;&#xE35;"><empty/></element></element>`)
 }
+
+// Validation is bounded by depth, and by its own limit rather than the
+// parser's.
+//
+// Taking derivatives over a nested document costs time and memory *quadratic*
+// in the depth: each level carries the pattern remaining at every level above
+// it. Measured before this bound existed, depth 8000 cost 487ms and 911MB,
+// and doubling the depth quadrupled both. The parser's MaxDepth capped it by
+// accident; a caller who raises that to accept a deep document, or who builds
+// a tree by transform rather than parsing, had nothing.
+func TestValidationDepthIsBounded(t *testing.T) {
+	s, err := compileSrc(t, `<grammar`+rngNS+`>
+		<start><element name="r"><ref name="e"/></element></start>
+		<define name="e">
+			<element name="e"><optional><ref name="e"/></optional></element>
+		</define></grammar>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := func(n int) *xdm.Node {
+		t.Helper()
+		var sb strings.Builder
+		sb.WriteString("<r>")
+		for i := 0; i < n; i++ {
+			sb.WriteString("<e>")
+		}
+		for i := 0; i < n; i++ {
+			sb.WriteString("</e>")
+		}
+		sb.WriteString("</r>")
+		tree, err := xdm.ParseString(sb.String(),
+			xdm.ParseOptions{MaxDepth: n + 10, MaxBytes: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree.Root
+	}
+
+	// Within the default, a valid document validates.
+	if err := s.Validate(nested(50)); err != nil {
+		t.Errorf("a shallow document should validate: %v", err)
+	}
+
+	// Past it, the failure says so rather than reporting a validity error
+	// that is really a limit.
+	err = s.Validate(nested(DefaultMaxDepth + 100))
+	if err == nil {
+		t.Fatal("a document deeper than the limit was accepted")
+	}
+	if !strings.Contains(err.Error(), "nesting exceeds") {
+		t.Errorf("error = %v, want one naming the depth limit", err)
+	}
+
+	// A caller who wants the depth can have it.
+	if err := s.ValidateWithOptions(nested(DefaultMaxDepth+100),
+		ValidateOptions{MaxDepth: DefaultMaxDepth + 500}); err != nil {
+		t.Errorf("a raised limit should admit the document: %v", err)
+	}
+	if err := s.ValidateWithOptions(nested(DefaultMaxDepth+100),
+		ValidateOptions{MaxDepth: -1}); err != nil {
+		t.Errorf("an unbounded run should admit the document: %v", err)
+	}
+}

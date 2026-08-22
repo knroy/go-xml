@@ -32,6 +32,31 @@ func (e *Error) Error() string { return e.Path + ": " + e.Message }
 // point at which every branch died. Reporting the *last* place the document
 // was still viable is more useful than reporting the root.
 func (s *Schema) Validate(doc *xdm.Node) error {
+	return s.ValidateWithOptions(doc, ValidateOptions{})
+}
+
+// ValidateOptions bound one validation run.
+type ValidateOptions struct {
+	// MaxDepth bounds how deep validation will recurse. Zero means
+	// DefaultMaxDepth; a negative value means no limit.
+	//
+	// This is not the parser's limit, and the distinction matters more here
+	// than elsewhere: taking derivatives over a nested document costs time and
+	// memory *quadratic* in the depth, since each level carries the pattern
+	// remaining at every level above it. A tree can also be built by a
+	// transform rather than parsed, and a caller who raises
+	// xdm.ParseOptions.MaxDepth to accept a deep document has not thereby
+	// agreed to let the validator spend a gigabyte on it.
+	MaxDepth int
+}
+
+// DefaultMaxDepth bounds validation recursion when MaxDepth is zero. It
+// matches xdm.DefaultMaxDepth, so a document the parser accepts is one the
+// validator will not refuse for depth alone.
+const DefaultMaxDepth = 1000
+
+// ValidateWithOptions checks a document, with limits on the run.
+func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error {
 	if doc == nil {
 		return fmt.Errorf("relaxng: nil document")
 	}
@@ -48,8 +73,20 @@ func (s *Schema) Validate(doc *xdm.Node) error {
 			return &Error{Path: "/", Message: "the document has no root element"}
 		}
 	}
-	v := &validator{}
+	maxDepth := opts.MaxDepth
+	if maxDepth == 0 {
+		maxDepth = DefaultMaxDepth
+	}
+	v := &validator{maxDepth: maxDepth}
 	p := v.childDeriv(s.start, root)
+	if v.tooDeep {
+		return &Error{
+			Path: v.deepPath,
+			Message: fmt.Sprintf(
+				"nesting exceeds %d levels; validation cost grows with the "+
+					"square of the depth", maxDepth),
+		}
+	}
 	if !p.nullable() {
 		where := v.deepest
 		if where == "" {
@@ -61,12 +98,29 @@ func (s *Schema) Validate(doc *xdm.Node) error {
 }
 
 type validator struct {
+	// maxDepth bounds recursion; a negative value means no bound.
+	maxDepth int
+	// tooDeep records that the bound was reached, so the caller is told why
+	// rather than being handed a validity failure that is really a limit.
+	tooDeep  bool
+	deepPath string
+	depth    int
 	// deepest records the furthest point the document was still viable, and
 	// why it stopped being so. A derivative that fails says only "no", so the
 	// path has to be captured on the way down.
 	deepest string
 	why     string
 	path    []string
+}
+
+// tailPath renders the last few segments of a deep path.
+func tailPath(path []string, last string) string {
+	const keep = 4
+	segs := append(append([]string{}, path...), last)
+	if len(segs) <= keep {
+		return "/" + strings.Join(segs, "/")
+	}
+	return ".../" + strings.Join(segs[len(segs)-keep:], "/")
 }
 
 func (v *validator) at() string {
@@ -115,8 +169,28 @@ func (v *validator) childDeriv(p Pattern, n *xdm.Node) Pattern {
 		return v.textDeriv(p, n.Value, nsContextOf(n))
 
 	case xdm.KindElement:
+		// The depth bound is checked here because this is the only place
+		// recursion deepens, and it is fatal rather than recoverable: the
+		// derivative that would be taken next is the expensive one, so
+		// carrying on to report a validity failure would spend exactly the
+		// resources the bound exists to refuse.
+		if v.maxDepth >= 0 && v.depth >= v.maxDepth {
+			// The path is recorded now, because the deferred pops unwind it
+			// before the caller reads it — reporting "/" would name the
+			// document rather than the element that was too deep.
+			v.tooDeep = true
+			// A path a thousand segments long tells the reader nothing, so
+			// only the last few are kept: what identifies the failure is the
+			// depth, which the message states, not the route to it.
+			v.deepPath = tailPath(v.path, n.Name.Local)
+			return NotAllowed{}
+		}
+		v.depth++
 		v.path = append(v.path, n.Name.Local)
-		defer func() { v.path = v.path[:len(v.path)-1] }()
+		defer func() {
+			v.depth--
+			v.path = v.path[:len(v.path)-1]
+		}()
 
 		name := xdm.QName{URI: n.Name.URI, Local: n.Name.Local}
 		p1 := startTagOpenDeriv(p, name)

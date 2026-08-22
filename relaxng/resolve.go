@@ -27,6 +27,32 @@ type Resolver interface {
 	ResolveSchema(href string) (*xdm.Node, error)
 }
 
+// A Resolver owns containment, and must not assume the href it receives has
+// been made safe.
+//
+// The reference is resolved against the base URI in force, which composes
+// xml:base and where the schema was loaded from — but resolution is not
+// sanitisation. Measured against a base of "schemas/main.rng":
+//
+//	../../../../etc/passwd  ->  ../../../etc/passwd
+//	/etc/passwd             ->  schemas/etc/passwd
+//
+// and against "https://ex.com/a/main.rng":
+//
+//	//169.254.169.254/x.rng ->  https://169.254.169.254/x.rng
+//	../../../etc/passwd     ->  https://ex.com/etc/passwd
+//
+// So ".." survives, a scheme-relative reference inherits the scheme and
+// reaches a host of the schema's choosing, and URI resolution flattens a path
+// only as far as the base allows.
+//
+// That is deliberate: this package cannot know whether a caller's schemas live
+// in one directory, several, or behind an HTTP endpoint where ".." is
+// meaningless. What it can do is say plainly that the check belongs to the
+// implementation. A file-backed resolver should resolve to an absolute path
+// and verify it is inside the intended root; an HTTP one should check the host
+// against an allowlist rather than a prefix.
+
 // Options configure compilation.
 type Options struct {
 	// Resolver supplies the documents named by <externalRef> and <include>.
