@@ -313,7 +313,18 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if err := execSequence(v.Body, rt, out); err != nil {
 		return nil, err
 	}
-	// Content always builds a temporary tree rooted at a document node.
+	// Section 9.3's table: with an "as" attribute the value is the sequence
+	// the constructor produced, adjusted to the required type. Only *without*
+	// one is a document node built to hold it.
+	//
+	// The difference is observable and large. as="element()*" over a body of
+	// three literal elements is those three elements; wrapping them in a
+	// document node made the value a single node that does not match the
+	// declared type at all, so the variable failed rather than binding.
+	if v.AsType != nil {
+		return out.sequence(), nil
+	}
+	// Content otherwise builds a temporary tree rooted at a document node.
 	return xdm.One(out.toTree()), nil
 }
 
