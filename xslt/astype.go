@@ -81,9 +81,13 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 			continue
 		}
 		if a.Type == xdm.TypeUntypedAtomic {
-			conv, err := xpath.CastAtomic(a, t.stype.AtomicType)
+			// A derived type carries a facet the code alone cannot
+			// express, so the written name is used when there is one:
+			// casting to xs:token has to normalise, not merely widen to
+			// xs:string.
+			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", what, err)
+				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
 			}
 			out = append(out, conv)
 			continue
@@ -91,9 +95,13 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		// Numeric promotion is permitted without an explicit cast; anything
 		// else keeps its type and is checked against the declaration below.
 		if a.Type.IsNumeric() && t.stype.AtomicType.IsNumeric() {
-			conv, err := xpath.CastAtomic(a, t.stype.AtomicType)
+			// A derived type carries a facet the code alone cannot
+			// express, so the written name is used when there is one:
+			// casting to xs:token has to normalise, not merely widen to
+			// xs:string.
+			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", what, err)
+				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
 			}
 			out = append(out, conv)
 			continue

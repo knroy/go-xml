@@ -292,6 +292,14 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		t.Mode = modes
 	}
 
+	if as := el.AttrValue("as"); as != "" {
+		at, err := compileSequenceType(as, newNSResolver(el, ""))
+		if err != nil {
+			return fmt.Errorf("in xsl:template/@as: %w", err)
+		}
+		t.AsType = at
+	}
+
 	// Leading xsl:param children declare the template's parameters; they must
 	// precede the body.
 	children := el.ChildElements()
@@ -611,7 +619,8 @@ func (c *compiler) compileSpaceControl(el *xdm.Node) error {
 			prefix := strings.TrimSuffix(n, ":*")
 			uri, ok := el.LookupPrefix(prefix)
 			if !ok {
-				return fmt.Errorf("unbound prefix %q in %s/@elements", prefix, el.Name.Lexical())
+				return fmt.Errorf("XTSE0280: unbound prefix %q in %s/@elements",
+					prefix, el.Name.Lexical())
 			}
 			qn = xdm.QName{URI: uri, Local: "*"}
 		default:

@@ -251,7 +251,32 @@ func runTemplate(rt *runtime, t *Template,
 		sub = sub.withVar(p.Name, val)
 	}
 
-	return execSequence(t.Body, sub, out)
+	if t.AsType == nil {
+		return execSequence(t.Body, sub, out)
+	}
+
+	// XTTE0505: with an "as" declaration the template's result is converted
+	// to the required type, and a value that will not convert is an error.
+	// The body builds into its own builder so that the conversion sees the
+	// whole result rather than each instruction's contribution.
+	tmp := newOutputBuilder()
+	if err := execSequence(t.Body, sub, tmp); err != nil {
+		return err
+	}
+	converted, err := t.AsType.convertAs(tmp.sequence(),
+		"result of template "+templateLabel(t), "XTTE0505")
+	if err != nil {
+		return err
+	}
+	for _, it := range converted {
+		switch v := it.(type) {
+		case *xdm.Node:
+			out.appendNode(v)
+		case *xdm.Atomic:
+			out.appendValue(v)
+		}
+	}
+	return nil
 }
 
 func templateLabel(t *Template) string {

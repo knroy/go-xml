@@ -80,6 +80,10 @@ type Template struct {
 	Priority float64
 	Params   []*Variable
 	Body     []Instruction
+	// AsType is xsl:template/@as, which constrains what the template's
+	// sequence constructor may produce. Section 6.1 applies the function
+	// conversion rules to the result, so it converts as well as checks.
+	AsType *sequenceType
 	// importPrecedence orders templates from imported stylesheets below those
 	// of the importing one.
 	importPrecedence int
@@ -417,7 +421,8 @@ func resolveQNameAttr(el *xdm.Node, lex string) (xdm.QName, error) {
 	}
 	uri, ok := el.LookupPrefix(prefix)
 	if !ok {
-		return xdm.QName{}, fmt.Errorf("unbound namespace prefix %q in %q", prefix, lex)
+		return xdm.QName{}, fmt.Errorf(
+			"XTSE0280: unbound namespace prefix %q in %q", prefix, lex)
 	}
 	return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
 }
