@@ -69,7 +69,7 @@ Requires Go 1.26 or later.
 | | |
 |---|---|
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
-| **XSLT 2.0** | complete, including `xsl:import-schema`; verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 2.0** | 61.79% of the W3C XSLT suite filtered to 2.0 (3,319 of 5,371 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,953 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.79% instance (26,155 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -95,10 +95,17 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **The XSLT layer has no conformance suite behind it.** The W3C's XSLT tests
-   target 3.0 and do not carry over. Its evidence is a differential against
-   Saxon on real rule sets — strong, but corpus-shaped rather than systematic.
-   *Where it fails* sets out exactly what that does and does not cover.
+3. **XSLT is the weakest of the measured numbers, by a long way.** It sits at
+   61.79% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
+   else here. Two things follow from that. The figure is young — the suite was
+   only wired up recently, and the first runs were dominated by harness bugs
+   rather than engine ones, so it should be read as a floor. And it is not
+   comparable to the others: there is no maintained XSLT 2.0 suite, so this is
+   the XSLT 3.0 suite filtered by each test's declared version dependency,
+   which is a different kind of measurement from running a suite written for
+   the version under test. The corpus differential against Saxon remains the
+   stronger evidence for real stylesheets; *Where it fails* sets out what each
+   covers.
 
 Every remote-reference mechanism — `DOCTYPE`, `fn:doc`, file reads — is off
 unless enabled; see [Security defaults](#security-defaults).
@@ -1168,6 +1175,29 @@ $ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -v -timeout 1800s
 QT3: 31821 cases, 15181 in scope, 16640 skipped
 in-scope: 15180 passed, 1 failed (99.99%)
 ```
+
+### The W3C XSLT suite
+
+There is no maintained XSLT 2.0 suite. The original XSLTS froze at 1.1.0 in
+2007, was distributed from w3.org behind a click-through licence rather than a
+repository, and has no GitHub home. What replaced it is the XSLT 3.0 suite,
+which carried most of those tests forward and records a version dependency on
+each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
+
+```
+$ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
+$ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
+XSLT suite: 14601 cases, 5371 in scope, 9230 skipped
+in-scope: 3319 passed, 2052 failed (61.79%)
+```
+
+The filter decides what the number means, so the run prints its own exclusions:
+5,681 cases need XSLT 3.0, 1,580 depend on a Unicode version, 347 on
+`xsl:package`. A dependency the runner does not model excludes the test rather
+than being ignored — running a test under conditions it did not ask for reports
+the mismatch as a failure of the engine.
+
+`GOXSLT_XSLTS_VERBOSE=1` lists every failure rather than counting them.
 
 Two environment variables make a failure workable:
 

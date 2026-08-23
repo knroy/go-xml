@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
+| XSLT 2.0 | W3C xslt30-test, filtered | 61.79% — 3,319 of 5,371 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -68,6 +68,39 @@ Two limits remain, neither measured by the suite:
 * **A schema's names follow XML 1.0 fourth edition**, which is what RELAX NG
   specifies, while `xdm` follows the fifth, which is what XML now is. The two
   differ deliberately; `relaxng/ncname.go` says why.
+
+### XSLT 2.0
+
+The weakest of the measured numbers, at 61.79%, and the newest — so it is a
+floor rather than a settled figure. Two things about how it is obtained matter
+before the failures are read.
+
+There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
+2007 behind a click-through licence, with no repository. This runs the XSLT
+3.0 suite filtered by each test's declared version dependency, which measures
+something different from running a suite written for the version under test.
+5,371 of 14,601 cases are in scope; the largest exclusions are 5,681 needing
+XSLT 3.0, 1,580 depending on a Unicode version, and 347 on `xsl:package`.
+
+Of the 2,052 failures, the largest groups are:
+
+| what | count |
+|---|---:|
+| the result differs from the expected document | ~384 |
+| an error the suite expects that the engine does not raise | ~438 |
+| `FORX0002` — a backreference the engine resolves and the suite expects refused | 80 |
+| `id()` and `key()` patterns in `xsl:template match` | 29 |
+| `fn:document` with two arguments | 16 |
+
+The 438 missing errors are the same shape as the XSD schema-validity gap: the
+engine accepts a stylesheet the specification says to reject. That is the
+lower-risk direction — a wrong stylesheet runs rather than being reported —
+but it is a real gap, and it is the largest single thing standing between this
+number and the others.
+
+The `FORX0002` group is not a defect. Those tests expect a backreference to be
+refused; this engine resolves the fixed-width ones exactly, which is more than
+the suite expects rather than less. See the backreference note in the README.
 
 ### DTD
 

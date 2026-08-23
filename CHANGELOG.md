@@ -21,11 +21,17 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | *no public suite* | differential against Saxon-HE 12.4 |
+| XSLT 2.0 | W3C xslt30-test, filtered | 61.79% — 3,319 of 5,371 in scope |
 
-XSLT and DTD have no percentage because no redistributable conformance suite
-exists for either. That is stated rather than papered over: neither figure is
-comparable to a suite percentage and neither should be quoted as one.
+DTD has no percentage because no public conformance suite exists for it.
+
+XSLT's percentage is not comparable to the others. There is no maintained
+XSLT 2.0 suite — the original froze in 2007 — so this is the XSLT 3.0 suite
+filtered by each test's declared version dependency, which measures something
+different from running a suite written for the version under test. It is also
+young, and the first runs were dominated by harness bugs rather than engine
+ones, so read it as a floor. The differential against Saxon-HE 12.4 on two
+production corpora remains the stronger evidence for real stylesheets.
 
 ### Packages
 
