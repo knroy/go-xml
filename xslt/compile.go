@@ -84,6 +84,20 @@ type compiler struct {
 	// so every module gets its own number in post-order.
 	nextPrecedence int
 
+	// lowPrecedence is the lowest import precedence reachable from the module
+	// currently being compiled, i.e. the value nextPrecedence held when that
+	// module's compilation began. Because a module's whole import tree is
+	// numbered before the module itself takes a number, the tree occupies the
+	// contiguous interval [lowPrecedence, precedence). Templates record it so
+	// that xsl:apply-imports can ask "is this template in MY import tree"
+	// rather than merely "is it below me"; see Template.lowPrecedence.
+	//
+	// Kept on the compiler and saved/restored around each module rather than
+	// threaded through compileTopLevel, whose precedence parameter is already
+	// passed to a dozen declaration compilers that have no use for a second
+	// one.
+	lowPrecedence int
+
 	// funcPrecedence records the import precedence each function name and
 	// arity was declared at, for XTSE0770.
 	funcPrecedence map[string]int
@@ -173,6 +187,15 @@ func (c *compiler) compileIncludedDocument(doc *xdm.Node, precedence int) error 
 }
 
 func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) error {
+	// An xsl:include's declarations behave as if written in the including
+	// module, so they belong to the includer's import tree and keep its low
+	// end, exactly as they keep its precedence. A module reached by
+	// xsl:import starts a tree of its own at whatever number is next free.
+	if !fixed {
+		saved := c.lowPrecedence
+		c.lowPrecedence = c.nextPrecedence
+		defer func() { c.lowPrecedence = saved }()
+	}
 	collectPrefixes(doc, c.sheet.prefixes)
 	if err := c.checkInputTypeAnnotations(doc); err != nil {
 		return err
@@ -358,6 +381,7 @@ func (c *compiler) compileSimplifiedStylesheet(root *xdm.Node, precedence int) e
 		Priority:         pat.Priority(),
 		Body:             body,
 		importPrecedence: precedence,
+		lowPrecedence:    c.lowPrecedence,
 		declOrder:        c.declOrder,
 	})
 	return nil
@@ -524,7 +548,7 @@ func (c *compiler) checkPatternFuncs() error {
 }
 
 func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
-	t := &Template{importPrecedence: precedence}
+	t := &Template{importPrecedence: precedence, lowPrecedence: c.lowPrecedence}
 	c.declOrder++
 	t.declOrder = c.declOrder
 

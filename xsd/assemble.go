@@ -162,7 +162,17 @@ func registerDerivedTypes(s *Schema) {
 			// Registering only simple types left every such name unknown to
 			// the data model, so the derivation chain stopped one step short
 			// and the match never happened.
-			if ct == nil || ct.Content != ContentSimple {
+			if ct == nil {
+				continue
+			}
+			// PROBE ONLY (wave 8): complex content derivation.
+			if ct.Content != ContentSimple {
+				if b, ok := ct.Base.(*ComplexType); ok && b != nil {
+					if bn := b.Name; bn.Local != "" && bn.Local != name.Local &&
+						bn.URI != NSSchema {
+						xdm.RegisterDerivedType(name.Local, bn.Local)
+					}
+				}
 				continue
 			}
 			base = ct.SimpleContent

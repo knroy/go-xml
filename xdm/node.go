@@ -549,7 +549,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 	fields := strings.Fields(n.StringValue())
 	out := make(Sequence, 0, len(fields))
 	for _, f := range fields {
-		if a := atomicForAnnotation(item, f); a != nil {
+		if a := atomicForLexical(item, f); a != nil {
 			// The item carries the LIST's item type as its derived name, so
 			// that "data(@nmtokens) instance of xs:NMTOKEN*" is true. Without
 			// it each token is only the xs:string that NMTOKEN erases to and
@@ -560,6 +560,35 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 		out = append(out, NewUntypedAtomic(f))
 	}
 	return out, true
+}
+
+// atomicForLexical builds a typed value for one lexical form annotated with
+// the named type, walking the derivation chain the schema registered when the
+// name is not itself a built-in this package constructs.
+//
+// AtomizeList needs this and atomicForDerivedAnnotation cannot serve: that
+// function reads the whole node's string value, while a list item is one
+// token out of many. The walk is the same, bounded the same way, and the
+// value keeps the ITEM type's own name so that
+// "data(@list) instance of my:itemType*" answers true.
+func atomicForLexical(typeName, value string) *Atomic {
+	if a := atomicForAnnotation(typeName, value); a != nil {
+		return a
+	}
+	name := typeName
+	for i := 0; i < 32; i++ {
+		derivedMu.RLock()
+		prim, ok := derivedPrimitives[name]
+		derivedMu.RUnlock()
+		if !ok {
+			return nil
+		}
+		if a := atomicForAnnotation(prim, value); a != nil {
+			return a
+		}
+		name = prim
+	}
+	return nil
 }
 
 // listItemType maps a list type annotation to the type of its items, or ""

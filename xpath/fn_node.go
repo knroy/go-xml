@@ -274,6 +274,26 @@ func registerNodeFuncs(l *Library) {
 		if n.Kind != xdm.KindElement {
 			return xdm.Empty, nil
 		}
+		// dm:nilled is a PSVI property: it is set by schema validation, not by
+		// the presence of xsi:nil in the source. An element that was never
+		// validated is not nilled however it is marked, because nothing has
+		// decided the marking means anything — xsi:nil on an element whose
+		// declaration is not nillable is an ERROR, not a nilled element, and
+		// only validation can tell the two apart.
+		//
+		// Reading the attribute alone therefore answered true for every
+		// untyped element carrying it. QT3's fn-nilled-5 pins this exactly:
+		// nilled(<shoe xsi:nil="true"/>) on a constructed, unvalidated element
+		// must be FALSE. So must every case in the XSLT suite's
+		// expression-0931, whose stated purpose is "nilled() in an untyped
+		// environment (always false)".
+		//
+		// A non-empty TypeAnnotation is the data model evidence available here
+		// that the element went through validation; an untyped tree leaves it
+		// empty on every node.
+		if n.TypeAnnotation == "" {
+			return boolSeq(false), nil
+		}
 		a := n.Attr(xdm.NSXSI, "nil")
 		return boolSeq(a != nil && (a.Value == "true" || a.Value == "1")), nil
 	})

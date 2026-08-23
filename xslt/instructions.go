@@ -124,13 +124,19 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// source, or a later instruction mutating one would change the
 			// other.
 			if v.Kind == xdm.KindDocument {
-				for _, ch := range v.Children {
-					c := deepCopy(ch)
-					if err := i.validation.assess(rt, c); err != nil {
+				// The copy of a document node is a document node (11.9.1).
+				// Flattening happens only where the copy is attached as the
+				// content of an element (5.7.1), which appendNode decides;
+				// destinations that keep a bare sequence — a variable
+				// declared as="document-node()*", a function body — must see
+				// the wrapper itself.
+				c := deepCopy(v)
+				for _, ch := range c.Children {
+					if err := i.validation.assess(rt, ch); err != nil {
 						return err
 					}
-					out.appendNode(c)
 				}
+				out.appendNode(c)
 				continue
 			}
 			if v.Kind == xdm.KindAttribute {
@@ -1098,7 +1104,12 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 			if err != nil {
 				return nil, err
 			}
-			e.keys[k] = makeSortValue(v, s, resolved[k], rt.ctx.ImplicitTimezone)
+			sv, err := makeSortValue(v, s, resolved[k], rt.ctx.ImplicitTimezone,
+				rt.sheet.output.Version10Implicit)
+			if err != nil {
+				return nil, err
+			}
+			e.keys[k] = sv
 		}
 		entries[i] = e
 	}
@@ -1116,8 +1127,8 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 					sortErr = fmt.Errorf(
 						"XTDE1030: two sort key values cannot be compared "+
 							"with the lt operator (%s and %s)",
-						entries[a].keys[k].atom.TypeName(),
-						entries[b].keys[k].atom.TypeName())
+						entries[a].keys[k].typeName(),
+						entries[b].keys[k].typeName())
 				}
 				return false
 			}
@@ -1169,15 +1180,39 @@ type sortValue struct {
 	// conversion the stylesheet asked for. nil when data-type forced a
 	// conversion, or when the value was not a single atomic item.
 	atom *xdm.Atomic
+	// cmpAtom is the same value, but retained even for the string types,
+	// which take the collation path for ORDERING and so must leave atom nil.
+	//
+	// XTDE1030 is about whether the pair is comparable at all, and that
+	// question has to be answered for a string against an integer just as
+	// much as for a date against an integer — the "lt" operator raises
+	// XPTY0004 for both. Keying the check off atom alone meant a sort of
+	// (1 to 5, 'fred') never reached the branch, because 'fred' arrived with
+	// atom already cleared. error-1030a is exactly that sort.
+	cmpAtom *xdm.Atomic
 	// implicitTZ is needed to order the date/time types, whose comparison
 	// depends on the timezone an untimezoned value is taken to be in.
 	implicitTZ int
 }
 
-func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitTZ int) sortValue {
+// makeSortValue precomputes one sort key.
+//
+// It returns an error rather than a value for XTTE1020: section 13.1.3 says
+// that if a sort key value, after atomization and any data-type conversion,
+// is a sequence of more than one item then "with XSLT 1.0 behavior the
+// effective sort key value is the first item in the sequence. In other cases,
+// this is a type error." Taking seq[:1] unconditionally applied the 1.0 rule
+// in 2.0 mode as well, so a key of (.,.,.) sorted silently instead of being
+// rejected.
+func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitTZ int, backwards bool) (sortValue, error) {
 	atoms := xdm.Atomize(seq)
 	if len(atoms) == 0 {
-		return sortValue{empty: true}
+		return sortValue{empty: true}, nil
+	}
+	if len(atoms) > 1 && !backwards {
+		return sortValue{}, fmt.Errorf(
+			"XTTE1020: a sort key value is a sequence of %d items; only "+
+				"XSLT 1.0 behaviour takes the first item", len(atoms))
 	}
 	text := stringJoin(seq[:1], "")
 	if s.dataType == "number" {
@@ -1186,9 +1221,9 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 		if err != nil {
 			// A non-numeric value sorts as NaN, which the comparison places
 			// before all numbers rather than erroring the whole transform.
-			return sortValue{numeric: true, num: nan()}
+			return sortValue{numeric: true, num: nan()}, nil
 		}
-		return sortValue{numeric: true, num: conv.Float64()}
+		return sortValue{numeric: true, num: conv.Float64()}, nil
 	}
 
 	v := sortValue{str: text, strColl: coll, implicitTZ: implicitTZ}
@@ -1203,8 +1238,11 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 	if s.dataType == "" && len(atoms) == 1 {
 		if a, ok := atoms[0].(*xdm.Atomic); ok && a.Type != xdm.TypeUntypedAtomic {
 			v.atom = a
+			v.cmpAtom = a
 			// A string-valued key still goes through the collation rules
-			// below, so only the non-string types take the typed path.
+			// below, so only the non-string types take the typed path for
+			// ordering. cmpAtom keeps the value regardless, because the
+			// comparability question above it is asked of every pair.
 			if isStringSortType(a.Type) {
 				v.atom = nil
 			}
@@ -1224,7 +1262,29 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 		v.caseOrder, v.upperFirst = true, false
 		v.fold = strings.ToLower(text)
 	}
-	return v
+	return v, nil
+}
+
+// typeName names the sort key's type for an XTDE1030 message, reading either
+// of the two atom fields — the string types leave atom nil and keep cmpAtom.
+func (v sortValue) typeName() string {
+	switch {
+	case v.atom != nil:
+		return v.atom.TypeName()
+	case v.cmpAtom != nil:
+		return v.cmpAtom.TypeName()
+	}
+	return "untyped"
+}
+
+// comparableSortTypes reports whether "lt" accepts the pair. Only the numeric
+// types promote across type boundaries; string against anything else, and any
+// other cross-type pair, is XPTY0004 and therefore XTDE1030.
+func comparableSortTypes(a, b xdm.TypeCode) bool {
+	if a == b {
+		return true
+	}
+	return a.IsNumeric() && b.IsNumeric()
 }
 
 func compareSortValues(a, b sortValue) int {
@@ -1309,6 +1369,22 @@ func compareSortValues(a, b sortValue) int {
 			a.atom.Type != b.atom.Type {
 			return sortIncomparable
 		}
+	}
+
+	// The same comparability test, for the pairs where at least one side took
+	// the string path and so left atom nil. A string against an integer is
+	// the pair XTDE1030 names — "lt" raises XPTY0004 for it — and without
+	// this the two would silently be ordered by their string forms.
+	//
+	// Untyped values are excluded for the same reason as above: "lt" promotes
+	// them to the other operand's type rather than refusing, and an unvalidated
+	// document's keys are all untyped. Equal types are excluded because they
+	// are orderable in principle, so a refusal there would be a gap in the
+	// comparison rather than this error.
+	if a.cmpAtom != nil && b.cmpAtom != nil && a.atom == nil != (b.atom == nil) &&
+		!isUntyped(a.cmpAtom) && !isUntyped(b.cmpAtom) &&
+		!comparableSortTypes(a.cmpAtom.Type, b.cmpAtom.Type) {
+		return sortIncomparable
 	}
 
 	if a.numeric && b.numeric {

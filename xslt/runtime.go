@@ -236,6 +236,15 @@ func (b *outputBuilder) appendNode(n *xdm.Node) {
 		_ = b.addAttribute(n.Name, n.Value)
 		return
 	}
+	if n.Kind == xdm.KindDocument && b.open != nil {
+		// A document node used as the content of an element contributes its
+		// children, not itself (5.7.1): a result tree may not contain a
+		// document node below the root.
+		for _, ch := range append([]*xdm.Node(nil), n.Children...) {
+			b.appendNode(ch)
+		}
+		return
+	}
 	if b.open != nil {
 		// Copying is only needed when the node is about to be re-parented:
 		// AppendChild rewrites Parent and tree pointers, so adopting a source
@@ -324,15 +333,21 @@ func detach(n *xdm.Node) *xdm.Node {
 // invariant of no adjacent text nodes holds in constructed trees too.
 func (b *outputBuilder) appendText(s string) {
 	b.lastAtomic = false
-	if s == "" && (b.open != nil || len(b.items) > 0) {
+	if s == "" && b.open != nil {
 		// Section 5.7.1 discards zero-length text nodes only while
 		// *constructing complex content*, that is, inside an element. At the
-		// top level of a sequence constructor one survives, which is what
-		// lets a variable declared as="text()" be satisfied by an
-		// xsl:value-of over the empty string — but only when it is the whole
-		// result. A zero-length node beside other items contributes nothing
-		// and, kept, would add a separator of its own everywhere the
-		// sequence is joined into a string.
+		// top level of a sequence constructor they all survive: section
+		// 11.10's own example gives a function body of three xsl:text
+		// instructions and says it "returns a sequence of three text nodes",
+		// and function-1009 asserts count() = 3 over exactly that body with
+		// every one of them zero-length. Dropping the empty ones once any
+		// other item was present answered 1.
+		//
+		// Nothing downstream is harmed by keeping them: toTree skips
+		// zero-length children when it builds a variable's document node,
+		// and constructedText skips them when it joins a sequence into a
+		// string, so neither a temporary tree nor a separator gains anything
+		// from them.
 		return
 	}
 	if b.open != nil {
@@ -650,6 +665,20 @@ func (b *outputBuilder) toTree() *xdm.Node {
 			// constructed parentless element would otherwise be adopted in
 			// place — making "$x/lre is $y" true for a node xsl:document is
 			// defined to have copied.
+			if n.Kind == xdm.KindDocument {
+				// A document node cannot be the child of a document node.
+				// Section 5.7.1 makes it contribute its children instead —
+				// the same flattening appendNode performs for the content of
+				// an element. xsl:copy-of now delivers the wrapper (11.9.1
+				// says the copy of a document node is a document node), so
+				// this is the point where a variable's implicit document
+				// node absorbs it.
+				for _, ch := range n.Children {
+					tree.Root.AppendChild(deepCopy(ch))
+				}
+				prevAtomic = false
+				continue
+			}
 			tree.Root.AppendChild(deepCopy(n))
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {

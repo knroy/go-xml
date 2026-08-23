@@ -104,6 +104,23 @@ type Template struct {
 	// importPrecedence orders templates from imported stylesheets below those
 	// of the importing one.
 	importPrecedence int
+	// lowPrecedence is the lowest import precedence in the import tree of the
+	// module that declared this template — that is, the number given to the
+	// deepest module this one reaches through xsl:import.
+	//
+	// xsl:apply-imports (section 6.7) considers only "the templates that were
+	// imported, directly or indirectly, by the stylesheet module containing
+	// the current template rule". Import precedence alone cannot express that:
+	// two modules imported as siblings both rank below their importer, so a
+	// scan that merely drops below the current precedence runs on into a
+	// sibling's import tree that the current module never imported.
+	//
+	// compileModule numbers a module's whole import tree before the module
+	// itself takes a number (post-order, see the comment there), so those
+	// numbers form the contiguous half-open interval
+	// [lowPrecedence, importPrecedence). Recording the low end turns the
+	// import-tree question into a range test.
+	lowPrecedence int
 	// declOrder breaks ties between equal-priority templates: the last one
 	// declared wins, per the spec's conflict-resolution rule.
 	declOrder int

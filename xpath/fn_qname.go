@@ -17,6 +17,28 @@ import (
 // part of its value, so a stylesheet that needs the prefix — to reproduce a
 // name in output, or to resolve one from document content — has no way to get
 // at it except through these.
+// checkLexicalQName reports FOCA0002 when lex is not a well formed lexical
+// QName, given the prefix and local part xdm.SplitQName produced from it.
+//
+// Both halves must be NCNames. Without this "1person" and "@person" became
+// QNames whose lexical form cannot be written in any document, and a second
+// colon vanished: SplitQName cuts at the FIRST colon, so "pre:thi:ng" yields
+// the local part "thi:ng", which only the NCName check rejects.
+//
+// A colon with nothing before it is the case a "prefix != """ guard misses:
+// ":person" splits to an empty prefix, so the prefix goes unchecked and the
+// colon disappears into a QName named "person".
+func checkLexicalQName(lex, prefix, local string) error {
+	trimmed := strings.TrimSpace(lex)
+	if strings.HasPrefix(trimmed, ":") || strings.HasSuffix(trimmed, ":") {
+		return fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
+	}
+	if !isNCName(local) || (prefix != "" && !isNCName(prefix)) {
+		return fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
+	}
+	return nil
+}
+
 func registerQNameFuncs(l *Library) {
 	l.registerFn("QName", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		uri, err := argString(args, 0)
@@ -37,12 +59,8 @@ func registerQNameFuncs(l *Library) {
 		// A colon with nothing before it is the case the prefix != "" guard
 		// misses: ":person" splits to an empty prefix, so the prefix was not
 		// checked and the colon vanished into a QName named "person".
-		if strings.HasPrefix(strings.TrimSpace(lex), ":") ||
-			strings.HasSuffix(strings.TrimSpace(lex), ":") {
-			return nil, fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
-		}
-		if !isNCName(local) || (prefix != "" && !isNCName(prefix)) {
-			return nil, fmt.Errorf("FOCA0002: %q is not a valid lexical QName", lex)
+		if err := checkLexicalQName(lex, prefix, local); err != nil {
+			return nil, err
 		}
 		return xdm.One(xdm.NewQNameValue(xdm.QName{Prefix: prefix, URI: uri, Local: local})), nil
 	})
@@ -60,6 +78,16 @@ func registerQNameFuncs(l *Library) {
 			return nil, err
 		}
 		prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+		// The first argument is declared xs:string?, not xs:QName, so nothing
+		// has checked its lexical form by the time it arrives. FOCA0002 is
+		// raised before the prefix is looked up because a name like
+		// "pre:thi:ng" or "pre:+thing" is malformed whether or not "pre" is
+		// bound: reporting FONS0004 for an unbound prefix in a name that was
+		// never a QName describes the wrong fault, and accepting it built a
+		// QName whose lexical form cannot be written into any document.
+		if err := checkLexicalQName(lex, prefix, local); err != nil {
+			return nil, err
+		}
 		uri, ok := el.LookupPrefix(prefix)
 		if !ok {
 			return nil, fmt.Errorf("FONS0004: no namespace binding for prefix %q", prefix)

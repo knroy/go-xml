@@ -182,7 +182,12 @@ func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, er
 			if err != nil {
 				return nil, err
 			}
-			e.keys[k] = makeSortValue(v, sk, colls[k], rt.ctx.ImplicitTimezone)
+			sv, err := makeSortValue(v, sk, colls[k], rt.ctx.ImplicitTimezone,
+				rt.sheet.output.Version10Implicit)
+			if err != nil {
+				return nil, err
+			}
+			e.keys[k] = sv
 		}
 		entries[n] = e
 	}
@@ -196,8 +201,8 @@ func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, er
 					sortErr = fmt.Errorf(
 						"XTDE1030: two sort key values cannot be compared "+
 							"with the lt operator (%s and %s)",
-						entries[a].keys[k].atom.TypeName(),
-						entries[b].keys[k].atom.TypeName())
+						entries[a].keys[k].typeName(),
+						entries[b].keys[k].typeName())
 				}
 				return false
 			}

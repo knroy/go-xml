@@ -53,6 +53,7 @@ func principalOf(res *xslt.Result) (*xslt.Result, string, bool) {
 			return &xslt.Result{
 					Nodes:     res.Secondary[i].Nodes,
 					Secondary: res.Secondary,
+					BaseURI:   res.Secondary[i].BaseURI,
 				},
 				res.Secondary[i].String(), true
 		}
@@ -455,7 +456,7 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 		}
 		switch x.Kind {
 		case xdm.KindElement:
-			if x.Name != y.Name || !attrsEqual(x, y) {
+			if !sameExpandedName(x.Name, y.Name) || !attrsEqual(x, y) {
 				return false
 			}
 			if !treesEqual(x, y, normalizeSpace) {
@@ -470,7 +471,7 @@ func treesEqual(a, b *xdm.Node, normalizeSpace bool) bool {
 				return false
 			}
 		case xdm.KindPI:
-			if x.Name != y.Name || x.Value != y.Value {
+			if !sameExpandedName(x.Name, y.Name) || x.Value != y.Value {
 				return false
 			}
 		}
@@ -492,6 +493,19 @@ func contentOf(n *xdm.Node, normalizeSpace bool) []*xdm.Node {
 	return out
 }
 
+// sameExpandedName compares two names by namespace URI and local part only.
+//
+// xdm.QName carries the prefix, and comparing the struct compares that too.
+// A prefix is not part of a name in the data model: when two prefixes are
+// bound to one URI the parser keeps whichever declaration it saw last, so two
+// serialisations that differ only in the ORDER of their xmlns declarations
+// parse into names that compare unequal, and assert-xml reports a mismatch
+// that does not exist. This relaxes the comparison on BOTH sides equally --
+// it does not normalise the actual output to look like the expected one.
+func sameExpandedName(a, b xdm.QName) bool {
+	return a.URI == b.URI && a.Local == b.Local
+}
+
 func attrsEqual(a, b *xdm.Node) bool {
 	if len(a.Attrs) != len(b.Attrs) {
 		return false
@@ -500,7 +514,7 @@ func attrsEqual(a, b *xdm.Node) bool {
 	for _, x := range a.Attrs {
 		found := false
 		for _, y := range b.Attrs {
-			if x.Name == y.Name && x.Value == y.Value {
+			if sameExpandedName(x.Name, y.Name) && x.Value == y.Value {
 				found = true
 				break
 			}
@@ -701,7 +715,11 @@ func secondaryByURI(res *xslt.Result, uri string) (*xslt.Result, string) {
 			// The text is taken alongside the nodes because a secondary
 			// result serialises with its own output settings, which a
 			// Result assembled from the nodes cannot express.
-			return &xslt.Result{Nodes: s.Nodes}, s.String()
+			// BaseURI travels with the nodes: the assertions inside an
+			// assert-result-document ask about base-uri(/), and the
+			// document node the Result manufactures is the only node that
+			// can carry the result document's own URI.
+			return &xslt.Result{Nodes: s.Nodes, BaseURI: s.BaseURI}, s.String()
 		}
 	}
 	return nil, ""

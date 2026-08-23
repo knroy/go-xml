@@ -114,6 +114,21 @@ func Atomize(seq Sequence) Sequence {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *Node:
+			// A node whose type is a LIST type has a typed value that is a
+			// SEQUENCE, one atomic value per whitespace-separated token --
+			// not a single string that happens to contain spaces. XDM 3.3
+			// and 6.2 both say so, and it is why
+			// "count(data(@nmtokens-attr))" must answer 3 for "red green
+			// blue" rather than 1, and why string-join(...,',') over such an
+			// attribute yields "red,green,blue".
+			//
+			// Node.Atomize returns a single *Atomic and so structurally
+			// cannot express this; the expansion therefore happens here, at
+			// the one place that turns nodes into atomized sequences.
+			if items, ok := v.AtomizeList(); ok {
+				out = append(out, items...)
+				continue
+			}
 			out = append(out, v.Atomize())
 		case *Opaque:
 			// Not atomisable; see above.

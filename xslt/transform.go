@@ -82,6 +82,12 @@ type Result struct {
 	// order produced. It is empty for the great majority of stylesheets,
 	// which produce a single result.
 	Secondary []SecondaryResult
+	// BaseURI is the URI this result tree is identified by, which Tree()
+	// puts on the document node it manufactures. It is empty for the
+	// principal result, whose document node has no URI of its own; a caller
+	// assembling a Result from a SecondaryResult sets it from that
+	// document's BaseURI so that base-uri(/) answers inside it.
+	BaseURI string
 	// output carries the stylesheet's serialisation settings.
 	output OutputSettings
 }
@@ -300,7 +306,8 @@ func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
 		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
 
 	case xdm.KindElement:
-		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI}
+		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
+			IsID: n.IsID, IsIDREFS: n.IsIDREFS}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
@@ -401,6 +408,10 @@ func (r *Result) Serialize(w io.Writer) error {
 // does with an SVRL report.
 func (r *Result) Tree() *xdm.Node {
 	tree := xdm.NewTree()
+	// The document node is manufactured here, so it is the only place the
+	// result's own URI can be put on it. Without this base-uri(/) answered
+	// "" even when every element below it had a base URI.
+	tree.Root.BaseURI = r.BaseURI
 	for _, it := range r.Nodes {
 		switch v := it.(type) {
 		case *xdm.Node:

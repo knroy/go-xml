@@ -21,6 +21,18 @@ type SecondaryResult struct {
 	// create files anywhere the process can write is a hazard the caller
 	// should be the one to opt into.
 	Href string
+	// BaseURI is Href resolved against the base output URI, which is the
+	// base URI of every node in this document that does not override it with
+	// xml:base.
+	//
+	// Section 19.1 makes the base output URI implementation-defined when the
+	// caller does not supply one, and the stylesheet's own location is the
+	// only URI this engine has: an @href of "out/second.xml" written in a
+	// stylesheet read from .../foo.xsl means .../out/second.xml, which is
+	// also where a caller honouring the href would write it. Leaving it
+	// empty made base-uri() answer "" for every node in a secondary result,
+	// and made a relative xml:base inside one resolve against nothing.
+	BaseURI string
 	// Nodes is the result sequence for this document.
 	Nodes xdm.Sequence
 	// Output holds the serialisation settings that apply to this document,
@@ -172,13 +184,31 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// The nodes carry the resolved base before they are recorded, so that
+	// base-uri() inside this document answers relative to where the document
+	// goes rather than to where the stylesheet was. rebase applies xml:base
+	// on the way down, which is what makes <l xml:base="in/third.xml"> come
+	// out at .../out/in/third.xml rather than at the bare reference.
+	resolvedHref := resolveAgainst(rt.sheet.baseURI, href)
+	if resolvedHref == "" {
+		resolvedHref = rt.sheet.baseURI
+	}
+	nodes := sub.sequence()
+	if resolvedHref != "" {
+		for _, it := range nodes {
+			if n, ok := it.(*xdm.Node); ok {
+				rebase(n, resolvedHref)
+			}
+		}
+	}
 	cm, err := rt.sheet.flattenCharacterMaps(settings.UseCharacterMaps)
 	if err != nil {
 		return err
 	}
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
 		Href:    href,
-		Nodes:   sub.sequence(),
+		BaseURI: resolvedHref,
+		Nodes:   nodes,
 		Output:  settings,
 		charMap: cm,
 	})

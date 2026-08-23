@@ -183,21 +183,52 @@ func (s *Stylesheet) findTemplateFrom(node *xdm.Node, mode string,
 	return nil, len(s.templates), nil
 }
 
-// findTemplateBelowPrecedence resumes the scan at the first template whose
-// import precedence is strictly lower than p.
+// findTemplateInImportTree finds the highest-priority template rule in the
+// import tree of the module that declared the current one.
 //
 // This is xsl:apply-imports, which differs from xsl:next-match in exactly this
 // respect: next-match takes the next template by any criterion, while
 // apply-imports skips the whole current precedence level and goes to the
 // stylesheet that was imported.
-func (s *Stylesheet) findTemplateBelowPrecedence(node *xdm.Node, mode string,
-	ctx *xpath.Context, p int) (*Template, int, error) {
+//
+// Section 6.7 says apply-imports searches "the templates that were imported,
+// directly or indirectly, by the stylesheet module containing the current
+// template rule". That is narrower than "everything below the current
+// precedence": two modules imported as SIBLINGS both rank below their
+// importer, so a scan that only drops below the current precedence runs on
+// into a sibling's import tree, which the current module never imported.
+// import-1601 is exactly that shape — a template in a module importing
+// nothing must fall back to the built-in rule, and instead reached a sibling's
+// rules.
+//
+// The current module's import tree is the half-open precedence interval
+// [low, p): compileModule numbers a module's whole import tree before the
+// module itself takes a number, so those numbers are contiguous. The list is
+// sorted by descending precedence, so the templates in range form one
+// contiguous run and the scan can stop as soon as it falls below low.
+func (s *Stylesheet) findTemplateInImportTree(node *xdm.Node, mode string,
+	ctx *xpath.Context, low, p int) (*Template, int, error) {
 
-	start := 0
-	for start < len(s.templates) && s.templates[start].importPrecedence >= p {
-		start++
+	for i := 0; i < len(s.templates); i++ {
+		t := s.templates[i]
+		if t.importPrecedence >= p {
+			continue
+		}
+		if t.importPrecedence < low {
+			break
+		}
+		if !t.matchesMode(mode) {
+			continue
+		}
+		ok, err := t.Match.Matches(node, ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		if ok {
+			return t, i + 1, nil
+		}
 	}
-	return s.findTemplateFrom(node, mode, ctx, start)
+	return nil, len(s.templates), nil
 }
 
 // matchesMode reports whether the template applies in the given mode.
@@ -526,8 +557,9 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 		err error
 	)
 	if i.applyImports {
-		t, nxt, err = rt.sheet.findTemplateBelowPrecedence(
-			node, rt.sel.mode, rt.ctx, rt.sel.template.importPrecedence)
+		t, nxt, err = rt.sheet.findTemplateInImportTree(
+			node, rt.sel.mode, rt.ctx,
+			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
 	} else {
 		t, nxt, err = rt.sheet.findTemplateFrom(node, rt.sel.mode, rt.ctx, rt.sel.next)
 	}
