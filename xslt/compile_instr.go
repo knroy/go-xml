@@ -61,7 +61,7 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 		// Whitespace-only text between instructions is discarded; anything
 		// else is a literal text node. Without this every indented stylesheet
 		// would emit its own indentation into the result.
-		if xdm.IsXMLWhitespace(n.Value) {
+		if xdm.IsXMLWhitespace(n.Value) && !stylesheetTextPreserved(n) {
 			return nil, nil
 		}
 		return &textInstr{text: n.Value}, nil
@@ -179,7 +179,20 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	sort.Strings(prefixes)
 	for _, p := range prefixes {
 		uri := scope[p]
-		if uri == xdm.NSXSL || uri == xdm.NSXML || excluded[uri] {
+		if uri == xdm.NSXML {
+			continue
+		}
+		if uri == xdm.NSXSL || excluded[uri] {
+			// Section 11.1.4: "a namespace node whose string value is a
+			// target namespace URI is copied to the result tree, whether or
+			// not the URI identifies an excluded namespace". Whether a URI is
+			// a target cannot be decided here — xsl:namespace-alias is a
+			// top-level declaration that may be compiled after this literal
+			// element, and may live in an imported module — so the excluded
+			// bindings are carried through and filtered when the instruction
+			// runs, by which time the alias map is complete.
+			instr.excludedNamespaces = append(instr.excludedNamespaces,
+				nsBinding{prefix: p, uri: uri})
 			continue
 		}
 		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
@@ -393,9 +406,18 @@ func (c *compiler) compileFallbackChildren(el *xdm.Node) ([]Instruction, bool, e
 }
 
 func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &valueOfInstr{separator: " ", hasSeparator: false}
-	if s := n.AttrValue("separator"); s != "" {
-		instr.separator, instr.hasSeparator = s, true
+	instr := &valueOfInstr{}
+	// @separator is an attribute value template — the syntax summary writes
+	// it as { string } — so a separator such as "{item[1]};{item[2]}" is
+	// evaluated rather than emitted literally. The attribute is looked up
+	// rather than tested for emptiness because separator="" is a meaningful
+	// request for no separator at all.
+	if a := n.Attr("", "separator"); a != nil {
+		sep, err := compileAVT(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:value-of/@separator: %w", err)
+		}
+		instr.separator, instr.hasSeparator = sep, true
 	}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
@@ -963,4 +985,71 @@ func checkCaseOrder(v string) error {
 		return fmt.Errorf("XTDE0030: invalid xsl:sort/@case-order %q", v)
 	}
 	return nil
+}
+
+// stylesheetTextPreserved reports whether a whitespace-only text node in the
+// stylesheet survives the preprocessing of section 4.2.
+//
+// The default is that it does not. It survives only under xml:space="preserve"
+// — and even then, section 4.2 lists two overriding cases where the node goes
+// regardless: a whitespace node whose parent is one of a fixed set of XSLT
+// elements whose content is entirely element children, and a whitespace node
+// immediately followed by xsl:param or xsl:sort. Both exist because those
+// positions can never carry meaningful text, so preserving there would inject
+// indentation into every stylesheet that formats them across lines.
+func stylesheetTextPreserved(n *xdm.Node) bool {
+	parent := n.Parent
+	if parent == nil {
+		return false
+	}
+	if parent.Name.URI == xdm.NSXSL && whitespaceStrippingParents[parent.Name.Local] {
+		return false
+	}
+	// The *following* sibling is what matters: text laid out before an
+	// xsl:sort or xsl:param is indentation, whereas text after the last one
+	// is content of the sequence constructor.
+	for i, ch := range parent.Children {
+		if ch != n {
+			continue
+		}
+		for _, sib := range parent.Children[i+1:] {
+			if sib.Kind != xdm.KindElement {
+				continue
+			}
+			if sib.Name.URI == xdm.NSXSL &&
+				(sib.Name.Local == "param" || sib.Name.Local == "sort") {
+				return false
+			}
+			break
+		}
+		break
+	}
+	// The nearest ancestor bearing xml:space decides. "default" written
+	// inside a "preserve" region turns stripping back on, which is why the
+	// walk stops at the first attribute found rather than at the first
+	// "preserve".
+	for cur := parent; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		if a := cur.Attr(xdm.NSXML, "space"); a != nil {
+			return a.Value == "preserve"
+		}
+	}
+	return false
+}
+
+// whitespaceStrippingParents are the XSLT elements section 4.2 names as
+// discarding whitespace-only children whatever xml:space says.
+var whitespaceStrippingParents = map[string]bool{
+	"analyze-string":  true,
+	"apply-imports":   true,
+	"apply-templates": true,
+	"attribute-set":   true,
+	"call-template":   true,
+	"character-map":   true,
+	"choose":          true,
+	"next-match":      true,
+	"stylesheet":      true,
+	"transform":       true,
 }

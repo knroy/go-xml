@@ -31,7 +31,16 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	// choice is made here rather than at compile time because it depends on
 	// the tree, which does not exist until the transform has run.
 	if opts.Method == "" {
-		opts.Method = defaultMethod(seq)
+		// The second argument is the backwards-compatibility case described
+		// on defaultMethod: a principal stylesheet module at version 1.0
+		// whose result tree was generated implicitly. Deciding it needs the
+		// stylesheet's own version and whether an xsl:result-document
+		// produced this tree, neither of which reaches the serialiser yet, so
+		// it is passed as false and the rule is inert. Supplying it is a
+		// one-field change to OutputSettings, set once at compile time and
+		// cleared by xsl:result-document; backwards-017, backwards-019 and
+		// backwards-019b are the tests waiting on it.
+		opts.Method = defaultMethod(seq, false)
 		s.opts.Method = opts.Method
 	}
 
@@ -549,23 +558,30 @@ func hasTextChild(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
-	if s.normalize != nil {
-		// Normalisation is applied to the text as a whole rather than to the
-		// bytes on their way out: a combining sequence spans several
-		// characters, so normalising each one alone would leave it exactly
-		// as it was.
-		text = s.normalize(text)
-	}
 	var sb strings.Builder
 	sb.Grow(len(text))
-	for _, r := range text {
-		// A character map wins over escaping: emitting "&nbsp;" is the whole
-		// reason a stylesheet declares one, and escaping the ampersand would
-		// defeat it.
-		if repl, ok := s.charMap[r]; ok {
-			sb.WriteString(repl)
-			continue
+	// The text is split at the characters the map claims, so that
+	// normalisation applies to the runs between them and not to the map's
+	// inputs or its outputs. See mapSegments.
+	for _, seg := range s.mapSegments(text) {
+		s.escapeTextRun(&sb, seg.text)
+		if s.err != nil {
+			return
 		}
+		if seg.has {
+			// A character map wins over escaping: emitting "&nbsp;" is the
+			// whole reason a stylesheet declares one, and escaping the
+			// ampersand would defeat it.
+			sb.WriteString(seg.repl)
+		}
+	}
+	s.writeString(sb.String())
+}
+
+// escapeTextRun escapes one run of character data into sb. It is the body of
+// escapeText for a stretch of text no character map claims.
+func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
+	for _, r := range text {
 		// HTML 4 gives #x7F-#x9F no meaning: the numeric character
 		// references in that range name positions in the C1 control block,
 		// and browsers historically remapped them to the windows-1252
@@ -579,7 +595,7 @@ func (s *serializer) escapeText(text string) {
 			return
 		}
 		if !s.representable(r) {
-			fmt.Fprintf(&sb, "&#%d;", r)
+			fmt.Fprintf(sb, "&#%d;", r)
 			continue
 		}
 		switch r {
@@ -603,7 +619,6 @@ func (s *serializer) escapeText(text string) {
 			sb.WriteRune(r)
 		}
 	}
-	s.writeString(sb.String())
 }
 
 // writeCData writes text as one or more CDATA sections.
@@ -622,6 +637,13 @@ func (s *serializer) writeCData(text string) {
 	// character written as a numeric reference, and a new one opened. That
 	// is the only spelling that both preserves the character and keeps every
 	// byte inside the declared encoding.
+	// Normalisation applies to the content of a CDATA section as it does to
+	// any other text: the section is a way of writing characters, not a way
+	// of exempting them. It matters because a normalisation can produce a
+	// character the encoding cannot hold — NFD splits "\u00e7" into "c" and a
+	// combining cedilla, and US-ASCII output must then break the section
+	// around the cedilla rather than write it raw.
+	text = s.normalized(text)
 	var sb strings.Builder
 	sb.WriteString("<![CDATA[")
 	for i := 0; i < len(text); {
@@ -671,6 +693,57 @@ func (s *serializer) normalized(text string) string {
 	return s.normalize(text)
 }
 
+// mapSegments splits text at the characters a character map claims, and
+// normalises everything in between.
+//
+// The two transforms have to be interleaved rather than run one after the
+// other, because each would otherwise feed the other. Normalising first
+// decomposes a character the map does not name into characters it does — with
+// normalization-form="NFD" and a map for "c", the "\u00e7" of "abc\u00e7de"
+// becomes "c" plus a combining cedilla, and the map rewrites that "c" too,
+// substituting a character the stylesheet never mentioned. Mapping first and
+// normalising afterwards is no better: it normalises the map's own output,
+// which the specification says is written through untouched.
+//
+// So the map is matched against the original characters, and only the runs
+// between them are normalised. Each run is normalised whole rather than
+// character by character, since a combining sequence spans several characters
+// and normalising each one alone would leave it exactly as it was.
+//
+// The result alternates: an unmapped run, then the replacement string for the
+// character that ended it. Callers escape the runs and write the
+// replacements verbatim, which is the point of declaring a map at all.
+func (s *serializer) mapSegments(text string) []mapSegment {
+	if len(s.charMap) == 0 {
+		return []mapSegment{{text: s.normalized(text)}}
+	}
+	var segs []mapSegment
+	run := 0
+	for i, r := range text {
+		repl, ok := s.charMap[r]
+		if !ok {
+			continue
+		}
+		segs = append(segs, mapSegment{
+			text: s.normalized(text[run:i]),
+			repl: repl,
+			has:  true,
+		})
+		run = i + utf8.RuneLen(r)
+	}
+	return append(segs, mapSegment{text: s.normalized(text[run:])})
+}
+
+// mapSegment is one unmapped run of text and, where the run ended at a
+// character the map claims, the string that replaces it.
+type mapSegment struct {
+	text string
+	repl string
+	// has distinguishes a replacement that is the empty string — a map may
+	// legitimately delete a character — from no replacement at all.
+	has bool
+}
+
 // mapChars applies the character map without escaping anything else, for the
 // text output method — which writes characters as they stand.
 func (s *serializer) mapChars(text string) string {
@@ -698,14 +771,16 @@ func (s *serializer) mapChars(text string) string {
 // delimiter around the value where it can. Only where both quote characters
 // appear is there no choice, and then the double quote is escaped.
 func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
-	v := a.Value
-	if s.normalize != nil {
-		v = s.normalize(v)
-	}
 	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
-		v = escapeURIAttribute(v)
+		// A character map does not reach a URI-valued attribute that is being
+		// percent-escaped. The two rewrites contradict each other — the map
+		// would substitute characters the escaping is there to encode — and
+		// the serialization specification gives the escaping precedence.
+		// character-map-009 checks exactly this: an href of "z-linkage.html"
+		// keeps its "z" even with a map that rewrites "z" everywhere else.
+		return `="` + escapeAttr(escapeURIAttribute(s.normalized(a.Value))) + `"`
 	}
-	body, raw := s.escapeAttrMapped(v)
+	body, raw := s.escapeAttrMapped(a.Value, false)
 	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
 		return "='" + body + "'"
 	}
@@ -715,28 +790,31 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 // escapeAttrMapped escapes an attribute value, passing character-mapped
 // substitutions through untouched. The second result reports whether any
 // substitution happened, which is what makes the delimiter choice necessary.
-func (s *serializer) escapeAttrMapped(v string) (string, bool) {
-	if len(s.charMap) == 0 && !s.html {
-		return escapeAttr(v), false
-	}
-	if len(s.charMap) == 0 {
-		var sb strings.Builder
-		sb.Grow(len(v))
-		for _, r := range v {
-			sb.WriteString(s.escapeAttrRune(r))
-		}
-		return sb.String(), false
-	}
+//
+// uri asks for percent-escaping of the unmapped runs, for a URI-valued
+// attribute of the html and xhtml methods. It applies to those runs only:
+// percent-escaping a replacement string would defeat the map, and the test
+// suite checks that a map leaves a URI attribute alone.
+func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 	var sb strings.Builder
 	sb.Grow(len(v))
 	mapped := false
-	for _, r := range v {
-		if repl, ok := s.charMap[r]; ok {
-			sb.WriteString(repl)
-			mapped = true
-			continue
+	for _, seg := range s.mapSegments(v) {
+		run := seg.text
+		if uri {
+			run = escapeURIAttribute(run)
 		}
-		sb.WriteString(s.escapeAttrRune(r))
+		if len(s.charMap) == 0 && !s.html {
+			sb.WriteString(escapeAttr(run))
+		} else {
+			for _, r := range run {
+				sb.WriteString(s.escapeAttrRune(r))
+			}
+		}
+		if seg.has {
+			sb.WriteString(seg.repl)
+			mapped = true
+		}
 	}
 	return sb.String(), mapped
 }
@@ -810,7 +888,14 @@ func isURIAttribute(element string, a *xdm.Node) bool {
 // a URI are escaped, and a "%" is left alone: a value that is already escaped
 // must survive unchanged, or every round trip through a stylesheet would
 // double-escape it.
+//
+// The value is put into NFC first. Percent-escaping an IRI is defined by
+// RFC 3987 section 3.1, which normalises to NFC before encoding the UTF-8
+// bytes, so a decomposed "a" plus combining ring and a precomposed "\u00e5"
+// escape to the same %C3%A5 rather than to two different byte sequences that
+// no longer compare equal as URIs.
 func escapeURIAttribute(v string) string {
+	v = norm.NFC.String(v)
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
@@ -903,7 +988,17 @@ func isRawTextElement(local string) bool {
 // namespace selects xhtml, "html" in no namespace — in any case — selects
 // html, and everything else, including a result whose first element is
 // preceded by non-whitespace text, is xml.
-func defaultMethod(seq xdm.Sequence) string {
+//
+// v10Implicit turns off the xhtml case. Section 20 makes it the one
+// exception: "if the version attribute of the xsl:stylesheet element of the
+// principal stylesheet module has the value 1.0, and if the result tree is
+// generated implicitly (rather than by an explicit xsl:result-document
+// instruction), then the default output method in this situation is xml".
+// A 1.0 stylesheet predates the xhtml method, so a result that happens to be
+// rooted at an XHTML html element was never asking for it — and choosing
+// xhtml would add a content-type meta and percent-escape its URIs, changing
+// output the stylesheet's author had already settled.
+func defaultMethod(seq xdm.Sequence, v10Implicit bool) string {
 	var first *xdm.Node
 	var scan func(xdm.Sequence) bool
 	scan = func(items xdm.Sequence) bool {
@@ -946,6 +1041,9 @@ func defaultMethod(seq xdm.Sequence) string {
 	}
 	switch {
 	case first.Name.URI == nsXHTML && first.Name.Local == "html":
+		if v10Implicit {
+			return "xml"
+		}
 		return "xhtml"
 	case first.Name.URI == "" && strings.EqualFold(first.Name.Local, "html"):
 		return "html"

@@ -67,11 +67,19 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 	if attrPrefix != "" {
 		vAttr, tAttr = attrPrefix+"validation", attrPrefix+"type"
 	}
-	v := n.AttrValue(vAttr)
-	t := n.AttrValue(tAttr)
+	// The unprefixed spellings are read only on an XSLT instruction. On a
+	// literal result element they are ordinary attributes of the *output*,
+	// and reading them as XSLT's own turned <script type="text/javascript">
+	// into a request to validate against a type named "text/javascript" —
+	// which then failed XTSE1660 for want of a schema, on a stylesheet that
+	// asked for no validation at all. output-0154 is exactly that stylesheet.
+	v, t := "", ""
+	if n.Name.URI == xdm.NSXSL {
+		v = n.AttrValue(vAttr)
+		t = n.AttrValue(tAttr)
+	}
 	// On a literal result element the attributes are spelled xsl:validation
-	// and xsl:type — an unprefixed one there would be an ordinary attribute
-	// of the output. They live in the XSLT namespace, which AttrValue does
+	// and xsl:type. They live in the XSLT namespace, which AttrValue does
 	// not search, so a literal result element asking to be validated was
 	// silently not being validated at all.
 	if v == "" {

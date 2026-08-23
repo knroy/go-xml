@@ -504,7 +504,7 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		if y < 0 {
 			y = -y
 		}
-		if max := maxWidth(width); max > 0 && max < 18 && isDigitPattern(pres) {
+		if max := effectiveMaxWidth(pres, width); max > 0 && max < 18 && isDigitPattern(pres) {
 			mod := int64(1)
 			for i := 0; i < max; i++ {
 				mod *= 10
@@ -665,8 +665,9 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 	}
 
 	var s string
-	if isDigitPattern(pres) {
-		s = fmt.Sprintf("%0*d", len(pres), n)
+	zero, digits := digitFamilyOf(pres)
+	if digits {
+		s = fmt.Sprintf("%0*d", len([]rune(pres)), n)
 	} else {
 		s = strconv.FormatInt(n, 10)
 	}
@@ -678,11 +679,38 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 		// already there stay where they are.
 		s = strings.Repeat("0", min-len([]rune(s))) + s
 	}
-	if max := maxWidth(width); max > 0 && len([]rune(s)) > max && isDigitPattern(pres) {
+	if max := effectiveMaxWidth(pres, width); max > 0 && len([]rune(s)) > max && digits {
 		r := []rune(s)
 		s = string(r[len(r)-max:])
 	}
+	if digits {
+		s = inDigitFamily(s, zero)
+	}
 	return s
+}
+
+// effectiveMaxWidth is the maximum width in force for a component, which the
+// width modifier states outright and a leading-zero format token implies.
+//
+// Section 16.5.1: "A format token containing leading zeroes, such as 001, sets
+// the minimum and maximum width to the number of digits appearing in the
+// format token; if a width modifier is also present, then the width modifier
+// takes precedence." Only the maximum was missing here, so [Y01] printed the
+// full year 2003 where the suite wants 03.
+func effectiveMaxWidth(pres, width string) int {
+	if width != "" {
+		return maxWidth(width)
+	}
+	zero, ok := digitFamilyOf(pres)
+	if !ok {
+		return 0
+	}
+	// A single one-digit token such as "1" places no constraint at all; only
+	// a token that begins with the family's zero does.
+	if r := []rune(pres); len(r) > 0 && r[0] == zero {
+		return len(r)
+	}
+	return 0
 }
 
 // alphaNum renders n in the alphabetic sequence a, b, ... z, aa, ab, which is
@@ -767,15 +795,68 @@ func weekOfMonth(dt *xdm.DateTime) int {
 // isDigitPattern reports whether pres is a decimal-digit-pattern: a run of
 // digits whose length is the minimum field width.
 func isDigitPattern(pres string) bool {
+	_, ok := digitFamilyOf(pres)
+	return ok
+}
+
+// digitFamilyOf reports whether pres is a decimal-digit-pattern and, if so,
+// which Unicode digit family it is written in.
+//
+// Section 16.5.1 defines the pattern as "a sequence of characters that are
+// classified as digits in the Unicode database", and adds that "all the digits
+// must be from the same digit family, that is, they must be [decimal] digits
+// whose Unicode code points are consecutive and start with zero". The family's
+// zero is the value returned, because every digit of the output is that zero
+// plus the digit's value: a picture written with Thai digits formats the year
+// in Thai digits.
+func digitFamilyOf(pres string) (zero rune, ok bool) {
 	if pres == "" {
-		return false
+		return 0, false
 	}
-	for i := 0; i < len(pres); i++ {
-		if pres[i] < '0' || pres[i] > '9' {
-			return false
+	first := true
+	for _, r := range pres {
+		if !unicode.IsDigit(r) {
+			return 0, false
+		}
+		// The family's zero is the code point that many below r as r's own
+		// numeric value. For ASCII that is '0'; for Thai it is U+0E50.
+		z := r - rune(digitValueOf(r))
+		if first {
+			zero, first = z, false
+		} else if z != zero {
+			return 0, false
 		}
 	}
-	return true
+	return zero, true
+}
+
+// digitValueOf is the numeric value of a Unicode decimal digit, found by
+// walking back to the start of its contiguous family. The standard library
+// exposes no accessor for the Nd numeric value, and every decimal digit family
+// is by definition ten consecutive code points beginning at zero.
+func digitValueOf(r rune) int {
+	v := 0
+	for v < 10 && unicode.IsDigit(r-rune(v)-1) {
+		v++
+	}
+	return v
+}
+
+// inDigitFamily rewrites an ASCII decimal string into the digit family whose
+// zero is the given rune. It is the identity for the ASCII family.
+func inDigitFamily(s string, zero rune) string {
+	if zero == '0' {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(zero + (r - '0'))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // fractionalSeconds renders the digits after the decimal point.
@@ -784,25 +865,42 @@ func isDigitPattern(pres string) bool {
 // them, because the digits are read left to right from the point: a minimum
 // width of 3 turns ".5" into "500", not "005".
 func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
-	digits := 1
+	// A leading-zero format token fixes the width outright; a width modifier
+	// overrides it. Without either, the value's own digits stand.
+	min, max := 0, 0
 	if isDigitPattern(pres) {
-		digits = len(pres)
+		min, max = len([]rune(pres)), len([]rune(pres))
 	}
-	if max := maxWidth(width); max > 0 {
-		digits = max
-	} else if min := minWidth(width); min > digits {
-		digits = min
+	if width != "" {
+		min, max = minWidth(width), maxWidth(width)
 	}
+
 	frac := new(big.Rat).Sub(dt.Second,
 		new(big.Rat).SetInt(new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom())))
-	s := frac.FloatString(digits)
+
+	// Rounding happens at the maximum width, because that is the width the
+	// output is allowed to occupy: [f,2-2] on .456 is "46", not "45".
+	places := max
+	if places <= 0 {
+		// No maximum: render enough places to hold the value exactly, since a
+		// fraction stored as a rational always terminates in decimal here.
+		places = 9
+	}
+	s := frac.FloatString(places)
 	if i := strings.IndexByte(s, '.'); i >= 0 {
 		s = s[i+1:]
 	} else {
-		s = strings.Repeat("0", digits)
+		s = ""
 	}
-	if min := minWidth(width); min > len(s) {
+	// Trailing zeroes carry no information, so they go — but never below the
+	// minimum width, which is exactly what padding is for. [f,1-4] on .456
+	// is "456" rather than "4560".
+	s = strings.TrimRight(s, "0")
+	if min > len(s) {
 		s += strings.Repeat("0", min-len(s))
+	}
+	if s == "" {
+		s = "0"
 	}
 	return s
 }

@@ -130,13 +130,33 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 	if prev, dup := c.sheet.decimalFormats[name]; dup {
 		switch prevPrec := c.decimalFormatPrecedence[name]; {
 		case precedence > prevPrec:
-			// This declaration has the higher import precedence, so it wins
-			// outright. Section 16.4.1 makes conflicting declarations an
-			// error only among those of the same precedence — overriding an
-			// imported declaration is the ordinary reason to import at all.
+			// Section 16.4.1 resolves a named decimal format attribute by
+			// attribute: "the effective value of each attribute is taken
+			// from an xsl:decimal-format declaration that has that name, and
+			// that specifies an explicit value for the required attribute
+			// ... If there is more than one such declaration, the one with
+			// highest import precedence is used." So this declaration wins
+			// only the attributes it actually states; everything it leaves
+			// out keeps the imported declaration's value rather than
+			// reverting to the default.
+			mergeDecimalFormat(df, prev, stated)
+			for a := range c.statedDecimalFormat[name] {
+				stated[a] = true
+			}
 		case precedence < prevPrec:
-			// An imported declaration cannot displace the importing module's,
-			// so this one is simply ignored.
+			// An imported declaration cannot displace the importing module's
+			// choices, but it still supplies the attributes that module left
+			// unstated. The registered format is updated in place so the
+			// higher-precedence declaration keeps its own values.
+			prevStated := c.statedDecimalFormat[name]
+			if prevStated == nil {
+				prevStated = map[string]bool{}
+				c.statedDecimalFormat[name] = prevStated
+			}
+			mergeDecimalFormat(prev, df, prevStated)
+			for a := range stated {
+				prevStated[a] = true
+			}
 			return nil
 		default:
 			// A conflict at this precedence is XTSE1290 — but only if no
@@ -369,7 +389,7 @@ func formatNumber2(num *xdm.Atomic, pic string, df *DecimalFormat) (string, erro
 		if f < 0 && !explicitNegative {
 			sign = string(df.MinusSign)
 		}
-		return p.prefix + sign + df.Infinity + p.suffix, nil
+		return sign + p.prefix + df.Infinity + p.suffix, nil
 	}
 
 	// Scaling by percent or per-mille happens before rounding, so
@@ -395,10 +415,14 @@ func formatNumber2(num *xdm.Atomic, pic string, df *DecimalFormat) (string, erro
 	fracStr := trimFraction(fracPart, p.minFrac, df)
 
 	var sb strings.Builder
-	sb.WriteString(p.prefix)
+	// Section 16.4.3: with only one sub-picture, "the prefix for the negative
+	// sub-picture is set by concatenating the minus-sign character and the
+	// prefix for the positive sub-picture (if any), in that order" — so the
+	// sign goes in front of the whole prefix, not between it and the digits.
 	if negative && !explicitNegative {
 		sb.WriteRune(df.MinusSign)
 	}
+	sb.WriteString(p.prefix)
 	sb.WriteString(intStr)
 	if fracStr != "" {
 		sb.WriteRune(df.DecimalSeparator)
@@ -671,6 +695,15 @@ func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat
 	active := func(r rune) bool {
 		return r == df.Digit || r == df.ZeroDigit ||
 			r == df.GroupingSeparator || r == df.DecimalSeparator
+	}
+
+	// "A sub-picture must contain at least one digit-sign or zero-digit-sign."
+	// The grouping and decimal separators are active characters too, so a
+	// sub-picture like "fred.ginger" gets past the digit-region scan without
+	// carrying a single place to put a digit in.
+	if !strings.ContainsRune(pic, df.Digit) && !strings.ContainsRune(pic, df.ZeroDigit) {
+		return fmt.Errorf(
+			"XTDE1310: picture %q contains no digit-sign or zero-digit-sign", pic)
 	}
 
 	// "A sub-picture must not contain more than one decimal-separator-sign."

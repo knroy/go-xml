@@ -760,3 +760,31 @@ func GroupingKey(a *xdm.Atomic, coll Collation, implicitTZ int) (string, error) 
 	}
 	return valueKey(ctx, a)
 }
+
+// GroupingEqual reports whether two grouping key values are the same value
+// under the "eq" operator, with the given collation comparing strings.
+//
+// GroupingKey is the fast path for grouping: equal values hash alike, so a map
+// finds the group in one lookup. It is not a complete answer, though, because
+// the value comparison XSLT grouping uses is not transitive across the numeric
+// types — erratum E25 spells this out. xs:float(1.0) equals
+// xs:decimal(1.0000000000100000000001) (the decimal is promoted to float), and
+// that decimal equals xs:double(1.00000000001) (promoted to double), yet the
+// float and the double are different values. No single hash can express that,
+// so a caller that missed in the map falls back to comparing against the key
+// each existing group was opened with, in order.
+//
+// A pair with no ordering at all — a string against a number — is simply not
+// equal rather than an error, because grouping puts such values in separate
+// groups rather than failing.
+func GroupingEqual(a, b *xdm.Atomic, coll Collation, implicitTZ int) bool {
+	ctx := &Context{ImplicitTimezone: implicitTZ}
+	if coll != nil {
+		ctx.collation = coll
+	}
+	eq, err := compareValues(ctx, a, b, "eq", false)
+	if err != nil {
+		return false
+	}
+	return eq
+}

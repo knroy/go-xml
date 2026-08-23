@@ -235,6 +235,11 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 	coll xpath.Collation) ([]group, error) {
 	index := map[string]int{}
 	var groups []group
+	// Indices of the groups whose key is numeric, and the numeric types seen
+	// so far. Both feed the erratum-E25 rescan below, which only has to run
+	// when a grouping actually mixes numeric types.
+	var numericGroups []int
+	numericTypes := map[xdm.TypeCode]bool{}
 
 	for idx, it := range seq {
 		sub := rt.withFocus(it, idx+1, len(seq))
@@ -242,6 +247,13 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 		if err != nil {
 			return nil, err
 		}
+		// Section 14.2 forms the groups from the *distinct* key values of an
+		// item, so an item whose key expression yields the same value twice
+		// still joins that group once. group-by="number(@pop),
+		// string-length(@name)" on a city named "milan" with pop=5 produces
+		// 5 twice, and appending it twice put the same element in one group
+		// two times over.
+		joined := map[int]bool{}
 		// An item with multiple key values joins every corresponding group,
 		// which is what makes group-by usable for many-to-many classification.
 		for _, kv := range xdm.Atomize(vals) {
@@ -253,12 +265,52 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 			if err != nil {
 				return nil, err
 			}
+			if a := kv.(*xdm.Atomic); a.Type.IsNumeric() {
+				numericTypes[a.Type] = true
+			}
 			gi, ok := index[k]
+			if !ok {
+				// The hash missed, but the value comparison grouping uses is
+				// not transitive across the numeric types — erratum E25
+				// spells this out. A value can be equal to a group's key
+				// without hashing to it: xs:decimal("1.0000000000100000000001")
+				// equals both xs:float("1.0") and xs:double("1.00000000001"),
+				// which are not equal to each other. So before opening a new
+				// group, compare against the key each existing group was
+				// opened with, in population order, and join the first match.
+				//
+				// The scan is quadratic, so it runs only where it can change
+				// the answer: over numeric groups, and only once the
+				// population has produced more than one numeric type. A
+				// grouping whose keys are all strings, or all xs:integer,
+				// keeps its single map lookup.
+				a := kv.(*xdm.Atomic)
+				if a.Type.IsNumeric() && len(numericTypes) > 1 {
+					for _, gj := range numericGroups {
+						gk, isAtomic := groups[gj].key[0].(*xdm.Atomic)
+						if !isAtomic {
+							continue
+						}
+						if xpath.GroupingEqual(a, gk, coll,
+							rt.ctx.ImplicitTimezone) {
+							gi, ok = gj, true
+							break
+						}
+					}
+				}
+			}
 			if !ok {
 				index[k] = len(groups)
 				groups = append(groups, group{key: xdm.One(kv)})
 				gi = len(groups) - 1
+				if a := kv.(*xdm.Atomic); a.Type.IsNumeric() {
+					numericGroups = append(numericGroups, gi)
+				}
 			}
+			if joined[gi] {
+				continue
+			}
+			joined[gi] = true
 			groups[gi].items = append(groups[gi].items, it)
 		}
 	}
@@ -326,6 +378,7 @@ func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, er
 	if err := requireNodePopulation(seq, "group-starting-with"); err != nil {
 		return nil, err
 	}
+	rt = rt.clearRegexGroups()
 	var groups []group
 	for _, it := range seq {
 		n, ok := it.(*xdm.Node)
@@ -350,6 +403,7 @@ func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, erro
 	if err := requireNodePopulation(seq, "group-ending-with"); err != nil {
 		return nil, err
 	}
+	rt = rt.clearRegexGroups()
 	var groups []group
 	open := false
 	for _, it := range seq {
@@ -628,6 +682,17 @@ func (rt *runtime) clearFunctionContext() *runtime {
 	sub := rt.withVar(regexGroupsVar, nil)
 	sub = sub.withVar(currentGroupVar, nil)
 	return sub.withVar(currentGroupingKeyVar, nil)
+}
+
+// clearRegexGroups empties the current captured substrings.
+//
+// Section 5.4's table of context components says the current captured
+// substrings are absent while a pattern is being matched, so a pattern written
+// inside xsl:matching-substring — group-starting-with="//item[@attr =
+// string(regex-group(1))]" — sees the empty string rather than the enclosing
+// match's group.
+func (rt *runtime) clearRegexGroups() *runtime {
+	return rt.withVar(regexGroupsVar, nil)
 }
 
 var regexGroupsVar = xdm.QName{URI: internalNS, Local: "regex-groups"}
@@ -1063,6 +1128,20 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 	// ancestors, and the H4 got no number for it.
 	root := node.Root()
 
+	// An attribute or namespace node is not on its parent's child axis, so
+	// the walk below can never arrive at it. For such a node the candidate
+	// set is the one belonging to its parent element — preceding::node() of
+	// an attribute is the same as that of the element carrying it — with the
+	// node itself appended as the last member of ancestor-or-self.
+	stop, extra := node, (*xdm.Node)(nil)
+	if node.Kind == xdm.KindAttribute || node.Kind == xdm.KindNamespace {
+		if node.Parent == nil {
+			return 0, fmt.Errorf(
+				"xsl:number: the context node is not in the tree being walked")
+		}
+		stop, extra = node.Parent, node
+	}
+
 	// The candidate set in document order: everything from the root up to
 	// and including the node, minus the descendants of the node itself, is
 	// exactly preceding::node() plus ancestor-or-self::node().
@@ -1074,7 +1153,7 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 			return
 		}
 		candidates = append(candidates, cur)
-		if cur == node {
+		if cur == stop {
 			reached = true
 			return
 		}
@@ -1089,6 +1168,9 @@ func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
 	if !reached {
 		return 0, fmt.Errorf(
 			"xsl:number: the context node is not in the tree being walked")
+	}
+	if extra != nil {
+		candidates = append(candidates, extra)
 	}
 
 	// $F: the last of them matching @from. With no @from every candidate

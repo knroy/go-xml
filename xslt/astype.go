@@ -76,49 +76,44 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 			out = append(out, it)
 			continue
 		}
-		if a.Type == t.stype.AtomicType {
+		// Subtype substitution: an item that already conforms to the
+		// required item type is passed through untouched. Without this an
+		// xs:integer bound to a variable declared as="xs:decimal" was
+		// promoted to xs:decimal and stopped being an xs:integer, and every
+		// value bound to as="xs:anyAtomicType" was cast to a string.
+		if t.stype.MatchesItem(a) {
 			out = append(out, a)
 			continue
 		}
-		if a.Type == xdm.TypeUntypedAtomic {
-			// A derived type carries a facet the code alone cannot
-			// express, so the written name is used when there is one:
-			// casting to xs:token has to normalise, not merely widen to
-			// xs:string.
-			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
-			}
-			out = append(out, conv)
+		// The function conversion rules cast in exactly three cases:
+		// untypedAtomic to anything, xs:anyURI to xs:string, and the numeric
+		// promotion ladder. Anything else keeps its type and is checked
+		// against the declaration below.
+		cast := a.Type == xdm.TypeUntypedAtomic ||
+			(a.Type == xdm.TypeAnyURI && t.stype.AtomicType == xdm.TypeString) ||
+			(a.Type.IsNumeric() && t.stype.AtomicType.IsNumeric())
+		if !cast {
+			out = append(out, a)
 			continue
 		}
-		// Type promotion, B.1. Besides the numeric ladder there is one other
-		// promotion the rules require: xs:anyURI promotes to xs:string. A
-		// schema-typed URI bound to a variable declared as="xs:string" is the
-		// ordinary case, and without this it was rejected as a type error.
-		if a.Type == xdm.TypeAnyURI && t.stype.AtomicType == xdm.TypeString {
-			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
-			}
-			out = append(out, conv)
-			continue
+		// A derived type carries a facet the code alone cannot express, so
+		// the written name is used when there is one: casting to xs:token
+		// has to normalise, not merely widen to xs:string.
+		conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", code, what, err)
 		}
-		// Numeric promotion is permitted without an explicit cast; anything
-		// else keeps its type and is checked against the declaration below.
-		if a.Type.IsNumeric() && t.stype.AtomicType.IsNumeric() {
-			// A derived type carries a facet the code alone cannot
-			// express, so the written name is used when there is one:
-			// casting to xs:token has to normalise, not merely widen to
-			// xs:string.
-			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
-			}
-			out = append(out, conv)
-			continue
+		if t.stype.SchemaType != "" {
+			// The declared type is an imported schema type, and the
+			// conversion rules make the converted value an instance of it.
+			// Without recording the annotation the cast produced a bare
+			// primitive, which matchesItem then rejected because an
+			// unannotated value is an instance of no named type — so every
+			// variable declared as a schema atomic type raised XTTE0570 on a
+			// value the rules had just converted for it.
+			conv = conv.WithDerived(t.stype.SchemaType)
 		}
-		out = append(out, a)
+		out = append(out, conv)
 	}
 
 	if !t.stype.Matches(out) {
@@ -127,4 +122,21 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 			what, t.src, len(out))
 	}
 	return out, nil
+}
+
+// bindParam applies the function conversion rules to a value supplied for a
+// template parameter.
+//
+// Section 10.1.1: the supplied value is converted to the parameter's required
+// type using the function conversion rules, and a value that will not convert
+// is XTTE0590. Binding the value untouched left an xsl:param declared
+// as="xs:double" holding whatever the caller passed — so a node bound to it
+// stayed a node, and the template's own "instance of xs:double" answered
+// false on a value the rules should have atomised and cast.
+func bindParam(p *Variable, v xdm.Sequence, t *Template) (xdm.Sequence, error) {
+	if p.AsType == nil {
+		return v, nil
+	}
+	return p.AsType.convertAs(v, "parameter $"+p.Name.Lexical()+
+		" of template "+templateLabel(t), "XTTE0590")
 }

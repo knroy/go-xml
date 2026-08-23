@@ -272,10 +272,18 @@ func runTemplate(rt *runtime, t *Template,
 		// ordinary parameter of that name.
 		if !p.Tunnel {
 			if v, ok := params[key]; ok {
+				v, err := bindParam(p, v, t)
+				if err != nil {
+					return err
+				}
 				sub = sub.withVar(p.Name, v)
 				continue
 			}
 		} else if v, ok := sub.tunnel[key]; ok {
+			v, err := bindParam(p, v, t)
+			if err != nil {
+				return err
+			}
 			sub = sub.withVar(p.Name, v)
 			continue
 		}

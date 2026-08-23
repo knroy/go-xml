@@ -412,6 +412,9 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 	if !s.nodeTest.Matches(node, principal) {
 		return false, nil
 	}
+	if !schemaDeclaredMatches(s.nodeTest, node) {
+		return false, nil
+	}
 
 	return matchPredicates(s, node, ctx)
 }
@@ -910,4 +913,32 @@ func (p *Pattern) Alternatives() []*Pattern {
 		out = append(out, q)
 	}
 	return out
+}
+
+// schemaDeclaredMatches applies the part of a schema-element() or
+// schema-attribute() test that a plain name comparison cannot express.
+//
+// Section 2.5.5.3 of XPath 2.0 says schema-element(E) matches a node only if
+// it "has been validated against" the global declaration E — the name alone
+// is not enough. A node built by a stylesheet without validation carries no
+// type annotation, so it is xs:untyped (or xs:untypedAtomic), and it does not
+// match however it is named.
+//
+// The suite pins the distinction: match-180 builds my:userNode and
+// my:simpleUserElem in a temporary tree with no validation, and expects the
+// generic element() rule to take both. Treating schema-element(E) as a
+// synonym for element(E) gave them to the schema rules instead, so nothing
+// ever reached the untyped rule.
+//
+// The rest of the test — substitution-group membership and derivation of the
+// annotation from the declaration's type — needs the schema components, which
+// are not reachable from a compiled pattern. Rejecting the untyped case is the
+// half that can be decided here, and it is the half that is unambiguously
+// wrong to get backwards.
+func schemaDeclaredMatches(nt xpath.NodeTest, node *xdm.Node) bool {
+	kt, ok := nt.(*xpath.KindTest)
+	if !ok || !kt.SchemaDeclared {
+		return true
+	}
+	return node.TypeAnnotation != ""
 }

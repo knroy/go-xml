@@ -180,6 +180,15 @@ type KindTest struct {
 	// matches the named declaration and, for an element, the members of its
 	// substitution group.
 	SchemaDeclared bool
+	// SubstitutionGroup holds the other names schema-element(E) admits: the
+	// members of E's substitution group, resolved from the imported schema
+	// when the test was parsed.
+	//
+	// It is resolved at parse time because nothing carries a schema into the
+	// evaluator, and the group is fixed once the schema is imported. Nil for
+	// every test that is not a schema-element(), and for a declaration that
+	// heads no group.
+	SubstitutionGroup []xdm.QName
 }
 
 // --- Sequence-level constructs ---------------------------------------------

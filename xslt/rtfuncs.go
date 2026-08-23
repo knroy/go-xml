@@ -135,21 +135,31 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					out = append(out, rt.sheet.source)
 					continue
 				}
-				base := ""
-				// The nil check is not redundant with the type assertion: a
-				// transform started from a named template has no context
-				// item, and the interface then holds a typed nil rather than
-				// no value at all, so the assertion succeeds and the field
-				// access is what faults.
-				if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
-					base = n.BaseURI
-				}
+				// Section 16.1 resolves a relative reference against "the
+				// base URI from the static context", which is the base URI
+				// of the element the call is written on — not the context
+				// node's. The context node's base belongs to the *source*
+				// document, and preferring it meant document('x.xml') in an
+				// included module looked for x.xml beside the input rather
+				// than beside the module, so a module in a subdirectory
+				// could never reach its own files. Only an explicit
+				// $base-node second argument makes a node's base URI the
+				// one that counts, and this is the one-argument form.
+				base := ctx.StaticBaseURI
 				if base == "" {
-					// No context node, or one with no base of its own: the
-					// static base URI is the stylesheet's, which is what a
-					// relative reference in a stylesheet means. Without this
-					// it resolves against the process's working directory.
-					base = ctx.StaticBaseURI
+					// A stylesheet compiled without a base URI leaves the
+					// static context with nothing; the context node's base
+					// is then the only thing to resolve against, and it is
+					// better than the process's working directory.
+					//
+					// The nil check is not redundant with the type
+					// assertion: a transform started from a named template
+					// has no context item, and the interface then holds a
+					// typed nil rather than no value at all, so the
+					// assertion succeeds and the field access is what faults.
+					if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
+						base = n.BaseURI
+					}
 				}
 				if ctx.Docs == nil {
 					return nil, fmt.Errorf(
@@ -223,14 +233,23 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 
 	// The static functions are registered separately so that use-when, whose
 	// context has no runtime at all, can have exactly these and nothing else.
-	registerStaticFuncs(l)
+	registerStaticFuncs(l, rt.resolveFunctionName)
 }
 
 // registerStaticFuncs adds the four functions section 3.12 makes available to
 // a use-when expression: they answer questions about the *processor* rather
 // than about the stylesheet or the source, so they need no runtime and are
 // legal in a context that has none.
-func registerStaticFuncs(l *xpath.Library) {
+func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
+	// A nil resolver means there is no stylesheet to resolve prefixes
+	// against: this is the use-when library, built before the prefix map
+	// exists. system-property must not report XTDE1390 there, because it
+	// cannot tell an unbound prefix from one the module bound to the XSLT
+	// namespace under a name it does not recognise.
+	haveStylesheet := resolve != nil
+	if resolve == nil {
+		resolve = defaultFunctionNS
+	}
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -244,24 +263,60 @@ func registerStaticFuncs(l *xpath.Library) {
 					"XTDE1390: system-property(%q) is not a valid QName", name)
 			}
 			// The other half of XTDE1390 — "there is no namespace declaration
-			// in scope for the prefix of the QName" — is deliberately not
-			// checked here. This library does not receive the stylesheet's
-			// namespace context, and guessing at the prefix does not work:
-			// a stylesheet binds the XSLT namespace to whatever prefix it
-			// likes, and the suite uses "t:" and "xslt:" as often as "xsl:".
-			// Rejecting the unfamiliar ones lost thirteen tests that were
-			// asking a perfectly well-formed question.
-			switch {
-			case strings.HasSuffix(name, "version"):
+			// in scope for the prefix of the QName" — needs the prefix
+			// resolved rather than guessed at. A stylesheet binds the XSLT
+			// namespace to whatever prefix it likes, and the suite uses "t:"
+			// and "xslt:" as often as "xsl:", so rejecting the unfamiliar
+			// prefixes outright once cost thirteen tests. Resolving them
+			// against the stylesheet's own bindings answers both halves: an
+			// unbound prefix is the error, and a bound one names the XSLT
+			// namespace or it does not.
+			//
+			// resolve puts an unprefixed name in the function namespace,
+			// which is right for function-available but not here: an
+			// unprefixed system property name is in no namespace, so it is
+			// never one of the XSLT-defined properties. system-property-010
+			// pins that even when xpath-default-namespace is the XSLT one.
+			prefix, local := xdm.SplitQName(name)
+			uri := ""
+			if prefix != "" {
+				var ok bool
+				if uri, _, ok = resolve(name); !ok {
+					if haveStylesheet {
+						return nil, fmt.Errorf(
+							"XTDE1390: system-property(%q): no namespace "+
+								"declaration is in scope for the prefix", name)
+					}
+					// Without a stylesheet the prefix is taken on trust: a
+					// use-when that asks for xslt:version under its own
+					// binding is asking a well-formed question.
+					uri = xdm.NSXSL
+				}
+			}
+			// Only the properties in the XSLT namespace are defined. Section
+			// 16.6.5 says any other name — including an unprefixed one, whose
+			// expanded name is in no namespace even when the default element
+			// namespace is the XSLT one — returns the empty string.
+			if uri != xdm.NSXSL {
+				return xdm.One(xdm.NewString("")), nil
+			}
+			switch local {
+			case "version":
 				return xdm.One(xdm.NewString("2.0")), nil
-			case strings.HasSuffix(name, "vendor"):
+			case "vendor":
 				return xdm.One(xdm.NewString("go-xml")), nil
-			case strings.HasSuffix(name, "vendor-url"):
+			case "vendor-url":
 				return xdm.One(xdm.NewString("https://github.com/knroy/go-xml")), nil
-			case strings.HasSuffix(name, "product-name"):
+			case "product-name":
 				return xdm.One(xdm.NewString("go-xml")), nil
-			case strings.HasSuffix(name, "product-version"):
+			case "product-version":
 				return xdm.One(xdm.NewString("0.1")), nil
+			case "is-schema-aware":
+				return xdm.One(xdm.NewString("no")), nil
+			case "supports-serialization":
+				return xdm.One(xdm.NewString("yes")), nil
+			case "supports-backwards-compatibility":
+				return xdm.One(xdm.NewString("yes")), nil
 			}
 			return xdm.One(xdm.NewString("")), nil
 		},
@@ -274,19 +329,9 @@ func registerStaticFuncs(l *xpath.Library) {
 			if err := checkAvailableArg("XTDE1400", "function-available", name); err != nil {
 				return nil, err
 			}
-			prefix, local := xdm.SplitQName(name)
-			uri := xdm.NSFN
-			if prefix != "" {
-				// Without the stylesheet's namespace context here, only the
-				// standard prefixes can be checked.
-				switch prefix {
-				case "fn":
-					uri = xdm.NSFN
-				case "xs":
-					uri = xdm.NSXS
-				default:
-					return xdm.One(xdm.NewBoolean(false)), nil
-				}
+			uri, local, ok := resolve(name)
+			if !ok {
+				return xdm.One(xdm.NewBoolean(false)), nil
 			}
 			for arity := 0; arity <= 4; arity++ {
 				if _, ok := ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity); ok {
@@ -313,19 +358,11 @@ func registerStaticFuncs(l *xpath.Library) {
 					arity = int(at.Int64())
 				}
 			}
-			prefix, local := xdm.SplitQName(name)
-			uri := xdm.NSFN
-			if prefix != "" {
-				switch prefix {
-				case "fn":
-					uri = xdm.NSFN
-				case "xs":
-					uri = xdm.NSXS
-				default:
-					return xdm.One(xdm.NewBoolean(false)), nil
-				}
+			uri, local, ok := resolve(name)
+			if !ok {
+				return xdm.One(xdm.NewBoolean(false)), nil
 			}
-			_, ok := ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity)
+			_, ok = ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
 		},
 	})
@@ -338,12 +375,20 @@ func registerStaticFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			prefix, local := xdm.SplitQName(name)
-			if prefix != "" && prefix != "xs" && prefix != "xsd" {
+			uri, local, ok := resolve(name)
+			if !ok || uri != xdm.NSXS {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}
-			_, ok := xpath.BuiltinAtomicTypeCode(local)
-			return xdm.One(xdm.NewBoolean(ok)), nil
+			if _, found := xpath.BuiltinAtomicTypeCode(local); found {
+				return xdm.One(xdm.NewBoolean(true)), nil
+			}
+			// The built-in types that are not atomic are not in the atomic
+			// table but are still in the static context of every processor:
+			// the two complex types at the root of the hierarchy, and the
+			// three built-in list types. Asking whether a type is available
+			// is not asking whether a value can have it, so an abstract or
+			// complex type answers true.
+			return xdm.One(xdm.NewBoolean(builtinNonAtomicTypes[local])), nil
 		},
 	})
 
@@ -431,7 +476,15 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	// lookup rather than being reported separately.
 	uri := ""
 	if prefix != "" {
-		uri = rt.sheet.prefixes[prefix]
+		bound := false
+		if uri, bound = rt.sheet.prefixes[prefix]; !bound {
+			// An unbound prefix is XTDE1260 in its own right. Falling through
+			// with the empty URI instead made key("your:k", ...) find the key
+			// declared as "k" in no namespace, which is a different key.
+			return nil, fmt.Errorf(
+				"XTDE1260: key(%q): no namespace declaration is in scope for "+
+					"the prefix %q", lexName, prefix)
+		}
 	}
 	keyName := xdm.QName{URI: uri, Local: local}.Clark()
 	defs, ok := rt.sheet.keys[keyName]
@@ -783,4 +836,67 @@ func checkAvailableArg(code, fn, name string) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %s(%q) is not a valid QName", code, fn, name)
+}
+
+// resolveFunctionName expands the lexical QName that function-available and
+// type-available are given.
+//
+// The prefix has to be resolved against the stylesheet's own namespace
+// declarations, not against a fixed table: "fn" is only conventionally bound
+// to the function namespace, and function-available-1006 binds it to the 2003
+// draft URI precisely to check that a stylesheet that does so gets false back.
+// The XPath context carries no namespace resolver, so the stylesheet-wide
+// prefix map collected at compile time is used, the same way fn:key does.
+//
+// An unprefixed name is in the default function namespace, which is the
+// standard function namespace — not the default element namespace.
+func (rt *runtime) resolveFunctionName(name string) (uri, local string, ok bool) {
+	prefix, local := xdm.SplitQName(name)
+	if prefix == "" {
+		return xdm.NSFN, local, true
+	}
+	if rt != nil && rt.sheet != nil {
+		if u, found := rt.sheet.prefixes[prefix]; found {
+			return u, local, true
+		}
+	}
+	// A prefix nothing binds cannot name a function. Answering false is what
+	// the spec requires of a name that does not resolve.
+	return "", local, false
+}
+
+// prefixResolver expands the lexical QName that function-available and
+// type-available are given into a namespace URI and local name.
+type prefixResolver func(name string) (uri, local string, ok bool)
+
+// defaultFunctionNS is the resolver used where no stylesheet is in scope: it
+// knows only the conventional prefixes, which is enough for a use-when
+// expression evaluated before the stylesheet's prefix map exists.
+func defaultFunctionNS(name string) (uri, local string, ok bool) {
+	prefix, local := xdm.SplitQName(name)
+	switch prefix {
+	case "":
+		return xdm.NSFN, local, true
+	case "fn":
+		return xdm.NSFN, local, true
+	case "xs", "xsd":
+		return xdm.NSXS, local, true
+	case "xsl":
+		// system-property is one of the four functions a use-when expression
+		// may call, and every property it can usefully name is in the XSLT
+		// namespace. Without this the conventional prefix does not resolve
+		// there and every such call became XTDE1390.
+		return xdm.NSXSL, local, true
+	}
+	return "", local, false
+}
+
+// builtinNonAtomicTypes are the built-in schema types fn:type-available must
+// report even though no atomic value can carry them.
+var builtinNonAtomicTypes = map[string]bool{
+	"anyType":  true,
+	"untyped":  true,
+	"ENTITIES": true,
+	"IDREFS":   true,
+	"NMTOKENS": true,
 }

@@ -88,9 +88,20 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// case, and it is how a stylesheet that generates its own content is
 	// invoked — so this is checked where a source is actually needed rather
 	// than on the way in.
+	// xsl:initial-template is the conventional default entry point: a
+	// stylesheet that declares a template with that name is asking to be
+	// started there when the caller names neither a source document nor a
+	// template. The name is already whitelisted as the one legal XSLT-
+	// namespace template name, and honouring it here is what lets a
+	// source-free stylesheet run at all.
+	defaultEntry := xdm.QName{URI: xdm.NSXSL, Local: "initial-template"}.Clark()
+	useDefaultEntry := false
 	if source == nil && opts.InitialTemplate == "" {
-		return nil, fmt.Errorf(
-			"Transform: source document is nil and no initial template was named")
+		if _, ok := s.named[defaultEntry]; !ok {
+			return nil, fmt.Errorf(
+				"Transform: source document is nil and no initial template was named")
+		}
+		useDefaultEntry = true
 	}
 
 	// Whitespace stripping is applied to a copy so that the caller's tree is
@@ -126,7 +137,19 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 
 	out := newOutputBuilder()
 
-	if opts.InitialTemplate != "" {
+	if useDefaultEntry {
+		t := s.named[defaultEntry]
+		for _, p := range t.Params {
+			if p.Required && !p.Tunnel {
+				return nil, fmt.Errorf(
+					"XTDE0060: the initial template xsl:initial-template "+
+						"declares required parameter $%s", p.Name.Lexical())
+			}
+		}
+		if err := runTemplate(rt, t, nil, nil, out); err != nil {
+			return nil, err
+		}
+	} else if opts.InitialTemplate != "" {
 		// XTDE0047: "it is a non-recoverable dynamic error if the invocation
 		// of the stylesheet specifies both an initial mode and an initial
 		// template". The two are alternative ways of saying where processing
@@ -137,7 +160,17 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 				"XTDE0047: the invocation specifies both an initial mode %q "+
 					"and an initial template %q", m, opts.InitialTemplate)
 		}
-		t, ok := s.named[xdm.QName{Local: opts.InitialTemplate}.Clark()]
+		// The name the caller supplies is lexical, so a prefix in it is
+		// resolved against the stylesheet's own namespace declarations before
+		// the lookup. Treating "foo:temp" as a local name found nothing, and
+		// a template declared with a prefixed name could not be invoked.
+		initName := xdm.QName{Local: opts.InitialTemplate}
+		if prefix, local := xdm.SplitQName(opts.InitialTemplate); prefix != "" {
+			if uri, found := s.prefixes[prefix]; found {
+				initName = xdm.QName{URI: uri, Local: local}
+			}
+		}
+		t, ok := s.named[initName.Clark()]
 		if !ok {
 			return nil, fmt.Errorf(
 				"XTDE0040: no template named %q", opts.InitialTemplate)

@@ -1028,10 +1028,14 @@ func derivedSubtypeOf(sub, want string) bool {
 		return true
 	}
 	parents := map[string]string{
-		"byte":               "short",
-		"short":              "int",
-		"int":                "long",
-		"long":               "integer",
+		"byte":  "short",
+		"short": "int",
+		"int":   "long",
+		"long":  "integer",
+		// xs:integer is a restriction of xs:decimal, and the chain has to say
+		// so: without it element(*, xs:decimal) refused a node annotated
+		// xs:integer, which is the derivation the suite tests most often.
+		"integer":            "decimal",
 		"unsignedByte":       "unsignedShort",
 		"unsignedShort":      "unsignedInt",
 		"unsignedInt":        "unsignedLong",

@@ -34,9 +34,11 @@ func (i *varInstr) Execute(rt *runtime, out *outputBuilder) error { return nil }
 
 // valueOfInstr implements xsl:value-of.
 type valueOfInstr struct {
-	sel          *xpath.Compiled
-	body         []Instruction
-	separator    string
+	sel  *xpath.Compiled
+	body []Instruction
+	// separator is @separator as an attribute value template, nil when the
+	// attribute is absent.
+	separator    *avt
 	hasSeparator bool
 }
 
@@ -63,13 +65,15 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// Section 11.4 gives xsl:value-of the same two defaults as xsl:attribute:
 	// a single space when the content comes from @select, and a zero-length
 	// string when it comes from the sequence constructor.
-	sep := i.separator
-	if !i.hasSeparator {
-		if i.sel != nil {
-			sep = " "
-		} else {
-			sep = ""
+	sep := ""
+	if i.hasSeparator {
+		v, err := i.separator.eval(rt)
+		if err != nil {
+			return err
 		}
+		sep = v
+	} else if i.sel != nil {
+		sep = " "
 	}
 	out.appendText(constructedText(seq, sep))
 	return nil
@@ -297,7 +301,26 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return i.validation.assess(rt, sub.open)
 
 	case xdm.KindDocument:
-		return execSequence(i.body, rt, out)
+		// Section 11.9.1: the result of xsl:copy over a document node is "a
+		// new node that has the same node kind and name as the context node",
+		// so a document node is constructed rather than the body simply being
+		// run inline. The difference is invisible when the copy goes straight
+		// into a result tree — a document node's children are flattened into
+		// the parent either way — but it is exactly what a variable declared
+		// as="document-node()*" is asking about.
+		sub := newOutputBuilder()
+		if err := execSequence(i.body, rt, sub); err != nil {
+			return err
+		}
+		doc, err := sub.toDocument()
+		if err != nil {
+			return err
+		}
+		if err := i.validation.assess(rt, doc); err != nil {
+			return err
+		}
+		out.appendNode(doc)
+		return nil
 
 	case xdm.KindText:
 		out.appendText(node.Value)
@@ -330,8 +353,13 @@ type literalElemInstr struct {
 	baseURI    string
 	attrs      []attrTemplate
 	namespaces []nsBinding
-	attrSets   []xdm.QName
-	body       []Instruction
+	// excludedNamespaces holds the bindings in scope on the element that were
+	// designated excluded, or are the XSLT namespace. They are kept because
+	// section 11.1.4 restores any of them whose URI turns out to be a target
+	// namespace URI of an xsl:namespace-alias.
+	excludedNamespaces []nsBinding
+	attrSets           []xdm.QName
+	body               []Instruction
 	// validation carries xsl:validation and xsl:type, which a literal result
 	// element may have exactly as xsl:element may.
 	validation validationSpec
@@ -361,6 +389,24 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		sub.open.AddNamespace(ns.prefix, ns.uri)
 	}
+	// A namespace that exclusion would have dropped comes back if it is the
+	// target of an alias: the point of aliasing onto, say, the XSLT namespace
+	// is that the result must carry a usable binding for it, and the note in
+	// section 11.1.4 says so explicitly — the rules "guarantee that there will
+	// be a namespace node that binds the prefix xsl to the URI".
+	for _, ns := range i.excludedNamespaces {
+		if !rt.sheet.isAliasTarget(ns.uri) {
+			continue
+		}
+		// A binding the aliasing loop above already produced is not repeated:
+		// the result-prefix of the alias and an excluded declaration of the
+		// same prefix name one namespace node, and emitting both would write
+		// the same xmlns declaration twice on one element.
+		if bound, ok := sub.open.LookupPrefix(ns.prefix); ok && bound == ns.uri {
+			continue
+		}
+		sub.open.AddNamespace(ns.prefix, ns.uri)
+	}
 	// Attribute sets are applied before the element's own attributes, so a
 	// literal attribute overrides one inherited from a set.
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
@@ -371,7 +417,16 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		if err := sub.addAttribute(a.name, v); err != nil {
+		// Section 11.1.4 lists exactly two things aliasing rewrites: the name
+		// of a literal result element, and the name of an attribute specified
+		// on one. An attribute in no namespace has no name to rewrite, so it
+		// is left alone rather than picked up by an alias whose literal
+		// namespace URI is null.
+		an := a.name
+		if an.URI != "" {
+			an = rt.sheet.aliasFor(an)
+		}
+		if err := sub.addAttribute(an, v); err != nil {
 			return err
 		}
 	}
@@ -546,12 +601,15 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
-	// leaving an invalid one behind on the element.
-	if err := i.validation.assess(rt,
-		&xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}); err != nil {
+	// leaving an invalid one behind on the element. The assessed node's type
+	// annotation is carried across: assessment is what gives the attribute a
+	// type, and writing an untyped copy instead would make the validation
+	// invisible to "instance of" and to schema-attribute() patterns.
+	assessed := &xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}
+	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
-	return out.addAttribute(qn, value)
+	return out.addAttributeTyped(qn, value, assessed.TypeAnnotation)
 }
 
 // resolveName turns a computed attribute name into an expanded QName.
@@ -964,7 +1022,14 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 
 	for i, it := range seq {
 		e := entry{item: it, idx: i, keys: make([]sortValue, len(sorts))}
-		sub := rt.withFocus(it, i+1, n)
+		// Section 16.6.1: current() is "the item that was the context item at
+		// the point where the expression was invoked from the XSLT
+		// stylesheet". A sort key expression is invoked from xsl:sort with
+		// the item being sorted as the context item, so that item is also
+		// the current item — a predicate inside the key such as
+		// "[@name=current()/@month]" must see it and not whatever node was
+		// current in the enclosing template.
+		sub := rt.withCurrent(it, i+1, n)
 		for k, s := range sorts {
 			v, err := s.evalKey(sub)
 			if err != nil {
@@ -1266,10 +1331,21 @@ func compareAtoms(a, b *xdm.Atomic, implicitTZ int) (int, bool) {
 		// Comparing as doubles loses precision for large integers and
 		// decimals, so an exact comparison is used when both sides can give
 		// one and the doubles came out equal.
-		if an < bn {
+		//
+		// Equality must return 0. Falling through to 1 made every pair of
+		// equal keys compare as "greater", which destroys the stability
+		// xsl:sort requires: five values that all round to the same number
+		// came back shuffled instead of in document order.
+		switch {
+		case an < bn:
 			return -1, true
+		case an > bn:
+			return 1, true
 		}
-		return 1, true
+		if ar, br := a.Rat(), b.Rat(); ar != nil && br != nil {
+			return ar.Cmp(br), true
+		}
+		return 0, true
 
 	case a.Type == xdm.TypeBoolean && b.Type == xdm.TypeBoolean:
 		av, bv := 0, 0
@@ -1283,6 +1359,25 @@ func compareAtoms(a, b *xdm.Atomic, implicitTZ int) (int, bool) {
 
 	case a.Type == b.Type && a.DateTimeVal() != nil && b.DateTimeVal() != nil:
 		return xdm.CompareDT(a.DateTimeVal(), b.DateTimeVal(), implicitTZ), true
+
+	case a.Type == b.Type && a.DurationVal() != nil && b.DurationVal() != nil:
+		// Durations were not handled at all, so xsl:sort over
+		// xs:yearMonthDuration fell through to a string comparison and put
+		// P11M before P1M.
+		//
+		// Only two durations of the same type are ordered here. The general
+		// case is not totally ordered — xs:duration compares months and
+		// seconds independently, and P1M against P30D has no answer — so
+		// leaving the mixed case to the caller is what keeps this from
+		// inventing one.
+		ad, bd := a.DurationVal(), b.DurationVal()
+		if am, bm := ad.SignedMonths(), bd.SignedMonths(); am != bm {
+			if am < bm {
+				return -1, true
+			}
+			return 1, true
+		}
+		return ad.SignedSeconds().Cmp(bd.SignedSeconds()), true
 	}
 	return 0, false
 }

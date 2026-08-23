@@ -1,6 +1,7 @@
 package xslts
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -271,7 +272,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// document() on the test-set's own files. Both resolvers are rooted
 		// at the test-set directory: the tests are trusted input, and
 		// confining them there is what keeps that true.
-		SchemaResolver: pathSchemaResolver{},
+		SchemaResolver: envSchemaResolver{set: set, env: r.environment(set, tc)},
 		// The suite's stylesheets include one another by relative path, and
 		// a resolver rooted at the test-set directory is what makes that
 		// work without opening the filesystem generally.
@@ -638,4 +639,55 @@ func uriToPath(s string) string {
 		}
 	}
 	return s
+}
+
+// envSchemaResolver prefers the schemas an environment declares with
+// role="stylesheet-import" over the schema-location hint written on
+// xsl:import-schema.
+//
+// schema-location is a hint: XSLT 2.0 section 3.14 and XML Schema alike let a
+// processor use a schema it already has for the namespace instead. Several
+// tests rely on that — import-schema-186 names testSchemaInline.xsd, whose
+// target namespace is not the one the declaration imports, and only the
+// environment's schema002.xsd actually declares the components the stylesheet
+// then names.
+type envSchemaResolver struct {
+	set *TestSet
+	env *Environment
+}
+
+func (e envSchemaResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	if e.env != nil && namespace != "" {
+		for _, sc := range e.env.Schemas {
+			if sc.File == "" {
+				continue
+			}
+			p := filepath.Join(e.set.Dir, filepath.FromSlash(sc.File))
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			if schemaTargetNamespace(data) != namespace {
+				continue
+			}
+			return io.NopCloser(bytes.NewReader(data)), p, nil
+		}
+	}
+	return pathSchemaResolver{}.Resolve(namespace, location, base)
+}
+
+// schemaTargetNamespace reads the targetNamespace attribute off a schema
+// document without parsing it fully, which is all the resolver needs to decide
+// whether a candidate file answers the namespace being imported.
+func schemaTargetNamespace(data []byte) string {
+	tree, err := xdm.ParseString(string(stripBOM(data)), xdm.ParseOptions{})
+	if err != nil || tree.Root == nil {
+		return ""
+	}
+	for _, el := range tree.Root.ChildElements() {
+		if el.IsElement(xsd.NSSchema, "schema") {
+			return el.AttrValue("targetNamespace")
+		}
+	}
+	return ""
 }

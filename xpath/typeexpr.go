@@ -33,6 +33,15 @@ func (t SequenceType) Matches(seq xdm.Sequence) bool {
 	return true
 }
 
+// MatchesItem reports whether a single item conforms to the sequence type's
+// item type, ignoring the occurrence indicator.
+//
+// The function conversion rules need this separately from Matches: subtype
+// substitution says an item that already conforms is passed through
+// untouched, and only an item that does not conform is a candidate for
+// atomisation, casting or promotion.
+func (t SequenceType) MatchesItem(it xdm.Item) bool { return t.matchesItem(it) }
+
 func (t SequenceType) matchesItem(it xdm.Item) bool {
 	switch {
 	case t.SchemaType != "":

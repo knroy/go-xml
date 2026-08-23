@@ -73,9 +73,21 @@ type compiler struct {
 	// calls records every xsl:call-template, so that XTSE0680 can be checked
 	// once every template is known.
 	calls []*callTemplateInstr
+	// nextPrecedence allocates import precedence numbers. See compileModule:
+	// precedence is a total order over the import tree rather than a depth,
+	// so every module gets its own number in post-order.
+	nextPrecedence int
+
 	// funcPrecedence records the import precedence each function name and
 	// arity was declared at, for XTSE0770.
 	funcPrecedence map[string]int
+
+	// preNumbered records the modules the include pre-pass has already
+	// compiled. They must not be compiled a second time by the ordinary
+	// walk: the second visit would allocate a *higher* precedence than the
+	// including module already took, and an import that exists to be
+	// overridden would then win. See numberIncludedImports.
+	preNumbered map[string]bool
 }
 
 // checkCallTemplateParams implements XTSE0680.
@@ -145,6 +157,16 @@ func (c *compiler) checkCallTemplateParams() error {
 // compileDocument compiles one stylesheet module at the given import
 // precedence.
 func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
+	return c.compileModule(doc, precedence, false)
+}
+
+// compileIncludedDocument compiles an xsl:include's target, whose top-level
+// declarations take the including module's precedence.
+func (c *compiler) compileIncludedDocument(doc *xdm.Node, precedence int) error {
+	return c.compileModule(doc, precedence, true)
+}
+
+func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) error {
 	collectPrefixes(doc, c.sheet.prefixes)
 	if err := c.checkInputTypeAnnotations(doc); err != nil {
 		return err
@@ -159,6 +181,19 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	// document a stylesheet reads through document("") is the one on disk.
 	if c.sheet.source == nil {
 		c.sheet.source = doc
+		// The principal module's declared version decides the default output
+		// method for the implicit result tree. Under backwards compatibility
+		// there is no xhtml method to default to, so an XHTML-rooted result
+		// serialises as xml. Recorded here rather than at serialisation time
+		// because only this module's version counts: an included 1.0 module
+		// does not put a 2.0 stylesheet into backwards-compatible output.
+		version := root.AttrValue("version")
+		if version == "" {
+			if a := root.Attr(xdm.NSXSL, "version"); a != nil {
+				version = a.Value
+			}
+		}
+		c.sheet.output.Version10Implicit = strings.TrimSpace(version) == "1.0"
 	}
 
 	// Conditional element inclusion runs before anything else looks at the
@@ -194,6 +229,10 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 				"XTSE0150: %s is the outermost element of a simplified "+
 					"stylesheet and has no xsl:version attribute",
 				root.Name.Lexical())
+		}
+		if !fixed {
+			precedence = c.nextPrecedence
+			c.nextPrecedence++
 		}
 		return c.compileSimplifiedStylesheet(root, precedence)
 	}
@@ -234,8 +273,48 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	}
 	compileSchema = c.sheet.schema
 
-	for _, el := range root.ChildElements() {
-		if el.Name.URI == xdm.NSXSL && el.Name.Local == "import-schema" {
+	// Import precedence is a total order over the import tree, not a depth.
+	// Section 3.10.2: a module has higher precedence than every module it
+	// imports, and among the modules a stylesheet imports directly the later
+	// xsl:import has higher precedence than the earlier one. Numbering by
+	// depth alone gave two sibling imports the same precedence, which turned
+	// a legitimate override into a spurious XTSE0630/XTSE0660 and let the
+	// first declaration win where the second should have.
+	//
+	// A post-order walk produces exactly that order: every module an import
+	// pulls in is numbered before the importer, and the imports are visited
+	// in document order, so the counter rises with precedence. Section 3.7
+	// requires xsl:import to come before every other declaration, so the
+	// imports are all reached in this first pass before anything else needs
+	// a number.
+	children := root.ChildElements()
+	for _, el := range children {
+		if isXSL(el, "import") {
+			if err := c.compileInclude(el, 0); err != nil {
+				return err
+			}
+		}
+	}
+	// An xsl:include's own xsl:import declarations are numbered here too,
+	// before this module takes its number.
+	//
+	// The included module's declarations share this module's precedence, so
+	// anything that module imports must rank *below* it. Numbering those
+	// imports where the include is compiled — after this module already took
+	// a number — gave them a higher one instead, and an import that exists to
+	// be overridden then won. The traversal reaches through nested includes
+	// for the same reason.
+	if err := c.numberIncludedImports(root); err != nil {
+		return err
+	}
+	if !fixed {
+		precedence = c.nextPrecedence
+		c.nextPrecedence++
+	}
+
+	for _, el := range children {
+		if el.Name.URI == xdm.NSXSL &&
+			(el.Name.Local == "import-schema" || el.Name.Local == "import") {
 			continue
 		}
 		if err := c.compileTopLevel(el, precedence); err != nil {
@@ -322,11 +401,16 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "strip-space", "preserve-space":
 		return c.compileSpaceControl(el)
 	case "include":
-		return c.compileInclude(el, precedence)
+		// An included module's declarations behave as if written in the
+		// including module, so they share its precedence. compileDocument
+		// allocates a fresh number for every module it compiles, so the
+		// included module's own declarations are given the includer's
+		// precedence explicitly here rather than through the recursion.
+		return c.compileIncludeAt(el, precedence)
 	case "import":
-		// Imported modules sit one precedence level below the importer, so
-		// their templates lose ties against it.
-		return c.compileInclude(el, precedence-1)
+		// Imports are compiled in the first pass of compileDocument, which
+		// numbers them, so nothing is left to do here.
+		return nil
 	case "decimal-format":
 		return c.compileDecimalFormat(el, precedence)
 	case "attribute-set":
@@ -1042,15 +1126,16 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 			if base == "" {
 				base = c.opts.BaseURI
 			}
+			fragment := ""
 			if i := strings.IndexByte(href, '#'); i >= 0 {
-				href = href[:i]
+				fragment, href = href[i+1:], href[:i]
 			}
 			doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
 			if err != nil || doc == nil || c.schemaSeen[resolved] {
 				continue
 			}
 			c.schemaSeen[resolved] = true
-			sub := firstElement(doc)
+			sub := embeddedModule(doc, fragment)
 			if sub == nil {
 				continue
 			}
@@ -1062,7 +1147,17 @@ func (c *compiler) hoistImportSchema(root *xdm.Node) error {
 	return nil
 }
 
+// compileIncludeAt compiles an xsl:include, whose declarations take the
+// including module's precedence rather than one of their own.
+func (c *compiler) compileIncludeAt(el *xdm.Node, precedence int) error {
+	return c.compileIncludeImpl(el, precedence, true)
+}
+
 func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
+	return c.compileIncludeImpl(el, precedence, false)
+}
+
+func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecedence bool) error {
 	href := el.AttrValue("href")
 	if href == "" {
 		return fmt.Errorf("%s requires an href attribute", el.Name.Lexical())
@@ -1081,8 +1176,11 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 	// A fragment identifier selects a part *within* the retrieved resource,
 	// so it is not part of the name of the resource to fetch. Passing it
 	// through made the resolver look for a file whose name contained "#".
+	// It is kept, though: for xsl:include and xsl:import it names the
+	// embedded module to take once the host document is in hand.
+	fragment := ""
 	if i := strings.IndexByte(href, '#'); i >= 0 {
-		href = href[:i]
+		fragment, href = href[i+1:], href[:i]
 	}
 	doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
 	if err != nil {
@@ -1100,13 +1198,166 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 		}
 		return fmt.Errorf("%s: circular %s of %q", code, el.Name.Local, resolved)
 	}
+	if c.preNumbered[resolved] && !forcePrecedence {
+		// An xsl:import the include pre-pass already handled. It has its
+		// number and its declarations; compiling it again here would give
+		// it a second, higher one.
+		return nil
+	}
 	c.seen[resolved] = true
 	defer delete(c.seen, resolved)
 
+	if fragment != "" {
+		if sub := embeddedModule(doc, fragment); sub != nil {
+			doc = sub
+		}
+	}
+	if forcePrecedence {
+		// xsl:include: the module's declarations take the includer's
+		// precedence, so its own allocation is overridden afterwards. The
+		// counter still advances, which only leaves a gap.
+		return c.compileIncludedDocument(doc, precedence)
+	}
 	return c.compileDocument(doc, precedence)
 }
 
+// importHref is the resource half of an xsl:import href, without the fragment
+// identifier that selects an embedded module within it.
+func importHref(el *xdm.Node) string {
+	href := el.AttrValue("href")
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		href = href[:i]
+	}
+	return href
+}
+
+// importBase is the base URI an xsl:import's href resolves against.
+func importBase(c *compiler, el *xdm.Node) string {
+	if el.BaseURI != "" {
+		return el.BaseURI
+	}
+	return c.opts.BaseURI
+}
+
+// numberIncludedImports allocates import precedence for the modules an
+// xsl:include chain imports, ahead of the including module's own number.
+//
+// It only assigns numbers; the declarations themselves are compiled later, by
+// the ordinary walk. The seen-set is the same one the module walk uses, so a
+// cycle is caught here rather than recursing forever, and a module already
+// numbered is not numbered twice.
+func (c *compiler) numberIncludedImports(root *xdm.Node) error {
+	if c.opts.Resolver == nil {
+		return nil
+	}
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "include") {
+			continue
+		}
+		href := el.AttrValue("href")
+		if href == "" {
+			continue
+		}
+		base := el.BaseURI
+		if base == "" {
+			base = c.opts.BaseURI
+		}
+		fragment := ""
+		if i := strings.IndexByte(href, '#'); i >= 0 {
+			fragment, href = href[i+1:], href[:i]
+		}
+		doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+		if err != nil || doc == nil {
+			// A module that cannot be retrieved is reported by the ordinary
+			// walk, with the error code the spec gives it. Reporting it here
+			// as well would change which error the caller sees.
+			continue
+		}
+		if c.seen[resolved] {
+			continue
+		}
+		sub := embeddedModule(doc, fragment)
+		if sub == nil {
+			continue
+		}
+		if c.seen == nil {
+			c.seen = map[string]bool{}
+		}
+		c.seen[resolved] = true
+		for _, kid := range sub.ChildElements() {
+			if !isXSL(kid, "import") {
+				continue
+			}
+			if err := c.compileInclude(kid, 0); err != nil {
+				delete(c.seen, resolved)
+				return err
+			}
+			if c.preNumbered == nil {
+				c.preNumbered = map[string]bool{}
+			}
+			if _, target, err := c.opts.Resolver.ResolveModule(
+				importHref(kid), importBase(c, kid)); err == nil {
+				c.preNumbered[target] = true
+			}
+		}
+		err = c.numberIncludedImports(sub)
+		delete(c.seen, resolved)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- helpers ----------------------------------------------------------------
+
+// embeddedModule finds the stylesheet module a fragment identifier names.
+//
+// Section 3.8 lets a stylesheet module live *inside* a host XML document
+// rather than being the whole of one: xsl:include href="doc.xml#embedded"
+// retrieves doc.xml and then takes the element whose ID is "embedded" as the
+// module. Without this the document element is taken instead, and a host whose
+// root is not xsl:stylesheet is diagnosed as a simplified stylesheet missing
+// its xsl:version — which is what include-0102 and include-0103 reported.
+//
+// Both spellings of an ID are matched by name: xml:id is an ID by definition,
+// and a plain id attribute is one only because an ATTLIST declares it so —
+// which this engine does not record, so the name is taken at face value. That
+// is looser than the spec, but a stylesheet naming a fragment that is not an
+// ID is already malformed, and the host documents in the suite use one
+// spelling each.
+func embeddedModule(doc *xdm.Node, id string) *xdm.Node {
+	if id == "" {
+		return firstElement(doc)
+	}
+	var walk func(n *xdm.Node) *xdm.Node
+	walk = func(n *xdm.Node) *xdm.Node {
+		if n.Kind == xdm.KindElement {
+			for _, a := range n.Attrs {
+				if a.Value != id {
+					continue
+				}
+				if a.Name.Local == "id" &&
+					(a.Name.URI == "" || a.Name.URI == xdm.NSXML) {
+					return n
+				}
+			}
+		}
+		for _, k := range n.Children {
+			if got := walk(k); got != nil {
+				return got
+			}
+		}
+		return nil
+	}
+	if got := walk(doc); got != nil {
+		return got
+	}
+	// A fragment that names nothing falls back to the document element, so
+	// that a mis-typed identifier is reported by the ordinary module checks
+	// rather than as a bare nil.
+	return firstElement(doc)
+}
 
 func firstElement(n *xdm.Node) *xdm.Node {
 	if n.Kind == xdm.KindElement {
@@ -1188,4 +1439,31 @@ func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
 		c.sheet.stripTypeAnnotations = true
 	}
 	return nil
+}
+
+// pruneOverriddenGlobals drops every global variable a higher-precedence
+// declaration of the same name overrides.
+//
+// Section 9.5: "if there is more than one binding of a global variable with
+// the same name, then all but one of them must have lower import precedence".
+// The lower-precedence bindings are not merely unused — they are not
+// evaluated at all, so a lower-precedence binding whose select expression
+// would fail is harmless. Keeping them in the list made evaluation order
+// decide which value a global took, so a stylesheet that imported a module
+// declaring the same parameter got the imported value.
+func (c *compiler) pruneOverriddenGlobals() {
+	best := make(map[string]int, len(c.sheet.globals))
+	for _, g := range c.sheet.globals {
+		k := g.Name.Clark()
+		if p, ok := best[k]; !ok || g.precedence > p {
+			best[k] = g.precedence
+		}
+	}
+	kept := c.sheet.globals[:0]
+	for _, g := range c.sheet.globals {
+		if g.precedence == best[g.Name.Clark()] {
+			kept = append(kept, g)
+		}
+	}
+	c.sheet.globals = kept
 }

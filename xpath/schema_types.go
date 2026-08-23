@@ -38,6 +38,41 @@ type SchemaTypes interface {
 	// *declaration* rather than a type, and both are XPST0008 when no schema
 	// declares the name.
 	LookupSchemaDeclaration(name xdm.QName, attribute bool) bool
+
+	// SubstitutionGroupMembers returns the global element declarations that
+	// may substitute for name, transitively and not including name itself.
+	//
+	// schema-element(E) matches E and every member of E's substitution
+	// group, so a schema that declares "surname" as substitutable for "last"
+	// makes schema-element(z:last) match a z:surname element. Resolving the
+	// members here rather than at match time is what keeps the node test
+	// self-contained: nothing carries a schema into the evaluator, and the
+	// group is fixed once the schema is imported.
+	//
+	// An implementation with no schema, or a name with no members, returns
+	// nil.
+	SubstitutionGroupMembers(name xdm.QName) []xdm.QName
+}
+
+// schemaSubstitutionGroup returns the names schema-element(lex) admits besides
+// lex itself, resolved through the same prefix bindings as the name.
+func schemaSubstitutionGroup(lex string, ns NamespaceResolver) []xdm.QName {
+	st, ok := ns.(SchemaTypes)
+	if !ok {
+		return nil
+	}
+	prefix, local := xdm.SplitQName(lex)
+	name := xdm.QName{Local: local}
+	if prefix != "" {
+		uri, found := ns.ResolvePrefix(prefix)
+		if !found {
+			return nil
+		}
+		name.URI = uri
+	} else {
+		name.URI = ns.DefaultElementNamespace()
+	}
+	return st.SubstitutionGroupMembers(name)
 }
 
 // schemaDeclared reports whether a schema in the static context declares name.

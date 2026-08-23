@@ -58,13 +58,18 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 			prefixes = append(prefixes, prefix)
 		}
 		sort.Strings(prefixes)
-		for _, prefix := range prefixes {
+		for i, prefix := range prefixes {
 			ns := &xdm.Node{
 				Kind:   xdm.KindNamespace,
 				Name:   xdm.QName{Local: prefix},
 				Value:  scope[prefix],
 				Parent: n,
 			}
+			// A synthesized node has no document order of its own, and left
+			// at zero it sorts before every real node and makes
+			// generate-id() answer "N0" for all of them — colliding with
+			// each other and with the document node.
+			ns.SetSynthesizedOrder(n, i)
 			if !visit(ns) {
 				return
 			}

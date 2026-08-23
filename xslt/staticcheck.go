@@ -264,6 +264,27 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 // rather than hard-coding the element names is what keeps the check honest —
 // if the table changes, so does the rule it enforces.
 func checkModelOrder(el *xdm.Node, cm contentModel) error {
+	// A model naming a foreign element with a "?" allows at most one of it.
+	// xsl:import-schema is the only element of that shape — its model is
+	// "xs:schema?" — and a second inline schema there has no defined meaning:
+	// section 3.14's rules about the target namespace are written about "the
+	// contained schema", singular. Reading the cardinality off the model
+	// string rather than naming xsl:import-schema is what keeps this true if
+	// the table gains another foreign model.
+	if cm.foreign != "" && strings.HasSuffix(cm.model, "?") {
+		n := 0
+		for _, ch := range el.ChildElements() {
+			if ch.Name.URI != xdm.NSXSL && ch.Name.Local == cm.foreign {
+				n++
+			}
+		}
+		if n > 1 {
+			return fmt.Errorf(
+				"xsl:%s: at most one %s child is allowed, its content is "+
+					"%s (XTSE0010)", el.Name.Local, cm.foreign, cm.model)
+		}
+	}
+
 	switch {
 	case strings.HasPrefix(cm.model, "(xsl:sort*,") ||
 		strings.HasPrefix(cm.model, "(xsl:sort+,"):

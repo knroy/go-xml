@@ -20,6 +20,11 @@ type runtime struct {
 	sheet *Stylesheet
 	ctx   *xpath.Context
 
+	// globalCtx is the context as it stood once the global variables were
+	// bound, holding those and nothing local. xsl:attribute-set bodies are
+	// evaluated against it; see the comment where it is set.
+	globalCtx *xpath.Context
+
 	// keyIndex caches xsl:key lookups per document. Building an index is a
 	// full document scan, so it is done once per (key, document) pair on
 	// first use rather than eagerly for every declared key.
@@ -211,6 +216,17 @@ func (b *outputBuilder) appendNode(n *xdm.Node) {
 		_ = b.addNamespaceNode(n.Name.Local, n.Value)
 		return
 	}
+	// An attribute node in a result sequence joins the element's attributes,
+	// not its children — section 5.7.1 prepends such nodes to the content
+	// rather than treating them as content. A parentless attribute is an
+	// ordinary item, so xsl:call-template on a template declared
+	// as="attribute()*" delivers one here; appending it as a child produced
+	// an element with an attribute node among its children, which no
+	// serialiser can write.
+	if n.Kind == xdm.KindAttribute && b.open != nil {
+		_ = b.addAttribute(n.Name, n.Value)
+		return
+	}
 	n = detach(n)
 	if b.open != nil {
 		rebase(n, b.open.BaseURI)
@@ -271,7 +287,15 @@ func detach(n *xdm.Node) *xdm.Node {
 // invariant of no adjacent text nodes holds in constructed trees too.
 func (b *outputBuilder) appendText(s string) {
 	b.lastAtomic = false
-	if s == "" {
+	if s == "" && (b.open != nil || len(b.items) > 0) {
+		// Section 5.7.1 discards zero-length text nodes only while
+		// *constructing complex content*, that is, inside an element. At the
+		// top level of a sequence constructor one survives, which is what
+		// lets a variable declared as="text()" be satisfied by an
+		// xsl:value-of over the empty string — but only when it is the whole
+		// result. A zero-length node beside other items contributes nothing
+		// and, kept, would add a separator of its own everywhere the
+		// sequence is joined into a string.
 		return
 	}
 	if b.open != nil {
@@ -313,6 +337,19 @@ func (b *outputBuilder) appendValue(a *xdm.Atomic) {
 
 // addAttribute attaches an attribute to the element under construction.
 func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
+	return b.addAttributeTyped(name, value, "")
+}
+
+// addAttributeTyped adds an attribute carrying a type annotation.
+//
+// The annotation has to travel with the attribute rather than be applied to a
+// throwaway node: xsl:attribute assesses the value it is about to write, and a
+// pattern such as schema-attribute(A) matches only a node that was actually
+// validated against the declaration, so an attribute that lost its annotation
+// on the way into the element could never match however it was named.
+func (b *outputBuilder) addAttributeTyped(name xdm.QName, value string,
+	typeAnnotation string) error {
+
 	if b.open == nil {
 		// A parentless attribute is a legal item in the data model, and a
 		// sequence constructor may produce one: xsl:function as="attribute()"
@@ -323,6 +360,7 @@ func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
 		// there is an element to check it against.
 		b.items = append(b.items, &xdm.Node{
 			Kind: xdm.KindAttribute, Name: name, Value: value,
+			TypeAnnotation: typeAnnotation,
 		})
 		return nil
 	}
@@ -336,10 +374,12 @@ func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
 	for _, a := range b.open.Attrs {
 		if a.Name.URI == name.URI && a.Name.Local == name.Local {
 			a.Value = value
+			a.TypeAnnotation = typeAnnotation
 			return nil
 		}
 	}
-	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value})
+	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value,
+		TypeAnnotation: typeAnnotation})
 	fixupAttrPrefix(b.open, b.open.Attrs[len(b.open.Attrs)-1])
 	return nil
 }
@@ -809,9 +849,24 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// "undeclared variable" instead of working. A variable is evaluated when
 	// something needs it, and the ones nothing needs are evaluated at the end
 	// so that their errors are still reported.
+	// Bind the runtime before the globals are evaluated, not after. A global
+	// variable's select expression may call a stylesheet function, and
+	// xsl:function reaches the runtime through this binding — evaluating the
+	// globals first left such a call reporting that it was made outside a
+	// transform.
+	rt.ctx = rt.ctx.WithVar(runtimeVar,
+		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
+
 	if err := rt.evalGlobals(s, opts); err != nil {
 		return nil, err
 	}
+	// Section 10.2: only top-level variables and parameters are in scope
+	// within an xsl:attribute-set declaration — a set is a declaration, not
+	// part of the template that uses it, so a local variable at the point of
+	// use must not be visible inside it. Snapshotting the context here, once
+	// the globals are bound and before any template has pushed a local scope,
+	// is what lets the set body be evaluated in that scope.
+	rt.globalCtx = rt.ctx
 	return rt, nil
 }
 

@@ -426,12 +426,11 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// against when there is no context node — which is the case in a
 	// stylesheet started from a named template — and it silently resolves
 	// against the process's working directory instead.
-	base := ""
-	if n, ok := ctx.Item.(*xdm.Node); ok {
-		base = n.BaseURI
-	}
+	base := ctx.StaticBaseURI
 	if base == "" {
-		base = ctx.StaticBaseURI
+		if n, ok := ctx.Item.(*xdm.Node); ok {
+			base = n.BaseURI
+		}
 	}
 	// An empty URI reference denotes the document containing the expression
 	// itself, not the document the context node came from. XSLT 2.0 section

@@ -89,11 +89,22 @@ func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
 			return fmt.Errorf("XTSE0710: no xsl:attribute-set named %q", n.Lexical())
 		}
 		active[key] = true
+		// Only top-level variables and parameters are in scope inside an
+		// attribute set: it is a declaration in its own right, so a local
+		// variable live at the point of use must not be visible to it. The
+		// focus is kept, because the set's body is still evaluated with the
+		// context item the instruction that used it had.
+		setRT := rt
+		if rt.globalCtx != nil {
+			r := *rt
+			r.ctx = rt.globalCtx.WithFocus(rt.ctx.Item, rt.ctx.Position, rt.ctx.Size)
+			setRT = &r
+		}
 		for _, as := range sets {
-			if err := expandAttributeSets(rt, as.uses, out, active); err != nil {
+			if err := expandAttributeSets(setRT, as.uses, out, active); err != nil {
 				return err
 			}
-			if err := execSequence(as.body, rt, out); err != nil {
+			if err := execSequence(as.body, setRT, out); err != nil {
 				return err
 			}
 		}

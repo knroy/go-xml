@@ -197,6 +197,18 @@ type OutputSettings struct {
 	// by a consumer that then compares it against a normalised form and
 	// finds a spurious difference.
 	NormalizationForm string
+	// Version10Implicit records that the principal module declares version
+	// "1.0" and this is the implicitly-created final result tree.
+	//
+	// It changes only the *default* output method. Under backwards
+	// compatibility an XSLT 1.0 stylesheet has no xhtml method to select —
+	// the method did not exist — so a result whose document element is html
+	// in the XHTML namespace serialises as xml, not xhtml: URI-valued
+	// attributes are left unescaped and no content-type meta element is
+	// added. An explicit xsl:output/@method overrides this like any other
+	// default, and xsl:result-document clears the flag, because the tree it
+	// creates is not the implicit one.
+	Version10Implicit bool
 }
 
 // Instruction is one compiled XSLT instruction.
@@ -274,6 +286,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.sheet.sortTemplates()
+	// A global variable overridden by a higher-precedence declaration is not
+	// evaluated at all, so the overridden bindings are dropped before the
+	// stylesheet is handed back.
+	c.pruneOverriddenGlobals()
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one
 	// declared later or in a module imported afterwards.
@@ -433,6 +449,34 @@ func (r *nsResolver) LookupSchemaDeclaration(name xdm.QName, attribute bool) boo
 	}
 	_, ok := r.schema.Elements[name]
 	return ok
+}
+
+// SubstitutionGroupMembers implements xpath.SchemaTypes.
+//
+// The schema has already computed the transitive closure and cached it on the
+// head declaration, so this is a lookup rather than a walk. Only the names are
+// handed back: the node test compares names, and returning declarations would
+// leak xsd types into the xpath package, which cannot import xsd.
+func (r *nsResolver) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
+	if r.schema == nil {
+		return nil
+	}
+	head, ok := r.schema.Elements[name]
+	if !ok {
+		return nil
+	}
+	members := head.Substitutable()
+	if len(members) == 0 {
+		return nil
+	}
+	out := make([]xdm.QName, 0, len(members))
+	for _, d := range members {
+		// Only the URI and local name: a QName is compared as a whole
+		// struct, and the prefix a schema was written with is rarely the
+		// stylesheet's.
+		out = append(out, xdm.QName{URI: d.Name.URI, Local: d.Name.Local})
+	}
+	return out
 }
 
 // LookupSchemaType implements xpath.SchemaTypes.

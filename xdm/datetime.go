@@ -74,7 +74,7 @@ func ParseDateTime(s string, t TypeCode) (*DateTime, error) {
 	if !dt.valid() {
 		return nil, ErrCast("invalid date/time value %q", s)
 	}
-	dt.normalizeHour24()
+	dt.normalizeHour24(t)
 	return dt, nil
 }
 
@@ -89,11 +89,20 @@ func ParseDateTime(s string, t TypeCode) (*DateTime, error) {
 //
 // For xs:time there is no date to carry, so only the hour is reset — which is
 // correct, since a time has no day for the rollover to land on.
-func (dt *DateTime) normalizeHour24() {
+func (dt *DateTime) normalizeHour24(t TypeCode) {
 	if dt.Hour != 24 {
 		return
 	}
 	dt.Hour = 0
+	// Decided by the type, not by whether the date happens to be zero:
+	// parsing an xs:time fills in the reference date 1972-12-31, so the zero
+	// test never fired for one and the day rolled forward. The hour came out
+	// right and the instant was a day late, which made
+	// xs:time('24:00:00') - xs:time('23:59:59') report PT1S instead of
+	// -PT23H59M59S.
+	if t == TypeTime {
+		return
+	}
 	if dt.Year == 0 && dt.Month == 0 && dt.Day == 0 {
 		return
 	}

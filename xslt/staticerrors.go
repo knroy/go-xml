@@ -239,6 +239,40 @@ func checkElementStatic(el *xdm.Node) error {
 	}
 
 	switch local {
+	case "import-schema":
+		// XTSE0215: "it is a static error if an xsl:import-schema element
+		// that contains an xs:schema element has a schema-location
+		// attribute, or if it has a namespace attribute that conflicts with
+		// the target namespace of the contained schema."
+		//
+		// Section 3.14 spells out what "conflicts" means, and it is not
+		// simple equality: exactly three combinations are permitted. Either
+		// both @namespace and @targetNamespace are absent, meaning a
+		// no-namespace schema; or both are present and equal; or @namespace
+		// is absent and @targetNamespace present, in which case the inline
+		// schema decides. Everything else conflicts — including a
+		// @namespace with no @targetNamespace to match it, which the
+		// equality reading would have let through.
+		if inline := inlineSchema(el); inline != nil {
+			if el.Attr("", "schema-location") != nil {
+				return fmt.Errorf(
+					"XTSE0215: xsl:import-schema contains an xs:schema, so " +
+						"it may not also have a schema-location attribute")
+			}
+			ns := el.Attr("", "namespace")
+			target := inline.Attr("", "targetNamespace")
+			switch {
+			case ns == nil:
+				// Absent @namespace never conflicts: the inline schema's
+				// target namespace, present or absent, is taken as given.
+			case target == nil || target.Value != ns.Value:
+				return fmt.Errorf(
+					"XTSE0215: xsl:import-schema/@namespace=%q conflicts "+
+						"with the target namespace of the contained schema",
+					ns.Value)
+			}
+		}
+
 	case "include", "import":
 		// XTSE0170 and XTSE0190: both must be top-level, which means their
 		// parent is the xsl:stylesheet element.
@@ -714,6 +748,24 @@ func checkDefaultCollation(el *xdm.Node) error {
 		return fmt.Errorf(
 			"XTSE0125: default-collation=%q names no collation this "+
 				"implementation recognises", a.Value)
+	}
+	return nil
+}
+
+// inlineSchema returns the xs:schema child of an xsl:import-schema, or nil.
+//
+// The element it looks for comes from the content model — xsl:import-schema is
+// the one XSLT element whose model names a foreign element outright — rather
+// than from a hard-coded name here, so that the two cannot drift apart.
+func inlineSchema(el *xdm.Node) *xdm.Node {
+	cm, ok := contentModels[el.Name.Local]
+	if !ok || cm.foreign == "" {
+		return nil
+	}
+	for _, c := range el.ChildElements() {
+		if c.Name.URI == xdm.NSXS && c.Name.Local == cm.foreign {
+			return c
+		}
 	}
 	return nil
 }

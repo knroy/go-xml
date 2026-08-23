@@ -64,13 +64,30 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 			return n.Name.Local == t.Name.Local
 		}
 		if n.Name.URI != t.Name.URI || n.Name.Local != t.Name.Local {
-			return false
+			// schema-element(E) matches E and anything substitutable for it,
+			// so a name that is not E itself may still be a member of E's
+			// substitution group. The members were resolved when the test was
+			// parsed; an ordinary name test has none and falls straight out.
+			if !t.substitutes(n.Name) {
+				return false
+			}
 		}
 	}
 	if t.TypeName != "" {
 		return nodeTypeMatches(n, t.TypeName)
 	}
 	return true
+}
+
+// substitutes reports whether name is a member of the substitution group the
+// test's schema-element() declaration heads.
+func (t *KindTest) substitutes(name xdm.QName) bool {
+	for _, m := range t.SubstitutionGroup {
+		if m.URI == name.URI && m.Local == name.Local {
+			return true
+		}
+	}
+	return false
 }
 
 // nodeTypeMatches reports whether a node's type annotation satisfies the type

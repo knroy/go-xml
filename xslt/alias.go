@@ -103,6 +103,21 @@ func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
 	return xdm.QName{Prefix: a.prefix, URI: a.uri, Local: n.Local}
 }
 
+// isAliasTarget reports whether a URI is the target namespace URI of any
+// declared alias.
+//
+// Section 11.1.4 makes a target namespace URI survive exclusion, so this is
+// the question the literal result element asks of each binding exclusion would
+// otherwise have dropped.
+func (s *Stylesheet) isAliasTarget(uri string) bool {
+	for _, a := range s.namespaceAliases {
+		if a.uri == uri {
+			return true
+		}
+	}
+	return false
+}
+
 // compileCharacterMap compiles xsl:character-map.
 //
 // A character map replaces individual characters in the serialised output with

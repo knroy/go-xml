@@ -92,12 +92,18 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 }
 
 // findAVTClose locates the '}' closing an expression that starts at i,
-// skipping braces inside string literals.
+// skipping braces inside string literals and XPath comments.
 //
 // An XPath expression can contain quoted strings with braces in them, as in
-// {concat('{', $x)}, so scanning for the first '}' is wrong.
+// {concat('{', $x)}, so scanning for the first '}' is wrong. The same is true
+// of an XPath comment: "(: a } here :)" is commentary, not the end of the
+// expression. XPath comments nest, so the comment is tracked with a depth
+// counter rather than a scan to the first ":)" — "(: (: :) :)" ends at the
+// second ":)", and stopping at the first would resume brace scanning inside
+// text that is still commented out.
 func findAVTClose(src string, i int) (int, error) {
 	var quote byte
+	comment := 0
 	for ; i < len(src); i++ {
 		c := src[i]
 		switch {
@@ -110,6 +116,17 @@ func findAVTClose(src string, i int) (int, error) {
 				}
 				quote = 0
 			}
+		case comment > 0:
+			if c == '(' && i+1 < len(src) && src[i+1] == ':' {
+				comment++
+				i++
+			} else if c == ':' && i+1 < len(src) && src[i+1] == ')' {
+				comment--
+				i++
+			}
+		case c == '(' && i+1 < len(src) && src[i+1] == ':':
+			comment++
+			i++
 		case c == '\'' || c == '"':
 			quote = c
 		case c == '}':

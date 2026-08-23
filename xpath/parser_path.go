@@ -355,9 +355,13 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			kt.Name = &qn
 			kt.HasName = true
 			// A schema-element test also admits the members of the named
-			// declaration's substitution group, which this records so that
-			// matching can consult the schema rather than the name alone.
+			// declaration's substitution group. They are resolved now, while
+			// the schema is still reachable through the resolver, because the
+			// evaluator sees only the test.
 			kt.SchemaDeclared = true
+			if kt.Kind == xdm.KindElement {
+				kt.SubstitutionGroup = schemaSubstitutionGroup(p.cur().Val, p.ns)
+			}
 			p.pos++
 		}
 		if t := p.cur(); t.Kind == TokName {

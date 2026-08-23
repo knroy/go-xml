@@ -167,6 +167,28 @@ func (n *Node) TypeName() string {
 // the same tree; use Compare for the general case.
 func (n *Node) Order() int { return int(n.order) }
 
+// SetSynthesizedOrder places a node the parser did not build into the document
+// order of an existing tree, immediately after owner.
+//
+// The namespace axis is the case this exists for: its nodes are synthesized on
+// demand from the in-scope bindings, so they have no order of their own. Left
+// at zero they sort before every real node, and — because generate-id() is
+// derived from the order — every one of them answers "N0", colliding with each
+// other and with the document node.
+//
+// The offset separates the bindings of one element from each other while
+// keeping them all adjacent to their owner. It is deliberately not an attempt
+// at a spec-defined position: XPath leaves the relative order of namespace
+// nodes implementation-dependent, and what a caller needs is that the order is
+// stable and the identities distinct.
+func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
+	if owner == nil {
+		return
+	}
+	n.tree = owner.tree
+	n.order = owner.order + int32(offset) + 1
+}
+
 // Tree returns the containing tree.
 func (n *Node) Tree() *Tree { return n.tree }
 

@@ -149,6 +149,6 @@ func elementIncluded(el *xdm.Node) (bool, error) {
 func useWhenFuncs() *xpath.Library {
 	l := xpath.NewLibrary(xpath.Builtins())
 	xpath.RegisterXSLTFuncs(l)
-	registerStaticFuncs(l)
+	registerStaticFuncs(l, nil)
 	return l
 }
