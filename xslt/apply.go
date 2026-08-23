@@ -351,6 +351,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	defer sub.ascend()
 
+	// A stylesheet function's body builds a temporary tree, which is
+	// temporary output state for XTDE1480.
+	sub.temporary = true
+
 	out := newOutputBuilder()
 	if err := execSequence(f.body, sub, out); err != nil {
 		return nil, err

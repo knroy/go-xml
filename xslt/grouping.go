@@ -418,6 +418,10 @@ func (c *compiler) compileAnalyzeString(n *xdm.Node, ns xpath.NamespaceResolver)
 // node matching @from.
 type numberInstr struct {
 	value *xpath.Compiled
+	// selectExpr is @select, which names the node to number instead of
+	// taking the context node. It is not @value: the node it selects is
+	// still counted by @level, @count and @from.
+	selectExpr *xpath.Compiled
 	// count selects which nodes are counted; nil means "nodes with the same
 	// name and kind as the context node", the spec's default.
 	count *Pattern
@@ -481,9 +485,32 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 	}
 
-	node, ok := rt.ctx.Item.(*xdm.Node)
-	if !ok {
-		return fmt.Errorf("XTTE0990: xsl:number requires a node context or a value attribute")
+	// @select names the node to number; without it the context node is used.
+	var node *xdm.Node
+	if i.selectExpr != nil {
+		seq, err := i.selectExpr.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		// XTTE1000: the select expression must yield exactly one node.
+		if len(seq) != 1 {
+			return fmt.Errorf(
+				"XTTE1000: xsl:number/@select returned %d items, want exactly one node",
+				len(seq))
+		}
+		n, ok := seq[0].(*xdm.Node)
+		if !ok {
+			return fmt.Errorf(
+				"XTTE1000: xsl:number/@select returned an item that is not a node")
+		}
+		node = n
+	} else {
+		n, ok := rt.ctx.Item.(*xdm.Node)
+		if !ok {
+			return fmt.Errorf(
+				"XTTE0990: xsl:number requires a node context or a value attribute")
+		}
+		node = n
 	}
 
 	numbers, err := i.countNode(rt, node)
@@ -868,6 +895,11 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 	if v := n.AttrValue("value"); v != "" {
 		if instr.value, err = compileExpr(v, ns); err != nil {
 			return nil, err
+		}
+	}
+	if v := n.AttrValue("select"); v != "" {
+		if instr.selectExpr, err = compileExpr(v, ns); err != nil {
+			return nil, fmt.Errorf("in xsl:number/@select: %w", err)
 		}
 	}
 	if v := n.AttrValue("count"); v != "" {

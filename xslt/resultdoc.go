@@ -71,6 +71,16 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		href = v
 	}
 
+	// XTDE1480: a result document cannot be created while building a
+	// temporary tree. There is no final result tree for it to sit beside,
+	// and the specification makes this an error rather than letting the
+	// output vanish.
+	if rt.temporary {
+		return fmt.Errorf(
+			"XTDE1480: xsl:result-document cannot be evaluated in temporary " +
+				"output state")
+	}
+
 	// The body builds into its own builder, so nothing it produces reaches
 	// the principal result. Passing `out` here is exactly the merging bug
 	// this instruction used to be rejected to avoid.

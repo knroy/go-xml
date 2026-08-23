@@ -31,6 +31,17 @@ type runtime struct {
 	// maxDepth is the ceiling depth may reach, from TransformOptions.
 	maxDepth int
 
+	// temporary marks that the runtime is building a temporary tree — the
+	// content of a variable, a function's body, or a grouping key — rather
+	// than a final result tree.
+	//
+	// It exists for XTDE1480: xsl:result-document may not be evaluated in
+	// temporary output state, because there is no final result tree for it
+	// to be a sibling of. The flag is on the runtime rather than the output
+	// builder because the state is inherited by everything the constructor
+	// calls, however deeply.
+	temporary bool
+
 	// secondary collects xsl:result-document outputs. Like messages it is a
 	// pointer, because the runtime struct is copied on every focus change:
 	// a plain slice would leave a result-document written inside a template
@@ -321,8 +332,11 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 		// usable as "".
 		return xdm.One(xdm.NewString("")), nil
 	}
+	// Building a variable's content is temporary output state.
+	sub := *rt
+	sub.temporary = true
 	out := newOutputBuilder()
-	if err := execSequence(v.Body, rt, out); err != nil {
+	if err := execSequence(v.Body, &sub, out); err != nil {
 		return nil, err
 	}
 	// Section 9.3's table: with an "as" attribute the value is the sequence

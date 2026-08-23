@@ -299,7 +299,20 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	t.Body = body
 
 	if t.HasName {
-		c.sheet.named[t.Name.Clark()] = t
+		// XTSE0660: two templates may not share a name at the same import
+		// precedence. A module of higher precedence legitimately overrides
+		// one of lower, which is what import is for, so only a tie is an
+		// error.
+		if prev, dup := c.sheet.named[t.Name.Clark()]; dup &&
+			prev.importPrecedence == t.importPrecedence {
+			return fmt.Errorf(
+				"XTSE0660: two templates are named %s at the same import precedence",
+				t.Name.Lexical())
+		}
+		if prev, dup := c.sheet.named[t.Name.Clark()]; !dup ||
+			t.importPrecedence >= prev.importPrecedence {
+			c.sheet.named[t.Name.Clark()] = t
+		}
 	}
 	if t.Match != nil {
 		c.sheet.templates = append(c.sheet.templates, t)
