@@ -213,6 +213,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.writeNamespaceDecl(n.Name.Prefix, n.Name.URI)
 		declared[n.Name.Prefix] = n.Name.URI
 	}
+	// An element in no namespace under an ancestor with a default namespace
+	// has to undeclare it. Without xmlns="" the element is read back as
+	// being in the ancestor's namespace, which is a different document from
+	// the one the transform produced — and the one case where omitting a
+	// declaration changes meaning rather than only size.
+	if n.Name.URI == "" && n.Name.Prefix == "" && inScope[""] != "" &&
+		declared[""] == "" {
+		s.writeNamespaceDecl("", "")
+		declared[""] = ""
+	}
 	for _, a := range n.Attrs {
 		if a.Name.URI == "" || a.Name.URI == xdm.NSXML {
 			continue
