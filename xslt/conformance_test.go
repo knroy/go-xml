@@ -201,3 +201,45 @@ func TestFormatDatePresentationModifiers(t *testing.T) {
 		}
 	}
 }
+
+// A format picture's characters outside the tokens are part of the output.
+//
+// Section 12.3: whatever precedes the first token is a prefix, whatever
+// follows the last is a suffix, and what sits between tokens separates the
+// numbers. Only the separators were emitted, so the two commonest formats —
+// "(1)" and "[1]" — produced a bare number.
+func TestNumberFormatPrefixAndSuffix(t *testing.T) {
+	cases := []struct{ format, value, want string }{
+		{"(1)", "7", "(7)"},
+		{"[1]", "7", "[7]"},
+		{"1.", "7", "7."},
+		{"1", "7", "7"},
+		{"a", "3", "c"},
+		{"I", "9", "IX"},
+		// A sequence of numbers takes the separator between each, with the
+		// prefix and suffix wrapping the whole.
+		{"(1).", "1 to 3", "(1.2.3)."},
+	}
+	for _, c := range cases {
+		sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+		  <xsl:template match="/"><out><xsl:number value="` + c.value +
+			`" format="` + c.format + `"/></out></xsl:template></xsl:stylesheet>`
+		got := run(t, sheet, `<r/>`)
+		if !strings.Contains(got, ">"+c.want+"<") {
+			t.Errorf("format=%q value=%q\n  got  %s\n  want it to contain %q",
+				c.format, c.value, got, c.want)
+		}
+	}
+}
+
+// The value attribute is a sequence, not a single number. Taking only the
+// first silently dropped the rest.
+func TestNumberValueIsASequence(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:template match="/"><out><xsl:number value="1 to 5" format="1."/></out>
+	  </xsl:template></xsl:stylesheet>`
+	got := run(t, sheet, `<r/>`)
+	if !strings.Contains(got, ">1.2.3.4.5.<") {
+		t.Errorf("got %s, want it to contain %q", got, "1.2.3.4.5.")
+	}
+}

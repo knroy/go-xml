@@ -420,15 +420,27 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
+		// The value attribute is a *sequence* of numbers, not one number
+		// (section 12.3): xsl:number value="1 to 3" is the three of them,
+		// separated by the format's own separators. Taking only the first
+		// silently dropped the rest.
 		atoms := xdm.Atomize(seq)
 		if len(atoms) == 0 {
 			return nil
 		}
-		conv, err := xpath.CastAtomic(atoms[0].(*xdm.Atomic), xdm.TypeInteger)
-		if err != nil {
-			return err
+		nums := make([]int64, 0, len(atoms))
+		for _, a := range atoms {
+			at, ok := a.(*xdm.Atomic)
+			if !ok {
+				continue
+			}
+			conv, err := xpath.CastAtomic(at, xdm.TypeInteger)
+			if err != nil {
+				return err
+			}
+			nums = append(nums, conv.Int64())
 		}
-		out.appendText(formatNumberSeq([]int64{conv.Int64()}, format))
+		out.appendText(formatNumberSeq(nums, format))
 		return nil
 	}
 
@@ -640,11 +652,15 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 // "1" repeats that token for every level and joins with ".", which is what
 // makes "<xsl:number level='multiple' format='1'/>" produce "2.1.3".
 func formatNumberSeq(nums []int64, format string) string {
-	tokens, seps := splitFormat(format)
+	tokens, seps, prefix, suffix := splitFormat(format)
 	if len(tokens) == 0 {
 		tokens = []string{"1"}
 	}
 	var sb strings.Builder
+	// Section 12.3: any characters before the first token and after the last
+	// are emitted as they stand. Dropping them turned the common "(1)" and
+	// "[1]" formats into a bare number.
+	sb.WriteString(prefix)
 	for i, n := range nums {
 		if i > 0 {
 			sep := "."
@@ -661,12 +677,13 @@ func formatNumberSeq(nums []int64, format string) string {
 		}
 		sb.WriteString(formatNumber(n, tok))
 	}
+	sb.WriteString(suffix)
 	return sb.String()
 }
 
 // splitFormat separates a picture into alphanumeric format tokens and the
 // literal separators between them.
-func splitFormat(format string) (tokens, seps []string) {
+func splitFormat(format string) (tokens, seps []string, prefix, suffix string) {
 	runes := []rune(format)
 	i := 0
 	for i < len(runes) {
@@ -683,13 +700,21 @@ func splitFormat(format string) (tokens, seps []string) {
 		for j < len(runes) && !isFormatToken(runes[j]) {
 			j++
 		}
-		// A separator before the first token is a prefix, not a separator.
-		if len(tokens) > 0 {
-			seps = append(seps, string(runes[i:j]))
+		run := string(runes[i:j])
+		switch {
+		case len(tokens) == 0:
+			// Before the first token: a prefix.
+			prefix = run
+		case j >= len(runes):
+			// After the last token: a suffix. It is not a separator, since
+			// there is no following number for it to separate.
+			suffix = run
+		default:
+			seps = append(seps, run)
 		}
 		i = j
 	}
-	return tokens, seps
+	return tokens, seps, prefix, suffix
 }
 
 func isFormatToken(r rune) bool {
