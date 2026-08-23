@@ -501,8 +501,11 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
-	if v := n.AttrValue("namespace"); v != "" {
-		avt, err := compileAVT(v, ns)
+	// namespace="" is not the same as no namespace attribute: the first puts
+	// the name in no namespace, the second lets the prefix decide. Testing
+	// the *value* rather than the attribute's presence conflated them.
+	if a := n.Attr("", "namespace"); a != nil {
+		avt, err := compileAVT(a.Value, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -525,8 +528,11 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
-	if v := n.AttrValue("namespace"); v != "" {
-		avt, err := compileAVT(v, ns)
+	// namespace="" is not the same as no namespace attribute: the first puts
+	// the name in no namespace, the second lets the prefix decide. Testing
+	// the *value* rather than the attribute's presence conflated them.
+	if a := n.Attr("", "namespace"); a != nil {
+		avt, err := compileAVT(a.Value, ns)
 		if err != nil {
 			return nil, err
 		}

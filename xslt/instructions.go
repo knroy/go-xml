@@ -322,6 +322,13 @@ func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
 		if err != nil {
 			return xdm.QName{}, err
 		}
+		if uri == "" {
+			// namespace="" puts the name in *no* namespace. A prefix cannot
+			// survive that — a prefixed name in no namespace is not
+			// expressible — so it is dropped rather than carried onto a name
+			// that would then serialise with a binding it does not have.
+			return xdm.QName{Local: local}, nil
+		}
 		return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
 	}
 	if prefix == "" {

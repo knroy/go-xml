@@ -229,15 +229,19 @@ func runTemplate(rt *runtime, t *Template,
 
 	for _, p := range t.Params {
 		key := p.Name.Clark()
-		if v, ok := params[key]; ok {
-			sub = sub.withVar(p.Name, v)
-			continue
-		}
-		if p.Tunnel {
-			if v, ok := sub.tunnel[key]; ok {
+		// A tunnel parameter is supplied only through the tunnel. A
+		// non-tunnel xsl:with-param of the same name does not bind it —
+		// section 10.1.2 keeps the two channels separate — so a template
+		// declaring tunnel="yes" keeps its default when the caller passes an
+		// ordinary parameter of that name.
+		if !p.Tunnel {
+			if v, ok := params[key]; ok {
 				sub = sub.withVar(p.Name, v)
 				continue
 			}
+		} else if v, ok := sub.tunnel[key]; ok {
+			sub = sub.withVar(p.Name, v)
+			continue
 		}
 		if p.Required {
 			return fmt.Errorf("XTDE0700: required parameter $%s was not supplied to template %s",
