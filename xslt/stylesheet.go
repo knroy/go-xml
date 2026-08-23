@@ -283,6 +283,23 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	}
 }
 
+// LookupSchemaDeclaration implements xpath.SchemaTypes.
+//
+// schema-element(us:address) names the global element declaration us:address,
+// so the question is whether the imported schema declares that name — not
+// whether any element happens to be called it.
+func (r *nsResolver) LookupSchemaDeclaration(name xdm.QName, attribute bool) bool {
+	if r.schema == nil {
+		return false
+	}
+	if attribute {
+		_, ok := r.schema.Attributes[name]
+		return ok
+	}
+	_, ok := r.schema.Elements[name]
+	return ok
+}
+
 // LookupSchemaType implements xpath.SchemaTypes.
 //
 // A type an imported schema defines is in the static context, so a stylesheet

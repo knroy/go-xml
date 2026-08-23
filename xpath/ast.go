@@ -168,6 +168,11 @@ type KindTest struct {
 	// child satisfies the inner test. Nil means the document's content is
 	// unconstrained.
 	Content NodeTest
+	// SchemaDeclared marks a schema-element() or schema-attribute() test,
+	// which names a global declaration rather than an element name. It
+	// matches the named declaration and, for an element, the members of its
+	// substitution group.
+	SchemaDeclared bool
 }
 
 // --- Sequence-level constructs ---------------------------------------------

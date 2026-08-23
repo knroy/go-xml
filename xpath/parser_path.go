@@ -332,12 +332,25 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 				return nil, err
 			}
 			// The name must then resolve to a global declaration in the
-			// in-scope schema. This engine imports no schemas, so there are
-			// none and every such name is unresolvable: XPST0008 says the
-			// name is not in scope, which is exactly the situation.
-			return nil, p.errorf(
-				"XPST0008: %s(%s) refers to a schema declaration, and no schema is imported",
-				name, p.cur().Val)
+			// in-scope schema. Without one — no xsl:import-schema, or a
+			// schema that does not declare this name — there is nothing for
+			// the name to mean, and XPST0008 says exactly that.
+			if !schemaDeclared(p.cur().Val, p.ns, kt.Kind == xdm.KindAttribute) {
+				return nil, p.errorf(
+					"XPST0008: %s(%s) refers to a schema declaration, and no schema is imported",
+					name, p.cur().Val)
+			}
+			qn, err := p.resolveElementName(p.cur().Val, axis)
+			if err != nil {
+				return nil, err
+			}
+			kt.Name = &qn
+			kt.HasName = true
+			// A schema-element test also admits the members of the named
+			// declaration's substitution group, which this records so that
+			// matching can consult the schema rather than the name alone.
+			kt.SchemaDeclared = true
+			p.pos++
 		}
 		if t := p.cur(); t.Kind == TokName {
 			axis := AxisChild

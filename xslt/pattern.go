@@ -36,6 +36,13 @@ type patternAlt struct {
 	steps []patternStep
 	// absolute marks a pattern rooted at the document node ("/foo").
 	absolute bool
+	// call is an id() or key() pattern, which is matched by evaluating the
+	// call and testing membership rather than by walking steps. It is the one
+	// pattern form the right-to-left walk cannot express, because the set it
+	// selects is not derived from the candidate node's ancestry.
+	call *xpath.FuncCall
+	// callSteps are the steps that follow the call, as in "key('k','v')/para".
+	callSteps []patternStep
 	// predicate expressions are attached to the step they qualify.
 }
 
@@ -151,7 +158,10 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 		// id() and key() are legal pattern starts; they are matched by
 		// evaluating the function and testing membership, which is the one
 		// case where the right-to-left trick does not apply.
-		return nil, fmt.Errorf("id() and key() patterns are not supported")
+		if err := checkPatternCall(e); err != nil {
+			return nil, err
+		}
+		a.call = e
 
 	default:
 		return nil, fmt.Errorf("not a valid pattern: %s", expr.String())
@@ -198,6 +208,9 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 }
 
 func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	if a.call != nil {
+		return a.matchesCall(node, ctx)
+	}
 	if len(a.steps) == 0 {
 		return false, nil
 	}
@@ -403,3 +416,81 @@ func (a *patternAlt) priority() float64 {
 
 // String returns the pattern source.
 func (p *Pattern) String() string { return p.src }
+
+// checkPatternCall reports whether a function call is one the pattern grammar
+// allows at the start of a path.
+//
+// Only fn:id and fn:key may appear there. Any other call parses as a path
+// expression but is not a pattern, which is XTSE0340.
+func checkPatternCall(e *xpath.FuncCall) error {
+	if e.Name.URI == xdm.NSFN || e.Name.URI == "" {
+		switch e.Name.Local {
+		case "id", "key":
+			return nil
+		}
+	}
+	return fmt.Errorf("not a valid pattern step: %s", e.String())
+}
+
+// matchesCall matches an id() or key() pattern.
+//
+// Section 5.5.3 defines a match as "evaluate the expression root(.)//(EE) with
+// a singleton focus based on N" and test whether the result contains N. For a
+// call that is exactly what evaluating the call with N as the context item
+// does: both fn:id and fn:key search the whole tree containing the context
+// node, so the root(.)// wrapper adds nothing and membership is the answer.
+func (a *patternAlt) matchesCall(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	// The candidate is the focus, so that fn:key resolves against the tree
+	// the node is in rather than against whatever the caller was looking at.
+	sub := *ctx
+	sub.Item = node
+	sub.Position, sub.Size = 1, 1
+
+	seq, err := a.call.Eval(&sub)
+	if err != nil {
+		// A pattern that cannot be evaluated does not match. It is not an
+		// error in the transform: fn:key against a key that selects nothing
+		// is an ordinary empty result, and template selection asks this
+		// question of every node.
+		return false, nil
+	}
+
+	// Without following steps, membership of the returned set is the answer.
+	if len(a.callSteps) == 0 {
+		for _, it := range seq {
+			if n, ok := it.(*xdm.Node); ok && n == node {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// With following steps — "key('k','v')/para" — the candidate must match
+	// the trailing steps, and the node the walk arrives at must be in the set.
+	rest := a.callSteps
+	last := rest[len(rest)-1]
+	ok, err := matchStep(last, node, ctx)
+	if err != nil || !ok {
+		return false, err
+	}
+	anc := node
+	for i := len(rest) - 2; i >= 0; i-- {
+		anc = anc.Parent
+		if anc == nil {
+			return false, nil
+		}
+		ok, err := matchStep(rest[i], anc, ctx)
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	if anc.Parent == nil {
+		return false, nil
+	}
+	for _, it := range seq {
+		if n, ok := it.(*xdm.Node); ok && n == anc.Parent {
+			return true, nil
+		}
+	}
+	return false, nil
+}

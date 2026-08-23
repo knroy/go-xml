@@ -30,6 +30,32 @@ type SchemaTypes interface {
 	// code and false for atomic — enough to stop XPST0051 without claiming
 	// the value is comparable as an atomic.
 	LookupSchemaType(name xdm.QName) (prim xdm.TypeCode, atomic, ok bool)
+
+	// LookupSchemaDeclaration reports whether name is a global element or
+	// attribute declaration in the static context.
+	//
+	// It is what schema-element() and schema-attribute() need: both name a
+	// *declaration* rather than a type, and both are XPST0008 when no schema
+	// declares the name.
+	LookupSchemaDeclaration(name xdm.QName, attribute bool) bool
+}
+
+// schemaDeclared reports whether a schema in the static context declares name.
+func schemaDeclared(lex string, ns NamespaceResolver, attribute bool) bool {
+	st, ok := ns.(SchemaTypes)
+	if !ok {
+		return false
+	}
+	prefix, local := xdm.SplitQName(lex)
+	name := xdm.QName{Local: local}
+	if prefix != "" {
+		uri, found := ns.ResolvePrefix(prefix)
+		if !found {
+			return false
+		}
+		name.URI = uri
+	}
+	return st.LookupSchemaDeclaration(name, attribute)
 }
 
 // BuiltinAtomicTypeCode returns the type code for a built-in xs: type, given
