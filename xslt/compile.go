@@ -23,6 +23,9 @@ type compiler struct {
 	// calls records every xsl:call-template, so that XTSE0680 can be checked
 	// once every template is known.
 	calls []*callTemplateInstr
+	// funcPrecedence records the import precedence each function name and
+	// arity was declared at, for XTSE0770.
+	funcPrecedence map[string]int
 }
 
 // checkCallTemplateParams implements XTSE0680.
@@ -186,6 +189,18 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 				v.Select, v.Body = comp, nil
 			}
 		}
+		// XTSE0630: two bindings of a global variable may not share a name
+		// at the same import precedence. A higher precedence legitimately
+		// overrides a lower one, so only a tie is an error.
+		for _, prev := range c.sheet.globals {
+			if prev.Name.Clark() == v.Name.Clark() &&
+				prev.precedence == precedence {
+				return fmt.Errorf(
+					"XTSE0630: two global variables are named %s at the same "+
+						"import precedence", v.Name.Lexical())
+			}
+		}
+		v.precedence = precedence
 		c.sheet.globals = append(c.sheet.globals, v)
 		return nil
 	case "output":
@@ -193,7 +208,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "key":
 		return c.compileKey(el)
 	case "function":
-		return c.compileFunction(el)
+		return c.compileFunction(el, precedence)
 	case "strip-space", "preserve-space":
 		return c.compileSpaceControl(el)
 	case "include":
@@ -288,6 +303,14 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		v, err := c.compileVariable(children[i])
 		if err != nil {
 			return err
+		}
+		// XTSE0580: two parameters of a template may not share a name.
+		for _, prev := range t.Params {
+			if prev.Name.Clark() == v.Name.Clark() {
+				return fmt.Errorf(
+					"XTSE0580: xsl:template has two parameters named %s",
+					v.Name.Lexical())
+			}
 		}
 		t.Params = append(t.Params, v)
 	}
@@ -487,7 +510,7 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 
 // compileFunction compiles an xsl:function declaration into a callable
 // registered in the stylesheet's function library.
-func (c *compiler) compileFunction(el *xdm.Node) error {
+func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	name := el.AttrValue("name")
 	if name == "" {
 		return fmt.Errorf("xsl:function requires a name attribute")
@@ -513,6 +536,14 @@ func (c *compiler) compileFunction(el *xdm.Node) error {
 		if err != nil {
 			return err
 		}
+		// XTSE0580: two parameters of a function may not share a name.
+		for _, prev := range params {
+			if prev.Name.Clark() == p.Name.Clark() {
+				return fmt.Errorf(
+					"XTSE0580: xsl:function %s has two parameters named %s",
+					qn.Lexical(), p.Name.Lexical())
+			}
+		}
 		params = append(params, p)
 	}
 	body, err := c.compileSequenceFrom(el, el, i)
@@ -530,6 +561,20 @@ func (c *compiler) compileFunction(el *xdm.Node) error {
 		}
 		fn.returns = t
 	}
+	// XTSE0770: two functions may not share a name and arity at the same
+	// import precedence. A higher precedence legitimately overrides a lower
+	// one, so only a tie is an error.
+	key := fmt.Sprintf("%s#%d", qn.Clark(), len(params))
+	if c.funcPrecedence == nil {
+		c.funcPrecedence = map[string]int{}
+	}
+	if prev, dup := c.funcPrecedence[key]; dup && prev == precedence {
+		return fmt.Errorf(
+			"XTSE0770: two functions are named %s with %d arguments at the "+
+				"same import precedence", qn.Lexical(), len(params))
+	}
+	c.funcPrecedence[key] = precedence
+
 	c.sheet.funcs.Add(xpath.Function{
 		Name:  qn,
 		Arity: len(params),

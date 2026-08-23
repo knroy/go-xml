@@ -104,6 +104,10 @@ type Variable struct {
 	// Tunnel marks a tunnel parameter, which passes through templates that do
 	// not declare it.
 	Tunnel bool
+	// precedence is the import precedence of the module that declared this
+	// variable, so that a duplicate at the *same* precedence can be
+	// distinguished from a legitimate override at a higher one.
+	precedence int
 	// AsType is the compiled "as" declaration, applied to the value when
 	// present. XSLT converts the value to this type rather than merely
 	// checking it, so it changes results and not just error messages.

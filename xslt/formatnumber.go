@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"unicode"
 	"fmt"
 	"math"
 	"math/big"
@@ -96,6 +97,24 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 	}
 	if v := el.AttrValue("NaN"); v != "" {
 		df.NaN = v
+	}
+
+	// XTSE1295: the zero-digit must be a digit whose numeric value is zero,
+	// since every other digit of the family is derived from it by offset.
+	if !unicode.IsDigit(df.ZeroDigit) || digitValue(df.ZeroDigit) != 0 {
+		return fmt.Errorf(
+			"XTSE1295: xsl:decimal-format/@zero-digit=%q is not a digit with "+
+				"the value zero", string(df.ZeroDigit))
+	}
+
+	// XTSE1290: two xsl:decimal-format declarations for the same format at
+	// the same import precedence may not disagree about an attribute.
+	if prev, dup := c.sheet.decimalFormats[df.Name.Clark()]; dup {
+		if *prev != *df {
+			return fmt.Errorf(
+				"XTSE1290: conflicting xsl:decimal-format declarations for %q",
+				df.Name.Lexical())
+		}
 	}
 
 	// XTSE1300: the characters used in a picture string must be distinct.
