@@ -238,6 +238,54 @@ func checkElementStatic(el *xdm.Node) error {
 			}
 		}
 
+	case "comment":
+		// XTSE0940: @select requires empty content.
+		if el.Attr("", "select") != nil && hasRealContent(el) {
+			return fmt.Errorf(
+				"XTSE0940: xsl:comment has both a select attribute and content")
+		}
+
+	case "sort":
+		// XTSE1015: @select requires empty content.
+		if el.Attr("", "select") != nil && hasRealContent(el) {
+			return fmt.Errorf(
+				"XTSE1015: xsl:sort has both a select attribute and content")
+		}
+		// XTSE1017: only the first xsl:sort of a sibling run may carry
+		// @stable, since stability is a property of the whole sort.
+		if el.Attr("", "stable") != nil && el.Parent != nil {
+			first := true
+			for _, sib := range el.Parent.ChildElements() {
+				if !isXSL(sib, "sort") {
+					continue
+				}
+				if sib == el {
+					break
+				}
+				first = false
+				break
+			}
+			if !first {
+				return fmt.Errorf(
+					"XTSE1017: only the first xsl:sort of a group may have a " +
+						"stable attribute")
+			}
+		}
+
+	case "perform-sort":
+		// XTSE1040: with @select, only xsl:sort and xsl:fallback may appear.
+		if el.Attr("", "select") != nil {
+			for _, c := range el.ChildElements() {
+				if isXSL(c, "sort") || isXSL(c, "fallback") {
+					continue
+				}
+				return fmt.Errorf(
+					"XTSE1040: xsl:perform-sort with a select attribute may "+
+						"only contain xsl:sort and xsl:fallback, found %s",
+					c.Name.Lexical())
+			}
+		}
+
 	case "call-template", "apply-templates", "apply-imports", "next-match":
 		// XTSE0670: two xsl:with-param children may not share a name.
 		seen := map[xdm.QName]bool{}

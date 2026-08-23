@@ -66,6 +66,13 @@ type patternStep struct {
 
 // CompilePattern compiles an XSLT match pattern.
 func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
+	// XTSE1060 and XTSE1070: the grouping functions may not be used in a
+	// pattern. A pattern is matched against a node with no grouping in
+	// progress, so there is no current group for them to return — the call
+	// would be evaluated in a context that cannot supply an answer.
+	if err := checkNoGroupingFuncs(src); err != nil {
+		return nil, err
+	}
 	p := &Pattern{src: src}
 	for _, alt := range splitTopLevel(src, '|') {
 		alt = strings.TrimSpace(alt)
@@ -559,4 +566,62 @@ func (a *patternAlt) callAncestors(steps []patternStep, node *xdm.Node,
 		}
 	}
 	return false, nil
+}
+
+// checkNoGroupingFuncs reports XTSE1060 or XTSE1070 for a pattern that calls
+// one of the grouping functions.
+//
+// The test is lexical rather than over the parsed tree because a pattern is
+// parsed one alternative at a time and the call may sit inside a predicate;
+// looking at the source once is both simpler and catches every position. A
+// name appearing inside a string literal is not a call, so quoted regions are
+// skipped.
+func checkNoGroupingFuncs(src string) error {
+	for _, fn := range []struct{ name, code string }{
+		{"current-group", "XTSE1060"},
+		{"current-grouping-key", "XTSE1070"},
+	} {
+		if callsFunction(src, fn.name) {
+			return fmt.Errorf(
+				"%s: %s() cannot be used in a pattern", fn.code, fn.name)
+		}
+	}
+	return nil
+}
+
+// callsFunction reports whether src calls name outside a string literal.
+func callsFunction(src, name string) bool {
+	var quote byte
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != name[0] || !strings.HasPrefix(src[i:], name) {
+			continue
+		}
+		// The name must be whole: "current-group" must not match inside
+		// "current-grouping-key", and it must be followed by "(".
+		rest := strings.TrimLeft(src[i+len(name):], " \t")
+		if !strings.HasPrefix(rest, "(") {
+			continue
+		}
+		if i > 0 {
+			prev := src[i-1]
+			if prev == '-' || prev == ':' || prev == '_' ||
+				(prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+				(prev >= '0' && prev <= '9') {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
