@@ -256,8 +256,13 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The same file: URI form that is passed to Compile below. These two
+	// have to agree: the parser stamps this base URI on every element, and
+	// an expression resolves against the base URI of the element it is
+	// written on in preference to the module's. A bare path here and a URI
+	// there left the two disagreeing, and the element's bare path won.
 	sheetDoc, err := xdm.ParseString(string(stripBOM(sheetSrc)),
-		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: sheetPath})
+		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(sheetPath)})
 	if err != nil {
 		return nil, err
 	}

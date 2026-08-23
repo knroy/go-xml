@@ -177,8 +177,15 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A file: URI rather than the bare path. This base URI is stamped on
+	// every element of the module and is what fn:document, fn:resolve-uri
+	// and fn:static-base-uri resolve against, and those are defined over
+	// URIs: an absolute filesystem path has no scheme, so it is still a
+	// *relative* URI reference and resolving against it drops everything
+	// before the last separator. resolvePath strips the scheme back off, so
+	// the filesystem sees the same path either way.
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
-		BaseURI:      path,
+		BaseURI:      fileURIOf(path),
 		AllowDOCTYPE: r.AllowDOCTYPE,
 	})
 	if err != nil {
@@ -196,4 +203,23 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	}
 	r.cache[path] = tree
 	return tree, nil
+}
+
+// fileURIOf renders an absolute filesystem path as a file: URI.
+//
+// The resolvers strip the scheme again before touching the filesystem; the
+// URI form exists because base URIs are resolved by the URI rules, which need
+// a scheme to treat the base as absolute.
+func fileURIOf(path string) string {
+	if path == "" || strings.HasPrefix(path, "file:") {
+		return path
+	}
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return path
+		}
+		path = abs
+	}
+	return "file://" + filepath.ToSlash(path)
 }

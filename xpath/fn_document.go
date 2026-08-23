@@ -25,9 +25,9 @@ import (
 // comparing identity, or counting the result of document((a,b)) where a and b
 // name one file, depends on it.
 func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	// The base for relative references. With a second argument it is that
-	// node's base URI; without one it is the context item's, falling back to
-	// the expression's static base as fn:doc does.
+	// The base for relative references: with a second argument it is that
+	// node's base URI, and without one it is the expression's static base
+	// URI, which is the stylesheet module the call is written in.
 	base := ""
 	if len(args) > 1 {
 		if len(args[1]) == 0 {
