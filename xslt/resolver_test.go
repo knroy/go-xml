@@ -176,8 +176,8 @@ func TestImportPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	mainSrc := `<xsl:stylesheet version="2.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-		<xsl:output omit-xml-declaration="yes"/>
 		<xsl:import href="mod.xsl"/>
+		<xsl:output omit-xml-declaration="yes"/>
 		<xsl:template match="x">MAIN</xsl:template>
 		<xsl:template match="/"><r><xsl:apply-templates select="//x"/></r></xsl:template>
 	</xsl:stylesheet>`

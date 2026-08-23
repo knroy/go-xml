@@ -50,6 +50,11 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	if err := checkStaticGrammarTree(root, false); err != nil {
 		return err
 	}
+	// The static rules that need more than the element grammar: lexical
+	// forms, sibling order, reserved namespaces. See staticerrors.go.
+	if err := checkStaticErrors(root); err != nil {
+		return err
+	}
 
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
