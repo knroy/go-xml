@@ -21,6 +21,10 @@ type compiler struct {
 	// module twice.
 	seen       map[string]bool
 	schemaSeen map[string]bool
+	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
+	// that the recursion for each included module does not repeat it from a
+	// root that sees less than the first one did.
+	schemaHoisted bool
 	// aliasDecls records each xsl:namespace-alias with its import precedence,
 	// for XTSE0810; charMapPrecedence does the same for xsl:character-map and
 	// XTSE1580. Both are needed because the stylesheet keeps only the winning
@@ -216,8 +220,17 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	// in one module makes them available throughout. A schema imported only in
 	// a secondary module was invisible to the primary one, so an expression
 	// there naming one of its types was XPST0051.
-	if err := c.hoistImportSchema(root); err != nil {
-		return err
+	// Once, from the outermost module. compileDocument recurses for every
+	// xsl:include and xsl:import, and re-running the pre-pass there would
+	// gather only what *that* module can reach — so an expression in an
+	// imported module naming a type the importing module declared was
+	// XPST0051, even though the components are a property of the stylesheet
+	// rather than of the module that declared them.
+	if !c.schemaHoisted {
+		c.schemaHoisted = true
+		if err := c.hoistImportSchema(root); err != nil {
+			return err
+		}
 	}
 	compileSchema = c.sheet.schema
 
