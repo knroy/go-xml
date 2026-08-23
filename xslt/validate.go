@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strings"
 	"fmt"
 
 	"github.com/knroy/go-xml/xdm"
@@ -90,7 +91,11 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 	if t != "" {
 		qn, err := resolveQNameAttr(n, t)
 		if err != nil {
-			return spec, err
+			// XTSE1520 is the code for a type attribute whose value is not a
+			// valid QName or whose prefix is unbound. The generic XTSE0280
+			// names the condition but not the place it arose.
+			return spec, fmt.Errorf(
+				"XTSE1520: in %s/@%s: %w", n.Name.Lexical(), tAttr, err)
 		}
 		spec.typeName = &qn
 		return spec, nil
@@ -128,12 +133,54 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	}
 
 	if spec.typeName != nil {
+		// XTTE1545: an attribute may not be validated against a type derived
+		// from, or built by list or union from, xs:ID, xs:IDREF, xs:IDREFS,
+		// xs:ENTITY or xs:ENTITIES. Those types carry document-level
+		// identity, which a constructed attribute has no document to have.
+		if n.Kind == xdm.KindAttribute {
+			if bad, why := namespaceSensitiveType(schema, *spec.typeName); bad {
+				return fmt.Errorf(
+					"XTTE1545: attribute %s cannot be validated against %s, "+
+						"which is %s", n.Name.Local, spec.typeName.Lexical(), why)
+			}
+		}
 		if err := schema.ValidateAgainstType(n, *spec.typeName,
 			xsd.ValidateOptions{}); err != nil {
 			return fmt.Errorf("XTTE1540: %s is not valid against %s: %w",
 				describeNode(n), spec.typeName.Lexical(), err)
 		}
 		return nil
+	}
+
+	if n.Kind == xdm.KindDocument {
+		// XTTE1550: validating a document node requires its children to be
+		// exactly one element, no text, and any number of comments and
+		// processing instructions. It is the element child that is then
+		// validated, since a schema describes elements rather than documents.
+		var elem *xdm.Node
+		for _, c := range n.Children {
+			switch c.Kind {
+			case xdm.KindElement:
+				if elem != nil {
+					return fmt.Errorf(
+						"XTTE1550: a validated document node must have exactly " +
+							"one element child")
+				}
+				elem = c
+			case xdm.KindText:
+				if strings.TrimSpace(c.Value) != "" {
+					return fmt.Errorf(
+						"XTTE1550: a validated document node must have no text " +
+							"node children")
+				}
+			}
+		}
+		if elem == nil {
+			return fmt.Errorf(
+				"XTTE1550: a validated document node must have exactly one " +
+					"element child")
+		}
+		n = elem
 	}
 
 	if n.Kind != xdm.KindElement {
@@ -161,4 +208,28 @@ func describeNode(n *xdm.Node) string {
 		return "element " + n.Name.Local
 	}
 	return n.Kind.String()
+}
+
+// namespaceSensitiveType reports whether a named type is, or derives from,
+// xs:QName or xs:NOTATION.
+//
+// Both carry a namespace binding rather than only characters, so their value
+// depends on the namespace context of the element the lexical form was written
+// on. A constructed attribute's value is a string with no such context, which
+// is why section 19.2 forbids validating one against these types instead of
+// letting the prefix resolve against nothing.
+func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
+	local := name.Local
+	for i := 0; i < 32 && local != ""; i++ {
+		switch local {
+		case "QName", "NOTATION":
+			return true, "derived from xs:" + local
+		}
+		next := xdm.DerivedBase(local)
+		if next == local {
+			break
+		}
+		local = next
+	}
+	return false, ""
 }
