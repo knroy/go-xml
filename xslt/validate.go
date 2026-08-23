@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -284,6 +285,13 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		err = schema.ValidateElementLax(n, xsd.ValidateOptions{Annotate: true})
 	}
 	if err != nil {
+		// XTTE1555 rather than XTTE1510/XTTE1515 when the only thing the
+		// assessment found wrong was an ID/IDREF constraint, and the node
+		// being validated was a document node. See idConstraintFailure.
+		if docNode && idConstraintFailure(err) {
+			return fmt.Errorf("XTTE1555: %s is not valid: %w",
+				describeNode(n), err)
+		}
 		return fmt.Errorf("%s: %s is not valid: %w",
 			invalidCode(spec.mode), describeNode(n), err)
 	}
@@ -291,6 +299,36 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		return checkDocumentIDs(n)
 	}
 	return nil
+}
+
+// idConstraintFailure reports whether every failure in a validation error is
+// an ID/IDREF constraint (cvc-id.1, a dangling IDREF, or cvc-id.2, an ID
+// bound twice).
+//
+// XTTE1555 covers "document-level constraints are not satisfied" when a
+// document node is validated, and the ID/IDREF constraints are exactly the
+// document-level ones. The identity constraints named alongside them in the
+// text of XTTE1555 are NOT: test error-1555c carries a note from the suite's
+// editor saying in as many words that "xs:unique/key/keyref are not
+// document-level constraints, and they do not result in the 1555 error code",
+// and that test expects XTTE1510. So the discrimination is on the cvc-id
+// codes specifically and not on "an identity-shaped rule failed".
+//
+// Every failure must be an ID failure, not merely one of them. A document
+// that is also wrong in its content model was found invalid for a reason that
+// has nothing to do with document-level constraints, and reporting XTTE1555
+// for it would tell the stylesheet the wrong thing about why it failed.
+func idConstraintFailure(err error) bool {
+	var errs *xsd.ValidationErrors
+	if !errors.As(err, &errs) || len(errs.Errors) == 0 {
+		return false
+	}
+	for _, e := range errs.Errors {
+		if !strings.HasPrefix(e.Code, "cvc-id.") {
+			return false
+		}
+	}
+	return true
 }
 
 // invalidCode is the error code for a node that was assessed and found

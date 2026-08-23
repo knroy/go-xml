@@ -147,12 +147,18 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 			// find it. Only attributes were being looked at, so a
 			// schema-validated document indexed by element content matched
 			// nothing.
-			if wantID && isIDAnnotation(n.TypeAnnotation) {
+			// n.IsID as well as the annotation: XSLT's
+			// input-type-annotations="strip" clears TypeAnnotation but is
+			// required to LEAVE is-id/is-idrefs untouched, and fn:id and
+			// fn:idref are defined over those properties rather than over
+			// the annotation. Testing only the annotation made both
+			// functions find nothing in a stripped document.
+			if wantID && (n.IsID || isIDAnnotation(n.TypeAnnotation)) {
 				if want[strings.TrimSpace(n.StringValue())] {
 					out = append(out, n)
 				}
 			}
-			if !wantID && isIDREFAnnotation(n.TypeAnnotation) {
+			if !wantID && (n.IsIDREFS || isIDREFAnnotation(n.TypeAnnotation)) {
 				for _, v := range strings.Fields(n.StringValue()) {
 					if want[v] {
 						out = append(out, n)
@@ -167,10 +173,10 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// was never validated, not a substitute: an attribute
 				// annotated ID counts however it is spelled, and one merely
 				// called "id" in a validated document does not.
-				isIDAttr := isIDAnnotation(a.TypeAnnotation) ||
+				isIDAttr := a.IsID || isIDAnnotation(a.TypeAnnotation) ||
 					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
 					(a.Name.URI == "" && a.Name.Local == "id")
-				isRefAttr := isIDREFAnnotation(a.TypeAnnotation) ||
+				isRefAttr := a.IsIDREFS || isIDREFAnnotation(a.TypeAnnotation) ||
 					(a.Name.URI == "" &&
 						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
 
@@ -1036,10 +1042,28 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 		}
 	}
 	if full {
+		// The hours take the width the presentation modifier asks for, so
+		// "[z0]" gives "GMT-9:30" where the default gives "GMT-09:30". The
+		// minutes stay two digits: they are a fraction of an hour, not a
+		// number in their own right.
+		//
+		// Only an explicit "0" counts. "1" is the component's *default*
+		// presentation rather than a request for one digit — the same
+		// distinction the hours-only branch below already draws — so "[z]"
+		// and "[z,2-2]" keep the padded form. format-date-018 wants the
+		// unpadded hours here and format-date-017 wants them padded.
+		if digits == 1 && pres == "0" {
+			return fmt.Sprintf("%s%s%d:%02d", prefix, sign, hours, mins)
+		}
 		return fmt.Sprintf("%s%s%02d:%02d", prefix, sign, hours, mins)
 	}
 	hs := strconv.FormatInt(int64(hours), 10)
-	if digits == 2 || minWidth(width) >= 3 {
+	// The minimum width applies to what is actually being written. In the
+	// "hh:mm" branch above that is five characters, so only a minimum of 3 or
+	// more said anything about the hours; here the hours are the whole value,
+	// and "[z,2-2]" is asking for two digits of them. Requiring >= 3 in this
+	// branch too left "GMT-5" where format-date-017/018 want "GMT-05".
+	if digits == 2 || minWidth(width) >= 2 {
 		hs = fmt.Sprintf("%02d", hours)
 	}
 	return prefix + sign + hs

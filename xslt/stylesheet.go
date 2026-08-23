@@ -318,6 +318,12 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkAttributeSetRefs(); err != nil {
 		return nil, err
 	}
+	// XPST0017 likewise: a match pattern may call an xsl:function declared
+	// after it, or in a module imported later, so pattern function calls are
+	// resolved once every declaration is in.
+	if err := c.checkPatternFuncs(); err != nil {
+		return nil, err
+	}
 	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
 	// conflict with each other and still be harmless, because the importing
 	// module overrides both.

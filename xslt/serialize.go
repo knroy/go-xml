@@ -775,7 +775,7 @@ func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
 		// the serialization specification gives the escaping precedence.
 		// character-map-009 checks exactly this: an href of "z-linkage.html"
 		// keeps its "z" even with a map that rewrites "z" everywhere else.
-		return `="` + escapeAttr(escapeURIAttribute(s.normalized(a.Value))) + `"`
+		return `="` + s.escapeAttrRunes(escapeURIAttribute(s.normalized(a.Value))) + `"`
 	}
 	body, raw := s.escapeAttrMapped(a.Value, false)
 	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
@@ -816,6 +816,19 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 	return sb.String(), mapped
 }
 
+// escapeAttrRunes escapes a whole attribute value one character at a time,
+// so that the html and xhtml spellings escapeAttrRune knows about apply. The
+// percent-escaped URI path used escapeAttr directly and so wrote "&quot;"
+// where the rest of the html serialiser writes "&#34;".
+func (s *serializer) escapeAttrRunes(v string) string {
+	var sb strings.Builder
+	sb.Grow(len(v))
+	for _, r := range v {
+		sb.WriteString(s.escapeAttrRune(r))
+	}
+	return sb.String()
+}
+
 // escapeURIs reports whether URI-valued attributes are percent-escaped. The
 // parameter defaults to yes, which is why it is a pointer.
 func (s *serializer) escapeURIs() bool {
@@ -832,6 +845,16 @@ func (s *serializer) escapeURIs() bool {
 func (s *serializer) escapeAttrRune(r rune) string {
 	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
 		return fmt.Sprintf("&#%d;", r)
+	}
+	if s.html && r == '"' {
+		// The html and xhtml methods spell an embedded quotation mark as a
+		// numeric reference rather than as "&quot;". HTML 4 defines &quot;
+		// only in its own entity set, and the serialisation of an attribute
+		// value has to be readable by a parser that has not loaded it; the
+		// numeric form names the code point with no entity set at all.
+		// output-0102c and output-0103c both accept &#34; or &#x22; and
+		// nothing else.
+		return "&#34;"
 	}
 	return escapeAttr(string(r))
 }
@@ -881,10 +904,16 @@ func isURIAttribute(element string, a *xdm.Node) bool {
 
 // escapeURIAttribute percent-escapes the characters a URI cannot hold.
 //
-// Only non-ASCII characters and the few ASCII characters that are illegal in
-// a URI are escaped, and a "%" is left alone: a value that is already escaped
-// must survive unchanged, or every round trip through a stylesheet would
-// double-escape it.
+// Only non-ASCII characters are escaped. XSLT 1.0 section 16.2 and the
+// Serialization Recommendation both delegate to HTML 4.0 appendix B.2.1,
+// which escapes "characters ... outside the range of US-ASCII" and nothing
+// else. ASCII characters that are merely illegal in a URI — space, quote,
+// angle brackets, and the rest of " <>\"{}|^`" — are left for ordinary
+// attribute escaping to deal with; percent-escaping them here turned
+// href='% %C2%96 ... a " < > &' into a value in which every separator had
+// been rewritten. A "%" is likewise left alone: a value that is already
+// escaped must survive unchanged, or every round trip through a stylesheet
+// would double-escape it.
 //
 // The value is put into NFC first. Percent-escaping an IRI is defined by
 // RFC 3987 section 3.1, which normalises to NFC before encoding the UTF-8
@@ -896,7 +925,7 @@ func escapeURIAttribute(v string) string {
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for _, r := range v {
-		if r < 0x7F && !strings.ContainsRune(" <>\"{}|^`", r) {
+		if r < 0x80 {
 			sb.WriteRune(r)
 			continue
 		}

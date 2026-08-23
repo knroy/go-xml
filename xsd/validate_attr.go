@@ -192,7 +192,13 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 	v.recordKeyValue(a, normalized, decl.Type)
 
 	if v.opts.Annotate && decl.Type.Name.Local != "" {
-		a.TypeAnnotation = decl.Type.Name.Local
+		// SetTypeAnnotation rather than a bare assignment: it also records
+		// the is-id and is-idrefs properties from the declared type. Those
+		// are separate state from the annotation because XSLT's
+		// input-type-annotations="strip" clears the annotation while
+		// requiring them to survive, and fn:id/fn:idref are defined over
+		// them rather than over the annotation.
+		a.SetTypeAnnotation(decl.Type.Name.Local)
 	}
 }
 

@@ -30,6 +30,10 @@ type Assertion struct {
 	// Flags is the @flags of a serialization-matches, in the XPath regular
 	// expression flag vocabulary: i, s, m and x.
 	Flags string
+	// Encoding is the @encoding of an assert-serialization, naming the
+	// character encoding the expected-result file is written in. Without it
+	// the file is UTF-8, which is what almost every one of them is.
+	Encoding string
 	// NS holds the prefix-to-URI bindings in scope where the assertion was
 	// written. The suite declares them on the assertion element or on an
 	// enclosing combinator — an XPath assertion that names a prefix cannot be
@@ -84,6 +88,8 @@ func ParseAssert(raw []byte) (Assertion, error) {
 					a.URI = at.Value
 				case "flags":
 					a.Flags = at.Value
+				case "encoding":
+					a.Encoding = at.Value
 				}
 			}
 			a.NS = ns

@@ -851,6 +851,172 @@ func checkNoGroupingFuncs(src string) error {
 	return nil
 }
 
+// patternFuncCall is one function call found by scanning a pattern's source.
+type patternFuncCall struct {
+	name  string
+	arity int
+}
+
+// patternFuncCalls returns the function calls written in a pattern.
+//
+// The scan is over the source text rather than the compiled tree because
+// xpath.Expr exposes only Eval and String: there is no way to walk it looking
+// for calls, and the parser resolves nothing about a function beyond its name.
+//
+// Two constructs look like calls and are not, and both are skipped: a node or
+// kind test — node(), element(), attribute(), schema-element() and the rest —
+// and an axis step, which is spelled "axis::name" and so is preceded by "::".
+// Treating either as a call would report XPST0017 for a perfectly ordinary
+// pattern, which is much worse than missing a genuine undeclared function.
+func patternFuncCalls(src string) []patternFuncCall {
+	var out []patternFuncCall
+	var quote byte
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if !isQNameStart(c) {
+			continue
+		}
+		j := i
+		for j < len(src) && isQNameChar(src[j]) {
+			j++
+		}
+		name := src[i:j]
+		rest := strings.TrimLeft(src[j:], " \t\r\n")
+		// Not a call unless "(" follows, and not a call if "::" does: that is
+		// an axis, whose name is not a function.
+		if !strings.HasPrefix(rest, "(") {
+			i = j - 1
+			continue
+		}
+		// A name preceded by "::" is the node test of an axis step, and a
+		// name preceded by a QName character is part of a longer name the
+		// scan has already passed.
+		if i >= 2 && src[i-1] == ':' && src[i-2] == ':' {
+			i = j - 1
+			continue
+		}
+		if reservedNodeTest[name] || xpathKeyword[name] {
+			i = j - 1
+			continue
+		}
+		// "(:" opens an XPath comment, not an argument list. Without this a
+		// pattern that merely has a comment after a name — "letters (:1:)" —
+		// reads as a one-argument call to that name.
+		if strings.HasPrefix(rest, "(:") {
+			i = j - 1
+			continue
+		}
+		args, end, ok := countCallArgs(src, j+strings.Index(src[j:], "("))
+		if !ok {
+			i = j - 1
+			continue
+		}
+		out = append(out, patternFuncCall{name: name, arity: args})
+		i = end
+	}
+	return out
+}
+
+// xpathKeyword holds the XPath 2.0 keywords that may be followed by "(",
+// where the parenthesis opens a sub-expression rather than an argument list.
+//
+// "some $v in .//element() satisfies (string($v) ne ”)" is the case that
+// matters: "satisfies (" is not a call to a function named satisfies, and
+// reading it as one reported XPST0017 for a valid pattern.
+var xpathKeyword = map[string]bool{
+	"and": true, "or": true, "not": true, "div": true, "idiv": true,
+	"mod": true, "eq": true, "ne": true, "lt": true, "le": true,
+	"gt": true, "ge": true, "is": true, "to": true, "in": true,
+	"satisfies": true, "return": true, "then": true, "else": true,
+	"some": true, "every": true, "for": true, "union": true,
+	"intersect": true, "except": true, "instance": true, "of": true,
+	"treat": true, "as": true, "castable": true, "cast": true,
+}
+
+// reservedNodeTest holds the names that are node or kind tests rather than
+// functions. They are spelled exactly like a call and must never be reported
+// as an undeclared one.
+var reservedNodeTest = map[string]bool{
+	"node": true, "text": true, "comment": true,
+	"processing-instruction": true, "document-node": true,
+	"element": true, "attribute": true, "namespace-node": true,
+	"schema-element": true, "schema-attribute": true,
+	"item": true, "empty-sequence": true, "if": true,
+}
+
+// countCallArgs counts the arguments of the call whose "(" is at open, and
+// returns the index of the matching ")".
+//
+// Arity is counted by splitting on top-level commas, so nested calls and
+// predicates inside an argument do not inflate it. An unbalanced call yields
+// ok=false and is left alone: the pattern will fail to compile on its own, and
+// reporting an arity derived from a truncated call would be noise.
+func countCallArgs(src string, open int) (args, end int, ok bool) {
+	depth := 0
+	var quote byte
+	n := 0
+	empty := true
+	for i := open; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+			empty = false
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+			if depth == 0 && c == ')' {
+				if !empty {
+					n++
+				}
+				return n, i, true
+			}
+		case ',':
+			if depth == 1 {
+				n++
+			}
+		case ' ', '\t', '\r', '\n':
+		default:
+			empty = false
+		}
+	}
+	return 0, 0, false
+}
+
+// splitPatternQName splits a lexical QName into prefix and local part.
+func splitPatternQName(s string) (prefix, local string) {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		return s[:i], s[i+1:]
+	}
+	return "", s
+}
+
+func isQNameStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isQNameChar(c byte) bool {
+	return isQNameStart(c) || c == '-' || c == '.' || c == ':' ||
+		(c >= '0' && c <= '9')
+}
+
 // callsFunction reports whether src calls name outside a string literal.
 func callsFunction(src, name string) bool {
 	var quote byte

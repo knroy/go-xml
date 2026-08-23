@@ -190,7 +190,7 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			n.TypeAnnotation = typeName.Local
+			n.SetTypeAnnotation(typeName.Local)
 		}
 	default:
 		return fmt.Errorf("xsd: ValidateAgainstType needs an element or attribute")

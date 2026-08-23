@@ -832,9 +832,20 @@ func constructedText(seq xdm.Sequence, sep string) string {
 				inText = true
 				continue
 			}
-			// Atomizing any other node yields its typed value, whose string
-			// form is its string value.
-			parts = append(parts, v.StringValue())
+			// The sequence is atomized and every atomic value is then cast
+			// to a string (XSLT 2.0 section 11.4.3). For an UNTYPED node the
+			// typed value is its string value, so reading StringValue()
+			// directly was right; for a schema-annotated node it is not. An
+			// attribute annotated xs:integer whose lexical form is "003" has
+			// the typed value 3, and casting that to a string gives "3" —
+			// the canonical form — not the "003" that was written. Reading
+			// the string value skipped atomization entirely and so always
+			// produced the lexical form.
+			for _, a := range xdm.Atomize(xdm.Sequence{v}) {
+				if at, ok := a.(*xdm.Atomic); ok {
+					parts = append(parts, at.String())
+				}
+			}
 			inText = false
 		case *xdm.Atomic:
 			parts = append(parts, v.String())
@@ -860,7 +871,18 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		baseURIUsed: new(bool),
 	}
 
-	xctx := xpath.NewContext(root, s.funcs)
+	// A transform started from a named template has no source document, and
+	// root is then a nil *xdm.Node. Handing that straight to NewContext puts
+	// a non-nil interface holding a nil pointer in Context.Item: the "is
+	// there a focus" tests all read true, and the first axis step to
+	// dereference it panics instead of raising XPDY0002. The nil is widened
+	// to a genuinely nil interface so that absence of a context item is
+	// represented the one way the rest of the engine checks for it.
+	var item xdm.Item
+	if root != nil {
+		item = root
+	}
+	xctx := xpath.NewContext(item, s.funcs)
 	xctx.Ctx = ctx
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
@@ -977,6 +999,36 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 
 		val, err := evalVariable(g, rt)
+		// globalRefs orders the obvious dependencies, but it only reads the
+		// select expression: a reference reached through a sequence
+		// constructor, a match pattern or the body of a stylesheet function
+		// is invisible to it, and shows up here as XPST0008 for a name that
+		// is in fact a declared global. Which of the two things that means
+		// is decided by the state of the name it could not resolve.
+		for err != nil {
+			dep, ok := unresolvedGlobal(err, byName)
+			if !ok {
+				break
+			}
+			if state[dep.Name.Clark()] == active {
+				// The name is a global already under evaluation further up
+				// this same call chain, so its value depends on itself.
+				// Section 3.10 makes a circularity in a stylesheet
+				// XTDE0640, and reporting the reference as undeclared hid
+				// the cycle behind a static-error code.
+				return fmt.Errorf(
+					"XTDE0640: global variable $%s depends on itself",
+					dep.Name.Lexical())
+			}
+			// Not a cycle, merely an order globalRefs could not see. Bind
+			// the dependency and evaluate this variable again; bind() is
+			// idempotent through the done state, so the retry converges —
+			// each pass either finishes or moves one more name to done.
+			if berr := bind(dep); berr != nil {
+				return berr
+			}
+			val, err = evalVariable(g, rt)
+		}
 		if err != nil {
 			// A global xsl:param with an "as" type, no explicit default and
 			// no supplied value takes the empty sequence as its default.
@@ -1013,6 +1065,32 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 	}
 	return nil
+}
+
+// unresolvedGlobal reports whether err is an XPST0008 naming a variable that
+// the stylesheet does in fact declare globally, and if so returns that
+// declaration.
+//
+// The name is recovered from the message rather than from a typed error
+// because XPST0008 is raised in xpath, where nothing knows what an XSLT
+// global is. A message that is not this shape, or that names something no
+// global declares, yields false and is left to be reported as it stands.
+func unresolvedGlobal(err error, byName map[string]*Variable) (*Variable, bool) {
+	const marker = "XPST0008: undeclared variable $"
+	msg := err.Error()
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return nil, false
+	}
+	name := msg[i+len(marker):]
+	if j := strings.IndexAny(name, " :\t\n"); j >= 0 {
+		name = name[:j]
+	}
+	if name == "" {
+		return nil, false
+	}
+	g, ok := byName[xdm.QName{Local: name}.Clark()]
+	return g, ok
 }
 
 // globalRefs returns the names of the variables a global's select expression

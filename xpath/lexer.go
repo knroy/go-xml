@@ -64,10 +64,34 @@ type Lexer struct {
 	// it could, then `*` is multiplication and `div` is an operator; if it
 	// could not, `*` is a wildcard and `div` is a name test.
 	prevOperand bool
+
+	// extended enables the two XPath 3.0 constructs the XSLT test suite uses
+	// in its own assertion expressions: the braced URI literal Q{uri}local
+	// and the simple map operator "!". It is off by default, so an XSLT 2.0
+	// stylesheet still gets XPST0003 for either — which is correct, and which
+	// several tests in the suite assert. Only ParseExtended turns it on.
+	extended bool
+
+	// bracedURIs collects the URIs seen in braced URI literals, in the order
+	// they were lexed. A literal is rewritten to a synthetic prefix naming
+	// its index here, so that the ordinary QName resolution path can bind it
+	// without the parser needing a second spelling of every name test. The
+	// prefix begins with a character no NCName may contain, so it cannot
+	// collide with a prefix written in the source.
+	bracedURIs []string
 }
+
+// bracedURIPrefix marks a synthetic prefix standing for a braced URI literal.
+// U+0001 is not a name character, so no source-written prefix can begin with
+// it and no lookup of a real prefix can be captured by one of these.
+const bracedURIPrefix = "\x01Q"
 
 // NewLexer returns a lexer over src.
 func NewLexer(src string) *Lexer { return &Lexer{src: src} }
+
+// newExtendedLexer returns a lexer that also accepts the XPath 3.0 constructs
+// the test suite's assertion language uses. See Lexer.extended.
+func newExtendedLexer(src string) *Lexer { return &Lexer{src: src, extended: true} }
 
 // operatorKeywords are the names that act as infix operators when they follow
 // an operand.
@@ -197,6 +221,16 @@ func (l *Lexer) next() (Token, error) {
 		// (the `if` in `if (...)`, the `for` in `for $x in ...`).
 		l.prevOperand = true
 		return Token{Kind: TokName, Val: name, Pos: start}, nil
+	}
+
+	// The simple map operator. It must be tested before the multi-character
+	// list below, which would otherwise never see it, and after nothing —
+	// "!=" is still matched first because the prefix check there runs on the
+	// two-character string.
+	if l.extended && c == '!' && !strings.HasPrefix(l.src[l.pos:], "!=") {
+		l.pos++
+		l.prevOperand = false
+		return Token{Kind: TokOp, Val: "!", Pos: start}, nil
 	}
 
 	// Multi-character operators must be matched before their prefixes, or
@@ -375,6 +409,24 @@ func (l *Lexer) lexNumber(start int) (Token, error) {
 // A trailing ':' is returned as part of the value so the caller can detect the
 // prefix:* wildcard form.
 func (l *Lexer) lexQName() (string, error) {
+	// A braced URI literal, Q{uri}local. Recognised only in extended mode;
+	// otherwise "Q" is an ordinary name and the "{" that follows is the
+	// syntax error XPath 2.0 says it is.
+	if l.extended && strings.HasPrefix(l.src[l.pos:], "Q{") {
+		l.pos += 2
+		end := strings.IndexByte(l.src[l.pos:], '}')
+		if end < 0 {
+			return "", fmt.Errorf("XPST0003: unterminated braced URI literal at offset %d", l.pos)
+		}
+		uri := strings.TrimSpace(l.src[l.pos : l.pos+end])
+		l.pos += end + 1
+		local, err := l.lexNCName()
+		if err != nil {
+			return "", err
+		}
+		l.bracedURIs = append(l.bracedURIs, uri)
+		return fmt.Sprintf("%s%d:%s", bracedURIPrefix, len(l.bracedURIs)-1, local), nil
+	}
 	first, err := l.lexNCName()
 	if err != nil {
 		return "", err

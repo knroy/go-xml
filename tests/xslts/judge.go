@@ -313,8 +313,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		if got == want {
 			return true, ""
 		}
-		return false, fmt.Sprintf("serialization %q, want %q",
-			trunc(got), trunc(want))
+		return false, serializationMismatch(got, want)
 
 	case "assert-result-document":
 		// A secondary output produced by xsl:result-document. The nested
@@ -349,8 +348,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 					got, want = normalize(got), normalize(want)
 				}
 				if got != want {
-					return false, fmt.Sprintf("%s: serialization %q, want %q",
-						a.URI, trunc(got), trunc(want))
+					return false, a.URI + ": " + serializationMismatch(got, want)
 				}
 				continue
 			}
@@ -639,7 +637,7 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	}
 	ctx := xpath.NewContext(root, xpath.Builtins())
 	resolver := xpath.NamespaceResolver(mapNS(ns))
-	got, evalErr := xpath.Eval(expr, ctx, resolver)
+	got, evalErr := evalAssertExpr(expr, ctx, resolver)
 	if err := evalErr; err != nil {
 		return false, fmt.Sprintf("%s: %v", trunc(expr), err)
 	}
@@ -651,6 +649,32 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 		return true, ""
 	}
 	return false, "assertion is false: " + trunc(expr) + " || GOT=" + trunc(res.String())
+}
+
+// evalAssertExpr evaluates one assertion expression.
+//
+// The suite's assertion language is not the language of the stylesheets it
+// tests. An assertion may use XPath 3.0 — the braced URI literal Q{uri}local
+// appears in attribute-0601, namespace-3301 and xpath-default-namespace-0107,
+// and the simple map operator "!" in strip-space-003 and strip-space-005 —
+// even where the stylesheet under test is XSLT 2.0 and the engine is right to
+// refuse both inside it.
+//
+// So the 2.0 parser is tried first and keeps its full compile path, including
+// the optimiser; only a syntax error falls back to xpath.ParseExtended, which
+// adds those two constructs and nothing else. A genuine syntax error in an
+// assertion still fails, under the extended parser's message rather than the
+// 2.0 one — which names the same offset in the same expression.
+func evalAssertExpr(expr string, ctx *xpath.Context, ns xpath.NamespaceResolver) (xdm.Sequence, error) {
+	got, err := xpath.Eval(expr, ctx, ns)
+	if err == nil || !strings.Contains(err.Error(), "XPST0003") {
+		return got, err
+	}
+	e, perr := xpath.ParseExtended(expr, ns)
+	if perr != nil {
+		return nil, err
+	}
+	return e.Eval(ctx)
 }
 
 // secondaryByURI finds the result document a URI names, as a Result so that
@@ -711,7 +735,68 @@ func serializationWant(a Assertion, set *TestSet) (string, error) {
 			firstLine(err.Error()))
 	}
 	return strings.TrimSpace(
-		strings.ReplaceAll(string(stripBOM(data)), "\r", "")), nil
+		strings.ReplaceAll(decodeExpected(stripBOM(data), a.Encoding), "\r", "")), nil
+}
+
+// decodeExpected converts an expected-result file's bytes to the UTF-8 the
+// engine's serialisation is compared as.
+//
+// @encoding on an assert-serialization names the encoding the file was
+// written in, and the comparison is defined on characters rather than bytes:
+// select-6101 asserts that "&eacute;" serialises as the single byte xE9 under
+// ISO-8859-1, and ships its expected result in that encoding. Reading it as
+// UTF-8 turned that byte into the replacement character, so the assertion
+// compared a valid result against a corrupted expectation.
+//
+// Only ISO-8859-1 is decoded, because it is the only encoding the suite names
+// and because it is the one encoding whose decoding is a rune conversion —
+// its code points are exactly U+0000 to U+00FF. Any other name, and the bytes
+// are used as they are, which is right for UTF-8 and no worse than the
+// previous behaviour for anything else.
+func decodeExpected(data []byte, encoding string) string {
+	switch strings.ToLower(encoding) {
+	case "iso-8859-1", "latin1", "latin-1":
+		runes := make([]rune, len(data))
+		for i, b := range data {
+			runes[i] = rune(b)
+		}
+		return string(runes)
+	}
+	return string(data)
+}
+
+// serializationMismatch reports an assert-serialization failure in a form that
+// says what actually differs.
+//
+// trunc collapses runs of whitespace, which is right for an XPath expression
+// echoed back but wrong here: a serialisation mismatch is very often a
+// whitespace mismatch, and collapsing it printed two strings that read as
+// byte-identical. expression-2101 differs from its expected result by one
+// text node of indentation and was reported as "serialization X, want X",
+// which sent one investigation after a line-ending difference that was not
+// there — the expected side already has its carriage returns stripped.
+//
+// So the two are quoted with escapes intact and cut at the first byte that
+// differs, which is the one piece of information a reader needs.
+func serializationMismatch(got, want string) string {
+	i := 0
+	for i < len(got) && i < len(want) && got[i] == want[i] {
+		i++
+	}
+	const window = 40
+	from := i - window
+	if from < 0 {
+		from = 0
+	}
+	clip := func(s string) string {
+		to := i + window
+		if to > len(s) {
+			to = len(s)
+		}
+		return fmt.Sprintf("%q", s[from:to])
+	}
+	return fmt.Sprintf("serialization differs at offset %d: got %s, want %s",
+		i, clip(got), clip(want))
 }
 
 func stripDecl(s string) string {

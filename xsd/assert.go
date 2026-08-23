@@ -428,7 +428,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		}
 		a := el.Attr(use.Decl.Name.URI, use.Decl.Name.Local)
 		if a != nil && a.TypeAnnotation == "" {
-			a.TypeAnnotation = annotationName(use.Decl.Type)
+			a.SetTypeAnnotation(annotationName(use.Decl.Type))
 		}
 	}
 
@@ -443,7 +443,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		// $value carries the typed value instead, which is how an
 		// assertion reaches it.
 		if depth > 0 && el.TypeAnnotation == "" {
-			el.TypeAnnotation = annotationName(t.SimpleContent)
+			el.SetTypeAnnotation(annotationName(t.SimpleContent))
 		}
 		return
 	}
@@ -460,7 +460,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		switch dt := d.Type.(type) {
 		case *SimpleType:
 			if c.TypeAnnotation == "" {
-				c.TypeAnnotation = annotationName(dt)
+				c.SetTypeAnnotation(annotationName(dt))
 			}
 		case *ComplexType:
 			annotateSubtree(c, dt, depth+1)

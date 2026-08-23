@@ -463,7 +463,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// parameter to a stylesheet function". Reporting 0590 here made
 		// error-0790a report the template code for a function call.
 		v, err := p.AsType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
-			" of "+f.name.Lexical(), "XTTE0590")
+			" of "+f.name.Lexical(), "XTTE0790")
 		if err != nil {
 			return nil, err
 		}

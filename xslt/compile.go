@@ -36,6 +36,12 @@ type compiler struct {
 	// refers to, for XTSE0710.
 	usedAttributeSets []xdm.QName
 
+	// patternFuncs collects every function call written in a match pattern,
+	// for XPST0017. It is checked after every module has compiled, because an
+	// xsl:function the pattern calls may be declared below it or in a module
+	// imported afterwards.
+	patternFuncs []patternFuncRef
+
 	// inputTypeAnnotations is the value the modules so far have agreed on,
 	// for XTSE0265. Empty means no module has stated one.
 	inputTypeAnnotations string
@@ -453,6 +459,70 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		"unknown top-level element xsl:%s (XTSE0010)", el.Name.Local)
 }
 
+// patternFuncRef is one function call found in a match pattern, recorded with
+// enough context to resolve and report it once compilation has finished.
+type patternFuncRef struct {
+	name  xdm.QName
+	arity int
+	pat   string
+}
+
+// notePatternFuncs records the function calls written in a pattern so that
+// checkPatternFuncs can resolve them later.
+//
+// Section 5.5.3 makes a pattern a restricted path expression, and a call in a
+// predicate is an ordinary function call subject to the ordinary static rule:
+// XPST0017 if no function of that name and arity is in scope. Nothing else
+// catches it. A pattern is only ever *matched*, never evaluated for a value,
+// and a template whose pattern never matches anything is silently skipped — so
+// an undeclared function in a predicate would otherwise turn a stylesheet the
+// author got wrong into one that quietly produces the fallback output.
+//
+// Names that cannot be resolved to a URI here are dropped rather than
+// reported: an unbound prefix is XTSE0080/XPST0081 and is diagnosed where
+// prefixes are resolved, and guessing at it here would report the wrong code.
+func (c *compiler) notePatternFuncs(pat string, ns *nsResolver) {
+	for _, call := range patternFuncCalls(pat) {
+		prefix, local := splitPatternQName(call.name)
+		uri := xdm.NSFN
+		if prefix != "" {
+			bound, ok := ns.bindings[prefix]
+			if !ok {
+				continue
+			}
+			uri = bound
+		}
+		c.patternFuncs = append(c.patternFuncs, patternFuncRef{
+			name:  xdm.QName{Prefix: prefix, URI: uri, Local: local},
+			arity: call.arity,
+			pat:   pat,
+		})
+	}
+}
+
+// checkPatternFuncs reports XPST0017 for a function called in a match pattern
+// that no function library and no xsl:function declares.
+//
+// It runs after every module has compiled, for the same reason XTSE0710 does:
+// the declaration may come later than the use.
+func (c *compiler) checkPatternFuncs() error {
+	for _, r := range c.patternFuncs {
+		if r.name.URI == xdm.NSFN && runtimeFuncNames[r.name.Local] {
+			// Bound per transform rather than at compile time; see
+			// runtimeFuncNames.
+			continue
+		}
+		if _, ok := c.sheet.funcs.Lookup(r.name, r.arity); ok {
+			continue
+		}
+		return fmt.Errorf(
+			"XPST0017: pattern %q calls %s with %d argument(s), but no "+
+				"function is declared with that name and arity",
+			r.pat, r.name.Lexical(), r.arity)
+	}
+	return nil
+}
+
 func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	t := &Template{importPrecedence: precedence}
 	c.declOrder++
@@ -467,6 +537,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		}
 		t.Match = pat
 		t.Priority = pat.Priority()
+		c.notePatternFuncs(m, ns)
 	}
 	if n := el.AttrValue("name"); n != "" {
 		qn, err := resolveQNameAttr(el, n)

@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -32,18 +33,48 @@ type Parser struct {
 	pos  int
 	src  string
 	ns   NamespaceResolver
+
+	// extended mirrors the lexer's flag: the XPath 3.0 constructs the test
+	// harness's own assertions use are accepted. See ParseExtended.
+	extended bool
 }
 
 // Parse compiles an XPath 2.0 expression.
 func Parse(src string, ns NamespaceResolver) (Expr, error) {
+	return parse(src, ns, false)
+}
+
+// ParseExtended compiles an expression in which two XPath 3.0 constructs are
+// also accepted: the braced URI literal Q{uri}local, and the simple map
+// operator "!".
+//
+// This is not a relaxation of the XPath 2.0 language. Nothing in the XSLT
+// engine calls it: a stylesheet compiled with Parse still rejects both, which
+// is what a 2.0 processor must do and what several tests in the W3C suite
+// assert. It exists for a caller that is itself writing XPath rather than
+// running someone else's — specifically the conformance harness, whose
+// assertion expressions are written in the 3.0 language even for tests whose
+// stylesheets are 2.0.
+func ParseExtended(src string, ns NamespaceResolver) (Expr, error) {
+	return parse(src, ns, true)
+}
+
+func parse(src string, ns NamespaceResolver, extended bool) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
-	toks, err := NewLexer(src).Tokens()
+	lex := NewLexer(src)
+	if extended {
+		lex = newExtendedLexer(src)
+	}
+	toks, err := lex.Tokens()
 	if err != nil {
 		return nil, fmt.Errorf("%w in %q", err, src)
 	}
-	p := &Parser{toks: toks, src: src, ns: ns}
+	if len(lex.bracedURIs) > 0 {
+		ns = bracedResolver{NamespaceResolver: ns, uris: lex.bracedURIs}
+	}
+	p := &Parser{toks: toks, src: src, ns: ns, extended: extended}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -52,6 +83,30 @@ func Parse(src string, ns NamespaceResolver) (Expr, error) {
 		return nil, p.errorf("unexpected %q after expression", p.cur().Val)
 	}
 	return e, nil
+}
+
+// bracedResolver answers the synthetic prefixes the lexer substitutes for
+// braced URI literals, and delegates every other prefix to the resolver the
+// caller supplied.
+//
+// Rewriting Q{uri}local to a prefixed name keeps the whole feature inside the
+// lexer and this one lookup: every place that resolves a name — element test,
+// attribute test, variable, function, type — goes through ResolvePrefix, so
+// none of them needs to learn a second spelling.
+type bracedResolver struct {
+	NamespaceResolver
+	uris []string
+}
+
+func (b bracedResolver) ResolvePrefix(prefix string) (string, bool) {
+	if idx, ok := strings.CutPrefix(prefix, bracedURIPrefix); ok {
+		n, err := strconv.Atoi(idx)
+		if err != nil || n < 0 || n >= len(b.uris) {
+			return "", false
+		}
+		return b.uris[n], true
+	}
+	return b.NamespaceResolver.ResolvePrefix(prefix)
 }
 
 // defaultResolver binds no prefixes and uses the standard function namespace.
@@ -593,8 +648,64 @@ func (p *Parser) parseUnary() (Expr, error) {
 		}
 		return &UnaryOp{Op: op, Operand: operand}, nil
 	}
-	return p.parsePath()
+	return p.parseSimpleMap()
 }
+
+// parseSimpleMap parses the XPath 3.0 simple map operator, which sits between
+// unary and path in the grammar: SimpleMapExpr ::= PathExpr ("!" PathExpr)*.
+//
+// Outside extended mode the "!" never reaches here — the lexer does not
+// produce the token — so this is a plain call through to parsePath.
+func (p *Parser) parseSimpleMap() (Expr, error) {
+	left, err := p.parsePath()
+	if err != nil {
+		return nil, err
+	}
+	for p.extended {
+		if _, ok := p.acceptOp("!"); !ok {
+			return left, nil
+		}
+		right, err := p.parsePath()
+		if err != nil {
+			return nil, err
+		}
+		left = &SimpleMap{Left: left, Right: right}
+	}
+	return left, nil
+}
+
+// SimpleMap is the XPath 3.0 "!" operator: the right operand is evaluated once
+// per item of the left, with that item as the context item, and the results
+// are concatenated.
+//
+// Unlike "/" it neither requires nodes nor sorts, which is the whole reason
+// the suite's assertions use it — "string-to-codepoints(...)!string()" maps
+// over integers, where "/" would raise XPTY0019.
+type SimpleMap struct {
+	Left  Expr
+	Right Expr
+}
+
+func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
+	in, err := e.Left.Eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out xdm.Sequence
+	for i, it := range in {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		v, err := e.Right.Eval(ctx.WithFocus(it, i+1, len(in)))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v...)
+	}
+	return out, nil
+}
+
+func (e *SimpleMap) String() string { return e.Left.String() + "!" + e.Right.String() }
 
 // checkCastTarget rejects a cast whose target cannot be a target.
 //

@@ -315,6 +315,15 @@ func ParseSchema(root *xdm.Node) (*Schema, error) {
 	if err := checkAllGroupLimited(s); err != nil {
 		return nil, err
 	}
+	// Registered here as well as in the assembler, and for the same reason
+	// linkSubstitutionGroups is: this entry point reads a schema from a node
+	// rather than from files, and skipping the step left the data model with
+	// no record of which built-in each user-defined type erases to. The
+	// consequence is not confined to atomisation -- SetTypeAnnotation walks
+	// this same derivation chain to decide is-id and is-idrefs, so an
+	// element whose type extends xs:ID was not recognised as an ID at all,
+	// and fn:id could not find it.
+	registerDerivedTypes(s)
 	return s, nil
 }
 

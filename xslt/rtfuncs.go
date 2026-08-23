@@ -49,6 +49,32 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 	return &n, true
 }
 
+// runtimeFuncNames lists the functions bound per transform rather than at
+// compile time, by registerRuntimeFuncs and registerGroupingFuncs together.
+//
+// These are absent from the stylesheet's compile-time library because each one
+// closes over a *runtime that does not exist until a transform starts. A
+// static check that resolves function names against that library must still
+// treat them as declared, or it would reject key() and current() — which is
+// exactly where they are most often written.
+//
+// The list is kept beside registerRuntimeFuncs so the two are edited together;
+// TestRuntimeFuncNamesMatchRegistration holds the list and both registrars to
+// each other.
+var runtimeFuncNames = map[string]bool{
+	"current":              true,
+	"current-group":        true,
+	"current-grouping-key": true,
+	"document":             true,
+	"element-available":    true,
+	"function-available":   true,
+	"generate-id":          true,
+	"key":                  true,
+	"regex-group":          true,
+	"system-property":      true,
+	"type-available":       true,
+}
+
 // registerRuntimeFuncs adds the functions that need transform state.
 func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	l.Add(xpath.Function{
