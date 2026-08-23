@@ -281,6 +281,23 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 		// A child-axis step never matches an attribute.
 		return false, nil
 	}
+	// Section 5.5.3: a pattern step on the child axis is evaluated on the
+	// child-or-top axis, and "for backwards compatibility reasons, the
+	// pattern node(), when used without an explicit axis, does not match
+	// document nodes, attribute nodes, or namespace nodes".
+	//
+	// Without this the pattern node() matched the document node, and since a
+	// document node is where template selection starts, a stylesheet
+	// declaring both match="doc" and match="node()" ran the second on the
+	// root and never reached the first.
+	if node.Kind == xdm.KindDocument && !s.attribute {
+		// Only the unrestricted node() test is excluded. document-node() and
+		// "/" name the document node explicitly and must still match it;
+		// they differ from node() by not being the "any kind" test.
+		if kt, ok := s.nodeTest.(*xpath.KindTest); ok && kt.Any {
+			return false, nil
+		}
+	}
 	if !s.nodeTest.Matches(node, principal) {
 		return false, nil
 	}
