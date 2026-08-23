@@ -93,6 +93,16 @@ func foldConstant(e Expr) (Expr, bool) {
 		if !isClosed(v.Left) || !isClosed(v.Right) {
 			return nil, false
 		}
+		// A comparison is not closed over its operands alone: comparing two
+		// strings consults the default collation, which [xsl:]default-collation
+		// sets *after* the expression is compiled. Folding it here evaluated
+		// it under codepoint order, so "'Adele' eq 'ADELE'" was decided
+		// false before the stylesheet's case-blind collation could be
+		// applied. Leaving comparisons unfolded costs one evaluation and is
+		// the only way the answer can depend on the collation in force.
+		if isComparisonOp(v.Op) {
+			return nil, false
+		}
 		return evalToLiteral(e)
 
 	case *UnaryOp:
@@ -194,6 +204,17 @@ func foldableFunction(name xdm.QName) bool {
 		"contains", "starts-with", "ends-with", "translate",
 		"not", "true", "false", "boolean", "number", "string",
 		"empty", "exists", "reverse", "distinct-values":
+		return true
+	}
+	return false
+}
+
+// isComparisonOp reports whether an operator's result can depend on the
+// default collation, which is what makes it unsafe to fold at compile time.
+func isComparisonOp(op string) bool {
+	switch op {
+	case "eq", "ne", "lt", "le", "gt", "ge",
+		"=", "!=", "<", "<=", ">", ">=":
 		return true
 	}
 	return false

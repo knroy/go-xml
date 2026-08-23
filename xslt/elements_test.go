@@ -545,7 +545,12 @@ func TestPositionFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `<out><at id="a" line="2" col="3"/><at id="b" line="4" col="5"/>` +
+	// The gx prefix is declared on xsl:stylesheet to reach the extension
+	// functions. Section 11.1.3 copies the namespace nodes in scope on a
+	// literal result element to the element it constructs, and this one is
+	// not an excluded namespace, so the declaration appears in the result.
+	want := `<out xmlns:gx="https://github.com/knroy/go-xml">` +
+		`<at id="a" line="2" col="3"/><at id="b" line="4" col="5"/>` +
 		`<at id="c" line="5" col="5"/></out>`
 	if got := strings.TrimSpace(res.String()); got != want {
 		t.Errorf("positions = %q, want %q", got, want)
@@ -566,7 +571,7 @@ func TestPositionFunctionsWithoutTracking(t *testing.T) {
 		</out></xsl:template>
 	</xsl:stylesheet>`
 	got := run(t, sheet, "<order>\n  <item id=\"a\"/>\n</order>")
-	if want := "<out>0,empty</out>"; got != want {
+	if want := `<out xmlns:gx="https://github.com/knroy/go-xml">0,empty</out>`; got != want {
 		t.Errorf("untracked = %q, want %q", got, want)
 	}
 }

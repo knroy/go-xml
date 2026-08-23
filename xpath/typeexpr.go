@@ -206,6 +206,15 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 
 	out, err := CastToDerived(atoms[0].(*xdm.Atomic), e.Type.AtomicType, e.Type.FacetName)
+	if err == nil && out != nil && e.Type.SchemaType != "" {
+		// A constructor call on an imported schema type folds into this cast,
+		// and the value it produces is an instance of that type — that is what
+		// the constructor is for. Without recording the annotation the cast
+		// produced a bare primitive, so "foo:testType(2000)" did not match a
+		// declared type of "foo:testType" and every such variable raised
+		// XTTE0570.
+		out = out.WithDerived(e.Type.SchemaType)
+	}
 	if e.Castable {
 		// "castable as" is precisely "would cast succeed", so the error is
 		// consumed rather than propagated.

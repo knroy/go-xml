@@ -364,14 +364,14 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			kt.Name = &qn
 			kt.HasName = true
 			p.pos++
-			p.skipTypeAnnotation()
+			p.readTypeAnnotation(kt)
 		} else if p.cur().Kind == TokWildcard {
 			p.pos++ // element(*) is the same as element()
 			// element(*, type) and attribute(*, type) are as legal as
 			// the named forms; only the name may be a wildcard, not
-			// the whole second argument, so the annotation is skipped
+			// the whole second argument, so the annotation is read
 			// here too rather than only after a name.
-			p.skipTypeAnnotation()
+			p.readTypeAnnotation(kt)
 		}
 	default:
 		return nil, p.errorf("unknown kind test %q", name)
@@ -383,22 +383,25 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 	return kt, nil
 }
 
-// skipTypeAnnotation consumes the ", type" of element(name, type) and its
-// attribute() counterpart.
+// readTypeAnnotation consumes the ", type" of element(name, type) and its
+// attribute() counterpart, recording it on the test.
 //
-// The annotation is accepted and ignored: this engine carries no in-scope
-// schema, so there is no type hierarchy to check a node's annotation against.
-// Ignoring it makes the test the name test alone, which is weaker than the
-// spec's but never wrong about the name — whereas failing to parse it rejects
-// a legal expression outright.
-func (p *Parser) skipTypeAnnotation() {
+// The annotation is a real constraint, not decoration: element(*, xs:NOTATION)
+// asks whether the node was validated against that type, and answering "yes"
+// for every node made a DTD-declared attribute claim a type it does not have.
+// It is kept lexically because the comparison is against the node's own
+// annotation, which is likewise a name rather than a resolved component.
+func (p *Parser) readTypeAnnotation(kt *KindTest) {
 	if _, ok := p.acceptOp(","); !ok {
 		return
 	}
 	if p.cur().Kind == TokName {
+		kt.TypeName = p.cur().Val
 		p.pos++
 	}
-	p.acceptOp("?")
+	if _, ok := p.acceptOp("?"); ok {
+		kt.TypeNillable = true
+	}
 }
 
 func (p *Parser) parsePredicates() ([]Expr, error) {
@@ -563,6 +566,20 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 	if !found || !isAtomic {
 		return nil, false
 	}
+	if prim == xdm.TypeQName {
+		// A type derived from xs:NOTATION (or from xs:QName) has the QName
+		// value space, so its constructor has to resolve the prefix here,
+		// while the static context still exists — the same reason xs:QName()
+		// is folded rather than called. A cast at run time would build a
+		// QName with no namespace URI, which made two notation values with
+		// different prefixes for the same namespace compare unequal and two
+		// values with the same prefix for different namespaces compare equal.
+		if q, ok, err := p.foldQNameLiteral(args[0]); err == nil && ok {
+			q.Val = q.Val.WithDerived(lex)
+			return q, true
+		}
+		return nil, false
+	}
 	return &CastExpr{
 		Operand: args[0],
 		Type: SequenceType{
@@ -587,7 +604,21 @@ func (p *Parser) foldQNameConstructor(name xdm.QName, args []Expr) (Expr, bool, 
 	if name.URI != xdm.NSXS || name.Local != "QName" || len(args) != 1 {
 		return nil, false, nil
 	}
-	lit, ok := args[0].(*Literal)
+	q, ok, err := p.foldQNameLiteral(args[0])
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	return q, true, nil
+}
+
+// foldQNameLiteral turns a string-literal argument into a QName literal,
+// resolving its prefix in the static context.
+//
+// It is shared by xs:QName() and by the constructor of a schema type whose
+// value space is the QName one, because both have to bind the prefix while the
+// namespace declarations of the expression are still reachable.
+func (p *Parser) foldQNameLiteral(arg Expr) (*Literal, bool, error) {
+	lit, ok := arg.(*Literal)
 	if !ok || lit.Val.Type != xdm.TypeString {
 		return nil, false, xdm.Errorf("XPTY0004",
 			"xs:QName() requires a string literal: the prefix must be resolvable "+

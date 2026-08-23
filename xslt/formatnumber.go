@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -48,8 +49,16 @@ func defaultDecimalFormat() *DecimalFormat {
 }
 
 // compileDecimalFormat compiles an xsl:decimal-format declaration.
-func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
+func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 	df := defaultDecimalFormat()
+	// Which attributes this particular declaration states. Section 16.4.1
+	// compares declarations attribute by attribute: two declarations of the
+	// same format conflict only where they both name an attribute and
+	// disagree about it. Comparing the whole structure instead made a
+	// declaration that sets only @decimal-separator conflict with one that
+	// sets only @grouping-separator, because each carried the defaults for
+	// everything it had not mentioned.
+	stated := map[string]bool{}
 
 	if n := el.AttrValue("name"); n != "" {
 		qn, err := resolveQNameAttr(el, n)
@@ -73,6 +82,7 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 				attr, v)
 		}
 		*dst = r[0]
+		stated[attr] = true
 		return nil
 	}
 	for _, spec := range []struct {
@@ -94,9 +104,11 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 	}
 	if v := el.AttrValue("infinity"); v != "" {
 		df.Infinity = v
+		stated["infinity"] = true
 	}
 	if v := el.AttrValue("NaN"); v != "" {
 		df.NaN = v
+		stated["NaN"] = true
 	}
 
 	// XTSE1295: the zero-digit must be a digit whose numeric value is zero,
@@ -109,44 +121,109 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 
 	// XTSE1290: two xsl:decimal-format declarations for the same format at
 	// the same import precedence may not disagree about an attribute.
-	if prev, dup := c.sheet.decimalFormats[df.Name.Clark()]; dup {
-		// Only *conflicting* values are an error. A module that declares the
-		// same format as one it imports is repeating itself, not disagreeing,
-		// and comparing whole structs made the default format conflict with
-		// itself the moment any module declared it explicitly.
-		if !sameDecimalFormat(prev, df) {
-			return fmt.Errorf(
-				"XTSE1290: conflicting xsl:decimal-format declarations for %q",
-				df.Name.Lexical())
+	//
+	// Where they do not disagree they *combine*: one declaration may set the
+	// decimal separator and another the grouping separator, and the format
+	// ends up with both. That is why the previous declaration is merged in
+	// rather than replaced.
+	name := df.Name.Clark()
+	if prev, dup := c.sheet.decimalFormats[name]; dup {
+		switch prevPrec := c.decimalFormatPrecedence[name]; {
+		case precedence > prevPrec:
+			// This declaration has the higher import precedence, so it wins
+			// outright. Section 16.4.1 makes conflicting declarations an
+			// error only among those of the same precedence — overriding an
+			// imported declaration is the ordinary reason to import at all.
+		case precedence < prevPrec:
+			// An imported declaration cannot displace the importing module's,
+			// so this one is simply ignored.
+			return nil
+		default:
+			// A conflict at this precedence is XTSE1290 — but only if no
+			// module of higher precedence goes on to declare the same
+			// format, which overrides both. The importing module is compiled
+			// after the modules it imports, so that cannot be known yet: the
+			// conflict is recorded and reported at the end of the
+			// compilation, by checkDecimalFormatConflicts.
+			if conflict, ok := conflictingAttr(c.statedDecimalFormat[name], stated, prev, df); ok {
+				if c.decimalFormatConflicts == nil {
+					c.decimalFormatConflicts = map[string]decimalFormatConflict{}
+				}
+				c.decimalFormatConflicts[name] = decimalFormatConflict{
+					lexical:    df.Name.Lexical(),
+					attr:       conflict,
+					precedence: precedence,
+				}
+				break
+			}
+			mergeDecimalFormat(df, prev, stated)
+			for a := range c.statedDecimalFormat[name] {
+				stated[a] = true
+			}
 		}
 	}
 
-	// XTSE1300: the characters used in a picture string must be distinct.
-	// Two symbols with the same character make a picture ambiguous, so the
-	// specification requires them to differ rather than picking a winner.
-	seen := map[rune]string{}
-	for _, sym := range []struct {
-		name string
-		r    rune
-	}{
-		{"decimal-separator", df.DecimalSeparator},
-		{"grouping-separator", df.GroupingSeparator},
-		{"percent", df.Percent},
-		{"per-mille", df.PerMille},
-		{"zero-digit", df.ZeroDigit},
-		{"digit", df.Digit},
-		{"pattern-separator", df.PatternSeparator},
-	} {
-		if prev, dup := seen[sym.r]; dup {
-			return fmt.Errorf(
-				"XTSE1300: xsl:decimal-format/@%s and @%s are both %q",
-				prev, sym.name, string(sym.r))
-		}
-		seen[sym.r] = sym.name
+	c.sheet.decimalFormats[name] = df
+	if c.statedDecimalFormat == nil {
+		c.statedDecimalFormat = map[string]map[string]bool{}
 	}
-
-	c.sheet.decimalFormats[df.Name.Clark()] = df
+	c.statedDecimalFormat[name] = stated
+	if c.decimalFormatPrecedence == nil {
+		c.decimalFormatPrecedence = map[string]int{}
+	}
+	c.decimalFormatPrecedence[name] = precedence
 	return nil
+}
+
+// decimalFormatAttrs pairs each xsl:decimal-format attribute name with a way
+// to read its value out of a declaration, so that the merge and the conflict
+// check can both work attribute by attribute rather than field by field.
+var decimalFormatAttrs = []struct {
+	name string
+	get  func(*DecimalFormat) any
+	set  func(*DecimalFormat, *DecimalFormat)
+}{
+	{"decimal-separator", func(d *DecimalFormat) any { return d.DecimalSeparator },
+		func(d, src *DecimalFormat) { d.DecimalSeparator = src.DecimalSeparator }},
+	{"grouping-separator", func(d *DecimalFormat) any { return d.GroupingSeparator },
+		func(d, src *DecimalFormat) { d.GroupingSeparator = src.GroupingSeparator }},
+	{"percent", func(d *DecimalFormat) any { return d.Percent },
+		func(d, src *DecimalFormat) { d.Percent = src.Percent }},
+	{"per-mille", func(d *DecimalFormat) any { return d.PerMille },
+		func(d, src *DecimalFormat) { d.PerMille = src.PerMille }},
+	{"zero-digit", func(d *DecimalFormat) any { return d.ZeroDigit },
+		func(d, src *DecimalFormat) { d.ZeroDigit = src.ZeroDigit }},
+	{"digit", func(d *DecimalFormat) any { return d.Digit },
+		func(d, src *DecimalFormat) { d.Digit = src.Digit }},
+	{"pattern-separator", func(d *DecimalFormat) any { return d.PatternSeparator },
+		func(d, src *DecimalFormat) { d.PatternSeparator = src.PatternSeparator }},
+	{"minus-sign", func(d *DecimalFormat) any { return d.MinusSign },
+		func(d, src *DecimalFormat) { d.MinusSign = src.MinusSign }},
+	{"infinity", func(d *DecimalFormat) any { return d.Infinity },
+		func(d, src *DecimalFormat) { d.Infinity = src.Infinity }},
+	{"NaN", func(d *DecimalFormat) any { return d.NaN },
+		func(d, src *DecimalFormat) { d.NaN = src.NaN }},
+}
+
+// conflictingAttr finds an attribute that both declarations state and
+// disagree about, which is the only thing XTSE1290 forbids.
+func conflictingAttr(prevStated, stated map[string]bool, prev, df *DecimalFormat) (string, bool) {
+	for _, a := range decimalFormatAttrs {
+		if prevStated[a.name] && stated[a.name] && a.get(prev) != a.get(df) {
+			return a.name, true
+		}
+	}
+	return "", false
+}
+
+// mergeDecimalFormat copies into df every attribute the earlier declaration
+// stated and this one did not, so the two combine into one format.
+func mergeDecimalFormat(df, prev *DecimalFormat, stated map[string]bool) {
+	for _, a := range decimalFormatAttrs {
+		if !stated[a.name] {
+			a.set(df, prev)
+		}
+	}
 }
 
 // registerFormatNumber adds fn:format-number, which needs the stylesheet's
@@ -168,10 +245,18 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 			if err != nil {
 				return nil, err
 			}
-			// Only unprefixed format names are resolvable here, since the
-			// stylesheet's namespace context is not available at call time.
-			_, local := xdm.SplitQName(lex)
-			dfName = xdm.QName{Local: local}.Clark()
+			// The name is a lexical QName whose prefix must be resolved
+			// against the namespace context of the expression. That context
+			// is not threaded through to a function call, so the prefix is
+			// resolved against the prefixes the stylesheet declared anywhere
+			// — which is enough whenever a prefix is bound consistently, and
+			// that is the case a stylesheet actually writes.
+			prefix, local := xdm.SplitQName(lex)
+			uri := ""
+			if prefix != "" {
+				uri = s.prefixes[prefix]
+			}
+			dfName = xdm.QName{URI: uri, Local: local}.Clark()
 		}
 		df, ok := s.decimalFormats[dfName]
 		if !ok {
@@ -230,10 +315,18 @@ func formatNumberString(args []xdm.Sequence, i int) (string, error) {
 
 // picture is a parsed format-number picture string.
 type picture struct {
-	prefix, suffix    string
-	minInt, minFrac   int
-	maxFrac           int
-	grouping          int // digits per group, 0 for none
+	prefix, suffix  string
+	minInt, minFrac int
+	maxFrac         int
+	// groupPositions are the digit offsets from the right at which a
+	// grouping separator is inserted. A picture may place them irregularly —
+	// "###,##0,00.00" groups at 2 and 4 — so a single "digits per group" is
+	// not enough to express one.
+	groupPositions []int
+	// grouping is the repeating group size, used only when the positions form
+	// a regular sequence N, 2N, 3N and the number may be longer than the
+	// picture. 0 means the positions are irregular and are used as they are.
+	grouping          int
 	percent, perMille bool
 }
 
@@ -296,8 +389,8 @@ func formatNumber2(num *xdm.Atomic, pic string, df *DecimalFormat) (string, erro
 	intPart, fracPart := splitRat(rounded, p.maxFrac)
 
 	intStr := padInt(intPart, p.minInt, df)
-	if p.grouping > 0 {
-		intStr = applyGrouping(intStr, p.grouping, df.GroupingSeparator)
+	if p.grouping > 0 || len(p.groupPositions) > 0 {
+		intStr = applyGrouping(intStr, p.grouping, p.groupPositions, df.GroupingSeparator)
 	}
 	fracStr := trimFraction(fracPart, p.minFrac, df)
 
@@ -381,9 +474,11 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 
 	digits := runes[start : end+1]
 	intPart, fracPart := digits, []rune(nil)
+	hasDecimalSep := false
 	for i, r := range digits {
 		if r == df.DecimalSeparator {
 			intPart, fracPart = digits[:i], digits[i+1:]
+			hasDecimalSep = true
 			break
 		}
 	}
@@ -391,20 +486,52 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	// Grouping size is the distance from the last grouping separator to the
 	// end of the integer part, which is what makes "#,##,##0" (the Indian
 	// lakh grouping) express a different size from "#,##0".
-	lastSep := -1
-	for i, r := range intPart {
-		if r == df.GroupingSeparator {
-			lastSep = i
+	// Every grouping separator's distance from the right-hand end of the
+	// integer part is one grouping position. Counting only the last one
+	// collapsed "###,##0,00" into a single repeating size and lost the
+	// irregular grouping the picture asked for.
+	//
+	// The separators themselves are not digits, so the distance is measured
+	// in digits seen after each one.
+	digitsAfter := 0
+	for i := len(intPart) - 1; i >= 0; i-- {
+		if intPart[i] == df.GroupingSeparator {
+			if digitsAfter > 0 {
+				p.groupPositions = append(p.groupPositions, digitsAfter)
+			}
+			continue
 		}
+		digitsAfter++
 	}
-	if lastSep >= 0 {
-		p.grouping = len(intPart) - lastSep - 1
+	// Positions at regular intervals N, 2N, 3N extend beyond the picture, so
+	// that a number longer than the picture is still grouped every N digits.
+	// Irregular positions do not extend: the picture states them exhaustively.
+	if n := len(p.groupPositions); n > 0 {
+		regular := true
+		step := p.groupPositions[0]
+		for k, pos := range p.groupPositions {
+			if pos != step*(k+1) {
+				regular = false
+				break
+			}
+		}
+		if regular {
+			p.grouping = step
+		}
 	}
 
 	for _, r := range intPart {
 		if r == df.ZeroDigit {
 			p.minInt++
 		}
+	}
+	// Section 16.4.2: the minimum integer part size is normally the count of
+	// zero-digit-signs, "but if the sub-picture contains no zero-digit-sign
+	// and no decimal-separator-sign, it is set to one." That is what makes
+	// format-number(0, '#') produce "0" rather than nothing at all; the
+	// sub-picture "#.#" keeps a zero minimum, so it still gives ".5".
+	if p.minInt == 0 && !hasDecimalSep {
+		p.minInt = 1
 	}
 	if len(fracPart) > 0 {
 		p.maxFrac = 0
@@ -500,30 +627,35 @@ func translateDigits(s string, zero rune) string {
 }
 
 // applyGrouping inserts the grouping separator every n digits from the right.
-func applyGrouping(s string, n int, sep rune) string {
-	if n <= 0 || len(s) <= n {
+// applyGrouping inserts separators into the integer digits.
+//
+// n is the repeating group size when the picture's grouping positions were
+// regular, and positions lists them when they were not. A regular picture uses
+// both: the listed positions and every multiple of n beyond them.
+func applyGrouping(s string, n int, positions []int, sep rune) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
 		return s
 	}
-	runes := []rune(s)
+	at := map[int]bool{}
+	for _, p := range positions {
+		at[p] = true
+	}
+	if n > 0 {
+		for p := n; p < len(runes); p += n {
+			at[p] = true
+		}
+	}
 	var out []rune
 	for i, r := range runes {
-		if i > 0 && (len(runes)-i)%n == 0 {
+		// The offset from the right of the position *before* this digit is
+		// what a grouping position names.
+		if i > 0 && at[len(runes)-i] {
 			out = append(out, sep)
 		}
 		out = append(out, r)
 	}
 	return string(out)
-}
-
-// sameDecimalFormat reports whether two declarations agree on every symbol.
-//
-// Name is excluded: two declarations of the same format necessarily share it,
-// and comparing it adds nothing. Everything else is compared by value, which
-// is what "conflicting values for the same attribute" means.
-func sameDecimalFormat(a, b *DecimalFormat) bool {
-	x, y := *a, *b
-	x.Name, y.Name = xdm.QName{}, xdm.QName{}
-	return x == y
 }
 
 // checkSubPicture applies the section 16.4.2 rules a sub-picture must satisfy.
@@ -623,6 +755,84 @@ func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat
 					"XTDE1310: the fractional part of picture %q has a "+
 						"zero-digit sign after a digit sign", pic)
 			}
+		}
+	}
+	return nil
+}
+
+// decimalFormatConflict records an XTSE1290 that may yet be overridden by a
+// declaration of higher import precedence.
+type decimalFormatConflict struct {
+	lexical    string
+	attr       string
+	precedence int
+}
+
+// checkDecimalFormatConflicts reports any conflict that no higher-precedence
+// declaration resolved.
+//
+// It runs once the whole module graph has been compiled, because an importing
+// module is compiled after the modules it imports and only then is it known
+// whether it overrode the conflicting pair.
+func (c *compiler) checkDecimalFormatConflicts() error {
+	// Map order is not deterministic and the error names a format, so the
+	// names are sorted to make the message reproducible.
+	names := make([]string, 0, len(c.decimalFormatConflicts))
+	for name := range c.decimalFormatConflicts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		conf := c.decimalFormatConflicts[name]
+		if c.decimalFormatPrecedence[name] > conf.precedence {
+			continue
+		}
+		return fmt.Errorf(
+			"XTSE1290: conflicting xsl:decimal-format declarations for %q: "+
+				"@%s is given two different values",
+			conf.lexical, conf.attr)
+	}
+	return nil
+}
+
+// checkDecimalFormatSymbols reports XTSE1300 for any format whose symbols are
+// not all distinct.
+//
+// Two symbols sharing a character make a picture string ambiguous, so the
+// specification requires them to differ. The check is deferred to the end of
+// compilation because a format is assembled from several declarations: one
+// module may set only the decimal separator and another only the grouping
+// separator, and neither is in error on its own even though the first one
+// momentarily leaves the two equal at their defaults.
+func (c *compiler) checkDecimalFormatSymbols() error {
+	// Map order is not deterministic and the error names symbols, so the
+	// formats are visited in a fixed order to make the message reproducible.
+	names := make([]string, 0, len(c.sheet.decimalFormats))
+	for name := range c.sheet.decimalFormats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		df := c.sheet.decimalFormats[name]
+		seen := map[rune]string{}
+		for _, sym := range []struct {
+			name string
+			r    rune
+		}{
+			{"decimal-separator", df.DecimalSeparator},
+			{"grouping-separator", df.GroupingSeparator},
+			{"percent", df.Percent},
+			{"per-mille", df.PerMille},
+			{"zero-digit", df.ZeroDigit},
+			{"digit", df.Digit},
+			{"pattern-separator", df.PatternSeparator},
+		} {
+			if prev, dup := seen[sym.r]; dup {
+				return fmt.Errorf(
+					"XTSE1300: xsl:decimal-format/@%s and @%s are both %q",
+					prev, sym.name, string(sym.r))
+			}
+			seen[sym.r] = sym.name
 		}
 	}
 	return nil

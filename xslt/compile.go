@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,8 +16,53 @@ type compiler struct {
 	sheet     *Stylesheet
 	declOrder int
 	// seen guards against include cycles, which would otherwise recurse until
-	// the stack runs out.
-	seen map[string]bool
+	// the stack runs out. schemaSeen does the same for the xsl:import-schema
+	// pre-pass, which walks the module graph separately and must not visit a
+	// module twice.
+	seen       map[string]bool
+	schemaSeen map[string]bool
+	// aliasDecls records each xsl:namespace-alias with its import precedence,
+	// for XTSE0810; charMapPrecedence does the same for xsl:character-map and
+	// XTSE1580. Both are needed because the stylesheet keeps only the winning
+	// declaration, which cannot say whether a losing one conflicted.
+	aliasDecls        map[string]aliasDecl
+	charMapPrecedence map[string]int
+
+	// usedAttributeSets collects every name a use-attribute-sets attribute
+	// refers to, for XTSE0710.
+	usedAttributeSets []xdm.QName
+
+	// inputTypeAnnotations is the value the modules so far have agreed on,
+	// for XTSE0265. Empty means no module has stated one.
+	inputTypeAnnotations string
+
+	// keyCollations records the effective collation of each xsl:key name, for
+	// XTSE1220.
+	keyCollations map[string]string
+
+	// statedDecimalFormat records, per format name, which attributes an
+	// xsl:decimal-format declaration actually named. XTSE1290 compares
+	// declarations attribute by attribute, and the merged format kept in the
+	// stylesheet cannot say which of its values were stated and which are
+	// defaults.
+	statedDecimalFormat map[string]map[string]bool
+
+	// decimalFormatPrecedence is the import precedence of the declarations
+	// that produced each stored format. XTSE1290 only forbids a conflict
+	// between declarations at the *same* precedence; a higher-precedence
+	// module overriding a lower one is the ordinary way an import is
+	// customised.
+	decimalFormatPrecedence map[string]int
+
+	// decimalFormatConflicts holds XTSE1290 conditions that a
+	// higher-precedence declaration may still override, checked once the
+	// whole module graph is compiled.
+	decimalFormatConflicts map[string]decimalFormatConflict
+
+	// outputAttrs records the serialisation attributes declared for each
+	// output definition, for XTSE1560. The empty key is the unnamed one.
+	outputAttrs map[string]map[string][]outputAttrDecl
+
 	// charMapIncludes records the use-character-maps of each
 	// xsl:character-map, resolved after every module has compiled.
 	charMapIncludes []charMapInclusion
@@ -45,8 +91,17 @@ func (c *compiler) checkCallTemplateParams() error {
 			// where the call is executed rather than here.
 			continue
 		}
+		// A tunnel template parameter is not a match for a non-tunnel
+		// with-param. The two are separate bindings of the same name — a
+		// tunnel parameter is supplied by an ancestor call and passed through
+		// invisibly, and a non-tunnel one by the immediate caller — so a
+		// template declaring only the tunnel form "does not have a template
+		// parameter named x" in the sense the clause means.
 		declared := map[string]bool{}
 		for _, p := range t.Params {
+			if p.Tunnel {
+				continue
+			}
 			declared[p.Name.Clark()] = true
 		}
 		for _, p := range call.params {
@@ -65,6 +120,10 @@ func (c *compiler) checkCallTemplateParams() error {
 // compileDocument compiles one stylesheet module at the given import
 // precedence.
 func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
+	collectPrefixes(doc, c.sheet.prefixes)
+	if err := c.checkInputTypeAnnotations(doc); err != nil {
+		return err
+	}
 	root := firstElement(doc)
 	if root == nil {
 		return fmt.Errorf("stylesheet has no root element")
@@ -120,12 +179,14 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	// xsl:import-schema that defines it. Compiling in document order made that
 	// stylesheet fail with XPST0051 while the same declarations in the other
 	// order compiled.
-	for _, el := range root.ChildElements() {
-		if el.Name.URI == xdm.NSXSL && el.Name.Local == "import-schema" {
-			if err := c.compileTopLevel(el, precedence); err != nil {
-				return err
-			}
-		}
+	// The pre-pass reaches into included and imported modules as well, because
+	// the in-scope schema components are a property of the *stylesheet*, not
+	// of the module that declared them: section 3.14 says importing components
+	// in one module makes them available throughout. A schema imported only in
+	// a secondary module was invisible to the primary one, so an expression
+	// there naming one of its types was XPST0051.
+	if err := c.hoistImportSchema(root); err != nil {
+		return err
 	}
 	compileSchema = c.sheet.schema
 
@@ -209,7 +270,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		c.sheet.globals = append(c.sheet.globals, v)
 		return nil
 	case "output":
-		return c.compileOutput(el)
+		return c.compileOutput(el, precedence)
 	case "key":
 		return c.compileKey(el)
 	case "function":
@@ -223,13 +284,13 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// their templates lose ties against it.
 		return c.compileInclude(el, precedence-1)
 	case "decimal-format":
-		return c.compileDecimalFormat(el)
+		return c.compileDecimalFormat(el, precedence)
 	case "attribute-set":
 		return c.compileAttributeSet(el, precedence)
 	case "namespace-alias":
-		return c.compileNamespaceAlias(el)
+		return c.compileNamespaceAlias(el, precedence)
 	case "character-map":
-		return c.compileCharacterMap(el)
+		return c.compileCharacterMap(el, precedence)
 	case "import-schema":
 		return c.compileImportSchema(el)
 	}
@@ -267,6 +328,21 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	if t.Match == nil && !t.HasName {
 		return fmt.Errorf("XTSE0500: xsl:template must have a match or name attribute")
 	}
+	// The other half of XTSE0500: "an xsl:template element that has no match
+	// attribute must have no mode attribute and no priority attribute." Both
+	// only mean anything for a template rule — a named template is invoked by
+	// name, so neither the mode it would match in nor the priority it would
+	// win by has any effect, and specifying one is a mistake about how the
+	// template will be reached.
+	if t.Match == nil {
+		for _, a := range []string{"mode", "priority"} {
+			if el.Attr("", a) != nil {
+				return fmt.Errorf(
+					"XTSE0500: xsl:template has no match attribute, so it "+
+						"must have no %s attribute", a)
+			}
+		}
+	}
 	// An explicit priority overrides the computed default.
 	if p := el.AttrValue("priority"); p != "" {
 		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
@@ -275,8 +351,12 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		}
 		t.Priority = v
 	}
-	if m := el.AttrValue("mode"); m != "" {
-		modes := strings.Fields(m)
+	// The attribute is looked up rather than its value, because mode="" is
+	// itself one of the errors: "it is a static error if the list is empty".
+	// Testing the value for "" cannot tell an empty list from an absent
+	// attribute, so the empty one went unreported.
+	if ma := el.Attr("", "mode"); ma != nil {
+		modes := strings.Fields(ma.Value)
 		// XTSE0550: the list may not be empty, may not repeat a token, and
 		// "#all" may not appear beside anything else.
 		if len(modes) == 0 {
@@ -293,6 +373,32 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		if seen["#all"] && len(modes) > 1 {
 			return fmt.Errorf(
 				"XTSE0550: xsl:template/@mode=#all cannot appear with other modes")
+		}
+		// "or if the list contains an invalid token": a mode name is a QName,
+		// and the two hash tokens are the only other things permitted.
+		for _, tok := range modes {
+			if tok == "#all" || tok == "#default" {
+				continue
+			}
+			if !isLexicalQName(tok) {
+				return fmt.Errorf(
+					"XTSE0550: xsl:template/@mode names %q, which is not a "+
+						"mode name", tok)
+			}
+		}
+		// Mode names are expanded QNames, not lexical ones: two prefixes bound
+		// to the same URI name one mode, and a stylesheet that uses them
+		// interchangeably must dispatch to the same rules. The pseudo-modes
+		// are left as written because they are not names at all.
+		for i, tok := range modes {
+			if tok == "#all" || tok == "#default" {
+				continue
+			}
+			qn, err := resolveQNameAttr(el, tok)
+			if err != nil {
+				return err
+			}
+			modes[i] = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
 		}
 		t.Mode = modes
 	}
@@ -400,7 +506,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	return v, nil
 }
 
-func (c *compiler) compileOutput(el *xdm.Node) error {
+func (c *compiler) compileOutput(el *xdm.Node, precedence int) error {
 	// An xsl:output with a name declares a *named* output definition, which
 	// xsl:result-document/@format selects. The unnamed one configures the
 	// principal result. A named definition starts from the principal
@@ -424,7 +530,123 @@ func (c *compiler) compileOutput(el *xdm.Node) error {
 			o = &cp
 		}
 	}
+	c.recordOutputAttrs(el, precedence)
 	return applyOutputAttrs(el, o)
+}
+
+// recordOutputAttrs notes one xsl:output's serialisation attributes for the
+// XTSE1560 check.
+//
+// "It is a static error if two xsl:output declarations within an output
+// definition specify explicit values for the same attribute (other than
+// cdata-section-elements and use-character-maps), with the values of the
+// attributes being not equal, unless there is another xsl:output declaration
+// within the same output definition that specifies the attribute with higher
+// import precedence."
+//
+// Two exclusions are in that sentence and both matter. The two named
+// attributes are cumulative — a second declaration adds elements to the list
+// rather than replacing it — so they cannot conflict. And a declaration at a
+// higher import precedence settles the question, which is what makes an
+// importing stylesheet able to override an imported one's indent setting
+// without the two being an error.
+//
+// The check itself is deferred to checkOutputConflicts, because the escape
+// clause looks forward: a module is compiled before the module that imports
+// it, so the higher-precedence declaration that settles a conflict is not
+// seen until after the conflicting pair. Reporting on sight refused
+// output-0175, where two imported modules disagree and the importer resolves
+// them.
+func (c *compiler) recordOutputAttrs(el *xdm.Node, precedence int) {
+	definition := ""
+	if name := el.AttrValue("name"); name != "" {
+		// An unresolvable name is reported where the declaration is
+		// otherwise compiled; here it only groups declarations, and the
+		// lexical form groups them just as well.
+		if qn, err := resolveQNameAttr(el, name); err == nil {
+			definition = qn.Clark()
+		} else {
+			definition = name
+		}
+	}
+	if c.outputAttrs == nil {
+		c.outputAttrs = map[string]map[string][]outputAttrDecl{}
+	}
+	seen := c.outputAttrs[definition]
+	if seen == nil {
+		seen = map[string][]outputAttrDecl{}
+		c.outputAttrs[definition] = seen
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" || a.Name.Local == "name" {
+			continue
+		}
+		switch a.Name.Local {
+		case "cdata-section-elements", "use-character-maps":
+			continue
+		}
+		seen[a.Name.Local] = append(seen[a.Name.Local],
+			outputAttrDecl{value: a.Value, precedence: precedence})
+	}
+}
+
+// checkOutputConflicts reports XTSE1560 once every module has been compiled.
+func (c *compiler) checkOutputConflicts() error {
+	// The definitions and their attributes are walked in sorted order so
+	// that a stylesheet with two independent conflicts reports the same one
+	// on every run; a map walk would pick either.
+	for _, definition := range sortedKeys(c.outputAttrs) {
+		attrs := c.outputAttrs[definition]
+		for _, name := range sortedKeys(attrs) {
+			decls := attrs[name]
+			highest := decls[0].precedence
+			for _, d := range decls {
+				if d.precedence > highest {
+					highest = d.precedence
+				}
+			}
+			// Only the declarations at the highest precedence can conflict:
+			// any lower one is overridden by them, which is exactly the
+			// escape the clause gives.
+			var value string
+			first := true
+			for _, d := range decls {
+				if d.precedence != highest {
+					continue
+				}
+				if first {
+					value, first = d.value, false
+					continue
+				}
+				if d.value != value {
+					return fmt.Errorf(
+						"XTSE1560: two xsl:output declarations give %s "+
+							"different values (%q and %q) at the same import "+
+							"precedence", name, value, d.value)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// sortedKeys returns a map's keys in order, so that a check over a map
+// reports the same finding on every run.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// outputAttrDecl records one serialisation attribute as declared, for the
+// XTSE1560 check. The precedence is kept because a higher one silences the
+// conflict rather than participating in it.
+type outputAttrDecl struct {
+	value      string
+	precedence int
 }
 
 // applyOutputAttrs reads the serialisation attributes from el into o.
@@ -433,48 +655,71 @@ func (c *compiler) compileOutput(el *xdm.Node) error {
 // set: the instruction may override method, indent, encoding and the rest for
 // one document. Reading them in two places would let the two drift.
 func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
-	if v := el.AttrValue("method"); v != "" {
+	return applyOutputValues(el, el.AttrValue, o)
+}
+
+// applyOutputValues is applyOutputAttrs with the values supplied by the
+// caller.
+//
+// xsl:result-document's serialisation attributes are attribute value
+// templates, so their effective values are only known when the instruction
+// runs; el is still needed because use-character-maps and
+// cdata-section-elements name QNames that resolve against the stylesheet's
+// namespace context.
+func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSettings) error {
+	if v := value("method"); v != "" {
 		o.Method = v
 	}
-	if v := el.AttrValue("indent"); v != "" {
+	if v := value("indent"); v != "" {
 		o.Indent = v == "yes"
 	}
-	if v := el.AttrValue("omit-xml-declaration"); v != "" {
+	if v := value("omit-xml-declaration"); v != "" {
 		o.OmitXMLDecl = v == "yes"
 	}
-	if v := el.AttrValue("encoding"); v != "" {
+	if v := value("encoding"); v != "" {
 		o.Encoding = v
 	}
-	if v := el.AttrValue("doctype-public"); v != "" {
-		o.DocTypePublic = v
+	// A zero-length value for these two overrides an inherited one to
+	// absent, which is the only way a stylesheet can cancel a doctype set by
+	// a module it imports. So presence is tested rather than non-emptiness.
+	if el.Attr("", "doctype-public") != nil {
+		o.DocTypePublic = value("doctype-public")
 	}
-	if v := el.AttrValue("doctype-system"); v != "" {
-		o.DocTypeSystem = v
+	if el.Attr("", "doctype-system") != nil {
+		o.DocTypeSystem = value("doctype-system")
 	}
-	if v := el.AttrValue("standalone"); v != "" {
+	if v := value("standalone"); v != "" {
+		// "omit" is the way to say "no standalone declaration", so it is
+		// normalised to the absent state rather than written out literally.
+		if v == "omit" {
+			v = ""
+		}
 		o.Standalone = v
 	}
-	if v := el.AttrValue("version"); v != "" {
+	if v := value("version"); v != "" {
 		o.Version = v
 	}
-	if v := el.AttrValue("byte-order-mark"); v != "" {
+	if v := value("byte-order-mark"); v != "" {
 		o.ByteOrderMark = v == "yes"
 	}
-	if v := el.AttrValue("include-content-type"); v != "" {
+	if v := value("include-content-type"); v != "" {
 		b := v == "yes"
 		o.IncludeContentType = &b
 	}
-	if v := el.AttrValue("escape-uri-attributes"); v != "" {
+	if v := value("escape-uri-attributes"); v != "" {
 		b := v == "yes"
 		o.EscapeURIAttributes = &b
 	}
-	if v := el.AttrValue("undeclare-prefixes"); v != "" {
+	if v := value("undeclare-prefixes"); v != "" {
 		o.UndeclarePrefixes = v == "yes"
 	}
-	if v := el.AttrValue("media-type"); v != "" {
+	if v := value("media-type"); v != "" {
 		o.MediaType = v
 	}
-	if v := el.AttrValue("use-character-maps"); v != "" {
+	if v := value("normalization-form"); v != "" {
+		o.NormalizationForm = v
+	}
+	if v := value("use-character-maps"); v != "" {
 		for _, n := range strings.Fields(v) {
 			qn, err := resolveQNameAttr(el, n)
 			if err != nil {
@@ -483,9 +728,14 @@ func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
 			o.UseCharacterMaps = append(o.UseCharacterMaps, qn)
 		}
 	}
-	if v := el.AttrValue("cdata-section-elements"); v != "" {
+	if v := value("cdata-section-elements"); v != "" {
 		for _, n := range strings.Fields(v) {
-			qn, err := resolveQNameAttr(el, n)
+			// An unprefixed name here takes the default namespace rather
+			// than no namespace. These names refer to elements in the result
+			// document, so they follow the convention of a literal result
+			// element rather than the one for QNames elsewhere in a
+			// stylesheet — the specification calls the difference out.
+			qn, err := resolveResultQNameAttr(el, n)
 			if err != nil {
 				return err
 			}
@@ -517,6 +767,32 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 	if keyColl == "" {
 		keyColl = ns.collation
 	}
+	// XTSE1210: "it is a static error if the xsl:key declaration has a
+	// collation attribute whose value ... is not a URI recognized by the
+	// implementation as referring to a collation." Only the explicit
+	// attribute is checked here — an unrecognised *default* collation is
+	// XTSE0125 and belongs where the default is declared.
+	if v := strings.TrimSpace(el.AttrValue("collation")); v != "" {
+		if _, err := xpath.ResolveCollation(v); err != nil {
+			return fmt.Errorf(
+				"XTSE1210: xsl:key/@collation=%q is not a collation this "+
+					"implementation recognises", v)
+		}
+	}
+	// XTSE1220: "it is a static error if there are several xsl:key
+	// declarations in the stylesheet with the same key name and different
+	// effective collations." A key is one index, and two declarations that
+	// disagree about how its values compare cannot both be honoured.
+	if prev, ok := c.keyCollations[qn.Clark()]; ok && prev != keyColl {
+		return fmt.Errorf(
+			"XTSE1220: the xsl:key declarations named %s specify different "+
+				"collations (%q and %q)", qn.Lexical(), prev, keyColl)
+	}
+	if c.keyCollations == nil {
+		c.keyCollations = map[string]string{}
+	}
+	c.keyCollations[qn.Clark()] = keyColl
+
 	k := &keyDef{match: pat, collation: keyColl}
 	hasBody := len(el.ChildElements()) > 0
 	switch {
@@ -655,6 +931,57 @@ func (c *compiler) compileSpaceControl(el *xdm.Node) error {
 	return nil
 }
 
+// hoistImportSchema processes every xsl:import-schema reachable from a module,
+// following xsl:include and xsl:import to do it.
+//
+// It runs before any expression is compiled, so that the whole stylesheet's
+// schema is in the static context of every module. The traversal is guarded
+// against cycles by the same seen-set the ordinary module walk uses; a module
+// that cannot be resolved is passed over silently here, because the ordinary
+// walk will report it with the right error code and reporting it twice would
+// change which error the caller sees.
+func (c *compiler) hoistImportSchema(root *xdm.Node) error {
+	if c.schemaSeen == nil {
+		c.schemaSeen = map[string]bool{}
+	}
+	for _, el := range root.ChildElements() {
+		if el.Name.URI != xdm.NSXSL {
+			continue
+		}
+		switch el.Name.Local {
+		case "import-schema":
+			if err := c.compileImportSchema(el); err != nil {
+				return err
+			}
+		case "include", "import":
+			href := el.AttrValue("href")
+			if href == "" || c.opts.Resolver == nil {
+				continue
+			}
+			base := el.BaseURI
+			if base == "" {
+				base = c.opts.BaseURI
+			}
+			if i := strings.IndexByte(href, '#'); i >= 0 {
+				href = href[:i]
+			}
+			doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
+			if err != nil || doc == nil || c.schemaSeen[resolved] {
+				continue
+			}
+			c.schemaSeen[resolved] = true
+			sub := firstElement(doc)
+			if sub == nil {
+				continue
+			}
+			if err := c.hoistImportSchema(sub); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 	href := el.AttrValue("href")
 	if href == "" {
@@ -715,4 +1042,62 @@ func firstElement(n *xdm.Node) *xdm.Node {
 
 func isXSL(n *xdm.Node, local string) bool {
 	return n.Kind == xdm.KindElement && n.Name.URI == xdm.NSXSL && n.Name.Local == local
+}
+
+// collectPrefixes records every namespace prefix declared in a module.
+//
+// A prefix declared twice for different URIs keeps the first, which is
+// arbitrary but harmless: this map exists only so that a name computed at run
+// time can be expanded at all, and a stylesheet that binds one prefix two ways
+// and then computes a name with it has not said which it meant.
+func collectPrefixes(n *xdm.Node, into map[string]string) {
+	if n.Kind == xdm.KindElement {
+		for _, ns := range n.Namespaces {
+			p := ns.Name.Local
+			if p == "" {
+				continue
+			}
+			if _, seen := into[p]; !seen {
+				into[p] = ns.Value
+			}
+		}
+	}
+	for _, c := range n.Children {
+		collectPrefixes(c, into)
+	}
+}
+
+// checkInputTypeAnnotations applies XTSE0265 across the stylesheet's modules.
+//
+// "It is a static error if there is a stylesheet module in the stylesheet that
+// specifies input-type-annotations="strip" and another stylesheet module that
+// specifies input-type-annotations="preserve"." The two say opposite things
+// about the source document, and the attribute is a property of the whole
+// stylesheet rather than of the module it appears on, so there is no rule of
+// precedence that could reconcile them — unlike almost every other conflict
+// between modules, which import precedence settles.
+//
+// The third value, "unspecified", is the default and participates in no
+// conflict, which is why only the two named ones are recorded.
+func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
+	root := firstElement(doc)
+	if root == nil || root.Name.URI != xdm.NSXSL {
+		return nil
+	}
+	a := root.Attr("", "input-type-annotations")
+	if a == nil {
+		return nil
+	}
+	v := strings.TrimSpace(a.Value)
+	if v != "strip" && v != "preserve" {
+		return nil
+	}
+	if c.inputTypeAnnotations != "" && c.inputTypeAnnotations != v {
+		return fmt.Errorf(
+			"XTSE0265: one stylesheet module specifies "+
+				"input-type-annotations=%q and another specifies %q",
+			c.inputTypeAnnotations, v)
+	}
+	c.inputTypeAnnotations = v
+	return nil
 }

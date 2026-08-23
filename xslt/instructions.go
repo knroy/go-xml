@@ -50,7 +50,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		seq = v
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
 		seq = sub.sequence()
@@ -60,6 +60,9 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// space separator when select is used and none otherwise. Defaulting to
 	// the 2.0 behaviour matters for rule sets that rely on it, and the
 	// separator attribute makes the choice explicit either way.
+	// Section 11.4 gives xsl:value-of the same two defaults as xsl:attribute:
+	// a single space when the content comes from @select, and a zero-length
+	// string when it comes from the sequence constructor.
 	sep := i.separator
 	if !i.hasSeparator {
 		if i.sel != nil {
@@ -68,7 +71,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			sep = ""
 		}
 	}
-	out.appendText(stringJoin(seq, sep))
+	out.appendText(constructedText(seq, sep))
 	return nil
 }
 
@@ -94,8 +97,10 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // copyOfInstr implements xsl:copy-of, which deep-copies nodes.
 type copyOfInstr struct {
-	sel        *xpath.Compiled
-	validation validationSpec
+	sel *xpath.Compiled
+	// noNamespaces records copy-namespaces="no".
+	noNamespaces bool
+	validation   validationSpec
 }
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -128,7 +133,28 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				}
 				continue
 			}
+			if v.Kind == xdm.KindNamespace {
+				// A namespace node joins the element's bindings rather than
+				// its children. Appending it as a child put it nowhere the
+				// namespace axis or the serialiser would ever look.
+				if err := out.addNamespaceNode(v.Name.Local, v.Value); err != nil {
+					return err
+				}
+				continue
+			}
 			c := deepCopy(v)
+			if v.Kind == xdm.KindElement {
+				if i.noNamespaces {
+					stripNamespaces(c)
+				} else {
+					// The copy carries only the declarations written on the
+					// source element, so the ones it inherits from ancestors
+					// it is being lifted away from are added here. Without
+					// them a copied subtree loses the binding its own prefix
+					// depends on.
+					inheritNamespaces(c, v)
+				}
+			}
 			// The copy is assessed rather than the original: validation may
 			// annotate, and annotating the source document would leak a
 			// property of this instruction into the tree everything else
@@ -145,18 +171,27 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 }
 
 // deepCopy clones a subtree, detached from its original parent.
+//
+// The type annotation travels with the copy. validation="preserve" is defined
+// as keeping the types the source carried, and dropping them here left a
+// preserved copy untyped, so "$v instance of element(e, xs:anyURI)" answered
+// false for a node that had just been copied from a validated document.
+// Stripping is done by the validation spec, which is the thing that knows
+// whether the instruction asked for it.
 func deepCopy(n *xdm.Node) *xdm.Node {
 	c := &xdm.Node{
-		Kind:    n.Kind,
-		Name:    n.Name,
-		Value:   n.Value,
-		BaseURI: n.BaseURI,
+		Kind:           n.Kind,
+		Name:           n.Name,
+		Value:          n.Value,
+		BaseURI:        n.BaseURI,
+		TypeAnnotation: n.TypeAnnotation,
 	}
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)
 	}
 	for _, a := range n.Attrs {
-		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value})
+		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
+			Value: a.Value, TypeAnnotation: a.TypeAnnotation})
 	}
 	for _, ch := range n.Children {
 		c.AppendChild(deepCopy(ch))
@@ -164,11 +199,72 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 	return c
 }
 
+// inheritNamespaces gives a detached copy the bindings it used to inherit.
+//
+// Declarations the element already carries are left alone: they are the
+// nearest ones, and an inherited binding for the same prefix is masked.
+func inheritNamespaces(dst, src *xdm.Node) {
+	have := map[string]bool{}
+	for _, ns := range dst.Namespaces {
+		have[ns.Name.Local] = true
+	}
+	scope := src.InScopeNamespaces()
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		prefixes = append(prefixes, p)
+	}
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		if p == "xml" || have[p] {
+			continue
+		}
+		dst.AddNamespace(p, scope[p])
+	}
+}
+
+// stripNamespaces removes the namespace nodes from a copied subtree, which is
+// what copy-namespaces="no" asks for. The names keep their URIs — only the
+// declarations go, and the serialiser re-creates whatever the names still
+// need.
+func stripNamespaces(n *xdm.Node) {
+	n.Namespaces = nil
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindElement {
+			stripNamespaces(c)
+		}
+	}
+}
+
+// copyNamespacesTo adds every namespace node in scope on src to the element
+// sub is building.
+func copyNamespacesTo(sub *outputBuilder, src *xdm.Node) {
+	scope := src.InScopeNamespaces()
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		prefixes = append(prefixes, p)
+	}
+	// Sorted so that the declarations come out in a stable order; the XDM
+	// leaves the order of the namespace axis implementation-dependent, but an
+	// order that varies between runs is not an order at all.
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		if p == "xml" {
+			// The xml prefix is bound implicitly everywhere, so declaring it
+			// would be redundant and is in fact forbidden in the output.
+			continue
+		}
+		_ = sub.addNamespaceNode(p, scope[p])
+	}
+}
+
 // copyInstr implements xsl:copy, a shallow copy of the context node.
 type copyInstr struct {
-	attrSets   []xdm.QName
-	body       []Instruction
-	validation validationSpec
+	attrSets []xdm.QName
+	// noNamespaces records copy-namespaces="no", which copies the element
+	// without its namespace nodes. The default is to copy them all.
+	noNamespaces bool
+	body         []Instruction
+	validation   validationSpec
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -183,8 +279,12 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// children come from the body. That is the distinction from
 		// xsl:copy-of, and it is what makes the identity-transform idiom work.
 		sub := out.startElement(node.Name)
-		for _, ns := range node.Namespaces {
-			sub.open.AddNamespace(ns.Name.Local, ns.Value)
+		if !i.noNamespaces {
+			// Section 11.9.1 copies "the namespace nodes of the element",
+			// which is every binding in scope on it rather than only those it
+			// declares itself. A copied element whose prefix was declared on
+			// an ancestor otherwise lost the declaration it needs.
+			copyNamespacesTo(sub, node)
 		}
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
@@ -248,6 +348,17 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.startElement(rt.sheet.aliasFor(i.name))
 	sub.open.BaseURI = i.baseURI
 	for _, ns := range i.namespaces {
+		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
+		// the literal result element, not only its name. Copying them
+		// unaliased left the placeholder URI in the result beside the
+		// namespace it was supposed to have been rewritten to.
+		if a, ok := rt.sheet.namespaceAliases[ns.uri]; ok {
+			if a.uri == "" {
+				continue
+			}
+			sub.open.AddNamespace(a.prefix, a.uri)
+			continue
+		}
 		sub.open.AddNamespace(ns.prefix, ns.uri)
 	}
 	// Attribute sets are applied before the element's own attributes, so a
@@ -317,7 +428,17 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 // explicit namespace attribute if given and the stylesheet's namespace
 // context otherwise.
 func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
-	prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+	trimmed := strings.TrimSpace(lex)
+	// A leading colon splits into an empty prefix and a local name that is a
+	// perfectly good NCName, so the checks below pass it. ":foo" is not a
+	// lexical QName — the production requires the prefix to be present when
+	// the colon is — and it is what "{$prefix}:foo" produces when $prefix is
+	// empty, which is the ordinary way a stylesheet reaches this by accident.
+	if strings.HasPrefix(trimmed, ":") {
+		return xdm.QName{}, fmt.Errorf(
+			"XTDE0820: computed name %q is not a valid QName", lex)
+	}
+	prefix, local := xdm.SplitQName(trimmed)
 	// Both halves have to be names, not merely non-empty. A computed name is
 	// written to the output as-is, so an unchecked one is a hole rather than
 	// a laxity: a name holding "><script>" serialises as markup, producing
@@ -332,6 +453,21 @@ func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
 		if err != nil {
 			return xdm.QName{}, err
 		}
+		// XTDE0835: "it is a non-recoverable dynamic error if the effective
+		// value of the namespace attribute is not in the lexical space of the
+		// xs:anyURI data type or if it is the string
+		// http://www.w3.org/2000/xmlns/." The second clause is the same
+		// prohibition xsl:namespace carries, and for the same reason: a
+		// prefix bound to that URI produces a document no parser reads back.
+		if uri == "http://www.w3.org/2000/xmlns/" {
+			return xdm.QName{}, fmt.Errorf(
+				"XTDE0835: xsl:element must not place a name in " +
+					"http://www.w3.org/2000/xmlns/")
+		}
+		if uri != "" && !isLexicalAnyURI(uri) {
+			return xdm.QName{}, fmt.Errorf(
+				"XTDE0835: %q is not in the lexical space of xs:anyURI", uri)
+		}
 		if uri == "" {
 			// namespace="" puts the name in *no* namespace. A prefix cannot
 			// survive that — a prefixed name in no namespace is not
@@ -341,9 +477,12 @@ func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
 		}
 		return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
 	}
-	if prefix == "" {
-		return xdm.QName{Local: local}, nil
-	}
+	// Section 11.2: with no namespace attribute the name is expanded using
+	// the namespace declarations in effect for the xsl:element element,
+	// "including any default namespace declaration". An unprefixed name is
+	// therefore not automatically in no namespace — it lands wherever the
+	// default namespace points, which is what makes a literal result element
+	// and a computed one agree.
 	uri, ok := i.scope.LookupPrefix(prefix)
 	if !ok {
 		return xdm.QName{}, fmt.Errorf("XTDE0830: unbound prefix %q in computed name %q", prefix, lex)
@@ -355,9 +494,13 @@ func (i *elementInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
 type attributeInstr struct {
 	name      *avt
 	namespace *avt
-	sel       *xpath.Compiled
-	scope     *xdm.Node
-	body      []Instruction
+	// separator is @separator, and hasSeparator distinguishes an explicit
+	// zero-length one from an absent attribute.
+	separator    *avt
+	hasSeparator bool
+	sel          *xpath.Compiled
+	scope        *xdm.Node
+	body         []Instruction
 	// validation carries [xsl:]validation and [xsl:]type, which assess the
 	// constructed attribute exactly as they assess a constructed element.
 	validation validationSpec
@@ -368,25 +511,38 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	el := &elementInstr{name: i.name, namespace: i.namespace, scope: i.scope}
-	qn, err := el.resolveName(rt, nameStr)
+	qn, err := i.resolveName(rt, nameStr)
 	if err != nil {
 		return err
 	}
 
+	// Section 11.2: with no @separator the default is a single space when the
+	// content comes from @select and a zero-length string when it comes from
+	// the sequence constructor. The two defaults are not interchangeable —
+	// xsl:copy-of of a node sequence into an attribute concatenates, while
+	// select="1 to 5" produces "1 2 3 4 5".
+	sep := ""
+	if i.sel != nil {
+		sep = " "
+	}
+	if i.hasSeparator {
+		if sep, err = i.separator.eval(rt); err != nil {
+			return err
+		}
+	}
 	var value string
 	if i.sel != nil {
 		seq, err := i.sel.Eval(rt.ctx)
 		if err != nil {
 			return err
 		}
-		value = stringJoin(seq, " ")
+		value = constructedText(seq, sep)
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
-		value = stringJoin(sub.sequence(), "")
+		value = constructedText(sub.sequence(), sep)
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
@@ -398,27 +554,105 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	return out.addAttribute(qn, value)
 }
 
+// resolveName turns a computed attribute name into an expanded QName.
+//
+// It is separate from the element rule for one reason that matters: section
+// 11.3 expands an attribute name "not including any default namespace
+// declaration". An unprefixed attribute name is in no namespace whatever the
+// default namespace says, which is the same rule XML itself applies to
+// attributes written literally.
+func (i *attributeInstr) resolveName(rt *runtime, lex string) (xdm.QName, error) {
+	prefix, local := xdm.SplitQName(strings.TrimSpace(lex))
+	if !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
+		return xdm.QName{}, fmt.Errorf(
+			"XTDE0850: computed attribute name %q is not a valid QName", lex)
+	}
+	if i.namespace != nil {
+		uri, err := i.namespace.eval(rt)
+		if err != nil {
+			return xdm.QName{}, err
+		}
+		if uri == xdm.NSXMLNS {
+			return xdm.QName{}, fmt.Errorf(
+				"XTDE0865: xsl:attribute/@namespace may not be the xmlns namespace")
+		}
+		if uri == "" {
+			return xdm.QName{Local: local}, nil
+		}
+		return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
+	}
+	// XTDE0855: with no namespace attribute the name "xmlns" would ask for a
+	// namespace declaration to be built as an attribute, which the data model
+	// does not represent.
+	if prefix == "" && local == "xmlns" {
+		return xdm.QName{}, fmt.Errorf(
+			"XTDE0855: xsl:attribute cannot create an attribute named xmlns")
+	}
+	if prefix == "" {
+		return xdm.QName{Local: local}, nil
+	}
+	uri, ok := i.scope.LookupPrefix(prefix)
+	if !ok {
+		return xdm.QName{}, fmt.Errorf(
+			"XTDE0860: unbound prefix %q in computed attribute name %q", prefix, lex)
+	}
+	return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
+}
+
 // commentInstr implements xsl:comment.
-type commentInstr struct{ body []Instruction }
+//
+// The content comes either from @select or from the sequence constructor; the
+// two are alternatives, and a stylesheet writing both is rejected at compile
+// time.
+type commentInstr struct {
+	sel  *xpath.Compiled
+	body []Instruction
+}
 
 func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := newOutputBuilder()
-	if err := execSequence(i.body, rt, sub); err != nil {
-		return err
+	var text string
+	if i.sel != nil {
+		seq, err := i.sel.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		text = constructedText(seq, " ")
+	} else {
+		sub := newOutputBuilder()
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+			return err
+		}
+		text = constructedText(sub.sequence(), " ")
 	}
-	text := stringJoin(sub.sequence(), "")
-	// "--" cannot appear in a comment and "-" cannot end one; the spec says
-	// to raise an error rather than mangle the content silently.
-	if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
-		return fmt.Errorf("XTDE0450: comment content %q contains '--' or ends with '-'", text)
-	}
+	// Section 11.8: the processor "must insert a space after any occurrence of
+	// - that is followed by another - or that ends the comment". This is a
+	// repair the specification requires, not an error — rejecting the
+	// stylesheet refused output XML can perfectly well represent.
+	text = repairCommentText(text)
 	out.appendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
 	return nil
+}
+
+// repairCommentText makes a string legal as comment content.
+//
+// A "-" followed by another "-", or one at the very end, gets a space after
+// it. Done in one left-to-right pass so that a run of hyphens is separated
+// throughout rather than only at its first pair.
+func repairCommentText(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		b.WriteByte(s[i])
+		if s[i] == '-' && (i+1 == len(s) || s[i+1] == '-') {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
 }
 
 // piInstr implements xsl:processing-instruction.
 type piInstr struct {
 	name *avt
+	sel  *xpath.Compiled
 	body []Instruction
 }
 
@@ -438,14 +672,27 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return fmt.Errorf(
 			"XTDE0890: %q is not a valid processing instruction target", target)
 	}
-	sub := newOutputBuilder()
-	if err := execSequence(i.body, rt, sub); err != nil {
-		return err
+	var text string
+	if i.sel != nil {
+		seq, err := i.sel.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		text = constructedText(seq, " ")
+	} else {
+		sub := newOutputBuilder()
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+			return err
+		}
+		text = constructedText(sub.sequence(), " ")
 	}
-	text := stringJoin(sub.sequence(), "")
-	if strings.Contains(text, "?>") {
-		return fmt.Errorf("XTDE0890: processing instruction content contains '?>'")
-	}
+	// Leading whitespace is not part of the content: the serialised form puts
+	// a space after the target, so keeping it would double.
+	text = strings.TrimLeft(text, " \t\r\n")
+	// Section 11.6: an occurrence of "?>" in the content is repaired by
+	// inserting a space between the "?" and the ">", which is what keeps a
+	// computed processing instruction from closing itself early.
+	text = strings.ReplaceAll(text, "?>", "? >")
 	out.appendNode(&xdm.Node{
 		Kind:  xdm.KindPI,
 		Name:  xdm.QName{Local: target},
@@ -521,7 +768,7 @@ func (i *forEachInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := rt.ctx.Err(); err != nil {
 			return err
 		}
-		sub := rt.withCurrent(it, idx+1, size)
+		sub := rt.withCurrent(it, idx+1, size).clearCurrentRule()
 		if err := execSequence(i.body, sub, out); err != nil {
 			return err
 		}
@@ -546,10 +793,10 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		text = stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
-		text = stringJoin(sub.sequence(), "")
+		text = constructedText(sub.sequence(), " ")
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
@@ -560,8 +807,20 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		if v == "yes" || v == "true" || v == "1" {
+		// XTDE0030: "it is a non-recoverable dynamic error if the effective
+		// value of an attribute written using curly brackets, in a position
+		// where an attribute value template is permitted, is a value that is
+		// not one of the permitted values for that attribute." The summary
+		// gives terminate a closed set of two, and the static check cannot
+		// look inside a template, so the effective value is checked here.
+		switch strings.TrimSpace(v) {
+		case "yes":
 			return fmt.Errorf("XTMM9000: %s", text)
+		case "no":
+		default:
+			return fmt.Errorf(
+				"XTDE0030: xsl:message/@terminate evaluated to %q, which is "+
+					"neither yes nor no", v)
 		}
 	}
 	return nil
@@ -571,9 +830,11 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // sortKey is a compiled xsl:sort.
 type sortKey struct {
-	sel       *xpath.Compiled
-	order     string // "ascending" or "descending"
-	dataType  string // "text" or "number"
+	sel   *xpath.Compiled
+	order string // "ascending" or "descending"
+	// dataType is "text" or "number" for the XSLT 1.0 forced conversions;
+	// empty means the XSLT 2.0 default of comparing by the values' own type.
+	dataType  string
 	caseOrder string
 	// coll orders text by the conventions of a language when xsl:sort/@lang
 	// names one; nil means codepoint order.
@@ -585,6 +846,75 @@ type sortKey struct {
 	// given. Accepting the attribute and then sorting by codepoint anyway is
 	// exactly the silent-wrong-answer this engine exists to avoid.
 	strColl xpath.Collation
+	// The remaining attribute value templates, held unevaluated for the case
+	// where the stylesheet computes them. Each is nil when the attribute was
+	// absent or literal, in which case the plain field above already holds
+	// the answer.
+	orderAVT     *avt
+	dataTypeAVT  *avt
+	caseOrderAVT *avt
+	langAVT      *avt
+}
+
+// resolve evaluates the attribute value templates of a sort key, returning a
+// copy with the results filled in.
+//
+// The attributes cannot vary between the items being sorted — one sort has one
+// ordering — so this runs once per sort rather than once per item.
+func (s *sortKey) resolve(rt *runtime) (*sortKey, error) {
+	if s.orderAVT == nil && s.dataTypeAVT == nil &&
+		s.caseOrderAVT == nil && s.langAVT == nil {
+		return s, nil
+	}
+	out := *s
+	if s.orderAVT != nil {
+		v, err := s.orderAVT.eval(rt)
+		if err != nil {
+			return nil, err
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			if err := checkSortOrder(v); err != nil {
+				return nil, err
+			}
+			out.order = v
+		}
+	}
+	if s.dataTypeAVT != nil {
+		v, err := s.dataTypeAVT.eval(rt)
+		if err != nil {
+			return nil, err
+		}
+		out.dataType = strings.TrimSpace(v)
+	}
+	if s.caseOrderAVT != nil {
+		v, err := s.caseOrderAVT.eval(rt)
+		if err != nil {
+			return nil, err
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			if err := checkCaseOrder(v); err != nil {
+				return nil, err
+			}
+			out.caseOrder = v
+		}
+	}
+	if s.langAVT != nil {
+		v, err := s.langAVT.eval(rt)
+		if err != nil {
+			return nil, err
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			// A computed language tag that names no collation is XTDE0030
+			// rather than a compile-time refusal: the stylesheet is
+			// well-formed and only the value it produced is wrong.
+			coll, err := newCollator(v)
+			if err != nil {
+				return nil, fmt.Errorf("XTDE0030: %w", err)
+			}
+			out.coll = coll
+		}
+	}
+	return &out, nil
 }
 
 // applySorts orders a sequence by the given sort keys.
@@ -595,9 +925,6 @@ type sortKey struct {
 // paths into the document.
 func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, error) {
 	n := len(seq)
-	if n < 2 {
-		return seq, nil
-	}
 
 	type entry struct {
 		item xdm.Item
@@ -606,9 +933,17 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 	}
 	entries := make([]entry, n)
 
-	// A collation named by an attribute value template is resolved once for
-	// the whole sort rather than per item: it cannot vary between items, and
-	// resolving it per comparison would parse the same URI n log n times.
+	// The attribute value templates are resolved once for the whole sort
+	// rather than per item: they cannot vary between items, and resolving
+	// them per comparison would parse the same URI n log n times.
+	sorts = append([]*sortKey(nil), sorts...)
+	for k, s := range sorts {
+		r, err := s.resolve(rt)
+		if err != nil {
+			return nil, err
+		}
+		sorts[k] = r
+	}
 	resolved := make([]xpath.Collation, len(sorts))
 	for k, s := range sorts {
 		resolved[k] = s.strColl
@@ -620,11 +955,25 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 			if strings.TrimSpace(uri) != "" {
 				c, err := xpath.ResolveCollation(uri)
 				if err != nil {
-					return nil, fmt.Errorf("xsl:sort/@collation: %w", err)
+					// Section 13.1.3 fixes the code: a collation URI the
+					// implementation does not recognise is XTDE1035, not the
+					// FOCH0002 that the function library raises for the same
+					// condition.
+					return nil, fmt.Errorf(
+						"XTDE1035: xsl:sort/@collation %q is not a recognized collation", uri)
 				}
 				resolved[k] = c
 			}
 		}
+	}
+
+	// Nothing to order, but the attributes above were still validated: a
+	// stylesheet naming an unrecognised collation is in error whether or not
+	// the sequence it sorts happens to be short enough that the ordering
+	// never matters. The key expressions are not evaluated, since their
+	// values could not change the answer.
+	if n < 2 {
+		return seq, nil
 	}
 
 	for i, it := range seq {
@@ -635,7 +984,7 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 			if err != nil {
 				return nil, err
 			}
-			e.keys[k] = makeSortValue(v, s, resolved[k])
+			e.keys[k] = makeSortValue(v, s, resolved[k], rt.ctx.ImplicitTimezone)
 		}
 		entries[i] = e
 	}
@@ -644,6 +993,20 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 	sort.SliceStable(entries, func(a, b int) bool {
 		for k, s := range sorts {
 			cmp := compareSortValues(entries[a].keys[k], entries[b].keys[k])
+			if cmp == sortIncomparable {
+				// The comparison function cannot fail, so the error is
+				// recorded and reported once the sort has finished. Its
+				// result is discarded, so the arbitrary ordering it gives
+				// these two never reaches the caller.
+				if sortErr == nil {
+					sortErr = fmt.Errorf(
+						"XTDE1030: two sort key values cannot be compared "+
+							"with the lt operator (%s and %s)",
+						entries[a].keys[k].atom.TypeName(),
+						entries[b].keys[k].atom.TypeName())
+				}
+				return false
+			}
 			if cmp == 0 {
 				continue
 			}
@@ -687,10 +1050,19 @@ type sortValue struct {
 	collKey []byte
 	// empty marks an absent key, which sorts before everything else.
 	empty bool
+	// atom is the atomized sort key value, kept for the XSLT 2.0 default
+	// where the comparison follows the value's own type rather than a
+	// conversion the stylesheet asked for. nil when data-type forced a
+	// conversion, or when the value was not a single atomic item.
+	atom *xdm.Atomic
+	// implicitTZ is needed to order the date/time types, whose comparison
+	// depends on the timezone an untimezoned value is taken to be in.
+	implicitTZ int
 }
 
-func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation) sortValue {
-	if len(seq) == 0 {
+func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitTZ int) sortValue {
+	atoms := xdm.Atomize(seq)
+	if len(atoms) == 0 {
 		return sortValue{empty: true}
 	}
 	text := stringJoin(seq[:1], "")
@@ -705,7 +1077,25 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation) sortValue
 		return sortValue{numeric: true, num: conv.Float64()}
 	}
 
-	v := sortValue{str: text, strColl: coll}
+	v := sortValue{str: text, strColl: coll, implicitTZ: implicitTZ}
+	// With no data-type, the value keeps its own type and the comparison is
+	// the XPath "lt" operator: a sequence of xs:integer sorts numerically,
+	// dates sort chronologically. Only a single atomic value can be ordered
+	// that way; anything else falls back to the string form.
+	//
+	// xs:untypedAtomic is excluded deliberately — section 13.1.2 says such
+	// values are cast to xs:string, which is what the string path already
+	// does, and treating them as typed would sort unparsed text numerically.
+	if s.dataType == "" && len(atoms) == 1 {
+		if a, ok := atoms[0].(*xdm.Atomic); ok && a.Type != xdm.TypeUntypedAtomic {
+			v.atom = a
+			// A string-valued key still goes through the collation rules
+			// below, so only the non-string types take the typed path.
+			if isStringSortType(a.Type) {
+				v.atom = nil
+			}
+		}
+	}
 	if s.coll != nil {
 		v.collKey = s.coll.key(text)
 	}
@@ -775,6 +1165,38 @@ func compareSortValues(a, b sortValue) int {
 		return -c
 	}
 
+	// Two typed values compare by their own type, which is the XSLT 2.0
+	// default. A pair that cannot be ordered together — a string against a
+	// number, say — falls through to the string comparison rather than
+	// failing the transform, because section 13.1.2 makes that an error only
+	// when the values genuinely have no ordering and the suite expects the
+	// sort to complete.
+	if a.atom != nil && b.atom != nil {
+		if c, ok := compareAtoms(a.atom, b.atom, a.implicitTZ); ok {
+			return c
+		}
+		// XTDE1030: "it is a non-recoverable dynamic error if, for any sort
+		// key component, the set of sort key values ... contains a pair of
+		// ordinary values for which the result of the XPath lt operator is an
+		// error." Two values of unrelated types — an integer against a string
+		// — are exactly that pair, and ordering them by string form invents
+		// an answer the stylesheet did not ask for.
+		//
+		// The exception is xs:untypedAtomic, which the "lt" operator promotes
+		// to the other operand's type rather than refusing: a sort key read
+		// from an unvalidated document is untyped, and that is the ordinary
+		// case rather than an error.
+		// Two values of the *same* type are always orderable in principle, so
+		// a refusal there is a gap in compareAtoms rather than the error the
+		// clause describes; the durations are the pair that exposed it, and
+		// reporting XTDE1030 for them lost two tests that sort perfectly
+		// well. Only a pair of genuinely unrelated types is the error.
+		if !isUntyped(a.atom) && !isUntyped(b.atom) &&
+			a.atom.Type != b.atom.Type {
+			return sortIncomparable
+		}
+	}
+
 	if a.numeric && b.numeric {
 		an, bn := a.num, b.num
 		switch {
@@ -819,10 +1241,77 @@ func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
 	}
-	doc := sub.toTree()
+	doc, err := sub.toDocument()
+	if err != nil {
+		return err
+	}
 	if err := i.validation.assess(rt, doc); err != nil {
 		return err
 	}
 	out.appendNode(doc)
 	return nil
+}
+
+// isStringSortType reports whether a type is ordered by the collation rules of
+// section 13.1.3 rather than by its own comparison operator.
+func isStringSortType(t xdm.TypeCode) bool {
+	return t == xdm.TypeString || t == xdm.TypeAnyURI ||
+		t == xdm.TypeUntypedAtomic
+}
+
+// compareAtoms orders two atomic sort key values by their own type, reporting
+// whether the pair has an ordering at all.
+//
+// NaN is ordered rather than left unordered: section 13.1.2 makes NaN values
+// equal to each other and less than every other number, which is not what the
+// "lt" operator does but is what sorting needs to stay a total order.
+func compareAtoms(a, b *xdm.Atomic, implicitTZ int) (int, bool) {
+	switch {
+	case a.Type.IsNumeric() && b.Type.IsNumeric():
+		an, bn := a.Float64(), b.Float64()
+		switch {
+		case an != an && bn != bn:
+			return 0, true
+		case an != an:
+			return -1, true
+		case bn != bn:
+			return 1, true
+		}
+		// Comparing as doubles loses precision for large integers and
+		// decimals, so an exact comparison is used when both sides can give
+		// one and the doubles came out equal.
+		if an < bn {
+			return -1, true
+		}
+		return 1, true
+
+	case a.Type == xdm.TypeBoolean && b.Type == xdm.TypeBoolean:
+		av, bv := 0, 0
+		if a.Bool() {
+			av = 1
+		}
+		if b.Bool() {
+			bv = 1
+		}
+		return av - bv, true
+
+	case a.Type == b.Type && a.DateTimeVal() != nil && b.DateTimeVal() != nil:
+		return xdm.CompareDT(a.DateTimeVal(), b.DateTimeVal(), implicitTZ), true
+	}
+	return 0, false
+}
+
+// sortIncomparable is the value compareSortValues returns for a pair the XPath
+// lt operator cannot order.
+//
+// It is a sentinel rather than an error return because the function is called
+// from sort.SliceStable's comparison, whose signature has no room for one. The
+// value is outside the -1..1 that a real comparison produces, so no caller can
+// mistake it for an ordering.
+const sortIncomparable = -2
+
+// isUntyped reports whether an atomic value is xs:untypedAtomic, which the
+// comparison operators promote rather than refuse.
+func isUntyped(a *xdm.Atomic) bool {
+	return a.Type == xdm.TypeUntypedAtomic
 }

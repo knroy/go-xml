@@ -41,11 +41,13 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		// only that the namespace is expected to be available. That is
 		// legal — a processor may already know the schema — and there
 		// is nothing to load.
-		if ns == "" {
-			return fmt.Errorf(
-				"xsl:import-schema needs a namespace, a schema-location, " +
-					"or an inline xs:schema")
-		}
+		//
+		// An absent namespace is legal too. The specification makes both
+		// attributes optional and reads an absent namespace as "import the
+		// components whose names are in no namespace", so <xsl:import-schema/>
+		// with no attributes and no content imports the no-namespace schema,
+		// which in the ordinary case has no components. Rejecting it made a
+		// stylesheet that only wants the built-in types fail to compile.
 		return nil
 	}
 

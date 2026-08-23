@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -195,7 +196,10 @@ func TestAsTypeCoercesUntypedAtomic(t *testing.T) {
 	</xsl:stylesheet>`
 	// 0.1 + 0.2 is exactly 0.3 in decimal arithmetic and 0.30000000000000004
 	// in double arithmetic; the "as" declaration is what selects the former.
-	if got := run(t, sheet, `<d><x>0.1</x><y>0.2</y></d>`); got != "<r>0.3</r>" {
-		t.Errorf("got %q, want <r>0.3</r> (the as-declaration must coerce to xs:decimal)", got)
+	// What is under test is the arithmetic, not the serialised namespace
+	// declarations: the u: and xs: prefixes are in scope on the literal
+	// result element and section 11.1.3 copies them to it.
+	if got := run(t, sheet, `<d><x>0.1</x><y>0.2</y></d>`); !strings.Contains(got, ">0.3<") {
+		t.Errorf("got %q, want 0.3 (the as-declaration must coerce to xs:decimal)", got)
 	}
 }

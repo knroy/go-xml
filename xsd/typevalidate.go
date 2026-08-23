@@ -55,6 +55,50 @@ func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
 	return s.Validate(el, opts)
 }
 
+// HasElementDeclaration reports whether the schema declares a global element
+// of that name, and HasAttributeDeclaration does the same for an attribute.
+//
+// A caller that must distinguish "not declared" from "declared and invalid" —
+// XSLT's XTTE1512 against XTTE1510 — needs to ask before validating, because
+// once validation has run both look like a failure.
+func (s *Schema) HasElementDeclaration(name xdm.QName) bool {
+	_, ok := s.Elements[bareName(name)]
+	return ok
+}
+
+// HasAttributeDeclaration reports whether the schema declares a global
+// attribute of that name.
+func (s *Schema) HasAttributeDeclaration(name xdm.QName) bool {
+	_, ok := s.Attributes[bareName(name)]
+	return ok
+}
+
+// ValidateAttribute checks one attribute against the global declaration for
+// its name.
+//
+// It is the attribute counterpart of ValidateElement, for a stylesheet that
+// copies an attribute under validation="strict": the declaration selects the
+// type, and the value has to satisfy it. lax passes an attribute the schema
+// does not declare; strict rejects it.
+func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions) error {
+	if at == nil || at.Kind != xdm.KindAttribute {
+		return fmt.Errorf("xsd: ValidateAttribute needs an attribute")
+	}
+	decl, ok := s.Attributes[bareName(at.Name)]
+	if !ok || decl == nil || decl.Type == nil {
+		if lax {
+			return nil
+		}
+		return &ValidationErrors{Errors: []*ValidationError{{
+			Code: "cvc-attribute.1",
+			Message: fmt.Sprintf("no global declaration for attribute %s",
+				showName(at.Name)),
+			Path: "/@" + at.Name.Local,
+		}}}
+	}
+	return s.ValidateAgainstType(at, decl.Type.Name, opts)
+}
+
 // ValidateAgainstType checks one element or attribute against a named type.
 //
 // This is the [xsl:]type attribute, which names a type directly rather than
@@ -108,6 +152,14 @@ func (s *Schema) ValidateAgainstType(n *xdm.Node, typeName xdm.QName,
 				n.Name.Local, showName(typeName))
 		}
 		v.validateSimpleContent(n, n.Value, st, nil)
+		if opts.Annotate && len(v.errs) == 0 && typeName.Local != "" {
+			// The element branch stamps the annotation inside the validator;
+			// this one has to do it here, because validateSimpleContent works
+			// on a value rather than on a declared node. Without it an
+			// attribute validated against a named type came out untyped and
+			// "instance of attribute(a, my:t)" answered false for it.
+			n.TypeAnnotation = typeName.Local
+		}
 	default:
 		return fmt.Errorf("xsd: ValidateAgainstType needs an element or attribute")
 	}

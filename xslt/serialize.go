@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -11,16 +14,50 @@ import (
 // serialize writes a result sequence using the given output settings.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
 	s := &serializer{w: w, opts: opts, charMap: charMap}
+	s.normalize = normalizerFor(opts.NormalizationForm)
+	if len(opts.CDataElements) > 0 {
+		s.cdataElems = make(map[xdm.QName]bool, len(opts.CDataElements))
+		for _, q := range opts.CDataElements {
+			// Only URI and Local are set: a QName is compared as a whole
+			// struct, so leaving the prefix in would never match a result
+			// element carrying a different one for the same namespace.
+			s.cdataElems[xdm.QName{URI: q.URI, Local: q.Local}] = true
+		}
+	}
+
+	// The method defaults to one chosen from the result itself: a document
+	// whose first element is <html> is meant to be read as HTML, and writing
+	// it as XML would produce something a browser renders differently. The
+	// choice is made here rather than at compile time because it depends on
+	// the tree, which does not exist until the transform has run.
+	if opts.Method == "" {
+		opts.Method = defaultMethod(seq)
+		s.opts.Method = opts.Method
+	}
+
+	// Parameter conflicts are diagnosed before a byte is written. The
+	// alternative — discovering halfway through that the requested encoding
+	// does not exist — leaves the caller holding a truncated document that
+	// looks like a complete one.
+	if err := checkOutputSettings(opts, seq); err != nil {
+		return err
+	}
 
 	if opts.Method == "text" {
+		// A byte order mark precedes everything the method writes, text
+		// included: it is what tells a reader how to decode the bytes, and
+		// text output has no declaration to carry the encoding instead.
+		if opts.ByteOrderMark {
+			s.writeString("\uFEFF")
+		}
 		// Text output emits string values only; markup is discarded, which is
 		// the point of the method.
 		for _, it := range seq {
 			switch v := it.(type) {
 			case *xdm.Node:
-				s.writeString(v.StringValue())
+				s.writeString(s.normalized(s.mapChars(v.StringValue())))
 			case *xdm.Atomic:
-				s.writeString(v.String())
+				s.writeString(s.normalized(s.mapChars(v.String())))
 			}
 		}
 		return s.err
@@ -34,6 +71,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	xhtml := strings.EqualFold(opts.Method, "xhtml")
 	s.html = html || xhtml
 	s.xhtml = xhtml
+	s.html5 = strings.HasPrefix(opts.Version, "5")
 
 	// A byte order mark, when asked for. It precedes everything, including
 	// the XML declaration, since it is what tells a reader how to decode
@@ -54,7 +92,15 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if opts.Standalone != "" {
 			decl += ` standalone="` + opts.Standalone + `"`
 		}
-		s.writeString(decl + "?>\n")
+		// The newline after the declaration is indentation, not structure.
+		// With indent off the result is meant to be exactly the markup the
+		// stylesheet produced, and a stray line break there is a character
+		// the caller did not ask for.
+		if opts.Indent {
+			s.writeString(decl + "?>\n")
+		} else {
+			s.writeString(decl + "?>")
+		}
 	}
 	switch {
 	case html && opts.DocTypeSystem == "" && opts.DocTypePublic == "":
@@ -63,8 +109,19 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if strings.HasPrefix(opts.Version, "5") {
 			s.writeString("<!DOCTYPE HTML>\n")
 		}
-	case opts.DocTypeSystem != "" || opts.DocTypePublic != "":
-		s.writeDoctype(seq)
+	case opts.DocTypeSystem != "":
+		// A document type declaration is written only when a system
+		// identifier is available. A public identifier alone cannot be
+		// written at all: the XML grammar puts the system literal after
+		// PUBLIC and makes it required, so there is no legal spelling of a
+		// declaration that names only a public identifier.
+		//
+		// The declaration goes immediately before the document element, not
+		// before the whole result: XML puts comments and processing
+		// instructions in the prolog ahead of it, and a result that starts
+		// with one of those would otherwise have them moved after the
+		// declaration, which changes the document.
+		s.pendingDoctype = true
 	}
 
 	// suppressFirstIndent stops the top-level element from emitting the
@@ -89,12 +146,18 @@ type serializer struct {
 	// nsStack tracks namespace prefixes already declared on ancestors, so a
 	// binding is emitted once rather than on every descendant.
 	nsStack []map[string]string
+	// pendingDoctype records that a document type declaration is owed, to be
+	// written immediately before the document element.
+	pendingDoctype bool
 	// atTop suppresses the leading newline before the first top-level node.
 	atTop bool
 	// html selects the HTML output method, which differs from XML in three
 	// ways that matter: void elements are written unclosed, no element is
 	// ever self-closed, and a content-type meta is injected into <head>.
 	html bool
+	// html5 records that the HTML version asked for is 5 or later, where the
+	// C1 range that HTML 4 forbids is merely discouraged.
+	html5 bool
 	// xhtml marks the XHTML method, which shares the HTML method's
 	// content-type meta but serialises as XML: an XML declaration, and empty
 	// elements closed rather than left open.
@@ -107,6 +170,15 @@ type serializer struct {
 	// which one, so that the error naming it can say so.
 	rawText     bool
 	rawTextName string
+	// inCData marks that serialisation is inside an element named in
+	// cdata-section-elements, whose text children are wrapped in CDATA
+	// sections instead of being escaped.
+	inCData bool
+	// cdataElems is that list, as a set keyed by expanded name.
+	cdataElems map[xdm.QName]bool
+	// normalize applies the Unicode normalisation named by
+	// normalization-form, or is nil when none was asked for.
+	normalize func(string) string
 	// charMap substitutes individual characters for arbitrary strings,
 	// bypassing escaping. Declared by xsl:character-map.
 	charMap map[rune]string
@@ -119,22 +191,26 @@ func (s *serializer) writeString(str string) {
 	_, s.err = io.WriteString(s.w, str)
 }
 
-func (s *serializer) writeDoctype(seq xdm.Sequence) {
-	// The doctype names the first element of the result.
-	for _, it := range seq {
-		n, ok := it.(*xdm.Node)
-		if !ok || n.Kind != xdm.KindElement {
-			continue
-		}
-		s.writeString("<!DOCTYPE " + n.Name.Lexical())
-		if s.opts.DocTypePublic != "" {
-			s.writeString(` PUBLIC "` + s.opts.DocTypePublic + `" "` + s.opts.DocTypeSystem + `"`)
-		} else {
-			s.writeString(` SYSTEM "` + s.opts.DocTypeSystem + `"`)
-		}
-		s.writeString(">\n")
-		return
+// writeDoctypeFor writes the document type declaration naming this element.
+func (s *serializer) writeDoctypeFor(n *xdm.Node) {
+	s.writeString("<!DOCTYPE " + s.elementName(n))
+	if s.opts.DocTypePublic != "" {
+		s.writeString(" PUBLIC " + quoteLiteral(s.opts.DocTypePublic))
+	} else {
+		s.writeString(" SYSTEM")
 	}
+	s.writeString(" " + quoteLiteral(s.opts.DocTypeSystem) + ">\n")
+}
+
+// quoteLiteral wraps an external identifier in quotes it does not itself
+// contain. XML gives these literals no escaping mechanism, so a value holding
+// a double quote has to be delimited with single quotes instead — the choice
+// is the only way to write it at all.
+func quoteLiteral(v string) string {
+	if strings.Contains(v, `"`) {
+		return "'" + v + "'"
+	}
+	return `"` + v + `"`
 }
 
 // node writes one node at the given indent depth.
@@ -174,6 +250,10 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 			s.writeString(n.Value)
 			return
 		}
+		if s.inCData {
+			s.writeCData(n.Value)
+			return
+		}
 		s.escapeText(n.Value)
 
 	case xdm.KindComment:
@@ -181,6 +261,17 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		s.writeString("<!--" + n.Value + "-->")
 
 	case xdm.KindPI:
+		// The HTML method ends a processing instruction at the first ">"
+		// rather than at "?>", so a ">" inside the data would truncate it.
+		// There is no escape for it in HTML, which is why the spec makes it
+		// an error rather than something to encode.
+		if s.html && !s.xhtml && strings.Contains(n.Value, ">") {
+			if s.err == nil {
+				s.err = fmt.Errorf("SERE0015: a processing instruction " +
+					"contains '>', which ends it in the html output method")
+			}
+			return
+		}
 		s.indent(depth)
 		s.writeString("<?" + n.Name.Local)
 		if n.Value != "" {
@@ -200,10 +291,19 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 }
 
 func (s *serializer) element(n *xdm.Node, depth int) {
+	if s.pendingDoctype {
+		s.pendingDoctype = false
+		s.writeDoctypeFor(n)
+	}
+
 	// The method already emitted a content-type meta, so a charset meta from
 	// the stylesheet would be a duplicate declaration.
+	// The method already emitted a content-type meta, so one from the
+	// stylesheet would be a second, contradicting declaration. Both spellings
+	// are dropped: the HTML5 "charset" form and the HTTP-header form the
+	// serialiser itself writes.
 	if s.html && s.inHead && strings.EqualFold(n.Name.Local, "meta") &&
-		n.Attr("", "charset") != nil {
+		(n.Attr("", "charset") != nil || isContentTypeMeta(n)) {
 		return
 	}
 	s.indent(depth)
@@ -252,7 +352,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 
 	for _, a := range n.Attrs {
-		s.writeString(" " + s.attrName(a) + `="` + escapeAttr(a.Value) + `"`)
+		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
 	}
 
 	if len(n.Children) == 0 {
@@ -267,8 +367,23 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			}
 			return
 		}
-		// XHTML is XML and self-closes, which is the whole point of the
-		// method: the output has to parse as XML as well as render as HTML.
+		if s.xhtml {
+			// XHTML has to satisfy both parsers at once. An HTML parser
+			// reading "<div/>" sees an unclosed start tag, so a non-void
+			// element gets an explicit end tag; a void element has no end
+			// tag in HTML at all, so it is written self-closed with the
+			// space that the HTML compatibility guidelines ask for. Which
+			// side of the rule an element falls on is decided by its HTML
+			// name, which only makes sense inside the XHTML namespace.
+			if n.Name.URI == nsXHTML && isVoidElement(n.Name.Local) {
+				s.writeString(" />")
+			} else {
+				s.writeString("></" + name + ">")
+			}
+			return
+		}
+		// XML self-closes an empty element, which is the shortest spelling
+		// and the one every parser reads identically.
 		s.writeString("/>")
 		return
 	}
@@ -278,7 +393,11 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 
 	// The HTML method adds the content-type meta so the encoding survives
 	// being served without a charset header.
-	if s.html && isRawTextElement(n.Name.Local) {
+	// Only the html method writes script and style content raw. XHTML is
+	// XML, where those elements hold ordinary parsed character data — the
+	// suite's expected output escapes "<" and "&" inside a script there, and
+	// a document that did not would not parse as XML at all.
+	if s.html && !s.xhtml && isRawTextElement(n.Name.Local) {
 		saved, savedName := s.rawText, s.rawTextName
 		s.rawText, s.rawTextName = true, n.Name.Local
 		defer func() { s.rawText, s.rawTextName = saved, savedName }()
@@ -295,19 +414,36 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			}
 			media := s.opts.MediaType
 			if media == "" {
+				// The default is text/html for the html *and* xhtml methods.
+				// XHTML served as application/xhtml+xml is the stricter
+				// choice, but the specification names text/html for both,
+				// and this element exists to describe what a browser will
+				// see rather than what the author would prefer.
 				media = "text/html"
-				if s.xhtml {
-					media = "application/xhtml+xml"
-				}
 			}
 			tag := `<meta http-equiv="Content-Type" content="` + media +
 				`; charset=` + enc + `">`
 			if s.xhtml {
-				// XHTML is XML: an empty element must be closed.
-				tag = strings.TrimSuffix(tag, ">") + "/>"
+				// XHTML is XML: an empty element must be closed. The space
+				// before the slash is what the HTML compatibility guidelines
+				// ask for, so that an HTML parser reading the same bytes does
+				// not take the slash as part of the last attribute value.
+				tag = strings.TrimSuffix(tag, ">") + " />"
 			}
 			s.writeString(tag)
 		}
+	}
+
+	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+		saved := s.inCData
+		s.inCData = true
+		defer func() { s.inCData = saved }()
+	} else if s.inCData {
+		// The parameter names the elements whose *own* text children are
+		// wrapped, not a subtree. A nested element's text is escaped
+		// normally unless that element is named too.
+		s.inCData = false
+		defer func() { s.inCData = true }()
 	}
 
 	// Indentation is suppressed for mixed content: adding whitespace around
@@ -413,6 +549,13 @@ func hasTextChild(n *xdm.Node) bool {
 // because doing it unconditionally is cheaper than scanning for that sequence
 // and produces output every parser accepts.
 func (s *serializer) escapeText(text string) {
+	if s.normalize != nil {
+		// Normalisation is applied to the text as a whole rather than to the
+		// bytes on their way out: a combining sequence spans several
+		// characters, so normalising each one alone would leave it exactly
+		// as it was.
+		text = s.normalize(text)
+	}
 	var sb strings.Builder
 	sb.Grow(len(text))
 	for _, r := range text {
@@ -421,6 +564,22 @@ func (s *serializer) escapeText(text string) {
 		// defeat it.
 		if repl, ok := s.charMap[r]; ok {
 			sb.WriteString(repl)
+			continue
+		}
+		// HTML 4 gives #x7F-#x9F no meaning: the numeric character
+		// references in that range name positions in the C1 control block,
+		// and browsers historically remapped them to the windows-1252
+		// characters instead. Writing one either way produces a document
+		// whose meaning depends on the reader, so the spec forbids it.
+		if s.html && !s.xhtml && r >= 0x7F && r <= 0x9F && !s.html5 {
+			if s.err == nil {
+				s.err = fmt.Errorf("SERE0014: character #x%X cannot be "+
+					"output by the html method", r)
+			}
+			return
+		}
+		if !s.representable(r) {
+			fmt.Fprintf(&sb, "&#%d;", r)
 			continue
 		}
 		switch r {
@@ -445,6 +604,225 @@ func (s *serializer) escapeText(text string) {
 		}
 	}
 	s.writeString(sb.String())
+}
+
+// writeCData writes text as one or more CDATA sections.
+//
+// The section ends at the first "]]>", which the text may itself contain — so
+// the text is split there and the ">" begins a new section. That is the only
+// way to write the sequence inside CDATA at all, and it is what the
+// specification's own example shows.
+//
+// A character map does not apply here. Inside a CDATA section nothing is
+// escaped, so there is no escaping for a map to replace; the test suite
+// checks that a mapped character survives unchanged in such an element.
+func (s *serializer) writeCData(text string) {
+	// A character the encoding cannot represent has to leave the section
+	// too: there is no escaping inside CDATA, so the section is closed, the
+	// character written as a numeric reference, and a new one opened. That
+	// is the only spelling that both preserves the character and keeps every
+	// byte inside the declared encoding.
+	var sb strings.Builder
+	sb.WriteString("<![CDATA[")
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "]]>") {
+			// The section ends at the first "]]>", which the text may itself
+			// contain — so it is split there and the ">" begins a new one.
+			sb.WriteString("]]]]><![CDATA[>")
+			i += 3
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if !s.representable(r) {
+			sb.WriteString("]]>")
+			fmt.Fprintf(&sb, "&#%d;", r)
+			sb.WriteString("<![CDATA[")
+			i += size
+			continue
+		}
+		sb.WriteString(text[i : i+size])
+		i += size
+	}
+	sb.WriteString("]]>")
+	s.writeString(sb.String())
+}
+
+// representable reports whether the declared encoding can hold this
+// character. Only the ASCII-limited encodings restrict anything; the Unicode
+// ones hold every character by construction.
+func (s *serializer) representable(r rune) bool {
+	if r < 0x80 {
+		return true
+	}
+	switch strings.ToLower(s.opts.Encoding) {
+	case "us-ascii", "ascii":
+		return false
+	case "iso-8859-1", "latin1":
+		return r < 0x100
+	}
+	return true
+}
+
+// normalized applies the requested Unicode normalisation, if any.
+func (s *serializer) normalized(text string) string {
+	if s.normalize == nil {
+		return text
+	}
+	return s.normalize(text)
+}
+
+// mapChars applies the character map without escaping anything else, for the
+// text output method — which writes characters as they stand.
+func (s *serializer) mapChars(text string) string {
+	if len(s.charMap) == 0 {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	for _, r := range text {
+		if repl, ok := s.charMap[r]; ok {
+			sb.WriteString(repl)
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// attrValue writes an attribute value with its delimiters.
+//
+// A character map applies to attribute nodes as well as to text nodes, and
+// the substituted string bypasses escaping — that is the point of declaring
+// one. That leaves the delimiter: a map that produces a quotation mark cannot
+// have it escaped, so the specification says the serialiser uses the other
+// delimiter around the value where it can. Only where both quote characters
+// appear is there no choice, and then the double quote is escaped.
+func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
+	v := a.Value
+	if s.normalize != nil {
+		v = s.normalize(v)
+	}
+	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
+		v = escapeURIAttribute(v)
+	}
+	body, raw := s.escapeAttrMapped(v)
+	if raw && strings.Contains(body, `"`) && !strings.Contains(body, "'") {
+		return "='" + body + "'"
+	}
+	return `="` + body + `"`
+}
+
+// escapeAttrMapped escapes an attribute value, passing character-mapped
+// substitutions through untouched. The second result reports whether any
+// substitution happened, which is what makes the delimiter choice necessary.
+func (s *serializer) escapeAttrMapped(v string) (string, bool) {
+	if len(s.charMap) == 0 && !s.html {
+		return escapeAttr(v), false
+	}
+	if len(s.charMap) == 0 {
+		var sb strings.Builder
+		sb.Grow(len(v))
+		for _, r := range v {
+			sb.WriteString(s.escapeAttrRune(r))
+		}
+		return sb.String(), false
+	}
+	var sb strings.Builder
+	sb.Grow(len(v))
+	mapped := false
+	for _, r := range v {
+		if repl, ok := s.charMap[r]; ok {
+			sb.WriteString(repl)
+			mapped = true
+			continue
+		}
+		sb.WriteString(s.escapeAttrRune(r))
+	}
+	return sb.String(), mapped
+}
+
+// escapeURIs reports whether URI-valued attributes are percent-escaped. The
+// parameter defaults to yes, which is why it is a pointer.
+func (s *serializer) escapeURIs() bool {
+	return s.opts.EscapeURIAttributes == nil || *s.opts.EscapeURIAttributes
+}
+
+// escapeAttrRune escapes one character of an attribute value.
+//
+// The HTML and XHTML methods write the C1 range as a numeric character
+// reference. Those code points are the ones HTML 4 leaves undefined and that
+// browsers have historically remapped to windows-1252 characters, so a
+// reference — which names a Unicode code point unambiguously — is the only
+// spelling that survives being read back.
+func (s *serializer) escapeAttrRune(r rune) string {
+	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
+		return fmt.Sprintf("&#%d;", r)
+	}
+	return escapeAttr(string(r))
+}
+
+// uriAttributes are the attributes the HTML DTD declares with type URI, whose
+// values the html and xhtml methods percent-escape. The key is the element
+// name, or "*" for an attribute that carries a URI on any element.
+var uriAttributes = map[string]map[string]bool{
+	"a":          {"href": true, "name": true},
+	"applet":     {"codebase": true, "archive": true},
+	"area":       {"href": true},
+	"base":       {"href": true},
+	"blockquote": {"cite": true},
+	"body":       {"background": true},
+	"del":        {"cite": true},
+	"form":       {"action": true},
+	"frame":      {"src": true, "longdesc": true},
+	"head":       {"profile": true},
+	"iframe":     {"src": true, "longdesc": true},
+	"img":        {"src": true, "longdesc": true, "usemap": true},
+	"input":      {"src": true, "usemap": true},
+	"ins":        {"cite": true},
+	"link":       {"href": true},
+	"object":     {"classid": true, "codebase": true, "data": true, "usemap": true, "archive": true},
+	"q":          {"cite": true},
+	"script":     {"src": true, "for": true},
+	"*":          {},
+}
+
+// isURIAttribute reports whether an attribute holds a URI, and so is subject
+// to percent-escaping in the html and xhtml output methods.
+//
+// The list is by element and attribute name, because "href" is a URI on <a>
+// and an ordinary string on an element the HTML DTD does not define it for.
+// The test suite checks exactly that distinction: accesskey on <a> holds a
+// character, not a URI, and must not be escaped.
+func isURIAttribute(element string, a *xdm.Node) bool {
+	if a.Name.URI != "" {
+		return false
+	}
+	attrs, ok := uriAttributes[strings.ToLower(element)]
+	if !ok {
+		return false
+	}
+	return attrs[strings.ToLower(a.Name.Local)]
+}
+
+// escapeURIAttribute percent-escapes the characters a URI cannot hold.
+//
+// Only non-ASCII characters and the few ASCII characters that are illegal in
+// a URI are escaped, and a "%" is left alone: a value that is already escaped
+// must survive unchanged, or every round trip through a stylesheet would
+// double-escape it.
+func escapeURIAttribute(v string) string {
+	var sb strings.Builder
+	sb.Grow(len(v))
+	for _, r := range v {
+		if r < 0x7F && !strings.ContainsRune(" <>\"{}|^`", r) {
+			sb.WriteRune(r)
+			continue
+		}
+		for _, b := range []byte(string(r)) {
+			fmt.Fprintf(&sb, "%%%02X", b)
+		}
+	}
+	return sb.String()
 }
 
 // escapeAttr escapes a value for an attribute, which additionally must not
@@ -477,6 +855,24 @@ func escapeAttr(v string) string {
 	return sb.String()
 }
 
+// isContentTypeMeta reports whether an element is a meta declaring the
+// content type, in the http-equiv spelling. Case is ignored on both the
+// attribute name and its value, which is how HTTP header names compare.
+func isContentTypeMeta(n *xdm.Node) bool {
+	for _, a := range n.Attrs {
+		if a.Name.URI == "" && strings.EqualFold(a.Name.Local, "http-equiv") &&
+			strings.EqualFold(strings.TrimSpace(a.Value), "content-type") {
+			return true
+		}
+	}
+	return false
+}
+
+// nsXHTML is the namespace an element must be in for the XHTML output
+// method's HTML-specific rules to apply to it. An element outside it is
+// ordinary XML that happens to be serialised by this method.
+const nsXHTML = "http://www.w3.org/1999/xhtml"
+
 // voidElements are the HTML elements that take no end tag. Writing one with a
 // closing tag, or self-closing a non-void element, both produce a tree that
 // an HTML parser reads differently from the one the stylesheet built.
@@ -499,4 +895,260 @@ func isRawTextElement(local string) bool {
 		return true
 	}
 	return false
+}
+
+// defaultMethod chooses the output method for a result with no explicit one.
+//
+// The rule reads the first element child of the result: "html" in the XHTML
+// namespace selects xhtml, "html" in no namespace — in any case — selects
+// html, and everything else, including a result whose first element is
+// preceded by non-whitespace text, is xml.
+func defaultMethod(seq xdm.Sequence) string {
+	var first *xdm.Node
+	var scan func(xdm.Sequence) bool
+	scan = func(items xdm.Sequence) bool {
+		for _, it := range items {
+			switch v := it.(type) {
+			case *xdm.Node:
+				switch v.Kind {
+				case xdm.KindDocument:
+					kids := make(xdm.Sequence, 0, len(v.Children))
+					for _, c := range v.Children {
+						kids = append(kids, c)
+					}
+					if !scan(kids) {
+						return false
+					}
+				case xdm.KindElement:
+					if first == nil {
+						first = v
+					}
+					return false
+				case xdm.KindText:
+					// Text before the first element rules out the HTML
+					// methods, which describe a document rather than an
+					// arbitrary sequence — unless it is only whitespace.
+					if !xdm.IsXMLWhitespace(v.Value) {
+						return false
+					}
+				}
+			case *xdm.Atomic:
+				if !xdm.IsXMLWhitespace(v.String()) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	scan(seq)
+	if first == nil {
+		return "xml"
+	}
+	switch {
+	case first.Name.URI == nsXHTML && first.Name.Local == "html":
+		return "xhtml"
+	case first.Name.URI == "" && strings.EqualFold(first.Name.Local, "html"):
+		return "html"
+	}
+	return "xml"
+}
+
+// checkOutputSettings reports the serialization errors that a set of output
+// parameters raises on its own, before any node is written.
+//
+// These are the conflicts the Serialization specification names: a parameter
+// whose value this serialiser cannot honour, and a combination of parameters
+// that contradict each other. Each is a serialization error rather than
+// something to fall back from, because every fallback would produce a
+// document that differs from the one the stylesheet asked for without saying
+// so.
+func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
+	method := strings.ToLower(opts.Method)
+	if method == "" {
+		method = "xml"
+	}
+
+	// An encoding this serialiser cannot produce. Everything is written as
+	// UTF-8, and the encodings that are byte-for-byte compatible enough to
+	// name are the Unicode ones; anything else would be a declaration that
+	// lies about the bytes that follow.
+	if enc := opts.Encoding; enc != "" && !supportedEncoding(enc) {
+		return fmt.Errorf("SESU0007: encoding %q is not supported", enc)
+	}
+
+	// A form the serialiser cannot apply. Claiming a normalisation while
+	// emitting unnormalised text would be worse than refusing: a consumer
+	// that trusts the parameter would compare the output against a
+	// normalised form and find a difference that is not really there.
+	if nf := opts.NormalizationForm; nf != "" && normalizerFor(nf) == nil &&
+		nf != "none" {
+		return fmt.Errorf(
+			"SESU0011: normalization form %q is not supported", nf)
+	}
+
+	// A public identifier is restricted to the PubidChar production. A
+	// character outside it cannot be written between the quotes at all.
+	if p := opts.DocTypePublic; p != "" && !isPubidLiteral(p) {
+		return fmt.Errorf(
+			"SEPM0016: %q is not a valid public identifier", p)
+	}
+
+	if method == "html" {
+		// The html method supports the HTML versions it knows how to write.
+		// An unrecognised one would silently get HTML 4 rules, which for a
+		// stylesheet that asked for something else is the wrong document.
+		if v := opts.Version; v != "" && !supportedHTMLVersion(v) {
+			return fmt.Errorf(
+				"SESU0013: HTML version %q is not supported", v)
+		}
+		return nil
+	}
+	if method != "xml" && method != "xhtml" {
+		return nil
+	}
+
+	// undeclare-prefixes needs the xmlns:p="" syntax, which only XML 1.1
+	// permits. Asking for it with version 1.0 is a request the output cannot
+	// express.
+	if opts.UndeclarePrefixes && !strings.HasPrefix(opts.Version, "1.1") {
+		return fmt.Errorf("SEPM0010: undeclare-prefixes requires XML 1.1, " +
+			"but the output version is 1.0")
+	}
+
+	// standalone and a document type declaration both live in the prolog,
+	// which omit-xml-declaration removes. Honouring both would mean writing
+	// a declaration that was asked to be omitted.
+	if opts.OmitXMLDecl {
+		if opts.Standalone != "" && opts.Standalone != "omit" {
+			return fmt.Errorf("SEPM0009: standalone=%q cannot be written "+
+				"when omit-xml-declaration is yes", opts.Standalone)
+		}
+		if opts.DocTypeSystem != "" && opts.Version != "" &&
+			!strings.HasPrefix(opts.Version, "1.0") {
+			return fmt.Errorf("SEPM0009: doctype-system with version %q "+
+				"cannot be written when omit-xml-declaration is yes",
+				opts.Version)
+		}
+	}
+
+	// A standalone declaration and a document type declaration each describe
+	// a document with exactly one element. A result with several top-level
+	// elements, or with text beside them, is not one — it is an external
+	// general parsed entity, and neither construct is legal there.
+	if opts.Standalone != "" && opts.Standalone != "omit" ||
+		opts.DocTypeSystem != "" || opts.DocTypePublic != "" {
+		if !isWellFormedDocument(seq) {
+			return fmt.Errorf("SEPM0004: the result is not a well-formed " +
+				"document, so a standalone or doctype declaration cannot " +
+				"be written")
+		}
+	}
+	return nil
+}
+
+// normalizerFor returns the Unicode normalisation the named form asks for, or
+// nil when this serialiser cannot apply it.
+//
+// "fully-normalized" is not one of the four Unicode forms: it additionally
+// requires that no text node begin with a combining character, which is a
+// property of the whole result rather than a transformation of it. Refusing
+// it is honest; pretending it is NFC would not be.
+func normalizerFor(form string) func(string) string {
+	var f norm.Form
+	switch form {
+	case "NFC":
+		f = norm.NFC
+	case "NFD":
+		f = norm.NFD
+	case "NFKC":
+		f = norm.NFKC
+	case "NFKD":
+		f = norm.NFKD
+	default:
+		return nil
+	}
+	return f.String
+}
+
+// isWellFormedDocument reports whether a result sequence would serialise as an
+// XML document rather than as an entity: exactly one element, and no text
+// beside it.
+func isWellFormedDocument(seq xdm.Sequence) bool {
+	elems := 0
+	var walk func(xdm.Sequence) bool
+	walk = func(items xdm.Sequence) bool {
+		for _, it := range items {
+			switch v := it.(type) {
+			case *xdm.Node:
+				switch v.Kind {
+				case xdm.KindDocument:
+					kids := make(xdm.Sequence, 0, len(v.Children))
+					for _, c := range v.Children {
+						kids = append(kids, c)
+					}
+					if !walk(kids) {
+						return false
+					}
+				case xdm.KindElement:
+					elems++
+				case xdm.KindText:
+					// Whitespace between top-level nodes is permitted in a
+					// document; anything else is character data outside the
+					// document element.
+					if !xdm.IsXMLWhitespace(v.Value) {
+						return false
+					}
+				}
+			case *xdm.Atomic:
+				if !xdm.IsXMLWhitespace(v.String()) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !walk(seq) {
+		return false
+	}
+	return elems == 1
+}
+
+// supportedEncoding reports whether the serialiser can write this encoding.
+//
+// Output is always UTF-8 bytes, so the encodings that can be named honestly
+// are the ones whose declaration matches those bytes. The rest are refused
+// rather than approximated.
+func supportedEncoding(enc string) bool {
+	switch strings.ToLower(enc) {
+	case "utf-8", "utf8", "utf-16", "utf16", "utf-16be", "utf-16le",
+		"us-ascii", "ascii", "iso-8859-1", "latin1", "iso-8859-15",
+		"windows-1252", "iso-10646-ucs-2", "iso-10646-ucs-4":
+		return true
+	}
+	return false
+}
+
+// supportedHTMLVersion reports whether the html output method knows the rules
+// for this version of HTML.
+func supportedHTMLVersion(v string) bool {
+	switch v {
+	case "4.0", "4.01", "4", "5", "5.0", "1.0", "1.1":
+		return true
+	}
+	return false
+}
+
+// isPubidLiteral reports whether every character is a PubidChar, the
+// production XML restricts a public identifier to.
+func isPubidLiteral(s string) bool {
+	for _, r := range s {
+		switch {
+		case r == 0x20 || r == 0x0D || r == 0x0A:
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("-'()+,./:=?;!*#@$_%", r):
+		default:
+			return false
+		}
+	}
+	return true
 }

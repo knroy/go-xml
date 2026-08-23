@@ -251,7 +251,7 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 		// Attribute order is not significant, so each is matched by name.
 		for _, aa := range a.Attrs {
 			ba := b.Attr(aa.Name.URI, aa.Name.Local)
-			if ba == nil || ba.Value != aa.Value {
+			if ba == nil || !deepEqualText(ctx, aa.Value, ba.Value) {
 				return false, nil
 			}
 		}
@@ -259,15 +259,34 @@ func deepEqualNode(ctx *Context, a, b *xdm.Node) (bool, error) {
 
 	case xdm.KindAttribute, xdm.KindNamespace:
 		return a.Name.URI == b.Name.URI && a.Name.Local == b.Name.Local &&
-			a.Value == b.Value, nil
+			deepEqualText(ctx, a.Value, b.Value), nil
 
 	case xdm.KindPI:
+		// A processing instruction's content is not text in the sense the
+		// collation governs, so it keeps codepoint comparison.
 		return a.Name.Local == b.Name.Local && a.Value == b.Value, nil
 
-	case xdm.KindText, xdm.KindComment:
+	case xdm.KindText:
+		return deepEqualText(ctx, a.Value, b.Value), nil
+
+	case xdm.KindComment:
 		return a.Value == b.Value, nil
 	}
 	return false, nil
+}
+
+// deepEqualText compares two string values under the collation in force.
+//
+// fn:deep-equal compares the string values of text and attribute nodes "using
+// the collation" — so under a case-blind collation two elements whose text
+// differs only in case are deep-equal. Comparing with == ignored the
+// collation argument for exactly the nodes the function is usually asked
+// about.
+func deepEqualText(ctx *Context, a, b string) bool {
+	if ctx != nil && ctx.collation != nil {
+		return ctx.collation.Compare(a, b) == 0
+	}
+	return a == b
 }
 
 // deepEqualContent compares children, ignoring comments and PIs and merging
@@ -333,9 +352,17 @@ func registerFormatDateTime(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			out, err := formatDateTimePicture(a.DateTimeVal(), pic)
+			out, err := formatDateTimePicture(a.DateTimeVal(), pic, name)
 			if err != nil {
 				return nil, err
+			}
+			// Section 16.5.2: when the requested language is not supported
+			// the result must say which language was used instead. English
+			// is the only one implemented, so any other request that would
+			// have produced language-dependent text is flagged.
+			if lang, ok := requestedLanguage(args); ok && !supportedLanguage(lang) &&
+				pictureUsesNames(pic) {
+				out = "[Language: en]" + out
 			}
 			return strSeq(out), nil
 		})
@@ -346,7 +373,12 @@ func registerFormatDateTime(l *Library) {
 }
 
 // formatDateTimePicture renders a date/time through a picture string.
-func formatDateTimePicture(dt *xdm.DateTime, pic string) (string, error) {
+//
+// fn names the calling function, which decides which components the value can
+// supply: fn:format-date has no clock and fn:format-time has no calendar, and
+// section 16.5.1 makes a marker naming an absent component XTDE1350 rather
+// than something to render as blank.
+func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string) (string, error) {
 	var sb strings.Builder
 	runes := []rune(pic)
 
@@ -380,7 +412,7 @@ func formatDateTimePicture(dt *xdm.DateTime, pic string) (string, error) {
 		marker := strings.TrimSpace(string(runes[i+1 : end]))
 		i = end
 
-		text, err := formatComponent(dt, marker)
+		text, err := formatComponent(dt, marker, fn)
 		if err != nil {
 			return "", err
 		}
@@ -389,88 +421,340 @@ func formatDateTimePicture(dt *xdm.DateTime, pic string) (string, error) {
 	return sb.String(), nil
 }
 
+// dateComponents are the picture components that need a calendar date, and
+// timeComponents those that need a clock. A marker naming a component the
+// value cannot supply is XTDE1350; a timezone marker is exempt because
+// section 16.5.1 says a value with no timezone simply drops it.
+const dateComponents = "YMDdFWwEC"
+const timeComponents = "HhPmsf"
+
 // formatComponent renders one [component]presentation marker.
-func formatComponent(dt *xdm.DateTime, marker string) (string, error) {
+func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error) {
 	if marker == "" {
 		return "", fmt.Errorf("FOFD1340: empty component in picture")
 	}
 	comp := marker[0]
-	pres := strings.TrimSpace(marker[1:])
-	// A width modifier follows a comma. For a *named* component it is what
-	// selects the abbreviation — "[FNn,*-3]" is "Mon" rather than "Monday" —
-	// so it travels with the presentation rather than being discarded.
-	width := ""
-	if i := strings.IndexByte(pres, ','); i >= 0 {
-		width = strings.TrimSpace(pres[i+1:])
-		pres = strings.TrimSpace(pres[:i])
+	// Whitespace anywhere inside a variable marker is ignored, so it is
+	// stripped wholesale rather than only at the ends: "[M 01]" and "[M01]"
+	// are the same marker.
+	rest := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, marker[1:])
+
+	switch fn {
+	case "format-date":
+		if strings.IndexByte(timeComponents, comp) >= 0 {
+			return "", fmt.Errorf("FOFD1350: component %q is not available in a date", string(comp))
+		}
+	case "format-time":
+		if strings.IndexByte(dateComponents, comp) >= 0 {
+			return "", fmt.Errorf("FOFD1350: component %q is not available in a time", string(comp))
+		}
+	}
+
+	// A width modifier follows a comma, and everything before it is the one
+	// or two presentation modifiers.
+	pres, width := rest, ""
+	if i := strings.IndexByte(rest, ','); i >= 0 {
+		width = rest[i+1:]
+		pres = rest[:i]
+	}
+	// The second presentation modifier, when present, is the last character
+	// and is either "t" (traditional numbering) or "o" (ordinal form).
+	ordinal, traditional := false, false
+	if n := len(pres); n > 1 || (n == 1 && (pres == "o" || pres == "t")) {
+		switch pres[len(pres)-1] {
+		case 'o':
+			ordinal = true
+			pres = pres[:len(pres)-1]
+		case 't':
+			// Traditional numbering coincides with the default for the
+			// languages implemented here, so for most components the
+			// modifier only needs stripping; the timezone is the exception.
+			traditional = true
+			pres = pres[:len(pres)-1]
+		}
 	}
 	if pres == "" {
-		pres = "1"
+		pres = defaultPresentation(comp)
+	}
+	if err := checkWidthModifier(width); err != nil {
+		return "", err
+	}
+
+	num := func(n int64) (string, error) {
+		return padNumber(n, pres, width, ordinal), nil
 	}
 
 	switch comp {
 	case 'Y':
-		return padNumber(int64(dt.Year), pres), nil
+		// A maximum width on the year means "keep the low-order digits":
+		// with max-width 2, 2003 is "03".
+		y := int64(dt.Year)
+		if y < 0 {
+			y = -y
+		}
+		if max := maxWidth(width); max > 0 && max < 18 && isDigitPattern(pres) {
+			mod := int64(1)
+			for i := 0; i < max; i++ {
+				mod *= 10
+			}
+			y %= mod
+		}
+		return padNumber(y, pres, width, ordinal), nil
 	case 'M':
 		if isNamePresentation(pres) {
 			return applyNameCase(monthNameOf(dt), pres, width), nil
 		}
-		return padNumber(int64(dt.Month), pres), nil
+		return num(int64(dt.Month))
 	case 'D':
-		return padNumber(int64(dt.Day), pres), nil
+		return num(int64(dt.Day))
 	case 'd':
-		return padNumber(int64(dayOfYear(dt)), pres), nil
+		return num(int64(dayOfYear(dt)))
+	case 'W':
+		return num(int64(weekOfYear(dt)))
+	case 'w':
+		return num(int64(weekOfMonth(dt)))
 	case 'H':
-		return padNumber(int64(dt.Hour), pres), nil
+		return num(int64(dt.Hour))
 	case 'h':
 		// 12-hour clock: midnight and noon are both "12".
 		h := dt.Hour % 12
 		if h == 0 {
 			h = 12
 		}
-		return padNumber(int64(h), pres), nil
+		return num(int64(h))
 	case 'm':
-		return padNumber(int64(dt.Minute), pres), nil
+		return num(int64(dt.Minute))
 	case 's':
 		whole := new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom()).Int64()
-		return padNumber(whole, pres), nil
+		return num(whole)
 	case 'f':
-		return fractionalSeconds(dt, pres), nil
+		return fractionalSeconds(dt, pres, width), nil
 	case 'P':
 		half := "am"
 		if dt.Hour >= 12 {
 			half = "pm"
 		}
+		if !isNamePresentation(pres) {
+			pres = "n"
+		}
 		return applyNameCase(half, pres, width), nil
 	case 'F':
+		if !isNamePresentation(pres) {
+			// A numeric presentation of the day of the week is ISO's
+			// numbering, Monday = 1.
+			d := int64(weekdayIndex(dt))
+			if d == 0 {
+				d = 7
+			}
+			return padNumber(d, pres, width, ordinal), nil
+		}
 		return applyNameCase(weekdayName(dt, pres), pres, width), nil
+	case 'E':
+		// The only era this implementation knows is the Common Era, whose
+		// baseline splits at year zero.
+		era := "AD"
+		if dt.Year <= 0 {
+			era = "BC"
+		}
+		if !isNamePresentation(pres) {
+			pres = "n"
+		}
+		return applyNameCase(era, pres, width), nil
+	case 'C':
+		// Only the ISO calendar is implemented, so it is the only name that
+		// can be reported.
+		if !isNamePresentation(pres) {
+			pres = "n"
+		}
+		return applyNameCase("ISO", pres, width), nil
 	case 'Z', 'z':
-		return formatTZMarker(dt, comp), nil
+		return formatTZMarker(dt, comp, pres, width, traditional), nil
 	}
 	return "", fmt.Errorf("FOFD1340: unsupported picture component %q", string(comp))
 }
 
-// padNumber renders n per a presentation modifier.
+// defaultPresentation is the presentation modifier a component takes when the
+// picture supplies none, from the table in section 16.5.1.
+func defaultPresentation(comp byte) string {
+	switch comp {
+	case 'F', 'P', 'C', 'E':
+		return "n"
+	case 'm', 's':
+		return "01"
+	}
+	return "1"
+}
+
+// checkWidthModifier rejects a width modifier whose syntax is wrong, which is
+// XTDE1340. Both bounds must be "*" or an integer greater than zero.
+func checkWidthModifier(width string) error {
+	if width == "" {
+		return nil
+	}
+	parts := strings.SplitN(width, "-", 2)
+	for _, part := range parts {
+		if part == "*" {
+			continue
+		}
+		if part == "" {
+			return fmt.Errorf("FOFD1340: malformed width modifier %q", width)
+		}
+		n := 0
+		for _, c := range part {
+			if c < '0' || c > '9' {
+				return fmt.Errorf("FOFD1340: malformed width modifier %q", width)
+			}
+			n = n*10 + int(c-'0')
+		}
+		if n == 0 {
+			return fmt.Errorf("FOFD1340: width modifier %q must be greater than zero", width)
+		}
+	}
+	return nil
+}
+
+// minWidth reads the minimum from a width modifier, or 0 when it sets none.
+func minWidth(width string) int {
+	if width == "" {
+		return 0
+	}
+	part := width
+	if i := strings.IndexByte(width, '-'); i >= 0 {
+		part = width[:i]
+	}
+	if part == "" || part == "*" {
+		return 0
+	}
+	n := 0
+	for _, c := range part {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// padNumber renders n per a presentation modifier and width modifier.
 //
 // A decimal-digit-pattern such as "01" or "0001" sets the minimum width to its
 // own length — "[M01]" means a two-digit month, so January is "01" and not
-// "1". The pattern is any run of digits ending in "1"; "1" alone means no
-// padding.
-func padNumber(n int64, pres string) string {
+// "1". An explicit width modifier takes precedence over the pattern.
+func padNumber(n int64, pres, width string, ordinal bool) string {
 	switch pres {
 	case "i":
 		return strings.ToLower(romanNum(n))
 	case "I":
 		return romanNum(n)
-	case "N", "n", "Nn":
-		// Name forms are meaningful only for components the caller handles
-		// separately (month, weekday); for a bare number there is no name.
+	case "w", "W", "Ww":
+		return spellDateNumber(n, pres, ordinal)
+	case "a", "A":
+		return alphaNum(n, pres == "A")
+	}
+
+	var s string
+	if isDigitPattern(pres) {
+		s = fmt.Sprintf("%0*d", len(pres), n)
+	} else {
+		s = strconv.FormatInt(n, 10)
+	}
+	if ordinal {
+		s += ordinalSuffixFor(n)
+	}
+	if min := minWidth(width); min > len([]rune(s)) {
+		// Decimal representations are padded with leading zeroes; the digits
+		// already there stay where they are.
+		s = strings.Repeat("0", min-len([]rune(s))) + s
+	}
+	if max := maxWidth(width); max > 0 && len([]rune(s)) > max && isDigitPattern(pres) {
+		r := []rune(s)
+		s = string(r[len(r)-max:])
+	}
+	return s
+}
+
+// alphaNum renders n in the alphabetic sequence a, b, ... z, aa, ab, which is
+// the "a"/"A" format token of xsl:number.
+func alphaNum(n int64, upper bool) string {
+	if n <= 0 {
 		return strconv.FormatInt(n, 10)
 	}
-	if isDigitPattern(pres) {
-		return fmt.Sprintf("%0*d", len(pres), n)
+	base := byte('a')
+	if upper {
+		base = 'A'
 	}
-	return strconv.FormatInt(n, 10)
+	var out []byte
+	for n > 0 {
+		n--
+		out = append([]byte{base + byte(n%26)}, out...)
+		n /= 26
+	}
+	return string(out)
+}
+
+// ordinalSuffixFor is the English ordinal suffix for a number in digits.
+func ordinalSuffixFor(n int64) string {
+	if n < 0 {
+		n = -n
+	}
+	// 11, 12 and 13 take "th" despite ending in 1, 2 and 3, and that repeats
+	// in every hundred.
+	switch n % 100 {
+	case 11, 12, 13:
+		return "th"
+	}
+	switch n % 10 {
+	case 1:
+		return "st"
+	case 2:
+		return "nd"
+	case 3:
+		return "rd"
+	}
+	return "th"
+}
+
+// weekdayIndex is the day of the week with Sunday = 0.
+func weekdayIndex(dt *xdm.DateTime) int {
+	// 1970-01-01 was a Thursday, which anchors the modulo.
+	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day)
+	return int(((days+4)%7 + 7) % 7)
+}
+
+// weekOfYear is the ISO 8601 week number: weeks start on Monday and week 1 is
+// the one containing the year's first Thursday.
+func weekOfYear(dt *xdm.DateTime) int {
+	// Shift to the Thursday of this week; the year that Thursday falls in is
+	// the ISO week-numbering year, and the week number follows from its day
+	// of the year.
+	iso := (weekdayIndex(dt) + 6) % 7 // Monday = 0
+	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
+	// Recover the calendar year of that Thursday by walking from the value's
+	// own year, which is at most one out in either direction.
+	y := dt.Year
+	for daysFromCivilLocal(y+1, 1, 1) <= days {
+		y++
+	}
+	for daysFromCivilLocal(y, 1, 1) > days {
+		y--
+	}
+	return int((days-daysFromCivilLocal(y, 1, 1))/7) + 1
+}
+
+// weekOfMonth is the week within the month, numbered on the same basis as the
+// week of the year: the week containing the month's first Thursday is week 1.
+func weekOfMonth(dt *xdm.DateTime) int {
+	iso := (weekdayIndex(dt) + 6) % 7
+	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
+	first := daysFromCivilLocal(dt.Year, dt.Month, 1)
+	firstISO := int64((weekdayIndex(&xdm.DateTime{Year: dt.Year, Month: dt.Month, Day: 1}) + 6) % 7)
+	firstThu := first - firstISO + 3
+	return int((days-firstThu)/7) + 1
 }
 
 // isDigitPattern reports whether pres is a decimal-digit-pattern: a run of
@@ -487,18 +771,33 @@ func isDigitPattern(pres string) bool {
 	return true
 }
 
-func fractionalSeconds(dt *xdm.DateTime, pres string) string {
+// fractionalSeconds renders the digits after the decimal point.
+//
+// Padding for this component is by *appending* zeroes rather than prepending
+// them, because the digits are read left to right from the point: a minimum
+// width of 3 turns ".5" into "500", not "005".
+func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
 	digits := 1
 	if isDigitPattern(pres) {
 		digits = len(pres)
+	}
+	if max := maxWidth(width); max > 0 {
+		digits = max
+	} else if min := minWidth(width); min > digits {
+		digits = min
 	}
 	frac := new(big.Rat).Sub(dt.Second,
 		new(big.Rat).SetInt(new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom())))
 	s := frac.FloatString(digits)
 	if i := strings.IndexByte(s, '.'); i >= 0 {
-		return s[i+1:]
+		s = s[i+1:]
+	} else {
+		s = strings.Repeat("0", digits)
 	}
-	return strings.Repeat("0", digits)
+	if min := minWidth(width); min > len(s) {
+		s += strings.Repeat("0", min-len(s))
+	}
+	return s
 }
 
 var weekdayNames = []string{"Sunday", "Monday", "Tuesday", "Wednesday",
@@ -553,23 +852,66 @@ func daysFromCivilLocal(y, m, d int) int64 {
 	return int64(era*146097 + doe - 719468)
 }
 
-func formatTZMarker(dt *xdm.DateTime, comp byte) string {
+// formatTZMarker renders the [Z] and [z] components.
+//
+// The width modifier drives the shape of the offset. Its full representation
+// is a sign, the hours, and — only when the offset is not a whole number of
+// hours — a colon and the minutes; a minimum width of 5 or more is what asks
+// for the minutes to be spelled out unconditionally.
+func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional bool) string {
 	if !dt.HasTZ {
 		return ""
 	}
 	off := dt.TZOffset
-	if comp == 'Z' && off == 0 {
+	prefix := ""
+	if comp == 'z' {
+		prefix = "GMT"
+	}
+	// The specification permits, but does not require, writing UTC as "Z"
+	// under "[Z]". The conformance suite settles the choice: the plain
+	// picture spells "+00:00", and only the traditional modifier "[Z...t]"
+	// asks for the single letter.
+	if comp == 'Z' && off == 0 && traditional && !isNamePresentation(pres) {
 		return "Z"
 	}
 	sign := "+"
 	if off < 0 {
 		sign, off = "-", -off
 	}
-	s := fmt.Sprintf("%s%02d:%02d", sign, off/60, off%60)
-	if comp == 'z' {
-		return "GMT" + s
+	hours, mins := off/60, off%60
+
+	// An offset with minutes always spells them. Otherwise the shape is set
+	// by how much room the picture asks for: with no width modifier and the
+	// default presentation the padded "hh:mm" form is used, but a picture
+	// that constrains the width to the hours alone — "[z,2-2]" or "[z0]" —
+	// gets just the hours, because the specification says a value too long
+	// for the maximum width should use a shorter representation.
+	digits := 0
+	if isDigitPattern(pres) {
+		digits = len(pres)
 	}
-	return s
+	max := maxWidth(width)
+	full := mins != 0
+	if !full {
+		switch {
+		case max > 0 && max < 5:
+			// The maximum leaves no room for ":mm".
+		case digits > 0 && digits < 3 && pres != "1":
+			// "[z0]" and "[z01]" ask for the hours only. The bare "1" is the
+			// component's *default* presentation rather than a request, so
+			// it does not constrain the width the way "0" does.
+		default:
+			full = true
+		}
+	}
+	if full {
+		return fmt.Sprintf("%s%s%02d:%02d", prefix, sign, hours, mins)
+	}
+	hs := strconv.FormatInt(int64(hours), 10)
+	if digits == 2 || minWidth(width) >= 3 {
+		hs = fmt.Sprintf("%02d", hours)
+	}
+	return prefix + sign + hs
 }
 
 func romanNum(n int64) string {
@@ -675,10 +1017,69 @@ func applyNameCase(name, pres, width string) string {
 	}
 	if max := maxWidth(width); max > 0 {
 		if r := []rune(name); len(r) > max {
-			name = string(r[:max])
+			name = abbreviateName(name, max)
 		}
 	}
 	return name
+}
+
+// conventionalAbbreviations lists the English short forms that are in
+// customary use, longest first, for names where crude truncation would give
+// something nobody writes: "Tuesday" is shortened to "Tues" or "Tue", never
+// to "Tuesd".
+//
+// Lookup is by the lower-cased full name so that the table is consulted
+// before the case modifier has been applied.
+var conventionalAbbreviations = map[string][]string{
+	"monday":    {"Mon"},
+	"tuesday":   {"Tues", "Tue"},
+	"wednesday": {"Weds", "Wed"},
+	"thursday":  {"Thurs", "Thur", "Thu"},
+	"friday":    {"Fri"},
+	"saturday":  {"Sat"},
+	"sunday":    {"Sun"},
+	"january":   {"Jan"},
+	"february":  {"Feb"},
+	"march":     {"Mar"},
+	"april":     {"Apr"},
+	"may":       {"May"},
+	"june":      {"Jun"},
+	"july":      {"Jul"},
+	"august":    {"Aug"},
+	"september": {"Sept", "Sep"},
+	"october":   {"Oct"},
+	"november":  {"Nov"},
+	"december":  {"Dec"},
+}
+
+// abbreviateName shortens a name to at most max characters, preferring a
+// conventional abbreviation over right-truncation.
+//
+// The longest conventional form that fits is the one chosen, because the
+// width modifier states a maximum rather than an exact length and a reader
+// asking for five characters would rather have "Thurs" than "Thur".
+func abbreviateName(name string, max int) string {
+	// The table is keyed on the canonical name, so the case the picture asked
+	// for has to be re-applied to whatever comes back.
+	key := strings.ToLower(name)
+	for _, cand := range conventionalAbbreviations[key] {
+		if len([]rune(cand)) <= max {
+			return matchCaseOf(cand, name)
+		}
+	}
+	return string([]rune(name)[:max])
+}
+
+// matchCaseOf puts abbr into the same case pattern as the already-cased name
+// it abbreviates.
+func matchCaseOf(abbr, name string) string {
+	switch {
+	case name == strings.ToUpper(name) && name != strings.ToLower(name):
+		return strings.ToUpper(abbr)
+	case name == strings.ToLower(name):
+		return strings.ToLower(abbr)
+	}
+	return abbr
 }
 
 // titleCase upper-cases the first letter and lower-cases the rest, which is
@@ -746,6 +1147,250 @@ func annotationDerivesFrom(annotation, base string) bool {
 			return true
 		}
 		annotation = xdm.DerivedBase(annotation)
+	}
+	return false
+}
+
+// Number-to-words for the "w", "W" and "Ww" format tokens of a date picture.
+//
+// Section 16.5.1 defers these to the rules for xsl:number format tokens, and
+// section 12.3 in turn makes the actual words implementation-defined and
+// language-sensitive. English is what is implemented; a request for a
+// language that is not supported falls back to it, which is what the
+// specification prescribes.
+
+var dateSmallWords = []string{
+	"zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+	"nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+	"sixteen", "seventeen", "eighteen", "nineteen",
+}
+
+var dateTensWords = []string{
+	"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+	"eighty", "ninety",
+}
+
+// dateScaleWords are the powers of a thousand, in the short scale.
+var dateScaleWords = []string{"", " thousand", " million", " billion", " trillion"}
+
+// dateIrregularOrdinals are the words whose ordinal is not "word" + "th".
+var dateIrregularOrdinals = map[string]string{
+	"one": "first", "two": "second", "three": "third", "five": "fifth",
+	"eight": "eighth", "nine": "ninth", "twelve": "twelfth",
+}
+
+// spellDateNumber writes n in English words, cased as the presentation
+// modifier asks and in ordinal form when the second modifier said so.
+func spellDateNumber(n int64, pres string, ordinal bool) string {
+	s := spellCardinal(n)
+	if ordinal {
+		s = spellOrdinalOf(s)
+	}
+	switch pres {
+	case "W":
+		s = strings.ToUpper(s)
+	case "Ww":
+		s = titleCaseWords(s)
+	}
+	if ordinal {
+		// The ordinal forms run their words together: "twentyfirst", and
+		// "OneThousandNineHundredandNinetieth" with the conjunction left
+		// lower case. That is the convention the conformance suite fixes for
+		// English, and the specification leaves the choice to the processor.
+		s = strings.ReplaceAll(s, "-", "")
+		if pres == "W" {
+			s = strings.ReplaceAll(s, " ", "")
+		} else if pres == "Ww" {
+			s = strings.ReplaceAll(s, "And", "and")
+			s = strings.ReplaceAll(s, " ", "")
+		} else {
+			s = strings.ReplaceAll(s, " ", "")
+		}
+	} else {
+		// Cardinals keep their word boundaries; the hyphen of a compound ten
+		// becomes a space in the run-together cases only.
+		if pres == "W" || pres == "Ww" {
+			s = strings.ReplaceAll(s, "-", " ")
+		}
+		if pres == "Ww" {
+			s = strings.ReplaceAll(s, "And", "and")
+		}
+	}
+	return s
+}
+
+// titleCaseWords upper-cases the first letter of every word, leaving the rest
+// lower case.
+func titleCaseWords(s string) string {
+	r := []rune(strings.ToLower(s))
+	up := true
+	for i, c := range r {
+		if up && unicode.IsLetter(c) {
+			r[i] = unicode.ToUpper(c)
+			up = false
+		} else if c == ' ' || c == '-' {
+			up = true
+		}
+	}
+	return string(r)
+}
+
+// spellCardinal writes n in English words, with the British "and" before a
+// final group below one hundred: "one thousand nine hundred and ninety".
+func spellCardinal(n int64) string {
+	if n < 0 {
+		return "minus " + spellCardinal(-n)
+	}
+	if n == 0 {
+		return "zero"
+	}
+	// Beyond the named scales there is no agreed English word, so the number
+	// falls back to digits rather than inventing one.
+	if n >= 1000000000000000 {
+		return strconv.FormatInt(n, 10)
+	}
+
+	// Split into groups of three from the least significant end, so each
+	// group is spoken with its own scale word.
+	var groups []int64
+	for v := n; v > 0; v /= 1000 {
+		groups = append(groups, v%1000)
+	}
+
+	var parts []string
+	for i := len(groups) - 1; i >= 0; i-- {
+		g := groups[i]
+		if g == 0 {
+			continue
+		}
+		// The conjunction goes before the final group when that group is
+		// below a hundred and something precedes it: "two thousand and one",
+		// but "two thousand one hundred".
+		if i == 0 && len(parts) > 0 && g < 100 {
+			parts = append(parts, "and")
+		}
+		parts = append(parts, spellDateUnder1000(g)+dateScaleWords[i])
+	}
+	return strings.Join(parts, " ")
+}
+
+func spellDateUnder1000(n int64) string {
+	switch {
+	case n < 20:
+		return dateSmallWords[n]
+	case n < 100:
+		s := dateTensWords[n/10]
+		if n%10 != 0 {
+			s += "-" + dateSmallWords[n%10]
+		}
+		return s
+	default:
+		s := dateSmallWords[n/100] + " hundred"
+		if n%100 != 0 {
+			s += " and " + spellDateUnder1000(n%100)
+		}
+		return s
+	}
+}
+
+// spellOrdinalOf converts the last word of a spelled number to its ordinal.
+//
+// Only the last word changes: "one hundred and twenty-first" ends in the
+// ordinal and everything before it stays cardinal. A trailing scale word is
+// itself ordinalised — "two thousand" becomes "two thousandth".
+func spellOrdinalOf(s string) string {
+	i := strings.LastIndexAny(s, " -")
+	head, last := "", s
+	if i >= 0 {
+		head, last = s[:i+1], s[i+1:]
+	}
+	if o, ok := dateIrregularOrdinals[last]; ok {
+		return head + o
+	}
+	// A word ending in "y" forms its ordinal in "ieth": twenty, twentieth.
+	if strings.HasSuffix(last, "y") {
+		return head + last[:len(last)-1] + "ieth"
+	}
+	return head + last + "th"
+}
+
+// requestedLanguage reads the $language argument, reporting whether one was
+// supplied at all: an omitted or empty argument means the processor picks,
+// which is never a fallback.
+func requestedLanguage(args []xdm.Sequence) (string, bool) {
+	if len(args) < 3 || len(args[2]) == 0 {
+		return "", false
+	}
+	s, err := argString(args, 2)
+	if err != nil || strings.TrimSpace(s) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(s), true
+}
+
+// supportedLanguage reports whether the language tag selects the one language
+// whose names and number words are implemented.
+//
+// Only the primary subtag matters: "en-GB" and "en-US" both select English,
+// and neither is a fallback.
+func supportedLanguage(lang string) bool {
+	primary := lang
+	if i := strings.IndexByte(lang, '-'); i >= 0 {
+		primary = lang[:i]
+	}
+	return strings.EqualFold(primary, "en")
+}
+
+// pictureUsesNames reports whether the picture asks for anything whose text is
+// language-dependent — a name, or a number spelled out in words.
+//
+// A picture made only of digits renders the same in every language, so
+// announcing a language substitution for it would be noise rather than the
+// information section 16.5.2 asks for.
+func pictureUsesNames(pic string) bool {
+	runes := []rune(pic)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '[' {
+			continue
+		}
+		if i+1 < len(runes) && runes[i+1] == '[' {
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(runes) && runes[end] != ']' {
+			end++
+		}
+		if end >= len(runes) {
+			return false
+		}
+		marker := string(runes[i+1 : end])
+		i = end
+		if marker == "" {
+			continue
+		}
+		comp := marker[0]
+		pres := strings.Map(func(r rune) rune {
+			if unicode.IsSpace(r) {
+				return -1
+			}
+			return r
+		}, marker[1:])
+		if j := strings.IndexByte(pres, ','); j >= 0 {
+			pres = pres[:j]
+		}
+		if pres == "" {
+			pres = defaultPresentation(comp)
+		}
+		// The components that are always words, plus any component whose
+		// presentation modifier asks for a name or for words.
+		if strings.IndexByte("FPCE", comp) >= 0 || isNamePresentation(pres) {
+			return true
+		}
+		switch strings.TrimRight(pres, "ot") {
+		case "w", "W", "Ww":
+			return true
+		}
 	}
 	return false
 }

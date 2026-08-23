@@ -138,9 +138,30 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			return nil, err
 		}
 	} else {
-		if err := applyToNode(rt, source, opts.InitialMode, nil, nil, out); err != nil {
+		// "#default" and "#unnamed" both name the unnamed mode; a caller
+		// passing either means "start where a stylesheet with no @mode
+		// starts", which is the empty name.
+		initialMode := opts.InitialMode
+		if initialMode == "#default" || initialMode == "#unnamed" {
+			initialMode = ""
+		}
+		if err := applyToNode(rt, source, initialMode, nil, nil, out); err != nil {
 			return nil, err
 		}
+	}
+
+	// The base output URI belongs to the principal result tree. An
+	// xsl:result-document with an absent or empty @href names that same URI,
+	// so a stylesheet that both writes there and leaves content in the
+	// principal tree has produced two documents at one URI. The check is made
+	// here rather than in the instruction because the ordering is not fixed:
+	// the implicit content may be written either side of the instruction, and
+	// only at the end is it known that both happened.
+	if *rt.baseURIUsed && len(out.sequence()) > 0 {
+		return nil, fmt.Errorf(
+			"XTDE1490: two result documents were written to the base output " +
+				"URI: the principal result tree and an xsl:result-document " +
+				"with no href")
 	}
 
 	return &Result{

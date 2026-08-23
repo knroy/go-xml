@@ -3,6 +3,7 @@ package xslts
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,9 +158,37 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		}
 	}
 
+	// Serialization errors are raised while writing the result, not while
+	// building it, so a transform that succeeded may still fail to
+	// serialise. The suite asserts those with assert-serialization-error,
+	// and judging them needs the error in hand — so the result is written to
+	// a discard writer here and any failure is promoted to the transform
+	// error. Only tests that actually assert a serialization error do this,
+	// because for every other test the serialised text is obtained lazily by
+	// whichever assertion needs it.
+	if terr == nil && res != nil && wantsSerializationError(assert) {
+		if err := res.Serialize(io.Discard); err != nil {
+			terr = err
+		}
+	}
+
 	ok, why := r.judge(assert, res, terr, set)
 	out.Pass, out.Why = ok, why
 	return out
+}
+
+// wantsSerializationError reports whether the assertion tree asks for an
+// error raised during serialisation.
+func wantsSerializationError(a Assertion) bool {
+	if a.Kind == "assert-serialization-error" {
+		return true
+	}
+	for _, c := range a.Children {
+		if wantsSerializationError(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // outOfScopeError recognises the documented refusals, which are choices this

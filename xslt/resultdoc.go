@@ -26,35 +26,70 @@ type SecondaryResult struct {
 	// Output holds the serialisation settings that apply to this document,
 	// taken from @format and any serialisation attributes on the instruction.
 	Output OutputSettings
+	// charMap is the substitution table @use-character-maps names, already
+	// flattened. It is resolved when the document is produced rather than
+	// when it is serialised because only the stylesheet can resolve a
+	// character-map name, and a caller holding a SecondaryResult no longer
+	// has it.
+	charMap map[rune]string
 }
 
 // resultDocumentInstr implements xsl:result-document.
 type resultDocumentInstr struct {
 	href *avt
-	// format is the Clark name of the xsl:output declaration @format names,
-	// or "" for the unnamed one. It is resolved when the instruction runs,
-	// not when it compiles: xsl:output is a top-level declaration and may be
-	// written after the template that uses it.
-	format string
+	// format is @format, an attribute value template naming the xsl:output
+	// declaration to use. It is resolved when the instruction runs, not when
+	// it compiles: the value may be computed, and xsl:output is a top-level
+	// declaration that may be written after the template that uses it.
+	format *avt
 	// overrides is the instruction element itself, whose serialisation
-	// attributes take precedence over the selected definition.
-	overrides *xdm.Node
-	body      []Instruction
+	// attributes take precedence over the selected definition. They are
+	// attribute value templates, so the compiled forms are kept beside it and
+	// the element is retained only for resolving the QNames they may name.
+	overrides    *xdm.Node
+	overrideAVTs map[string]*avt
+	body         []Instruction
 }
 
 // settings selects the output definition this instruction writes with.
 func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 	out := rt.sheet.output
-	if i.format != "" {
-		named, ok := rt.sheet.namedOutputs[i.format]
-		if !ok {
-			return out, fmt.Errorf(
-				"XTDE1460: xsl:result-document/@format names no xsl:output declaration")
+	if i.format != nil {
+		lex, err := i.format.eval(rt)
+		if err != nil {
+			return out, err
 		}
-		out = *named
+		if lex = strings.TrimSpace(lex); lex != "" {
+			qn, err := resolveQNameAttr(i.overrides, lex)
+			if err != nil {
+				return out, err
+			}
+			named, ok := rt.sheet.namedOutputs[xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()]
+			if !ok {
+				return out, fmt.Errorf(
+					"XTDE1460: xsl:result-document/@format names no xsl:output "+
+						"declaration named %q", lex)
+			}
+			out = *named
+		}
 	}
 	if i.overrides != nil {
-		if err := applyOutputAttrs(i.overrides, &out); err != nil {
+		// The effective values are computed here rather than read from the
+		// element: every serialisation attribute of this instruction is an
+		// attribute value template, and reading the literal text made
+		// doctype-system="{doc/foo}" a doctype of "{doc/foo}".
+		value := func(name string) string {
+			a, ok := i.overrideAVTs[name]
+			if !ok {
+				return ""
+			}
+			v, err := a.eval(rt)
+			if err != nil {
+				return ""
+			}
+			return v
+		}
+		if err := applyOutputValues(i.overrides, value, &out); err != nil {
 			return out, err
 		}
 	}
@@ -91,6 +126,10 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	if href == "" {
+		*rt.baseURIUsed = true
+	}
+
 	// Two result documents sharing an href would mean one silently
 	// overwriting the other, so the collision is reported instead.
 	for _, prev := range *rt.secondary {
@@ -105,10 +144,15 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	cm, err := rt.sheet.flattenCharacterMaps(settings.UseCharacterMaps)
+	if err != nil {
+		return err
+	}
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
-		Href:   href,
-		Nodes:  sub.sequence(),
-		Output: settings,
+		Href:    href,
+		Nodes:   sub.sequence(),
+		Output:  settings,
+		charMap: cm,
 	})
 	return nil
 }
@@ -118,7 +162,13 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 // A caller holding a SecondaryResult would otherwise have no way to render it:
 // the serialiser is unexported, and re-deriving these settings from the
 // stylesheet is exactly the duplication @format exists to avoid.
+// The charMap argument overrides the table resolved from the document's own
+// @use-character-maps; passing nil uses that table, which is what a caller
+// almost always wants.
 func (sr *SecondaryResult) Serialize(w io.Writer, charMap map[rune]string) error {
+	if charMap == nil {
+		charMap = sr.charMap
+	}
 	return serialize(w, sr.Nodes, sr.Output, charMap)
 }
 

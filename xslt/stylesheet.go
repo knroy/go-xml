@@ -37,6 +37,17 @@ type Stylesheet struct {
 	baseURI string
 	// keys holds xsl:key declarations, grouped by name.
 	keys map[string][]*keyDef
+
+	// prefixes holds every namespace prefix declared anywhere in the
+	// stylesheet, so that a name computed at run time can be expanded.
+	//
+	// It exists for fn:key, whose first argument is a lexical QName that the
+	// specification says to resolve "in scope for the prefix" at the point of
+	// the call — a context the function library does not receive. A
+	// stylesheet-wide map is a superset of any one element's context, which
+	// is the safe direction to err: it can only make a name resolve that a
+	// stricter reading would have rejected, never the reverse.
+	prefixes map[string]string
 	// decimalFormats holds xsl:decimal-format declarations by Clark name;
 	// the unnamed default is stored under "".
 	decimalFormats map[string]*DecimalFormat
@@ -174,6 +185,13 @@ type OutputSettings struct {
 	// MediaType is the media type of the output. It affects no serialised
 	// character; it is metadata a caller passes on.
 	MediaType string
+	// NormalizationForm names a Unicode normalisation applied to the output.
+	// Only "none" is implemented; any other value the serialiser does not
+	// support is a serialization error rather than something to ignore,
+	// because output that was silently left unnormalised would be accepted
+	// by a consumer that then compares it against a normalised form and
+	// finds a spurious difference.
+	NormalizationForm string
 }
 
 // Instruction is one compiled XSLT instruction.
@@ -220,14 +238,20 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		sheet: &Stylesheet{
 			named:            map[string]*Template{},
 			keys:             map[string][]*keyDef{},
+			prefixes:         map[string]string{},
 			decimalFormats:   map[string]*DecimalFormat{},
 			attributeSets:    map[string][]*attributeSet{},
 			namespaceAliases: map[string]nsAlias{},
 			characterMaps:    map[string]map[rune]string{},
 			funcs:            newStylesheetFuncs(),
 			baseURI:          stylesheetBase(doc, opts.BaseURI),
+			// Method is deliberately left empty. Its default is not "xml"
+			// but a choice made from the result tree — a document whose
+			// first element is <html> defaults to the html or xhtml method
+			// — and that tree does not exist until the transform has run.
+			// Filling it in here would make every stylesheet that omits
+			// xsl:output/@method serialise as XML.
 			output: OutputSettings{
-				Method:   "xml",
 				Encoding: "UTF-8",
 			},
 		},
@@ -252,6 +276,28 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	if err := c.checkCallTemplateParams(); err != nil {
+		return nil, err
+	}
+	// XTSE1560 is checked here rather than as each xsl:output compiles,
+	// because a declaration at a higher import precedence silences a conflict
+	// and is compiled after the modules it overrides.
+	if err := c.checkOutputConflicts(); err != nil {
+		return nil, err
+	}
+	// XTSE0710 is checked here for the same reason: an attribute set may name
+	// one declared in a module compiled after it.
+	if err := c.checkAttributeSetRefs(); err != nil {
+		return nil, err
+	}
+	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
+	// conflict with each other and still be harmless, because the importing
+	// module overrides both.
+	if err := c.checkDecimalFormatConflicts(); err != nil {
+		return nil, err
+	}
+	// XTSE1300 is checked on the assembled format rather than on each
+	// declaration, since a format may be built from several of them.
+	if err := c.checkDecimalFormatSymbols(); err != nil {
 		return nil, err
 	}
 	// Character maps are resolved last, so that an xsl:output in the
@@ -407,6 +453,16 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 	if !ok || st.Variety != xsd.VarietyAtomic || st.Primitive == nil {
 		return 0, false, true
 	}
+	if st.Primitive.Name.Local == "NOTATION" && st.Primitive.Name.URI == xsd.NSSchema {
+		// A value of a type derived from xs:NOTATION is a QName, not a
+		// string: XML Schema gives xs:NOTATION the same value space as
+		// xs:QName, so two notation values are equal when their expanded
+		// names are equal however they were spelled. Erasing to xs:string —
+		// which is what the built-in table does, since the abstract type
+		// cannot be cast to directly — made one:mp3 and first:mp3 compare
+		// unequal even though both prefixes bind the same namespace.
+		return xdm.TypeQName, true, true
+	}
 	code, ok := xpath.BuiltinAtomicTypeCode(st.Primitive.Name.Local)
 	if !ok {
 		return 0, false, true
@@ -460,6 +516,20 @@ func (r *nsResolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 // name="foo" and <foo> mean different things inside a default namespace.
 func resolveQNameAttr(el *xdm.Node, lex string) (xdm.QName, error) {
 	lex = strings.TrimSpace(lex)
+	// The EQName form Q{uri}local carries its own namespace, so no prefix has
+	// to be in scope for it. The suite writes it wherever a QName is
+	// accepted, and rejecting it reported a perfectly well-formed name as an
+	// unbound prefix "Q{http".
+	if strings.HasPrefix(lex, "Q{") {
+		if end := strings.IndexByte(lex, '}'); end > 0 {
+			uri, local := lex[2:end], lex[end+1:]
+			if !xdm.IsNCName(local) {
+				return xdm.QName{}, fmt.Errorf(
+					"XTSE0020: %q is not a valid EQName", lex)
+			}
+			return xdm.QName{URI: uri, Local: local}, nil
+		}
+	}
 	prefix, local := xdm.SplitQName(lex)
 	if prefix == "" {
 		return xdm.QName{Local: local}, nil
@@ -470,6 +540,22 @@ func resolveQNameAttr(el *xdm.Node, lex string) (xdm.QName, error) {
 			"XTSE0280: unbound namespace prefix %q in %q", prefix, lex)
 	}
 	return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
+}
+
+// resolveResultQNameAttr resolves a QName that names an element of the result
+// document, where an unprefixed name takes the default namespace.
+//
+// This differs from resolveQNameAttr, which leaves an unprefixed name in no
+// namespace. Only cdata-section-elements uses this rule, because only it
+// names elements that the stylesheet also writes as literal result elements —
+// where xmlns="uri" does apply.
+func resolveResultQNameAttr(el *xdm.Node, lex string) (xdm.QName, error) {
+	lex = strings.TrimSpace(lex)
+	if prefix, local := xdm.SplitQName(lex); prefix == "" {
+		uri, _ := el.LookupPrefix("")
+		return xdm.QName{URI: uri, Local: local}, nil
+	}
+	return resolveQNameAttr(el, lex)
 }
 
 // newStylesheetFuncs builds the function library a stylesheet sees.

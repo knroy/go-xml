@@ -216,8 +216,12 @@ func buildRegexp(pattern, flags string) (*regexp.Regexp, error) {
 			// it is applied by stripping unescaped whitespace here.
 			pattern = stripPatternWhitespace(pattern)
 		case 'q':
-			// The pattern is a literal string.
-			pattern = regexp.QuoteMeta(pattern)
+			// The "q" flag, which makes the pattern a literal string, was
+			// introduced in XPath 3.0. This implementation targets 2.0, where
+			// it is simply not one of the flags, so it is refused rather than
+			// silently honoured — a 2.0 stylesheet using it is in error and
+			// the conformance suite checks that it is reported.
+			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		default:
 			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		}
@@ -364,7 +368,19 @@ func translatePattern(p string, dotAll bool) (string, error) {
 						// otherwise reaches inside \p{Lu} and makes it match
 						// lowercase, which is not what asking for an uppercase
 						// letter means.
-						sb.WriteString("(?-i:\\" + string(esc) + "{" + body + "})")
+						//
+						// Inside a character class there is nowhere to put the
+						// group: RE2 reads "(?-i:...)" between brackets as the
+						// literal characters that spell it, so "[\P{L}*]"
+						// silently became "any of ( ? - i : \ P { L } * )" —
+						// which matches "A". The escape is contributed bare
+						// there, and the case pinning is lost along with it,
+						// which is the lesser of the two wrongs.
+						if inClass {
+							sb.WriteString("\\" + string(esc) + "{" + body + "}")
+						} else {
+							sb.WriteString("(?-i:\\" + string(esc) + "{" + body + "})")
+						}
 						i += len(p[i+1:]) - len(rest)
 						continue
 					}
@@ -468,10 +484,23 @@ func translatePattern(p string, dotAll bool) (string, error) {
 			}
 			sb.WriteString(dotClass)
 		case '[':
-			if !inClass {
-				inClass = true
-				classSrc = i
+			if inClass {
+				// An unescaped "[" inside a character class is not in the
+				// XML Schema grammar. A posCharGroup is a run of ranges and
+				// escapes, never a nested class, and the only "[" a group may
+				// contain is the one opening the right operand of a
+				// subtraction — which the "-" case above has already
+				// consumed by the time control reaches here. RE2 reads a bare
+				// "[" as a literal bracket instead, so "[^[a-b]]" and
+				// "[[abcd]-[bc]]" were quietly accepted with a meaning the
+				// specification does not give them.
+				return "", fmt.Errorf(
+					"FORX0002: %q is not in the XML Schema grammar "+
+						"(a character class may not contain a nested class)",
+					p)
 			}
+			inClass = true
+			classSrc = i
 			sb.WriteByte(c)
 		case ']':
 			inClass = false
@@ -758,82 +787,88 @@ func takeBlockName(s string) (name, rest string, ok bool) {
 // contiguous range of codepoints, while the Tibetan script is a set that spans
 // several — substituting one for the other would quietly change the match.
 var unicodeBlocks = map[string][][2]rune{
-	"IsBasicLatin":                           {{0x0000, 0x007F}},
-	"IsLatin-1Supplement":                    {{0x0080, 0x00FF}},
-	"IsLatinExtended-A":                      {{0x0100, 0x017F}},
-	"IsLatinExtended-B":                      {{0x0180, 0x024F}},
-	"IsIPAExtensions":                        {{0x0250, 0x02AF}},
-	"IsSpacingModifierLetters":               {{0x02B0, 0x02FF}},
-	"IsCombiningDiacriticalMarks":            {{0x0300, 0x036F}},
-	"IsGreek":                                {{0x0370, 0x03FF}},
-	"IsCyrillic":                             {{0x0400, 0x04FF}},
-	"IsArmenian":                             {{0x0530, 0x058F}},
-	"IsHebrew":                               {{0x0590, 0x05FF}},
-	"IsArabic":                               {{0x0600, 0x06FF}},
-	"IsSyriac":                               {{0x0700, 0x074F}},
-	"IsThaana":                               {{0x0780, 0x07BF}},
-	"IsDevanagari":                           {{0x0900, 0x097F}},
-	"IsBengali":                              {{0x0980, 0x09FF}},
-	"IsGurmukhi":                             {{0x0A00, 0x0A7F}},
-	"IsGujarati":                             {{0x0A80, 0x0AFF}},
-	"IsOriya":                                {{0x0B00, 0x0B7F}},
-	"IsTamil":                                {{0x0B80, 0x0BFF}},
-	"IsTelugu":                               {{0x0C00, 0x0C7F}},
-	"IsKannada":                              {{0x0C80, 0x0CFF}},
-	"IsMalayalam":                            {{0x0D00, 0x0D7F}},
-	"IsSinhala":                              {{0x0D80, 0x0DFF}},
-	"IsThai":                                 {{0x0E00, 0x0E7F}},
-	"IsLao":                                  {{0x0E80, 0x0EFF}},
-	"IsTibetan":                              {{0x0F00, 0x0FFF}},
-	"IsMyanmar":                              {{0x1000, 0x109F}},
-	"IsGeorgian":                             {{0x10A0, 0x10FF}},
-	"IsHangulJamo":                           {{0x1100, 0x11FF}},
-	"IsEthiopic":                             {{0x1200, 0x137F}},
-	"IsCherokee":                             {{0x13A0, 0x13FF}},
-	"IsUnifiedCanadianAboriginalSyllabics":   {{0x1400, 0x167F}},
-	"IsOgham":                                {{0x1680, 0x169F}},
-	"IsRunic":                                {{0x16A0, 0x16FF}},
-	"IsKhmer":                                {{0x1780, 0x17FF}},
-	"IsMongolian":                            {{0x1800, 0x18AF}},
-	"IsLatinExtendedAdditional":              {{0x1E00, 0x1EFF}},
-	"IsGreekExtended":                        {{0x1F00, 0x1FFF}},
-	"IsGeneralPunctuation":                   {{0x2000, 0x206F}},
-	"IsSuperscriptsandSubscripts":            {{0x2070, 0x209F}},
-	"IsCurrencySymbols":                      {{0x20A0, 0x20CF}},
-	"IsCombiningMarksforSymbols":             {{0x20D0, 0x20FF}},
-	"IsLetterlikeSymbols":                    {{0x2100, 0x214F}},
-	"IsNumberForms":                          {{0x2150, 0x218F}},
-	"IsArrows":                               {{0x2190, 0x21FF}},
-	"IsMathematicalOperators":                {{0x2200, 0x22FF}},
-	"IsMiscellaneousTechnical":               {{0x2300, 0x23FF}},
-	"IsControlPictures":                      {{0x2400, 0x243F}},
-	"IsOpticalCharacterRecognition":          {{0x2440, 0x245F}},
-	"IsEnclosedAlphanumerics":                {{0x2460, 0x24FF}},
-	"IsBoxDrawing":                           {{0x2500, 0x257F}},
-	"IsBlockElements":                        {{0x2580, 0x259F}},
-	"IsGeometricShapes":                      {{0x25A0, 0x25FF}},
-	"IsMiscellaneousSymbols":                 {{0x2600, 0x26FF}},
-	"IsDingbats":                             {{0x2700, 0x27BF}},
-	"IsBraillePatterns":                      {{0x2800, 0x28FF}},
-	"IsCJKRadicalsSupplement":                {{0x2E80, 0x2EFF}},
-	"IsKangxiRadicals":                       {{0x2F00, 0x2FDF}},
-	"IsIdeographicDescriptionCharacters":     {{0x2FF0, 0x2FFF}},
-	"IsCJKSymbolsandPunctuation":             {{0x3000, 0x303F}},
-	"IsHiragana":                             {{0x3040, 0x309F}},
-	"IsKatakana":                             {{0x30A0, 0x30FF}},
-	"IsBopomofo":                             {{0x3100, 0x312F}},
-	"IsHangulCompatibilityJamo":              {{0x3130, 0x318F}},
-	"IsKanbun":                               {{0x3190, 0x319F}},
-	"IsBopomofoExtended":                     {{0x31A0, 0x31BF}},
-	"IsEnclosedCJKLettersandMonths":          {{0x3200, 0x32FF}},
-	"IsCJKCompatibility":                     {{0x3300, 0x33FF}},
-	"IsCJKUnifiedIdeographsExtensionA":       {{0x3400, 0x4DB5}},
-	"IsCJKUnifiedIdeographs":                 {{0x4E00, 0x9FFF}},
-	"IsYiSyllables":                          {{0xA000, 0xA48F}},
-	"IsYiRadicals":                           {{0xA490, 0xA4CF}},
-	"IsHangulSyllables":                      {{0xAC00, 0xD7A3}},
-	"IsHighSurrogates":                       {{0xD800, 0xDB7F}},
-	"IsLowSurrogates":                        {{0xDC00, 0xDFFF}},
+	"IsBasicLatin":                         {{0x0000, 0x007F}},
+	"IsLatin-1Supplement":                  {{0x0080, 0x00FF}},
+	"IsLatinExtended-A":                    {{0x0100, 0x017F}},
+	"IsLatinExtended-B":                    {{0x0180, 0x024F}},
+	"IsIPAExtensions":                      {{0x0250, 0x02AF}},
+	"IsSpacingModifierLetters":             {{0x02B0, 0x02FF}},
+	"IsCombiningDiacriticalMarks":          {{0x0300, 0x036F}},
+	"IsGreek":                              {{0x0370, 0x03FF}},
+	"IsCyrillic":                           {{0x0400, 0x04FF}},
+	"IsArmenian":                           {{0x0530, 0x058F}},
+	"IsHebrew":                             {{0x0590, 0x05FF}},
+	"IsArabic":                             {{0x0600, 0x06FF}},
+	"IsSyriac":                             {{0x0700, 0x074F}},
+	"IsThaana":                             {{0x0780, 0x07BF}},
+	"IsDevanagari":                         {{0x0900, 0x097F}},
+	"IsBengali":                            {{0x0980, 0x09FF}},
+	"IsGurmukhi":                           {{0x0A00, 0x0A7F}},
+	"IsGujarati":                           {{0x0A80, 0x0AFF}},
+	"IsOriya":                              {{0x0B00, 0x0B7F}},
+	"IsTamil":                              {{0x0B80, 0x0BFF}},
+	"IsTelugu":                             {{0x0C00, 0x0C7F}},
+	"IsKannada":                            {{0x0C80, 0x0CFF}},
+	"IsMalayalam":                          {{0x0D00, 0x0D7F}},
+	"IsSinhala":                            {{0x0D80, 0x0DFF}},
+	"IsThai":                               {{0x0E00, 0x0E7F}},
+	"IsLao":                                {{0x0E80, 0x0EFF}},
+	"IsTibetan":                            {{0x0F00, 0x0FFF}},
+	"IsMyanmar":                            {{0x1000, 0x109F}},
+	"IsGeorgian":                           {{0x10A0, 0x10FF}},
+	"IsHangulJamo":                         {{0x1100, 0x11FF}},
+	"IsEthiopic":                           {{0x1200, 0x137F}},
+	"IsCherokee":                           {{0x13A0, 0x13FF}},
+	"IsUnifiedCanadianAboriginalSyllabics": {{0x1400, 0x167F}},
+	"IsOgham":                              {{0x1680, 0x169F}},
+	"IsRunic":                              {{0x16A0, 0x16FF}},
+	"IsKhmer":                              {{0x1780, 0x17FF}},
+	"IsMongolian":                          {{0x1800, 0x18AF}},
+	"IsLatinExtendedAdditional":            {{0x1E00, 0x1EFF}},
+	"IsGreekExtended":                      {{0x1F00, 0x1FFF}},
+	"IsGeneralPunctuation":                 {{0x2000, 0x206F}},
+	"IsSuperscriptsandSubscripts":          {{0x2070, 0x209F}},
+	"IsCurrencySymbols":                    {{0x20A0, 0x20CF}},
+	"IsCombiningMarksforSymbols":           {{0x20D0, 0x20FF}},
+	"IsLetterlikeSymbols":                  {{0x2100, 0x214F}},
+	"IsNumberForms":                        {{0x2150, 0x218F}},
+	"IsArrows":                             {{0x2190, 0x21FF}},
+	"IsMathematicalOperators":              {{0x2200, 0x22FF}},
+	"IsMiscellaneousTechnical":             {{0x2300, 0x23FF}},
+	"IsControlPictures":                    {{0x2400, 0x243F}},
+	"IsOpticalCharacterRecognition":        {{0x2440, 0x245F}},
+	"IsEnclosedAlphanumerics":              {{0x2460, 0x24FF}},
+	"IsBoxDrawing":                         {{0x2500, 0x257F}},
+	"IsBlockElements":                      {{0x2580, 0x259F}},
+	"IsGeometricShapes":                    {{0x25A0, 0x25FF}},
+	"IsMiscellaneousSymbols":               {{0x2600, 0x26FF}},
+	"IsDingbats":                           {{0x2700, 0x27BF}},
+	"IsBraillePatterns":                    {{0x2800, 0x28FF}},
+	"IsCJKRadicalsSupplement":              {{0x2E80, 0x2EFF}},
+	"IsKangxiRadicals":                     {{0x2F00, 0x2FDF}},
+	"IsIdeographicDescriptionCharacters":   {{0x2FF0, 0x2FFF}},
+	"IsCJKSymbolsandPunctuation":           {{0x3000, 0x303F}},
+	"IsHiragana":                           {{0x3040, 0x309F}},
+	"IsKatakana":                           {{0x30A0, 0x30FF}},
+	"IsBopomofo":                           {{0x3100, 0x312F}},
+	"IsHangulCompatibilityJamo":            {{0x3130, 0x318F}},
+	"IsKanbun":                             {{0x3190, 0x319F}},
+	"IsBopomofoExtended":                   {{0x31A0, 0x31BF}},
+	"IsEnclosedCJKLettersandMonths":        {{0x3200, 0x32FF}},
+	"IsCJKCompatibility":                   {{0x3300, 0x33FF}},
+	"IsCJKUnifiedIdeographsExtensionA":     {{0x3400, 0x4DB5}},
+	"IsCJKUnifiedIdeographs":               {{0x4E00, 0x9FFF}},
+	"IsYiSyllables":                        {{0xA000, 0xA48F}},
+	"IsYiRadicals":                         {{0xA490, 0xA4CF}},
+	"IsHangulSyllables":                    {{0xAC00, 0xD7A3}},
+	"IsHighSurrogates":                     {{0xD800, 0xDB7F}},
+	"IsLowSurrogates":                      {{0xDC00, 0xDFFF}},
+	// The BMP area only. Extending this to the two supplementary private-use
+	// areas gains 3 tests in the XSLT suite and loses 4 in the XML Schema
+	// suite, which is the authority here: block names come from Unicode,
+	// and Unicode names E000-F8FF "Private Use Area" while the supplementary
+	// ranges are the separately named "Supplementary Private Use Area-A"
+	// and "-B". A block name denotes one block.
 	"IsPrivateUse":                           {{0xE000, 0xF8FF}},
 	"IsCJKCompatibilityIdeographs":           {{0xF900, 0xFAFF}},
 	"IsAlphabeticPresentationForms":          {{0xFB00, 0xFB4F}},

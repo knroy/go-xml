@@ -156,21 +156,33 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	for _, fn := range []struct {
 		name   string
 		public bool
+		code   string
 	}{
-		{"unparsed-entity-uri", false},
-		{"unparsed-entity-public-id", true},
+		{"unparsed-entity-uri", false, "XTDE1370"},
+		{"unparsed-entity-public-id", true, "XTDE1380"},
 	} {
-		public := fn.public
+		public, code, fname := fn.public, fn.code, fn.name
 		l.Add(xpath.Function{
 			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 1,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 				name := stringArg(args[0])
 				n, ok := ctx.Item.(*xdm.Node)
+				// XTDE1370 and XTDE1380 say the same thing of their own
+				// function: it is an error "when there is no context node, or
+				// when the root of the tree containing the context node is
+				// not a document node". Both halves matter — a temporary tree
+				// rooted at an element has a context node but no document to
+				// hold an entity declaration, so answering the zero-length
+				// string there would report "no such entity" for a question
+				// that could never have had an answer.
 				if !ok {
-					// No context node means no document to ask, and the
-					// specification makes the answer the zero-length string
-					// rather than an error.
-					return xdm.One(xdm.NewAnyURI("")), nil
+					return nil, fmt.Errorf(
+						"%s: %s() has no context node", code, fname)
+				}
+				if n.Root().Kind != xdm.KindDocument {
+					return nil, fmt.Errorf(
+						"%s: the root of the tree containing the context node "+
+							"of %s() is not a document node", code, fname)
 				}
 				sys, pub, _, found := n.Tree().UnparsedEntity(name)
 				if !found {
@@ -211,6 +223,14 @@ func registerStaticFuncs(l *xpath.Library) {
 				return nil, fmt.Errorf(
 					"XTDE1390: system-property(%q) is not a valid QName", name)
 			}
+			// The other half of XTDE1390 — "there is no namespace declaration
+			// in scope for the prefix of the QName" — is deliberately not
+			// checked here. This library does not receive the stylesheet's
+			// namespace context, and guessing at the prefix does not work:
+			// a stylesheet binds the XSLT namespace to whatever prefix it
+			// likes, and the suite uses "t:" and "xslt:" as often as "xsl:".
+			// Rejecting the unfamiliar ones lost thirteen tests that were
+			// asking a perfectly well-formed question.
 			switch {
 			case strings.HasSuffix(name, "version"):
 				return xdm.One(xdm.NewString("2.0")), nil
@@ -231,6 +251,9 @@ func registerStaticFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
+			if err := checkAvailableArg("XTDE1400", "function-available", name); err != nil {
+				return nil, err
+			}
 			prefix, local := xdm.SplitQName(name)
 			uri := xdm.NSFN
 			if prefix != "" {
@@ -261,6 +284,9 @@ func registerStaticFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
+			if err := checkAvailableArg("XTDE1400", "function-available", name); err != nil {
+				return nil, err
+			}
 			arity := 0
 			for _, a := range xdm.Atomize(args[1]) {
 				if at, ok := a.(*xdm.Atomic); ok {
@@ -305,6 +331,9 @@ func registerStaticFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
+			if err := checkAvailableArg("XTDE1440", "element-available", name); err != nil {
+				return nil, err
+			}
 			_, local := xdm.SplitQName(name)
 			return xdm.One(xdm.NewBoolean(supportedInstructions[local])), nil
 		},
@@ -366,10 +395,25 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	}
 	lexName := nameSeq[0].(*xdm.Atomic).String()
 
-	// Resolve the key name. Only unprefixed names are resolvable here, since
-	// the stylesheet's namespace context is not available at call time.
-	_, local := xdm.SplitQName(lexName)
-	keyName := xdm.QName{Local: local}.Clark()
+	// XTDE1260 covers three cases in one sentence: the name "is not a valid
+	// QName, or ... there is no namespace declaration in scope for the prefix
+	// of the QName, or ... the name obtained by expanding the QName is not
+	// the same as the expanded name of any xsl:key declaration".
+	if !isLexicalQName(lexName) {
+		return nil, fmt.Errorf(
+			"XTDE1260: key(%q): the name is not a valid QName", lexName)
+	}
+	prefix, local := xdm.SplitQName(lexName)
+	// The stylesheet's namespace context is not available at call time, so
+	// the prefix is resolved against the bindings the stylesheet collected at
+	// compile time. An unresolvable prefix and a resolvable one naming no key
+	// are the same error, so failing to find a binding falls through to the
+	// lookup rather than being reported separately.
+	uri := ""
+	if prefix != "" {
+		uri = rt.sheet.prefixes[prefix]
+	}
+	keyName := xdm.QName{URI: uri, Local: local}.Clark()
 	defs, ok := rt.sheet.keys[keyName]
 	if !ok {
 		return nil, fmt.Errorf("XTDE1260: no xsl:key named %q", lexName)
@@ -386,9 +430,24 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	if root == nil {
 		n, err := ctx.ContextNode()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf(
+				"XTDE1270: key() has no context node to search from")
 		}
 		root = n.Root()
+	}
+	// XTDE1270: it is an error "to call the key function with two arguments
+	// if there is no context node, or if the root of the tree containing the
+	// context node is not a document node; or to call the function with three
+	// arguments if the root of the tree containing the node supplied in the
+	// third argument is not a document node."
+	//
+	// Both forms come down to the same requirement, which is why one check
+	// serves them: a key is an index over a document, and a temporary tree
+	// rooted at an element is not one. Searching it anyway simply found
+	// nothing, so the stylesheet saw an empty result rather than a mistake.
+	if root.Kind != xdm.KindDocument {
+		return nil, fmt.Errorf(
+			"XTDE1270: key() searches a tree whose root is not a document node")
 	}
 
 	index, err := rt.keyIndexFor(keyName, defs, root, ctx)
@@ -408,28 +467,56 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		}
 	}
 	for _, kv := range xdm.Atomize(args[1]) {
-		k := collationKey(coll, kv.(*xdm.Atomic).String())
+		k, err := rt.keySearchKey(kv.(*xdm.Atomic), coll)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, index[k]...)
 	}
 	return xdm.SortDocumentOrder(out), nil
 }
 
-// keyValues computes the key strings one node contributes.
+// keyLookupKey is the string a key value is indexed and looked up by.
+//
+// Section 16.3 compares key values by value, using the "eq" rules, not by
+// their lexical form: a key declared use="xs:dateTime(.)" must find a node
+// whose stored value names the same instant even when the two are written in
+// different timezones, and an xs:double key must find NaN. Indexing on the
+// string form did neither.
+func (rt *runtime) keyLookupKey(a *xdm.Atomic, coll xpath.Collation) (string, error) {
+	return xpath.GroupingKey(a, coll, rt.ctx.ImplicitTimezone)
+}
+
+// keySearchKey is keyLookupKey for the value being searched for.
+//
+// It differs in one case: NaN. fn:key selects the nodes whose key value is
+// *equal* to the sought value, and NaN equals nothing, itself included — so
+// key('i', xs:double('NaN')) must select nothing even though nodes with a NaN
+// key value are in the index. Giving the search a key the index cannot contain
+// is what expresses that.
+func (rt *runtime) keySearchKey(a *xdm.Atomic, coll xpath.Collation) (string, error) {
+	if a.IsNaN() {
+		return "\x00fn:key-NaN-matches-nothing", nil
+	}
+	return rt.keyLookupKey(a, coll)
+}
+
+// keyValues computes the key values one node contributes.
 //
 // A key is declared either with a use expression or with a sequence
 // constructor, and the two produce their value differently: the expression is
 // atomized, while the constructor builds a temporary tree whose string value
 // is the key. Both may yield several values, which puts the node under each.
-func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]string, error) {
+func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*xdm.Atomic, error) {
 	if def.use != nil {
 		vals, err := def.use.Eval(ctx.WithFocus(n, 1, 1))
 		if err != nil {
 			return nil, err
 		}
-		out := make([]string, 0, len(vals))
+		out := make([]*xdm.Atomic, 0, len(vals))
 		for _, v := range xdm.Atomize(vals) {
 			if a, ok := v.(*xdm.Atomic); ok {
-				out = append(out, a.String())
+				out = append(out, a)
 			}
 		}
 		return out, nil
@@ -437,13 +524,31 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]st
 
 	// The constructor form. The focus is the matched node, as it is for the
 	// expression form, so the same key definition reads the same way.
-	sub := *rt
+	sub := rt.temporaryOutput()
 	sub.ctx = ctx.WithFocus(n, 1, 1)
 	out := newOutputBuilder()
-	if err := execSequence(def.body, &sub, out); err != nil {
+	if err := execSequence(def.body, sub, out); err != nil {
 		return nil, err
 	}
-	return []string{out.toTree().StringValue()}, nil
+	// The constructor's result keeps its type. An xsl:sequence yielding an
+	// xs:integer gives an integer key, which key('k', 4) then finds; building
+	// a temporary tree and taking its string value instead turned every such
+	// key into a string that no typed lookup could match.
+	//
+	// A constructor that produced nodes or text has no atomic value of its
+	// own, so the tree's string value remains the answer for those.
+	items := out.sequence()
+	atoms := xdm.Atomize(items)
+	if len(atoms) == 0 {
+		return []*xdm.Atomic{xdm.NewString(out.toTree().StringValue())}, nil
+	}
+	vals := make([]*xdm.Atomic, 0, len(atoms))
+	for _, it := range atoms {
+		if a, ok := it.(*xdm.Atomic); ok {
+			vals = append(vals, a)
+		}
+	}
+	return vals, nil
 }
 
 // keyIndexFor returns the index for a key over a document, building it if
@@ -475,8 +580,12 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			if err != nil {
 				return err
 			}
-			for _, k := range vals {
-				idx[collationKey(coll, k)] = append(idx[collationKey(coll, k)], n)
+			for _, kv := range vals {
+				k, err := rt.keyLookupKey(kv, coll)
+				if err != nil {
+					return err
+				}
+				idx[k] = append(idx[k], n)
 			}
 		}
 		// Attributes can be key targets, so they are visited too.
@@ -497,8 +606,12 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				if err != nil {
 					return err
 				}
-				for _, k := range vals {
-					idx[collationKey(coll, k)] = append(idx[collationKey(coll, k)], a)
+				for _, kv := range vals {
+					k, err := rt.keyLookupKey(kv, coll)
+					if err != nil {
+						return err
+					}
+					idx[k] = append(idx[k], a)
 				}
 			}
 		}
@@ -629,4 +742,25 @@ func (rt *runtime) keyCollation(def *keyDef) (xpath.Collation, error) {
 		return nil, nil
 	}
 	return coll, nil
+}
+
+// checkAvailableArg applies the lexical half of XTDE1400 and XTDE1440.
+//
+// Both say the same thing about their argument: it "does not evaluate to a
+// string that is a valid QName, or ... there is no namespace declaration in
+// scope for the prefix of the QName". Only the first half is decidable here,
+// because these functions are registered in a library that does not carry the
+// stylesheet's namespace context; an unbound prefix still answers false rather
+// than raising, which is the pre-existing behaviour and is not made worse by
+// catching the malformed names.
+//
+// The distinction matters because a malformed name and a valid name for an
+// absent function are otherwise indistinguishable: both would answer false,
+// so a stylesheet asking about "c#" would silently be told the instruction
+// does not exist rather than that it asked a meaningless question.
+func checkAvailableArg(code, fn, name string) error {
+	if isLexicalQName(name) {
+		return nil
+	}
+	return fmt.Errorf("%s: %s(%q) is not a valid QName", code, fn, name)
 }

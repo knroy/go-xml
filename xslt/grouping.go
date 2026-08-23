@@ -106,7 +106,7 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if len(g.items) > 0 {
 			focus = g.items[0]
 		}
-		sub := rt.withCurrent(focus, idx+1, size)
+		sub := rt.withCurrent(focus, idx+1, size).clearCurrentRule()
 		sub = sub.withVar(currentGroupVar, g.items)
 		sub = sub.withVar(currentGroupingKeyVar, g.key)
 		if err := execSequence(i.body, sub, out); err != nil {
@@ -144,7 +144,10 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 			// two keys the collation calls equal land together — while the
 			// group keeps the key as written, which is what
 			// current-grouping-key() returns.
-			k := collationKey(coll, kv.(*xdm.Atomic).String())
+			k, err := groupingKey(rt, kv.(*xdm.Atomic), coll)
+			if err != nil {
+				return nil, err
+			}
 			gi, ok := index[k]
 			if !ok {
 				index[k] = len(groups)
@@ -181,7 +184,10 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 				"XTTE1100: the group-adjacent key produced %d items, want exactly one",
 				len(atoms))
 		}
-		k := collationKey(coll, atoms[0].(*xdm.Atomic).String())
+		k, err := groupingKey(rt, atoms[0].(*xdm.Atomic), coll)
+		if err != nil {
+			return nil, err
+		}
 		if first || k != prev {
 			groups = append(groups, group{key: xdm.One(atoms[0])})
 			first, prev = false, k
@@ -282,6 +288,16 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, fmt.Errorf(
 			"XTSE1080: xsl:for-each-group requires exactly one grouping attribute, found %d", count)
 	}
+	// XTSE1090: "it is an error to specify the collation attribute if neither
+	// the group-by attribute nor group-adjacent attribute is specified." The
+	// two pattern-based forms group by position rather than by key, so there
+	// is no key for a collation to compare and naming one is a mistake about
+	// what the instruction does.
+	if instr.collation != nil && instr.groupBy == nil && instr.groupAdjacent == nil {
+		return nil, fmt.Errorf(
+			"XTSE1090: xsl:for-each-group/@collation requires either " +
+				"group-by or group-adjacent")
+	}
 
 	_, sorts, err := c.compileParamsAndSorts(n, ns)
 	if err != nil {
@@ -329,7 +345,16 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	re, err := xpath.CompileRegexp(pattern, flags)
 	if err != nil {
-		return err
+		// xsl:analyze-string has its own error codes for the two ways the
+		// regex can be rejected, and a caller matching on the code needs
+		// them rather than the function library's FORX0001/FORX0002: an
+		// unusable flag is XTDE1145 and an unusable pattern XTDE1140.
+		if strings.Contains(err.Error(), "FORX0001") {
+			return fmt.Errorf(
+				"XTDE1145: invalid xsl:analyze-string/@flags %q: %w", flags, err)
+		}
+		return fmt.Errorf(
+			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
 	if re.MatchString("") {
 		// XTDE1150: xsl:analyze-string's own error for a regex that matches
@@ -365,7 +390,7 @@ func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
 	if len(body) == 0 {
 		return nil
 	}
-	sub := rt.withFocus(xdm.NewString(text), 1, 1)
+	sub := rt.withFocus(xdm.NewString(text), 1, 1).clearCurrentRule()
 	if loc != nil {
 		// regex-group(n) reads the captured groups of the current match.
 		groups := make([]string, 0, len(loc)/2)
@@ -494,9 +519,6 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// separated by the format's own separators. Taking only the first
 		// silently dropped the rest.
 		atoms := xdm.Atomize(seq)
-		if len(atoms) == 0 {
-			return nil
-		}
 		nums := make([]int64, 0, len(atoms))
 		for _, a := range atoms {
 			at, ok := a.(*xdm.Atomic)
@@ -524,7 +546,17 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			// round() is half-up towards positive infinity, which is not
 			// what math.Round does for a negative half.
-			nums = append(nums, int64(math.Floor(f+0.5)))
+			n := int64(math.Floor(f + 0.5))
+			// The second half of XTDE0980: "or if the resulting integer is
+			// less than 0 (zero)". There is no numbering scheme for a
+			// negative position, and formatting one produced a plausible
+			// string rather than an error.
+			if n < 0 {
+				return fmt.Errorf(
+					"XTDE0980: the value %q converts to %d, which is less "+
+						"than zero", at.String(), n)
+			}
+			nums = append(nums, n)
 		}
 		out.appendText(formatNumberSeq(nums, format, opts))
 		return nil
@@ -562,9 +594,11 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	if len(numbers) == 0 {
-		return nil
-	}
+	// An empty number list is not an empty result. Section 12.3 says the
+	// characters before the first format token and after the last are output
+	// literally, and that holds whether or not any number was found: the
+	// format "*1*" applied to nothing produces "**", not "". Returning early
+	// here dropped the prefix and suffix of every unnumbered node.
 	out.appendText(formatNumberSeq(numbers, format, opts))
 	return nil
 }
@@ -645,21 +679,24 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 		// chain is innermost-first, so the first @from match in it is the
 		// innermost one, and everything at or below that index is in its
 		// subtree.
-		limit := len(chain)
-		if i.from != nil {
-			for k, cur := range chain {
-				ok, err := i.matchesFrom(rt, cur)
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					limit = k
-					break
-				}
+		// $F is the innermost ancestor-or-self matching @from, and matches-from
+		// is true at the root whether or not @from was given — so $F always
+		// exists and the walk has a definite stopping point. Everything at or
+		// below $F in the chain is inside its subtree and so is a candidate
+		// for $AF, $F itself included when it also matches @count.
+		limit := len(chain) - 1
+		for k, cur := range chain {
+			ok, err := i.matchesFrom(rt, cur)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				limit = k
+				break
 			}
 		}
 		var nums []int64
-		for k := 0; k < limit; k++ {
+		for k := 0; k <= limit; k++ {
 			counted, err := i.matchesCount(rt, chain[k], node)
 			if err != nil {
 				return nil, err
@@ -685,28 +722,58 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 	// document node. Breaking before testing it meant xsl:number produced
 	// nothing at all when the node being numbered was the root — which is the
 	// context a simplified stylesheet starts in.
+	// The specification computes $A and $F independently and only then asks
+	// whether $A lies in the subtree rooted at $F:
+	//
+	//   $A  = $S/ancestor-or-self::node()[matches-count(.)][1]
+	//   $F  = $S/ancestor-or-self::node()[matches-from(.)][1]
+	//   $AF = $A[ancestor-or-self::node()[. is $F]]
+	//
+	// Walking up and stopping at the first @from match computed something
+	// else: it never looked for a counted node *above* the @from node, and
+	// so returned nothing where the spec returns a number.
+	var chain []*xdm.Node
 	for cur := node; cur != nil; cur = cur.Parent {
-		stop, err := i.matchesFrom(rt, cur)
+		chain = append(chain, cur)
+	}
+
+	aIdx := -1
+	for k, cur := range chain {
+		ok, err := i.matchesCount(rt, cur, node)
 		if err != nil {
 			return nil, err
 		}
-		if stop {
+		if ok {
+			aIdx = k
 			break
 		}
-		counted, err := i.matchesCount(rt, cur, node)
-		if err != nil {
-			return nil, err
-		}
-		if !counted {
-			continue
-		}
-		n, err := i.positionAmongSiblings(rt, cur, node)
-		if err != nil {
-			return nil, err
-		}
-		return []int64{n}, nil
 	}
-	return nil, nil
+	if aIdx < 0 {
+		return nil, nil
+	}
+
+	fIdx := -1
+	for k, cur := range chain {
+		ok, err := i.matchesFrom(rt, cur)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			fIdx = k
+			break
+		}
+	}
+	// chain is innermost-first, so $A is inside the subtree rooted at $F
+	// exactly when $F is at or above it — that is, at a larger index.
+	if fIdx < 0 || aIdx > fIdx {
+		return nil, nil
+	}
+
+	n, err := i.positionAmongSiblings(rt, chain[aIdx], node)
+	if err != nil {
+		return nil, err
+	}
+	return []int64{n}, nil
 }
 
 // matchesCount reports whether n is a node the count pattern selects. With no
@@ -722,6 +789,14 @@ func (i *numberInstr) matchesCount(rt *runtime, n, target *xdm.Node) (bool, erro
 }
 
 func (i *numberInstr) matchesFrom(rt *runtime, n *xdm.Node) (bool, error) {
+	// Section 12.2 states the base case explicitly: matches-from returns true
+	// "if the given node matches the pattern given in the from attribute, or
+	// if $node is the root node of a tree". The root is a match whether or
+	// not @from was given, which is what guarantees $F always exists and so
+	// that counting has somewhere to start.
+	if n.Parent == nil {
+		return true, nil
+	}
 	if i.from == nil {
 		return false, nil
 	}
@@ -855,7 +930,13 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 func formatNumberSeq(nums []int64, format string, opts numberOptions) string {
 	tokens, seps, prefix, suffix := splitFormat(format)
 	if len(tokens) == 0 {
+		// A picture with no format token at all still has to number
+		// something, so the default token "1" is used — and the literal that
+		// makes up the whole picture surrounds it on both sides, because it
+		// is at once everything before the first token and everything after
+		// the last. format="*" on the number 1 gives "*1*".
 		tokens = []string{"1"}
+		suffix = prefix
 	}
 	var sb strings.Builder
 	// Section 12.3: any characters before the first token and after the last
@@ -1199,6 +1280,17 @@ func (i *forEachGroupInstr) resolveCollation(rt *runtime) (xpath.Collation, erro
 // Only equality matters here, not order, so a collation that cannot produce a
 // key falls back to comparing — which for the collations this implements is
 // the same answer by a slower route.
+// groupingKey is the key two items must share to land in the same group.
+//
+// Section 14: grouping keys are compared by value, using the rules of the "eq"
+// operator, not by their string form. Keying on the string put two
+// xs:dateTime values naming the same instant in different groups whenever
+// their lexical timezones differed, and kept an xs:integer apart from the
+// equal xs:double.
+func groupingKey(rt *runtime, a *xdm.Atomic, coll xpath.Collation) (string, error) {
+	return xpath.GroupingKey(a, coll, rt.ctx.ImplicitTimezone)
+}
+
 func collationKey(coll xpath.Collation, s string) string {
 	if coll == nil {
 		return s

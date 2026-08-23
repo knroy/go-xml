@@ -46,15 +46,74 @@ func principalOf(res *xslt.Result) (*xslt.Result, string, bool) {
 			// serialises with the instruction's own output settings, which
 			// a Result built from its nodes cannot express — the unnamed
 			// xsl:output selecting method="text" is exactly the case.
-			return &xslt.Result{Nodes: res.Secondary[i].Nodes},
+			// The secondary list travels with the substituted result: a
+			// stylesheet may write both an unnamed result document and a
+			// named one, and an assert-result-document nested beside the
+			// assertions about the principal tree still has to find it.
+			return &xslt.Result{
+					Nodes:     res.Secondary[i].Nodes,
+					Secondary: res.Secondary,
+				},
 				res.Secondary[i].String(), true
 		}
 	}
 	return res, "", false
 }
 
+// compileMatchPattern compiles a serialization-matches pattern, translating
+// the XPath regular expression flags the suite uses.
+//
+// Go's regexp takes i, s and m as inline flags. It has no free-spacing mode,
+// so x is applied by removing the whitespace the mode would ignore — every
+// space outside a character class and not escaped — which is what the flag
+// means rather than an approximation of it.
+func compileMatchPattern(pat, flags string) (*regexp.Regexp, error) {
+	if strings.Contains(flags, "x") {
+		var b strings.Builder
+		inClass := false
+		for i := 0; i < len(pat); i++ {
+			c := pat[i]
+			switch {
+			case c == '\\' && i+1 < len(pat):
+				b.WriteByte(c)
+				i++
+				b.WriteByte(pat[i])
+				continue
+			case c == '[':
+				inClass = true
+			case c == ']':
+				inClass = false
+			case !inClass && (c == ' ' || c == '\t' || c == '\n' || c == '\r'):
+				continue
+			}
+			b.WriteByte(c)
+		}
+		pat = b.String()
+	}
+	var inline string
+	for _, f := range "ism" {
+		if strings.ContainsRune(flags, f) {
+			inline += string(f)
+		}
+	}
+	if inline != "" {
+		pat = "(?" + inline + ")" + pat
+	}
+	return regexp.Compile(pat)
+}
+
 func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) (bool, string) {
 	res, redirected, wasRedirected := principalOf(res)
+	return r.judgeIn(a, res, redirected, wasRedirected, terr, set)
+}
+
+// judgeIn is judge once the redirection has been resolved. The two are split
+// because the assertion tree is always rooted in an implicit all-of: resolving
+// the redirection inside the recursion would do it again on the substituted
+// result, whose principal tree is no longer empty, and every nested
+// assert-serialization would then read a re-serialisation with default output
+// settings instead of the text xsl:result-document actually produced.
+func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRedirected bool, terr error, set *TestSet) (bool, string) {
 	// A nil result with no error should not happen; treating it as a failure
 	// rather than dereferencing it keeps a harness bug from looking like an
 	// engine crash.
@@ -65,7 +124,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 	switch a.Kind {
 	case "all-of":
 		for _, c := range a.Children {
-			if ok, why := r.judge(c, res, terr, set); !ok {
+			if ok, why := r.judgeIn(c, res, redirected, wasRedirected, terr, set); !ok {
 				return false, why
 			}
 		}
@@ -74,7 +133,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 	case "any-of":
 		var reasons []string
 		for _, c := range a.Children {
-			if ok, _ := r.judge(c, res, terr, set); ok {
+			if ok, _ := r.judgeIn(c, res, redirected, wasRedirected, terr, set); ok {
 				return true, ""
 			}
 			reasons = append(reasons, c.Kind)
@@ -83,13 +142,18 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 
 	case "not":
 		for _, c := range a.Children {
-			if ok, _ := r.judge(c, res, terr, set); ok {
+			if ok, _ := r.judgeIn(c, res, redirected, wasRedirected, terr, set); ok {
 				return false, "the negated assertion held"
 			}
 		}
 		return true, ""
 
-	case "error":
+	// A serialization error is a dynamic error like any other; the suite
+	// gives it its own element only to record that it arises while writing
+	// the result rather than while building it. The reference driver's
+	// assert.xsl matches c:error and c:assert-serialization-error with the
+	// same template, so they are judged identically here.
+	case "error", "assert-serialization-error":
 		if terr == nil {
 			return false, fmt.Sprintf("expected error %s, the transform succeeded", a.Code)
 		}
@@ -131,7 +195,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		return evalAssert(res, a.Value)
+		return evalAssert(res, a.Value, a.NS)
 
 	case "assert-string-value":
 		if terr != nil {
@@ -151,11 +215,22 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		re, err := regexp.Compile(a.Value)
+		// The pattern is written as indented CDATA inside the element, so
+		// it arrives with the surrounding layout attached. Compiling that
+		// verbatim makes every such assertion fail on whitespace the suite
+		// never meant as part of the pattern.
+		re, err := compileMatchPattern(strings.TrimSpace(a.Value), a.Flags)
 		if err != nil {
 			return false, "unusable pattern: " + firstLine(err.Error())
 		}
-		if re.MatchString(res.String()) {
+		text := res.String()
+		if wasRedirected {
+			// The same reason as assert-serialization: an unnamed
+			// xsl:result-document produces the tree these patterns describe,
+			// and it serialises with its own output settings.
+			text = redirected
+		}
+		if re.MatchString(text) {
 			return true, ""
 		}
 		return false, "serialization does not match " + trunc(a.Value)
@@ -168,7 +243,12 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		if wasRedirected {
 			text = redirected
 		}
-		got, want := stripDecl(text), strings.TrimSpace(a.Value)
+		want, err := serializationWant(a, set)
+		if err != nil {
+			return false, err.Error()
+		}
+		got := stripDecl(text)
+		want = stripDecl(want)
 		if a.Normalize {
 			got, want = normalize(got), normalize(want)
 		}
@@ -201,8 +281,12 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 			// can tell the difference, so it is given the text the engine
 			// produced rather than a re-serialisation with defaults.
 			if c.Kind == "assert-serialization" {
+				want, err := serializationWant(c, set)
+				if err != nil {
+					return false, err.Error()
+				}
 				got := stripDecl(serialized)
-				want := strings.TrimSpace(c.Value)
+				want = stripDecl(want)
 				if c.Normalize {
 					got, want = normalize(got), normalize(want)
 				}
@@ -212,7 +296,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 				}
 				continue
 			}
-			if ok, why := r.judge(c, sub, nil, set); !ok {
+			if ok, why := r.judgeIn(c, sub, "", false, nil, set); !ok {
 				return false, a.URI + ": " + why
 			}
 		}
@@ -358,13 +442,36 @@ func attrsEqual(a, b *xdm.Node) bool {
 // before evaluation. Using the result's first node as context instead makes
 // every rooted path raise XPDY0050, which is not the engine disagreeing with
 // the suite but the harness handing it the wrong context.
-func evalAssert(res *xslt.Result, expr string) (bool, string) {
+// mapNS resolves the prefixes the suite declared on the assertion element.
+type mapNS map[string]string
+
+func (m mapNS) ResolvePrefix(p string) (string, bool) {
+	if u, ok := m[p]; ok {
+		return u, true
+	}
+	// xs and xml are bound everywhere an XPath expression is written in the
+	// suite: the catalog leaves them undeclared on the assertion because a
+	// processor is expected to have them in scope, and refusing them measures
+	// the harness rather than the engine.
+	switch p {
+	case "xs":
+		return xdm.NSXS, true
+	case "xml":
+		return xdm.NSXML, true
+	}
+	return "", false
+}
+func (m mapNS) DefaultElementNamespace() string { return m[""] }
+func (mapNS) DefaultFunctionNamespace() string  { return xdm.NSFN }
+
+func evalAssert(res *xslt.Result, expr string, ns map[string]string) (bool, string) {
 	doc, err := xdm.ParseString(stripDecl(res.String()), xdm.ParseOptions{})
 	if err != nil {
 		return false, "the result is not a document: " + firstLine(err.Error())
 	}
 	ctx := xpath.NewContext(doc.Root, xpath.Builtins())
-	got, evalErr := xpath.Eval(expr, ctx, noNS{})
+	resolver := xpath.NamespaceResolver(mapNS(ns))
+	got, evalErr := xpath.Eval(expr, ctx, resolver)
 	if err := evalErr; err != nil {
 		return false, fmt.Sprintf("%s: %v", trunc(expr), err)
 	}
@@ -416,6 +523,29 @@ func resultString(res *xslt.Result) string {
 }
 
 // stripDecl removes an XML declaration and any leading whitespace.
+// serializationWant returns the text an assert-serialization expects.
+//
+// The suite writes the expected serialisation inline for short results and in
+// a companion file for long ones. Ignoring @file compared every such
+// assertion against the empty string, which reported a mismatch for a test
+// that was never actually checked.
+//
+// Carriage returns are dropped because the suite ships those files with
+// whatever line endings the contributor's platform used, and the reference
+// driver's assert.xsl translates them away before comparing.
+func serializationWant(a Assertion, set *TestSet) (string, error) {
+	if a.File == "" {
+		return strings.TrimSpace(a.Value), nil
+	}
+	data, err := os.ReadFile(filepath.Join(set.Dir, filepath.FromSlash(a.File)))
+	if err != nil {
+		return "", fmt.Errorf("expected-serialization file: %s",
+			firstLine(err.Error()))
+	}
+	return strings.TrimSpace(
+		strings.ReplaceAll(string(stripBOM(data)), "\r", "")), nil
+}
+
 func stripDecl(s string) string {
 	t := strings.TrimSpace(s)
 	if strings.HasPrefix(t, "<?xml") {

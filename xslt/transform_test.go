@@ -356,8 +356,8 @@ func TestXSLFunction(t *testing.T) {
 		</xsl:function>
 		<xsl:template match="/"><r><xsl:value-of select="my:double(21)"/></r></xsl:template>
 	</xsl:stylesheet>`
-	if got := run(t, sheet, `<a/>`); got != "<r>42</r>" {
-		t.Errorf("got %q, want <r>42</r>", got)
+	if got := run(t, sheet, `<a/>`); !strings.Contains(got, ">42<") {
+		t.Errorf("got %q, want 42", got)
 	}
 }
 
@@ -372,8 +372,8 @@ func TestRecursiveFunction(t *testing.T) {
 		</xsl:function>
 		<xsl:template match="/"><r><xsl:value-of select="my:fact(5)"/></r></xsl:template>
 	</xsl:stylesheet>`
-	if got := run(t, sheet, `<a/>`); got != "<r>120</r>" {
-		t.Errorf("got %q, want <r>120</r>", got)
+	if got := run(t, sheet, `<a/>`); !strings.Contains(got, ">120<") {
+		t.Errorf("got %q, want 120", got)
 	}
 }
 

@@ -250,6 +250,8 @@ var xsltElements = map[string]elementDef{
 	}},
 	"fallback": {attrs: map[string]attrDef{}},
 	"result-document": {attrs: map[string]attrDef{
+		"html-version":           {avt: true},
+		"suppress-indentation":   {avt: true},
 		"format":                 {avt: true},
 		"href":                   {avt: true},
 		"validation":             {values: []string{"strict", "lax", "preserve", "strip"}},
@@ -272,8 +274,18 @@ var xsltElements = map[string]elementDef{
 		"output-version":         {avt: true},
 	}},
 	"output": {attrs: map[string]attrDef{
-		"name":                   {},
-		"method":                 {},
+		"name":   {},
+		"method": {},
+		// html-version selects between the HTML 4 and HTML 5 serialisation
+		// rules. It was added after XSLT 2.0, but the test suite uses it in
+		// tests declared XSLT20+, and rejecting an attribute a stylesheet may
+		// legitimately carry is worse than reading one this version does not
+		// otherwise act on.
+		"html-version": {},
+		// suppress-indentation names elements whose content is not
+		// re-indented. Like html-version it postdates XSLT 2.0, and is read
+		// rather than rejected for the same reason.
+		"suppress-indentation":   {},
 		"byte-order-mark":        {values: []string{"yes", "no"}},
 		"cdata-section-elements": {},
 		"doctype-public":         {},
@@ -431,4 +443,46 @@ var xsltDeclarations = map[string]bool{
 	"strip-space":     true,
 	"template":        true,
 	"variable":        true,
+}
+
+// qnameAttrDef records that an attribute's value is a QName, or a
+// whitespace-separated list of them, as the element syntax summaries say.
+type qnameAttrDef struct {
+	// list marks the "qnames" type, whose value is a whitespace-separated
+	// list rather than a single name.
+	list bool
+	// avt marks a summary that writes the type inside curly brackets, which
+	// is how it says the attribute is an attribute value template. Where the
+	// summary does *not* write the brackets, a value containing "{" is not a
+	// template but simply not a QName, and so is a static error.
+	avt bool
+}
+
+// qnameAttrs is the set of attributes whose summary gives their type as
+// "qname" or "qnames", extracted from the same element syntax summaries as
+// the tables above.
+//
+// It answers half of XTSE0020 that the enumeration cannot: an attribute with
+// no closed set of values still has a lexical space, and a value outside it
+// is "not one of the permitted values for that attribute". The distinction
+// the table carries is whether the summary brackets the type, because only a
+// bracketed one may hold a curly-bracket template.
+var qnameAttrs = map[string]map[string]qnameAttrDef{
+	"attribute":       {"name": {avt: true}, "type": {}},
+	"attribute-set":   {"name": {}, "use-attribute-sets": {list: true}},
+	"call-template":   {"name": {}},
+	"character-map":   {"name": {}, "use-character-maps": {list: true}},
+	"copy":            {"use-attribute-sets": {list: true}, "type": {}},
+	"copy-of":         {"type": {}},
+	"decimal-format":  {"name": {}},
+	"document":        {"type": {}},
+	"element":         {"name": {avt: true}, "use-attribute-sets": {list: true}, "type": {}},
+	"function":        {"name": {}},
+	"key":             {"name": {}},
+	"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
+	"param":           {"name": {}},
+	"result-document": {"format": {avt: true}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
+	"template":        {"name": {}},
+	"variable":        {"name": {}},
+	"with-param":      {"name": {}},
 }

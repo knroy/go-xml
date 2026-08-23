@@ -25,10 +25,10 @@ kind — they break working documents — so they are listed first throughout.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.80% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 78.93% — 4,238 of 5,369 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 89.44% — 4,803 of 5,370 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 78.93%, and the newest — so it is a
+The weakest of the measured numbers, at 89.44%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -758,7 +758,7 @@ greedy content-model matcher, two reverted attempts recorded above), and
 |---|---|---|---|
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
 | XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
-| XSD 1.1 instance | 99.79% | ~99.9% | same |
+| XSD 1.1 instance | 99.80% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
 | XSD 1.1 schema | 97.96% | ~99.9% | 285 constraints, one at a time |
 

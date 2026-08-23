@@ -70,6 +70,19 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		case xdm.NSXML:
 			// xml:space, xml:lang and xml:base are always permitted.
 			continue
+		case xdm.NSXSL:
+			// XTSE0090 names the XSLT namespace alongside the null one: an
+			// attribute written xsl:name on an XSLT element is as wrong as
+			// an unrecognised unprefixed one, because the summaries define
+			// every attribute of an XSLT element in no namespace. The
+			// prefixed form belongs on a literal result element, where
+			// XTSE0805 governs it instead.
+			if forwards {
+				continue
+			}
+			return fmt.Errorf(
+				"attribute xsl:%s is not allowed on xsl:%s (XTSE0090)",
+				a.Name.Local, el.Name.Local)
 		default:
 			// An attribute in another namespace is allowed on any XSLT
 			// element and is ignored, which is how extension attributes
@@ -94,6 +107,9 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 				a.Name.Local, el.Name.Local)
 		}
 		if err := checkAttrValue(el, a, ad); err != nil {
+			return err
+		}
+		if err := checkQNameAttr(el, a); err != nil {
 			return err
 		}
 	}
@@ -228,6 +244,81 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 				el.Name.Local, cm.model)
 		}
 	}
+	return checkModelOrder(el, cm)
+}
+
+// checkModelOrder checks the order and cardinality the content model states.
+//
+// The model strings in the table are the specification's own, and two shapes
+// of them recur often enough to be worth reading mechanically rather than
+// leaving to each instruction's compiler:
+//
+//   - a leading "xsl:sort*" or "xsl:sort+" before a sequence constructor,
+//     which says every xsl:sort must precede the content being sorted;
+//   - "(xsl:when+, xsl:otherwise?)", which says an xsl:choose needs at least
+//     one xsl:when, allows at most one xsl:otherwise, and requires the
+//     xsl:otherwise to come last.
+//
+// Both are XTSE0010: "the content of the element does not correspond to the
+// content that is allowed for the element." Reading them off the model string
+// rather than hard-coding the element names is what keeps the check honest —
+// if the table changes, so does the rule it enforces.
+func checkModelOrder(el *xdm.Node, cm contentModel) error {
+	switch {
+	case strings.HasPrefix(cm.model, "(xsl:sort*,") ||
+		strings.HasPrefix(cm.model, "(xsl:sort+,"):
+		// Everything before the sequence constructor is xsl:sort, so an
+		// xsl:sort after any other content is out of place. xsl:fallback is
+		// not part of these models, so only real content counts.
+		seenOther := false
+		for _, ch := range el.Children {
+			switch ch.Kind {
+			case xdm.KindText:
+				if !xdm.IsXMLWhitespace(ch.Value) {
+					seenOther = true
+				}
+			case xdm.KindElement:
+				if isXSL(ch, "sort") {
+					if seenOther {
+						return fmt.Errorf(
+							"xsl:%s: every xsl:sort must precede the sequence "+
+								"constructor, its content is %s (XTSE0010)",
+							el.Name.Local, cm.model)
+					}
+					continue
+				}
+				seenOther = true
+			}
+		}
+
+	case cm.model == "(xsl:when+, xsl:otherwise?)":
+		whens, otherwises := 0, 0
+		for _, ch := range el.ChildElements() {
+			switch {
+			case isXSL(ch, "when"):
+				if otherwises > 0 {
+					return fmt.Errorf(
+						"xsl:choose: an xsl:when may not follow the " +
+							"xsl:otherwise, its content is " +
+							"(xsl:when+, xsl:otherwise?) (XTSE0010)")
+				}
+				whens++
+			case isXSL(ch, "otherwise"):
+				otherwises++
+				if otherwises > 1 {
+					return fmt.Errorf(
+						"xsl:choose: at most one xsl:otherwise is allowed, " +
+							"its content is (xsl:when+, xsl:otherwise?) " +
+							"(XTSE0010)")
+				}
+			}
+		}
+		if whens == 0 {
+			return fmt.Errorf(
+				"xsl:choose: at least one xsl:when is required, its content " +
+					"is (xsl:when+, xsl:otherwise?) (XTSE0010)")
+		}
+	}
 	return nil
 }
 
@@ -312,4 +403,46 @@ func forwardsAt(el *xdm.Node, inherited bool) bool {
 		return inherited
 	}
 	return f > 2.0
+}
+
+// checkQNameAttr verifies an attribute the summary types as a QName.
+//
+// XTSE0020 is about "a value that is not one of the permitted values for that
+// attribute", and for an attribute with no enumeration the permitted values
+// are its lexical space. A name attribute typed "qname" therefore rejects
+// "12foo" and "x/y" for the same reason an enumerated attribute rejects an
+// unlisted token.
+//
+// The parenthesis in that clause — "other than an attribute written using
+// curly brackets in a position where an attribute value template is
+// permitted" — is why the table records whether the summary bracketed the
+// type. Where it did not, a curly-bracket value is not a template that
+// escapes the check but simply a value outside the lexical space, which is
+// what xsl:decimal-format/@name="{concat('f','f')}" is.
+func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
+	qd, ok := qnameAttrs[el.Name.Local][a.Name.Local]
+	if !ok {
+		return nil
+	}
+	v := strings.TrimSpace(a.Value)
+	if qd.avt {
+		// The value is only known once the instruction runs, so it is
+		// checked then.
+		if strings.Contains(v, "{") {
+			return nil
+		}
+	}
+	names := []string{v}
+	if qd.list {
+		names = strings.Fields(v)
+		// An empty list is vacuously fine: it names nothing.
+	}
+	for _, n := range names {
+		if !isLexicalQName(n) {
+			return fmt.Errorf(
+				"attribute %s=%q on xsl:%s is not a QName (XTSE0020)",
+				a.Name.Local, a.Value, el.Name.Local)
+		}
+	}
+	return nil
 }

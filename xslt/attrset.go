@@ -41,6 +41,7 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 			return err
 		}
 		as.uses = append(as.uses, uq)
+		c.usedAttributeSets = append(c.usedAttributeSets, uq)
 	}
 
 	// The content must be xsl:attribute instructions only; anything else
@@ -148,28 +149,109 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 		uri = stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
-		uri = stringJoin(sub.sequence(), "")
+		uri = constructedText(sub.sequence(), " ")
 	}
 	uri = strings.TrimSpace(uri)
 
 	if uri == "" {
 		return fmt.Errorf("XTDE0930: xsl:namespace must not create a binding to an empty URI")
 	}
+	// XTDE0920: "if the effective value of the name attribute is neither a
+	// zero-length string nor an NCName, or if it is xmlns". The zero-length
+	// string is the default namespace, which is a legitimate thing to bind;
+	// anything else that is not an NCName is not a prefix at all, and would
+	// be written to the output as one.
+	if prefix != "" && !xdm.IsNCName(prefix) {
+		return fmt.Errorf(
+			"XTDE0920: %q is not an NCName, so it cannot be a namespace prefix",
+			prefix)
+	}
 	if prefix == "xmlns" {
 		return fmt.Errorf("XTDE0920: xsl:namespace must not bind the prefix \"xmlns\"")
 	}
-	if out.open == nil {
-		return fmt.Errorf("XTDE0410: xsl:namespace cannot be used outside an element")
+	// XTDE0905: the string value must be "valid in the lexical space of the
+	// data type xs:anyURI, or ... the string http://www.w3.org/2000/xmlns/".
+	// The second half is a flat prohibition: that URI is the one the
+	// Namespaces recommendation reserves for the xmlns attributes
+	// themselves, so binding a prefix to it would produce a document no
+	// parser could read back.
+	if uri == "http://www.w3.org/2000/xmlns/" {
+		return fmt.Errorf(
+			"XTDE0905: xsl:namespace must not bind a prefix to " +
+				"http://www.w3.org/2000/xmlns/")
 	}
-	out.open.AddNamespace(prefix, uri)
-	return nil
+	if !isLexicalAnyURI(uri) {
+		return fmt.Errorf(
+			"XTDE0905: %q is not in the lexical space of xs:anyURI", uri)
+	}
+	// XTDE0925: the xml prefix and the XML namespace are bound to each
+	// other, and neither may be paired with anything else.
+	switch {
+	case prefix == "xml" && uri != xdm.NSXML:
+		return fmt.Errorf(
+			"XTDE0925: the xml prefix may only be bound to %s", xdm.NSXML)
+	case prefix != "xml" && uri == xdm.NSXML:
+		return fmt.Errorf(
+			"XTDE0925: %s may only be bound to the xml prefix", xdm.NSXML)
+	}
+	// A parentless namespace node is a legal item in the data model, and a
+	// sequence constructor may produce one: xsl:variable as="node()" with an
+	// xsl:namespace body is the ordinary way to write one. XTDE0410 is about
+	// ordering within element content, which the builder checks where there
+	// is an element to check it against.
+	return out.addNamespaceNode(prefix, uri)
+}
+
+// isLexicalAnyURI reports whether s is in the lexical space of xs:anyURI.
+//
+// XML Schema defines that space by reference to RFC 2396 as amended, which is
+// permissive enough that almost any string is a valid relative reference. What
+// it does *not* permit is the two cases checked here: a percent sign that does
+// not introduce a two-digit hex escape, and more than one "#", since a URI
+// reference has at most one fragment identifier. Those are the forms a
+// stylesheet produces by accident — a half-built escape, or a placeholder such
+// as "####" — rather than by intent.
+func isLexicalAnyURI(s string) bool {
+	if strings.Count(s, "#") > 1 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '%':
+			if i+2 >= len(s) || !isHexByte(s[i+1]) || !isHexByte(s[i+2]) {
+				return false
+			}
+			i += 2
+		case ' ', '\t', '\n', '\r', '<', '>', '{', '}', '|', '\\', '^', '`':
+			// The characters RFC 2396 excludes outright, either as delimiters
+			// or as unwise. A double quote is not among them here: the suite
+			// builds namespace URIs containing one and requires them to be
+			// accepted, and RFC 2396 lists it only as "unwise" rather than
+			// excluded from the lexical space. A space in particular is what a stylesheet
+			// produces when it concatenates two URIs by mistake.
+			return false
+		}
+	}
+	return true
+}
+
+func isHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 func (c *compiler) compileNamespace(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	nameAVT, err := requiredAVT(n, "name", ns)
+	// A zero-length name is legal here and means the default namespace, so
+	// the attribute is looked up rather than its value: requiredAVT cannot
+	// tell name="" from an absent name, and refusing it rejected the one
+	// spelling the specification gives for declaring xmlns.
+	na := n.Attr("", "name")
+	if na == nil {
+		return nil, fmt.Errorf("xsl:namespace requires a name attribute")
+	}
+	nameAVT, err := compileAVT(na.Value, ns)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +290,7 @@ func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 		seq = v
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt, sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
 		seq = sub.sequence()
@@ -252,4 +334,25 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 		}
 	}
 	return instr, nil
+}
+
+// checkAttributeSetRefs applies XTSE0710 once every module has compiled.
+//
+// The runtime already reports it when an undeclared set is actually used, but
+// the error is static: a stylesheet naming a set that does not exist is wrong
+// whether or not the instruction naming it is ever reached, and error-0710a
+// declares one inside another attribute set that no template applies. The
+// check is deferred rather than made as each reference compiles, because
+// xsl:attribute-set is a top-level declaration and may name one written below
+// it or in a module imported afterwards.
+func (c *compiler) checkAttributeSetRefs() error {
+	for _, n := range c.usedAttributeSets {
+		if _, ok := c.sheet.attributeSets[n.Clark()]; !ok {
+			return fmt.Errorf(
+				"XTSE0710: use-attribute-sets names %q, but no "+
+					"xsl:attribute-set is declared with that name",
+				n.Lexical())
+		}
+	}
+	return nil
 }

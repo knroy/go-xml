@@ -20,7 +20,7 @@ type nsAlias struct {
 // be an instruction rather than output. So it writes the element in a
 // placeholder namespace and declares that namespace to be an alias for the
 // XSLT one, and the serialiser rewrites it on the way out.
-func (c *compiler) compileNamespaceAlias(el *xdm.Node) error {
+func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 	stylePrefix := el.AttrValue("stylesheet-prefix")
 	resultPrefix := el.AttrValue("result-prefix")
 	if stylePrefix == "" || resultPrefix == "" {
@@ -54,8 +54,43 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node) error {
 	if outPrefix == "#default" {
 		outPrefix = ""
 	}
-	c.sheet.namespaceAliases[from] = nsAlias{uri: to, prefix: outPrefix}
+	// XTSE0810: "it is a static error if there is more than one such
+	// declaration with the same literal namespace URI and the same import
+	// precedence and different values for the target namespace URI, unless
+	// there is also an xsl:namespace-alias declaration with the same literal
+	// namespace URI and a higher import precedence."
+	//
+	// The whole sentence matters: two declarations that agree are not an
+	// error, and a tie broken by a *higher* precedence declaration elsewhere
+	// is not one either. The second escape is why the record is kept rather
+	// than the check being made against the alias map alone — the map holds
+	// only the winner, so it cannot say whether a loser conflicted.
+	if prev, ok := c.aliasDecls[from]; ok {
+		switch {
+		case prev.precedence > precedence, precedence > prev.precedence:
+			// A higher precedence declaration settles the question.
+		case prev.uri != to:
+			return fmt.Errorf(
+				"XTSE0810: two xsl:namespace-alias declarations for %q at the "+
+					"same import precedence name different target namespaces "+
+					"(%q and %q)", from, prev.uri, to)
+		}
+	}
+	if c.aliasDecls == nil {
+		c.aliasDecls = map[string]aliasDecl{}
+	}
+	if prev, ok := c.aliasDecls[from]; !ok || precedence >= prev.precedence {
+		c.aliasDecls[from] = aliasDecl{uri: to, precedence: precedence}
+		c.sheet.namespaceAliases[from] = nsAlias{uri: to, prefix: outPrefix}
+	}
 	return nil
+}
+
+// aliasDecl records one xsl:namespace-alias for the XTSE0810 check, which
+// needs the import precedence the winning alias map does not keep.
+type aliasDecl struct {
+	uri        string
+	precedence int
 }
 
 // aliasFor rewrites a name through the declared namespace aliases, returning
@@ -74,7 +109,7 @@ func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
 // arbitrary strings. It is applied at serialisation time and deliberately
 // bypasses escaping, which is what makes it the supported way to emit a
 // literal entity reference such as "&nbsp;" into HTML.
-func (c *compiler) compileCharacterMap(el *xdm.Node) error {
+func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 	name := el.AttrValue("name")
 	if name == "" {
 		return fmt.Errorf("xsl:character-map requires a name attribute")
@@ -118,6 +153,26 @@ func (c *compiler) compileCharacterMap(el *xdm.Node) error {
 		m[runes[0]] = ch.AttrValue("string")
 	}
 
+	// XTSE1580: "it is a static error if the stylesheet contains two or more
+	// character maps with the same name and the same import precedence,
+	// unless it also contains another character map with the same name and
+	// higher import precedence." Unlike XTSE0810 there is no escape for two
+	// declarations that happen to agree — a character map is a set of
+	// mappings rather than a single value, so "the same" has no meaning here.
+	if prev, ok := c.charMapPrecedence[qn.Clark()]; ok && prev == precedence {
+		return fmt.Errorf(
+			"XTSE1580: two xsl:character-map declarations are named %s at the "+
+				"same import precedence", qn.Lexical())
+	}
+	if c.charMapPrecedence == nil {
+		c.charMapPrecedence = map[string]int{}
+	}
+	if prev, ok := c.charMapPrecedence[qn.Clark()]; ok && prev > precedence {
+		// A map already declared at a higher precedence wins, and this one
+		// is discarded rather than overwriting it.
+		return nil
+	}
+	c.charMapPrecedence[qn.Clark()] = precedence
 	c.sheet.characterMaps[qn.Clark()] = m
 	return nil
 }
@@ -129,21 +184,38 @@ func (c *compiler) compileCharacterMap(el *xdm.Node) error {
 // module has been compiled so that a map declared in an imported stylesheet is
 // visible to an xsl:output in the importing one.
 func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
+	merged, err := s.flattenCharacterMaps(names)
+	if err != nil {
+		return err
+	}
+	if merged != nil {
+		s.activeCharMap = merged
+	}
+	return nil
+}
+
+// flattenCharacterMaps merges the named maps into the single table the
+// serialiser consults.
+//
+// xsl:result-document takes @use-character-maps of its own, so this is shared
+// rather than left inside the xsl:output path: a secondary document that
+// names a character map must get the same substitutions the principal one
+// would, and resolving the name needs the stylesheet the caller no longer has.
+func (s *Stylesheet) flattenCharacterMaps(names []xdm.QName) (map[rune]string, error) {
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
 	merged := map[rune]string{}
 	for _, n := range names {
 		m, ok := s.characterMaps[n.Clark()]
 		if !ok {
-			return fmt.Errorf("XTSE1590: no xsl:character-map named %q", n.Lexical())
+			return nil, fmt.Errorf("XTSE1590: no xsl:character-map named %q", n.Lexical())
 		}
 		for k, v := range m {
 			merged[k] = v
 		}
 	}
-	s.activeCharMap = merged
-	return nil
+	return merged, nil
 }
 
 // charMapInclusion records one xsl:character-map's use-character-maps, to be

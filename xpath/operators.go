@@ -335,6 +335,18 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 		return ai - bi, true, nil
 
 	case isStringLike(a.Type) && isStringLike(b.Type):
+		// String comparison uses the default collation from the static
+		// context, which [xsl:]default-collation sets. Comparing with the
+		// Go operators instead hard-wired codepoint order, so a stylesheet
+		// that declared a case-blind default still found "Adele" and "ADELE"
+		// unequal.
+		//
+		// xs:anyURI is the exception the specification carves out: URIs are
+		// always compared by codepoint, whatever the default collation is.
+		if ctx != nil && ctx.collation != nil &&
+			a.Type != xdm.TypeAnyURI && b.Type != xdm.TypeAnyURI {
+			return sign(ctx.collation.Compare(a.Str(), b.Str())), true, nil
+		}
 		switch {
 		case a.Str() < b.Str():
 			return -1, true, nil

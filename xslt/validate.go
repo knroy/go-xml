@@ -114,8 +114,17 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 // declared what it was building and built something else, and continuing
 // would write output the author said was wrong.
 func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
-	if spec.typeName == nil && (spec.mode == validateStrip ||
-		spec.mode == validatePreserve) {
+	if spec.typeName == nil && spec.mode == validatePreserve {
+		// preserve keeps whatever the source carried, which the copy already
+		// has: there is nothing to assess and nothing to remove.
+		return nil
+	}
+	if spec.typeName == nil && spec.mode == validateStrip {
+		// strip is the other half of the same rule: the copy is untyped
+		// however the source was annotated. This is where it happens, because
+		// the copy carries the annotation forward by default so that preserve
+		// has something to preserve.
+		stripAnnotations(n)
 		return nil
 	}
 	schema := rt.sheet.schema
@@ -132,6 +141,36 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		}
 	}
 
+	if spec.typeName != nil && spec.typeName.URI == xdm.NSXS {
+		// xs:untyped and xs:untypedAtomic are the annotations a node that was
+		// never validated carries, so naming one as the type is a request for
+		// exactly that: the node comes out untyped rather than being checked
+		// against a schema component, which is what "no type named
+		// {…XMLSchema}untyped in the schema" was complaining about. xs:anyType
+		// is the other end of the same idea — every element is valid against
+		// it — and validating against it likewise constrains nothing.
+		switch spec.typeName.Local {
+		case "untyped", "untypedAtomic", "anyType":
+			stripAnnotations(n)
+			return nil
+		}
+	}
+
+	if spec.typeName != nil && n.Kind == xdm.KindDocument {
+		// A [xsl:]type on a document node applies to the element the document
+		// contains: a schema describes elements, not documents. The same
+		// XTTE1550 shape applies as for validation=, so the document must have
+		// exactly one element child and no significant text. Passing the
+		// document node straight to the validator produced "needs an element
+		// or attribute", which is a complaint about the caller rather than
+		// about the stylesheet.
+		elem, err := soleElementChild(n)
+		if err != nil {
+			return err
+		}
+		n = elem
+	}
+
 	if spec.typeName != nil {
 		// XTTE1545: an attribute may not be validated against a type derived
 		// from, or built by list or union from, xs:ID, xs:IDREF, xs:IDREFS,
@@ -144,8 +183,13 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 						"which is %s", n.Name.Local, spec.typeName.Lexical(), why)
 			}
 		}
+		// Annotate: the whole point of validating a constructed node is that
+		// the result carries the type it was validated against, so that
+		// "instance of element(x, my:t)" and a match pattern naming a type
+		// answer true for it. Without the annotation the node came out of a
+		// successful validation still untyped.
 		if err := schema.ValidateAgainstType(n, *spec.typeName,
-			xsd.ValidateOptions{}); err != nil {
+			xsd.ValidateOptions{Annotate: true}); err != nil {
 			return fmt.Errorf("XTTE1540: %s is not valid against %s: %w",
 				describeNode(n), spec.typeName.Lexical(), err)
 		}
@@ -153,51 +197,101 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	}
 
 	if n.Kind == xdm.KindDocument {
-		// XTTE1550: validating a document node requires its children to be
-		// exactly one element, no text, and any number of comments and
-		// processing instructions. It is the element child that is then
-		// validated, since a schema describes elements rather than documents.
-		var elem *xdm.Node
-		for _, c := range n.Children {
-			switch c.Kind {
-			case xdm.KindElement:
-				if elem != nil {
-					return fmt.Errorf(
-						"XTTE1550: a validated document node must have exactly " +
-							"one element child")
-				}
-				elem = c
-			case xdm.KindText:
-				if strings.TrimSpace(c.Value) != "" {
-					return fmt.Errorf(
-						"XTTE1550: a validated document node must have no text " +
-							"node children")
-				}
-			}
-		}
-		if elem == nil {
-			return fmt.Errorf(
-				"XTTE1550: a validated document node must have exactly one " +
-					"element child")
+		elem, err := soleElementChild(n)
+		if err != nil {
+			return err
 		}
 		n = elem
 	}
 
+	if n.Kind == xdm.KindAttribute {
+		// An attribute is assessed against the *global attribute*
+		// declaration for its name, which is the attribute counterpart of
+		// what strict and lax do for an element. Passing it over left an
+		// attribute copied under validation="strict" untyped, so a template
+		// declaring as="attribute(a, my:t)" rejected its own result.
+		if spec.mode == validateStrict && !schema.HasAttributeDeclaration(n.Name) {
+			return fmt.Errorf(
+				"XTTE1512: no top-level declaration for %s", describeNode(n))
+		}
+		if err := schema.ValidateAttribute(n, spec.mode != validateStrict,
+			xsd.ValidateOptions{Annotate: true}); err != nil {
+			return fmt.Errorf("XTTE1510: %s is not valid: %w",
+				describeNode(n), err)
+		}
+		return nil
+	}
 	if n.Kind != xdm.KindElement {
-		// validation= assesses against an element declaration, so there is
-		// nothing for it to do to an attribute.
+		// Nothing else carries a type annotation, so there is nothing to
+		// assess.
 		return nil
 	}
 	var err error
 	if spec.mode == validateStrict {
-		err = schema.ValidateElement(n, xsd.ValidateOptions{})
+		if !schema.HasElementDeclaration(n.Name) {
+			// XTTE1512 is the specific code for strict validation finding no
+			// top-level declaration to assess against, as distinct from
+			// XTTE1510, which says the node was assessed and found invalid.
+			return fmt.Errorf(
+				"XTTE1512: no top-level declaration for %s", describeNode(n))
+		}
+		err = schema.ValidateElement(n, xsd.ValidateOptions{Annotate: true})
 	} else {
-		err = schema.ValidateElementLax(n, xsd.ValidateOptions{})
+		err = schema.ValidateElementLax(n, xsd.ValidateOptions{Annotate: true})
 	}
 	if err != nil {
 		return fmt.Errorf("XTTE1510: %s is not valid: %w", describeNode(n), err)
 	}
 	return nil
+}
+
+// soleElementChild returns the one element child a validated document node is
+// required to have.
+//
+// XTTE1550: validating a document node requires its children to be exactly one
+// element, no significant text, and any number of comments and processing
+// instructions. It is that element child that is then validated, since a
+// schema describes elements rather than documents.
+func soleElementChild(n *xdm.Node) (*xdm.Node, error) {
+	var elem *xdm.Node
+	for _, c := range n.Children {
+		switch c.Kind {
+		case xdm.KindElement:
+			if elem != nil {
+				return nil, fmt.Errorf(
+					"XTTE1550: a validated document node must have exactly " +
+						"one element child")
+			}
+			elem = c
+		case xdm.KindText:
+			if strings.TrimSpace(c.Value) != "" {
+				return nil, fmt.Errorf(
+					"XTTE1550: a validated document node must have no text " +
+						"node children")
+			}
+		}
+	}
+	if elem == nil {
+		return nil, fmt.Errorf(
+			"XTTE1550: a validated document node must have exactly one " +
+				"element child")
+	}
+	return elem, nil
+}
+
+// stripAnnotations removes every type annotation from a subtree, which is what
+// validation="strip" means.
+func stripAnnotations(n *xdm.Node) {
+	if n == nil {
+		return
+	}
+	n.TypeAnnotation = ""
+	for _, a := range n.Attrs {
+		a.TypeAnnotation = ""
+	}
+	for _, c := range n.Children {
+		stripAnnotations(c)
+	}
 }
 
 func describeNode(n *xdm.Node) string {

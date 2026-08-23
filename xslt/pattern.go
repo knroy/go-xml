@@ -47,6 +47,10 @@ type patternAlt struct {
 	// the descendant axis, so that key('k','v')//para admits any ancestor
 	// rather than only the parent.
 	callDescendant bool
+	// pendingCallDescendant carries the "//" between the call and the next
+	// named step, which the parser emits as its own descendant-or-self step,
+	// onto that step while the alternative is being built.
+	pendingCallDescendant bool
 	// predicate expressions are attached to the step they qualify.
 }
 
@@ -81,12 +85,17 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		}
 		a, err := compilePatternAlt(alt, ns)
 		if err != nil {
-			return nil, fmt.Errorf("pattern %q: %w", src, err)
+			// Every way a pattern can fail to compile is the same static
+			// error: the attribute does not match the Pattern production.
+			// The code is attached here, once, rather than at each of the
+			// dozen places that can detect it, so that a new check cannot
+			// forget it.
+			return nil, fmt.Errorf("XTSE0340: pattern %q: %w", src, err)
 		}
 		p.alts = append(p.alts, a)
 	}
 	if len(p.alts) == 0 {
-		return nil, fmt.Errorf("pattern %q is empty", src)
+		return nil, fmt.Errorf("XTSE0340: pattern %q is empty", src)
 	}
 	p.prio = p.computePriority()
 	return p, nil
@@ -151,6 +160,15 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 		// The call selects the starting set and the steps that follow are
 		// walked up from the candidate; only the *first* step may be a call.
 		if call, ok := rest[0].(*xpath.FuncCall); ok {
+			// The RelativePathPattern production puts an IdKeyPattern only
+			// at the very front: "/key(...)" is not a pattern, because the
+			// call already names the nodes it starts from and rooting it
+			// would say nothing.
+			if a.absolute {
+				return nil, fmt.Errorf(
+					"not a valid pattern step: %s may not follow \"/\"",
+					call.String())
+			}
 			if err := checkPatternCall(call); err != nil {
 				return nil, err
 			}
@@ -167,6 +185,23 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 				return nil, err
 			}
 			if a.call != nil {
+				// "//" parses as an explicit descendant-or-self::node()
+				// step between the two named ones, so "key('k','v')//para"
+				// arrives here as two steps rather than one. That synthetic
+				// step is not a step to match against an ancestor — it is
+				// the *axis* joining the call to what follows — so it is
+				// folded into the descendant flag of the step after it.
+				// Leaving it in place made the pattern demand one more
+				// ancestor level than the path actually names, and no node
+				// ever matched.
+				if isDescendantOrSelfNode(step) {
+					a.pendingCallDescendant = true
+					continue
+				}
+				if a.pendingCallDescendant {
+					ps.descendant = true
+					a.pendingCallDescendant = false
+				}
 				if len(a.callSteps) == 0 {
 					a.callDescendant = ps.descendant
 				}
@@ -224,6 +259,14 @@ func convertStep(s *xpath.Step) (patternStep, error) {
 // why "para[1]" as a pattern means "a para that is the first para child of its
 // parent" rather than "the first para in the document".
 func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	// Section 16.6.1 fixes what current() means inside a pattern: "its value
+	// is the node that is being matched against the pattern" — not whatever
+	// the enclosing instruction was processing. The distinction shows up in
+	// xsl:number/@count, where a predicate such as "[@bar = current()/@bar]"
+	// compares each candidate against *itself* and so always holds; binding
+	// the outer node instead made the predicate select only the candidates
+	// sharing the numbered node's value.
+	ctx = ctx.WithVar(currentVar, xdm.One(node))
 	for _, alt := range p.alts {
 		ok, err := alt.matches(node, ctx)
 		if err != nil {
@@ -269,22 +312,37 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 	rest := steps[:len(steps)-1]
 
 	if step.descendant {
-		// A "//" step matches at any depth, so try every ancestor. The
-		// step itself is the node() test that "//" expands to, so what
-		// actually has to match is the *remaining* steps against some
-		// ancestor.
+		// A "//" step matches at any depth, so try every ancestor. The step
+		// itself is the node() test that "//" expands to; what has to match
+		// is the *remaining* steps ending at some ancestor.
+		//
+		// The last remaining step is tested against the ancestor itself
+		// rather than against the ancestor's parent: in "B//X" the X may be a
+		// direct child of the B, and matching B one level higher than the
+		// node "//" landed on skipped exactly that case.
+		if len(rest) == 0 {
+			// Nothing further to satisfy. Relative "//X" matches anywhere; an
+			// absolute one is satisfied by having any ancestor at all, which
+			// every node inside a document has.
+			return true, nil
+		}
+		inner := rest[len(rest)-1]
+		before := rest[:len(rest)-1]
 		for anc := node.Parent; anc != nil; anc = anc.Parent {
-			ok, err := a.matchAncestors(rest, anc, ctx)
+			ok, err := matchStep(inner, anc, ctx)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				continue
+			}
+			ok, err = a.matchAncestors(before, anc, ctx)
 			if err != nil {
 				return false, err
 			}
 			if ok {
 				return true, nil
 			}
-		}
-		// An absolute "//" pattern is satisfied by reaching the root.
-		if len(rest) == 0 && a.absolute {
-			return true, nil
 		}
 		return false, nil
 	}
@@ -572,12 +630,47 @@ func (p *Pattern) String() string { return p.src }
 // expression but is not a pattern, which is XTSE0340.
 func checkPatternCall(e *xpath.FuncCall) error {
 	if e.Name.URI == xdm.NSFN || e.Name.URI == "" {
+		// The arities come from the IdKeyPattern production, which spells
+		// each call out rather than deferring to the function signature:
+		// the two-argument forms search a document the pattern names, and a
+		// pattern is matched against a node whose document is already fixed.
 		switch e.Name.Local {
-		case "id", "key":
-			return nil
+		case "id":
+			if len(e.Args) != 1 {
+				return fmt.Errorf(
+					"id() in a pattern takes one argument, not %d", len(e.Args))
+			}
+			return patternCallArg("id", e.Args[0])
+		case "key":
+			if len(e.Args) != 2 {
+				return fmt.Errorf(
+					"key() in a pattern takes two arguments, not %d", len(e.Args))
+			}
+			if _, ok := e.Args[0].(*xpath.Literal); !ok {
+				return fmt.Errorf(
+					"the key name in a pattern must be a string literal, not %s",
+					e.Args[0].String())
+			}
+			return patternCallArg("key", e.Args[1])
 		}
 	}
 	return fmt.Errorf("not a valid pattern step: %s", e.String())
+}
+
+// patternCallArg checks the value argument of an IdKeyPattern.
+//
+// The productions IdValue and KeyValue admit only a literal or a variable
+// reference. Anything else would have to be evaluated with a focus, and a
+// pattern is matched with the candidate node as the focus — so "key('k', .)"
+// would silently mean something different from what it reads as.
+func patternCallArg(name string, arg xpath.Expr) error {
+	switch arg.(type) {
+	case *xpath.Literal, *xpath.VarRef:
+		return nil
+	}
+	return fmt.Errorf(
+		"the value argument of %s() in a pattern must be a literal or a "+
+			"variable reference, not %s", name, arg.String())
 }
 
 // matchesCall matches an id() or key() pattern.
@@ -726,4 +819,18 @@ func callsFunction(src, name string) bool {
 		return true
 	}
 	return false
+}
+
+// isDescendantOrSelfNode reports whether a step is the synthetic
+// "descendant-or-self::node()" that the parser inserts for "//".
+//
+// It is distinguished from a written-out descendant-or-self step by having no
+// predicates and the any-node test; a pattern that spells the axis itself is
+// vanishingly rare and matching it the same way is harmless.
+func isDescendantOrSelfNode(s *xpath.Step) bool {
+	if s.Axis != xpath.AxisDescendantOrSelf || len(s.Predicates) != 0 {
+		return false
+	}
+	kt, ok := s.Test.(*xpath.KindTest)
+	return ok && kt.Any
 }

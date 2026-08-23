@@ -670,21 +670,40 @@ func DerivedBase(name string) string {
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
 // type, using the built-in it derives from.
 func atomicForDerivedAnnotation(n *Node) *Atomic {
-	derivedMu.RLock()
-	prim, ok := derivedPrimitives[n.TypeAnnotation]
-	derivedMu.RUnlock()
-	if !ok {
-		return nil
-	}
-	switch prim {
-	case "QName", "NOTATION":
-		if q, ok := n.resolveQNameValue(); ok {
-			return NewQNameValue(q).WithDerived(n.TypeAnnotation)
+	// The chain is walked rather than followed one step. A schema type is
+	// often a restriction of another *user-defined* type — specialPartNumber
+	// restricts partNumberType which restricts xs:string — and the registered
+	// base of the annotation is then itself a schema name that
+	// atomicForAnnotation cannot build. Stopping after one step returned nil
+	// for exactly those types and the node atomised to xs:untypedAtomic,
+	// which lost the annotation and made every "instance of" on the value
+	// answer false.
+	//
+	// The walk is bounded so that a schema whose derivations somehow formed a
+	// cycle cannot spin here.
+	name := n.TypeAnnotation
+	for i := 0; i < 32; i++ {
+		derivedMu.RLock()
+		prim, ok := derivedPrimitives[name]
+		derivedMu.RUnlock()
+		if !ok {
+			return nil
 		}
-		return nil
-	}
-	if a := atomicForAnnotation(prim, n.StringValue()); a != nil {
-		return a.WithDerived(n.TypeAnnotation)
+		switch prim {
+		case "QName", "NOTATION":
+			if q, ok := n.resolveQNameValue(); ok {
+				return NewQNameValue(q).WithDerived(n.TypeAnnotation)
+			}
+			return nil
+		}
+		if a := atomicForAnnotation(prim, n.StringValue()); a != nil {
+			// The value keeps the annotation it was *validated* as, not the
+			// intermediate name the walk stopped at: that is what makes
+			// "instance of my:specialPartNumber" true as well as
+			// "instance of my:partNumberType".
+			return a.WithDerived(n.TypeAnnotation)
+		}
+		name = prim
 	}
 	return nil
 }

@@ -45,6 +45,13 @@ func walkAxis(n *xdm.Node, axis Axis, visit func(*xdm.Node) bool) {
 		// order of this axis implementation-dependent, so any stable
 		// order conforms — an unstable one does not, in the sense that
 		// matters to a caller.
+		// Only elements have namespace nodes. Every other kind has an empty
+		// namespace axis — including the text and document nodes of a
+		// temporary tree, which inherit no bindings because they have no
+		// name to put in a namespace.
+		if n.Kind != xdm.KindElement {
+			return
+		}
 		scope := n.InScopeNamespaces()
 		prefixes := make([]string, 0, len(scope))
 		for prefix := range scope {
@@ -153,6 +160,18 @@ func siblingsOf(n *xdm.Node) ([]*xdm.Node, int) {
 // following siblings' subtrees, which yields document order without needing a
 // full-tree scan.
 func walkFollowing(n *xdm.Node, visit func(*xdm.Node) bool) {
+	// An attribute or namespace node comes before its element's children in
+	// document order, so those children follow it. They are not descendants
+	// of the attribute — an attribute has none — so the exclusion the axis
+	// makes for descendants does not reach them, and starting the walk at the
+	// owner element's siblings skipped the whole subtree.
+	if n.Kind == xdm.KindAttribute || n.Kind == xdm.KindNamespace {
+		if n.Parent != nil {
+			if !walkDescendants(n.Parent, visit) {
+				return
+			}
+		}
+	}
 	for cur := n; cur != nil; cur = cur.Parent {
 		sibs, i := siblingsOf(cur)
 		if i < 0 {

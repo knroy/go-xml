@@ -162,7 +162,11 @@ func collationArgCtx(ctx *Context, fn string, args []xdm.Sequence, i int) (Colla
 		}
 		return codepointCollation{}, nil
 	}
-	uri, err := argString(args, i)
+	// The parameter is declared xs:string, not xs:string?, so an explicitly
+	// supplied empty sequence is a type error rather than "use the default":
+	// index-of((1,2,3), 1, ()) is XPTY0004. Omitting the argument is fine,
+	// which is the branch above.
+	uri, err := argStringRequired(args, i)
 	if err != nil {
 		return nil, err
 	}

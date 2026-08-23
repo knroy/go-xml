@@ -48,6 +48,13 @@ type runtime struct {
 	// appending to a copy that the caller never sees.
 	secondary *[]SecondaryResult
 
+	// baseURIUsed records that an xsl:result-document claimed the base output
+	// URI — the one an absent or empty @href names. The principal result tree
+	// has that URI too, so a stylesheet that writes to both is producing two
+	// documents at one URI, which is XTDE1490. It is a pointer for the same
+	// reason secondary is: the runtime is copied on every focus change.
+	baseURIUsed *bool
+
 	// messages collects xsl:message output rather than writing to stderr.
 	//
 	// It is a pointer to a slice because the runtime struct is copied on
@@ -157,6 +164,27 @@ type outputBuilder struct {
 	// parent chains open elements so that nested construction works.
 	parent *outputBuilder
 	tree   *xdm.Tree
+	// declared records the prefixes xsl:namespace has bound on the open
+	// element, and to what.
+	//
+	// It is kept separately from open.Namespaces because XTDE0430 is about
+	// "the result sequence", meaning the namespace nodes the sequence
+	// constructor produced — not the binding the element's own name already
+	// carries. A clash with that one is resolved by renaming the prefix, and
+	// the suite requires it to be: namespace-alias-1903 constructs
+	// <ns:e xmlns:ns="one"> and then binds ns to "two", and the expected
+	// result renames the element's prefix rather than reporting an error.
+	declared map[string]string
+
+	// lastAtomic records that the item most recently appended was an atomic
+	// value rather than a node.
+	//
+	// Section 5.7.1 turns a run of adjacent atomic values into one text node
+	// with a single space between each, but adjacent *text nodes* are merged
+	// with no separator at all. Only the builder knows which of the two just
+	// happened, so the flag lives here rather than being rediscovered by
+	// looking at the trailing text — which cannot tell "a" "b" from "ab".
+	lastAtomic bool
 }
 
 func newOutputBuilder() *outputBuilder {
@@ -173,6 +201,16 @@ func newOutputBuilder() *outputBuilder {
 // xsl:copy-of already copied; xsl:sequence and xsl:perform-sort did not, and
 // the guard belongs here where every caller is covered.
 func (b *outputBuilder) appendNode(n *xdm.Node) {
+	b.lastAtomic = false
+	// A namespace node joins the element's bindings, not its children. Any
+	// instruction may put one in the result sequence — xsl:sequence selecting
+	// namespace::* is the usual way — and appending it as a child both lost
+	// it and made the element look as if it already had content, so a later
+	// xsl:attribute was rejected with XTDE0410.
+	if n.Kind == xdm.KindNamespace && b.open != nil {
+		_ = b.addNamespaceNode(n.Name.Local, n.Value)
+		return
+	}
 	n = detach(n)
 	if b.open != nil {
 		b.open.AppendChild(n)
@@ -193,6 +231,7 @@ func detach(n *xdm.Node) *xdm.Node {
 // appendText adds text, merging with a preceding text node so that the XDM
 // invariant of no adjacent text nodes holds in constructed trees too.
 func (b *outputBuilder) appendText(s string) {
+	b.lastAtomic = false
 	if s == "" {
 		return
 	}
@@ -220,10 +259,16 @@ func (b *outputBuilder) appendValue(a *xdm.Atomic) {
 	// Inside an element being built, an atomic value becomes text; at the top
 	// level it stays an atomic item, because xsl:sequence can return one.
 	if b.open != nil {
-		b.appendText(a.String())
+		sep := ""
+		if b.lastAtomic {
+			sep = " "
+		}
+		b.appendText(sep + a.String())
+		b.lastAtomic = true
 		return
 	}
 	b.items = append(b.items, a)
+	b.lastAtomic = true
 }
 
 // addAttribute attaches an attribute to the element under construction.
@@ -255,7 +300,156 @@ func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
 		}
 	}
 	b.open.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: name, Value: value})
+	fixupAttrPrefix(b.open, b.open.Attrs[len(b.open.Attrs)-1])
 	return nil
+}
+
+// fixupAttrPrefix gives a namespaced attribute a usable prefix and declares
+// it on the element.
+//
+// This is the namespace fixup of section 5.7.3, restricted to the case that
+// actually needs repairing. An attribute in a namespace cannot borrow the
+// default namespace declaration — XML gives an unprefixed attribute no
+// namespace at all — so a computed attribute whose name carries a URI but no
+// prefix has to be given one. A prefix already bound to a different URI on
+// this element is the same problem, so it is replaced rather than trusted.
+func fixupAttrPrefix(el, attr *xdm.Node) {
+	if attr.Name.URI == "" {
+		// An attribute in no namespace needs no declaration, and must not
+		// acquire a prefix: it would then be in one.
+		attr.Name.Prefix = ""
+		return
+	}
+	if attr.Name.URI == xdm.NSXML {
+		attr.Name.Prefix = "xml"
+		return
+	}
+	if p := attr.Name.Prefix; p != "" {
+		uri, ok := el.LookupPrefix(p)
+		if ok && uri == attr.Name.URI {
+			return
+		}
+		if ok {
+			// The prefix is already bound to something else on this element,
+			// so it cannot be reused: two xmlns:p declarations on one element
+			// is not a document any parser will read back.
+			attr.Name.Prefix = freshPrefixOn(el, p)
+		}
+		el.AddNamespace(attr.Name.Prefix, attr.Name.URI)
+		return
+	}
+	// An existing prefix for this URI is reused, so that a stylesheet adding
+	// several attributes in one namespace does not accumulate a declaration
+	// each.
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		for _, ns := range cur.Namespaces {
+			if ns.Value == attr.Name.URI && ns.Name.Local != "" {
+				if uri, ok := el.LookupPrefix(ns.Name.Local); ok && uri == attr.Name.URI {
+					attr.Name.Prefix = ns.Name.Local
+					return
+				}
+			}
+		}
+	}
+	// An invented prefix is numbered from zero — ns0, ns1 — which is the
+	// form the suite's expected results are written against.
+	for i := 0; ; i++ {
+		p := fmt.Sprintf("ns%d", i)
+		if _, taken := el.LookupPrefix(p); taken {
+			continue
+		}
+		attr.Name.Prefix = p
+		el.AddNamespace(p, attr.Name.URI)
+		return
+	}
+}
+
+// freshPrefixOn returns a prefix not already bound on el, derived from want.
+//
+// The suffix starts at 1 rather than 0 so that the first rename of "p" reads
+// as "p_1", which is the form the suite's expected results use.
+func freshPrefixOn(el *xdm.Node, want string) string {
+	if _, taken := el.LookupPrefix(want); !taken {
+		return want
+	}
+	for i := 1; ; i++ {
+		p := fmt.Sprintf("%s_%d", want, i)
+		if _, taken := el.LookupPrefix(p); !taken {
+			return p
+		}
+	}
+}
+
+// addNamespaceNode attaches a namespace node to the element under
+// construction.
+//
+// It is shared by xsl:namespace and by xsl:copy-of of a namespace node: both
+// add a binding to the element being built, and a namespace node appended as
+// if it were a child would silently vanish from the result.
+func (b *outputBuilder) addNamespaceNode(prefix, uri string) error {
+	if b.open == nil {
+		b.items = append(b.items, &xdm.Node{
+			Kind:  xdm.KindNamespace,
+			Name:  xdm.QName{Local: prefix},
+			Value: uri,
+		})
+		return nil
+	}
+	// XTDE0430: "the result sequence contains two or more namespace nodes
+	// having the same name but different string values". Re-declaring a
+	// prefix to the *same* URI is harmless and common — an element and its
+	// content may each ask for it — so only a conflicting one is an error.
+	if was, ok := b.declared[prefix]; ok && was != uri {
+		return fmt.Errorf(
+			"XTDE0430: the prefix %q is bound to both %q and %q on the "+
+				"same element", prefix, was, uri)
+	}
+	if b.declared == nil {
+		b.declared = map[string]string{}
+	}
+	b.declared[prefix] = uri
+	// The element's own name may already have claimed this prefix for a
+	// different URI. Section 11.7 resolves that in favour of the namespace
+	// node and renames the element's prefix — the specification's own example
+	// turns <xsl:element name="p:item"> plus <xsl:namespace name="p"> into
+	// <ns0:item xmlns:ns0="…p" xmlns:p="…q">. Leaving both bindings in place
+	// produced an element whose prefix pointed at the wrong URI.
+	if b.open.Name.Prefix == prefix && b.open.Name.URI != uri {
+		b.open.Name.Prefix = b.freshPrefix(prefix)
+	}
+	for _, ns := range b.open.Namespaces {
+		if ns.Name.Local == prefix {
+			ns.Value = uri
+			return nil
+		}
+	}
+	b.open.AddNamespace(prefix, uri)
+	return nil
+}
+
+// freshPrefix returns a prefix not yet bound on the element under
+// construction, derived from want so that the result still reads as the
+// stylesheet's choice.
+func (b *outputBuilder) freshPrefix(want string) string {
+	for i := 0; ; i++ {
+		p := fmt.Sprintf("%s_%d", want, i)
+		taken := false
+		for _, ns := range b.open.Namespaces {
+			if ns.Name.Local == p {
+				taken = true
+				break
+			}
+		}
+		if _, ok := b.declared[p]; ok {
+			taken = true
+		}
+		if !taken {
+			return p
+		}
+	}
 }
 
 // startElement opens a new element, returning a builder scoped to it.
@@ -270,13 +464,60 @@ func (b *outputBuilder) sequence() xdm.Sequence { return b.items }
 
 // toTree wraps the accumulated items in a document node, which is what a
 // variable with content produces.
+// toDocument is toTree with the check XTDE0420 requires.
+//
+// "It is a non-recoverable dynamic error if the result sequence used to
+// construct the content of a document node contains a namespace node or
+// attribute node." A document node has no attributes and carries no namespace
+// declarations of its own, so such an item has nowhere to go: appending it
+// silently discarded it, and the stylesheet saw a document that was missing
+// what it had just built.
+//
+// It is separate from toTree because not every temporary builder becomes a
+// document. A sequence constructor producing a bare attribute is legitimate —
+// xsl:function as="attribute()" is written that way — and only wrapping the
+// result in a document node makes it wrong.
+func (b *outputBuilder) toDocument() (*xdm.Node, error) {
+	for _, it := range b.items {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		switch n.Kind {
+		case xdm.KindAttribute:
+			return nil, fmt.Errorf(
+				"XTDE0420: an attribute node (%s) cannot be the content of a "+
+					"document node", n.Name.Lexical())
+		case xdm.KindNamespace:
+			return nil, fmt.Errorf(
+				"XTDE0420: a namespace node (%s) cannot be the content of a "+
+					"document node", n.Name.Local)
+		}
+	}
+	return b.toTree(), nil
+}
+
 func (b *outputBuilder) toTree() *xdm.Node {
 	tree := xdm.NewTree()
+	// Adjacent atomic values become one text node separated by single spaces,
+	// exactly as they do inside a constructed element: a variable holding a
+	// sequence constructor is a document node built by the same rule, and
+	// giving each value its own text node would both break the no-adjacent-
+	// text invariant and lose the separators.
+	prevAtomic := false
 	for _, it := range b.items {
 		if n, ok := it.(*xdm.Node); ok {
 			tree.Root.AppendChild(detach(n))
+			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {
-			tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: a.String()})
+			text := a.String()
+			if prevAtomic {
+				kids := tree.Root.Children
+				kids[len(kids)-1].Value += " " + text
+			} else {
+				tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: text})
+			}
+			prevAtomic = true
 		}
 	}
 	tree.Finalize()
@@ -342,10 +583,9 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 		return xdm.One(xdm.NewString("")), nil
 	}
 	// Building a variable's content is temporary output state.
-	sub := *rt
-	sub.temporary = true
+	sub := rt.temporaryOutput()
 	out := newOutputBuilder()
-	if err := execSequence(v.Body, &sub, out); err != nil {
+	if err := execSequence(v.Body, sub, out); err != nil {
 		return nil, err
 	}
 	// Section 9.3's table: with an "as" attribute the value is the sequence
@@ -362,9 +602,50 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	// Content otherwise builds a temporary tree rooted at a document node,
 	// whose base URI is the one in force at the declaration. Leaving it empty
 	// made fn:base-uri return nothing for every node in a temporary tree.
-	tree := out.toTree()
+	tree, err := out.toDocument()
+	if err != nil {
+		return nil, err
+	}
 	tree.BaseURI = v.baseURI
 	return xdm.One(tree), nil
+}
+
+// clearCurrentRule returns a runtime with the current template rule cleared.
+//
+// Section 5.2's table names what clears it: "xsl:for-each,
+// xsl:for-each-group, and xsl:analyze-string, and calls on stylesheet
+// functions. Also cleared while evaluating global variables or default values
+// of stylesheet parameters, and the sequence constructors contained in
+// xsl:key and xsl:sort."
+//
+// It exists for XTDE0560, which is an error "if xsl:apply-imports or
+// xsl:next-match is evaluated when the current template rule is null". Both
+// instructions resume the search that the current rule interrupted, and once
+// an xsl:for-each has changed the focus there is no such search to resume —
+// the node being processed is no longer the one any template rule matched.
+func (rt *runtime) clearCurrentRule() *runtime {
+	sub := *rt
+	sub.sel = selection{mode: rt.sel.mode, tunnels: rt.sel.tunnels}
+	return &sub
+}
+
+// temporaryOutput returns a runtime in temporary output state.
+//
+// Section 19.1 lists exactly which instructions switch it on: "xsl:variable,
+// xsl:param, xsl:with-param, xsl:attribute, xsl:comment,
+// xsl:processing-instruction, xsl:namespace, xsl:value-of, xsl:function,
+// xsl:key, xsl:sort, and xsl:message always evaluate the instructions in
+// their contained sequence constructor in temporary output state." Each of
+// those calls this before executing its body, so that an xsl:result-document
+// anywhere beneath is XTDE1480 however deep the call chain.
+//
+// The copy is by value because the state is a property of the evaluation, not
+// of the runtime: the caller's own state must be unchanged when the body
+// returns.
+func (rt *runtime) temporaryOutput() *runtime {
+	sub := *rt
+	sub.temporary = true
+	return &sub
 }
 
 // stringJoin renders a sequence as a separated string, which is what
@@ -382,6 +663,45 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 	return strings.Join(parts, sep)
 }
 
+// constructedText renders a sequence constructor's result as the string
+// content of an attribute, comment, processing instruction or namespace node.
+//
+// This is section 5.7.2 verbatim: zero-length text nodes are dropped,
+// adjacent text nodes are merged, the sequence is atomized, and the resulting
+// strings are joined with the separator. The merge step is what makes the
+// separator behave as the specification's own example describes — five text
+// nodes concatenate to "12345" while five atomic values become "1 2 3 4 5" —
+// so it cannot be skipped by joining the raw items.
+func constructedText(seq xdm.Sequence, sep string) string {
+	var parts []string
+	inText := false
+	for _, it := range seq {
+		switch v := it.(type) {
+		case *xdm.Node:
+			if v.Kind == xdm.KindText {
+				if v.Value == "" {
+					continue
+				}
+				if inText {
+					parts[len(parts)-1] += v.Value
+					continue
+				}
+				parts = append(parts, v.Value)
+				inText = true
+				continue
+			}
+			// Atomizing any other node yields its typed value, whose string
+			// form is its string value.
+			parts = append(parts, v.StringValue())
+			inText = false
+		case *xdm.Atomic:
+			parts = append(parts, v.String())
+			inText = false
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
 // newRuntime builds a runtime for one transform.
 func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts TransformOptions) (*runtime, error) {
 	maxDepth := opts.MaxDepth
@@ -389,12 +709,13 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth = DefaultMaxDepth
 	}
 	rt := &runtime{
-		sheet:     s,
-		maxDepth:  maxDepth,
-		keyIndex:  map[keyCacheKey]map[string]xdm.Sequence{},
-		tunnel:    map[string]xdm.Sequence{},
-		messages:  new([]string),
-		secondary: new([]SecondaryResult),
+		sheet:       s,
+		maxDepth:    maxDepth,
+		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
+		tunnel:      map[string]xdm.Sequence{},
+		messages:    new([]string),
+		secondary:   new([]SecondaryResult),
+		baseURIUsed: new(bool),
 	}
 
 	xctx := xpath.NewContext(root, s.funcs)

@@ -27,6 +27,14 @@ type Assertion struct {
 	// URI is the @uri of an assert-result-document, naming which secondary
 	// output the nested assertions apply to.
 	URI string
+	// Flags is the @flags of a serialization-matches, in the XPath regular
+	// expression flag vocabulary: i, s, m and x.
+	Flags string
+	// NS holds the prefix-to-URI bindings in scope where the assertion was
+	// written. The suite declares them on the assertion element or on an
+	// enclosing combinator — an XPath assertion that names a prefix cannot be
+	// evaluated without them.
+	NS map[string]string
 	// Children are the operands of all-of, any-of and not.
 	Children []Assertion
 }
@@ -36,6 +44,9 @@ func ParseAssert(raw []byte) (Assertion, error) {
 	dec := xml.NewDecoder(strings.NewReader(string(raw)))
 	root := Assertion{Kind: "all-of"}
 	stack := []*Assertion{&root}
+	// Namespace scopes parallel the element stack, so a binding declared on a
+	// combinator reaches the assertions nested inside it.
+	nsStack := []map[string]string{nil}
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
@@ -47,7 +58,21 @@ func ParseAssert(raw []byte) (Assertion, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			a := Assertion{Kind: t.Name.Local}
+			ns := nsStack[len(nsStack)-1]
 			for _, at := range t.Attr {
+				if at.Name.Space == "xmlns" || (at.Name.Space == "" && at.Name.Local == "xmlns") {
+					next := make(map[string]string, len(ns)+1)
+					for k, v := range ns {
+						next[k] = v
+					}
+					if at.Name.Space == "xmlns" {
+						next[at.Name.Local] = at.Value
+					} else {
+						next[""] = at.Value
+					}
+					ns = next
+					continue
+				}
 				switch at.Name.Local {
 				case "error-code", "code":
 					a.Code = at.Value
@@ -57,8 +82,12 @@ func ParseAssert(raw []byte) (Assertion, error) {
 					a.Normalize = at.Value == "true" || at.Value == "yes"
 				case "uri":
 					a.URI = at.Value
+				case "flags":
+					a.Flags = at.Value
 				}
 			}
+			a.NS = ns
+			nsStack = append(nsStack, ns)
 			top := stack[len(stack)-1]
 			top.Children = append(top.Children, a)
 			stack = append(stack, &top.Children[len(top.Children)-1])
@@ -67,6 +96,7 @@ func ParseAssert(raw []byte) (Assertion, error) {
 		case xml.EndElement:
 			if len(stack) > 1 {
 				stack = stack[:len(stack)-1]
+				nsStack = nsStack[:len(nsStack)-1]
 			}
 		}
 	}

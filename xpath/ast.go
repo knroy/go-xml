@@ -168,6 +168,13 @@ type KindTest struct {
 	// child satisfies the inner test. Nil means the document's content is
 	// unconstrained.
 	Content NodeTest
+	// TypeName is the second argument of element(name, type) and its
+	// attribute() counterpart, written lexically. The empty string means the
+	// test carried no type argument and constrains only the name.
+	TypeName string
+	// TypeNillable records the "?" of element(name, type?), which lets a
+	// nilled element match even though its content is absent.
+	TypeNillable bool
 	// SchemaDeclared marks a schema-element() or schema-attribute() test,
 	// which names a global declaration rather than an element name. It
 	// matches the named declaration and, for an element, the members of its

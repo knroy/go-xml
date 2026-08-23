@@ -134,31 +134,39 @@ func registerSeqFuncs(l *Library) {
 		return out, nil
 	})
 
+	// The collation argument of these four is not merely validated: it
+	// selects how their string comparisons are made. Binding it into the
+	// context is what carries it down to compareValues, which is where the
+	// comparison actually happens.
 	l.registerFn("distinct-values", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		if err := checkCollationArg("distinct-values", args, 1); err != nil {
+		coll, err := collationArgCtx(ctx, "distinct-values", args, 1)
+		if err != nil {
 			return nil, err
 		}
-		return fnDistinctValues(ctx, args)
+		return fnDistinctValues(withCollation(ctx, coll), args)
 	})
 	l.registerFn("index-of", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		if err := checkCollationArg("index-of", args, 2); err != nil {
+		coll, err := collationArgCtx(ctx, "index-of", args, 2)
+		if err != nil {
 			return nil, err
 		}
-		return fnIndexOf(ctx, args)
+		return fnIndexOf(withCollation(ctx, coll), args)
 	})
 
 	l.registerFn("sum", []int{1, 2}, fnSum)
 	l.registerFn("min", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		if err := checkCollationArg("min", args, 1); err != nil {
+		coll, err := collationArgCtx(ctx, "min", args, 1)
+		if err != nil {
 			return nil, err
 		}
-		return minMax(ctx, args[0], true)
+		return minMax(withCollation(ctx, coll), args[0], true)
 	})
 	l.registerFn("max", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		if err := checkCollationArg("max", args, 1); err != nil {
+		coll, err := collationArgCtx(ctx, "max", args, 1)
+		if err != nil {
 			return nil, err
 		}
-		return minMax(ctx, args[0], false)
+		return minMax(withCollation(ctx, coll), args[0], false)
 	})
 	l.registerFn("avg", []int{1}, fnAvg)
 
@@ -302,6 +310,18 @@ func valueKey(ctx *Context, a *xdm.Atomic) (string, error) {
 	case a.Type == xdm.TypeBoolean:
 		return fmt.Sprintf("b\x00%t", a.Bool()), nil
 	case isStringLike(a.Type):
+		// Two strings are the same value under the collation in force, not
+		// under codepoint equality: with a case-blind collation "THou" and
+		// "though" key alike, so distinct-values collapses them. The
+		// collation's own key is what makes that work as a hash key.
+		if ctx != nil && a.Type != xdm.TypeAnyURI {
+			// Key is optional: a host-supplied collation need not offer one,
+			// and without it there is no sound way to hash by that
+			// collation, so the raw string stands.
+			if k, ok := ctx.collation.(interface{ Key(string) string }); ok {
+				return "s\x00" + k.Key(a.Str()), nil
+			}
+		}
 		return "s\x00" + a.Str(), nil
 	case isDurationLike(a.Type):
 		// Two durations are the same value when their months and seconds
@@ -710,4 +730,22 @@ func clampPosition(pos *xdm.Atomic, past int) int {
 		return 0
 	}
 	return past
+}
+
+// GroupingKey returns a string that is identical for two atomic values that
+// compare equal, and different otherwise.
+//
+// XSLT needs this for xsl:for-each-group, whose grouping keys are compared by
+// value rather than by lexical form: xs:dateTime("2000-01-01T00:00:00Z") and
+// xs:dateTime("2000-01-01T01:00:00+01:00") name the same instant and belong in
+// one group, but their string forms differ. Keying on the string put them in
+// two.
+//
+// coll may be nil, in which case strings key on themselves.
+func GroupingKey(a *xdm.Atomic, coll Collation, implicitTZ int) (string, error) {
+	ctx := &Context{ImplicitTimezone: implicitTZ}
+	if coll != nil {
+		ctx.collation = coll
+	}
+	return valueKey(ctx, a)
 }

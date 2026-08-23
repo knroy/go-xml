@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -18,13 +19,16 @@ func (c *compiler) compileSequence(el, nsScope *xdm.Node) ([]Instruction, error)
 func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]Instruction, error) {
 	// Convert the element index into a child index so that interleaved text
 	// nodes are not dropped.
+	// The cut is placed immediately after the last skipped element rather
+	// than at the next one: the text between an xsl:param and the instruction
+	// that follows it is part of the sequence constructor, and starting at
+	// the following element silently swallowed it.
 	seen, start := 0, 0
 	for i, ch := range el.Children {
 		if ch.Kind != xdm.KindElement {
 			continue
 		}
 		if seen == fromElem {
-			start = i
 			break
 		}
 		seen++
@@ -94,39 +98,76 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// Namespace declarations on the literal element are copied to the result,
 	// minus the XSLT namespace itself and anything listed in
 	// exclude-result-prefixes.
+	// Keyed by namespace URI, not by prefix: the attribute names prefixes, but
+	// section 11.1.3 excludes "the namespace" each names. A module that binds
+	// two prefixes to one URI, or rebinds a prefix further down, otherwise
+	// gets an exclusion that follows the spelling instead of the namespace.
 	excluded := map[string]bool{}
 	// XTSE0808: every prefix named here must be bound. An unbound one is a
 	// typo that would otherwise exclude nothing and go unnoticed.
-	addExcluded := func(list string) error {
+	// The list is interpreted against the element it is written on: "#all"
+	// names every prefix in scope *there*, which for a list on xsl:stylesheet
+	// is not the same set as the prefixes a literal element further down
+	// declares for itself. Resolving it against the literal element instead
+	// excluded declarations the stylesheet never asked to exclude.
+	addExcluded := func(at *xdm.Node, list string) error {
 		for _, p := range strings.Fields(list) {
-			if p != "#all" && p != "#default" {
-				if _, ok := n.LookupPrefix(p); !ok {
-					return fmt.Errorf(
-						"XTSE0808: exclude-result-prefixes names %q, which is "+
-							"not a namespace prefix in scope", p)
+			if p == "#all" {
+				for _, uri := range at.InScopeNamespaces() {
+					excluded[uri] = true
 				}
+				continue
 			}
 			if p == "#default" {
 				p = ""
 			}
-			excluded[p] = true
+			uri, ok := at.LookupPrefix(p)
+			if !ok {
+				return fmt.Errorf(
+					"XTSE0808: exclude-result-prefixes names %q, which is "+
+						"not a namespace prefix in scope", p)
+			}
+			excluded[uri] = true
 		}
 		return nil
 	}
-	if err := addExcluded(n.AttrValue("exclude-result-prefixes")); err != nil {
-		return nil, err
-	}
-	if v := n.Attr(xdm.NSXSL, "exclude-result-prefixes"); v != nil {
-		if err := addExcluded(v.Value); err != nil {
-			return nil, err
-		}
-	}
-	for _, ns := range n.Namespaces {
-		if ns.Value == xdm.NSXSL || excluded[ns.Name.Local] || excluded["#all"] {
+	// exclude-result-prefixes applies to the element it is written on and to
+	// everything inside it, so an ancestor's list is collected too — a
+	// stylesheet routinely writes one on xsl:stylesheet and expects it to
+	// cover every literal element in the module.
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
 			continue
 		}
-		instr.namespaces = append(instr.namespaces,
-			nsBinding{prefix: ns.Name.Local, uri: ns.Value})
+		if cur == n || cur.Name.URI == xdm.NSXSL {
+			if err := addExcluded(cur, cur.AttrValue("exclude-result-prefixes")); err != nil {
+				return nil, err
+			}
+		}
+		if v := cur.Attr(xdm.NSXSL, "exclude-result-prefixes"); v != nil {
+			if err := addExcluded(cur, v.Value); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Section 11.1 copies the namespace *nodes* of the literal result
+	// element, which is every binding in scope on it — not only those
+	// declared on the element itself. A stylesheet that declares a prefix on
+	// xsl:stylesheet and uses it inside a literal element expects the result
+	// to carry the declaration, and the difference is observable through the
+	// namespace axis of the constructed tree.
+	scope := n.InScopeNamespaces()
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		prefixes = append(prefixes, p)
+	}
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		uri := scope[p]
+		if uri == xdm.NSXSL || uri == xdm.NSXML || excluded[uri] {
+			continue
+		}
+		instr.namespaces = append(instr.namespaces, nsBinding{prefix: p, uri: uri})
 	}
 
 	for _, a := range n.Attrs {
@@ -182,11 +223,20 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 	case "attribute":
 		return c.compileAttribute(n, ns)
 	case "comment":
+		instr := &commentInstr{}
+		if sel := n.AttrValue("select"); sel != "" {
+			var err error
+			if instr.sel, err = compileExpr(sel, ns); err != nil {
+				return nil, err
+			}
+			return instr, nil
+		}
 		body, err := c.compileSequence(n, n)
 		if err != nil {
 			return nil, err
 		}
-		return &commentInstr{body: body}, nil
+		instr.body = body
+		return instr, nil
 	case "processing-instruction":
 		return c.compilePI(n, ns)
 	case "copy":
@@ -200,7 +250,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &copyOfInstr{sel: sel, validation: spec}, nil
+		return &copyOfInstr{
+			sel:          sel,
+			noNamespaces: n.AttrValue("copy-namespaces") == "no",
+			validation:   spec,
+		}, nil
 	case "sequence":
 		sel, err := requiredExpr(n, "select", ns)
 		if err != nil {
@@ -303,7 +357,17 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 		instr.sel = comp
 	}
 	if m := strings.TrimSpace(n.AttrValue("mode")); m != "" {
-		instr.mode = m
+		// Expanded to match the form the template rules are indexed under;
+		// the pseudo-modes are not names and stay as written.
+		if m == "#current" || m == "#default" {
+			instr.mode = m
+		} else {
+			qn, err := resolveQNameAttr(n, m)
+			if err != nil {
+				return nil, err
+			}
+			instr.mode = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
+		}
 	}
 	params, sorts, err := c.compileParamsAndSorts(n, ns)
 	if err != nil {
@@ -360,7 +424,12 @@ func (c *compiler) compileParamsAndSorts(n *xdm.Node, ns xpath.NamespaceResolver
 
 func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 	ns := newNSResolver(n, "")
-	s := &sortKey{order: "ascending", dataType: "text"}
+	// An absent data-type means the XSLT 2.0 default: compare the values by
+	// their own type, using the XPath "lt" operator, rather than converting
+	// everything to a string first. The empty string records that, so that
+	// data-type="text" — which really does mean "compare as strings" — stays
+	// distinguishable from the default.
+	s := &sortKey{order: "ascending"}
 
 	sel := n.AttrValue("select")
 	if sel == "" {
@@ -372,31 +441,67 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 	}
 	s.sel = comp
 
-	// order, data-type and case-order are attribute value templates in the
-	// spec, but a sort key whose direction varies per item is meaningless, so
-	// only the static form is supported.
+	// order, data-type, case-order and lang are all attribute value
+	// templates. They cannot vary per item — the whole sort is one ordering —
+	// but they can be computed from a parameter, so a literal value is
+	// resolved now and anything with braces in it is deferred to run time.
 	if v := n.AttrValue("order"); v != "" {
-		s.order = v
+		a, err := compileAVT(v, ns)
+		if err != nil {
+			return nil, fmt.Errorf("xsl:sort/@order: %w", err)
+		}
+		if a.isLit {
+			if err := checkSortOrder(a.literal); err != nil {
+				return nil, err
+			}
+			s.order = a.literal
+		} else {
+			s.orderAVT = a
+		}
 	}
 	if v := n.AttrValue("data-type"); v != "" {
-		s.dataType = v
+		a, err := compileAVT(v, ns)
+		if err != nil {
+			return nil, fmt.Errorf("xsl:sort/@data-type: %w", err)
+		}
+		if a.isLit {
+			s.dataType = a.literal
+		} else {
+			s.dataTypeAVT = a
+		}
 	}
 	if v := n.AttrValue("case-order"); v != "" {
-		if v != "upper-first" && v != "lower-first" {
-			return nil, fmt.Errorf("invalid xsl:sort/@case-order %q", v)
+		a, err := compileAVT(v, ns)
+		if err != nil {
+			return nil, fmt.Errorf("xsl:sort/@case-order: %w", err)
 		}
-		s.caseOrder = v
+		if a.isLit {
+			if err := checkCaseOrder(a.literal); err != nil {
+				return nil, err
+			}
+			s.caseOrder = a.literal
+		} else {
+			s.caseOrderAVT = a
+		}
 	}
 	// @lang orders accented and cased letters by the conventions of that
 	// language: Swedish puts "ä" after "z", where codepoint order puts it
-	// next to "a". The collator is built at compile time so that an
-	// unrecognised tag is reported before the transform runs.
+	// next to "a". A literal tag builds its collator now, so an unrecognised
+	// one is reported before the transform runs.
 	if v := strings.TrimSpace(n.AttrValue("lang")); v != "" {
-		coll, err := newCollator(v)
+		a, err := compileAVT(v, ns)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("xsl:sort/@lang: %w", err)
 		}
-		s.coll = coll
+		if a.isLit {
+			coll, err := newCollator(a.literal)
+			if err != nil {
+				return nil, err
+			}
+			s.coll = coll
+		} else {
+			s.langAVT = a
+		}
 	}
 	// @collation names a collation by URI. Codepoint and the ASCII
 	// case-insensitive collation are implemented; a language-sensitive
@@ -414,12 +519,14 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 		}
 		s.collAVT = a
 		if a.isLit {
-			lit := a.literal
-			c, err := xpath.ResolveCollation(lit)
-			if err != nil {
-				return nil, fmt.Errorf("xsl:sort/@collation: %w", err)
+			// An unrecognised collation URI is XTDE1035, which section 13.1.3
+			// makes a *dynamic* error. Refusing it here turned it into a
+			// compile-time failure, so a stylesheet whose sort is never
+			// reached was rejected outright. Leaving it to collAVT means the
+			// error is raised when the sort actually runs.
+			if c, err := xpath.ResolveCollation(a.literal); err == nil {
+				s.strColl = c
 			}
-			s.strColl = c
 		}
 	} else if ns.collation != "" {
 		// No @collation: the default collation in force where the xsl:sort
@@ -525,6 +632,13 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 		return nil, err
 	}
 	instr := &attributeInstr{name: nameAVT, scope: n}
+	if sepAttr := n.Attr("", "separator"); sepAttr != nil {
+		sep, err := compileAVT(sepAttr.Value, ns)
+		if err != nil {
+			return nil, err
+		}
+		instr.separator, instr.hasSeparator = sep, true
+	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -559,11 +673,17 @@ func (c *compiler) compilePI(n *xdm.Node, ns xpath.NamespaceResolver) (Instructi
 	if err != nil {
 		return nil, err
 	}
-	body, err := c.compileSequence(n, n)
-	if err != nil {
+	instr := &piInstr{name: nameAVT}
+	if sel := n.AttrValue("select"); sel != "" {
+		if instr.sel, err = compileExpr(sel, ns); err != nil {
+			return nil, err
+		}
+		return instr, nil
+	}
+	if instr.body, err = c.compileSequence(n, n); err != nil {
 		return nil, err
 	}
-	return &piInstr{name: nameAVT, body: body}, nil
+	return instr, nil
 }
 
 func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
@@ -579,7 +699,12 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 	if err != nil {
 		return nil, err
 	}
-	return &copyInstr{attrSets: sets, body: body, validation: spec}, nil
+	return &copyInstr{
+		attrSets:     sets,
+		noNamespaces: n.AttrValue("copy-namespaces") == "no",
+		body:         body,
+		validation:   spec,
+	}, nil
 }
 
 func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
@@ -659,16 +784,27 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 	// this point captured whatever had been seen so far, which for a
 	// stylesheet that declares its output after its templates was nothing.
 	if v := n.AttrValue("format"); v != "" {
-		qn, err := resolveQNameAttr(n, v)
+		a, err := compileAVT(v, ns)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("in xsl:result-document/@format: %w", err)
 		}
-		instr.format = qn.Clark()
+		instr.format = a
 	}
 	// Serialisation attributes written on the instruction itself override
 	// whatever the selected definition supplies, so they are kept separately
-	// and applied over it at run time.
+	// and applied over it at run time. Each is an attribute value template.
 	instr.overrides = n
+	instr.overrideAVTs = map[string]*avt{}
+	for _, a := range n.Attrs {
+		if a.Name.URI != "" || a.Name.Local == "href" || a.Name.Local == "format" {
+			continue
+		}
+		t, err := compileAVT(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name.Local, err)
+		}
+		instr.overrideAVTs[a.Name.Local] = t
+	}
 
 	if v := n.AttrValue("href"); v != "" {
 		a, err := compileAVT(v, ns)
@@ -713,4 +849,21 @@ func enclosingElementFor(local string) string {
 func isSupportedSortCollation(uri string) bool {
 	_, err := xpath.ResolveCollation(uri)
 	return err == nil
+}
+
+// checkSortOrder validates xsl:sort/@order, whose only values are the two the
+// specification names.
+func checkSortOrder(v string) error {
+	if v != "ascending" && v != "descending" {
+		return fmt.Errorf("XTDE0030: invalid xsl:sort/@order %q", v)
+	}
+	return nil
+}
+
+// checkCaseOrder validates xsl:sort/@case-order.
+func checkCaseOrder(v string) error {
+	if v != "upper-first" && v != "lower-first" {
+		return fmt.Errorf("XTDE0030: invalid xsl:sort/@case-order %q", v)
+	}
+	return nil
 }

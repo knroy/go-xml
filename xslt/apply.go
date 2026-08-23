@@ -9,7 +9,11 @@ import (
 
 // applyTemplatesInstr implements xsl:apply-templates.
 type applyTemplatesInstr struct {
-	sel    *xpath.Compiled
+	sel *xpath.Compiled
+	// mode is the mode to dispatch in. "#current" is kept as written and
+	// resolved when the instruction runs, because it names whatever mode the
+	// enclosing template rule was selected in — which is not known until
+	// then.
 	mode   string
 	params []*Variable
 	sorts  []*sortKey
@@ -77,11 +81,27 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			continue
 		}
 		sub := rt.withCurrent(node, idx+1, size)
-		if err := applyToNode(sub, node, i.mode, params, tunnels, out); err != nil {
+		if err := applyToNode(sub, node, i.effectiveMode(rt), params, tunnels, out); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// effectiveMode resolves the two pseudo-modes.
+//
+// "#current" is the mode of the template rule currently executing. Inside an
+// xsl:function or a named template invoked outside any rule there is none, and
+// erratum XT.E19 settles that case as the unnamed mode rather than as an
+// error — the runtime's selection state carries "" there, so it falls out.
+func (i *applyTemplatesInstr) effectiveMode(rt *runtime) string {
+	switch i.mode {
+	case "#current":
+		return rt.sel.mode
+	case "#default":
+		return ""
+	}
+	return i.mode
 }
 
 // applyToNode selects and runs the best-matching template for one node.
@@ -94,7 +114,7 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 		return err
 	}
 	if t == nil {
-		return applyBuiltInRule(rt, node, mode, tunnels, out)
+		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
 	}
 	// Record the selection state so xsl:next-match and xsl:apply-imports in
 	// the body can resume from here.
@@ -162,7 +182,17 @@ func (t *Template) matchesMode(mode string) bool {
 		return mode == ""
 	}
 	for _, m := range t.Mode {
-		if m == mode || m == "#all" {
+		if m == "#all" {
+			return true
+		}
+		// "#default" written on a template rule names the unnamed mode, so it
+		// has to be compared against "" rather than against itself: a
+		// stylesheet mixing mode="#default" with rules that omit @mode
+		// otherwise puts them in two different modes.
+		if m == "#default" {
+			m = ""
+		}
+		if m == mode {
 			return true
 		}
 	}
@@ -177,8 +207,14 @@ func (t *Template) matchesMode(mode string) bool {
 // nodes copy themselves through. A stylesheet author who does not want the
 // text leaking into the output has to override the text rule explicitly, which
 // is a frequent source of surprise but is what the spec requires.
+// params carries the non-tunnel parameters the rule was invoked with. Section
+// 6.6: "If the built-in rule was invoked with parameters, those parameters are
+// passed on in the implicit xsl:apply-templates instruction" — so a rule
+// several levels down still sees a parameter supplied above an element the
+// stylesheet wrote no rule for. Dropping them made those parameters take their
+// defaults instead.
 func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
-	tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
 	switch node.Kind {
 	case xdm.KindDocument, xdm.KindElement:
@@ -189,7 +225,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		size := len(node.Children)
 		for idx, ch := range node.Children {
 			sub := rt.withCurrent(ch, idx+1, size)
-			if err := applyToNode(sub, ch, mode, nil, tunnels, out); err != nil {
+			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
 				return err
 			}
 		}
@@ -449,7 +485,7 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	if t == nil {
 		// Falling off the end of the template list lands on the built-in rule.
-		return applyBuiltInRule(rt, node, rt.sel.mode, tunnels, out)
+		return applyBuiltInRule(rt, node, rt.sel.mode, params, tunnels, out)
 	}
 	if err := rt.descend(); err != nil {
 		return err

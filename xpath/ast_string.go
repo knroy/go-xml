@@ -63,9 +63,66 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 			// A PI test names the target, which has no namespace.
 			return n.Name.Local == t.Name.Local
 		}
-		return n.Name.URI == t.Name.URI && n.Name.Local == t.Name.Local
+		if n.Name.URI != t.Name.URI || n.Name.Local != t.Name.Local {
+			return false
+		}
+	}
+	if t.TypeName != "" {
+		return nodeTypeMatches(n, t.TypeName)
 	}
 	return true
+}
+
+// nodeTypeMatches reports whether a node's type annotation satisfies the type
+// named in an element() or attribute() kind test.
+//
+// The annotation is compared by name and by the derivation chain the schema
+// recorded, so a node validated against a restriction of the named type
+// matches it. An unvalidated node carries no annotation and is xs:untyped (an
+// element) or xs:untypedAtomic (an attribute): those two names, and the roots
+// of the hierarchy that every type derives from, are the only ones such a node
+// satisfies. Answering true for anything else is what made "@bar instance of
+// attribute(*, xs:NOTATION)" true for a DTD-declared attribute, which is the
+// exact distinction the test exists to draw.
+func nodeTypeMatches(n *xdm.Node, want string) bool {
+	_, w := xdm.SplitQName(want)
+	if n.TypeAnnotation == "" {
+		switch w {
+		case "anyType", "anySimpleType", "anyAtomicType":
+			return true
+		case "untyped":
+			return n.Kind == xdm.KindElement
+		case "untypedAtomic":
+			return n.Kind == xdm.KindAttribute
+		}
+		return false
+	}
+	switch w {
+	case "anyType", "anySimpleType", "anyAtomicType":
+		return true
+	}
+	if schemaTypeNameMatches(n.TypeAnnotation, want) {
+		return true
+	}
+	// The built-in hierarchy is not in the schema's derivation table — nothing
+	// registers that xs:ID restricts xs:NCName — so it is walked separately.
+	// Subtype substitution applies to it just the same: an attribute
+	// annotated xs:ID satisfies attribute(*, xs:string).
+	_, a := xdm.SplitQName(n.TypeAnnotation)
+	if derivedSubtypeOf(a, w) {
+		return true
+	}
+	// A schema type ultimately grounded in a built-in reaches it through the
+	// registered chain; from there the built-in table takes over. Walking both
+	// in one pass is what lets a restriction of xs:token satisfy
+	// attribute(*, xs:string).
+	for i := 0; i < 32 && a != ""; i++ {
+		a = xdm.DerivedBase(a)
+		if a != "" && derivedSubtypeOf(a, w) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *KindTest) String() string {
@@ -77,7 +134,13 @@ func (t *KindTest) String() string {
 		return base + "(" + t.Content.String() + ")"
 	}
 	if t.HasName && t.Name != nil {
+		if t.TypeName != "" {
+			return base + "(" + t.Name.Lexical() + ", " + t.TypeName + ")"
+		}
 		return base + "(" + t.Name.Lexical() + ")"
+	}
+	if t.TypeName != "" {
+		return base + "(*, " + t.TypeName + ")"
 	}
 	return base + "()"
 }
