@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 72.83% — 3,910 of 5,369 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 75.90% — 4,075 of 5,369 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 72.83%, and the newest — so it is a
+The weakest of the measured numbers, at 75.90%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -89,18 +89,17 @@ by that measure:
 
 | set | passing | what is missing |
 |---|---|---|
-| `error` | 149/398 | static and type errors the engine does not raise |
-| `output` | 36/138 | serialisation: BOM, XHTML method, CDATA sections |
-| `import-schema` | 88/189 | schema-aware assessment in the harder cases |
+| `error` | 245/398 | the remaining error conditions of Appendix E |
+| `import-schema` | 93/189 | schema-aware assessment in the harder cases |
+| `output` | 45/138 | serialisation errors, CDATA sections, encodings |
 | `match` | 93/179 | patterns over schema components |
-| `result-document` | 21/79 | the base output URI, duplicate-URI detection |
-| `number` | 84/136 | languages other than English |
+| `result-document` | 25/79 | the base output URI, and output-state rules |
 | `namespace` | 140/189 | namespace fixup on constructed elements |
-| `base-uri` | 20/48 | the static base URI is per module, not per element |
-| `for-each-group` | 29/56 | grouping edge cases |
+| `number` | 91/136 | languages other than English |
 | `collations` | 17/42 | collations beyond codepoint and ASCII-case-insensitive |
+| `base-uri` | 24/48 | remaining base-URI edge cases |
 
-Roughly 300 failures are errors the suite expects that the engine does not
+Roughly 240 failures are errors the suite expects that the engine does not
 raise. That is the same shape as the XSD schema-validity gap: the engine
 accepts a stylesheet the specification says to reject. It is the lower-risk
 direction — a wrong stylesheet runs rather than being reported — but it is a
@@ -116,9 +115,18 @@ it states. Forwards-compatible processing (section 3.9) rides on the same
 table, since an unknown element or attribute is ignored rather than rejected
 wherever a version greater than 2.0 is in force.
 
-The largest remaining group is the type errors — XTTE1510, XTTE1540 and their
-neighbours — which need schema validity assessment of constructed nodes in
-cases the current implementation does not reach.
+Appendix E defines 154 error codes. 81 can now be raised; 73 cannot. All 154
+definitions were extracted from the specification's own markup rather than
+transcribed, which is also how the element grammar in `xslt/elementtable.go`
+and the content models behind XTSE0260 were built — a hand-written list of
+"elements that must be empty" wrongly included `xsl:value-of` and refused 65
+valid stylesheets before it was replaced with the specification's own.
+
+**A ceiling below 100% is structural, not a matter of effort.** Three tests
+expect `XTDE3160` and `XTTE1535`, which appear nowhere in the XSLT 2.0
+Recommendation; fifteen more assert a *serialization error*, and this
+serialiser has no error path. Those eighteen cannot pass against a conforming
+XSLT 2.0 processor. The reachable maximum is about 99.7%.
 
 The `FORX0002` group is not a defect. Those tests expect a backreference to be
 refused; this engine resolves the fixed-width ones exactly, which is more than

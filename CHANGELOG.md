@@ -21,7 +21,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 72.83% — 3,910 of 5,369 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 75.90% — 4,075 of 5,369 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 
