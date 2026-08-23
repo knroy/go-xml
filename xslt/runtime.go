@@ -330,6 +330,15 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 		// A variable with neither select nor content is the empty string, not
 		// the empty sequence: this is what makes <xsl:variable name="x"/>
 		// usable as "".
+		//
+		// With an "as" declaration the rule is the other way. Section 9.3's
+		// table gives "value is an empty sequence, provided the as attribute
+		// permits an empty sequence" for that row, so a zero-length string
+		// would fail every declaration that is not a string type — including
+		// the document-node()? that the empty body was written for.
+		if v.AsType != nil {
+			return nil, nil
+		}
 		return xdm.One(xdm.NewString("")), nil
 	}
 	// Building a variable's content is temporary output state.
@@ -348,19 +357,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	// document node made the value a single node that does not match the
 	// declared type at all, so the variable failed rather than binding.
 	if v.AsType != nil {
-		seq := out.sequence()
-		// A body that is only whitespace produces the empty sequence, not a
-		// whitespace text node. Stylesheet whitespace is stripped from the
-		// tree, but an "as" declaration is applied to what the constructor
-		// yields, and <xsl:variable as="document-node()?"> </xsl:variable>
-		// means "no value" rather than "a text node holding a space".
-		if len(seq) == 1 {
-			if n, ok := seq[0].(*xdm.Node); ok && n.Kind == xdm.KindText &&
-				strings.TrimSpace(n.Value) == "" {
-				return nil, nil
-			}
-		}
-		return seq, nil
+		return out.sequence(), nil
 	}
 	// Content otherwise builds a temporary tree rooted at a document node.
 	return xdm.One(out.toTree()), nil
