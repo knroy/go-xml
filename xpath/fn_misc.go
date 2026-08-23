@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -382,9 +383,13 @@ func formatComponent(dt *xdm.DateTime, marker string) (string, error) {
 	}
 	comp := marker[0]
 	pres := strings.TrimSpace(marker[1:])
-	// A width modifier follows a comma; only the minimum width is honoured.
+	// A width modifier follows a comma. For a *named* component it is what
+	// selects the abbreviation — "[FNn,*-3]" is "Mon" rather than "Monday" —
+	// so it travels with the presentation rather than being discarded.
+	width := ""
 	if i := strings.IndexByte(pres, ','); i >= 0 {
-		pres = pres[:i]
+		width = strings.TrimSpace(pres[i+1:])
+		pres = strings.TrimSpace(pres[:i])
 	}
 	if pres == "" {
 		pres = "1"
@@ -394,6 +399,9 @@ func formatComponent(dt *xdm.DateTime, marker string) (string, error) {
 	case 'Y':
 		return padNumber(int64(dt.Year), pres), nil
 	case 'M':
+		if isNamePresentation(pres) {
+			return applyNameCase(monthNameOf(dt), pres, width), nil
+		}
 		return padNumber(int64(dt.Month), pres), nil
 	case 'D':
 		return padNumber(int64(dt.Day), pres), nil
@@ -416,12 +424,13 @@ func formatComponent(dt *xdm.DateTime, marker string) (string, error) {
 	case 'f':
 		return fractionalSeconds(dt, pres), nil
 	case 'P':
-		if dt.Hour < 12 {
-			return "am", nil
+		half := "am"
+		if dt.Hour >= 12 {
+			half = "pm"
 		}
-		return "pm", nil
+		return applyNameCase(half, pres, width), nil
 	case 'F':
-		return weekdayName(dt, pres), nil
+		return applyNameCase(weekdayName(dt, pres), pres, width), nil
 	case 'Z', 'z':
 		return formatTZMarker(dt, comp), nil
 	}
@@ -482,18 +491,30 @@ func fractionalSeconds(dt *xdm.DateTime, pres string) string {
 var weekdayNames = []string{"Sunday", "Monday", "Tuesday", "Wednesday",
 	"Thursday", "Friday", "Saturday"}
 
+// weekdayName returns the day's name in its canonical case; applyNameCase
+// puts it in the case the picture asked for.
 func weekdayName(dt *xdm.DateTime, pres string) string {
 	// 1970-01-01 was a Thursday, which anchors the modulo.
 	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day)
 	idx := int(((days+4)%7 + 7) % 7)
-	name := weekdayNames[idx]
-	if pres == "N" {
-		return strings.ToUpper(name)
+	return weekdayNames[idx]
+}
+
+// monthNameOf returns the month's name in its canonical case.
+func monthNameOf(dt *xdm.DateTime) string {
+	if dt.Month < 1 || dt.Month > 12 {
+		return ""
 	}
-	if len(pres) > 1 && strings.Trim(pres, "n") == "" {
-		return name
-	}
-	return name
+	return monthNames[dt.Month-1]
+}
+
+// monthNames and weekdayNames are English. Section 16.5 of the XSLT
+// specification makes the languages a processor supports
+// implementation-defined, and requires only that the choice be documented —
+// which the README does.
+var monthNames = []string{
+	"January", "February", "March", "April", "May", "June",
+	"July", "August", "September", "October", "November", "December",
 }
 
 func dayOfYear(dt *xdm.DateTime) int {
@@ -608,4 +629,78 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve collection %q: %w", uri, err)
 	}
 	return seq, nil
+}
+
+// The presentation modifier of a named component: which case, and how wide.
+//
+// "[FN]" is MONDAY, "[FNn]" is Monday, "[Fn]" is monday — the case of the
+// modifier's own letters says which. The width modifier then decides
+// abbreviation: "[FNn,*-3]" is Mon, because a maximum width of 3 asks for the
+// shortest form that fits. Dropping the width, as this did, made every
+// abbreviated date come out in full.
+
+// isNamePresentation reports whether a modifier asks for a name rather than a
+// number. "N", "n" and "Nn" are the three spellings.
+func isNamePresentation(pres string) bool {
+	switch pres {
+	case "N", "n", "Nn":
+		return true
+	}
+	return false
+}
+
+// applyNameCase renders a name in the case the modifier asks for, truncated
+// to the width modifier's maximum when it names one.
+func applyNameCase(name, pres, width string) string {
+	switch pres {
+	case "N":
+		name = strings.ToUpper(name)
+	case "n":
+		name = strings.ToLower(name)
+	case "Nn":
+		name = titleCase(name)
+	}
+	if max := maxWidth(width); max > 0 {
+		if r := []rune(name); len(r) > max {
+			name = string(r[:max])
+		}
+	}
+	return name
+}
+
+// titleCase upper-cases the first letter and lower-cases the rest, which is
+// what "Nn" means. strings.Title is deprecated and word-splits, which is
+// wrong here: "am" must become "Am", not "AM".
+func titleCase(s string) string {
+	r := []rune(strings.ToLower(s))
+	if len(r) == 0 {
+		return s
+	}
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
+// maxWidth reads the maximum from a width modifier, or 0 when it sets none.
+//
+// The syntax is min-max, either side optionally "*" meaning unbounded: "*-3"
+// caps at three characters, "3-*" sets a floor and no cap, "3" sets both.
+func maxWidth(width string) int {
+	if width == "" {
+		return 0
+	}
+	part := width
+	if i := strings.IndexByte(width, '-'); i >= 0 {
+		part = strings.TrimSpace(width[i+1:])
+	}
+	if part == "" || part == "*" {
+		return 0
+	}
+	n := 0
+	for _, c := range part {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }

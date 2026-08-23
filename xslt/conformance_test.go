@@ -164,3 +164,40 @@ func TestKeyNeedsExactlyOneValueForm(t *testing.T) {
 		}
 	}
 }
+
+// A named picture component takes its case from the modifier's own letters,
+// and its width from the width modifier.
+//
+// "[FN]" is MONDAY, "[FNn]" is Monday, "[Fn]" is monday. The width modifier
+// then selects the abbreviation: "[FNn,*-3]" is Mon, because a maximum of
+// three characters asks for the shortest form that fits. Dropping the width —
+// which is what this did — made every abbreviated date come out in full,
+// which is the failure mode the suite's format-date tests are full of.
+func TestFormatDatePresentationModifiers(t *testing.T) {
+	cases := []struct{ expr, want string }{
+		{`format-date(xs:date('2026-08-24'), '[FNn]')`, "Monday"},
+		{`format-date(xs:date('2026-08-24'), '[FN]')`, "MONDAY"},
+		{`format-date(xs:date('2026-08-24'), '[Fn]')`, "monday"},
+		{`format-date(xs:date('2026-08-24'), '[FNn,*-3]')`, "Mon"},
+		{`format-date(xs:date('2026-08-24'), '[MNn]')`, "August"},
+		{`format-date(xs:date('2026-08-24'), '[MN,*-3]')`, "AUG"},
+		{`format-date(xs:date('2026-08-24'), '[MNn] [D], [Y]')`, "August 24, 2026"},
+		// A numeric month is still numeric: only N, n and Nn ask for a name.
+		{`format-date(xs:date('2026-08-24'), '[M01]')`, "08"},
+		{`format-dateTime(xs:dateTime('2026-08-24T15:05:00'), '[h]:[m01] [PN]')`,
+			"3:05 PM"},
+		// "Nn" title-cases rather than word-splitting: am becomes Am.
+		{`format-dateTime(xs:dateTime('2026-08-24T09:00:00'), '[PNn]')`, "Am"},
+	}
+	for _, c := range cases {
+		sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+		  <xsl:template match="/"><out><xsl:value-of select="` +
+			strings.ReplaceAll(c.expr, `'`, "&apos;") + `"/></out></xsl:template>
+		</xsl:stylesheet>`
+		got := run(t, sheet, `<r/>`)
+		if !strings.Contains(got, ">"+c.want+"<") {
+			t.Errorf("%s\n  got  %s\n  want it to contain %q", c.expr, got, c.want)
+		}
+	}
+}
