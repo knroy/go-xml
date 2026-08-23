@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -425,6 +426,13 @@ type numberInstr struct {
 	from   *Pattern
 	format *avt
 	level  string
+	// ordinal, lang, groupingSep and groupingSize are the remaining
+	// number-to-string conversion attributes of section 12.3. All four are
+	// attribute value templates, so none can be resolved at compile time.
+	ordinal      *avt
+	lang         *avt
+	groupingSep  *avt
+	groupingSize *avt
 }
 
 func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -437,6 +445,10 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if f != "" {
 			format = f
 		}
+	}
+	opts, err := i.conversionOptions(rt)
+	if err != nil {
+		return err
 	}
 
 	// An explicit value bypasses counting entirely.
@@ -465,7 +477,7 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			nums = append(nums, conv.Int64())
 		}
-		out.appendText(formatNumberSeq(nums, format))
+		out.appendText(formatNumberSeq(nums, format, opts))
 		return nil
 	}
 
@@ -481,8 +493,49 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if len(numbers) == 0 {
 		return nil
 	}
-	out.appendText(formatNumberSeq(numbers, format))
+	out.appendText(formatNumberSeq(numbers, format, opts))
 	return nil
+}
+
+// conversionOptions evaluates the number-to-string conversion attributes.
+//
+// All of them are attribute value templates, so they are resolved per
+// execution rather than at compile time: xsl:number ordinal="{$o}" is legal
+// and changes the answer from one call to the next.
+func (i *numberInstr) conversionOptions(rt *runtime) (numberOptions, error) {
+	var o numberOptions
+	for _, a := range []struct {
+		src *avt
+		dst *string
+	}{
+		{i.ordinal, &o.ordinal},
+		{i.lang, &o.lang},
+		{i.groupingSep, &o.groupingSep},
+	} {
+		if a.src == nil {
+			continue
+		}
+		v, err := a.src.eval(rt)
+		if err != nil {
+			return o, err
+		}
+		*a.dst = v
+	}
+	if i.groupingSize != nil {
+		v, err := i.groupingSize.eval(rt)
+		if err != nil {
+			return o, err
+		}
+		if v != "" {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return o, fmt.Errorf(
+					"in xsl:number/@grouping-size: %q is not an integer", v)
+			}
+			o.groupingSize = n
+		}
+	}
+	return o, nil
 }
 
 // countNode produces the sequence of numbers for a node, one per level.
@@ -676,7 +729,7 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 // A format like "1.1.1" gives "." as the separator; a single-token format like
 // "1" repeats that token for every level and joins with ".", which is what
 // makes "<xsl:number level='multiple' format='1'/>" produce "2.1.3".
-func formatNumberSeq(nums []int64, format string) string {
+func formatNumberSeq(nums []int64, format string, opts numberOptions) string {
 	tokens, seps, prefix, suffix := splitFormat(format)
 	if len(tokens) == 0 {
 		tokens = []string{"1"}
@@ -700,7 +753,7 @@ func formatNumberSeq(nums []int64, format string) string {
 		if i < len(tokens) {
 			tok = tokens[i]
 		}
-		sb.WriteString(formatNumber(n, tok))
+		sb.WriteString(formatNumber(n, tok, opts))
 	}
 	sb.WriteString(suffix)
 	return sb.String()
@@ -742,8 +795,14 @@ func splitFormat(format string) (tokens, seps []string, prefix, suffix string) {
 	return tokens, seps, prefix, suffix
 }
 
+// isFormatToken reports whether r may appear in a format token.
+//
+// Section 12.3 defines this by Unicode category — "Nd, Nl, No, Lu, Ll, Lt, Lm
+// or Lo" — not by ASCII range. Restricting it to ASCII split a picture written
+// in any other script into separators, so an Arabic-Indic or Greek format
+// token was never recognised as a token at all.
 func isFormatToken(r rune) bool {
-	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+	return unicode.IsDigit(r) || unicode.IsNumber(r) || unicode.IsLetter(r)
 }
 
 func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
@@ -779,14 +838,45 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 			return nil, err
 		}
 	}
+	for _, a := range []struct {
+		name string
+		dst  **avt
+	}{
+		{"ordinal", &instr.ordinal},
+		{"lang", &instr.lang},
+		{"grouping-separator", &instr.groupingSep},
+		{"grouping-size", &instr.groupingSize},
+	} {
+		if v := n.AttrValue(a.name); v != "" {
+			if *a.dst, err = compileAVT(v, ns); err != nil {
+				return nil, fmt.Errorf("in xsl:number/@%s: %w", a.name, err)
+			}
+		}
+	}
 	return instr, nil
 }
 
 // formatNumber renders one level number in a numbering style.
-func formatNumber(n int64, format string) string {
+// numberOptions carries the number-to-string conversion attributes other than
+// format, which section 12.3 defines alongside it.
+type numberOptions struct {
+	// ordinal requests ordinal rather than cardinal numbering when it is a
+	// non-empty string. Its *value* may also select a variant in inflected
+	// languages; English has none, so any non-empty value means the same
+	// thing here.
+	ordinal string
+	// lang selects the language for the spelled-out sequences. Only English
+	// is implemented; section 12.3 requires an unsupported language to fall
+	// back to the default rather than to fail.
+	lang string
+	// groupingSep and groupingSize insert a separator every groupingSize
+	// digits of a decimal sequence, which is how "1,000" is written.
+	groupingSep  string
+	groupingSize int
+}
+
+func formatNumber(n int64, format string, opts numberOptions) string {
 	switch format {
-	case "1":
-		return strconv.FormatInt(n, 10)
 	case "a":
 		return alphaNumber(n, 'a')
 	case "A":
@@ -795,13 +885,128 @@ func formatNumber(n int64, format string) string {
 		return strings.ToLower(romanNumber(n))
 	case "I":
 		return romanNumber(n)
+	case "w":
+		return spellNumber(n, opts.ordinal != "")
+	case "W":
+		return strings.ToUpper(spellNumber(n, opts.ordinal != ""))
+	case "Ww":
+		return titleCaseWords(spellNumber(n, opts.ordinal != ""))
 	}
-	// A run of zeros sets a minimum width: "01" pads to two digits, "001" to
-	// three. Any other token falls back to plain decimal.
-	if strings.Trim(format, "0") == "" && len(format) > 1 {
-		return fmt.Sprintf("%0*d", len(format), n)
+	// The decimal rule, section 12.3: "any token where the last character has
+	// a decimal digit value of 1, and the Unicode value of preceding
+	// characters is one less than the Unicode value of the last character".
+	//
+	// That is a much wider rule than a run of zeros. "001" and "0001" match
+	// it, but so does any digit family — Arabic-Indic "١" numbers in
+	// Arabic-Indic digits — and the width is the *token's* length, so "0100"
+	// is not a valid token at all while "001" pads to three. Matching only
+	// zeros made every non-zero-padded token fall through to plain decimal.
+	if digits, width, ok := decimalToken(format); ok {
+		s := decimalIn(n, digits, width)
+		if opts.groupingSep != "" && opts.groupingSize > 0 {
+			s = groupDigits(s, opts.groupingSep, opts.groupingSize)
+		}
+		if opts.ordinal != "" {
+			s += ordinalSuffix(n)
+		}
+		return s
 	}
 	return strconv.FormatInt(n, 10)
+}
+
+// groupDigits inserts sep every size digits from the right.
+func groupDigits(s, sep string, size int) string {
+	r := []rune(s)
+	var out []rune
+	for i, c := range r {
+		if i > 0 && (len(r)-i)%size == 0 {
+			out = append(out, []rune(sep)...)
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+// decimalToken recognises a decimal format token and returns the zero digit of
+// its digit family together with the minimum width it requires.
+func decimalToken(format string) (zero rune, width int, ok bool) {
+	runes := []rune(format)
+	if len(runes) == 0 {
+		return 0, 0, false
+	}
+	last := runes[len(runes)-1]
+	// The last character must be the "one" of some decimal digit family, and
+	// its family's zero is one below it.
+	if !unicode.IsDigit(last) {
+		return 0, 0, false
+	}
+	if digitValue(last) != 1 {
+		return 0, 0, false
+	}
+	zero = last - 1
+	// Every preceding character must be that family's zero, so that the
+	// token's own length is the width. "0100" fails here, which is why the
+	// specification's own example of it is not a decimal token.
+	for _, r := range runes[:len(runes)-1] {
+		if r != zero {
+			return 0, 0, false
+		}
+	}
+	return zero, len(runes), true
+}
+
+// digitValue returns the decimal digit value of a Unicode digit, or -1.
+func digitValue(r rune) int {
+	// Every decimal digit family is a contiguous run of ten codepoints
+	// starting at its zero, so the value is the distance back to the first
+	// codepoint that is still a digit. unicode.IsDigit has already
+	// established that r is in such a run.
+	for d := 0; d <= 9; d++ {
+		if !unicode.IsDigit(r - rune(d) - 1) {
+			return d
+		}
+	}
+	return -1
+}
+
+// decimalIn renders n in the digit family whose zero is the given rune, padded
+// to at least width digits.
+func decimalIn(n int64, zero rune, width int) string {
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var ds []rune
+	for {
+		ds = append([]rune{zero + rune(n%10)}, ds...)
+		n /= 10
+		if n == 0 {
+			break
+		}
+	}
+	for len(ds) < width {
+		ds = append([]rune{zero}, ds...)
+	}
+	if neg {
+		ds = append([]rune{'-'}, ds...)
+	}
+	return string(ds)
+}
+
+// titleCaseWords upper-cases the first letter of each word.
+func titleCaseWords(s string) string {
+	out := []rune(s)
+	start := true
+	for i, r := range out {
+		if start && unicode.IsLetter(r) {
+			out[i] = unicode.ToUpper(r)
+			start = false
+		}
+		if r == ' ' || r == '-' {
+			start = true
+		}
+	}
+	return string(out)
 }
 
 // alphaNumber renders 1 as "a", 26 as "z", 27 as "aa", in a bijective base-26
