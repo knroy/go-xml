@@ -18,10 +18,13 @@ import (
 type forEachGroupInstr struct {
 	sel *xpath.Compiled
 	// exactly one of these grouping modes is set
-	groupBy         *xpath.Compiled
-	groupAdjacent   *xpath.Compiled
-	groupStartsWith *Pattern
-	groupEndsWith   *Pattern
+	groupBy       *xpath.Compiled
+	groupAdjacent *xpath.Compiled
+	// defaultCollation is the default collation in force at the instruction,
+	// used when no @collation is given.
+	defaultCollation string
+	groupStartsWith  *Pattern
+	groupEndsWith    *Pattern
 	// collation names the collation that compares grouping keys. It is an
 	// attribute value template, so it is resolved per execution rather than
 	// at compile time: collation="{$c}" is legal and names a collation the
@@ -239,6 +242,9 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, err
 	}
 	instr := &forEachGroupInstr{sel: sel}
+	if r, ok := ns.(*nsResolver); ok {
+		instr.defaultCollation = r.collation
+	}
 
 	if v := n.AttrValue("collation"); v != "" {
 		if instr.collation, err = compileAVT(v, ns); err != nil {
@@ -1143,7 +1149,13 @@ func romanNumber(n int64) string {
 // resolveCollation evaluates the collation attribute for this execution.
 func (i *forEachGroupInstr) resolveCollation(rt *runtime) (xpath.Collation, error) {
 	if i.collation == nil {
-		return nil, nil
+		// No @collation: the default collation in force where the
+		// instruction was written applies, which is what
+		// [xsl:]default-collation sets.
+		if i.defaultCollation == "" {
+			return nil, nil
+		}
+		return xpath.ResolveCollation(i.defaultCollation)
 	}
 	uri, err := i.collation.eval(rt)
 	if err != nil {

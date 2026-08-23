@@ -510,7 +510,13 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 	if err != nil {
 		return err
 	}
-	k := &keyDef{match: pat}
+	// An absent @collation falls back to the default collation in force at
+	// the declaration, which is what [xsl:]default-collation sets.
+	keyColl := el.AttrValue("collation")
+	if keyColl == "" {
+		keyColl = ns.collation
+	}
+	k := &keyDef{match: pat, collation: keyColl}
 	hasBody := len(el.ChildElements()) > 0
 	switch {
 	case use != "" && hasBody:

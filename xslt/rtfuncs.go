@@ -397,8 +397,18 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	}
 
 	var out xdm.Sequence
+	// The sought value is folded by the same collation the index was built
+	// with, so that a case-blind key finds a node whose value differs only in
+	// case. Every definition of a given name shares a collation in practice;
+	// the first is used, which is what the index was keyed by.
+	var coll xpath.Collation
+	if len(defs) > 0 {
+		if c, err := rt.keyCollation(defs[0]); err == nil {
+			coll = c
+		}
+	}
 	for _, kv := range xdm.Atomize(args[1]) {
-		k := kv.(*xdm.Atomic).String()
+		k := collationKey(coll, kv.(*xdm.Atomic).String())
 		out = append(out, index[k]...)
 	}
 	return xdm.SortDocumentOrder(out), nil
@@ -461,8 +471,12 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			if err != nil {
 				return err
 			}
+			coll, err := rt.keyCollation(def)
+			if err != nil {
+				return err
+			}
 			for _, k := range vals {
-				idx[k] = append(idx[k], n)
+				idx[collationKey(coll, k)] = append(idx[collationKey(coll, k)], n)
 			}
 		}
 		// Attributes can be key targets, so they are visited too.
@@ -479,8 +493,12 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				if err != nil {
 					return err
 				}
+				coll, err := rt.keyCollation(def)
+				if err != nil {
+					return err
+				}
 				for _, k := range vals {
-					idx[k] = append(idx[k], a)
+					idx[collationKey(coll, k)] = append(idx[collationKey(coll, k)], a)
 				}
 			}
 		}
@@ -594,4 +612,21 @@ func isLexicalQName(s string) bool {
 		}
 	}
 	return true
+}
+
+// keyCollation resolves the collation a key declaration compares under.
+//
+// An unrecognised URI is FOCH0002 where a collation is *used*, but a key
+// declared with one that this engine does not implement should not make the
+// whole index fail: the codepoint collation is the documented fallback, and
+// it is what the key would have used had no collation been named.
+func (rt *runtime) keyCollation(def *keyDef) (xpath.Collation, error) {
+	if def.collation == "" {
+		return nil, nil
+	}
+	coll, err := xpath.ResolveCollation(def.collation)
+	if err != nil {
+		return nil, nil
+	}
+	return coll, nil
 }

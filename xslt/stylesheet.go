@@ -130,6 +130,11 @@ type keyDef struct {
 	// temporary tree per matched node, exactly as a variable's content does,
 	// and the tree's string value is the key.
 	body []Instruction
+	// collation is the collation URI the key's values are compared under.
+	// Section 16.3 makes key matching collation-sensitive, so a key declared
+	// with a case-blind collation finds a node whose value differs from the
+	// sought one only in case.
+	collation string
 }
 
 // OutputSettings holds the xsl:output declaration.
@@ -310,6 +315,10 @@ type nsResolver struct {
 	// baseURI is the base URI of the element this resolver was built for,
 	// which is the static base URI of the expressions written on it.
 	baseURI string
+	// collation is the default collation in force at that element, from the
+	// nearest ancestor-or-self carrying [xsl:]default-collation. It is a
+	// static property, inherited exactly as the base URI is.
+	collation string
 	// schema is what xsl:import-schema brought in, or nil. It makes the
 	// stylesheet's imported types part of the static context, which is what
 	// lets "instance of my:partNumberType" resolve at all.
@@ -339,6 +348,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: defaultElementNS,
 		baseURI:   el.BaseURI,
+		collation: defaultCollationAt(el),
 		schema:    compileSchema,
 	}
 }
@@ -449,4 +459,43 @@ func newStylesheetFuncs() *xpath.Library {
 	l := xpath.NewLibrary(xpath.Builtins())
 	xpath.RegisterXSLTFuncs(l)
 	return l
+}
+
+// defaultCollationAt returns the default collation in force at an element.
+//
+// [xsl:]default-collation is a standard attribute: it applies to the element
+// it is on and to everything within, and an inner one overrides an outer. The
+// value is a whitespace-separated list of candidate URIs, of which the first
+// the implementation recognises is used — which is how a stylesheet names a
+// preferred collation and a fallback in one attribute.
+func defaultCollationAt(el *xdm.Node) string {
+	for n := el; n != nil; n = n.Parent {
+		if n.Kind != xdm.KindElement {
+			continue
+		}
+		v := ""
+		if n.Name.URI == xdm.NSXSL {
+			if a := n.Attr("", "default-collation"); a != nil {
+				v = a.Value
+			}
+		}
+		if v == "" {
+			if a := n.Attr(xdm.NSXSL, "default-collation"); a != nil {
+				v = a.Value
+			}
+		}
+		if v == "" {
+			continue
+		}
+		for _, uri := range strings.Fields(v) {
+			if _, err := xpath.ResolveCollation(uri); err == nil {
+				return uri
+			}
+		}
+		// None recognised: the declaration is still in force and shadows any
+		// outer one, so the codepoint collation applies rather than an
+		// ancestor's choice.
+		return ""
+	}
+	return ""
 }

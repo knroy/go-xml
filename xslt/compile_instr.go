@@ -421,6 +421,12 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 			}
 			s.strColl = c
 		}
+	} else if ns.collation != "" {
+		// No @collation: the default collation in force where the xsl:sort
+		// was written applies.
+		if c, err := xpath.ResolveCollation(ns.collation); err == nil {
+			s.strColl = c
+		}
 	}
 	return s, nil
 }
