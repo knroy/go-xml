@@ -404,9 +404,17 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if ctx.Docs == nil {
 		return nil, fmt.Errorf("FODC0002: document access is disabled (no resolver configured): %q", uri)
 	}
+	// The context item's base URI, falling back to the expression's own.
+	// Without the fallback a relative reference has nothing to resolve
+	// against when there is no context node — which is the case in a
+	// stylesheet started from a named template — and it silently resolves
+	// against the process's working directory instead.
 	base := ""
 	if n, ok := ctx.Item.(*xdm.Node); ok {
 		base = n.BaseURI
+	}
+	if base == "" {
+		base = ctx.StaticBaseURI
 	}
 	tree, err := ctx.Docs.ResolveDocument(uri, base)
 	if err != nil {

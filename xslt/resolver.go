@@ -92,7 +92,19 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	}
 
 	for _, root := range r.Roots {
-		rel, err := filepath.Rel(root, abs)
+		// The root is made absolute and symlink-resolved on the same terms
+		// as the path. Comparing an absolute path against a root the caller
+		// wrote relatively makes filepath.Rel fail, and every file is then
+		// refused as outside a directory it is plainly inside — a caller who
+		// passes "./schemas" gets a resolver that resolves nothing.
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+			absRoot = resolved
+		}
+		rel, err := filepath.Rel(absRoot, abs)
 		if err != nil {
 			continue
 		}
@@ -147,9 +159,14 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	// The cache is created on first use. A FileResolver is documented as
+	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
+	// here is the ordinary case, not a caller's mistake, and writing to one
+	// panics.
+	//
 	// Cleared wholesale rather than evicted one at a time: there is no useful
 	// recency signal here, and the same choice is made for the regex cache.
-	if len(r.cache) >= resolverCacheMax {
+	if r.cache == nil || len(r.cache) >= resolverCacheMax {
 		r.cache = map[string]*xdm.Tree{}
 	}
 	r.cache[path] = tree

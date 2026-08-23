@@ -68,9 +68,22 @@ func admitsXSLT20(value string) bool {
 // case-level ones admits tests needing XSLT 3.0 and counts them as failures
 // of this engine.
 func inScope(set *TestSet, tc *TestCase) (bool, string) {
+	// A case's dependencies override the set's *per kind*, not wholesale.
+	//
+	// Reading it as wholesale loses the set's version gate whenever a case
+	// states any dependency of its own: regex-syntax declares XSLT30+ once
+	// for the set, and its cases declare only feature dependencies, so all
+	// 1,500 of them ran as if they were XSLT 2.0 tests and reported the
+	// engine failing at XSLT 3.0 syntax.
 	deps := tc.Dependencies
-	if len(deps.Specs) == 0 && len(deps.Features) == 0 && len(deps.Others) == 0 {
-		deps = set.Dependencies
+	if len(deps.Specs) == 0 {
+		deps.Specs = set.Dependencies.Specs
+	}
+	if len(deps.Features) == 0 {
+		deps.Features = set.Dependencies.Features
+	}
+	if len(deps.Others) == 0 {
+		deps.Others = set.Dependencies.Others
 	}
 
 	// A streamability test is XSLT 3.0 by construction, whatever it declares.

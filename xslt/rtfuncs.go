@@ -120,6 +120,13 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				if n, ok := ctx.Item.(*xdm.Node); ok {
 					base = n.BaseURI
 				}
+				if base == "" {
+					// No context node, or one with no base of its own: the
+					// static base URI is the stylesheet's, which is what a
+					// relative reference in a stylesheet means. Without this
+					// it resolves against the process's working directory.
+					base = ctx.StaticBaseURI
+				}
 				tree, err := ctx.Docs.ResolveDocument(uri, base)
 				if err != nil {
 					return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)

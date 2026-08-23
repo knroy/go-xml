@@ -27,6 +27,13 @@ type Stylesheet struct {
 	globals []*Variable
 	// funcs holds xsl:function declarations.
 	funcs *xpath.Library
+	// baseURI is where the principal stylesheet module was read from.
+	//
+	// It is the static base URI of every expression the stylesheet contains,
+	// which is what fn:doc, fn:document and fn:resolve-uri resolve a relative
+	// reference against when there is no context node to take one from — a
+	// transform started from a named template has none.
+	baseURI string
 	// keys holds xsl:key declarations, grouped by name.
 	keys map[string][]*keyDef
 	// decimalFormats holds xsl:decimal-format declarations by Clark name;
@@ -130,6 +137,16 @@ type Instruction interface {
 	Execute(rt *runtime, out *outputBuilder) error
 }
 
+// stylesheetBase is where the principal module was read from: the document's
+// own base URI, or the one the caller supplied when the document came from
+// somewhere with no location of its own.
+func stylesheetBase(doc *xdm.Node, opt string) string {
+	if doc != nil && doc.BaseURI != "" {
+		return doc.BaseURI
+	}
+	return opt
+}
+
 // Compile compiles a stylesheet from a parsed XSLT document.
 func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// See xsd.Schema.Validate: a nil document is a caller's mistake, but a
@@ -147,6 +164,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			namespaceAliases: map[string]nsAlias{},
 			characterMaps:    map[string]map[rune]string{},
 			funcs:            newStylesheetFuncs(),
+			baseURI:          stylesheetBase(doc, opts.BaseURI),
 			output: OutputSettings{
 				Method:   "xml",
 				Encoding: "UTF-8",

@@ -352,6 +352,11 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
 	xctx.ImplicitTimezone = opts.ImplicitTimezone
+	// The static base URI of every expression in the stylesheet. Without it
+	// a relative reference in fn:doc or fn:resolve-uri has nothing to
+	// resolve against when there is no context node — which is the case for
+	// a transform started from a named template.
+	xctx.StaticBaseURI = s.baseURI
 	// One clock reading per transform, so fn:current-dateTime is stable
 	// across every call the stylesheet makes.
 	now := opts.Now

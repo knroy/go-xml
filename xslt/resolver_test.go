@@ -276,3 +276,62 @@ func TestResolverRootThroughSymlink(t *testing.T) {
 		t.Errorf("a file inside a symlinked root was refused: %v", err)
 	}
 }
+
+// A FileResolver is documented as usable as a plain literal, so the cache it
+// keeps has to be created on first use rather than by a constructor nobody
+// calls. Writing to a nil map panics, and a panic in a request handler is a
+// denial of service.
+func TestFileResolverLiteralDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.xml")
+	if err := os.WriteFile(path, []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &FileResolver{Roots: []string{dir}}
+	if _, err := r.ResolveDocument(path, ""); err != nil {
+		t.Fatalf("resolving through a literal FileResolver: %v", err)
+	}
+	// Twice, so the cache is both written and read.
+	if _, err := r.ResolveDocument(path, ""); err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+}
+
+// A root written relatively must confine the same paths an absolute one does.
+//
+// The containment check makes the candidate path absolute and resolves its
+// symlinks; comparing that against a root the caller wrote relatively makes
+// filepath.Rel fail, and every file is then refused as outside a directory it
+// is plainly inside. A caller passing "./schemas" got a resolver that
+// resolved nothing.
+func TestFileResolverAcceptsRelativeRoots(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "x.xml"), []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+
+	r := &FileResolver{Roots: []string{"sub"}}
+	if _, err := r.ResolveDocument("sub/x.xml", ""); err != nil {
+		t.Errorf("a relative root should confine the same paths: %v", err)
+	}
+	// And still refuse what is outside it.
+	if err := os.WriteFile(filepath.Join(dir, "out.xml"), []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ResolveDocument("out.xml", ""); err == nil {
+		t.Error("a file outside the relative root was accepted")
+	}
+}

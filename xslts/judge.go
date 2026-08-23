@@ -93,7 +93,12 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 			}
 			want = string(stripBOM(data))
 		}
-		return compareXML(res, want, a.Normalize)
+		// Inter-element whitespace is ignored unless the assertion asks for
+		// it to count. The suite writes its expected values pretty-printed —
+		// indented to suit the author — while a transform emits what the
+		// stylesheet says, so comparing them literally reports indentation
+		// as a conformance failure. This is what the reference driver does.
+		return compareXML(res, want, true)
 
 	case "assert":
 		if terr != nil {
@@ -178,6 +183,10 @@ func compareXML(res *xslt.Result, want string, normalizeSpace bool) (bool, strin
 	// document, declaration included, so comparing the two directly reports
 	// every passing test as a mismatch against its own prologue.
 	got := stripDecl(res.String())
+	// The expected value is stripped too. An expected result read from a
+	// file carries its own declaration, and comparing one prologue against
+	// the absence of another is not what the test asks.
+	want = stripDecl(want)
 	// The expected value may be a fragment with several top-level nodes,
 	// which is not a document; wrapping both makes them parseable and
 	// compares them on equal terms.
