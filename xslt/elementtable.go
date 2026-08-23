@@ -299,3 +299,136 @@ var xsltElements = map[string]elementDef{
 		"string":    {required: true},
 	}},
 }
+
+// contentModels records what each XSLT element may contain, taken from the
+// Content line of the specification's element syntax summaries and extracted
+// mechanically from the same markup as the attribute table above.
+//
+// seqCtor means a sequence constructor is allowed, which admits any
+// instruction, any literal result element and text. kids lists the XSLT
+// elements the model names explicitly; when there is no sequence
+// constructor that list is exhaustive, which is what makes an xsl:sort
+// inside xsl:apply-imports a static error rather than a no-op.
+type contentModel struct {
+	seqCtor bool
+	// decls marks the two elements whose model says "other-declarations",
+	// which stands for the whole declaration category rather than naming an
+	// element. Reading it as a literal name refused every stylesheet that
+	// contained an xsl:template.
+	decls bool
+	// foreign is the local name of a non-XSLT element the model names, which
+	// is xs:schema inside xsl:import-schema and nothing else.
+	foreign string
+	pcdata  bool
+	kids    map[string]bool
+	model   string
+}
+
+var contentModels = map[string]contentModel{
+	"analyze-string":         {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "matching-substring": true, "non-matching-substring": true}, model: "(xsl:matching-substring?, xsl:non-matching-substring?, xsl:fallback*)"},
+	"apply-imports":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+	"apply-templates":        {seqCtor: false, pcdata: false, kids: map[string]bool{"sort": true, "with-param": true}, model: "(xsl:sort | xsl:with-param)*"},
+	"attribute":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"attribute-set":          {seqCtor: false, pcdata: false, kids: map[string]bool{"attribute": true}, model: "xsl:attribute*"},
+	"call-template":          {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+	"character-map":          {seqCtor: false, pcdata: false, kids: map[string]bool{"output-character": true}, model: "(xsl:output-character*)"},
+	"choose":                 {seqCtor: false, pcdata: false, kids: map[string]bool{"otherwise": true, "when": true}, model: "(xsl:when+, xsl:otherwise?)"},
+	"comment":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"copy":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"copy-of":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"decimal-format":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"document":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"element":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"fallback":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"for-each":               {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
+	"for-each-group":         {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
+	"function":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
+	"if":                     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
+	"include":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"key":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"matching-substring":     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"message":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"namespace":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"namespace-alias":        {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"next-match":             {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "with-param": true}, model: "(xsl:with-param | xsl:fallback)*"},
+	"non-matching-substring": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"number":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"otherwise":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"output":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"output-character":       {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"param":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"perform-sort":           {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort+, sequence-constructor)"},
+	"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"sequence":               {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
+	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
+	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
+	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+	"value-of":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"variable":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"when":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"with-param":             {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+}
+
+// xsltInstructions is the "instruction" category of the element syntax
+// summaries: the elements that may appear in a sequence constructor.
+//
+// xsl:variable and xsl:param are included even though the summaries file them
+// as declarations, because both are also permitted in a sequence constructor
+// where they bind a local name.
+var xsltInstructions = map[string]bool{
+	"analyze-string":         true,
+	"apply-imports":          true,
+	"apply-templates":        true,
+	"attribute":              true,
+	"call-template":          true,
+	"choose":                 true,
+	"comment":                true,
+	"copy":                   true,
+	"copy-of":                true,
+	"document":               true,
+	"element":                true,
+	"fallback":               true,
+	"for-each":               true,
+	"for-each-group":         true,
+	"if":                     true,
+	"message":                true,
+	"namespace":              true,
+	"next-match":             true,
+	"number":                 true,
+	"param":                  true,
+	"perform-sort":           true,
+	"processing-instruction": true,
+	"result-document":        true,
+	"sequence":               true,
+	"text":                   true,
+	"value-of":               true,
+	"variable":               true,
+}
+
+// xsltDeclarations is the "declaration" category: the elements permitted as
+// children of xsl:stylesheet, which the syntax summary abbreviates to
+// "other-declarations" rather than naming.
+var xsltDeclarations = map[string]bool{
+	"attribute-set":   true,
+	"character-map":   true,
+	"decimal-format":  true,
+	"function":        true,
+	"import":          true,
+	"import-schema":   true,
+	"include":         true,
+	"key":             true,
+	"namespace-alias": true,
+	"output":          true,
+	"param":           true,
+	"preserve-space":  true,
+	"strip-space":     true,
+	"template":        true,
+	"variable":        true,
+}

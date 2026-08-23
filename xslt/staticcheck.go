@@ -108,7 +108,96 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 				el.Name.Local, name)
 		}
 	}
+
+	return checkContentModel(el, forwards)
+}
+
+// checkContentModel verifies an element's children against its content model.
+//
+// XTSE0010 covers three things, and this is the third: "the content of the
+// element does not correspond to the content that is allowed for the element."
+// The attribute half of the check was already made from the syntax summaries;
+// the Content line of those same summaries answers this half.
+//
+// The distinction that matters is whether the model admits a sequence
+// constructor. When it does, any instruction, literal result element or text
+// may appear and only the elements named alongside it are constrained — an
+// xsl:when inside xsl:template is still wrong. When it does not, the list of
+// named children is exhaustive: xsl:apply-imports takes xsl:with-param and
+// nothing else, so an xsl:sort inside one is an error rather than something to
+// ignore.
+//
+// Order and cardinality are deliberately not checked here. "(xsl:when+,
+// xsl:otherwise?)" also says an xsl:otherwise may not precede an xsl:when, but
+// those are decided by each instruction's own compiler, which has to walk the
+// children in order anyway.
+func checkContentModel(el *xdm.Node, forwards bool) error {
+	cm, ok := contentModels[el.Name.Local]
+	if !ok {
+		return nil
+	}
+	for _, ch := range el.Children {
+		switch ch.Kind {
+		case xdm.KindElement:
+			if ch.Name.URI != xdm.NSXSL {
+				// A literal result element or extension element is content
+				// only where a sequence constructor is.
+				if cm.seqCtor {
+					continue
+				}
+				// Section 3.6: an element from another namespace is allowed
+				// as a top-level declaration and is ignored, which is how a
+				// stylesheet carries data or another vocabulary's
+				// configuration alongside its own declarations.
+				if cm.decls {
+					continue
+				}
+				// A model may also name a non-XSLT element outright:
+				// xsl:import-schema contains an inline xs:schema.
+				if cm.foreign != "" && ch.Name.Local == cm.foreign {
+					continue
+				}
+				return fmt.Errorf(
+					"xsl:%s may not contain %s: its content is %s (XTSE0010)",
+					el.Name.Local, ch.Name.Lexical(), cm.model)
+			}
+			if cm.kids[ch.Name.Local] || (cm.decls && xsltDeclarations[ch.Name.Local]) {
+				continue
+			}
+			// An unknown XSLT element is XTSE0010 from the table check when
+			// it is reached; here it is only a question of placement, and
+			// forwards-compatible mode ignores what it does not know.
+			if _, known := xsltElements[ch.Name.Local]; !known && forwards {
+				continue
+			}
+			if cm.seqCtor && isInstruction(ch.Name.Local) {
+				continue
+			}
+			return fmt.Errorf(
+				"xsl:%s may not contain xsl:%s: its content is %s (XTSE0010)",
+				el.Name.Local, ch.Name.Local, cm.model)
+
+		case xdm.KindText:
+			if cm.seqCtor || cm.pcdata {
+				continue
+			}
+			// Whitespace between elements is layout, not content, and every
+			// stylesheet in the suite is indented.
+			if xdm.IsXMLWhitespace(ch.Value) {
+				continue
+			}
+			return fmt.Errorf(
+				"xsl:%s may not contain text: its content is %s (XTSE0010)",
+				el.Name.Local, cm.model)
+		}
+	}
 	return nil
+}
+
+// isInstruction reports whether an XSLT element may appear in a sequence
+// constructor, which is the "instruction" category of the syntax summaries.
+func isInstruction(local string) bool {
+	return xsltInstructions[local]
 }
 
 // checkAttrValue verifies an attribute against the closed set of values the
