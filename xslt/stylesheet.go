@@ -142,6 +142,25 @@ type OutputSettings struct {
 	// UseCharacterMaps names the xsl:character-map declarations applied at
 	// serialisation.
 	UseCharacterMaps []xdm.QName
+	// ByteOrderMark writes a BOM at the start of the output. It is "no" by
+	// default for every method, which is what makes UTF-8 output usable by
+	// readers that do not expect one.
+	ByteOrderMark bool
+	// IncludeContentType controls whether the HTML and XHTML methods insert
+	// the content-type meta element. It defaults to true, which is why it is
+	// stored as a pointer: an explicit "no" has to be distinguishable from
+	// the attribute being absent.
+	IncludeContentType *bool
+	// EscapeURIAttributes controls percent-escaping of URI-valued attributes
+	// in the HTML and XHTML methods. It defaults to true, and is a pointer
+	// for the same reason.
+	EscapeURIAttributes *bool
+	// UndeclarePrefixes emits namespace undeclarations, which only XML 1.1
+	// permits. This parser implements XML 1.0, so it is recorded and ignored.
+	UndeclarePrefixes bool
+	// MediaType is the media type of the output. It affects no serialised
+	// character; it is metadata a caller passes on.
+	MediaType string
 }
 
 // Instruction is one compiled XSLT instruction.

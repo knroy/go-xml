@@ -27,7 +27,20 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	}
 
 	html := strings.EqualFold(opts.Method, "html")
-	s.html = html
+	// XHTML serialises as XML — declaration, self-closing empty elements,
+	// well-formed markup — while sharing the HTML method's content-type meta
+	// and its treatment of a few elements. So it sets the HTML flag for
+	// those behaviours but is not "html" for the XML-declaration rule below.
+	xhtml := strings.EqualFold(opts.Method, "xhtml")
+	s.html = html || xhtml
+	s.xhtml = xhtml
+
+	// A byte order mark, when asked for. It precedes everything, including
+	// the XML declaration, since it is what tells a reader how to decode
+	// that declaration in the first place.
+	if opts.ByteOrderMark {
+		s.writeString("\uFEFF")
+	}
 
 	// The HTML output method never emits an XML declaration: an HTML document
 	// beginning with "<?xml" is served as XML by some browsers, which defeats
@@ -82,6 +95,10 @@ type serializer struct {
 	// ways that matter: void elements are written unclosed, no element is
 	// ever self-closed, and a content-type meta is injected into <head>.
 	html bool
+	// xhtml marks the XHTML method, which shares the HTML method's
+	// content-type meta but serialises as XML: an XML declaration, and empty
+	// elements closed rather than left open.
+	xhtml bool
 	// inHead marks that serialisation is inside <head>, where a duplicate
 	// charset meta is suppressed.
 	inHead bool
@@ -239,7 +256,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	}
 
 	if len(n.Children) == 0 {
-		if s.html {
+		if s.html && !s.xhtml {
 			// HTML has no self-closing syntax. A void element takes no end
 			// tag; every other empty element takes an explicit one, because
 			// "<div/>" is parsed by HTML parsers as an unclosed "<div>".
@@ -250,6 +267,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			}
 			return
 		}
+		// XHTML is XML and self-closes, which is the whole point of the
+		// method: the output has to parse as XML as well as render as HTML.
 		s.writeString("/>")
 		return
 	}
@@ -267,11 +286,28 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	if s.html && strings.EqualFold(n.Name.Local, "head") {
 		s.inHead = true
 		defer func() { s.inHead = false }()
-		enc := s.opts.Encoding
-		if enc == "" {
-			enc = "UTF-8"
+		// include-content-type="no" suppresses the meta element. It defaults
+		// to yes, which is why an absent attribute is nil rather than false.
+		if s.opts.IncludeContentType == nil || *s.opts.IncludeContentType {
+			enc := s.opts.Encoding
+			if enc == "" {
+				enc = "UTF-8"
+			}
+			media := s.opts.MediaType
+			if media == "" {
+				media = "text/html"
+				if s.xhtml {
+					media = "application/xhtml+xml"
+				}
+			}
+			tag := `<meta http-equiv="Content-Type" content="` + media +
+				`; charset=` + enc + `">`
+			if s.xhtml {
+				// XHTML is XML: an empty element must be closed.
+				tag = strings.TrimSuffix(tag, ">") + "/>"
+			}
+			s.writeString(tag)
 		}
-		s.writeString(`<meta http-equiv="Content-Type" content="text/html; charset=` + enc + `">`)
 	}
 
 	// Indentation is suppressed for mixed content: adding whitespace around

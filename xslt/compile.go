@@ -443,6 +443,23 @@ func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
 	if v := el.AttrValue("version"); v != "" {
 		o.Version = v
 	}
+	if v := el.AttrValue("byte-order-mark"); v != "" {
+		o.ByteOrderMark = v == "yes"
+	}
+	if v := el.AttrValue("include-content-type"); v != "" {
+		b := v == "yes"
+		o.IncludeContentType = &b
+	}
+	if v := el.AttrValue("escape-uri-attributes"); v != "" {
+		b := v == "yes"
+		o.EscapeURIAttributes = &b
+	}
+	if v := el.AttrValue("undeclare-prefixes"); v != "" {
+		o.UndeclarePrefixes = v == "yes"
+	}
+	if v := el.AttrValue("media-type"); v != "" {
+		o.MediaType = v
+	}
 	if v := el.AttrValue("use-character-maps"); v != "" {
 		for _, n := range strings.Fields(v) {
 			qn, err := resolveQNameAttr(el, n)
