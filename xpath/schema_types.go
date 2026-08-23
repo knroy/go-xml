@@ -54,6 +54,14 @@ func schemaDeclared(lex string, ns NamespaceResolver, attribute bool) bool {
 			return false
 		}
 		name.URI = uri
+	} else {
+		// An unprefixed element declaration name takes the default element
+		// namespace, exactly as an element name in a path step does.
+		// An attribute is different: an unprefixed attribute name is always
+		// in no namespace.
+		if !attribute {
+			name.URI = ns.DefaultElementNamespace()
+		}
 	}
 	return st.LookupSchemaDeclaration(name, attribute)
 }
@@ -85,8 +93,13 @@ func (xsOnlyResolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 // recognise.
 //
 // The lexical name is resolved through the same prefix bindings as everything
-// else, so an unprefixed name is in no namespace and a prefixed one must have
-// its prefix bound — the caller has already reported XPST0081 when it is not.
+// else, and a prefixed name must have its prefix bound — the caller has
+// already reported XPST0081 when it is not.
+//
+// An unprefixed name is *not* in no namespace: a type name takes the default
+// element/type namespace, which xpath-default-namespace sets. Treating it as
+// unqualified made "instance of partNumberType" XPST0051 in a stylesheet that
+// had imported the very schema defining it.
 func schemaTypeOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool, bool) {
 	st, ok := ns.(SchemaTypes)
 	if !ok {
@@ -104,6 +117,8 @@ func schemaTypeOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool, bool) {
 		// made every lookup miss, because a schema stores a type under the
 		// prefix *it* was written with, which is rarely the stylesheet's.
 		name.URI = uri
+	} else {
+		name.URI = ns.DefaultElementNamespace()
 	}
 	return st.LookupSchemaType(name)
 }

@@ -344,6 +344,17 @@ var (
 )
 
 func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
+	// [xsl:]xpath-default-namespace is a standard attribute, so it can sit on
+	// any ancestor — including a literal result element — and applies to every
+	// expression within. Reading it only from the stylesheet element left an
+	// unprefixed type or element name in a nested xsl:variable resolving to no
+	// namespace, which is XPST0051 against the schema that defines it.
+	//
+	// An explicit argument still wins: xsl:key and friends pass the namespace
+	// the spec fixes for them rather than inheriting one.
+	if defaultElementNS == "" {
+		defaultElementNS = xpathDefaultNamespaceAt(el)
+	}
 	return &nsResolver{
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: defaultElementNS,
@@ -459,6 +470,29 @@ func newStylesheetFuncs() *xpath.Library {
 	l := xpath.NewLibrary(xpath.Builtins())
 	xpath.RegisterXSLTFuncs(l)
 	return l
+}
+
+// xpathDefaultNamespaceAt returns the namespace unprefixed element and type
+// names in an XPath expression take, at the given element.
+//
+// The attribute is spelled xsl:xpath-default-namespace on a literal result
+// element and xpath-default-namespace on an XSLT element, and the innermost
+// occurrence wins — the same scoping [xsl:]default-collation has.
+func xpathDefaultNamespaceAt(el *xdm.Node) string {
+	for n := el; n != nil; n = n.Parent {
+		if n.Kind != xdm.KindElement {
+			continue
+		}
+		if n.Name.URI == xdm.NSXSL {
+			if a := n.Attr("", "xpath-default-namespace"); a != nil {
+				return a.Value
+			}
+		}
+		if a := n.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 // defaultCollationAt returns the default collation in force at an element.

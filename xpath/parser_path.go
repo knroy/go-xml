@@ -533,7 +533,45 @@ func (p *Parser) parseFunctionCall() (Expr, error) {
 	} else if ok {
 		return q, nil
 	}
+	if c, ok := p.foldSchemaConstructor(name, args); ok {
+		return c, nil
+	}
 	return &FuncCall{Name: name, Args: args}, nil
+}
+
+// foldSchemaConstructor rewrites a call on an imported schema type into a cast.
+//
+// Importing a schema makes a constructor function available for each atomic
+// type it defines, and that constructor is defined as a cast: foo:size("3") is
+// "3" cast as foo:size?. Nothing registers such a function in the library,
+// because the set of them is not known until a schema is imported, so the call
+// is turned into the cast it is defined to be while the schema hook is still
+// reachable. Without this, importing a schema gave the type to "treat as" but
+// left every constructor call reported as an unknown function.
+//
+// Only a one-argument call qualifies. A built-in xs: name never reaches here:
+// those are registered in the library and resolved before this point.
+func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool) {
+	if len(args) != 1 || name.URI == xdm.NSXS {
+		return nil, false
+	}
+	lex := name.Local
+	if name.Prefix != "" {
+		lex = name.Prefix + ":" + name.Local
+	}
+	prim, isAtomic, found := schemaTypeOf(lex, p.ns)
+	if !found || !isAtomic {
+		return nil, false
+	}
+	return &CastExpr{
+		Operand: args[0],
+		Type: SequenceType{
+			AtomicType:    prim,
+			HasAtomicType: true,
+			SchemaType:    lex,
+			Occurrence:    "?",
+		},
+	}, true
 }
 
 // foldQNameConstructor rewrites xs:QName("prefix:local") into a QName literal.
@@ -713,12 +751,16 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			// if a schema was imported. Asking only here is what keeps a
 			// schema from redefining xs:integer, and keeps the built-in
 			// path free of a map lookup.
+			// Falling through to the occurrence indicator below is the whole
+			// point of not returning here. Returning early gave an imported
+			// schema type no occurrence indicator at all, so "foo:testType*"
+			// reported a syntax error at the "*" while "xs:integer*" parsed.
 			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
 				st.SchemaType = t.Val
 				if isAtomic {
 					st.AtomicType, st.HasAtomicType = prim, true
 				}
-				return st, nil
+				goto occurrence
 			}
 			return st, p.errorf("XPST0051: unknown type %q", t.Val)
 		}
@@ -732,6 +774,7 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		return st, p.errorf("expected a type, got %q", t.Val)
 	}
 
+occurrence:
 	// At most one occurrence indicator, and only immediately after the type.
 	// "xs:integer ? * 3" is an optional integer multiplied by 3, not an
 	// occurrence indicator followed by a second one: taking both left the "3"
