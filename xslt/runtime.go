@@ -218,7 +218,17 @@ func (b *outputBuilder) appendValue(a *xdm.Atomic) {
 // addAttribute attaches an attribute to the element under construction.
 func (b *outputBuilder) addAttribute(name xdm.QName, value string) error {
 	if b.open == nil {
-		return fmt.Errorf("XTDE0410: an attribute cannot be created outside an element")
+		// A parentless attribute is a legal item in the data model, and a
+		// sequence constructor may produce one: xsl:function as="attribute()"
+		// with an xsl:attribute body is the ordinary way to write one, and
+		// XTDE0410 is not about this at all. The error is about *ordering*
+		// within element content — an attribute preceded by a node that is
+		// neither an attribute nor a namespace — which is checked below where
+		// there is an element to check it against.
+		b.items = append(b.items, &xdm.Node{
+			Kind: xdm.KindAttribute, Name: name, Value: value,
+		})
+		return nil
 	}
 	// Adding an attribute after children exist is an error the spec calls out,
 	// because it usually means the stylesheet's instruction order is wrong.
