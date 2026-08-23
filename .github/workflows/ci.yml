@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: testdata
-          key: suites-v1
+          key: suites-v2
 
       - name: Fetch the conformance suites
         if: steps.suites.outputs.cache-hit != 'true'
@@ -65,6 +65,7 @@ jobs:
           mkdir -p testdata/relaxng
           git clone --depth 1 https://github.com/relaxng/jing-trang.git /tmp/jing-trang
           cp /tmp/jing-trang/mod/rng-validate/test/spectest.xml testdata/relaxng/
+          git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 
       # check.sh treats a suite that is present but silent as a failure, which
       # is the property that matters: a check that did not run must not look
