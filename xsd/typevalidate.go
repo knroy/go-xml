@@ -24,7 +24,10 @@ func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
 	if el == nil || el.Kind != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElement needs an element")
 	}
-	if _, ok := s.Elements[el.Name]; !ok {
+	// Prefix-insensitive, for the reason given in ValidateAgainstType: the
+	// element was built by a stylesheet using its own prefix, and the schema
+	// stores the declaration under the one its document used.
+	if _, ok := s.Elements[bareName(el.Name)]; !ok {
 		return &ValidationErrors{Errors: []*ValidationError{{
 			Code: "cvc-elt.1",
 			Message: fmt.Sprintf("no global declaration for element %s",
@@ -46,7 +49,7 @@ func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
 	if el == nil || el.Kind != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElementLax needs an element")
 	}
-	if _, ok := s.Elements[el.Name]; !ok {
+	if _, ok := s.Elements[bareName(el.Name)]; !ok {
 		return nil
 	}
 	return s.Validate(el, opts)
@@ -63,6 +66,12 @@ func (s *Schema) ValidateAgainstType(n *xdm.Node, typeName xdm.QName,
 	if n == nil {
 		return fmt.Errorf("xsd: ValidateAgainstType needs a node")
 	}
+	// A QName is compared as a whole struct, prefix included, and a schema
+	// stores a type under the prefix its own document used. Looking up the
+	// name as the *caller* spelled it therefore misses whenever the two
+	// differ, which is nearly always. Only the URI and local name identify a
+	// type.
+	typeName = bareName(typeName)
 	typ, ok := s.Types[typeName]
 	if !ok {
 		if bt := BuiltinType(typeName.Local); bt != nil &&
@@ -114,4 +123,15 @@ func showName(n xdm.QName) string {
 		return n.Local
 	}
 	return "{" + n.URI + "}" + n.Local
+}
+
+// bareName drops the prefix from a QName so that it can be used as a lookup
+// key.
+//
+// xdm.QName carries the prefix and is compared as a whole struct, but a
+// prefix is a spelling rather than part of a name's identity. Every global
+// component here is keyed by URI and local name, and a caller who built a
+// name from a stylesheet carries whatever prefix that stylesheet used.
+func bareName(q xdm.QName) xdm.QName {
+	return xdm.QName{URI: q.URI, Local: q.Local}
 }

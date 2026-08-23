@@ -93,7 +93,10 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 }
 
 // copyOfInstr implements xsl:copy-of, which deep-copies nodes.
-type copyOfInstr struct{ sel *xpath.Compiled }
+type copyOfInstr struct {
+	sel        *xpath.Compiled
+	validation validationSpec
+}
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	seq, err := i.sel.Eval(rt.ctx)
@@ -108,17 +111,32 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// other.
 			if v.Kind == xdm.KindDocument {
 				for _, ch := range v.Children {
-					out.appendNode(deepCopy(ch))
+					c := deepCopy(ch)
+					if err := i.validation.assess(rt, c); err != nil {
+						return err
+					}
+					out.appendNode(c)
 				}
 				continue
 			}
 			if v.Kind == xdm.KindAttribute {
+				if err := i.validation.assess(rt, v); err != nil {
+					return err
+				}
 				if err := out.addAttribute(v.Name, v.Value); err != nil {
 					return err
 				}
 				continue
 			}
-			out.appendNode(deepCopy(v))
+			c := deepCopy(v)
+			// The copy is assessed rather than the original: validation may
+			// annotate, and annotating the source document would leak a
+			// property of this instruction into the tree everything else
+			// still reads.
+			if err := i.validation.assess(rt, c); err != nil {
+				return err
+			}
+			out.appendNode(c)
 		case *xdm.Atomic:
 			out.appendValue(v)
 		}
@@ -148,8 +166,9 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 
 // copyInstr implements xsl:copy, a shallow copy of the context node.
 type copyInstr struct {
-	attrSets []xdm.QName
-	body     []Instruction
+	attrSets   []xdm.QName
+	body       []Instruction
+	validation validationSpec
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -170,7 +189,12 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 			return err
 		}
-		return execSequence(i.body, rt, sub)
+		if err := execSequence(i.body, rt, sub); err != nil {
+			return err
+		}
+		// The copy is assessed once it is complete, since validity is a
+		// property of the whole element and its content.
+		return i.validation.assess(rt, sub.open)
 
 	case xdm.KindDocument:
 		return execSequence(i.body, rt, out)
@@ -180,6 +204,9 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return nil
 
 	case xdm.KindAttribute:
+		if err := i.validation.assess(rt, node); err != nil {
+			return err
+		}
 		return out.addAttribute(node.Name, node.Value)
 
 	case xdm.KindComment:
@@ -306,6 +333,9 @@ type attributeInstr struct {
 	sel       *xpath.Compiled
 	scope     *xdm.Node
 	body      []Instruction
+	// validation carries [xsl:]validation and [xsl:]type, which assess the
+	// constructed attribute exactly as they assess a constructed element.
+	validation validationSpec
 }
 
 func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -332,6 +362,13 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 		value = stringJoin(sub.sequence(), "")
+	}
+	// Assessment happens before the attribute joins the output, so that a
+	// failure reports the attribute the stylesheet asked for rather than
+	// leaving an invalid one behind on the element.
+	if err := i.validation.assess(rt,
+		&xdm.Node{Kind: xdm.KindAttribute, Name: qn, Value: value}); err != nil {
+		return err
 	}
 	return out.addAttribute(qn, value)
 }

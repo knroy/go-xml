@@ -175,7 +175,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &copyOfInstr{sel: sel}, nil
+		spec, err := compileValidation(n, "")
+		if err != nil {
+			return nil, err
+		}
+		return &copyOfInstr{sel: sel, validation: spec}, nil
 	case "sequence":
 		sel, err := requiredExpr(n, "select", ns)
 		if err != nil {
@@ -476,6 +480,9 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 		return nil, err
 	}
 	instr := &attributeInstr{name: nameAVT, scope: n}
+	if instr.validation, err = compileValidation(n, ""); err != nil {
+		return nil, err
+	}
 	if v := n.AttrValue("namespace"); v != "" {
 		avt, err := compileAVT(v, ns)
 		if err != nil {
@@ -520,7 +527,11 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 	if err != nil {
 		return nil, err
 	}
-	return &copyInstr{attrSets: sets, body: body}, nil
+	spec, err := compileValidation(n, "")
+	if err != nil {
+		return nil, err
+	}
+	return &copyInstr{attrSets: sets, body: body, validation: spec}, nil
 }
 
 func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
