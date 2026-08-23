@@ -118,6 +118,14 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 	case "":
 		return atomicTypeMatches(a.Type, want)
 	}
+	// A value annotated with a schema type derived from the named built-in
+	// satisfies it: subtype substitution. "instance of xs:int" is true for a
+	// value validated against a restriction of xs:int, which is the ordinary
+	// case for anything read out of a schema-validated document.
+	if a.Derived() != "" && a.Derived() != facet &&
+		schemaTypeNameMatches(a.Derived(), facet) {
+		return true
+	}
 	if hasRangeFacet(facet) || hasStringFacet(facet) {
 		// A derived type matches only a value that was built as that type or
 		// as one below it. A plain xs:integer literal is the *parent* of

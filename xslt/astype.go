@@ -92,6 +92,18 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 			out = append(out, conv)
 			continue
 		}
+		// Type promotion, B.1. Besides the numeric ladder there is one other
+		// promotion the rules require: xs:anyURI promotes to xs:string. A
+		// schema-typed URI bound to a variable declared as="xs:string" is the
+		// ordinary case, and without this it was rejected as a type error.
+		if a.Type == xdm.TypeAnyURI && t.stype.AtomicType == xdm.TypeString {
+			conv, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %s: %w", code, what, err)
+			}
+			out = append(out, conv)
+			continue
+		}
 		// Numeric promotion is permitted without an explicit cast; anything
 		// else keeps its type and is checked against the declaration below.
 		if a.Type.IsNumeric() && t.stype.AtomicType.IsNumeric() {

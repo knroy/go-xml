@@ -234,7 +234,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &blockInstr{body: body}, nil
+		spec, err := compileValidation(n, "")
+		if err != nil {
+			return nil, err
+		}
+		return &documentInstr{body: body, validation: spec}, nil
 	case "result-document":
 		return c.compileResultDocument(n, ns)
 	case "fallback":

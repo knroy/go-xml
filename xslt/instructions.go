@@ -781,3 +781,31 @@ func nan() float64 {
 	var z float64
 	return z / z
 }
+
+// documentInstr implements xsl:document.
+//
+// Section 11.5: the instruction builds a *document node* whose children are
+// what its sequence constructor produced. That is the whole point of it — a
+// sequence constructor otherwise yields a bare sequence, and a stylesheet
+// needing a document node to hand to fn:doc, to validate, or to bind to a
+// variable declared as="document-node()" has no other way to make one.
+//
+// Compiling it as a plain block dropped the node, so the content appeared in
+// the result but the document node itself never existed.
+type documentInstr struct {
+	body       []Instruction
+	validation validationSpec
+}
+
+func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
+	sub := newOutputBuilder()
+	if err := execSequence(i.body, rt, sub); err != nil {
+		return err
+	}
+	doc := sub.toTree()
+	if err := i.validation.assess(rt, doc); err != nil {
+		return err
+	}
+	out.appendNode(doc)
+	return nil
+}
