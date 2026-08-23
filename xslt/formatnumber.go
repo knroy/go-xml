@@ -250,7 +250,13 @@ func formatNumber2(num *xdm.Atomic, pic string, df *DecimalFormat) (string, erro
 		return df.NaN, nil
 	}
 
-	// Split positive and negative sub-pictures.
+	// Split positive and negative sub-pictures. "A picture-string must not
+	// contain more than one pattern-separator-sign": a third sub-picture was
+	// being discarded silently rather than reported.
+	if strings.Count(pic, string(df.PatternSeparator)) > 1 {
+		return "", fmt.Errorf(
+			"XTDE1310: picture %q contains more than one pattern separator", pic)
+	}
 	subs := splitPicture(pic, df.PatternSeparator)
 	negative := isNegative(num)
 	chosen := subs[0]
@@ -357,6 +363,9 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	}
 	if start < 0 {
 		return p, fmt.Errorf("XTDE1310: picture %q contains no digit characters", pic)
+	}
+	if err := checkSubPicture(pic, runes, start, end, df); err != nil {
+		return p, err
 	}
 
 	p.prefix = string(runes[:start])
@@ -515,4 +524,106 @@ func sameDecimalFormat(a, b *DecimalFormat) bool {
 	x, y := *a, *b
 	x.Name, y.Name = xdm.QName{}, xdm.QName{}
 	return x == y
+}
+
+// checkSubPicture applies the section 16.4.2 rules a sub-picture must satisfy.
+//
+// Only one of these was enforced — that a sub-picture contains a digit — and
+// the rest silently produced a number from a picture the spec says is an
+// error. They are written out one rule per block, in the order the spec gives
+// them, so that each can be read against the sentence it comes from.
+//
+// active characters are the digit, zero-digit, grouping and decimal signs;
+// everything else in the sub-picture is passive.
+func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat) error {
+	active := func(r rune) bool {
+		return r == df.Digit || r == df.ZeroDigit ||
+			r == df.GroupingSeparator || r == df.DecimalSeparator
+	}
+
+	// "A sub-picture must not contain more than one decimal-separator-sign."
+	if strings.Count(pic, string(df.DecimalSeparator)) > 1 {
+		return fmt.Errorf(
+			"XTDE1310: picture %q contains more than one decimal separator", pic)
+	}
+
+	// "A sub-picture must not contain more than one percent-sign or
+	// per-mille-sign, and it must not contain one of each."
+	nPercent := strings.Count(pic, string(df.Percent))
+	nPerMille := strings.Count(pic, string(df.PerMille))
+	if nPercent+nPerMille > 1 {
+		return fmt.Errorf(
+			"XTDE1310: picture %q contains more than one percent or per-mille sign", pic)
+	}
+
+	// "A sub-picture must not contain a passive character that is preceded by
+	// an active character and that is followed by another active character."
+	// The digit region runs from start to end, so a passive character inside
+	// it is by definition surrounded by active ones.
+	for i := start; i <= end; i++ {
+		if !active(runes[i]) {
+			return fmt.Errorf(
+				"XTDE1310: picture %q contains %q between active characters",
+				pic, string(runes[i]))
+		}
+	}
+
+	// "A sub-picture must not contain a grouping-separator-sign adjacent to a
+	// decimal-separator-sign."
+	for i := 0; i+1 < len(runes); i++ {
+		a, b := runes[i], runes[i+1]
+		if (a == df.GroupingSeparator && b == df.DecimalSeparator) ||
+			(a == df.DecimalSeparator && b == df.GroupingSeparator) {
+			return fmt.Errorf(
+				"XTDE1310: picture %q has a grouping separator adjacent to "+
+					"the decimal separator", pic)
+		}
+	}
+
+	// A grouping separator at the very end of the integer part has nothing to
+	// group, which the adjacency rule does not cover when no decimal
+	// separator follows it.
+	if runes[end] == df.GroupingSeparator {
+		return fmt.Errorf(
+			"XTDE1310: picture %q ends the digit region with a grouping separator", pic)
+	}
+
+	// "The integer part of a sub-picture must not contain a zero-digit-sign
+	// that is followed by a digit-sign", and "the fractional part ... must not
+	// contain a digit-sign that is followed by a zero-digit-sign".
+	digits := runes[start : end+1]
+	intPart, fracPart := digits, []rune(nil)
+	for i, r := range digits {
+		if r == df.DecimalSeparator {
+			intPart, fracPart = digits[:i], digits[i+1:]
+			break
+		}
+	}
+	seenZero := false
+	for _, r := range intPart {
+		switch r {
+		case df.ZeroDigit:
+			seenZero = true
+		case df.Digit:
+			if seenZero {
+				return fmt.Errorf(
+					"XTDE1310: the integer part of picture %q has a digit sign "+
+						"after a zero-digit sign", pic)
+			}
+		}
+	}
+	seenDigit := false
+	for _, r := range fracPart {
+		switch r {
+		case df.Digit:
+			seenDigit = true
+		case df.ZeroDigit:
+			if seenDigit {
+				return fmt.Errorf(
+					"XTDE1310: the fractional part of picture %q has a "+
+						"zero-digit sign after a digit sign", pic)
+			}
+		}
+	}
+	return nil
 }

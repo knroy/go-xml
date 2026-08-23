@@ -157,6 +157,12 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 				if cm.foreign != "" && ch.Name.Local == cm.foreign {
 					continue
 				}
+				if cm.model == "" {
+					return fmt.Errorf(
+						"xsl:%s is required to be empty, so the %s child is "+
+							"a static error (XTSE0260)",
+						el.Name.Local, ch.Name.Lexical())
+				}
 				return fmt.Errorf(
 					"xsl:%s may not contain %s: its content is %s (XTSE0010)",
 					el.Name.Local, ch.Name.Lexical(), cm.model)
@@ -173,6 +179,18 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			if cm.seqCtor && isInstruction(ch.Name.Local) {
 				continue
 			}
+			// Two of these have a code of their own, which says the same
+			// thing about a specific element rather than about the model.
+			switch {
+			case ch.Name.Local == "include":
+				return fmt.Errorf(
+					"an xsl:include element must be a top-level element, "+
+						"and this one is inside xsl:%s (XTSE0170)", el.Name.Local)
+			case ch.Name.Local == "import":
+				return fmt.Errorf(
+					"an xsl:import element must be a top-level element, "+
+						"and this one is inside xsl:%s (XTSE0190)", el.Name.Local)
+			}
 			return fmt.Errorf(
 				"xsl:%s may not contain xsl:%s: its content is %s (XTSE0010)",
 				el.Name.Local, ch.Name.Local, cm.model)
@@ -183,8 +201,27 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			}
 			// Whitespace between elements is layout, not content, and every
 			// stylesheet in the suite is indented.
+			//
+			// XTSE0260 says a whitespace text node preserved by
+			// xml:space="preserve" *is* an error inside an element required
+			// to be empty. That is checked where xml:space is known rather
+			// than assumed here, so plain indentation stays legal.
 			if xdm.IsXMLWhitespace(ch.Value) {
 				continue
+			}
+			// An empty element and a non-empty one give different codes for
+			// text: XTSE0260 is specifically about content in an element
+			// required to be empty, and xsl:stylesheet has XTSE0120 of its
+			// own for a text node child.
+			switch {
+			case el.Name.Local == "stylesheet" || el.Name.Local == "transform":
+				return fmt.Errorf(
+					"an xsl:%s element must not have text node children (XTSE0120)",
+					el.Name.Local)
+			case cm.model == "":
+				return fmt.Errorf(
+					"xsl:%s is required to be empty, so its text content is "+
+						"a static error (XTSE0260)", el.Name.Local)
 			}
 			return fmt.Errorf(
 				"xsl:%s may not contain text: its content is %s (XTSE0010)",
