@@ -409,23 +409,145 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	registerRuntimeFuncs(lib, rt)
 	rt.ctx.Funcs = lib
 
-	// Global variables are evaluated in declaration order. The spec permits
-	// any order consistent with dependencies; declaration order is the
-	// predictable choice and matches what stylesheet authors assume.
-	for _, g := range s.globals {
-		if supplied, ok := opts.Params[g.Name.Clark()]; ok {
-			rt.ctx = rt.ctx.WithVar(g.Name, supplied)
-			continue
-		}
-		if g.Required {
-			return nil, fmt.Errorf("XTDE0050: required parameter $%s was not supplied",
-				g.Name.Lexical())
-		}
-		val, err := evalVariable(g, rt)
-		if err != nil {
-			return nil, fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
-		}
-		rt.ctx = rt.ctx.WithVar(g.Name, val)
+	// Global variables are evaluated in dependency order rather than
+	// declaration order. Section 9.5 puts no ordering constraint on
+	// declarations, so a global may legitimately be declared above the one it
+	// refers to; evaluating in declaration order made that a spurious
+	// "undeclared variable" instead of working. A variable is evaluated when
+	// something needs it, and the ones nothing needs are evaluated at the end
+	// so that their errors are still reported.
+	if err := rt.evalGlobals(s, opts); err != nil {
+		return nil, err
 	}
 	return rt, nil
+}
+
+// evalGlobals binds every global variable, resolving dependencies on demand.
+func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
+	byName := make(map[string]*Variable, len(s.globals))
+	for _, g := range s.globals {
+		if _, dup := byName[g.Name.Clark()]; !dup {
+			byName[g.Name.Clark()] = g
+		}
+	}
+
+	// state tracks which globals are done and which are being evaluated, so
+	// that a cycle is reported rather than recursed into forever.
+	const (
+		pending = 0
+		active  = 1
+		done    = 2
+	)
+	state := make(map[string]int, len(s.globals))
+
+	var bind func(g *Variable) error
+	bind = func(g *Variable) error {
+		key := g.Name.Clark()
+		switch state[key] {
+		case done:
+			return nil
+		case active:
+			// XTDE0640: a global variable whose value depends on its own.
+			return fmt.Errorf(
+				"XTDE0640: global variable $%s depends on itself",
+				g.Name.Lexical())
+		}
+		state[key] = active
+		defer func() { state[key] = done }()
+
+		if supplied, ok := opts.Params[key]; ok {
+			rt.ctx = rt.ctx.WithVar(g.Name, supplied)
+			return nil
+		}
+		if g.Required {
+			return fmt.Errorf("XTDE0050: required parameter $%s was not supplied",
+				g.Name.Lexical())
+		}
+
+		// Everything this variable refers to is bound first, so that its own
+		// evaluation finds each one already in the context.
+		for _, dep := range globalRefs(g) {
+			d, ok := byName[dep]
+			if !ok {
+				continue
+			}
+			if d == g {
+				// A variable whose select expression names itself is the
+				// simplest circularity there is, and the recursion below
+				// would never reach it: bind() has already marked this one
+				// active, so the cycle is reported here directly.
+				return fmt.Errorf(
+					"XTDE0640: global variable $%s depends on itself",
+					g.Name.Lexical())
+			}
+			if err := bind(d); err != nil {
+				return err
+			}
+		}
+
+		val, err := evalVariable(g, rt)
+		if err != nil {
+			return fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
+		}
+		rt.ctx = rt.ctx.WithVar(g.Name, val)
+		return nil
+	}
+
+	for _, g := range s.globals {
+		if err := bind(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// globalRefs returns the names of the variables a global's select expression
+// refers to.
+//
+// The scan is lexical rather than over the parsed tree. What it is for is
+// *ordering*: binding a dependency before the variable that needs it. Naming
+// one variable too many only evaluates something earlier than strictly
+// necessary, which is harmless, and naming one too few leaves the old
+// behaviour, which the cycle check still catches. A visitor over every
+// expression node would be more precise and buy nothing.
+//
+// Names are returned unprefixed-Clark, because that is how a global is keyed
+// when its name is in no namespace — the overwhelmingly common case. A
+// prefixed reference simply does not match and is left to declaration order.
+func globalRefs(g *Variable) []string {
+	if g.Select == nil {
+		return nil
+	}
+	src := g.Select.Source()
+	var out []string
+	var quote byte
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != '$' {
+			continue
+		}
+		j := i + 1
+		for j < len(src) && (src[j] == ':' || src[j] == '-' || src[j] == '_' ||
+			src[j] == '.' ||
+			(src[j] >= 'a' && src[j] <= 'z') ||
+			(src[j] >= 'A' && src[j] <= 'Z') ||
+			(src[j] >= '0' && src[j] <= '9')) {
+			j++
+		}
+		if j > i+1 {
+			out = append(out, xdm.QName{Local: src[i+1 : j]}.Clark())
+		}
+		i = j - 1
+	}
+	return out
 }
