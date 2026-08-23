@@ -106,6 +106,17 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 			return spec, fmt.Errorf(
 				"XTSE1520: in %s/@%s: %w", n.Name.Lexical(), tAttr, err)
 		}
+		// Section 19.2.1.2: "If the QName has no prefix, it is expanded using
+		// the default namespace established using the effective
+		// [xsl:]xpath-default-namespace attribute if there is one; otherwise,
+		// it is taken as being a name in no namespace." Section 5.2 lists
+		// both the type attribute of an XSLT element and the xsl:type
+		// attribute of a literal result element among the places this
+		// applies. Resolving an unprefixed type name in no namespace made a
+		// schema-declared type unfindable under a default namespace.
+		if qn.Prefix == "" && qn.URI == "" {
+			qn.URI = xpathDefaultNamespaceAt(n)
+		}
 		spec.typeName = &qn
 		return spec, nil
 	}
@@ -185,8 +196,39 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// is the other end of the same idea — every element is valid against
 		// it — and validating against it likewise constrains nothing.
 		switch spec.typeName.Local {
-		case "untyped", "untypedAtomic", "anyType":
+		case "untyped", "anyType":
 			stripAnnotations(n)
+			return nil
+		case "untypedAtomic":
+			// xs:untypedAtomic is the *simple* end of the untyped pair: it is
+			// what an unvalidated attribute's typed value is. Naming it as the
+			// type therefore asks for a node whose content is a single
+			// untypedAtomic value, and an element with element children has no
+			// such value at all — there is nothing for the atomic to be. That
+			// makes it a type error under XTTE1540, exactly as validating
+			// against any other simple type with element content would be.
+			//
+			// The three cases were previously folded together and all three
+			// simply stripped. Stripping is right for xs:untyped and
+			// xs:anyType, whose annotations are what an absent annotation
+			// already means. It is wrong here: an element with an empty
+			// annotation reads back as xs:untyped, so
+			// "instance of element(*, xs:untypedAtomic)" answered false for a
+			// node the stylesheet had just validated as untypedAtomic. The
+			// annotation is written instead, which is what the general
+			// xsl:type path does for every named type.
+			if n.Kind == xdm.KindElement {
+				for _, c := range n.Children {
+					if c.Kind == xdm.KindElement {
+						return fmt.Errorf(
+							"XTTE1540: %s is not valid against %s: an element "+
+								"with element children has no atomic value",
+							describeNode(n), spec.typeName.Lexical())
+					}
+				}
+			}
+			stripAnnotations(n)
+			n.TypeAnnotation = "untypedAtomic"
 			return nil
 		}
 	}

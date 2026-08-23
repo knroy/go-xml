@@ -76,8 +76,15 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		switch v := it.(type) {
 		case *xdm.Node:
 			b := base
-			if !explicitBase && v.BaseURI != "" {
-				b = v.BaseURI
+			// The base URI *in force at* the node, not the field: only an
+			// element carrying xml:base has one of its own, so an attribute
+			// (document(@href) is the ordinary spelling) and every element
+			// the parser did not stamp read back empty and fell through to
+			// the stylesheet's own directory.
+			if !explicitBase {
+				if nb := inheritedBaseURI(v); nb != "" {
+					b = nb
+				}
 			}
 			reqs = append(reqs, request{v.StringValue(), b})
 		default:
@@ -105,6 +112,16 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if err := validAnyURI(uri); err != nil || strings.HasPrefix(uri, ":") {
 			return nil, fmt.Errorf("FODC0005: %q is not a valid URI", uri)
 		}
+		// A fragment identifier that is not legal for an XML media type is
+		// XTRE1160, and it is decidable from the URI alone -- so it is
+		// reported before the resource is fetched rather than after, which
+		// is what lets it be diagnosed for a URI this engine will not
+		// retrieve at all.
+		if !FragmentIsValidXMLName(uri) {
+			return nil, fmt.Errorf(
+				"XTRE1160: %q has a fragment identifier that is not valid "+
+					"for an XML media type", uri)
+		}
 		tree, err := ctx.Docs.ResolveDocument(uri, r.base)
 		if err != nil {
 			return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
@@ -123,4 +140,41 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	}
 
 	return out, nil
+}
+
+// FragmentIsValidXMLName reports whether the fragment identifier in uri, if
+// there is one, conforms to the rules for the XML media types.
+//
+// XSLT 2.0 16.1 makes it a recoverable dynamic error (XTRE1160) if "the
+// fragment identifier does not conform to the rules for fragment identifiers
+// for that media type". For text/xml and application/xml those rules (RFC
+// 7303) admit a bare name, which must be an XML Name, or an XPointer -- and an
+// XPointer scheme part is itself a QName. So a fragment of "123456789" is not
+// a legal one for XML however the resource is fetched, which is what lets the
+// error be raised without retrieving anything: error-1160a names a w3.org URL
+// this engine will not fetch at all, and diagnosing the fragment is the only
+// way to reach the right answer offline.
+//
+// It is exported because xslt/rtfuncs.go registers its own fn:document#1,
+// which shadows the one here for arity 1 and needs the same rule.
+//
+// A uri with no fragment, or an empty one, is not an error here: only a
+// present and malformed fragment is.
+func FragmentIsValidXMLName(uri string) bool {
+	i := strings.IndexByte(uri, '#')
+	if i < 0 {
+		return true
+	}
+	frag := uri[i+1:]
+	if frag == "" {
+		return true
+	}
+	// An XPointer -- "element(...)", "xpointer(...)", "scheme(...)" -- is
+	// admitted without further checking: parsing one needs the document, and
+	// the shorthand bare-name form is the only one this can judge on the URI
+	// alone.
+	if strings.ContainsAny(frag, "()") {
+		return true
+	}
+	return xdm.IsNCName(frag)
 }

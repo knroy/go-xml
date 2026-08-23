@@ -41,6 +41,7 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 }
 
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
+	nodes = mergeAcrossComments(nodes)
 	var out []Instruction
 	for _, n := range nodes {
 		instr, err := c.compileNode(n, nsScope)
@@ -118,6 +119,15 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// two prefixes to one URI, or rebinds a prefix further down, otherwise
 	// gets an exclusion that follows the spelling instead of the namespace.
 	excluded := map[string]bool{}
+	// Exclusion is decided per URI, but a prefix is what an attribute name
+	// carries, and a module may bind several prefixes to one URI. When an
+	// attribute's own prefix is one the stylesheet named explicitly, and
+	// another prefix for the same URI was not named, the unnamed one is the
+	// author's surviving spelling and the attribute should be written with
+	// it. excludedPrefixes records the ones named by name; "#all" is not
+	// recorded here because it names no prefix in particular and leaves no
+	// unnamed alternative to prefer.
+	excludedPrefixes := map[string]bool{}
 	// XTSE0808: every prefix named here must be bound. An unbound one is a
 	// typo that would otherwise exclude nothing and go unnoticed.
 	// The list is interpreted against the element it is written on: "#all"
@@ -143,6 +153,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 						"not a namespace prefix in scope", p)
 			}
 			excluded[uri] = true
+			excludedPrefixes[p] = true
 		}
 		return nil
 	}
@@ -208,7 +219,20 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		if err != nil {
 			return nil, fmt.Errorf("in attribute %s: %w", a.Name.Lexical(), err)
 		}
-		instr.attrs = append(instr.attrs, attrTemplate{name: a.Name, value: avt})
+		// The parser recovers an attribute's prefix by scanning the in-scope
+		// bindings for one matching its URI, innermost first, so a prefix
+		// that exclusion is about to drop can win over one that survives. A
+		// namespace an attribute needs cannot actually be excluded — the
+		// result would not be readable back — so the declaration reappears
+		// under the dropped spelling. Re-point the name at a surviving
+		// prefix for the same URI when the stylesheet named this one.
+		an := a.Name
+		if an.URI != "" && excludedPrefixes[an.Prefix] {
+			if p, ok := survivingPrefix(scope, an.URI, excludedPrefixes); ok {
+				an.Prefix = p
+			}
+		}
+		instr.attrs = append(instr.attrs, attrTemplate{name: an, value: avt})
 	}
 
 	body, err := c.compileSequence(n, n)
@@ -217,6 +241,26 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	}
 	instr.body = body
 	return instr, nil
+}
+
+// survivingPrefix returns a prefix bound to uri in scope that the stylesheet
+// did not name in an exclude-result-prefixes list, if there is one.
+//
+// Ties are broken by sorting so that a module binding several surviving
+// prefixes to one URI compiles to the same output on every run; ranging over
+// the scope map directly made the chosen spelling depend on map order.
+func survivingPrefix(scope map[string]string, uri string, excludedPrefixes map[string]bool) (string, bool) {
+	var cands []string
+	for p, u := range scope {
+		if u == uri && p != "" && !excludedPrefixes[p] {
+			cands = append(cands, p)
+		}
+	}
+	if len(cands) == 0 {
+		return "", false
+	}
+	sort.Strings(cands)
+	return cands[0], true
 }
 
 // compileXSLInstruction dispatches on the instruction name.
@@ -1068,4 +1112,39 @@ var whitespaceStrippingParents = map[string]bool{
 	"next-match":      true,
 	"stylesheet":      true,
 	"transform":       true,
+}
+
+// mergeAcrossComments implements the first two steps of XSLT 2.0 section 4.2:
+// comments and processing instructions are removed from the stylesheet tree,
+// and text nodes that become adjacent as a result are merged. Only then is the
+// whitespace-only test applied.
+//
+// The order matters. In expression-2101 a comment sits between "\n    " and
+// "\n    [", neither of which survives on its own as a whitespace-only node;
+// merged they form "\n    \n    [", which is not whitespace-only and is kept.
+func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
+	has := false
+	for _, n := range nodes {
+		if n.Kind == xdm.KindComment || n.Kind == xdm.KindPI {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return nodes
+	}
+	var kept []*xdm.Node
+	for _, n := range nodes {
+		if n.Kind == xdm.KindComment || n.Kind == xdm.KindPI {
+			continue
+		}
+		if n.Kind == xdm.KindText && len(kept) > 0 && kept[len(kept)-1].Kind == xdm.KindText {
+			prev := kept[len(kept)-1]
+			merged := &xdm.Node{Kind: xdm.KindText, Value: prev.Value + n.Value, Parent: prev.Parent}
+			kept[len(kept)-1] = merged
+			continue
+		}
+		kept = append(kept, n)
+	}
+	return kept
 }

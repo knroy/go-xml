@@ -67,8 +67,89 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		}
 		if !matched[use] {
 			v.recordDefaultID(el, use)
+			v.applyAttributeDefault(el, use)
 		}
 	}
+}
+
+// applyAttributeDefault adds an attribute the schema supplies by default.
+//
+// XSD 1.0 §3.4.5 (and 1.1 §3.4.5) make the {value constraint} of an unmatched
+// attribute use a *contribution to the infoset*: the attribute information
+// item is created, with [schema normalized value] set from the default, and
+// nothing downstream can tell it from one the instance wrote. So a consumer of
+// the PSVI — which for this package means the XSLT layer reading a validated
+// result tree — must see @cost on an element whose type declares cost with a
+// default, even though the instance omitted it.
+//
+// A `fixed` constraint on an *absent* attribute is also a default in the
+// spec's model (§3.2.2 folds the two into one {value constraint}), and is
+// applied here for the same reason; what a fixed constraint additionally does
+// — reject a written value that differs — is checked in validateAttribute, not
+// here.
+//
+// This is gated on Annotate for the same reason the type annotation is: it
+// mutates the tree the caller handed in, and a caller who only asked "is this
+// valid?" has not asked for their document to be rewritten. recordDefaultID
+// above deliberately stays ungated, because ID/IDREF binding affects the
+// validity *verdict* rather than the tree.
+func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
+	if !v.opts.Annotate || use == nil || use.Decl == nil || use.Prohibited {
+		return
+	}
+	c := use.Constraint
+	if c == nil {
+		c = use.Decl.Constraint
+	}
+	if c == nil || c.Lexical == "" {
+		return
+	}
+	// An invalid default is a schema error, already reported when the schema
+	// was read; adding it to the tree would only spread the damage.
+	normalized, err := validateSimpleValue(c.Lexical, use.Decl.Type)
+	if err != nil {
+		return
+	}
+	name := use.Decl.Name
+	// A defaulted attribute in a namespace needs a prefix to serialize. The
+	// element's in-scope declarations are the only bindings certain to be in
+	// scope here, so an unbound namespace is left alone rather than guessed
+	// at: an attribute serialized with an undeclared prefix is worse than one
+	// that is missing.
+	prefix := ""
+	if name.URI != "" {
+		prefix = prefixInScopeFor(el, name.URI)
+		if prefix == "" {
+			return
+		}
+	}
+	attr := &xdm.Node{
+		Kind:  xdm.KindAttribute,
+		Name:  xdm.QName{Prefix: prefix, Local: name.Local, URI: name.URI},
+		Value: normalized,
+	}
+	if use.Decl.Type != nil {
+		if a := annotationName(use.Decl.Type); a != "" {
+			attr.SetTypeAnnotation(a)
+		}
+	}
+	el.AddAttr(attr)
+}
+
+// prefixInScopeFor finds a prefix bound to a namespace at an element, or ""
+// when none is in scope.
+func prefixInScopeFor(el *xdm.Node, uri string) string {
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		for _, ns := range cur.Namespaces {
+			if ns.Value == uri && ns.Name.Local != "" && ns.Name.Local != "xmlns" {
+				return ns.Name.Local
+			}
+		}
+	}
+	return ""
 }
 
 // recordDefaultID binds the ID or IDREF a defaulted attribute contributes.

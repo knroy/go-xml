@@ -109,6 +109,12 @@ type Source struct {
 	File    string `xml:"file,attr"`
 	URI     string `xml:"uri,attr"`
 	Content string `xml:"content"`
+	// Select is an XPath expression that picks the initial context node out
+	// of the loaded document -- or, with no file and no inline content,
+	// constructs it outright (parse-xml('<root/>')). The initial context
+	// item need not be a document node, and three cases in the suite name an
+	// element or a text node this way.
+	Select string `xml:"select,attr"`
 	// Validation is "strict", "lax" or "skip". A source declared strict is
 	// meant to reach the transform carrying type annotations from the
 	// environment's schema, which is what makes "instance of my:type"
@@ -202,7 +208,13 @@ type PackageRef struct {
 }
 
 type NamedThing struct {
+	// Name is the lexical QName exactly as the catalog wrote it.
 	Name string `xml:"name,attr"`
+	// URI is the namespace the catalog's own declarations bind Name's prefix
+	// to. It is filled in by resolveInitialTemplateNames rather than by
+	// encoding/xml, which never resolves a QName held in an attribute value.
+	// Empty means the name has no prefix, or the prefix was unbound.
+	URI string `xml:"-"`
 }
 
 type OutputRef struct {
@@ -217,4 +229,116 @@ type OutputRef struct {
 // with struct tags.
 type Result struct {
 	Inner string `xml:",innerxml"`
+}
+
+// resolveInitialTemplateNames fills in NamedThing.URI for every
+// <initial-template> in a test-set.
+//
+// The catalog writes the initial template as a lexical QName whose prefix is
+// bound by the catalog itself, and that binding is not always on the element:
+//
+//	<test-set xmlns:xsl="http://www.w3.org/1999/XSL/Transform" ...>
+//	  ...<initial-template name="xsl:initial-template"/>
+//	<initial-template xmlns:my="www.example.com/myTemp" name="my:temp"/>
+//
+// encoding/xml resolves the namespace of element and attribute *names* but
+// never of a QName that appears as an attribute *value*, and an UnmarshalXML
+// method sees only its own start element, not its ancestors' declarations. So
+// the bindings are recovered here with a second token pass that maintains the
+// in-scope prefix stack, keyed by the enclosing test-case name.
+//
+// Without this the lexical prefix reaches the engine and is resolved against
+// the *stylesheet's* namespace declarations instead. call-template-0105 is the
+// test that catches it: the catalog binds my: to "www.example.com/myTemp" and
+// names my:temp, which the stylesheet does not declare, so XTDE0040 is due —
+// but the stylesheet binds the same prefix my: to "http://www.othertemp.com"
+// and does declare my:temp there, so the misresolved lookup finds a template
+// the catalog never named and the transform wrongly succeeds.
+func resolveInitialTemplateNames(data []byte, set *TestSet) error {
+	found, err := scanInitialTemplateNames(data)
+	if err != nil {
+		return err
+	}
+	for i := range set.Cases {
+		nt := set.Cases[i].Test.InitialTemplate
+		if nt == nil {
+			continue
+		}
+		if uri, ok := found[set.Cases[i].Name]; ok {
+			nt.URI = uri
+		}
+	}
+	return nil
+}
+
+// scanInitialTemplateNames maps test-case name -> resolved namespace URI of
+// the prefix on that case's <initial-template name="..."> QName. A case whose
+// name has no prefix, or whose prefix is unbound, is absent from the map.
+func scanInitialTemplateNames(data []byte) (map[string]string, error) {
+	dec := xml.NewDecoder(strings.NewReader(string(stripBOM(data))))
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
+		return input, nil
+	}
+	out := map[string]string{}
+	// scopes[i] holds the declarations made by the element at depth i; a
+	// lookup walks it from the top down so that an inner binding wins.
+	var scopes []map[string]string
+	caseName := ""
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			decls := map[string]string{}
+			for _, a := range t.Attr {
+				if a.Name.Space == "xmlns" {
+					decls[a.Name.Local] = a.Value
+				}
+			}
+			scopes = append(scopes, decls)
+			switch t.Name.Local {
+			case "test-case":
+				caseName = attrValue(t, "name")
+			case "initial-template":
+				name := attrValue(t, "name")
+				if prefix, _, hasPrefix := strings.Cut(name, ":"); hasPrefix &&
+					caseName != "" {
+					if uri := lookupPrefix(scopes, prefix); uri != "" {
+						out[caseName] = uri
+					}
+				}
+			}
+		case xml.EndElement:
+			if len(scopes) > 0 {
+				scopes = scopes[:len(scopes)-1]
+			}
+			if t.Name.Local == "test-case" {
+				caseName = ""
+			}
+		}
+	}
+	return out, nil
+}
+
+func attrValue(e xml.StartElement, local string) string {
+	for _, a := range e.Attr {
+		if a.Name.Local == local && a.Name.Space == "" {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+func lookupPrefix(scopes []map[string]string, prefix string) string {
+	for i := len(scopes) - 1; i >= 0; i-- {
+		if uri, ok := scopes[i][prefix]; ok {
+			return uri
+		}
+	}
+	return ""
 }

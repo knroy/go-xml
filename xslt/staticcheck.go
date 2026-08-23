@@ -562,11 +562,33 @@ func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
 		code = "XTSE0020"
 	}
 	for _, n := range names {
-		if !isLexicalQName(n) {
+		// An EQName counts as a QName here. resolveQNameAttr already accepts
+		// Q{uri}local for every QName-valued attribute in the stylesheet —
+		// the suite writes it wherever a QName is accepted — so rejecting it
+		// in the static check refused a name the resolver would have taken,
+		// and did so before the resolver ever saw it. The two disagreed only
+		// because the check predates the resolver's support.
+		if !isLexicalQName(n) && !isEQName(n) {
 			return fmt.Errorf(
 				"%s: attribute %s=%q on xsl:%s is not a QName",
 				code, a.Name.Local, a.Value, el.Name.Local)
 		}
 	}
 	return nil
+}
+
+// isEQName reports whether s has the Q{uri}local form.
+//
+// The braced-URI spelling names a namespace directly rather than through a
+// prefix, so it needs no in-scope binding. Only the local part is checked
+// here: the URI is taken as written, exactly as resolveQNameAttr takes it.
+func isEQName(s string) bool {
+	if !strings.HasPrefix(s, "Q{") {
+		return false
+	}
+	end := strings.IndexByte(s, '}')
+	if end < 0 {
+		return false
+	}
+	return xdm.IsNCName(s[end+1:])
 }

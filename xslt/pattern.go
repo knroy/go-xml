@@ -570,6 +570,13 @@ func needsPosition(e xpath.Expr) bool {
 	switch v := e.(type) {
 	case *xpath.Literal:
 		return v.Val.Type.IsNumeric()
+	case *xpath.VarRef:
+		// A variable can hold a number, and a numeric predicate is
+		// positional. Nothing here knows what the variable holds, so the
+		// conservative answer is the only sound one: judging chapter[$v3]
+		// non-positional pinned the context position at 1 and made every
+		// chapter match.
+		return true
 	case *xpath.FuncCall:
 		if v.Name.URI == xdm.NSFN && (v.Name.Local == "position" || v.Name.Local == "last") {
 			return true
@@ -760,6 +767,14 @@ func (a *patternAlt) matchesCall(node *xdm.Node, ctx *xpath.Context) (bool, erro
 		// error in the transform: fn:key against a key that selects nothing
 		// is an ordinary empty result, and template selection asks this
 		// question of every node.
+		//
+		// A non-recoverable dynamic error is the exception. Swallowing one
+		// turned a circular xsl:key — which section 16.3 makes XTDE0640 —
+		// into a silent non-match, so the stylesheet ran to completion and
+		// the error the test is about was never reported.
+		if isNonRecoverable(err) {
+			return false, err
+		}
 		return false, nil
 	}
 
@@ -1116,4 +1131,14 @@ func schemaDeclaredMatches(nt xpath.NodeTest, node *xdm.Node) bool {
 		return true
 	}
 	return node.TypeAnnotation != ""
+}
+
+// isNonRecoverable reports whether an error must propagate out of a pattern
+// match rather than being read as "this node does not match".
+//
+// Only the codes the specification calls non-recoverable qualify. Everything
+// else — an unbound key, a type mismatch inside a predicate — is an ordinary
+// failure to match, which is what pattern evaluation is for.
+func isNonRecoverable(err error) bool {
+	return strings.HasPrefix(err.Error(), "XTDE0640")
 }

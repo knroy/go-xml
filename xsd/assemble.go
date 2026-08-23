@@ -140,6 +140,19 @@ func registerDerivedTypes(s *Schema) {
 			if ct == nil {
 				continue
 			}
+			// A LIST type's typed value is a sequence, one item per token, and
+			// its item type is the only thing that says what those items are.
+			// Registering it as merely deriving from its base loses that: a
+			// list of xs:decimal derives from xs:anySimpleType, which the data
+			// model cannot build a value from at all, so the node atomised to
+			// a single untypedAtomic holding the whole literal.
+			// listItemTypeOf sees through restrictions of a list, which carry
+			// no item type of their own.
+			if item := listItemTypeOf(ct); item != nil {
+				if in := annotationName(item); in != "" && in != name.Local {
+					xdm.RegisterListType(name.Local, in)
+				}
+			}
 			base, _ = ct.Base.(*SimpleType)
 		case *ComplexType:
 			// A complex type with simple content atomises as its content

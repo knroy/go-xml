@@ -122,6 +122,12 @@ func (r *Runner) loadSet(ref TestSetRef) (*TestSet, error) {
 	if err := decode(data, &set); err != nil {
 		return nil, err
 	}
+	// The catalog's own namespace declarations bind the prefix in an
+	// <initial-template> name; encoding/xml does not resolve a QName that
+	// appears in an attribute value, so they are recovered separately.
+	if err := resolveInitialTemplateNames(data, &set); err != nil {
+		return nil, err
+	}
 	// Stylesheet and source paths are relative to the test-set file rather
 	// than to the suite root, so the directory travels with the parsed set.
 	set.Dir = filepath.Dir(path)
@@ -316,6 +322,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	if tc.Test.InitialTemplate != nil {
 		opts.InitialTemplate = tc.Test.InitialTemplate.Name
+		// The catalog binds its own prefixes, so the name is resolved
+		// there rather than against the stylesheet. A stylesheet is free
+		// to spell a different namespace with the same prefix, and
+		// resolving twice picked a template the catalog never named.
+		opts.InitialTemplateURI = tc.Test.InitialTemplate.URI
 	}
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
@@ -363,6 +374,16 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 		if s.Role != "." {
 			continue
 		}
+		// A source may name the initial context node with an XPath
+		// expression instead of, or on top of, a file: role="." select="/doc"
+		// starts the transform at an element rather than at the document
+		// node, and select="parse-xml('<root/>')" builds the document with no
+		// file at all. Ignoring @select started every such case at the wrong
+		// node, or -- with nothing else in the environment -- at no node,
+		// which surfaced as "source document is nil".
+		if s.Select != "" {
+			return r.selectedSource(set, env, s)
+		}
 		if s.Content != "" {
 			// An inline source has no file of its own, but fn:doc inside the
 			// stylesheet still resolves relative names — against the test-set
@@ -406,6 +427,56 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 		}
 	}
 	return nil, nil
+}
+
+// selectedSource evaluates a source's @select to get the initial context node.
+//
+// The expression is evaluated with the source's own document as the context
+// item when it has one, and with no context item when it does not -- the
+// latter is how parse-xml() builds a document from nothing.
+func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.Node, error) {
+	var doc *xdm.Node
+	switch {
+	case s.Content != "":
+		tree, err := xdm.ParseString(s.Content, xdm.ParseOptions{
+			AllowDOCTYPE: true,
+			BaseURI:      fileURI(filepath.Join(set.Dir, "inline.xml")),
+		})
+		if err != nil {
+			return nil, err
+		}
+		doc = tree.Root
+	case s.File != "":
+		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		tree, err := xdm.ParseString(string(stripBOM(data)),
+			xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
+		if err != nil {
+			return nil, err
+		}
+		doc = tree.Root
+	}
+	if doc != nil {
+		if err := r.annotate(set, env, s, doc); err != nil {
+			return nil, err
+		}
+	}
+	ctx := xpath.NewContext(doc, xpath.Builtins())
+	seq, err := xpath.Eval(s.Select, ctx, noNS{})
+	if err != nil {
+		return nil, fmt.Errorf("source @select %q: %w", s.Select, err)
+	}
+	if len(seq) == 0 {
+		return nil, fmt.Errorf("source @select %q selected nothing", s.Select)
+	}
+	n, ok := seq[0].(*xdm.Node)
+	if !ok {
+		return nil, fmt.Errorf("source @select %q did not select a node", s.Select)
+	}
+	return n, nil
 }
 
 // environment finds the environment a case runs in, following a ref into the

@@ -180,14 +180,24 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		return true, ""
 
 	case "any-of":
+		// Each alternative's own reason is carried into the message. Naming
+		// only the kinds ("none of error, error, assert held") said nothing
+		// about WHY any of them failed, and a test whose result is an any-of
+		// was unclassifiable from the dump alone: the reader could not tell
+		// an engine bug from a harness one without re-running it by hand.
 		var reasons []string
 		for _, c := range a.Children {
-			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); ok {
+			ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set)
+			if ok {
 				return true, ""
 			}
-			reasons = append(reasons, c.Kind)
+			if why == "" {
+				why = "did not hold"
+			}
+			reasons = append(reasons, c.Kind+": "+why)
 		}
-		return false, "none of " + strings.Join(reasons, ", ") + " held"
+		return false, "none of the alternatives held [" +
+			strings.Join(reasons, " | ") + "]"
 
 	case "not":
 		for _, c := range a.Children {

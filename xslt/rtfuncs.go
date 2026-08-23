@@ -149,55 +149,91 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				return nil, fmt.Errorf(
 					"FODC0002: document() is disabled (no resolver configured)")
 			}
+			// Each item contributes a URI. Atomizing the whole argument
+			// first threw the nodes away, and with them the one thing
+			// section 16.1 needs: a relative reference taken from a node
+			// resolves "against the base URI of the node that contained
+			// it". document(doc('a/b/c.xml')/*/filename) must therefore
+			// resolve filename's text against a/b/, not against the
+			// stylesheet. Only an atomic argument, which carries no base
+			// of its own, falls back to the static base URI.
+			type docRequest struct{ uri, base string }
+			var reqs []docRequest
+			for _, it := range args[0] {
+				switch v := it.(type) {
+				case *xdm.Node:
+					b := v.BaseURI
+					if b == "" {
+						b = ctx.StaticBaseURI
+					}
+					reqs = append(reqs, docRequest{v.StringValue(), b})
+				default:
+					for _, a := range xdm.Atomize(xdm.Sequence{it}) {
+						// Section 16.1 resolves a relative reference from
+						// an atomic value against "the base URI from the
+						// static context", which is the base URI of the
+						// element the call is written on — not the context
+						// node's, whose base belongs to the *source*
+						// document. Preferring the context node meant
+						// document('x.xml') in an included module looked
+						// for x.xml beside the input rather than beside
+						// the module.
+						base := ctx.StaticBaseURI
+						if base == "" {
+							// A stylesheet compiled without a base URI
+							// leaves the static context with nothing; the
+							// context node's base is then the only thing to
+							// resolve against, and it is better than the
+							// process's working directory.
+							//
+							// The nil check is not redundant with the type
+							// assertion: a transform started from a named
+							// template has no context item, and the
+							// interface then holds a typed nil rather than
+							// no value at all, so the assertion succeeds and
+							// the field access is what faults.
+							if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
+								base = n.BaseURI
+							}
+						}
+						reqs = append(reqs, docRequest{a.(*xdm.Atomic).String(), base})
+					}
+				}
+			}
 			var out xdm.Sequence
-			for _, it := range xdm.Atomize(args[0]) {
-				uri := it.(*xdm.Atomic).String()
+			seen := map[*xdm.Node]bool{}
+			for _, r := range reqs {
+				uri := r.uri
 				// The zero-length URI names the document containing the
 				// expression, which for a stylesheet is the stylesheet
 				// itself. It is how a stylesheet carrying its own lookup
 				// tables as literal data reads them, and it needs no
 				// resolver because nothing is fetched.
 				if strings.TrimSpace(uri) == "" && rt.sheet.source != nil {
-					out = append(out, rt.sheet.source)
-					continue
-				}
-				// Section 16.1 resolves a relative reference against "the
-				// base URI from the static context", which is the base URI
-				// of the element the call is written on — not the context
-				// node's. The context node's base belongs to the *source*
-				// document, and preferring it meant document('x.xml') in an
-				// included module looked for x.xml beside the input rather
-				// than beside the module, so a module in a subdirectory
-				// could never reach its own files. Only an explicit
-				// $base-node second argument makes a node's base URI the
-				// one that counts, and this is the one-argument form.
-				base := ctx.StaticBaseURI
-				if base == "" {
-					// A stylesheet compiled without a base URI leaves the
-					// static context with nothing; the context node's base
-					// is then the only thing to resolve against, and it is
-					// better than the process's working directory.
-					//
-					// The nil check is not redundant with the type
-					// assertion: a transform started from a named template
-					// has no context item, and the interface then holds a
-					// typed nil rather than no value at all, so the
-					// assertion succeeds and the field access is what faults.
-					if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
-						base = n.BaseURI
+					if !seen[rt.sheet.source] {
+						seen[rt.sheet.source] = true
+						out = append(out, rt.sheet.source)
 					}
+					continue
 				}
 				if ctx.Docs == nil {
 					return nil, fmt.Errorf(
 						"FODC0002: document() is disabled (no resolver configured)")
 				}
-				tree, err := ctx.Docs.ResolveDocument(uri, base)
+				tree, err := ctx.Docs.ResolveDocument(uri, r.base)
 				if err != nil {
 					return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
 				}
 				if tree == nil || tree.Root == nil {
 					return nil, fmt.Errorf("FODC0002: %q retrieved no document", uri)
 				}
+				// 16.1 requires two calls naming the same resource to
+				// return the same node, so a repeated URI in one call
+				// must not put the same tree in the result twice.
+				if seen[tree.Root] {
+					continue
+				}
+				seen[tree.Root] = true
 				out = append(out, tree.Root)
 			}
 			return out, nil
@@ -700,6 +736,18 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	if idx, ok := rt.keyIndex[ck]; ok {
 		return idx, nil
 	}
+	// A key whose own match or use expression calls key() for this same key
+	// over this same document is circular. The cache below is only written
+	// after the whole scan finishes, so without this mark the re-entrant
+	// call would start a second scan, and that one a third, until the
+	// recursion guard reported XPDY0001 instead of the actual diagnosis.
+	if rt.keyBuilding[ck] {
+		return nil, fmt.Errorf(
+			"XTDE0640: key %q is defined circularly: its own definition "+
+				"calls key(%q, ...) over the same document", name, name)
+	}
+	rt.keyBuilding[ck] = true
+	defer delete(rt.keyBuilding, ck)
 
 	idx := map[string]xdm.Sequence{}
 	var walk func(*xdm.Node) error

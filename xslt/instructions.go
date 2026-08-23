@@ -353,6 +353,22 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
+		// xsl:copy of a document node copies the properties of the document
+		// as well as its children. Two of them are reachable only from the
+		// tree rather than the node: the DOCTYPE, which carries the unparsed
+		// entity declarations that fn:unparsed-entity-uri looks up, and the
+		// base URI, which the copy would otherwise lose along with any
+		// relative reference resolved against it. Both are needed together —
+		// carrying the DOCTYPE alone leaves the entities declared but their
+		// system identifiers unresolvable.
+		if src := node.Tree(); src != nil {
+			if dst := doc.Tree(); dst != nil {
+				dst.DocType = src.DocType
+			}
+		}
+		if doc.BaseURI == "" {
+			doc.BaseURI = node.BaseURI
+		}
 		if err := i.validation.assess(rt, doc); err != nil {
 			return err
 		}
@@ -503,6 +519,16 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub.open.BaseURI = i.baseURI
 	if qn.URI != "" {
 		sub.open.AddNamespace(qn.Prefix, qn.URI)
+	} else if qn.Prefix == "" {
+		// An unprefixed name in no namespace UNDECLARES the default
+		// namespace when one is in scope. The serialiser worked this out
+		// separately and wrote xmlns="", but the tree never recorded it, so
+		// the namespace axis kept reporting the inherited default binding.
+		// InScopeNamespaces already honours an empty-valued entry as an
+		// undeclaration; the constructor simply has to write one.
+		if sub.open.Parent != nil && sub.open.Parent.InScopeNamespaces()[""] != "" {
+			sub.open.AddNamespace("", "")
+		}
 	}
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 		return err

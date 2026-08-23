@@ -341,8 +341,13 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// being in the ancestor's namespace, which is a different document from
 	// the one the transform produced — and the one case where omitting a
 	// declaration changes meaning rather than only size.
-	if n.Name.URI == "" && n.Name.Prefix == "" && inScope[""] != "" &&
-		declared[""] == "" {
+	//
+	// Presence in the map, not its value: an undeclaration records the empty
+	// string, so testing declared[""] == "" could not tell "already
+	// undeclared here" from "not mentioned here" and wrote xmlns="" twice on
+	// an element that needed it once.
+	if _, undeclared := declared[""]; n.Name.URI == "" && n.Name.Prefix == "" &&
+		inScope[""] != "" && !undeclared {
 		s.writeNamespaceDecl("", "")
 		declared[""] = ""
 	}

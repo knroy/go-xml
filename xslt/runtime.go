@@ -30,6 +30,15 @@ type runtime struct {
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
 
+	// keyBuilding marks the (key, document) pairs whose index is currently
+	// being built. keyIndex is only written once a build has *finished*, so
+	// a key whose match or use expression calls key() for a name already
+	// under construction would re-enter the builder and recurse until the
+	// depth guard fired — reporting XPDY0001 where XTDE0640 is due. 5.7:
+	// "it is a non-recoverable dynamic error if the use or match attribute
+	// of an xsl:key declaration contains a call to the key function".
+	keyBuilding map[keyCacheKey]bool
+
 	// depth bounds apply-templates recursion, which the spec does not bound
 	// and which a stylesheet with a cycle would otherwise run forever.
 	depth int
@@ -865,6 +874,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		sheet:       s,
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
+		keyBuilding: map[keyCacheKey]bool{},
 		tunnel:      map[string]xdm.Sequence{},
 		messages:    new([]string),
 		secondary:   new([]SecondaryResult),

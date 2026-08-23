@@ -191,6 +191,26 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 			continue
 		}
 		v := c.AttrValue("value")
+		// Every constraining facet declares `value` as use="required" in the
+		// schema for schemas (Part 2 §4.3, one declaration per facet). A facet
+		// element without it is not a facet with an empty value — it is a
+		// schema document that does not conform to the schema for schemas, and
+		// §5.1 (Errors in Schema Construction and Structure) makes that an
+		// error rather than something to interpret.
+		//
+		// Reading the absent attribute as "" instead constrained the type by
+		// the empty string: <xs:enumeration values="yes"/>, a misspelling of
+		// `value`, silently produced an enumeration whose only member was "",
+		// so the misspelling was invisible and every legitimate value was
+		// rejected at validation time with no hint why.
+		//
+		// xs:assertion is exempt: 1.1 §4.3.13 gives it `test`, not `value`.
+		if knownFacet(c.Name.Local) && c.Name.Local != "assertion" &&
+			c.Attr("", "value") == nil {
+			p.errs = append(p.errs, errorAt(c, "src-facet-value",
+				"facet xs:%s requires a value attribute", c.Name.Local))
+			continue
+		}
 		if knownFacet(c.Name.Local) && !repeatableFacets[c.Name.Local] {
 			if seen[c.Name.Local] {
 				p.errs = append(p.errs, errorAt(c, "src-single-facet-value",

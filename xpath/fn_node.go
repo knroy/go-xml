@@ -474,3 +474,10 @@ func clampPlaces(n int64) int {
 	}
 	return int(n)
 }
+
+// InheritedBaseURI is inheritedBaseURI for callers outside this package.
+//
+// xslt/rtfuncs.go registers its own fn:document#1, which shadows the one in
+// package xpath for arity 1, and needs the same "base URI in force at a node"
+// rule when resolving a relative reference taken from a node.
+func InheritedBaseURI(n *xdm.Node) string { return inheritedBaseURI(n) }

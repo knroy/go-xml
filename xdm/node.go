@@ -103,6 +103,30 @@ type Node struct {
 	// BaseURI is the resolved base URI, used by fn:document and fn:doc.
 	BaseURI string
 
+	// DocumentURI is the data model's dm:document-uri property, which
+	// fn:document-uri returns. It is meaningful only on a document node.
+	//
+	// It is deliberately NOT the same field as BaseURI, and not derived from
+	// it. dm:base-uri and dm:document-uri are separate accessors in the XDM,
+	// and the difference is observable: dm:document-uri is the absolute URI a
+	// document was RETRIEVED BY, so it is empty for any document that was not
+	// retrieved by URI at all — a temporary tree built by xsl:variable, a
+	// document node constructed by xsl:document, a tree parsed from a string.
+	// Those trees still need a base URI, for fn:base-uri and for resolving a
+	// relative reference written inside them, so BaseURI on a temporary tree
+	// is set on purpose (xslt/runtime.go does this) and cannot double as the
+	// document URI. XPath F&O fn:document-uri: "returns the empty sequence if
+	// $arg is not a document node, or if the document node was not retrieved
+	// via a URI".
+	//
+	// The invariant a caller must maintain: set this ONLY when the document
+	// was fetched by that URI and registered in the document pool, so that
+	// fn:doc of this value returns this same node. Setting it on a tree that
+	// fn:doc cannot retrieve would make "doc(document-uri($d)) is $d" false
+	// while claiming it should be true. Parse sets it from
+	// ParseOptions.DocumentURI, which defaults to empty.
+	DocumentURI string
+
 	// TypeAnnotation records a schema type when the document has been
 	// validated. Untyped documents leave this empty, and atomisation then
 	// yields xs:untypedAtomic, which is the schemaless default.
@@ -499,6 +523,109 @@ func (n *Node) Atomize() *Atomic {
 		}
 	}
 	return NewUntypedAtomic(n.StringValue())
+}
+
+// AtomizeList returns the typed value of a node whose annotation is a list
+// type, as one atomic value per whitespace-separated token.
+//
+// The second result reports whether the annotation is in fact a list type; a
+// caller that gets false must fall back to Atomize, which yields the single
+// value that every non-list node has.
+//
+// Only the three built-in list types are recognised here. A user-defined list
+// type is registered by the schema layer with its item type, and that
+// derivation chain is what DerivedBase walks; a list type derived by
+// restriction from one of these three therefore resolves to it and is
+// expanded with its item type.
+//
+// The empty string atomizes to the empty sequence rather than to one
+// zero-length token, which is what "a list of no items" means and what
+// strings.Fields already produces.
+func (n *Node) AtomizeList() (Sequence, bool) {
+	item := listItemType(n.TypeAnnotation)
+	if item == "" {
+		return nil, false
+	}
+	fields := strings.Fields(n.StringValue())
+	out := make(Sequence, 0, len(fields))
+	for _, f := range fields {
+		if a := atomicForAnnotation(item, f); a != nil {
+			// The item carries the LIST's item type as its derived name, so
+			// that "data(@nmtokens) instance of xs:NMTOKEN*" is true. Without
+			// it each token is only the xs:string that NMTOKEN erases to and
+			// the instance-of test answers false.
+			out = append(out, a.WithDerived(item))
+			continue
+		}
+		out = append(out, NewUntypedAtomic(f))
+	}
+	return out, true
+}
+
+// listItemType maps a list type annotation to the type of its items, or ""
+// when the annotation does not name a list type.
+func listItemType(annotation string) string {
+	for i := 0; i < 32 && annotation != ""; i++ {
+		switch annotation {
+		case "NMTOKENS":
+			return "NMTOKEN"
+		case "IDREFS":
+			return "IDREF"
+		case "ENTITIES":
+			return "ENTITY"
+		}
+		// A user-defined list type is not reachable through DerivedBase: the
+		// schema layer registers it here with the item type it was declared
+		// with, because that is information the data model has no other way to
+		// obtain. It is consulted before the derivation walk so that a list
+		// whose base happens to be registered as something atomic does not
+		// lose its list-ness one step in.
+		if item := ListItemOf(annotation); item != "" {
+			return item
+		}
+		next := DerivedBase(annotation)
+		if next == annotation {
+			return ""
+		}
+		annotation = next
+	}
+	return ""
+}
+
+var (
+	listMu    sync.RWMutex
+	listItems = map[string]string{}
+)
+
+// RegisterListType records that a schema type is a list, and what its items
+// are.
+//
+// The xsd package calls this as it loads a schema, for the same reason it
+// calls RegisterDerivedType: the typed value of a list-typed node is a
+// SEQUENCE of one atomic per token, and nothing in the data model can work out
+// from a bare type name that "numbers" is a list of xs:decimal. Without it a
+// list-typed node atomises to one untypedAtomic holding the whole literal, so
+// count(data(@list)) answers 1 and "data(@list) instance of xs:untypedAtomic"
+// answers true for a node the schema plainly gave a typed value.
+//
+// itemType is the item type's own name, which may itself be a registered
+// schema type; atomicForAnnotation and the derivation walk resolve it.
+func RegisterListType(name, itemType string) {
+	if name == "" || itemType == "" || name == itemType {
+		return
+	}
+	listMu.Lock()
+	listItems[name] = itemType
+	listMu.Unlock()
+}
+
+// ListItemOf returns the item type registered for a list type, or "" when the
+// name is not a registered list.
+func ListItemOf(name string) string {
+	listMu.RLock()
+	item := listItems[name]
+	listMu.RUnlock()
+	return item
 }
 
 // atomicForAnnotation builds a typed value from a schema type annotation, or

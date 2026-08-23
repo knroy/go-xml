@@ -15,6 +15,18 @@ type ParseOptions struct {
 	// references in fn:document and xsl:include.
 	BaseURI string
 
+	// DocumentURI is recorded on the document node as its dm:document-uri
+	// property, which is what fn:document-uri returns. It is separate from
+	// BaseURI because the two accessors are separate in the data model: see
+	// Node.DocumentURI for why they cannot be the same field.
+	//
+	// It defaults to empty, which is the right answer for every caller that
+	// is parsing something it did not retrieve by URI — a stylesheet string,
+	// a re-parsed entity expansion, a test fixture. A caller that DID fetch
+	// the document from a URI, and that registers it in a document pool so
+	// that fn:doc of the same URI returns this same tree, sets it to that URI.
+	DocumentURI string
+
 	// StripSpace removes whitespace-only text nodes. XSLT applies this per
 	// element name via xsl:strip-space, so the transform layer passes a
 	// predicate; a plain bool here would not express "strip in these elements
@@ -165,6 +177,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 
 	tree := NewTree()
 	tree.Root.BaseURI = opts.BaseURI
+	tree.Root.DocumentURI = opts.DocumentURI
 	cur := tree.Root
 	depth := 0
 	sawRoot := false
@@ -178,7 +191,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		// InputOffset after Token() is the position *after* the token, so the
 		// start of the element must be taken before it is read.
 		start := dec.InputOffset()
-		tok, err := dec.Token()
+		// RawToken, not Token: Token resolves prefixes into Name.Space and
+		// throws the prefix away, which is unrecoverable (see buildElement).
+		// RawToken reports the name exactly as written.
+		//
+		// The one well-formedness check Token performs and RawToken does not
+		// is matching each end tag against its start tag, and that is done at
+		// xml.EndElement below. Token does NOT reject a duplicated attribute
+		// — verified against the standard library — so nothing is lost there
+		// either, and adding the check here would be new strictness rather
+		// than parity: it was tried, and it rejected our own serialiser's
+		// output for an element that undeclares the default namespace.
+		tok, err := dec.RawToken()
 		if err == io.EOF {
 			break
 		}
@@ -219,6 +243,14 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		case xml.EndElement:
 			if cur.Parent == nil {
 				return nil, fmt.Errorf("parse XML: unbalanced end element %q", t.Name.Local)
+			}
+			// RawToken does not pair tags, so the pairing is checked here on
+			// the lexical name — which is what XML §3 requires anyway: the
+			// end tag must repeat the start tag's QName character for
+			// character, not merely resolve to the same expanded name.
+			if got, want := lexicalName(t.Name), cur.Name.Lexical(); got != want {
+				return nil, fmt.Errorf(
+					"parse XML: element %q closed by end element %q", want, got)
 			}
 			if opts.StripSpace != nil {
 				stripWhitespaceChildren(cur, opts.StripSpace)
@@ -348,16 +380,21 @@ func ParseString(s string, opts ParseOptions) (*Tree, error) {
 // buildElement converts a StartElement into an element node with its namespace
 // and attribute nodes separated.
 //
-// Go's decoder has already resolved Name.Space to a URI, but it reports xmlns
-// declarations as ordinary attributes with Space "xmlns" (or Local "xmlns" for
-// the default). Those must become namespace nodes rather than attributes: the
-// attribute axis must not return them.
+// The token comes from Decoder.RawToken, so Name.Space holds the PREFIX the
+// author wrote rather than a resolved URI, and resolution is done here against
+// the namespace nodes in scope. That is the whole reason RawToken is used: the
+// namespace-aware Decoder.Token discards the prefix and reports only the URI,
+// which cannot be inverted — a document binding one URI to two prefixes has no
+// way to say which one an element was written with, and guessing renamed
+// a:foo to a2:foo and unprefixed <out> to <my:out> on serialisation.
+//
+// xmlns declarations arrive as ordinary attributes with Space "xmlns" (or
+// Local "xmlns" for the default). Those must become namespace nodes rather
+// than attributes: the attribute axis must not return them.
 func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
-	// Parent is linked here, before prefix recovery below, because
-	// findPrefix walks ancestors: an element that inherits its prefix
-	// declaration from an ancestor (rather than declaring it itself) would
-	// otherwise find nothing and serialise without its prefix. AppendChild
-	// sets the same link again, harmlessly.
+	// Parent is linked here, before resolution below, because resolvePrefix
+	// walks ancestors: an element using a prefix declared on an ancestor
+	// would otherwise resolve to nothing.
 	el := &Node{
 		Kind:    KindElement,
 		tree:    parent.tree,
@@ -373,12 +410,13 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 		case a.Name.Space == "" && a.Name.Local == "xmlns":
 			el.AddNamespace("", a.Value)
 		case a.Name.Space == NSXMLNS:
-			// Some decoder paths report the resolved xmlns URI instead.
+			// applyAttDefaults and callers that hand-build a token may use
+			// the resolved xmlns URI instead of the "xmlns" prefix.
 			el.AddNamespace(a.Name.Local, a.Value)
 		default:
 			attr := &Node{
 				Kind:  KindAttribute,
-				Name:  QName{URI: a.Name.Space, Local: a.Name.Local},
+				Name:  QName{Prefix: a.Name.Space, Local: a.Name.Local},
 				Value: a.Value,
 			}
 			// xml:base changes the base URI for the subtree.
@@ -389,38 +427,55 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 			// fn:base-uri return "sub/" for xml:base="sub/" instead of the
 			// document's directory joined with it, and made every nested
 			// xml:base lose everything its ancestors contributed.
-			if a.Name.Space == NSXML && a.Name.Local == "base" {
+			if a.Name.Space == "xml" && a.Name.Local == "base" {
 				el.BaseURI = resolveBase(el.BaseURI, a.Value)
 			}
 			el.AddAttr(attr)
 		}
 	}
 
-	el.Name = QName{URI: t.Name.Space, Local: t.Name.Local}
-	// Recover the prefix the author used, which the decoder discarded. It is
-	// needed only for serialisation, so an unresolvable case falls back to the
-	// default namespace rather than failing the parse.
-	el.Name.Prefix = findPrefix(el, t.Name.Space)
+	el.Name = QName{
+		Prefix: t.Name.Space,
+		Local:  t.Name.Local,
+		URI:    resolvePrefix(el, t.Name.Space, true),
+	}
 	for _, a := range el.Attrs {
-		if a.Name.URI != "" {
-			a.Name.Prefix = findPrefix(el, a.Name.URI)
+		// An unprefixed attribute is in no namespace: the default namespace
+		// declaration applies to elements only (Namespaces in XML 1.0 §6.2).
+		if a.Name.Prefix != "" {
+			a.Name.URI = resolvePrefix(el, a.Name.Prefix, false)
 		}
 	}
 	return el
 }
 
-// findPrefix locates a prefix bound to uri in scope at el.
-func findPrefix(el *Node, uri string) string {
-	if uri == "" {
+// resolvePrefix maps a prefix to the URI bound to it in scope at el.
+//
+// isElement selects whether an unbound (empty) prefix picks up the default
+// namespace declaration: it does for an element name and never for an
+// attribute name (Namespaces in XML 1.0 §6.2).
+//
+// An unbindable prefix resolves to the empty URI rather than failing the
+// parse. Rejecting it here would turn a namespace-ill-formed document into a
+// parse error in a package that is also asked to read stylesheet fragments and
+// re-parsed entity expansions, and the XSLT and XSD layers above report their
+// own diagnostics for a name they cannot resolve.
+func resolvePrefix(el *Node, prefix string, isElement bool) string {
+	if prefix == "" && !isElement {
 		return ""
 	}
-	if uri == NSXML {
-		return "xml"
+	switch prefix {
+	case "xml":
+		return NSXML
+	case "xmlns":
+		return NSXMLNS
 	}
 	for cur := el; cur != nil; cur = cur.Parent {
 		for _, ns := range cur.Namespaces {
-			if ns.Value == uri {
-				return ns.Name.Local
+			if ns.Name.Local == prefix {
+				// An empty value undeclares the namespace
+				// (xmlns="" or, in XML Names 1.1, xmlns:p="").
+				return ns.Value
 			}
 		}
 	}
@@ -551,4 +606,13 @@ func resolveBase(base, ref string) string {
 		return ref
 	}
 	return b.ResolveReference(r).String()
+}
+
+// lexicalName reassembles the QName as written, given a RawToken name whose
+// Space field holds the prefix.
+func lexicalName(n xml.Name) string {
+	if n.Space == "" {
+		return n.Local
+	}
+	return n.Space + ":" + n.Local
 }

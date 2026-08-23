@@ -1398,6 +1398,27 @@ type numberOptions struct {
 	groupingSize int
 }
 
+// spellNumberLang spells n in the language @lang asks for.
+//
+// Section 12.3: "if the processor does not support numbering in the language
+// requested, it must use the language it would use if the lang attribute were
+// omitted", so an unrecognised language is answered in English rather than
+// refused. The tag is matched on its primary subtag alone, per BCP 47, so
+// "de-AT" and "de-CH" reach the same table as "de"; German has no ordinal
+// support here, and an ordinal request falls back to English for the reason
+// spellNumberDE records.
+func spellNumberLang(n int64, opts numberOptions) string {
+	ordinal := opts.ordinal != ""
+	primary := opts.lang
+	if i := strings.IndexAny(primary, "-_"); i >= 0 {
+		primary = primary[:i]
+	}
+	if strings.EqualFold(primary, "de") && !ordinal {
+		return spellNumberDE(n)
+	}
+	return spellNumber(n, ordinal)
+}
+
 func formatNumber(n int64, format string, opts numberOptions) string {
 	switch format {
 	case "a":
@@ -1409,11 +1430,11 @@ func formatNumber(n int64, format string, opts numberOptions) string {
 	case "I":
 		return romanNumber(n)
 	case "w":
-		return spellNumber(n, opts.ordinal != "")
+		return spellNumberLang(n, opts)
 	case "W":
-		return strings.ToUpper(spellNumber(n, opts.ordinal != ""))
+		return strings.ToUpper(spellNumberLang(n, opts))
 	case "Ww":
-		return titleCaseWords(spellNumber(n, opts.ordinal != ""))
+		return titleCaseWords(spellNumberLang(n, opts))
 	}
 	// The decimal rule, section 12.3: "any token where the last character has
 	// a decimal digit value of 1, and the Unicode value of preceding

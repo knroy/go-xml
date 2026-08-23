@@ -46,6 +46,17 @@ type TransformOptions struct {
 	// document root, which is how a stylesheet with only named templates is
 	// entered.
 	InitialTemplate string
+	// InitialTemplateURI is the namespace URI of InitialTemplate, for a
+	// caller that has already resolved the prefix in its own namespace
+	// context. Empty means resolve any prefix in InitialTemplate against the
+	// stylesheet's own declarations instead.
+	//
+	// The two are not interchangeable. A caller naming the template from
+	// outside the stylesheet — a test catalog, a command line with its own
+	// bindings — binds the prefix itself, and resolving it a second time
+	// against the stylesheet can silently select a DIFFERENT template that
+	// happens to spell another namespace with the same prefix.
+	InitialTemplateURI string
 
 	// Now fixes the value fn:current-dateTime returns. Leave it zero to use
 	// the wall clock; set it to make a transform reproducible, which is what
@@ -133,6 +144,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	registerGroupingFuncs(lib)
 	registerFormatNumber(lib, s)
 	registerPositionFuncs(lib)
+	registerCurrentOutputURI(lib)
 	rt.ctx.Funcs = lib
 
 	out := newOutputBuilder()
@@ -164,8 +176,12 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		// resolved against the stylesheet's own namespace declarations before
 		// the lookup. Treating "foo:temp" as a local name found nothing, and
 		// a template declared with a prefixed name could not be invoked.
+		prefix, local := xdm.SplitQName(opts.InitialTemplate)
 		initName := xdm.QName{Local: opts.InitialTemplate}
-		if prefix, local := xdm.SplitQName(opts.InitialTemplate); prefix != "" {
+		switch {
+		case opts.InitialTemplateURI != "":
+			initName = xdm.QName{URI: opts.InitialTemplateURI, Local: local}
+		case prefix != "":
 			if uri, found := s.prefixes[prefix]; found {
 				initName = xdm.QName{URI: uri, Local: local}
 			}
@@ -221,6 +237,30 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		output:    s.output,
 		charMap:   s.activeCharMap,
 	}, nil
+}
+
+// registerCurrentOutputURI adds fn:current-output-uri.
+//
+// The function is XSLT 3.0, but result-document-1006 is declared XSLT20+ and
+// its expected result is XTRE1495/XTDE1490 rather than a rejection, so a 2.0
+// processor that raises XPST0017 for the name never reaches the condition the
+// test is about. Every test in the fn/current-output-uri set is XSLT30+ and so
+// out of scope; this name is reachable in scope from that one test alone.
+//
+// The value is the empty sequence whenever the transform is writing the
+// principal result tree and no base output URI was supplied to it — which is
+// always the case here, because TransformOptions has no base output URI and
+// this engine never writes files itself. Interpolated into @href by an
+// attribute value template the empty sequence gives "", which is the same
+// spelling xsl:result-document already uses for "the base output URI", so the
+// duplicate-destination check in Transform sees the collision it should.
+func registerCurrentOutputURI(l *xpath.Library) {
+	l.Add(xpath.Function{
+		Name: xdm.QName{URI: xdm.NSFN, Local: "current-output-uri"}, Arity: 0,
+		Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
+			return xdm.Empty, nil
+		},
+	})
 }
 
 // stripWhitespace returns a copy of the tree with whitespace-only text nodes
@@ -423,6 +463,7 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 			}
 			c.AddAttr(&xdm.Node{
 				Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
+				IsID: a.IsID, IsIDREFS: a.IsIDREFS,
 			})
 		}
 		for _, ch := range n.Children {
