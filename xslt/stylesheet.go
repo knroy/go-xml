@@ -117,6 +117,9 @@ type Variable struct {
 	// present. XSLT converts the value to this type rather than merely
 	// checking it, so it changes results and not just error messages.
 	AsType *sequenceType
+	// baseURI is the base URI in force at the declaration, which the
+	// temporary tree a content-valued variable builds takes as its own.
+	baseURI string
 }
 
 // keyDef is a compiled xsl:key.

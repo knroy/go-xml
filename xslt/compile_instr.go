@@ -86,7 +86,7 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	instr := &literalElemInstr{name: n.Name, attrSets: sets}
+	instr := &literalElemInstr{name: n.Name, attrSets: sets, baseURI: n.BaseURI}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -497,7 +497,7 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets}
+	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets, baseURI: n.BaseURI}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}

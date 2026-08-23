@@ -244,7 +244,7 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.Empty, err
 		}
-		return xdm.One(xdm.NewAnyURI(n.BaseURI)), nil
+		return xdm.One(xdm.NewAnyURI(inheritedBaseURI(n))), nil
 	})
 
 	l.registerFn("lang", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -270,6 +270,23 @@ func registerNodeFuncs(l *Library) {
 		a := n.Attr(xdm.NSXSI, "nil")
 		return boolSeq(a != nil && (a.Value == "true" || a.Value == "1")), nil
 	})
+}
+
+// inheritedBaseURI returns the base URI in force at a node.
+//
+// Only an element carrying xml:base has a base URI of its own; every other
+// node takes the one in force at its parent, exactly as fn:lang takes the
+// nearest xml:lang in scope. Reading the field alone returned empty for every
+// node the parser had not stamped, which is all of them in a tree built by a
+// stylesheet: a temporary tree records the base on its document node and
+// nowhere else.
+func inheritedBaseURI(n *xdm.Node) string {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.BaseURI != "" {
+			return cur.BaseURI
+		}
+	}
+	return ""
 }
 
 // langMatches implements fn:lang: the nearest xml:lang in scope must equal the

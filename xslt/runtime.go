@@ -359,8 +359,12 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	if v.AsType != nil {
 		return out.sequence(), nil
 	}
-	// Content otherwise builds a temporary tree rooted at a document node.
-	return xdm.One(out.toTree()), nil
+	// Content otherwise builds a temporary tree rooted at a document node,
+	// whose base URI is the one in force at the declaration. Leaving it empty
+	// made fn:base-uri return nothing for every node in a temporary tree.
+	tree := out.toTree()
+	tree.BaseURI = v.baseURI
+	return xdm.One(tree), nil
 }
 
 // stringJoin renders a sequence as a separated string, which is what

@@ -222,7 +222,12 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // literalElemInstr emits a literal result element.
 type literalElemInstr struct {
-	name       xdm.QName
+	name xdm.QName
+	// baseURI is the base URI in force where the element was written, which
+	// the constructed node inherits. Section 5.8: xml:base on any element
+	// changes it, so this is the source element's own base rather than the
+	// module's.
+	baseURI    string
 	attrs      []attrTemplate
 	namespaces []nsBinding
 	attrSets   []xdm.QName
@@ -241,6 +246,7 @@ type nsBinding struct{ prefix, uri string }
 
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.startElement(rt.sheet.aliasFor(i.name))
+	sub.open.BaseURI = i.baseURI
 	for _, ns := range i.namespaces {
 		sub.open.AddNamespace(ns.prefix, ns.uri)
 	}
@@ -268,7 +274,10 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // elementInstr implements xsl:element, whose name is computed at run time.
 type elementInstr struct {
-	name      *avt
+	name *avt
+	// baseURI is the base URI in force at the xsl:element instruction, which
+	// the constructed element inherits.
+	baseURI   string
 	namespace *avt
 	scope     *xdm.Node
 	attrSets  []xdm.QName
@@ -288,6 +297,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	sub := out.startElement(qn)
+	sub.open.BaseURI = i.baseURI
 	if qn.URI != "" {
 		sub.open.AddNamespace(qn.Prefix, qn.URI)
 	}

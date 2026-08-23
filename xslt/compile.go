@@ -369,6 +369,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 		Name:     qn,
 		Required: el.AttrValue("required") == "yes",
 		Tunnel:   el.AttrValue("tunnel") == "yes",
+		baseURI:  el.BaseURI,
 	}
 	if as := el.AttrValue("as"); as != "" {
 		t, err := compileSequenceType(as, newNSResolver(el, ""))
