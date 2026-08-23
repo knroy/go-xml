@@ -310,6 +310,27 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 		// A child-axis step never matches an attribute.
 		return false, nil
 	}
+	if s.attribute && node.Kind != xdm.KindAttribute {
+		// The attribute axis contains only attributes, so a step on it never
+		// matches anything else — whatever its node test says.
+		return false, nil
+	}
+	if s.attribute {
+		// A kind test naming another kind is unsatisfiable on this axis:
+		// "attribute::element()" selects elements from among the attributes,
+		// of which there are none. Left to the node test alone it matched
+		// every attribute, because a KindTest for a named kind is checked
+		// against the axis principal kind rather than against the node.
+		//
+		// That is not merely a pattern that fires too often. A stylesheet
+		// declaring match="attribute::element()" alongside ordinary rules had
+		// its elements captured by the attribute rule, so they never reached
+		// the rule that should have handled them.
+		if kt, ok := s.nodeTest.(*xpath.KindTest); ok && !kt.Any &&
+			kt.Kind != xdm.KindAttribute {
+			return false, nil
+		}
+	}
 	// Section 5.5.3: a pattern step on the child axis is evaluated on the
 	// child-or-top axis, and "for backwards compatibility reasons, the
 	// pattern node(), when used without an explicit axis, does not match
@@ -331,16 +352,97 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 		return false, nil
 	}
 
+	return matchPredicates(s, node, ctx)
+}
+
+// matchPredicates applies a step's predicates to a candidate node.
+//
+// A pattern is defined by the path it is equivalent to, and in a path each
+// predicate filters the sequence the previous one produced and *renumbers* it.
+// So in "x[position() mod 2 = 1][position() > 3][position() = 2]" the second
+// predicate counts positions among the survivors of the first, not among the
+// original children.
+//
+// Evaluating each predicate against the original sibling set independently is
+// what this replaced. That is right whenever at most one predicate is
+// positional, which is the overwhelmingly common case and why it went
+// unnoticed, but it makes every predicate after a positional one count the
+// wrong sequence.
+//
+// The survivor set is only materialised when there is more than one predicate
+// and at least one of them can observe the position; a single predicate, or
+// predicates that cannot see position, take the cheap path that tests the
+// candidate alone.
+func matchPredicates(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	positional := false
 	for _, pred := range s.preds {
-		ok, err := evalPatternPredicate(pred, s, node, ctx)
-		if err != nil {
-			return false, err
+		if needsPosition(pred) {
+			positional = true
+			break
 		}
-		if !ok {
+	}
+	if len(s.preds) < 2 || !positional || node.Parent == nil {
+		for _, pred := range s.preds {
+			ok, err := evalPatternPredicate(pred, s, node, ctx)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	principal := xdm.KindElement
+	siblings := node.Parent.Children
+	if s.attribute {
+		principal = xdm.KindAttribute
+		siblings = node.Parent.Attrs
+	}
+	cand := make([]*xdm.Node, 0, len(siblings))
+	for _, sib := range siblings {
+		if s.nodeTest.Matches(sib, principal) {
+			cand = append(cand, sib)
+		}
+	}
+
+	for _, pred := range s.preds {
+		kept := cand[:0:0]
+		for i, c := range cand {
+			sub := ctx.WithFocus(c, i+1, len(cand))
+			v, err := pred.Eval(sub)
+			if err != nil {
+				return false, err
+			}
+			ok := false
+			if len(v) == 1 {
+				if a, isAtomic := v[0].(*xdm.Atomic); isAtomic && a.Type.IsNumeric() {
+					ok = !a.IsNaN() && a.Float64() == float64(i+1)
+				} else {
+					ok, err = xpath.EffectiveBooleanValue(v)
+				}
+			} else {
+				ok, err = xpath.EffectiveBooleanValue(v)
+			}
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				kept = append(kept, c)
+			}
+		}
+		cand = kept
+		if len(cand) == 0 {
 			return false, nil
 		}
 	}
-	return true, nil
+	for _, c := range cand {
+		if c == node {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // evalPatternPredicate evaluates a pattern predicate against a candidate node.
