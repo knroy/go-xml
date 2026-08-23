@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 68.64% — 3,686 of 5,369 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 72.83% — 3,910 of 5,369 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 68.64%, and the newest — so it is a
+The weakest of the measured numbers, at 72.83%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -89,15 +89,16 @@ by that measure:
 
 | set | passing | what is missing |
 |---|---|---|
-| `error` | 118/398 | static and type errors the engine does not raise |
-| `import-schema` | 42/189 | schema-aware assessment beyond named types |
-| `output` | 38/138 | serialisation attributes |
-| `match` | 80/179 | patterns over schema components |
-| `number` | 76/136 | languages other than English |
-| `result-document` | 21/79 | the base output URI, and duplicate-URI detection |
-| `namespace` | 132/189 | namespace fixup on constructed elements |
+| `error` | 149/398 | static and type errors the engine does not raise |
+| `output` | 36/138 | serialisation: BOM, XHTML method, CDATA sections |
+| `import-schema` | 88/189 | schema-aware assessment in the harder cases |
+| `match` | 93/179 | patterns over schema components |
+| `result-document` | 21/79 | the base output URI, duplicate-URI detection |
+| `number` | 84/136 | languages other than English |
+| `namespace` | 140/189 | namespace fixup on constructed elements |
+| `base-uri` | 20/48 | the static base URI is per module, not per element |
+| `for-each-group` | 29/56 | grouping edge cases |
 | `collations` | 17/42 | collations beyond codepoint and ASCII-case-insensitive |
-| `format-date` | 10/34 | calendars, languages, timezone pictures |
 
 Roughly 300 failures are errors the suite expects that the engine does not
 raise. That is the same shape as the XSD schema-validity gap: the engine
