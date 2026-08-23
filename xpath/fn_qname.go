@@ -201,6 +201,15 @@ func registerURIFuncs(l *Library) {
 		if err != nil {
 			return nil, fmt.Errorf("FORG0002: invalid relative URI %q", rel)
 		}
+		// A URI reference carries at most one "#": RFC 3986 defines the
+		// fragment as *( pchar / "/" / "?" ), and "#" is not a pchar. net/url
+		// is happy to read "##some.uri" as a fragment of "#some.uri", so the
+		// check has to be made here — validAnyURI cannot make it, because
+		// xs:anyURI is deliberately permissive and tightening it would reject
+		// values XML Schema accepts.
+		if strings.Count(rel, "#") > 1 {
+			return nil, fmt.Errorf("FORG0002: invalid relative URI %q", rel)
+		}
 		if base == "" {
 			if !ref.IsAbs() {
 				return nil, fmt.Errorf("FONS0005: no base URI to resolve %q against", rel)

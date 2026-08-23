@@ -375,6 +375,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 			return err
 		}
 		if el.Name.Local == "param" {
+			v.IsParam = true
 			if s, ok := c.opts.StaticParams[v.Name.Clark()]; ok {
 				lit := "'" + strings.ReplaceAll(s, "'", "''") + "'"
 				comp, err := compileExpr(lit, newNSResolver(el, ""))
@@ -427,6 +428,14 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		return c.compileCharacterMap(el, precedence)
 	case "import-schema":
 		return c.compileImportSchema(el)
+	case "mode":
+		// An xsl:mode declaration carries nothing an XSLT 2.0 processor has
+		// to act on: its streamable attribute requests a streaming
+		// evaluation, and a processor is always free to answer that request
+		// by building the tree, which is what this one does. Accepting and
+		// ignoring it is therefore the whole of its 2.0 meaning. Its
+		// attributes were checked by the element table before this point.
+		return nil
 	}
 	// Section 3.9: where forwards-compatible behaviour is enabled, an XSLT
 	// element that XSLT 2.0 does not allow as a child of xsl:stylesheet "must

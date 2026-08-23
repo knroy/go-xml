@@ -428,7 +428,25 @@ func (p *Parser) parseMultiplicative() (Expr, error) {
 	for {
 		op, ok := p.acceptOp("*", "div", "idiv", "mod")
 		if !ok {
-			return left, nil
+			// A "*" reaching operator position as a wildcard token is
+			// multiplication. The lexer clears its operand flag on a "*" it
+			// has already classified as an operator — it must, or "*******"
+			// would lex as one wildcard followed by six operators instead of
+			// four wildcards separated by three multiplications — and a
+			// sequence-type occurrence indicator is a "*" the parser
+			// consumed as an operator, so the star after it arrives spelled
+			// as a wildcard. "3 treat as xs:integer * * 3" is that case: the
+			// first star is the indicator, the second multiplies.
+			//
+			// This is the exact mirror of parseSequenceType accepting a
+			// wildcard-spelled "*" as the occurrence indicator. Neither
+			// spelling is ambiguous in its own position; only the lexer,
+			// which sees no positions, cannot tell them apart.
+			if p.cur().Kind != TokWildcard || p.cur().Val != "*" {
+				return left, nil
+			}
+			p.pos++
+			op = "*"
 		}
 		right, err := p.parseUnion()
 		if err != nil {

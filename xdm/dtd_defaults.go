@@ -236,7 +236,12 @@ func applyAttTypes(el *Node, types []attDeclaredType) {
 				continue
 			}
 			if a.TypeAnnotation == "" {
-				a.TypeAnnotation = t.typ
+				// SetTypeAnnotation rather than a bare assignment: a DTD
+				// declaring ID/IDREF/IDREFS is one of the two ways a
+				// document establishes the is-id and is-idrefs properties,
+				// and those must survive input-type-annotations="strip"
+				// even though the annotation itself does not.
+				a.SetTypeAnnotation(t.typ)
 			}
 		}
 	}

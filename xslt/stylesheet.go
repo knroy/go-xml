@@ -122,6 +122,14 @@ type Variable struct {
 	Body []Instruction
 	// Required marks a parameter that must be supplied.
 	Required bool
+	// IsParam distinguishes an xsl:param from an xsl:variable. The two are
+	// compiled to the same structure because they evaluate identically, but
+	// only a parameter can be supplied from outside, and section 10.1.1
+	// gives the two different error codes when a declared "as" type rejects
+	// the value: a parameter left unsupplied whose required type excludes
+	// the empty sequence is XTDE0610, while a variable is only ever the
+	// plain type error.
+	IsParam bool
 	// Tunnel marks a tunnel parameter, which passes through templates that do
 	// not declare it.
 	Tunnel bool

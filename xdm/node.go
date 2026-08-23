@@ -108,6 +108,27 @@ type Node struct {
 	// yields xs:untypedAtomic, which is the schemaless default.
 	TypeAnnotation string
 
+	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
+	// (XDM §5.2, §6.2). They are deliberately *separate* state from
+	// TypeAnnotation rather than being derived from it, because XSLT 2.0
+	// §3.5 requires them to survive input-type-annotations="strip": that
+	// setting turns every annotation into xs:untyped/xs:untypedAtomic while
+	// leaving is-id and is-idrefs exactly as they were. Deriving them from
+	// the annotation would lose them at precisely the point the
+	// specification says they must be kept, and fn:id/fn:idref — which are
+	// defined over these properties, not over the annotation — would then
+	// find nothing in a stripped document whose ID attributes happen not to
+	// be spelled "id".
+	//
+	// Two bools rather than one enum: an attribute of a union type can in
+	// principle be neither, and nothing in the model makes them exclusive.
+	// They are set wherever an annotation is assigned (schema assessment,
+	// DTD attribute types) by whoever knows the declared type; a node whose
+	// type was never determined leaves both false, which is the correct
+	// answer for an unvalidated document.
+	IsID     bool
+	IsIDREFS bool
+
 	// detachedID numbers a node that roots a tree which was never finalized,
 	// assigned on the first cross-tree comparison. Zero means unassigned.
 	detachedID int64
@@ -917,4 +938,45 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		name = prim
 	}
 	return nil
+}
+
+// annotationIDKind reports whether an annotation name is derived from xs:ID or
+// from xs:IDREF/xs:IDREFS, walking the derivation chain a schema registered.
+//
+// The walk is bounded for the same reason the other derivation walks are: a
+// schema whose derivations somehow formed a cycle must not spin here.
+func annotationIDKind(annotation string) (isID, isIDREFS bool) {
+	for i := 0; i < 32 && annotation != ""; i++ {
+		switch annotation {
+		case "ID":
+			return true, false
+		case "IDREF", "IDREFS":
+			return false, true
+		}
+		annotation = DerivedBase(annotation)
+	}
+	return false, false
+}
+
+// SetTypeAnnotation records a type annotation and the is-id / is-idrefs
+// properties that go with it.
+//
+// It exists so that every producer of annotations — schema assessment, DTD
+// attribute types, the XSLT validation instructions — sets the two properties
+// the same way. Assigning TypeAnnotation directly is still legal but leaves
+// is-id and is-idrefs at whatever they were, which is what a caller
+// deliberately preserving them across a strip wants and what a caller
+// annotating a fresh node does not.
+//
+// The properties are only ever turned *on* here. A node that was already
+// marked keeps its marking when re-annotated with a non-ID type, because the
+// data model's properties describe how the node was validated originally and
+// XSLT's stripping rules are the only thing entitled to change them — and
+// those rules say the properties do not change at all.
+func (n *Node) SetTypeAnnotation(annotation string) {
+	n.TypeAnnotation = annotation
+	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
+		n.IsID = n.IsID || isID
+		n.IsIDREFS = n.IsIDREFS || isRefs
+	}
 }

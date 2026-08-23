@@ -104,7 +104,56 @@ func compileMatchPattern(pat, flags string) (*regexp.Regexp, error) {
 
 func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) (bool, string) {
 	res, redirected, wasRedirected := principalOf(res)
-	return r.judgeIn(a, res, redirected, wasRedirected, terr, set)
+	// The result tree is built once, here, and handed to every assertion
+	// underneath. Result.Tree re-parents the result's nodes into the fresh
+	// document root it returns, so building it per assertion would steal them
+	// out of the tree the previous assertion was evaluated against: an all-of
+	// with several assert children saw every rooted path after the first
+	// return nothing.
+	return r.judgeIn(a, res, treeOf(res), redirected, wasRedirected, terr, set)
+}
+
+// treeOf builds the document node an XPath assertion is evaluated against.
+//
+// This is Result.Tree with two adjustments the suite's assertions need, and a
+// nil result tolerated because a failed transform has none and the assertions
+// that read one check the error first.
+//
+// A result item may itself be a document node: xsl:copy applied to the root,
+// which is what an identity transform does, copies the document node rather
+// than the element under it. Appending that to a fresh root nests a document
+// inside a document, and "/resource" then looks for an element among the
+// root's children and finds a document node instead — every rooted path in
+// such a test returned the empty sequence against a result that was correct.
+// Splicing the children of a document item in puts the element where the
+// assertion looks for it.
+func treeOf(res *xslt.Result) *xdm.Node {
+	if res == nil {
+		return nil
+	}
+	// Result.Tree is used unchanged unless a nested document node forces the
+	// rebuild below. Re-parenting is not free: the namespace axis is computed
+	// from a node's ancestors when it is walked, so a node moved under a
+	// synthetic root reports a different set of in-scope namespaces than the
+	// one the engine gave it. element-0306 counts exactly that, and rebuilding
+	// unconditionally cost it one namespace node.
+	if !needsRebuild(res) {
+		return res.Tree()
+	}
+	tree := xdm.NewTree()
+	for _, it := range res.Nodes {
+		switch v := it.(type) {
+		case *xdm.Node:
+			spliceInto(tree.Root, v)
+		case *xdm.Atomic:
+			tree.Root.AppendChild(&xdm.Node{
+				Kind:  xdm.KindText,
+				Value: v.String(),
+			})
+		}
+	}
+	tree.Finalize()
+	return tree.Root
 }
 
 // judgeIn is judge once the redirection has been resolved. The two are split
@@ -113,7 +162,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 // result, whose principal tree is no longer empty, and every nested
 // assert-serialization would then read a re-serialisation with default output
 // settings instead of the text xsl:result-document actually produced.
-func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRedirected bool, terr error, set *TestSet) (bool, string) {
+func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirected string, wasRedirected bool, terr error, set *TestSet) (bool, string) {
 	// A nil result with no error should not happen; treating it as a failure
 	// rather than dereferencing it keeps a harness bug from looking like an
 	// engine crash.
@@ -124,7 +173,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 	switch a.Kind {
 	case "all-of":
 		for _, c := range a.Children {
-			if ok, why := r.judgeIn(c, res, redirected, wasRedirected, terr, set); !ok {
+			if ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); !ok {
 				return false, why
 			}
 		}
@@ -133,7 +182,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 	case "any-of":
 		var reasons []string
 		for _, c := range a.Children {
-			if ok, _ := r.judgeIn(c, res, redirected, wasRedirected, terr, set); ok {
+			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); ok {
 				return true, ""
 			}
 			reasons = append(reasons, c.Kind)
@@ -142,7 +191,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 
 	case "not":
 		for _, c := range a.Children {
-			if ok, _ := r.judgeIn(c, res, redirected, wasRedirected, terr, set); ok {
+			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); ok {
 				return false, "the negated assertion held"
 			}
 		}
@@ -204,7 +253,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		return evalAssert(res, a.Value, a.NS)
+		return evalAssert(res, root, a.Value, a.NS)
 
 	case "assert-string-value":
 		if terr != nil {
@@ -310,7 +359,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 			// assert-serialization was special-cased above, so a nested
 			// serialization-matches re-serialised the tree with the wrong
 			// output definition and compared the wrong bytes.
-			if ok, why := r.judgeIn(c, sub, serialized, true, nil, set); !ok {
+			if ok, why := r.judgeIn(c, sub, treeOf(sub), serialized, true, nil, set); !ok {
 				return false, a.URI + ": " + why
 			}
 		}
@@ -484,12 +533,111 @@ func (m mapNS) ResolvePrefix(p string) (string, bool) {
 func (m mapNS) DefaultElementNamespace() string { return m[""] }
 func (mapNS) DefaultFunctionNamespace() string  { return xdm.NSFN }
 
-func evalAssert(res *xslt.Result, expr string, ns map[string]string) (bool, string) {
-	doc, err := xdm.ParseString(stripDecl(res.String()), xdm.ParseOptions{})
-	if err != nil {
-		return false, "the result is not a document: " + firstLine(err.Error())
+// spliceInto appends n under parent, replacing every document node it meets
+// by that node's children.
+//
+// The data model has no document node below the root: XDM says a document
+// node inserted into a tree contributes its children, not itself. The engine
+// builds one wherever xsl:document or an xsl:variable holding a document
+// appears, and those survive into the result at any depth — xsl-document-0102
+// puts one directly under <out>, so "/out/node()[1]" saw a single document
+// node where the assertion expects the comment inside it.
+//
+// An element containing one is rebuilt rather than relinked, because the
+// splice changes its child list and the result's own nodes must not be
+// mutated: the failure message serialises them afterwards, and a shared
+// subtree would be reported with the harness's edit in it. An element with no
+// document node anywhere beneath it is passed through untouched, which is the
+// overwhelmingly common case.
+func spliceInto(parent, n *xdm.Node) {
+	if n.Kind == xdm.KindDocument {
+		for _, c := range n.Children {
+			spliceInto(parent, c)
+		}
+		return
 	}
-	ctx := xpath.NewContext(doc.Root, xpath.Builtins())
+	if !hasDocumentChild(n) {
+		parent.AppendChild(n)
+		return
+	}
+	// Every field of the node is carried across, not the handful the
+	// splicing itself needs. This copy exists only to give the node a new
+	// parent; an assertion evaluated against it must see the same node it
+	// would have seen otherwise. Copying a chosen subset dropped the base
+	// URI and the type annotation — and the namespace count in element-0306
+	// went from three to two because the node was no longer the one the
+	// engine built.
+	copied := &xdm.Node{
+		Kind:           n.Kind,
+		Name:           n.Name,
+		Value:          n.Value,
+		Attrs:          n.Attrs,
+		Namespaces:     n.Namespaces,
+		BaseURI:        n.BaseURI,
+		TypeAnnotation: n.TypeAnnotation,
+		IsID:           n.IsID,
+		IsIDREFS:       n.IsIDREFS,
+	}
+	parent.AppendChild(copied)
+	for _, c := range n.Children {
+		spliceInto(copied, c)
+	}
+}
+
+// needsRebuild reports whether the result contains a document node in a
+// position that Result.Tree would leave unreachable to a rooted path.
+//
+// A result item may itself be a document node — xsl:copy applied to the root,
+// which is what an identity transform does, copies the document node rather
+// than the element under it — and Result.Tree appends that to a fresh root,
+// nesting a document inside a document. "/resource" then looks for an element
+// among the root's children, finds a document node, and returns nothing
+// against a result that was perfectly correct.
+//
+// Only that case is worth rebuilding for. Everything else keeps the engine's
+// own tree, because rebuilding changes the namespace axis.
+func needsRebuild(res *xslt.Result) bool {
+	for _, it := range res.Nodes {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		if n.Kind == xdm.KindDocument || hasDocumentChild(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDocumentChild reports whether a document node appears anywhere below n.
+func hasDocumentChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindDocument || hasDocumentChild(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]string) (bool, string) {
+	// The result tree itself, not a re-parse of its serialisation.
+	//
+	// Serialising and re-parsing asks the XML parser to accept whatever the
+	// result's own output method produced, and two shapes of legal result are
+	// not XML at all. An html or xhtml method writes <meta> and <img> without
+	// a closing tag, so the round trip failed with "element <meta> closed by
+	// </head>" for a result the stylesheet built correctly. A result that is
+	// bare text, or several top-level nodes, is not a document either, and
+	// failed with "character data outside root element".
+	//
+	// Result.Tree builds the document node directly from the result sequence,
+	// which is the tree the assertion is written about. It admits both shapes
+	// because it never goes through a serialiser, and it is what the suite's
+	// own driver evaluates against.
+	if root == nil {
+		return false, "the transform produced no result tree"
+	}
+	ctx := xpath.NewContext(root, xpath.Builtins())
 	resolver := xpath.NamespaceResolver(mapNS(ns))
 	got, evalErr := xpath.Eval(expr, ctx, resolver)
 	if err := evalErr; err != nil {

@@ -147,11 +147,20 @@ func (l *Lexer) next() (Token, error) {
 			l.pos++
 			// A "*" that follows an operand is either multiplication or a
 			// sequence-type occurrence indicator, and the lexer cannot tell
-			// which. Leaving the flag set treats it as ending an operand,
-			// which is what the indicator does — "xs:integer * * 3"
-			// multiplies by 3 — and costs nothing for multiplication, where
-			// the parser demands an operand next in any case.
-			l.prevOperand = true
+			// which. The flag is cleared, which is what multiplication does:
+			// an operator does not end an operand, so a "*" immediately
+			// after it is a wildcard. That is the case the spec's own
+			// tokenization rule pins and the suite tests with "*******" —
+			// four wildcards separated by three multiplications — where
+			// leaving the flag set lexed every star after the first as an
+			// operator and the expression did not parse.
+			//
+			// The occurrence indicator is not lost by this. It occurs only
+			// in a sequence-type position, which the parser reaches through
+			// parseSequenceType, and that function already accepts the "*"
+			// under either spelling — TokOp when an operand preceded it,
+			// TokWildcard when a type name did.
+			l.prevOperand = false
 			return Token{Kind: TokOp, Val: "*", Pos: start}, nil
 		}
 		l.pos++
@@ -204,19 +213,23 @@ func (l *Lexer) next() (Token, error) {
 	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}':
 		l.pos++
 		op := string(c)
-		// A closing bracket ends an operand. So do "?" and "+" when one
-		// precedes them, because there they are sequence-type occurrence
-		// indicators rather than the start of something — and an indicator
-		// ends the type it applies to.
+		// A closing bracket ends an operand. So does "?" when one precedes
+		// it, because there it is a sequence-type occurrence indicator
+		// rather than the start of something — and an indicator ends the
+		// type it applies to. That matters for the "*" which may come next:
+		// "3 treat as xs:integer ? * 3" multiplies, and without this the
+		// "*" lexed as a wildcard and the expression did not parse.
 		//
-		// This matters for the "*" that may come next, which is a wildcard or
-		// a multiplication depending on this flag: "3 treat as xs:integer ? *
-		// 3" multiplies, and without this the "*" lexed as a wildcard and the
-		// expression did not parse. Treating a binary "+" as ending its
-		// left operand is harmless, since the parser demands an operand after
-		// it either way.
+		// "+" is deliberately NOT in that set even though it too can be an
+		// occurrence indicator. Binary "+" is far commoner, and after a
+		// binary operator a "*" is a wildcard: "5.+*" is the decimal 5 plus
+		// the wildcard step, which the suite pins as select-3502 and which
+		// treating "+" as operand-ending made a syntax error. The
+		// occurrence-indicator reading survives the change because
+		// parseMultiplicative accepts a wildcard-spelled "*" in operator
+		// position, so "xs:integer + * 3" still multiplies.
 		l.prevOperand = op == ")" || op == "]" ||
-			((op == "?" || op == "+") && l.prevOperand)
+			(op == "?" && l.prevOperand)
 		return Token{Kind: TokOp, Val: op, Pos: start}, nil
 	}
 

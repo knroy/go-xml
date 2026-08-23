@@ -503,6 +503,14 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 	if v.opts.Annotate {
 		if n := typ.TypeName(); n.Local != "" {
 			el.TypeAnnotation = n.Local
+		} else if a := annotationName(typ); a != "" {
+			// An anonymous simple type still annotates the node: the data
+			// model records the nearest named type it derives from, which is
+			// what "instance of element(*, xs:string)" asks about. Leaving
+			// the node unannotated made every such test answer false, and
+			// made the node atomise as untypedAtomic after a successful
+			// validation.
+			el.TypeAnnotation = a
 		}
 	}
 	return tables

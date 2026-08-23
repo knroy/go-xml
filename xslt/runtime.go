@@ -978,6 +978,29 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 
 		val, err := evalVariable(g, rt)
 		if err != nil {
+			// A global xsl:param with an "as" type, no explicit default and
+			// no supplied value takes the empty sequence as its default.
+			// Section 10.1.1: if the empty sequence is not a valid instance
+			// of the required type the parameter is treated as required, so
+			// the caller supplying nothing is XTDE0610 rather than the type
+			// error the conversion itself reports. This is the same rule
+			// that governs template parameters in runTemplate.
+			if g.IsParam && g.AsType != nil && !hasExplicitDefault(g) {
+				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s, "+
+					"and the empty sequence is not a valid instance of %s",
+					g.Name.Lexical(), g.AsType.source())
+			}
+			// Only a failure of the *type conversion itself* becomes
+			// XTTE0600. Evaluating the default can fail for reasons that
+			// have nothing to do with the declared type — a schema
+			// validation error inside the default's sequence constructor
+			// carries its own code, and rebranding that as a type error
+			// reported XTTE0600 where the suite expects XTTE1510.
+			if g.IsParam && g.AsType != nil &&
+				strings.HasPrefix(err.Error(), "XTTE0570") {
+				return fmt.Errorf("evaluating global $%s: %w",
+					g.Name.Lexical(), recodeError(err, "XTTE0600"))
+			}
 			return fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
 		}
 		rt.ctx = rt.ctx.WithVar(g.Name, val)

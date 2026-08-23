@@ -59,9 +59,15 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	}
 
 	// Each item contributes a URI: a node by its string value, an atomic by
-	// its lexical form. A node also carries its own base URI, which overrides
-	// the one computed above — document(@href) resolves against the element
-	// the attribute is on, wherever that element came from.
+	// its lexical form. A node also carries its own base URI, and section 16.1
+	// says a relative reference taken from a node resolves "against the base
+	// URI of $base-node if supplied, or against the base URI of the node that
+	// contained it otherwise". The node's own base is therefore a *fallback*
+	// for the two-argument form, not an override of it: an explicit
+	// $base-node is the whole point of the second argument, and letting the
+	// item node win meant document(filename, document('a/b/c.xml')) resolved
+	// against the source document rather than against the loaded one.
+	explicitBase := len(args) > 1
 	type request struct {
 		uri, base string
 	}
@@ -69,9 +75,9 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	for _, it := range args[0] {
 		switch v := it.(type) {
 		case *xdm.Node:
-			b := v.BaseURI
-			if b == "" {
-				b = base
+			b := base
+			if !explicitBase && v.BaseURI != "" {
+				b = v.BaseURI
 			}
 			reqs = append(reqs, request{v.StringValue(), b})
 		default:

@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -314,9 +315,35 @@ func runTemplate(rt *runtime, t *Template,
 			return fmt.Errorf("XTDE0700: required parameter $%s was not supplied to template %s",
 				p.Name.Lexical(), templateLabel(t))
 		}
-		// An unsupplied optional parameter takes its default value.
+		// An unsupplied optional parameter takes its default value. Which
+		// error a failure to convert that default raises depends on whether
+		// the default was written down.
+		//
+		// Section 10.1.1 splits the two cases. With an explicit default — a
+		// select attribute or a non-empty sequence constructor — a default
+		// that will not convert to the required type is XTTE0600. With no
+		// explicit default the default value is the empty sequence, and if
+		// the empty sequence is not a valid instance of the required type
+		// the parameter "is treated as a required parameter", so the caller
+		// supplying nothing is XTDE0610 — not a type error at all.
+		//
+		// Both previously fell through to evalVariable's generic XTTE0570.
 		val, err := evalVariable(p, sub)
 		if err != nil {
+			if p.AsType != nil {
+				if hasExplicitDefault(p) {
+					// Only the type conversion itself is XTTE0600; an error
+					// raised from inside the default's own evaluation keeps
+					// the code it came with.
+					if strings.HasPrefix(err.Error(), "XTTE0570") {
+						return recodeError(err, "XTTE0600")
+					}
+					return err
+				}
+				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s of template %s, "+
+					"and the empty sequence is not a valid instance of %s",
+					p.Name.Lexical(), templateLabel(t), p.AsType.source())
+			}
 			return err
 		}
 		sub = sub.withVar(p.Name, val)
@@ -429,8 +456,12 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// A declared parameter type converts the argument. Without this a
 		// parameter declared "as=xs:decimal?" receives an untypedAtomic and
 		// the body's arithmetic silently becomes double arithmetic.
-		// A function parameter whose supplied value will not convert to its
-		// declared type is XTTE0590.
+		// A parameter to a *stylesheet function* whose supplied value will
+		// not convert is XTTE0790, not XTTE0590. XTTE0590 covers the general
+		// parameter case — an xsl:with-param supplied to a template — while
+		// section 10.3's XTTE0790 is written specifically for "the value of a
+		// parameter to a stylesheet function". Reporting 0590 here made
+		// error-0790a report the template code for a function call.
 		v, err := p.AsType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
 			" of "+f.name.Lexical(), "XTTE0590")
 		if err != nil {

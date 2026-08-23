@@ -59,6 +59,26 @@ var xsltElements = map[string]elementDef{
 		"default-collation":          {},
 		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
 	}},
+	// xsl:mode is an XSLT 3.0 declaration, and 2.0 has no summary for it.
+	// It is listed here because everything it can say is configuration a
+	// non-streaming XSLT 2.0 processor is free to ignore: streamable="yes"
+	// asks for a streaming evaluation, which the specification always allows
+	// a processor to satisfy by building the tree instead, and the remaining
+	// attributes name defaults that 2.0 already fixes. Rejecting it under
+	// XTSE0010 would refuse a stylesheet whose 2.0 meaning is unambiguous,
+	// so the declaration is accepted and then does nothing. The attributes
+	// are still checked, so a misspelling inside it is not swallowed.
+	"mode": {attrs: map[string]attrDef{
+		"name":                      {},
+		"streamable":                {values: []string{"yes", "no"}},
+		"use-accumulators":          {},
+		"on-no-match":               {values: []string{"deep-copy", "shallow-copy", "deep-skip", "shallow-skip", "text-only-copy", "fail"}},
+		"on-multiple-match":         {values: []string{"use-last", "fail"}},
+		"warning-on-no-match":       {values: []string{"yes", "no"}},
+		"warning-on-multiple-match": {values: []string{"yes", "no"}},
+		"typed":                     {},
+		"visibility":                {},
+	}},
 	"include": {attrs: map[string]attrDef{
 		"href": {required: true},
 	}},
@@ -149,10 +169,13 @@ var xsltElements = map[string]elementDef{
 		"type":       {},
 		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
 	}},
-	"text": {attrs: map[string]attrDef{}},
+	"text": {attrs: map[string]attrDef{
+		"disable-output-escaping": {values: []string{"yes", "no"}},
+	}},
 	"value-of": {attrs: map[string]attrDef{
-		"select":    {},
-		"separator": {avt: true},
+		"select":                  {},
+		"separator":               {avt: true},
+		"disable-output-escaping": {values: []string{"yes", "no"}},
 	}},
 	"document": {attrs: map[string]attrDef{
 		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
@@ -363,6 +386,7 @@ var contentModels = map[string]contentModel{
 	"matching-substring":     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"message":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"namespace":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"mode":                   {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"namespace-alias":        {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"next-match":             {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true, "with-param": true}, model: "(xsl:with-param | xsl:fallback)*"},
 	"non-matching-substring": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -436,6 +460,7 @@ var xsltDeclarations = map[string]bool{
 	"import-schema":   true,
 	"include":         true,
 	"key":             true,
+	"mode":            true,
 	"namespace-alias": true,
 	"output":          true,
 	"param":           true,

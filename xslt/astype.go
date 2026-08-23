@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -164,4 +165,38 @@ func numericPromotes(from, to xdm.TypeCode) bool {
 	// item already of that type was passed through by the subtype check
 	// above, and anything else would be a narrowing.
 	return false
+}
+
+// source returns the written form of the declared type, for error messages.
+func (t *sequenceType) source() string {
+	if t == nil {
+		return "item()*"
+	}
+	return t.src
+}
+
+// hasExplicitDefault reports whether a parameter declares a default value.
+//
+// Section 10.1.1 turns on this exact distinction: "if there is either a
+// select attribute or a non-empty sequence constructor" the parameter has an
+// explicitly given default, and a default that will not convert is XTTE0600.
+// A parameter with neither has the empty sequence as its default, which is a
+// different rule with a different code (XTDE0610).
+func hasExplicitDefault(p *Variable) bool {
+	return p.Select != nil || len(p.Body) > 0
+}
+
+// recodeError replaces the leading error code of a conversion failure.
+//
+// The conversion machinery is shared, so the code it stamps in is the one
+// its caller asked for. Where the surrounding context requires a different
+// code — a template parameter's explicit default is XTTE0600 rather than the
+// XTTE0570 that evalVariable stamps on every variable — only the prefix
+// changes; the explanatory text after it is already correct.
+func recodeError(err error, code string) error {
+	msg := err.Error()
+	if i := strings.Index(msg, ": "); i > 0 && strings.HasPrefix(msg, "XT") {
+		return fmt.Errorf("%s%s", code, msg[i:])
+	}
+	return fmt.Errorf("%s: %s", code, msg)
 }
