@@ -68,6 +68,11 @@ func (codepointCollation) StartsWith(s, p string) bool { return strings.HasPrefi
 func (codepointCollation) EndsWith(s, suf string) bool { return strings.HasSuffix(s, suf) }
 func (codepointCollation) IndexOf(s, sub string) int   { return strings.Index(s, sub) }
 
+// Key returns a string that is identical for values this collation calls
+// equal, which is what lets a caller group or index by collation without
+// comparing every pair. For codepoint the value is its own key.
+func (codepointCollation) Key(s string) string { return s }
+
 // asciiCaseInsensitive folds only A-Z, deliberately: the spec defines this
 // collation over ASCII, so folding Unicode case as well would make it a
 // different, locale-sensitive comparison.
@@ -94,6 +99,10 @@ func (asciiCaseInsensitive) StartsWith(s, p string) bool {
 func (asciiCaseInsensitive) EndsWith(s, suf string) bool {
 	return strings.HasSuffix(asciiFold(s), asciiFold(suf))
 }
+
+// Key folds the ASCII case, so "THOUGH" and "though" index together.
+func (asciiCaseInsensitive) Key(s string) string { return asciiFold(s) }
+
 func (asciiCaseInsensitive) IndexOf(s, sub string) int {
 	return strings.Index(asciiFold(s), asciiFold(sub))
 }

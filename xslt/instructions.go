@@ -507,6 +507,9 @@ type sortKey struct {
 	// coll orders text by the conventions of a language when xsl:sort/@lang
 	// names one; nil means codepoint order.
 	coll *collator
+	// collAVT is @collation before evaluation, for the case where it is an
+	// attribute value template naming a collation the stylesheet computes.
+	collAVT *avt
 	// strColl is the collation named by @collation, used when no @lang is
 	// given. Accepting the attribute and then sorting by codepoint anyway is
 	// exactly the silent-wrong-answer this engine exists to avoid.
@@ -532,6 +535,27 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 	}
 	entries := make([]entry, n)
 
+	// A collation named by an attribute value template is resolved once for
+	// the whole sort rather than per item: it cannot vary between items, and
+	// resolving it per comparison would parse the same URI n log n times.
+	resolved := make([]xpath.Collation, len(sorts))
+	for k, s := range sorts {
+		resolved[k] = s.strColl
+		if s.strColl == nil && s.collAVT != nil {
+			uri, err := s.collAVT.eval(rt)
+			if err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(uri) != "" {
+				c, err := xpath.ResolveCollation(uri)
+				if err != nil {
+					return nil, fmt.Errorf("xsl:sort/@collation: %w", err)
+				}
+				resolved[k] = c
+			}
+		}
+	}
+
 	for i, it := range seq {
 		e := entry{item: it, idx: i, keys: make([]sortValue, len(sorts))}
 		sub := rt.withFocus(it, i+1, n)
@@ -540,7 +564,7 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 			if err != nil {
 				return nil, err
 			}
-			e.keys[k] = makeSortValue(v, s)
+			e.keys[k] = makeSortValue(v, s, resolved[k])
 		}
 		entries[i] = e
 	}
@@ -594,7 +618,7 @@ type sortValue struct {
 	empty bool
 }
 
-func makeSortValue(seq xdm.Sequence, s *sortKey) sortValue {
+func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation) sortValue {
 	if len(seq) == 0 {
 		return sortValue{empty: true}
 	}
@@ -610,7 +634,7 @@ func makeSortValue(seq xdm.Sequence, s *sortKey) sortValue {
 		return sortValue{numeric: true, num: conv.Float64()}
 	}
 
-	v := sortValue{str: text, strColl: s.strColl}
+	v := sortValue{str: text, strColl: coll}
 	if s.coll != nil {
 		v.collKey = s.coll.key(text)
 	}

@@ -243,3 +243,45 @@ func TestNumberValueIsASequence(t *testing.T) {
 		t.Errorf("got %s, want it to contain %q", got, "1.2.3.4.5.")
 	}
 }
+
+// A collation decides which grouping keys count as the same group, so
+// xsl:for-each-group must honour @collation. Ignoring it silently grouped by
+// codepoint, which puts "thou" and "THOU" in different groups under a
+// case-insensitive collation.
+func TestForEachGroupHonoursCollation(t *testing.T) {
+	const ci = "http://www.w3.org/2005/xpath-functions/collation/html-ascii-case-insensitive"
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:template match="/"><out>
+	    <xsl:for-each-group select="//w" group-by="." collation="` + ci + `">
+	      <g><xsl:value-of select="current-grouping-key()"/>:<xsl:value-of
+	        select="count(current-group())"/></g>
+	    </xsl:for-each-group>
+	  </out></xsl:template></xsl:stylesheet>`
+	got := run(t, sheet, `<r><w>thou</w><w>THOU</w><w>Thou</w><w>other</w></r>`)
+	if !strings.Contains(got, "<g>thou:3</g>") {
+		t.Errorf("got %s, want the three spellings in one group", got)
+	}
+	if !strings.Contains(got, "<g>other:1</g>") {
+		t.Errorf("got %s, want a separate group for other", got)
+	}
+}
+
+// @collation is an attribute value template on both xsl:sort and
+// xsl:for-each-group, so a stylesheet may compute which collation to use.
+// Resolving it at compile time refuses the literal braces as an unknown
+// collation URI, which is a stylesheet that will not compile at all.
+func TestCollationMayBeAnAVT(t *testing.T) {
+	const ci = "http://www.w3.org/2005/xpath-functions/collation/html-ascii-case-insensitive"
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:param name="c" select="'` + ci + `'"/>
+	  <xsl:template match="/"><out>
+	    <xsl:for-each select="//w"><xsl:sort select="." collation="{$c}"/>
+	      <w><xsl:value-of select="."/></w></xsl:for-each>
+	  </out></xsl:template></xsl:stylesheet>`
+	got := run(t, sheet, `<r><w>b</w><w>A</w><w>a</w></r>`)
+	// Under the case-insensitive collation A and a are equal, so the stable
+	// sort keeps their input order and both precede b.
+	if !strings.Contains(got, "<w>A</w><w>a</w><w>b</w>") {
+		t.Errorf("got %s, want A,a,b under a computed collation", got)
+	}
+}

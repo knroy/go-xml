@@ -21,8 +21,13 @@ type forEachGroupInstr struct {
 	groupAdjacent   *xpath.Compiled
 	groupStartsWith *Pattern
 	groupEndsWith   *Pattern
-	sorts           []*sortKey
-	body            []Instruction
+	// collation names the collation that compares grouping keys. It is an
+	// attribute value template, so it is resolved per execution rather than
+	// at compile time: collation="{$c}" is legal and names a collation the
+	// stylesheet computes.
+	collation *avt
+	sorts     []*sortKey
+	body      []Instruction
 }
 
 // group is one population group, carrying the key that formed it.
@@ -40,9 +45,17 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var groups []group
 	switch {
 	case i.groupBy != nil:
-		groups, err = groupByKey(rt, seq, i.groupBy)
+		var coll xpath.Collation
+		if coll, err = i.resolveCollation(rt); err != nil {
+			return err
+		}
+		groups, err = groupByKey(rt, seq, i.groupBy, coll)
 	case i.groupAdjacent != nil:
-		groups, err = groupAdjacentKey(rt, seq, i.groupAdjacent)
+		var coll xpath.Collation
+		if coll, err = i.resolveCollation(rt); err != nil {
+			return err
+		}
+		groups, err = groupAdjacentKey(rt, seq, i.groupAdjacent, coll)
 	case i.groupStartsWith != nil:
 		groups, err = groupStartingWith(rt, seq, i.groupStartsWith)
 	case i.groupEndsWith != nil:
@@ -108,7 +121,8 @@ var (
 
 // groupByKey groups items by the value of a key expression, preserving the
 // order in which each key was first seen.
-func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, error) {
+func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
+	coll xpath.Collation) ([]group, error) {
 	index := map[string]int{}
 	var groups []group
 
@@ -121,7 +135,11 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, er
 		// An item with multiple key values joins every corresponding group,
 		// which is what makes group-by usable for many-to-many classification.
 		for _, kv := range xdm.Atomize(vals) {
-			k := kv.(*xdm.Atomic).String()
+			// The group is found by the *collated* form of the key, so that
+			// two keys the collation calls equal land together — while the
+			// group keeps the key as written, which is what
+			// current-grouping-key() returns.
+			k := collationKey(coll, kv.(*xdm.Atomic).String())
 			gi, ok := index[k]
 			if !ok {
 				index[k] = len(groups)
@@ -136,7 +154,8 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, er
 
 // groupAdjacentKey starts a new group whenever the key value changes, so
 // non-consecutive items with the same key form separate groups.
-func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]group, error) {
+func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
+	coll xpath.Collation) ([]group, error) {
 	var groups []group
 	var prev string
 	first := true
@@ -151,7 +170,7 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled) ([]gro
 		if len(atoms) == 0 {
 			continue
 		}
-		k := atoms[0].(*xdm.Atomic).String()
+		k := collationKey(coll, atoms[0].(*xdm.Atomic).String())
 		if first || k != prev {
 			groups = append(groups, group{key: xdm.One(atoms[0])})
 			first, prev = false, k
@@ -213,6 +232,12 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, err
 	}
 	instr := &forEachGroupInstr{sel: sel}
+
+	if v := n.AttrValue("collation"); v != "" {
+		if instr.collation, err = compileAVT(v, ns); err != nil {
+			return nil, err
+		}
+	}
 
 	count := 0
 	if v := n.AttrValue("group-by"); v != "" {
@@ -808,4 +833,39 @@ func romanNumber(n int64) string {
 		}
 	}
 	return sb.String()
+}
+
+// resolveCollation evaluates the collation attribute for this execution.
+func (i *forEachGroupInstr) resolveCollation(rt *runtime) (xpath.Collation, error) {
+	if i.collation == nil {
+		return nil, nil
+	}
+	uri, err := i.collation.eval(rt)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(uri) == "" {
+		return nil, nil
+	}
+	return xpath.ResolveCollation(uri)
+}
+
+// collationKey is the string a grouping key is indexed by.
+//
+// Two keys belong in the same group when the collation calls them equal, so
+// the index is keyed by a form the collation makes identical rather than by
+// the key as written. For the ASCII case-insensitive collation that is the
+// folded string; for codepoint it is the string itself.
+//
+// Only equality matters here, not order, so a collation that cannot produce a
+// key falls back to comparing — which for the collations this implements is
+// the same answer by a slower route.
+func collationKey(coll xpath.Collation, s string) string {
+	if coll == nil {
+		return s
+	}
+	if k, ok := coll.(interface{ Key(string) string }); ok {
+		return k.Key(s)
+	}
+	return s
 }

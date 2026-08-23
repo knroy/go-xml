@@ -363,11 +363,24 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 	// ordering is spelled with @lang instead. Anything else is refused rather
 	// than accepted and then sorted by codepoint anyway.
 	if v := strings.TrimSpace(n.AttrValue("collation")); v != "" {
-		c, err := xpath.ResolveCollation(v)
+		// The attribute is an attribute value template, so a stylesheet may
+		// compute the collation: collation="{$c}" is legal, and resolving it
+		// here would refuse the literal braces as an unknown collation URI.
+		// A literal value is still resolved now, so a typo is a compile-time
+		// error rather than a surprise at run time.
+		a, err := compileAVT(v, ns)
 		if err != nil {
 			return nil, fmt.Errorf("xsl:sort/@collation: %w", err)
 		}
-		s.strColl = c
+		s.collAVT = a
+		if a.isLit {
+			lit := a.literal
+			c, err := xpath.ResolveCollation(lit)
+			if err != nil {
+				return nil, fmt.Errorf("xsl:sort/@collation: %w", err)
+			}
+			s.strColl = c
+		}
 	}
 	return s, nil
 }
