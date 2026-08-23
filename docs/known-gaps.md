@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 62.64% — 3,363 of 5,369 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 68.64% — 3,686 of 5,369 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 62.64%, and the newest — so it is a
+The weakest of the measured numbers, at 68.64%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -89,27 +89,35 @@ by that measure:
 
 | set | passing | what is missing |
 |---|---|---|
-| `result-document` | 5/79 | secondary outputs do not carry their own `xsl:output` |
-| `import-schema` | 30/189 | `@validation`/`@type` on instructions other than `xsl:element` |
-| `output` | 35/138 | serialisation attributes |
-| `use-when` | 26/80 | static conditional inclusion |
-| `number` | 66/136 | `xsl:number` levels and languages |
-| `format-date` | 10/34 | calendars, languages, timezone pictures |
+| `error` | 118/398 | static and type errors the engine does not raise |
+| `import-schema` | 42/189 | schema-aware assessment beyond named types |
+| `output` | 38/138 | serialisation attributes |
+| `match` | 80/179 | patterns over schema components |
+| `number` | 76/136 | languages other than English |
+| `result-document` | 21/79 | the base output URI, and duplicate-URI detection |
+| `namespace` | 132/189 | namespace fixup on constructed elements |
 | `collations` | 17/42 | collations beyond codepoint and ASCII-case-insensitive |
+| `format-date` | 10/34 | calendars, languages, timezone pictures |
 
-Roughly 335 failures are errors the suite expects that the engine does not
+Roughly 300 failures are errors the suite expects that the engine does not
 raise. That is the same shape as the XSD schema-validity gap: the engine
 accepts a stylesheet the specification says to reject. It is the lower-risk
 direction — a wrong stylesheet runs rather than being reported — but it is a
 real gap, and the largest single thing standing between this number and the
 others.
 
-Appendix E of the specification lists 79 static errors. The W3C also
-publishes a [schema for XSLT 2.0
-stylesheets](https://www.w3.org/2007/schema-for-xslt20.xsd), which this
-project's own XSD validator can load: validating a stylesheet against it
-mechanically produces most of XTSE0010 and XTSE0020, the two commonest.
-That is the obvious next step and is not yet taken.
+Appendix E of the specification lists 79 static errors. The three commonest —
+XTSE0010, XTSE0020 and XTSE0090 — are now decided by the element grammar in
+`xslt/elementtable.go`, which was extracted mechanically from the
+specification's own element syntax summaries rather than typed: 49 elements
+and 170 attributes, with the required/optional flags and the closed value sets
+it states. Forwards-compatible processing (section 3.9) rides on the same
+table, since an unknown element or attribute is ignored rather than rejected
+wherever a version greater than 2.0 is in force.
+
+The largest remaining group is the type errors — XTTE1510, XTTE1540 and their
+neighbours — which need schema validity assessment of constructed nodes in
+cases the current implementation does not reach.
 
 The `FORX0002` group is not a defect. Those tests expect a backreference to be
 refused; this engine resolves the fixed-width ones exactly, which is more than
