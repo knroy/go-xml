@@ -36,7 +36,7 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 		}
 		uri, ok := el.LookupPrefix(p)
 		if !ok {
-			return "", fmt.Errorf("xsl:namespace-alias: unbound prefix %q", p)
+			return "", fmt.Errorf("XTSE0812: xsl:namespace-alias: unbound prefix %q", p)
 		}
 		return uri, nil
 	}

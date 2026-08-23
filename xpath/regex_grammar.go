@@ -26,6 +26,9 @@ func checkRegexGrammar(p string) error {
 	// classDepth tracks nesting inside a class, so that a subtraction's inner
 	// class does not read as the outer one closing.
 	classDepth := 0
+	// groupStart is the offset of the first member of the innermost group
+	// now open, past any leading "^". A "]" seen there closes an empty group.
+	groupStart := -1
 
 	for i := 0; i < len(p); i++ {
 		c := p[i]
@@ -61,6 +64,26 @@ func checkRegexGrammar(p string) error {
 				inClass = true
 				classDepth = 1
 			}
+			// Appendix F's posCharGroup needs at least one member, so a
+			// group that closes with nothing in it is not in the grammar.
+			// The position after any "^" is remembered so that "[^]" is
+			// caught as well as "[]"; RE2 rejects those two on its own, but
+			// "[a-f-[]]" and "[^-[bc]]" are the same emptiness inside a
+			// subtraction, and there the rewrite dropped the empty half and
+			// produced a pattern that matched rather than an error.
+			groupStart = i + 1
+			if i+1 < len(p) && p[i+1] == '^' {
+				groupStart = i + 2
+			}
+			// The same emptiness on the left of a subtraction: charClassSub
+			// is "(posCharGroup | negCharGroup) '-' charClassExpr", so the
+			// group before the "-" must have a member. A leading "-" is
+			// otherwise a literal dash, which is why only "-[" is refused.
+			if groupStart+1 < len(p) && p[groupStart] == '-' && p[groupStart+1] == '[' {
+				return fmt.Errorf(
+					"FORX0002: invalid regular expression %q: character "+
+						"class subtraction with an empty left-hand group", p)
+			}
 			// POSIX collating elements and equivalence classes — "[[:alpha:]]",
 			// "[[=a=]]", "[[.a.]]" — are not in Appendix F's grammar. RE2
 			// accepts the first, which made a pattern using it match
@@ -83,6 +106,11 @@ func checkRegexGrammar(p string) error {
 			}
 		case ']':
 			if inClass {
+				if i == groupStart {
+					return fmt.Errorf(
+						"FORX0002: invalid regular expression %q: empty "+
+							"character class", p)
+				}
 				classDepth--
 				if classDepth <= 0 {
 					inClass = false

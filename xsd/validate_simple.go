@@ -19,7 +19,7 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	if t == nil {
 		return
 	}
-	normalized, err := validateSimpleValueVersion(lexical, t, v.schema.Version)
+	normalized, err := validateSimpleValueIn(lexical, t, v.schema.Version, n)
 	if err != nil {
 		v.fail(n, "cvc-datatype-valid.1", "%v", err)
 		return
@@ -95,6 +95,18 @@ func validateSimpleValue(lexical string, t *SimpleType) (string, error) {
 // sync.Once, so two schemas of different versions share the same *SimpleType
 // and a version stored there would be whichever schema loaded last.
 func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) (string, error) {
+	return validateSimpleValueIn(lexical, t, version, nil)
+}
+
+// validateSimpleValueIn is validateSimpleValueVersion with the instance node
+// the lexical form came from, when there is one.
+//
+// The node is needed by exactly one check: an enumeration facet on a type whose
+// value space is QNames compares expanded names, and expanding the instance's
+// spelling takes the namespaces in scope where it was written. Everything else
+// ignores it, which is why it is threaded as an extra parameter rather than
+// made part of the type or the version.
+func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *xdm.Node) (string, error) {
 	// A definition naming a type that does not exist loaded anyway, because
 	// the spec makes that an error only where the type is used. This is
 	// where it is used, so it is an error now — and checking here also
@@ -107,11 +119,11 @@ func validateSimpleValueVersion(lexical string, t *SimpleType, version Version) 
 	}
 	switch t.Variety {
 	case VarietyList:
-		return validateListValue(lexical, t)
+		return validateListValueIn(lexical, t, at)
 	case VarietyUnion:
-		return validateUnionValue(lexical, t)
+		return validateUnionValueIn(lexical, t, at)
 	}
-	return validateAtomicValueVersion(lexical, t, version)
+	return validateAtomicValueBoundsIn(lexical, t, version, true, at)
 }
 
 // valueSpaceOnly reports whether a lexical form denotes a value in a type's
@@ -152,6 +164,10 @@ func validateAtomicValueVersion(lexical string, t *SimpleType, version Version) 
 // re-stating a bound with the same value contradict itself, which the spec
 // allows outright (d3_4_28v09).
 func validateAtomicValueBounds(lexical string, t *SimpleType, version Version, bounds bool) (string, error) {
+	return validateAtomicValueBoundsIn(lexical, t, version, bounds, nil)
+}
+
+func validateAtomicValueBoundsIn(lexical string, t *SimpleType, version Version, bounds bool, at *xdm.Node) (string, error) {
 	ws := EffectiveWhiteSpace(t)
 	normalized := ws.Normalize(lexical)
 
@@ -188,7 +204,7 @@ func validateAtomicValueBounds(lexical string, t *SimpleType, version Version, b
 		return "", err
 	}
 
-	if err := checkEnumeration(steps, normalized, t); err != nil {
+	if err := checkEnumerationIn(steps, normalized, t, at); err != nil {
 		return "", err
 	}
 	if err := checkLengthForPrimitive(steps, normalized, prim); err != nil {
@@ -272,6 +288,10 @@ func hasTimezone(v string) bool {
 // matches the whole literal rather than each item — erratum E2-30, which is the
 // opposite of what the per-item reading would suggest.
 func validateListValue(lexical string, t *SimpleType) (string, error) {
+	return validateListValueIn(lexical, t, nil)
+}
+
+func validateListValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, error) {
 	normalized := WhiteCollapse.Normalize(lexical)
 	steps := facetChain(t)
 
@@ -286,13 +306,13 @@ func validateListValue(lexical string, t *SimpleType) (string, error) {
 	if err := checkLengthFacets(steps, uint64(len(items)), "items"); err != nil {
 		return "", err
 	}
-	if err := checkEnumeration(steps, normalized, t); err != nil {
+	if err := checkEnumerationIn(steps, normalized, t, at); err != nil {
 		return "", err
 	}
 
 	if t.ItemType != nil {
 		for _, item := range items {
-			if _, err := validateSimpleValue(item, t.ItemType); err != nil {
+			if _, err := validateSimpleValueIn(item, t.ItemType, Version10, at); err != nil {
 				return "", fmt.Errorf("list item %q: %w", item, err)
 			}
 		}
@@ -316,13 +336,17 @@ func validateListValue(lexical string, t *SimpleType) (string, error) {
 // that validates. Normalising once up front would make " 42 " fail against
 // union(xs:int, xs:string) or succeed as the wrong member.
 func validateUnionValue(lexical string, t *SimpleType) (string, error) {
+	return validateUnionValueIn(lexical, t, nil)
+}
+
+func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, error) {
 	steps := facetChain(t)
 
 	for _, m := range t.MemberTypes {
 		if m == nil {
 			continue
 		}
-		normalized, err := validateSimpleValue(lexical, m)
+		normalized, err := validateSimpleValueIn(lexical, m, Version10, at)
 		if err != nil {
 			continue
 		}
@@ -331,7 +355,7 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 		if err := checkPatterns(steps, normalized); err != nil {
 			continue
 		}
-		if err := checkEnumeration(steps, normalized, t); err != nil {
+		if err := checkEnumerationIn(steps, normalized, t, at); err != nil {
 			continue
 		}
 		// An assertion on a union is not a member-selection criterion:
@@ -354,18 +378,44 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 // type "1.0" and "1" are the same value and an enumeration of one admits the
 // other. Comparing lexical forms would reject documents the spec accepts.
 func checkEnumeration(steps []facetStep, normalized string, t *SimpleType) error {
+	return checkEnumerationIn(steps, normalized, t, nil)
+}
+
+// checkEnumerationIn is checkEnumeration with the instance node the value was
+// written on, which xs:QName and xs:NOTATION need and no other type does.
+func checkEnumerationIn(steps []facetStep, normalized string, t *SimpleType, at *xdm.Node) error {
 	prim := ""
 	if p := primitiveOf(t); p != nil {
 		prim = p.Name.Local
 	}
 	numeric := prim == "decimal" || prim == "float" || prim == "double"
 
+	// xs:QName and xs:NOTATION have QNames, not strings, for their value
+	// space, so two spellings denote the same value whenever their prefixes
+	// bind the same URI. The instance's spelling is expanded against the
+	// namespaces in scope where it was written; the facet's was expanded at
+	// schema-load time against the schema document's. Without both
+	// expansions "one:mp3" was refused by an enumeration of "smokey:mp3"
+	// even though the two prefixes name one namespace.
+	var want xdm.QName
+	haveQName := false
+	if (prim == "QName" || prim == "NOTATION") && at != nil {
+		want, haveQName = resolveInstanceQName(at, normalized)
+	}
+
 	for _, st := range steps {
 		if !st.facets.HasEnumerations {
 			continue
 		}
 		ok := false
-		for _, e := range st.facets.Enumerations {
+		for i, e := range st.facets.Enumerations {
+			if haveQName && i < len(st.facets.EnumerationQNames) {
+				cand := st.facets.EnumerationQNames[i]
+				if cand.Local != "" && cand == want {
+					ok = true
+					break
+				}
+			}
 			cand := EffectiveWhiteSpace(st.typ).Normalize(e)
 			if cand == normalized {
 				ok = true
@@ -1057,4 +1107,68 @@ func listItemKind(item *SimpleType, value string) string {
 		return "IDREFS"
 	}
 	return ""
+}
+
+// expandFacetQName expands an enumeration facet's value as a QName against the
+// namespaces in scope on the facet element itself.
+//
+// The prefix binds in the schema document, which is a different namespace
+// context from the instance document the value will be compared against. An
+// unprefixed name takes the default namespace: the value is a QName written in
+// element content, not an attribute name, so the XPath attribute rule that
+// leaves an unprefixed name in no namespace does not apply. That is what makes
+// an instance writing a bare "mp3" under a default namespace match a facet
+// written with a prefix bound to the same URI.
+//
+// The zero QName is returned when the prefix is not bound, which leaves the
+// comparison to fall back on the lexical forms.
+func expandFacetQName(el *xdm.Node, value string) xdm.QName {
+	value = strings.TrimSpace(value)
+	prefix, local := "", value
+	if i := strings.IndexByte(value, ':'); i >= 0 {
+		prefix, local = value[:i], value[i+1:]
+	}
+	if local == "" || strings.ContainsRune(local, ':') {
+		return xdm.QName{}
+	}
+	uri, ok := el.LookupPrefix(prefix)
+	if !ok {
+		return xdm.QName{}
+	}
+	// Only URI and Local are set. An xdm.QName is compared as a whole
+	// struct, so a prefix left on one side would make every comparison
+	// against an instance value that spells it differently fail.
+	return xdm.QName{URI: uri, Local: local}
+}
+
+// resolveInstanceQName expands a QName written as the value of an instance node
+// against the namespaces in scope there.
+//
+// An unprefixed name takes the *default* namespace even when the value sits on
+// an attribute. That is the rule for a QName appearing in content — Part 2
+// §3.2.18 — and not the rule for an attribute's own name, which is in no
+// namespace when unprefixed. The distinction is load-bearing: an instance
+// writing a bare "mp3" under xmlns="http://notation.example.com" denotes the
+// same notation as one writing "smokey:mp3" in the schema, and treating it as
+// an absent namespace made those two values differ.
+func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
+	value = strings.TrimSpace(value)
+	prefix, local := "", value
+	if i := strings.IndexByte(value, ':'); i >= 0 {
+		prefix, local = value[:i], value[i+1:]
+	}
+	if local == "" || strings.ContainsRune(local, ':') {
+		return xdm.QName{}, false
+	}
+	scope := at
+	if scope.Kind == xdm.KindAttribute && scope.Parent != nil {
+		scope = scope.Parent
+	}
+	uri, ok := scope.LookupPrefix(prefix)
+	if !ok {
+		return xdm.QName{}, false
+	}
+	// Only URI and Local are set: an xdm.QName compares as a whole struct,
+	// and a prefix carried on one side would defeat every comparison.
+	return xdm.QName{URI: uri, Local: local}, true
 }

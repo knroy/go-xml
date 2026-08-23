@@ -177,8 +177,12 @@ func TestIDLookup(t *testing.T) {
 	if got := evalStr(t, doc, `local-name(id('two', /r))`); got != "b" {
 		t.Errorf("id('two') = %q, want b", got)
 	}
-	if got := evalStr(t, doc, `local-name(idref('one', /r))`); got != "c" {
-		t.Errorf("idref('one') = %q, want c", got)
+	// fn:idref returns the nodes that *hold* the reference, which is the
+	// IDREF-typed attribute rather than the element carrying it. The W3C
+	// suite pins this: fn-idref-32 expects "idref(...)/name()" to yield
+	// attribute names.
+	if got := evalStr(t, doc, `local-name(idref('one', /r))`); got != "idref" {
+		t.Errorf("idref('one') = %q, want the attribute name idref", got)
 	}
 	if got := evalStr(t, doc, `count(id('missing', /r))`); got != "0" {
 		t.Errorf("id of a missing name = %q, want 0", got)

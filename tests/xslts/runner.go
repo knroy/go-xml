@@ -266,7 +266,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// document() on the test-set's own files. Both resolvers are rooted
 		// at the test-set directory: the tests are trusted input, and
 		// confining them there is what keeps that true.
-		SchemaResolver: &xsd.FileResolver{},
+		SchemaResolver: pathSchemaResolver{},
 		// The suite's stylesheets include one another by relative path, and
 		// a resolver rooted at the test-set directory is what makes that
 		// work without opening the filesystem generally.
@@ -276,10 +276,14 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// not read them. The suite is trusted input; the root is what keeps
 		// the run from reaching outside it.
 		Resolver: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
-		// A filesystem path rather than a file: URI: the schema resolver
-		// joins the base with filepath.Dir, which turns a URI into a
-		// directory literally named "file:".
-		BaseURI: sheetPath,
+		// A file: URI rather than a bare path. fn:static-base-uri and
+		// fn:resolve-uri are defined over URIs, and an absolute filesystem
+		// path is still a *relative* URI reference because it has no scheme
+		// — so a bare path made every stylesheet resolving against its own
+		// base fail with FORG0002 on a base that was perfectly correct. The
+		// resolvers strip the scheme back off before touching the
+		// filesystem, so joining with filepath still works.
+		BaseURI: fileURI(sheetPath),
 	})
 	if err != nil {
 		return nil, err
@@ -296,6 +300,13 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// the XXE entry point. The suite is trusted input read from a
 		// checkout, so it is enabled here and nowhere else.
 		Documents: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
+	}
+	// A collection is declared by the environment, not discovered on the
+	// filesystem, so only a test whose environment names one gets a resolver.
+	// Leaving the field nil elsewhere keeps fn:collection refusing, which is
+	// what the tests asserting that refusal expect.
+	if env := r.environment(set, tc); env != nil && len(env.Collections) > 0 {
+		opts.Collections = &catalogCollections{set: set, decls: env.Collections}
 	}
 	if tc.Test.InitialTemplate != nil {
 		opts.InitialTemplate = tc.Test.InitialTemplate.Name
@@ -503,4 +514,123 @@ func mergeInto(dst, src *xsd.Schema) {
 			dst.Attributes[n] = a
 		}
 	}
+}
+
+// catalogCollections resolves fn:collection from the environment's
+// declarations.
+//
+// The suite states a collection's membership explicitly rather than leaving it
+// to be discovered, so this reads the declaration rather than the directory:
+// two environments may name overlapping sets of the same files, and only the
+// declaration says which documents belong to which URI.
+type catalogCollections struct {
+	set   *TestSet
+	decls []Collection
+}
+
+// ResolveCollection returns the documents in the named collection.
+func (c *catalogCollections) ResolveCollection(uri, base string) (xdm.Sequence, error) {
+	// The URI is matched on its last path segment rather than in full. The
+	// stylesheet writes it relative to itself and the engine has already
+	// resolved it against the stylesheet's base, while the catalog writes it
+	// relative to the test-set file; comparing the resolved form against the
+	// declared form would never match even though both name one collection.
+	want := collectionKey(uri)
+	for _, d := range c.decls {
+		if collectionKey(d.URI) != want {
+			continue
+		}
+		var out xdm.Sequence
+		for _, s := range d.Sources {
+			// A source may name a fragment, which selects one element out of
+			// the document rather than the document node. Splitting it here
+			// keeps the filename openable.
+			file, frag := splitFragment(s.File)
+			if file == "" {
+				continue
+			}
+			p := filepath.Join(c.set.Dir, filepath.FromSlash(file))
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return nil, err
+			}
+			tree, err := xdm.ParseString(string(stripBOM(data)),
+				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
+			if err != nil {
+				return nil, err
+			}
+			if frag == "" {
+				out = append(out, tree.Root)
+				continue
+			}
+			if n := findByID(tree.Root, frag); n != nil {
+				out = append(out, n)
+			}
+		}
+		return out, nil
+	}
+	// A collection URI the environment does not declare is empty rather than
+	// an error: the environment is the whole statement of what exists, so a
+	// name absent from it names nothing.
+	return nil, nil
+}
+
+// collectionKey reduces a collection URI to the part two spellings of it
+// share: the final path segment, without any fragment.
+func collectionKey(uri string) string {
+	uri, _ = splitFragment(uri)
+	return lastSegment(uri)
+}
+
+// splitFragment separates a URI reference from its fragment identifier.
+func splitFragment(uri string) (string, string) {
+	if i := strings.IndexByte(uri, '#'); i >= 0 {
+		return uri[:i], uri[i+1:]
+	}
+	return uri, ""
+}
+
+// findByID returns the element carrying the given xml:id or ID-typed value.
+func findByID(n *xdm.Node, id string) *xdm.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == xdm.KindElement {
+		for _, a := range n.Attrs {
+			if a.Name.Local == "id" && a.Value == id {
+				return n
+			}
+		}
+	}
+	for _, ch := range n.Children {
+		if got := findByID(ch, id); got != nil {
+			return got
+		}
+	}
+	return nil
+}
+
+// pathSchemaResolver resolves xsl:import-schema against the filesystem after
+// turning a file: base URI back into a path.
+//
+// The stylesheet's base URI is a URI, because fn:static-base-uri and
+// fn:resolve-uri are defined over URIs and a bare path has no scheme. The
+// schema resolver, though, joins the base with filepath.Dir, which reads
+// "file:" as a directory name. Stripping the scheme here keeps both true
+// rather than making one of them wrong.
+type pathSchemaResolver struct{}
+
+func (pathSchemaResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	return (&xsd.FileResolver{}).Resolve(namespace, location, uriToPath(base))
+}
+
+// uriToPath turns a file: URI back into a filesystem path, leaving anything
+// else alone.
+func uriToPath(s string) string {
+	for _, p := range []string{"file://", "file:"} {
+		if strings.HasPrefix(s, p) {
+			return filepath.FromSlash(strings.TrimPrefix(s, p))
+		}
+	}
+	return s
 }

@@ -433,6 +433,15 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if base == "" {
 		base = ctx.StaticBaseURI
 	}
+	// An empty URI reference denotes the document containing the expression
+	// itself, not the document the context node came from. XSLT 2.0 section
+	// 16.1 keeps XSLT 1.0's rule for it, and it is the ordinary way a
+	// stylesheet reads its own literal data elements. Resolving it against
+	// the context node's base would load the source document instead, which
+	// is a different document that happens to be at hand.
+	if strings.TrimSpace(uri) == "" && ctx.StaticBaseURI != "" {
+		base = ctx.StaticBaseURI
+	}
 	tree, err := ctx.Docs.ResolveDocument(uri, base)
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)

@@ -86,6 +86,21 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 // stylesheet that is copied to the output with its attributes evaluated as
 // attribute value templates.
 func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
+	// Section 18.2: an element in a designated extension namespace is an
+	// instruction, not a literal result element. This processor implements no
+	// extension instructions, so every one of them is "not available" and
+	// fallback is performed: the xsl:fallback children are evaluated, or
+	// XTDE1450 is raised if there are none. XTDE1450 is a *dynamic* error, so
+	// it must fire when the instruction is reached rather than at compile
+	// time — a stylesheet may guard the instruction with element-available and
+	// never evaluate it.
+	if isExtensionInstruction(n) {
+		body, ok, err := c.compileFallbackChildren(n)
+		if err != nil {
+			return nil, err
+		}
+		return &extensionInstr{name: n.Name, fallback: body, hasFallback: ok}, nil
+	}
 	sets, err := parseUseAttributeSets(n)
 	if err != nil {
 		return nil, err
@@ -318,7 +333,63 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			"XTSE0010: xsl:%s is not allowed here; it belongs inside %s",
 			n.Name.Local, enclosingElementFor(n.Name.Local))
 	}
-	return nil, fmt.Errorf("unsupported instruction xsl:%s", n.Name.Local)
+	// Section 3.9: an element in the XSLT namespace that this version does not
+	// define, appearing in a sequence constructor where forwards-compatible
+	// behaviour is enabled, is not an error provided it supplies an
+	// xsl:fallback. The result is the concatenation of the fallback bodies,
+	// and siblings of the xsl:fallback children are ignored "even if they are
+	// valid XSLT 2.0 instructions" — which is why only the fallbacks are
+	// compiled and the rest of the content is dropped.
+	if forwardsMode(n) {
+		body, ok, err := c.compileFallbackChildren(n)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &blockInstr{body: body}, nil
+		}
+		// With no xsl:fallback, "a static error is reported in the same way as
+		// if forwards-compatible behaviour were not enabled" — XTSE0010.
+	}
+	return nil, fmt.Errorf(
+		"xsl:%s is not an XSLT 2.0 element (XTSE0010)", n.Name.Local)
+}
+
+// extensionInstr stands for an extension instruction the processor does not
+// implement. Every extension instruction reaches this state, because no
+// extension namespace is recognised.
+type extensionInstr struct {
+	name        xdm.QName
+	fallback    []Instruction
+	hasFallback bool
+}
+
+func (i *extensionInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if !i.hasFallback {
+		return fmt.Errorf(
+			"XTDE1450: extension instruction %s is not available and has no "+
+				"xsl:fallback children", i.name.Lexical())
+	}
+	return execSequence(i.fallback, rt, out)
+}
+
+// compileFallbackChildren compiles the bodies of el's xsl:fallback children,
+// reporting whether it had any.
+func (c *compiler) compileFallbackChildren(el *xdm.Node) ([]Instruction, bool, error) {
+	var body []Instruction
+	found := false
+	for _, ch := range el.ChildElements() {
+		if !isXSL(ch, "fallback") {
+			continue
+		}
+		found = true
+		instrs, err := c.compileSequence(ch, ch)
+		if err != nil {
+			return nil, false, err
+		}
+		body = append(body, instrs...)
+	}
+	return body, found, nil
 }
 
 func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
@@ -362,6 +433,18 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 		if m == "#current" || m == "#default" {
 			instr.mode = m
 		} else {
+			// Section 6.5: the value "must either be a QName ... or the token
+			// #default ... or the token #current". The summary does not
+			// bracket the type, so it is not an attribute value template, and
+			// a curly-bracket value is simply outside the lexical space —
+			// which is XTSE0020. Left unchecked, mode="{$x}" was resolved to
+			// a mode literally named "{$x}", so a stylesheet expecting an
+			// error selected no template rules and quietly produced nothing.
+			if !isLexicalQName(m) {
+				return nil, fmt.Errorf(
+					"XTSE0020: xsl:apply-templates/@mode=%q is neither a "+
+						"QName nor #default nor #current", m)
+			}
 			qn, err := resolveQNameAttr(n, m)
 			if err != nil {
 				return nil, err
@@ -431,15 +514,29 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 	// distinguishable from the default.
 	s := &sortKey{order: "ascending"}
 
+	// The key is either the select expression or the element's content.
+	// XTSE1015 forbids both, and with neither the default is select=".".
 	sel := n.AttrValue("select")
-	if sel == "" {
-		sel = "." // sorting on the item itself is the default
-	}
-	comp, err := compileExpr(sel, ns)
+	body, err := c.compileSequence(n, n)
 	if err != nil {
-		return nil, fmt.Errorf("in xsl:sort/@select: %w", err)
+		return nil, err
 	}
-	s.sel = comp
+	switch {
+	case sel != "" && len(body) > 0:
+		return nil, fmt.Errorf(
+			"XTSE1015: an xsl:sort element with a select attribute must be empty")
+	case sel == "" && len(body) > 0:
+		s.body = body
+	default:
+		if sel == "" {
+			sel = "." // sorting on the item itself is the default
+		}
+		comp, err := compileExpr(sel, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:sort/@select: %w", err)
+		}
+		s.sel = comp
+	}
 
 	// order, data-type, case-order and lang are all attribute value
 	// templates. They cannot vary per item — the whole sort is one ordering —

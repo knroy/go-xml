@@ -249,6 +249,15 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 			// than each replacing the last.
 			f.Enumerations = append(f.Enumerations, v)
 			f.HasEnumerations = true
+			// The expansion is recorded here even though most types
+			// never need it: this is the only point where the facet's
+			// own element — and so the schema document's namespace
+			// bindings — is still reachable. checkEnumeration uses it
+			// only when the type turns out to have QNames for its
+			// value space, and the base type is not necessarily
+			// resolved yet at this point.
+			f.EnumerationQNames = append(f.EnumerationQNames,
+				expandFacetQName(c, v))
 
 		case "minInclusive":
 			f.MinInclusive = &v

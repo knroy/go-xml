@@ -70,7 +70,7 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 				i += 2
 				continue
 			}
-			return nil, fmt.Errorf("unmatched '}' in attribute value template %q", src)
+			return nil, fmt.Errorf("XTSE0370: unmatched '}' in attribute value template %q", src)
 
 		default:
 			lit.WriteByte(src[i])
@@ -116,7 +116,7 @@ func findAVTClose(src string, i int) (int, error) {
 			return i, nil
 		}
 	}
-	return 0, fmt.Errorf("unclosed '{' in attribute value template %q", src)
+	return 0, fmt.Errorf("XTSE0350: unclosed '{' in attribute value template %q", src)
 }
 
 // eval renders the AVT in the given runtime context.

@@ -189,6 +189,15 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 		// indented to suit the author — while a transform emits what the
 		// stylesheet says, so comparing them literally reports indentation
 		// as a conformance failure. This is what the reference driver does.
+		if wasRedirected {
+			// The same reason as serialization-matches below: an unnamed
+			// xsl:result-document serialises with its *own* output settings,
+			// and a Result rebuilt from its nodes has lost them. Re-
+			// serialising it here defaulted the method, which picks html
+			// from an <html> root and injects a meta element the stylesheet
+			// never wrote — a difference invented by the harness.
+			return compareXMLText(redirected, want, true)
+		}
 		return compareXML(res, want, true)
 
 	case "assert":
@@ -333,11 +342,17 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 // expected values with the whitespace that suited the author, and a textual
 // match would report a difference in indentation as a conformance failure.
 func compareXML(res *xslt.Result, want string, normalizeSpace bool) (bool, string) {
+	return compareXMLText(res.String(), want, normalizeSpace)
+}
+
+// compareXMLText compares already-serialised result text against the expected
+// fragment.
+func compareXMLText(serialised, want string, normalizeSpace bool) (bool, string) {
 	// The expected value in the catalog is a *fragment*: the result tree
 	// written out, with no XML declaration. Result.String serialises a
 	// document, declaration included, so comparing the two directly reports
 	// every passing test as a mismatch against its own prologue.
-	got := stripDecl(res.String())
+	got := stripDecl(serialised)
 	// The expected value is stripped too. An expected result read from a
 	// file carries its own declaration, and comparing one prologue against
 	// the absence of another is not what the test asks.
@@ -482,7 +497,7 @@ func evalAssert(res *xslt.Result, expr string, ns map[string]string) (bool, stri
 	if b {
 		return true, ""
 	}
-	return false, "assertion is false: " + trunc(expr)
+	return false, "assertion is false: " + trunc(expr) + " || GOT=" + trunc(res.String())
 }
 
 // secondaryByURI finds the result document a URI names, as a Result so that

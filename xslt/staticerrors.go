@@ -662,6 +662,15 @@ func checkPrefixListAttrs(el *xdm.Node) error {
 		{"extension-element-prefixes", "XTSE1430", "XTSE1430"},
 	} {
 		for _, uri := range []string{"", xdm.NSXSL} {
+			// On a literal result element the unprefixed spelling is not a
+			// directive at all but an ordinary attribute destined for the
+			// output, which section 3.5 is explicit about: the attribute "must
+			// be in the XSLT namespace only if its parent element is not in
+			// the XSLT namespace". Checking it there rejected a stylesheet for
+			// an attribute it was merely copying through.
+			if uri == "" && el.Name.URI != xdm.NSXSL {
+				continue
+			}
 			a := el.Attr(uri, spec.attr)
 			if a == nil {
 				continue

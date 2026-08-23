@@ -113,6 +113,27 @@ func (c *compiler) checkCallTemplateParams() error {
 					"which does not declare it",
 				p.Name.Lexical(), call.name.Lexical())
 		}
+		// XTSE0690 is the mirror image, and static for the same reason: the
+		// call names the template, so both sides are known at compile time.
+		// A required non-tunnel parameter the call does not supply can never
+		// be supplied, whichever way the transformation runs. Leaving it to
+		// the runtime reported XTDE0700 instead, and only if the call was
+		// actually reached.
+		supplied := map[string]bool{}
+		for _, p := range call.params {
+			if !p.Tunnel {
+				supplied[p.Name.Clark()] = true
+			}
+		}
+		for _, p := range t.Params {
+			if !p.Required || p.Tunnel || supplied[p.Name.Clark()] {
+				continue
+			}
+			return fmt.Errorf(
+				"XTSE0690: xsl:call-template does not supply required "+
+					"parameter $%s of template %s",
+				p.Name.Lexical(), call.name.Lexical())
+		}
 	}
 	return nil
 }
@@ -158,17 +179,27 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
 	if !isXSL(root, "stylesheet") && !isXSL(root, "transform") {
+		// XTSE0150 names this exact condition: "a literal result element that
+		// is used as the outermost element of a simplified stylesheet module
+		// must have an xsl:version attribute". The unprefixed spelling does
+		// not count — on a non-XSLT element the attribute must be in the XSLT
+		// namespace for it to be the stylesheet's version rather than an
+		// ordinary attribute of the output.
 		if root.Attr(xdm.NSXSL, "version") == nil {
-			return fmt.Errorf("root element %s is not xsl:stylesheet and has no xsl:version",
+			return fmt.Errorf(
+				"XTSE0150: %s is the outermost element of a simplified "+
+					"stylesheet and has no xsl:version attribute",
 				root.Name.Lexical())
 		}
 		return c.compileSimplifiedStylesheet(root, precedence)
 	}
 
-	if v := root.AttrValue("version"); v != "" && !strings.HasPrefix(v, "1.") &&
-		!strings.HasPrefix(v, "2.") && !strings.HasPrefix(v, "3.") {
-		return fmt.Errorf("unsupported stylesheet version %q", v)
-	}
+	// Section 3.9: a version greater than 2.0 is not an error — it enables
+	// forwards-compatible processing, under which unknown XSLT constructs are
+	// ignored or handled by xsl:fallback. Rejecting such a stylesheet outright
+	// contradicts the whole point of the mechanism. Whether the value is a
+	// number at all is XTSE0110, checked in checkStylesheetElement, so nothing
+	// remains to reject here.
 
 	// xsl:import-schema is processed before anything else in the module.
 	//
@@ -294,6 +325,13 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "import-schema":
 		return c.compileImportSchema(el)
 	}
+	// Section 3.9: where forwards-compatible behaviour is enabled, an XSLT
+	// element that XSLT 2.0 does not allow as a child of xsl:stylesheet "must
+	// be ignored" — and its content with it, so nothing inside is compiled or
+	// checked either.
+	if forwardsMode(el) {
+		return nil
+	}
 	// An unrecognised xsl: element at the top level is an error, not something
 	// to skip. The spec reserves the whole namespace, so anything unknown in
 	// it is either a typo — "xsl:tempalte" would otherwise be dropped and the
@@ -344,7 +382,9 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		}
 	}
 	// An explicit priority overrides the computed default.
+	explicitPriority := false
 	if p := el.AttrValue("priority"); p != "" {
+		explicitPriority = true
 		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
 		if err != nil {
 			return fmt.Errorf("invalid template priority %q: %w", p, err)
@@ -457,7 +497,34 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		}
 	}
 	if t.Match != nil {
-		c.sheet.templates = append(c.sheet.templates, t)
+		// A union pattern is several template rules sharing one body: each
+		// branch gets its own default priority and its own place in
+		// declaration order, so that a later branch wins a tie against an
+		// earlier one and xsl:next-match can re-select the rule on a
+		// different branch. Sharing the body keeps the params and sequence
+		// constructor compiled once.
+		// An explicit priority is stated once for the whole rule, which keeps
+		// the union fused: next-match-024 writes the same union as
+		// next-match-023 with priority="1" and expects the body to run once,
+		// not once per branch.
+		alts := []*Pattern{t.Match}
+		if !explicitPriority {
+			alts = t.Match.Alternatives()
+		}
+		for i, alt := range alts {
+			rule := t
+			if i > 0 {
+				copyRule := *t
+				rule = &copyRule
+				c.declOrder++
+				rule.declOrder = c.declOrder
+			}
+			rule.Match = alt
+			if !explicitPriority {
+				rule.Priority = alt.Priority()
+			}
+			c.sheet.templates = append(c.sheet.templates, rule)
+		}
 	}
 	return nil
 }
@@ -1099,5 +1166,13 @@ func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
 			c.inputTypeAnnotations, v)
 	}
 	c.inputTypeAnnotations = v
+	// "Stripping of type annotations takes place if at least one stylesheet
+	// module in the stylesheet specifies input-type-annotations='strip'", so
+	// the flag is set by any module that asks for it and never cleared by a
+	// later one. A module saying "preserve" alongside one saying "strip" is
+	// the XTSE0265 above, not a retraction.
+	if v == "strip" && c.sheet != nil {
+		c.sheet.stripTypeAnnotations = true
+	}
 	return nil
 }

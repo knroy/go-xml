@@ -125,6 +125,7 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 	start := p.pos
 	step := &Step{Axis: AxisChild}
+	explicitAxis := false
 
 	switch {
 	case p.peekIs(TokOp, "."):
@@ -171,6 +172,7 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 				return nil, false, p.errorf("unknown axis %q", p.cur().Val)
 			}
 			step.Axis = ax
+			explicitAxis = true
 			p.pos += 2
 		} else if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokOp &&
 			p.toks[p.pos+1].Val == "(" && !isKindTestName(p.cur().Val) {
@@ -192,8 +194,14 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 	// implies the attribute axis. Without this, "attribute()" would be a
 	// child-axis step and select nothing at all, since attributes are never
 	// children.
+	//
+	// A *written* axis is left alone: "child::attribute(x)" is legal syntax
+	// that selects nothing, and a match pattern spelling it out is testing
+	// exactly that. Rewriting the axis there made such a pattern match every
+	// attribute named x, so a stylesheet using it to say "this must not
+	// match" got the opposite.
 	if kt, isKind := test.(*KindTest); isKind && !kt.Any &&
-		kt.Kind == xdm.KindAttribute && step.Axis == AxisChild {
+		kt.Kind == xdm.KindAttribute && step.Axis == AxisChild && !explicitAxis {
 		step.Axis = AxisAttribute
 	}
 	preds, err := p.parsePredicates()

@@ -38,6 +38,11 @@ type Stylesheet struct {
 	// keys holds xsl:key declarations, grouped by name.
 	keys map[string][]*keyDef
 
+	// stripTypeAnnotations records that some module specified
+	// input-type-annotations="strip", which is a property of the whole
+	// stylesheet rather than of the module carrying it.
+	stripTypeAnnotations bool
+
 	// prefixes holds every namespace prefix declared anywhere in the
 	// stylesheet, so that a name computed at run time can be expanded.
 	//

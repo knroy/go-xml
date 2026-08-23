@@ -3,6 +3,7 @@ package xslt
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -73,26 +74,9 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 
 	if len(i.sorts) > 0 {
-		// Sorting applies to the groups, with each group's first item as the
-		// context, so a sort key can name the grouping value.
-		var items xdm.Sequence
-		byItem := map[xdm.Item]group{}
-		for _, g := range groups {
-			if len(g.items) == 0 {
-				continue
-			}
-			items = append(items, g.items[0])
-			byItem[g.items[0]] = g
-		}
-		sorted, err := applySorts(rt, items, i.sorts)
-		if err != nil {
+		if groups, err = i.sortGroups(rt, groups); err != nil {
 			return err
 		}
-		reordered := make([]group, 0, len(sorted))
-		for _, it := range sorted {
-			reordered = append(reordered, byItem[it])
-		}
-		groups = reordered
 	}
 
 	size := len(groups)
@@ -114,6 +98,127 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 	return nil
+}
+
+// resolveSortCollations evaluates each sort key's @collation attribute value
+// template, giving the collation its text comparisons use.
+//
+// It runs once per sort rather than once per comparison: the attribute cannot
+// vary between the items being sorted, and re-parsing the URI n log n times
+// was measurable.
+func resolveSortCollations(rt *runtime, sorts []*sortKey) ([]xpath.Collation, error) {
+	resolved := make([]xpath.Collation, len(sorts))
+	for k, s := range sorts {
+		resolved[k] = s.strColl
+		if s.strColl == nil && s.collAVT != nil {
+			uri, err := s.collAVT.eval(rt)
+			if err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(uri) != "" {
+				c, err := xpath.ResolveCollation(uri)
+				if err != nil {
+					// Section 13.1.3 fixes the code: a collation URI the
+					// implementation does not recognise is XTDE1035, not the
+					// FOCH0002 that the function library raises for the same
+					// condition.
+					return nil, fmt.Errorf(
+						"XTDE1035: xsl:sort/@collation %q is not a recognized collation", uri)
+				}
+				resolved[k] = c
+			}
+		}
+	}
+	return resolved, nil
+}
+
+// sortGroups orders the groups by the instruction's xsl:sort children.
+//
+// The sort keys are evaluated with the *grouping* context in place: section
+// 14 puts the current group and the current grouping key in scope for them,
+// and <xsl:sort select="current-grouping-key()"/> is the ordinary way to
+// order groups. Sorting a bare sequence of first items instead left
+// current-grouping-key() unbound, so the sort key was empty for every group
+// and the groups stayed in population order.
+//
+// This does not go through applySorts because that function establishes the
+// focus itself, from the sequence it is given; here the focus and the two
+// grouping bindings have to be built per group. The comparison machinery it
+// uses — makeSortValue and compareSortValues — is shared.
+func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, error) {
+	sorts := make([]*sortKey, len(i.sorts))
+	for k, sk := range i.sorts {
+		r, err := sk.resolve(rt)
+		if err != nil {
+			return nil, err
+		}
+		sorts[k] = r
+	}
+	colls, err := resolveSortCollations(rt, sorts)
+	if err != nil {
+		return nil, err
+	}
+	if len(groups) < 2 {
+		return groups, nil
+	}
+
+	type entry struct {
+		g    group
+		keys []sortValue
+		idx  int
+	}
+	entries := make([]entry, len(groups))
+	for n, g := range groups {
+		var focus xdm.Item
+		if len(g.items) > 0 {
+			focus = g.items[0]
+		}
+		sub := rt.withFocus(focus, n+1, len(groups))
+		sub = sub.withVar(currentGroupVar, g.items)
+		sub = sub.withVar(currentGroupingKeyVar, g.key)
+		e := entry{g: g, idx: n, keys: make([]sortValue, len(sorts))}
+		for k, sk := range sorts {
+			v, err := sk.evalKey(sub)
+			if err != nil {
+				return nil, err
+			}
+			e.keys[k] = makeSortValue(v, sk, colls[k], rt.ctx.ImplicitTimezone)
+		}
+		entries[n] = e
+	}
+
+	var sortErr error
+	sort.SliceStable(entries, func(a, b int) bool {
+		for k, sk := range sorts {
+			cmp := compareSortValues(entries[a].keys[k], entries[b].keys[k])
+			if cmp == sortIncomparable {
+				if sortErr == nil {
+					sortErr = fmt.Errorf(
+						"XTDE1030: two sort key values cannot be compared "+
+							"with the lt operator (%s and %s)",
+						entries[a].keys[k].atom.TypeName(),
+						entries[b].keys[k].atom.TypeName())
+				}
+				return false
+			}
+			if cmp == 0 {
+				continue
+			}
+			if sk.order == "descending" {
+				cmp = -cmp
+			}
+			return cmp < 0
+		}
+		return entries[a].idx < entries[b].idx
+	})
+	if sortErr != nil {
+		return nil, sortErr
+	}
+	out := make([]group, len(entries))
+	for n, e := range entries {
+		out[n] = e.g
+	}
+	return out, nil
 }
 
 // The grouping state is passed to current-group() and current-grouping-key()
@@ -198,7 +303,29 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 }
 
 // groupStartingWith begins a new group at each item matching the pattern.
+// requireNodePopulation enforces XTTE1120.
+//
+// Positional grouping asks a pattern whether each item starts or ends a
+// group, and a pattern only ever matches a node. An atomic value in the
+// population therefore has no defined answer; treating it silently as "does
+// not match" put every atomic value in the first group instead of reporting
+// the type error the spec requires.
+func requireNodePopulation(seq xdm.Sequence, attr string) error {
+	for _, it := range seq {
+		if _, ok := it.(*xdm.Node); !ok {
+			return fmt.Errorf(
+				"XTTE1120: xsl:for-each-group/@%s requires a population of "+
+					"nodes, but the select expression produced an atomic value",
+				attr)
+		}
+	}
+	return nil
+}
+
 func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
+	if err := requireNodePopulation(seq, "group-starting-with"); err != nil {
+		return nil, err
+	}
 	var groups []group
 	for _, it := range seq {
 		n, ok := it.(*xdm.Node)
@@ -220,6 +347,9 @@ func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, er
 
 // groupEndingWith closes a group after each item matching the pattern.
 func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
+	if err := requireNodePopulation(seq, "group-ending-with"); err != nil {
+		return nil, err
+	}
 	var groups []group
 	open := false
 	for _, it := range seq {
@@ -313,6 +443,60 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 	return instr, nil
 }
 
+// analyzeStringInput applies the function conversion rules for xs:string to
+// the value of xsl:analyze-string/@select.
+//
+// Section 15.1 says the select expression's result is "converted to a string
+// by applying the function conversion rules", and the target type is the
+// required xs:string — a single item, not a sequence. Joining the sequence
+// instead accepted an integer, a three-item sequence and the empty sequence
+// alike, so three tests that require XPTY0004 quietly produced output.
+//
+// Only untypedAtomic is cast and only anyURI is promoted; xs:integer is
+// neither, which is what makes select="22" an error rather than the string
+// "22".
+func analyzeStringInput(seq xdm.Sequence) (string, error) {
+	atoms := xdm.Atomize(seq)
+	if len(atoms) != 1 {
+		return "", fmt.Errorf(
+			"XPTY0004: xsl:analyze-string/@select must be a single string, "+
+				"but the value has %d items", len(atoms))
+	}
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return "", fmt.Errorf(
+			"XPTY0004: xsl:analyze-string/@select must be a single string")
+	}
+	switch a.Type {
+	case xdm.TypeString, xdm.TypeUntypedAtomic, xdm.TypeAnyURI:
+		return a.String(), nil
+	}
+	return "", fmt.Errorf(
+		"XPTY0004: xsl:analyze-string/@select must be a string, not %s",
+		a.Type)
+}
+
+// evalKey computes one sort key value with the focus already set to the item
+// being sorted.
+//
+// Section 13.1 gives the key either as a select expression or as the
+// element's content, and says the value is "the sequence constructor's
+// result", atomized. The result is the sequence itself and not a temporary
+// tree: <xsl:sort><xsl:sequence select="round(.)"/></xsl:sort> must compare
+// doubles, and wrapping them in a document node would have atomized every key
+// to an untypedAtomic string and sorted 100 before 99.
+func (s *sortKey) evalKey(rt *runtime) (xdm.Sequence, error) {
+	if s.sel != nil {
+		return s.sel.Eval(rt.ctx)
+	}
+	sub := rt.temporaryOutput()
+	out := newOutputBuilder()
+	if err := execSequence(s.body, sub, out); err != nil {
+		return nil, err
+	}
+	return out.sequence(), nil
+}
+
 // --- xsl:analyze-string -----------------------------------------------------
 
 // analyzeStringInstr implements xsl:analyze-string, which splits a string by a
@@ -330,7 +514,10 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	input := stringJoin(seq, "")
+	input, err := analyzeStringInput(seq)
+	if err != nil {
+		return err
+	}
 
 	pattern, err := i.regex.eval(rt)
 	if err != nil {
@@ -364,20 +551,33 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 			"XTDE1150: the xsl:analyze-string regex matches a zero-length string")
 	}
 
+	// The substrings are collected before any is processed, because the
+	// context size is the number of matching *and* non-matching substrings
+	// and that is not known until the whole input has been scanned.
+	type run struct {
+		text  string
+		loc   []int // nil for a non-matching run
+		match bool
+	}
+	var runs []run
 	pos := 0
 	for _, loc := range re.FindAllStringSubmatchIndex(input, -1) {
 		if loc[0] > pos {
-			if err := i.runBranch(rt, out, i.nonMatch, input[pos:loc[0]], nil, input); err != nil {
-				return err
-			}
+			runs = append(runs, run{text: input[pos:loc[0]]})
 		}
-		if err := i.runBranch(rt, out, i.matching, input[loc[0]:loc[1]], loc, input); err != nil {
-			return err
-		}
+		runs = append(runs, run{text: input[loc[0]:loc[1]], loc: loc, match: true})
 		pos = loc[1]
 	}
 	if pos < len(input) {
-		if err := i.runBranch(rt, out, i.nonMatch, input[pos:], nil, input); err != nil {
+		runs = append(runs, run{text: input[pos:]})
+	}
+
+	for n, r := range runs {
+		body := i.nonMatch
+		if r.match {
+			body = i.matching
+		}
+		if err := i.runBranch(rt, out, body, r.text, r.loc, input, n+1, len(runs)); err != nil {
 			return err
 		}
 	}
@@ -385,25 +585,44 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 }
 
 // runBranch executes one branch with the run as the context item.
+//
+// pos and size are the substring's position within the whole sequence of
+// matching and non-matching substrings and that sequence's length, which is
+// what section 15.1 makes the context position and size. Using 1 of 1 made
+// position() report 1 for every substring.
 func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
-	body []Instruction, text string, loc []int, input string) error {
+	body []Instruction, text string, loc []int, input string, pos, size int) error {
 	if len(body) == 0 {
 		return nil
 	}
-	sub := rt.withFocus(xdm.NewString(text), 1, 1).clearCurrentRule()
-	if loc != nil {
-		// regex-group(n) reads the captured groups of the current match.
-		groups := make([]string, 0, len(loc)/2)
-		for g := 0; g < len(loc)/2; g++ {
-			if loc[2*g] < 0 {
-				groups = append(groups, "")
-				continue
-			}
-			groups = append(groups, input[loc[2*g]:loc[2*g+1]])
+	sub := rt.withFocus(xdm.NewString(text), pos, size).clearCurrentRule()
+	// Section 15.2: the captured substrings are set for xsl:matching-substring
+	// and set to the empty sequence for xsl:non-matching-substring. Leaving
+	// the outer binding in place let regex-group() inside a non-matching run
+	// read the groups of the preceding match.
+	groups := make([]string, 0, len(loc)/2)
+	for g := 0; g < len(loc)/2; g++ {
+		if loc[2*g] < 0 {
+			groups = append(groups, "")
+			continue
 		}
-		sub = sub.withVar(regexGroupsVar, groupsToSeq(groups))
+		groups = append(groups, input[loc[2*g]:loc[2*g+1]])
 	}
+	sub = sub.withVar(regexGroupsVar, groupsToSeq(groups))
 	return execSequence(body, sub, out)
+}
+
+// clearFunctionContext removes the context components that section 5.4's
+// table says a call on a stylesheet function clears: the current group, the
+// current grouping key and the current captured substrings.
+//
+// They have dynamic scope, so without this a function called from inside
+// xsl:matching-substring saw the caller's captured substrings and
+// regex-group(1) returned the match instead of the required empty string.
+func (rt *runtime) clearFunctionContext() *runtime {
+	sub := rt.withVar(regexGroupsVar, nil)
+	sub = sub.withVar(currentGroupVar, nil)
+	return sub.withVar(currentGroupingKeyVar, nil)
 }
 
 var regexGroupsVar = xdm.QName{URI: internalNS, Local: "regex-groups"}
@@ -421,7 +640,15 @@ func (c *compiler) compileAnalyzeString(n *xdm.Node, ns xpath.NamespaceResolver)
 	if err != nil {
 		return nil, err
 	}
-	regex, err := requiredAVT(n, "regex", ns)
+	// requiredAVT treats an empty value as a missing attribute, but an
+	// explicit regex="" is present and legal to compile: it is a regex that
+	// matches the zero-length string, and that is the run-time error
+	// XTDE1150, not a compile-time complaint about a missing attribute.
+	regexAttr := n.Attr("", "regex")
+	if regexAttr == nil {
+		return nil, fmt.Errorf("%s requires a regex attribute", n.Name.Lexical())
+	}
+	regex, err := compileAVT(regexAttr.Value, ns)
 	if err != nil {
 		return nil, err
 	}

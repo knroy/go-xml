@@ -364,6 +364,15 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		if err := checkStaticGrammar(n, forwards); err != nil {
 			return err
 		}
+		// Section 3.9 ignores an unknown top-level XSLT element "and its
+		// content", so the walk must not descend into it. Checking inside
+		// rejected a stylesheet for a required attribute missing from an
+		// element the processor was told to pretend it never saw.
+		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) {
+			if _, known := xsltElements[n.Name.Local]; !known {
+				return nil
+			}
+		}
 	}
 	for _, c := range n.Children {
 		if err := checkStaticGrammarTree(c, forwards); err != nil {
@@ -405,6 +414,96 @@ func forwardsAt(el *xdm.Node, inherited bool) bool {
 	return f > 2.0
 }
 
+// isExtensionInstruction reports whether el, an element in a sequence
+// constructor, sits in a namespace some ancestor-or-self designated as an
+// extension namespace.
+//
+// Section 18.2.1: the designation is made by an [xsl:]extension-element-prefixes
+// attribute and "is effective for the element bearing the attribute and for all
+// descendants of that element within the same stylesheet module". An element
+// whose namespace is so designated "is treated as an instruction rather than as
+// a literal result element", which is what changes an unknown element from
+// harmless output into something requiring fallback.
+func isExtensionInstruction(el *xdm.Node) bool {
+	if el.Name.URI == "" || el.Name.URI == xdm.NSXSL {
+		return false
+	}
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		lists := []string{}
+		// The attribute is unprefixed on an XSLT element and xsl:-prefixed on
+		// any other, and section 18.2.1 accepts either spelling wherever it is
+		// not ambiguous, so both are read.
+		if cur.Name.URI == xdm.NSXSL {
+			lists = append(lists, cur.AttrValue("extension-element-prefixes"))
+		}
+		if a := cur.Attr(xdm.NSXSL, "extension-element-prefixes"); a != nil {
+			lists = append(lists, a.Value)
+		}
+		for _, list := range lists {
+			for _, p := range strings.Fields(list) {
+				if p == "#default" {
+					p = ""
+				}
+				if uri, ok := cur.LookupPrefix(p); ok && uri == el.Name.URI {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// isTopLevel reports whether el is a child of xsl:stylesheet or xsl:transform.
+func isTopLevel(el *xdm.Node) bool {
+	p := el.Parent
+	return p != nil && p.Kind == xdm.KindElement && p.Name.URI == xdm.NSXSL &&
+		(p.Name.Local == "stylesheet" || p.Name.Local == "transform")
+}
+
+// forwardsMode reports whether forwards-compatible behaviour is in force at
+// el, working it out from el's own ancestry.
+//
+// checkStaticGrammarTree threads the mode down as it descends, but the
+// instruction compiler reaches an element without that context, so the mode
+// has to be recovered by walking up. The nearest ancestor-or-self carrying a
+// [xsl:]version attribute decides, since section 3.9 says the compatibility
+// behaviour an element establishes overrides any established by an ancestor.
+func forwardsMode(el *xdm.Node) bool {
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		if forwardsAt(cur, false) {
+			return true
+		}
+		// A version attribute that does not enable the mode positively
+		// disables it, so the walk must stop rather than consult an ancestor.
+		if hasVersionAttr(cur) {
+			return false
+		}
+	}
+	return false
+}
+
+// hasVersionAttr reports whether el carries a version attribute that
+// forwardsAt would consult — that is, one that states a compatibility mode.
+func hasVersionAttr(el *xdm.Node) bool {
+	if el.Name.URI == xdm.NSXSL {
+		// xsl:output/@version is the output method's version, not a
+		// compatibility statement, so it establishes nothing.
+		if el.Name.Local == "output" {
+			return false
+		}
+		if el.Attr("", "version") != nil {
+			return true
+		}
+	}
+	return el.Attr(xdm.NSXSL, "version") != nil
+}
+
 // checkQNameAttr verifies an attribute the summary types as a QName.
 //
 // XTSE0020 is about "a value that is not one of the permitted values for that
@@ -437,11 +536,15 @@ func checkQNameAttr(el *xdm.Node, a *xdm.Node) error {
 		names = strings.Fields(v)
 		// An empty list is vacuously fine: it names nothing.
 	}
+	code := qd.code
+	if code == "" {
+		code = "XTSE0020"
+	}
 	for _, n := range names {
 		if !isLexicalQName(n) {
 			return fmt.Errorf(
-				"attribute %s=%q on xsl:%s is not a QName (XTSE0020)",
-				a.Name.Local, a.Value, el.Name.Local)
+				"%s: attribute %s=%q on xsl:%s is not a QName",
+				code, a.Name.Local, a.Value, el.Name.Local)
 		}
 	}
 	return nil

@@ -309,6 +309,17 @@ func valueKey(ctx *Context, a *xdm.Atomic) (string, error) {
 		return "n\x00" + strconv.FormatFloat(f, 'g', 17, 64), nil
 	case a.Type == xdm.TypeBoolean:
 		return fmt.Sprintf("b\x00%t", a.Bool()), nil
+	case a.Type == xdm.TypeQName:
+		// A QName is its namespace URI and local name; the prefix is not
+		// part of the value. Two attributes written "one:mp3" and
+		// "first:mp3" under prefixes bound to the same URI are one value,
+		// so they must key alike. The fallback key below spells the value
+		// with its prefix, which kept them apart and made
+		// distinct-values, xsl:for-each-group and key() all see more
+		// distinct values than there are.
+		if q := a.QName(); q != nil {
+			return "q\x00" + q.URI + "\x00" + q.Local, nil
+		}
 	case isStringLike(a.Type):
 		// Two strings are the same value under the collation in force, not
 		// under codepoint equality: with a case-blind collation "THou" and

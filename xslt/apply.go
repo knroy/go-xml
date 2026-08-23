@@ -410,6 +410,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// A function body has no context item: referring to "." inside one is an
 	// error, which is what stops functions from depending on hidden state.
 	sub = sub.withFocus(nil, 0, 0)
+	// Section 5.4's table lists what a call on a stylesheet function clears
+	// as well as the focus: the current group, the current grouping key and
+	// the current captured substrings.
+	sub = sub.clearFunctionContext()
 
 	if err := sub.descend(); err != nil {
 		return nil, err

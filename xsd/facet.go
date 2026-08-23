@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // FacetKind identifies a constraining facet (Part 2 §4.3).
@@ -195,6 +197,25 @@ type FacetSet struct {
 	// is tested with HasEnumeration rather than len.
 	Enumerations    []string
 	HasEnumerations bool
+
+	// EnumerationQNames holds the expanded form of each enumeration value,
+	// parallel to Enumerations, for a type whose value space is QNames —
+	// xs:QName, xs:NOTATION and anything derived from them.
+	//
+	// Those two types compare by expanded name, not by spelling: Part 2
+	// §3.2.18 gives xs:NOTATION the value space of the QNames of the
+	// notations declared in the schema, so an instance writing "one:mp3"
+	// satisfies an enumeration written "smokey:mp3" whenever both prefixes
+	// bind the same URI. The prefix in the facet resolves against the
+	// *schema* document's namespaces and the prefix in the instance against
+	// the *instance* document's, so neither lexical form can be compared
+	// against the other; the expansion has to be recorded here, where the
+	// facet's own element is still in hand.
+	//
+	// An entry is the zero QName when the facet's prefix was not bound, and
+	// is only populated for a namespace-sensitive type, so an empty slice
+	// means "compare lexically" as before.
+	EnumerationQNames []xdm.QName
 
 	// Assertions are the XSD 1.1 <xs:assertion> facets. On a simple type an
 	// assertion is a facet rather than a component, though it compiles the

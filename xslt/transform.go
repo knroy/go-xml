@@ -101,6 +101,13 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		source = s.stripWhitespace(source)
 	}
 
+	// Type annotations are stripped from the same source trees whitespace
+	// stripping applies to — section 3.5 says so — and after it, so that the
+	// two passes compose rather than one undoing the other.
+	if source != nil && s.stripTypeAnnotations {
+		source = s.stripTypeAnnotationsFrom(source)
+	}
+
 	rt, err := newRuntime(s, ctx, source, opts)
 	if err != nil {
 		return nil, err
@@ -120,6 +127,16 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	out := newOutputBuilder()
 
 	if opts.InitialTemplate != "" {
+		// XTDE0047: "it is a non-recoverable dynamic error if the invocation
+		// of the stylesheet specifies both an initial mode and an initial
+		// template". The two are alternative ways of saying where processing
+		// starts, and honouring only one of them silently discards half of
+		// what the caller asked for.
+		if m := opts.InitialMode; m != "" && m != "#default" && m != "#unnamed" {
+			return nil, fmt.Errorf(
+				"XTDE0047: the invocation specifies both an initial mode %q "+
+					"and an initial template %q", m, opts.InitialTemplate)
+		}
 		t, ok := s.named[xdm.QName{Local: opts.InitialTemplate}.Clark()]
 		if !ok {
 			return nil, fmt.Errorf(
@@ -321,4 +338,72 @@ func (r *Result) Tree() *xdm.Node {
 	}
 	tree.Finalize()
 	return tree.Root
+}
+
+// stripTypeAnnotations returns a copy of the tree with every type annotation
+// removed, as input-type-annotations="strip" requires.
+//
+// Section 3.5 states the effect exactly: the annotation of every element
+// becomes xs:untyped and of every attribute xs:untypedAtomic, the typed value
+// of both becomes the string value as xs:untypedAtomic, and the is-nilled
+// property of every element becomes false. The is-id and is-idrefs properties
+// are explicitly *not* changed, which is why xsi:nil is the only attribute
+// dropped here and the ID-bearing ones are copied through untouched.
+//
+// The work is done on a copy for the same reason whitespace stripping is: a
+// caller may reuse one parsed document across several stylesheets, and only
+// some of them ask for the annotations to go.
+func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
+	tree := xdm.NewTree()
+	tree.Root.BaseURI = root.BaseURI
+	for _, ch := range root.Children {
+		if c := stripAnnotationCopy(ch); c != nil {
+			tree.Root.AppendChild(c)
+		}
+	}
+	tree.Finalize()
+	return tree.Root
+}
+
+// stripAnnotationCopy copies n with its type annotation cleared.
+//
+// An empty TypeAnnotation is how this data model spells xs:untyped for an
+// element and xs:untypedAtomic for an attribute: Atomize returns an
+// untypedAtomic for a node carrying none, which is precisely the typed value
+// the specification asks for here.
+func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
+	switch n.Kind {
+	case xdm.KindElement:
+		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI}
+		for _, ns := range n.Namespaces {
+			c.AddNamespace(ns.Name.Local, ns.Value)
+		}
+		for _, a := range n.Attrs {
+			// xsi:nil is dropped rather than copied: the is-nilled
+			// property of every element becomes false, and this data
+			// model computes is-nilled from the attribute rather than
+			// storing it, so removing the attribute is what sets the
+			// property. Every other attribute is kept, which is what
+			// leaves is-id and is-idrefs unchanged.
+			if a.Name.URI == xdm.NSXSI && a.Name.Local == "nil" {
+				continue
+			}
+			c.AddAttr(&xdm.Node{
+				Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
+			})
+		}
+		for _, ch := range n.Children {
+			if cc := stripAnnotationCopy(ch); cc != nil {
+				c.AppendChild(cc)
+			}
+		}
+		return c
+	case xdm.KindText:
+		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
+	case xdm.KindComment:
+		return &xdm.Node{Kind: xdm.KindComment, Value: n.Value}
+	case xdm.KindPI:
+		return &xdm.Node{Kind: xdm.KindPI, Name: n.Name, Value: n.Value}
+	}
+	return nil
 }

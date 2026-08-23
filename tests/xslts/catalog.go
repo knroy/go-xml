@@ -88,6 +88,11 @@ type Environment struct {
 	Sources []Source `xml:"source"`
 	Params  []Param  `xml:"param"`
 	Schemas []Schema `xml:"schema"`
+	// Collections are the document sets fn:collection resolves. An
+	// environment declaring one is what makes collection() answer at all:
+	// without it the engine refuses, correctly, because a collection URI it
+	// was never told about is not a document set it can invent.
+	Collections []Collection `xml:"collection"`
 	// Stylesheets declared here are shared by every case referencing the
 	// environment. A test-set built that way states no stylesheet on its
 	// cases at all, so a runner reading only the case-level ones finds none
@@ -116,6 +121,16 @@ type Param struct {
 	Select string `xml:"select,attr"`
 	As     string `xml:"as,attr"`
 	Static string `xml:"static,attr"`
+}
+
+// Collection is a named set of documents fn:collection returns.
+//
+// An empty uri names the *default* collection — the one collection() with no
+// argument returns — which is why the attribute is not treated as missing when
+// it is present and blank.
+type Collection struct {
+	URI     string   `xml:"uri,attr"`
+	Sources []Source `xml:"source"`
 }
 
 type Schema struct {

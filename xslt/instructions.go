@@ -830,7 +830,11 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // sortKey is a compiled xsl:sort.
 type sortKey struct {
-	sel   *xpath.Compiled
+	sel *xpath.Compiled
+	// body is the sequence-constructor form of the sort key, used when there
+	// is no select attribute. Section 13.1 allows the key to be written
+	// either way, and XTSE1015 forbids both at once.
+	body  []Instruction
 	order string // "ascending" or "descending"
 	// dataType is "text" or "number" for the XSLT 1.0 forced conversions;
 	// empty means the XSLT 2.0 default of comparing by the values' own type.
@@ -944,27 +948,9 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 		}
 		sorts[k] = r
 	}
-	resolved := make([]xpath.Collation, len(sorts))
-	for k, s := range sorts {
-		resolved[k] = s.strColl
-		if s.strColl == nil && s.collAVT != nil {
-			uri, err := s.collAVT.eval(rt)
-			if err != nil {
-				return nil, err
-			}
-			if strings.TrimSpace(uri) != "" {
-				c, err := xpath.ResolveCollation(uri)
-				if err != nil {
-					// Section 13.1.3 fixes the code: a collation URI the
-					// implementation does not recognise is XTDE1035, not the
-					// FOCH0002 that the function library raises for the same
-					// condition.
-					return nil, fmt.Errorf(
-						"XTDE1035: xsl:sort/@collation %q is not a recognized collation", uri)
-				}
-				resolved[k] = c
-			}
-		}
+	resolved, err := resolveSortCollations(rt, sorts)
+	if err != nil {
+		return nil, err
 	}
 
 	// Nothing to order, but the attributes above were still validated: a
@@ -980,7 +966,7 @@ func applySorts(rt *runtime, seq xdm.Sequence, sorts []*sortKey) (xdm.Sequence, 
 		e := entry{item: it, idx: i, keys: make([]sortValue, len(sorts))}
 		sub := rt.withFocus(it, i+1, n)
 		for k, s := range sorts {
-			v, err := s.sel.Eval(sub.ctx)
+			v, err := s.evalKey(sub)
 			if err != nil {
 				return nil, err
 			}

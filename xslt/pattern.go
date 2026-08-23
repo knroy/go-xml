@@ -321,10 +321,13 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 		// direct child of the B, and matching B one level higher than the
 		// node "//" landed on skipped exactly that case.
 		if len(rest) == 0 {
-			// Nothing further to satisfy. Relative "//X" matches anywhere; an
-			// absolute one is satisfied by having any ancestor at all, which
-			// every node inside a document has.
-			return true, nil
+			// Nothing further to satisfy, but "//X" still expands to
+			// root(.)/descendant-or-self::node()/child::X, so the node has to
+			// be somebody's child. A parentless element built by
+			// xsl:variable/@as is its own root and has no parent, so it does
+			// not match — which is what match-178 and match-183 check, and
+			// what the built-in rule they expect to fire depends on.
+			return node.Parent != nil, nil
 		}
 		inner := rest[len(rest)-1]
 		before := rest[:len(rest)-1]
@@ -598,24 +601,76 @@ func (p *Pattern) computePriority() float64 {
 
 func (a *patternAlt) priority() float64 {
 	// A pattern with more than one step, or with predicates, is "complex" and
-	// takes the highest default priority.
-	if len(a.steps) != 1 || len(a.steps[0].preds) > 0 || a.absolute {
+	// takes the highest default priority. The one exception is the pattern
+	// "/", which the parser records as an absolute pattern with a single
+	// document-node step: section 6.4 gives it -0.5 explicitly, and XSLT 2.0
+	// changed it from +0.5 for exactly this reason.
+	if a.call != nil {
 		return 0.5
 	}
-	s := a.steps[0]
-	switch t := s.nodeTest.(type) {
+	if len(a.steps) != 1 || len(a.steps[0].preds) > 0 {
+		return 0.5
+	}
+	if a.absolute {
+		if kt, ok := a.steps[0].nodeTest.(*xpath.KindTest); ok &&
+			kt.Kind == xdm.KindDocument && !kt.HasName && kt.Content == nil {
+			return -0.5 // the pattern "/"
+		}
+		return 0.5
+	}
+	return nodeTestPriority(a.steps[0].nodeTest)
+}
+
+// nodeTestPriority scores a single node test by the table in section 6.4.
+//
+// The table is written in terms of how much the test pins down: a name alone
+// or a type alone scores 0, both together 0.25, a namespace wildcard -0.25,
+// and a bare kind test -0.5. Collapsing every kind test to -0.5, as this used
+// to, made element(x) lose to *:x — which is backwards, and is exactly what
+// the union tests in the next-match set detect.
+func nodeTestPriority(nt xpath.NodeTest) float64 {
+	switch t := nt.(type) {
 	case *xpath.NameTest:
 		switch {
 		case t.AnyURI && t.AnyLocal:
 			return -0.5 // "*"
-		case t.AnyLocal:
-			return -0.25 // "prefix:*"
-		case t.AnyURI:
-			return -0.25 // "*:local"
+		case t.AnyLocal, t.AnyURI:
+			return -0.25 // "prefix:*" or "*:local"
 		}
 		return 0 // a specific name
 	case *xpath.KindTest:
-		return -0.5 // "node()", "text()", and friends
+		switch t.Kind {
+		case xdm.KindElement, xdm.KindAttribute:
+			// schema-element(E) and schema-attribute(A) match by declaration,
+			// which pins down name and type together.
+			if t.SchemaDeclared {
+				return 0.25
+			}
+			named := t.HasName && t.Name != nil
+			typed := t.TypeName != ""
+			switch {
+			case named && typed:
+				return 0.25
+			case named || typed:
+				return 0
+			}
+			return -0.5 // element() / element(*) / attribute() / attribute(*)
+		case xdm.KindDocument:
+			// document-node(E) takes the priority of its inner element test;
+			// document-node() alone is just a kind test.
+			if t.Content != nil {
+				return nodeTestPriority(t.Content)
+			}
+			return -0.5
+		case xdm.KindPI:
+			// processing-instruction("x") names its target, so it scores like
+			// a name test rather than like a bare kind test.
+			if t.HasName && t.Name != nil {
+				return 0
+			}
+			return -0.5
+		}
+		return -0.5 // "node()", "text()", "comment()"
 	}
 	return 0.5
 }
@@ -833,4 +888,26 @@ func isDescendantOrSelfNode(s *xpath.Step) bool {
 	}
 	kt, ok := s.Test.(*xpath.KindTest)
 	return ok && kt.Any
+}
+
+// Alternatives splits a union pattern into one Pattern per branch.
+//
+// Section 6.4 says a template rule whose match pattern is a union behaves as
+// if it were several template rules, one per branch, each with the default
+// priority computed for that branch alone. Keeping them fused would give the
+// whole rule the highest branch's priority, so a low-priority branch would
+// outrank templates it should lose to; it would also make xsl:next-match skip
+// the rule entirely after the first branch fired, when the spec has it
+// reconsider the rule for each remaining branch.
+func (p *Pattern) Alternatives() []*Pattern {
+	if len(p.alts) < 2 {
+		return []*Pattern{p}
+	}
+	out := make([]*Pattern, 0, len(p.alts))
+	for _, a := range p.alts {
+		q := &Pattern{src: p.src, alts: []*patternAlt{a}}
+		q.prio = q.computePriority()
+		out = append(out, q)
+	}
+	return out
 }

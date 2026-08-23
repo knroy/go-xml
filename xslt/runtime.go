@@ -213,10 +213,49 @@ func (b *outputBuilder) appendNode(n *xdm.Node) {
 	}
 	n = detach(n)
 	if b.open != nil {
+		rebase(n, b.open.BaseURI)
 		b.open.AppendChild(n)
 		return
 	}
 	b.items = append(b.items, n)
+}
+
+// rebase recomputes the base URIs of a subtree that has just been re-parented.
+//
+// A copied element keeps whatever xml:base attribute it carried, and XSLT 2.0
+// section 11.9 makes the base URI of the copy a function of that attribute and
+// of the *new* parent, not of the document it came from. So a source element
+// written xml:base="/xml/" under a document based at http://a.example/ becomes
+// based at http://b.example/xml/ once copied under a parent based at
+// http://b.example/main/ — carrying the resolved http://a.example/xml/ across
+// unchanged is the one answer that is wrong in every case.
+//
+// An element with no xml:base of its own simply inherits, which is the same
+// rule with an empty reference.
+func rebase(n *xdm.Node, parentBase string) {
+	if n == nil || n.Kind != xdm.KindElement {
+		return
+	}
+	base := parentBase
+	for _, a := range n.Attrs {
+		if a.Name.URI == xdm.NSXML && a.Name.Local == "base" {
+			base = resolveAgainst(parentBase, a.Value)
+			if a.Value != "" && base == a.Value {
+				// resolveAgainst returns the reference unchanged when it
+				// cannot resolve — an absolute reference, or a parent with no
+				// usable base. Either way the reference is the answer.
+				base = a.Value
+			}
+			break
+		}
+	}
+	if base == "" {
+		return
+	}
+	n.BaseURI = base
+	for _, ch := range n.Children {
+		rebase(ch, base)
+	}
 }
 
 // detach returns a node safe to re-parent: n itself when it is freshly
@@ -245,12 +284,13 @@ func (b *outputBuilder) appendText(s string) {
 		b.open.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: s})
 		return
 	}
-	if k := len(b.items); k > 0 {
-		if last, ok := b.items[k-1].(*xdm.Node); ok && last.Kind == xdm.KindText {
-			last.Value += s
-			return
-		}
-	}
+	// At the top level of a sequence constructor the text nodes stay
+	// separate. Section 5.7.1's merging rule applies when *constructing
+	// complex content* — inside an element, which the branch above handles —
+	// and section 11.10's own example is explicit that a function whose body
+	// is three text instructions "returns a sequence of three text nodes".
+	// Merging them here made xsl:perform-sort over such a body see a single
+	// item and sort nothing.
 	b.items = append(b.items, &xdm.Node{Kind: xdm.KindText, Value: s})
 }
 
@@ -397,6 +437,17 @@ func (b *outputBuilder) addNamespaceNode(prefix, uri string) error {
 			Value: uri,
 		})
 		return nil
+	}
+	// XTDE0440: "the result sequence contains a namespace node with no name
+	// and the element node being constructed has a null namespace URI (that
+	// is, it is an error to define a default namespace when the element is in
+	// no namespace)". Such a binding would put the element's own unprefixed
+	// name into that namespace when the result was read back, which is not
+	// the element that was constructed.
+	if prefix == "" && b.open.Name.URI == "" {
+		return fmt.Errorf(
+			"XTDE0440: a default namespace cannot be declared on %s, "+
+				"which is in no namespace", b.open.Name.Local)
 	}
 	// XTDE0430: "the result sequence contains two or more namespace nodes
 	// having the same name but different string values". Re-declaring a
@@ -607,6 +658,14 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 		return nil, err
 	}
 	tree.BaseURI = v.baseURI
+	// The document node's base is known only now, after its content was
+	// built, so the children are rebased against it here rather than as they
+	// were appended. Without this a copied element with a relative xml:base
+	// keeps the base of the document it came from, and a copied element with
+	// none keeps it too, instead of inheriting the temporary tree's.
+	for _, ch := range tree.Children {
+		rebase(ch, tree.BaseURI)
+	}
 	return xdm.One(tree), nil
 }
 

@@ -71,8 +71,15 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 
 // resolvePath turns an href into a filesystem path inside an allowed root.
 func (r *FileResolver) resolvePath(href, base string) (string, error) {
+	// An empty URI reference denotes the document the reference appears in,
+	// so with a base in hand it resolves to that base rather than being an
+	// error. This is what makes doc('') return the stylesheet itself, which
+	// XSLT 2.0 section 16.1 requires.
 	if href == "" {
-		return "", fmt.Errorf("empty href")
+		if base == "" {
+			return "", fmt.Errorf("empty href")
+		}
+		href = base
 	}
 
 	// Reject anything that names a non-file scheme before touching the
@@ -82,6 +89,14 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 		return "", fmt.Errorf("scheme %q is not permitted (only local files)", u.Scheme)
 	}
 	href = strings.TrimPrefix(href, "file://")
+
+	// A fragment identifier selects within a document rather than naming a
+	// different one, so it is removed before the filesystem sees it — it is
+	// not part of any filename. XSLT 2.0 section 16.1 says as much: two
+	// references differing only in their fragment retrieve one document.
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		href = href[:i]
+	}
 
 	p := href
 	if !filepath.IsAbs(p) && base != "" {

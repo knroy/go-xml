@@ -456,6 +456,17 @@ type qnameAttrDef struct {
 	// summary does *not* write the brackets, a value containing "{" is not a
 	// template but simply not a QName, and so is a static error.
 	avt bool
+	// code overrides the error raised for a value outside the lexical space.
+	//
+	// XTSE0020 is the general rule, but where the spec devotes a numbered
+	// error to one attribute's name being unusable — XTDE0820 for
+	// xsl:element/@name, XTDE1460 for xsl:result-document/@format — that code
+	// is the one the specific clause assigns, and it takes precedence over
+	// the general one. Both are dynamic errors, because the value is in
+	// general an attribute value template; a processor "may optionally signal
+	// this as a static error" when the value is a literal, which is what
+	// reporting it here amounts to.
+	code string
 }
 
 // qnameAttrs is the set of attributes whose summary gives their type as
@@ -469,19 +480,19 @@ type qnameAttrDef struct {
 // bracketed one may hold a curly-bracket template.
 var qnameAttrs = map[string]map[string]qnameAttrDef{
 	"attribute":       {"name": {avt: true}, "type": {}},
-	"attribute-set":   {"name": {}, "use-attribute-sets": {list: true}},
+	"attribute-set":   {"name": {}, "use-attribute-sets": {list: true, code: "XTSE0710"}},
 	"call-template":   {"name": {}},
 	"character-map":   {"name": {}, "use-character-maps": {list: true}},
-	"copy":            {"use-attribute-sets": {list: true}, "type": {}},
+	"copy":            {"use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
 	"copy-of":         {"type": {}},
 	"decimal-format":  {"name": {}},
 	"document":        {"type": {}},
-	"element":         {"name": {avt: true}, "use-attribute-sets": {list: true}, "type": {}},
+	"element":         {"name": {avt: true, code: "XTDE0820"}, "use-attribute-sets": {list: true, code: "XTSE0710"}, "type": {}},
 	"function":        {"name": {}},
 	"key":             {"name": {}},
 	"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
 	"param":           {"name": {}},
-	"result-document": {"format": {avt: true}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
+	"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
 	"template":        {"name": {}},
 	"variable":        {"name": {}},
 	"with-param":      {"name": {}},

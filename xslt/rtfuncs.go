@@ -81,9 +81,17 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				return seq, nil
 			}
 			// Outside any instruction (a bare XPath evaluation) the context
-			// item is the only sensible answer.
+			// item is the only sensible answer. With no context item there is
+			// no answer at all: XTDE1360 says so in as many words — "if the
+			// current function is evaluated within an expression that is
+			// evaluated when the context item is undefined, a non-recoverable
+			// dynamic error occurs". Returning the empty sequence made
+			// current() inside a stylesheet function, where the context item
+			// is absent, quietly yield nothing.
 			if ctx.Item == nil {
-				return xdm.Empty, nil
+				return nil, fmt.Errorf(
+					"XTDE1360: current() was called where the context item " +
+						"is undefined")
 			}
 			return xdm.One(ctx.Item), nil
 		},
@@ -128,7 +136,12 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					continue
 				}
 				base := ""
-				if n, ok := ctx.Item.(*xdm.Node); ok {
+				// The nil check is not redundant with the type assertion: a
+				// transform started from a named template has no context
+				// item, and the interface then holds a typed nil rather than
+				// no value at all, so the assertion succeeds and the field
+				// access is what faults.
+				if n, ok := ctx.Item.(*xdm.Node); ok && n != nil {
 					base = n.BaseURI
 				}
 				if base == "" {
@@ -138,9 +151,16 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					// it resolves against the process's working directory.
 					base = ctx.StaticBaseURI
 				}
+				if ctx.Docs == nil {
+					return nil, fmt.Errorf(
+						"FODC0002: document() is disabled (no resolver configured)")
+				}
 				tree, err := ctx.Docs.ResolveDocument(uri, base)
 				if err != nil {
 					return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
+				}
+				if tree == nil || tree.Root == nil {
+					return nil, fmt.Errorf("FODC0002: %q retrieved no document", uri)
 				}
 				out = append(out, tree.Root)
 			}

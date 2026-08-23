@@ -232,6 +232,19 @@ func (n *Node) appendText(sb *strings.Builder) {
 // node atomises to xs:untypedAtomic, which is what makes untyped comparison
 // rules apply throughout a schemaless transform.
 func (n *Node) Atomize() *Atomic {
+	// A comment, processing instruction or namespace node has xs:string for
+	// its typed value, not xs:untypedAtomic. XPath 2.0 appendix I.2 says so
+	// outright, and gives the consequence: because the value is a string
+	// rather than untyped, no implicit conversion applies, so using a PI as
+	// an operand of an arithmetic operator is a type error where XPath 1.0
+	// would have coerced it. These kinds are never schema-validated, so
+	// there is no annotation to consult and the answer does not depend on
+	// one.
+	switch n.Kind {
+	case KindComment, KindPI, KindNamespace:
+		return NewString(n.StringValue())
+	}
+
 	// A node validated against a schema atomises as its annotated type;
 	// one that was not is xs:untypedAtomic, the schemaless default.
 	//
@@ -389,9 +402,16 @@ func atomicForAnnotation(typeName, value string) *Atomic {
 // resolveQNameValue expands the node's string value as a QName against the
 // namespaces in scope at the node.
 //
-// An unprefixed name takes the default namespace when the node is an element
-// and the absent namespace when it is an attribute — the XPath rule, and the
-// one the schema's own QName-valued attributes follow.
+// An unprefixed name takes the default namespace, whichever kind of node
+// carries it. The rule that leaves an unprefixed name in no namespace applies
+// to an attribute's own *name*, not to a QName written as its *value*: XML
+// Schema Part 2 §3.2.18 gives xs:QName and xs:NOTATION the value space of
+// expanded names and resolves an unprefixed one against the default namespace.
+//
+// The suite pins the distinction. notation-03.xml writes NOTATION-attribute="mp3"
+// under xmlns="http://notation.example.com" and expects it to be the same
+// notation as one written "one:mp3"; treating the bare form as absent-namespace
+// made distinct-values, xsl:for-each-group and key() all see two values.
 func (n *Node) resolveQNameValue() (QName, bool) {
 	value := strings.TrimSpace(n.StringValue())
 	prefix, local := "", value
@@ -406,9 +426,6 @@ func (n *Node) resolveQNameValue() (QName, bool) {
 		scope = scope.Parent
 	}
 	if prefix == "" {
-		if n.Kind == KindAttribute {
-			return QName{Local: local}, true
-		}
 		uri, _ := scope.LookupPrefix("")
 		return QName{URI: uri, Local: local}, true
 	}

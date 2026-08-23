@@ -159,7 +159,14 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				if !wantID && isRefAttr {
 					for _, v := range strings.Fields(a.Value) {
 						if want[v] {
-							out = append(out, n)
+							// fn:idref returns the nodes that *hold* the
+							// reference, which for an IDREF-typed attribute
+							// is the attribute itself and not the element
+							// carrying it. The suite pins this:
+							// "idref('a1')/name()" is expected to yield the
+							// attribute names "ref refs", where returning the
+							// elements yielded their element names instead.
+							out = append(out, a)
 							break
 						}
 					}

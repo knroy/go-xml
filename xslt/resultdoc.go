@@ -62,7 +62,15 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 		if lex = strings.TrimSpace(lex); lex != "" {
 			qn, err := resolveQNameAttr(i.overrides, lex)
 			if err != nil {
-				return out, err
+				// XTDE1460 covers the whole of "not a valid lexical QName, or
+				// ... does not match the expanded-QName of an output
+				// definition", so a name that cannot even be resolved — an
+				// unbound prefix, a malformed lexical form — is reported under
+				// it too, not under the generic code resolveQNameAttr picks
+				// for its many other callers.
+				return out, fmt.Errorf(
+					"XTDE1460: xsl:result-document/@format=%q is not a usable "+
+						"QName: %w", lex, err)
 			}
 			named, ok := rt.sheet.namedOutputs[xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()]
 			if !ok {
