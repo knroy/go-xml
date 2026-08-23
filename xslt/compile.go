@@ -147,10 +147,15 @@ func (c *compiler) compileSimplifiedStylesheet(root *xdm.Node, precedence int) e
 	if err != nil {
 		return err
 	}
-	body, err := c.compileSequence(root, root)
+	// The document element is itself a literal result element, not merely the
+	// container of one: "<out xsl:version='2.0'>...</out>" produces <out>.
+	// Compiling only its children dropped the outermost element from every
+	// simplified stylesheet.
+	instr, err := c.compileLiteralElement(root)
 	if err != nil {
 		return err
 	}
+	body := []Instruction{instr}
 	c.declOrder++
 	c.sheet.templates = append(c.sheet.templates, &Template{
 		Match:            pat,
@@ -615,6 +620,11 @@ func (c *compiler) compileSpaceControl(el *xdm.Node) error {
 		switch {
 		case n == "*":
 			qn = xdm.QName{Local: "*"}
+		case strings.HasPrefix(n, "*:"):
+			// "*:local" matches that local name in any namespace. It is a
+			// wildcard rather than a prefixed name, so resolving "*" as a
+			// prefix reported an unbound-prefix error for a legal token.
+			qn = xdm.QName{URI: "*", Local: strings.TrimPrefix(n, "*:")}
 		case strings.HasSuffix(n, ":*"):
 			prefix := strings.TrimSuffix(n, ":*")
 			uri, ok := el.LookupPrefix(prefix)
@@ -653,6 +663,12 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 	base := el.BaseURI
 	if base == "" {
 		base = c.opts.BaseURI
+	}
+	// A fragment identifier selects a part *within* the retrieved resource,
+	// so it is not part of the name of the resource to fetch. Passing it
+	// through made the resolver look for a file whose name contained "#".
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		href = href[:i]
 	}
 	doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
 	if err != nil {

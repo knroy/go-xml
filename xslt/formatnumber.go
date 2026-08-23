@@ -110,7 +110,11 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 	// XTSE1290: two xsl:decimal-format declarations for the same format at
 	// the same import precedence may not disagree about an attribute.
 	if prev, dup := c.sheet.decimalFormats[df.Name.Clark()]; dup {
-		if *prev != *df {
+		// Only *conflicting* values are an error. A module that declares the
+		// same format as one it imports is repeating itself, not disagreeing,
+		// and comparing whole structs made the default format conflict with
+		// itself the moment any module declared it explicitly.
+		if !sameDecimalFormat(prev, df) {
 			return fmt.Errorf(
 				"XTSE1290: conflicting xsl:decimal-format declarations for %q",
 				df.Name.Lexical())
@@ -500,4 +504,15 @@ func applyGrouping(s string, n int, sep rune) string {
 		out = append(out, r)
 	}
 	return string(out)
+}
+
+// sameDecimalFormat reports whether two declarations agree on every symbol.
+//
+// Name is excluded: two declarations of the same format necessarily share it,
+// and comparing it adds nothing. Everything else is compared by value, which
+// is what "conflicting values for the same attribute" means.
+func sameDecimalFormat(a, b *DecimalFormat) bool {
+	x, y := *a, *b
+	x.Name, y.Name = xdm.QName{}, xdm.QName{}
+	return x == y
 }

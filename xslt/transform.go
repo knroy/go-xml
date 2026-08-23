@@ -217,13 +217,24 @@ func (s *Stylesheet) stripsElement(name xdm.QName) bool {
 		switch {
 		case q.Local == "*" && q.URI == "":
 			return 0 // "*"
-		case q.Local == "*":
-			return 1 // "prefix:*"
+		case q.Local == "*", q.URI == "*":
+			return 1 // "prefix:*" or "*:local"
 		default:
 			return 2 // a specific name
 		}
 	}
 	consider := func(q xdm.QName, isStrip bool) {
+		// "*:local" matches that local name in any namespace, which is
+		// recorded with URI "*" because a namespace URI cannot be one.
+		if q.URI == "*" {
+			if q.Local != name.Local {
+				return
+			}
+			if r := rank(q); r >= best {
+				best, strip = r, isStrip
+			}
+			return
+		}
 		if q.Local != "*" && (q.Local != name.Local || q.URI != name.URI) {
 			return
 		}
