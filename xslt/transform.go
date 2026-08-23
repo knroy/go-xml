@@ -171,11 +171,19 @@ func (s *Stylesheet) stripWhitespace(root *xdm.Node) *xdm.Node {
 }
 
 // stripCopy copies n, dropping whitespace-only text where stripping applies.
-// preserving carries xml:space="preserve" down the subtree.
+//
+// preserving carries xml:space="preserve" down the subtree, and *only* that:
+// whether an element's own whitespace is stripped is decided from the
+// strip-space and preserve-space declarations matching its name.
 func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
 	switch n.Kind {
 	case xdm.KindText:
-		if !preserving && xdm.IsXMLWhitespace(n.Value) {
+		// Whitespace-only text is dropped unless xml:space preserves it or
+		// its parent element is outside the strip-space list. The parent is
+		// what the declarations are matched against, which is why the test
+		// happens here rather than being decided by the parent and passed in.
+		if !preserving && xdm.IsXMLWhitespace(n.Value) &&
+			n.Parent != nil && s.stripsElement(n.Parent.Name) {
 			return nil
 		}
 		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
@@ -189,11 +197,19 @@ func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
 			c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value})
 		}
 
+		// Section 4.4 decides stripping per element, from the strip-space and
+		// preserve-space declarations matching *that* element's name. What
+		// inherits down the tree is xml:space, not the outcome: an ancestor
+		// outside the strip-space list says nothing about its descendants.
+		//
+		// Threading the outcome down made it latch. The document element is
+		// outside the list in the ordinary case, so it set "preserve", and
+		// every element beneath it then preserved whitespace whatever the
+		// declarations said — which is to say xsl:strip-space did nothing at
+		// all unless it also named the document element.
 		childPreserving := preserving
 		if a := n.Attr(xdm.NSXML, "space"); a != nil {
 			childPreserving = a.Value == "preserve"
-		} else if !s.stripsElement(n.Name) {
-			childPreserving = true
 		}
 
 		for _, ch := range n.Children {
