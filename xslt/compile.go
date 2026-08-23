@@ -34,6 +34,13 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 		return err
 	}
 
+	// The grammar checks run after conditional inclusion and before anything
+	// is compiled, so that an element excluded by use-when is never asked
+	// about — section 3.12 forbids reporting an error for one.
+	if err := checkStaticGrammarTree(root, false); err != nil {
+		return err
+	}
+
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
 	if !isXSL(root, "stylesheet") && !isXSL(root, "transform") {
