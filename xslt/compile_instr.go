@@ -95,12 +95,30 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	// minus the XSLT namespace itself and anything listed in
 	// exclude-result-prefixes.
 	excluded := map[string]bool{}
-	for _, p := range strings.Fields(n.AttrValue("exclude-result-prefixes")) {
-		excluded[p] = true
+	// XTSE0808: every prefix named here must be bound. An unbound one is a
+	// typo that would otherwise exclude nothing and go unnoticed.
+	addExcluded := func(list string) error {
+		for _, p := range strings.Fields(list) {
+			if p != "#all" && p != "#default" {
+				if _, ok := n.LookupPrefix(p); !ok {
+					return fmt.Errorf(
+						"XTSE0808: exclude-result-prefixes names %q, which is "+
+							"not a namespace prefix in scope", p)
+				}
+			}
+			if p == "#default" {
+				p = ""
+			}
+			excluded[p] = true
+		}
+		return nil
+	}
+	if err := addExcluded(n.AttrValue("exclude-result-prefixes")); err != nil {
+		return nil, err
 	}
 	if v := n.Attr(xdm.NSXSL, "exclude-result-prefixes"); v != nil {
-		for _, p := range strings.Fields(v.Value) {
-			excluded[p] = true
+		if err := addExcluded(v.Value); err != nil {
+			return nil, err
 		}
 	}
 	for _, ns := range n.Namespaces {
@@ -256,6 +274,11 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 			return nil, fmt.Errorf("in xsl:value-of/@select: %w", err)
 		}
 		instr.sel = comp
+		// XTSE0870: select and content are mutually exclusive.
+		if hasRealContent(n) {
+			return nil, fmt.Errorf(
+				"XTSE0870: xsl:value-of has both a select attribute and content")
+		}
 		return instr, nil
 	}
 	body, err := c.compileSequence(n, n)

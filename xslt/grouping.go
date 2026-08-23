@@ -389,17 +389,28 @@ func (c *compiler) compileAnalyzeString(n *xdm.Node, ns xpath.NamespaceResolver)
 			return nil, err
 		}
 	}
+	sawSubstring := false
 	for _, ch := range n.ChildElements() {
 		switch {
 		case isXSL(ch, "matching-substring"):
 			if instr.matching, err = c.compileSequence(ch, ch); err != nil {
 				return nil, err
 			}
+			sawSubstring = true
 		case isXSL(ch, "non-matching-substring"):
 			if instr.nonMatch, err = c.compileSequence(ch, ch); err != nil {
 				return nil, err
 			}
+			sawSubstring = true
 		}
+	}
+	// XTSE1130: at least one of the two substring elements is required.
+	// Without either, the instruction can produce nothing, which is more
+	// likely a mistake than an intention.
+	if !sawSubstring {
+		return nil, fmt.Errorf(
+			"XTSE1130: xsl:analyze-string needs an xsl:matching-substring or " +
+				"an xsl:non-matching-substring child")
 	}
 	return instr, nil
 }
