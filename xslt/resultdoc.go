@@ -96,7 +96,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, prev := range *rt.secondary {
 		if prev.Href == href {
 			return fmt.Errorf(
-				"xsl:result-document: href %q was already produced by an earlier "+
+				"XTDE1490: xsl:result-document: href %q was already produced by an earlier "+
 					"result document", href)
 		}
 	}

@@ -125,6 +125,15 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			return nil, fmt.Errorf(
 				"XTDE0040: no template named %q", opts.InitialTemplate)
 		}
+		// XTDE0060: the initial template may not declare a required
+		// parameter, because a transform started at it supplies none.
+		for _, p := range t.Params {
+			if p.Required && !p.Tunnel {
+				return nil, fmt.Errorf(
+					"XTDE0060: the initial template %q declares required "+
+						"parameter $%s", opts.InitialTemplate, p.Name.Lexical())
+			}
+		}
 		if err := runTemplate(rt, t, nil, nil, out); err != nil {
 			return nil, err
 		}

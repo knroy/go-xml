@@ -203,6 +203,14 @@ func registerStaticFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
+			// XTDE1390: the argument must be a valid QName. A malformed one
+			// would otherwise fall through to the empty string, which is
+			// what a *valid* name for an unknown property returns — so the
+			// two cases would be indistinguishable.
+			if !isLexicalQName(name) {
+				return nil, fmt.Errorf(
+					"XTDE1390: system-property(%q) is not a valid QName", name)
+			}
 			switch {
 			case strings.HasSuffix(name, "version"):
 				return xdm.One(xdm.NewString("2.0")), nil
@@ -568,4 +576,22 @@ func resolveAgainst(base, ref string) string {
 		return ref
 	}
 	return b.ResolveReference(r).String()
+}
+
+// isLexicalQName reports whether s has the form of a QName: an NCName, or two
+// separated by one colon.
+func isLexicalQName(s string) bool {
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, p := range parts {
+		if !xdm.IsNCName(p) {
+			return false
+		}
+	}
+	return true
 }

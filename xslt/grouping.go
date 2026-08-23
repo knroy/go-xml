@@ -167,9 +167,15 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 		if err != nil {
 			return nil, err
 		}
+		// XTTE1100: a group-adjacent key must be exactly one item. An empty
+		// sequence leaves the item in no group at all and more than one
+		// leaves it ambiguous, so both are errors rather than something to
+		// silently pick from.
 		atoms := xdm.Atomize(vals)
-		if len(atoms) == 0 {
-			continue
+		if len(atoms) != 1 {
+			return nil, fmt.Errorf(
+				"XTTE1100: the group-adjacent key produced %d items, want exactly one",
+				len(atoms))
 		}
 		k := collationKey(coll, atoms[0].(*xdm.Atomic).String())
 		if first || k != prev {
@@ -319,7 +325,11 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	if re.MatchString("") {
-		return fmt.Errorf("FORX0003: analyze-string pattern matches the empty string")
+		// XTDE1150: xsl:analyze-string's own error for a regex that matches
+		// a zero-length string. FORX0003 is fn:tokenize's; the instruction
+		// has its own code and a caller matching on one needs the right one.
+		return fmt.Errorf(
+			"XTDE1150: the xsl:analyze-string regex matches a zero-length string")
 	}
 
 	pos := 0
