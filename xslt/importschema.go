@@ -48,6 +48,17 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		// with no attributes and no content imports the no-namespace schema,
 		// which in the ordinary case has no components. Rejecting it made a
 		// stylesheet that only wants the built-in types fail to compile.
+		//
+		// The declaration still has to leave a schema behind, though. Whether
+		// a stylesheet may say validation="strict" is decided by whether it
+		// imported a schema at all (XTSE1660), and an empty schema is not the
+		// same thing as no schema: NewSchema carries the built-in types and
+		// the built-in declarations for xml:lang, xml:space, xml:base and
+		// xml:id, which is exactly what an import of the XML namespace with no
+		// location asks the processor to supply (Part 1 §F.1).
+		if c.sheet.schema == nil {
+			c.sheet.schema = xsd.NewSchema()
+		}
 		return nil
 	}
 
@@ -88,7 +99,13 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		loaded, err = xsd.Load(tree.Root, resolved, opts)
 	}
 	if err != nil {
-		return fmt.Errorf("xsl:import-schema: %w", err)
+		// XTSE0220 is the code for the synthetic schema document — the
+		// notional document holding every xsl:import-schema in the
+		// stylesheet — failing the constraints of XML Schema Part 1, "such
+		// as multiple definitions of the same name". Assembly is where
+		// those are detected, so every failure here is that error; without
+		// the tag the diagnosis was right but unattributable.
+		return fmt.Errorf("XTSE0220: xsl:import-schema: %w", err)
 	}
 
 	mergeSchema(c.sheet.schema, loaded)

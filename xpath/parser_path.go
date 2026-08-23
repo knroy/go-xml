@@ -209,6 +209,7 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 		return nil, false, err
 	}
 	step.Predicates = preds
+	step.Explicit = explicitAxis
 	return step, true, nil
 }
 
@@ -362,6 +363,11 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			if kt.Kind == xdm.KindElement {
 				kt.SubstitutionGroup = schemaSubstitutionGroup(p.cur().Val, p.ns)
 			}
+			// The declaration's type, for the same reason: a node named E
+			// but validated against a *local* declaration of E carries a
+			// different annotation, and schema-element(E) must not take it.
+			kt.DeclaredType, _ = schemaDeclarationType(
+				p.cur().Val, p.ns, kt.Kind == xdm.KindAttribute)
 			p.pos++
 		}
 		if t := p.cur(); t.Kind == TokName {
@@ -800,6 +806,18 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			// reported a syntax error at the "*" while "xs:integer*" parsed.
 			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
 				st.SchemaType = t.Val
+				// The facets of an imported simple type are only in the
+				// schema, so the check is captured here rather than being
+				// reconstructed from the type code at cast time.
+				if lex, ns := t.Val, p.ns; true {
+					st.SchemaValueValid = func(value string) error {
+						known, err := schemaValueValid(lex, ns, value)
+						if !known {
+							return nil
+						}
+						return err
+					}
+				}
 				if isAtomic {
 					st.AtomicType, st.HasAtomicType = prim, true
 				}

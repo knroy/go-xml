@@ -7,6 +7,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // The static errors of Appendix E that are decidable from the stylesheet tree
@@ -765,6 +766,105 @@ func inlineSchema(el *xdm.Node) *xdm.Node {
 	for _, c := range el.ChildElements() {
 		if c.Name.URI == xdm.NSXS && c.Name.Local == cm.foreign {
 			return c
+		}
+	}
+	return nil
+}
+
+// checkTypeAttributes applies XTSE1520 and XTSE1530, the two static rules
+// about a type attribute that name the in-scope schema components.
+//
+// They cannot run with the rest of the static checks. XTSE1520 asks whether
+// the QName "is the name of a type definition included in the in-scope schema
+// components for the stylesheet", and the schema is not assembled until
+// xsl:import-schema has been hoisted and loaded — which happens after
+// checkStaticErrors. So this pass is driven from the compiler once the schema
+// exists, in the same spirit as the deferred XTSE0710 and XTSE1560 checks.
+//
+// Which elements carry a type attribute is taken from qnameAttrs rather than
+// from a list written here, so that the grammar table stays the single place
+// that records it.
+func checkTypeAttributes(root *xdm.Node, schema *xsd.Schema) error {
+	var walk func(n *xdm.Node) error
+	walk = func(n *xdm.Node) error {
+		for _, el := range n.ChildElements() {
+			if err := checkTypeAttribute(el, schema); err != nil {
+				return err
+			}
+			if err := walk(el); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := checkTypeAttribute(root, schema); err != nil {
+		return err
+	}
+	return walk(root)
+}
+
+// checkTypeAttribute checks one element's type attribute.
+//
+// The attribute is spelled "type" on an XSLT instruction and "xsl:type" on a
+// literal result element, exactly as XTSE1520 states: the unprefixed name on a
+// literal result element would be an ordinary attribute of the output.
+func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
+	var a *xdm.Node
+	if el.Name.URI == xdm.NSXSL {
+		if _, ok := qnameAttrs[el.Name.Local]["type"]; !ok {
+			return nil
+		}
+		a = el.Attr("", "type")
+	} else {
+		a = el.Attr(xdm.NSXSL, "type")
+	}
+	if a == nil {
+		return nil
+	}
+
+	// The QName is resolved against the in-scope namespaces of the element the
+	// attribute is written on, with the default element/type namespace taken
+	// from [xsl:]xpath-default-namespace — an unprefixed type name is a type
+	// name, so it follows the element/type default rather than no namespace.
+	ns := newNSResolver(el, "")
+	prefix, local := xdm.SplitQName(strings.TrimSpace(a.Value))
+	if local == "" || !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
+		return fmt.Errorf("XTSE1520: type=%q on %s is not a valid QName",
+			a.Value, el.Name.Lexical())
+	}
+	uri := ns.defaultNS
+	if prefix != "" {
+		u, ok := ns.ResolvePrefix(prefix)
+		if !ok {
+			return fmt.Errorf(
+				"XTSE1520: type=%q on %s uses prefix %q, which is not "+
+					"declared in an in-scope namespace declaration",
+				a.Value, el.Name.Lexical(), prefix)
+		}
+		uri = u
+	}
+
+	// Without a schema there is nothing to look the name up in. XTSE1660
+	// already covers "validation requires a schema; none was imported", so
+	// reporting XTSE1520 here as well would replace a more specific error
+	// with a less specific one.
+	if schema == nil {
+		return nil
+	}
+	t := schema.Types[xdm.QName{URI: uri, Local: local}]
+	if t == nil {
+		return fmt.Errorf(
+			"XTSE1520: type=%q on %s is not the name of a type definition "+
+				"in the in-scope schema components",
+			a.Value, el.Name.Lexical())
+	}
+	// XTSE1530 is narrower: only xsl:attribute is forbidden from naming a
+	// complex type, because an attribute can only ever have a simple type.
+	if isXSL(el, "attribute") {
+		if _, complex := t.(*xsd.ComplexType); complex {
+			return fmt.Errorf(
+				"XTSE1530: type=%q on xsl:attribute names a complex type "+
+					"definition", a.Value)
 		}
 	}
 	return nil

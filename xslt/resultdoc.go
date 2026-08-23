@@ -49,6 +49,9 @@ type resultDocumentInstr struct {
 	overrides    *xdm.Node
 	overrideAVTs map[string]*avt
 	body         []Instruction
+	// validation is @validation or @type, which asks for the result tree to
+	// be assessed as a document node before it is written.
+	validation validationSpec
 }
 
 // settings selects the output definition this instruction writes with.
@@ -81,6 +84,12 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 			out = *named
 		}
 	}
+	// A tree produced by xsl:result-document is an explicit result tree, so
+	// the 1.0 backwards-compatibility rule that would default its output
+	// method to xml does not apply to it however the stylesheet is versioned.
+	// Clearing the flag after the named-format lookup covers the copy taken
+	// from a named xsl:output as well as the one from the unnamed default.
+	out.Version10Implicit = false
 	if i.overrides != nil {
 		// The effective values are computed here rather than read from the
 		// element: every serialisation attribute of this instruction is an
@@ -132,6 +141,17 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := instr.Execute(rt, sub); err != nil {
 			return err
 		}
+	}
+
+	// The tree is assessed as a document node before it is recorded, so that
+	// an invalid result is an error rather than a file written and then
+	// complained about.
+	doc, derr := sub.toDocument()
+	if derr != nil {
+		return derr
+	}
+	if err := i.validation.assess(rt, doc); err != nil {
+		return err
 	}
 
 	if href == "" {

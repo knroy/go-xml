@@ -139,6 +139,27 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
+			// An element whose own type is derived from xs:ID (or xs:IDREF /
+			// xs:IDREFS) carries the identity in its content, not in an
+			// attribute. Section 15.5.2 of the data model treats the two the
+			// same way, and a schema is free to declare either: match-212's
+			// <id-elem-only> is declared type="xs:ID" and id('unique') has to
+			// find it. Only attributes were being looked at, so a
+			// schema-validated document indexed by element content matched
+			// nothing.
+			if wantID && isIDAnnotation(n.TypeAnnotation) {
+				if want[strings.TrimSpace(n.StringValue())] {
+					out = append(out, n)
+				}
+			}
+			if !wantID && isIDREFAnnotation(n.TypeAnnotation) {
+				for _, v := range strings.Fields(n.StringValue()) {
+					if want[v] {
+						out = append(out, n)
+						break
+					}
+				}
+			}
 			for _, a := range n.Attrs {
 				// A validated document says which attributes are of type
 				// xs:ID, and that is what the specification asks for. The
@@ -153,7 +174,12 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 					(a.Name.URI == "" &&
 						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
 
-				if wantID && isIDAttr && want[a.Value] {
+				// The value of an ID attribute is of a type derived from
+				// xs:NCName, so its whitespace is collapsed before it is
+				// compared: key241.xml writes xml:id="id3 " and the
+				// stylesheet asks for id(' id3'). The search terms were
+				// already split on whitespace above; this is the other half.
+				if wantID && isIDAttr && want[strings.TrimSpace(a.Value)] {
 					out = append(out, n)
 				}
 				if !wantID && isRefAttr {

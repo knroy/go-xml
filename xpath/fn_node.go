@@ -244,6 +244,13 @@ func registerNodeFuncs(l *Library) {
 		if err != nil || n == nil {
 			return xdm.Empty, err
 		}
+		if n.Kind == xdm.KindNamespace {
+			// The data model defines no dm:base-uri for a namespace node, so
+			// the accessor returns the empty sequence rather than inheriting
+			// the element's. accessor-027/028 pin this: base-uri() over the
+			// namespace axis must yield nothing, not the document URI.
+			return xdm.Empty, nil
+		}
 		return xdm.One(xdm.NewAnyURI(inheritedBaseURI(n))), nil
 	})
 

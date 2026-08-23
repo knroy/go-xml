@@ -33,14 +33,11 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	if opts.Method == "" {
 		// The second argument is the backwards-compatibility case described
 		// on defaultMethod: a principal stylesheet module at version 1.0
-		// whose result tree was generated implicitly. Deciding it needs the
-		// stylesheet's own version and whether an xsl:result-document
-		// produced this tree, neither of which reaches the serialiser yet, so
-		// it is passed as false and the rule is inert. Supplying it is a
-		// one-field change to OutputSettings, set once at compile time and
-		// cleared by xsl:result-document; backwards-017, backwards-019 and
-		// backwards-019b are the tests waiting on it.
-		opts.Method = defaultMethod(seq, false)
+		// whose result tree was generated implicitly. compileModule records
+		// the version half in Version10Implicit; xsl:result-document clears
+		// the flag on its own copy of the settings, which is what makes the
+		// tree it produces an explicit one.
+		opts.Method = defaultMethod(seq, opts.Version10Implicit)
 		s.opts.Method = opts.Method
 	}
 

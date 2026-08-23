@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // NodeKind enumerates the seven node kinds of the XDM.
@@ -107,6 +108,10 @@ type Node struct {
 	// yields xs:untypedAtomic, which is the schemaless default.
 	TypeAnnotation string
 
+	// detachedID numbers a node that roots a tree which was never finalized,
+	// assigned on the first cross-tree comparison. Zero means unassigned.
+	detachedID int64
+
 	// offset is the byte position where this node starts in the source text,
 	// stored one greater than the true offset so that the zero value means
 	// "unknown". Nodes are built by a transform in two dozen places with a
@@ -163,9 +168,46 @@ func (n *Node) TypeName() string {
 	return n.Kind.String()
 }
 
-// Order returns the document-order index. Only meaningful against nodes from
-// the same tree; use Compare for the general case.
-func (n *Node) Order() int { return int(n.order) }
+// Order returns a number that identifies the node uniquely within the process.
+//
+// It is the document-order index within the node's own tree, combined with the
+// tree's identity so that nodes from two documents cannot collide. Callers
+// wanting relative position must use Compare: this value orders nodes within
+// one tree but says nothing across trees.
+//
+// The combination is what fn:generate-id() needs. Returning the bare per-tree
+// index gave the same answer to the first node of every document, so a
+// stylesheet comparing generated identities across documents — the case
+// key-042 in the XSLT suite exists to check — saw distinct nodes as identical.
+//
+// A tree built by a sequence constructor is never finalized and has no tree of
+// its own; those nodes take the identity assigned on demand to their root, the
+// same one cross-tree comparison uses, so two parentless elements are also
+// distinguished.
+func (n *Node) Order() int {
+	base := 0
+	if n.tree != nil {
+		base = n.tree.id
+	} else {
+		root := n
+		for root.Parent != nil {
+			root = root.Parent
+		}
+		base = int(detachedRootID(root)) + detachedIDBias
+	}
+	// The tree component is shifted well clear of any plausible document
+	// size. A document with more than a million nodes would overlap the next
+	// tree's range, which costs uniqueness but nothing else: the value is an
+	// identity, and Compare — not this — decides order.
+	return base*treeIDStride + int(n.order)
+}
+
+// treeIDStride separates one tree's identity range from the next.
+const treeIDStride = 1 << 20
+
+// detachedIDBias keeps identities handed to unfinalized roots clear of the
+// tree ids, which are drawn from a separate counter starting at one.
+const detachedIDBias = 1 << 20
 
 // SetSynthesizedOrder places a node the parser did not build into the document
 // order of an existing tree, immediately after owner.
@@ -198,6 +240,20 @@ func (n *Node) Compare(o *Node) int {
 	if n == o {
 		return 0
 	}
+	if n.tree == nil && o.tree == nil {
+		// A parentless element built by a sequence constructor is the root of
+		// its own tree, but nothing ever calls Finalize on it: it is handed
+		// out as a bare item, not wrapped in a Tree. Both nodes then carry
+		// tree nil and order zero, and comparing those fields alone declares
+		// every such node equal to every other — so a union of a variable
+		// holding <a><x/></a><b><x/></b> with its own descendants came out as
+		// a, b, then the three x's, instead of interleaved.
+		//
+		// Walking the parent links answers it without a tree: nodes in the
+		// same constructed tree compare by their position in it, and nodes in
+		// different ones fall back to a stable identity order.
+		return compareDetached(n, o)
+	}
 	if n.tree != o.tree {
 		ni, oi := 0, 0
 		if n.tree != nil {
@@ -222,6 +278,122 @@ func (n *Node) Compare(o *Node) int {
 		return 1
 	}
 	return 0
+}
+
+// compareDetached orders two nodes that belong to no Tree, by walking their
+// ancestry.
+//
+// The two are in the same constructed tree exactly when their ancestor chains
+// end at the same root. In that case the answer is the ordinary XDM rule:
+// find the nearest common ancestor and compare the two branches beneath it by
+// child index, with attributes and namespaces preceding children, and with an
+// ancestor preceding its own descendant. In different trees the spec requires
+// only a stable order, and roots that have never been numbered have nothing to
+// order them by, so they compare equal — the same answer the tree-id branch
+// gives for two untracked trees.
+func compareDetached(n, o *Node) int {
+	na := ancestorChain(n)
+	oa := ancestorChain(o)
+	if na[0] != oa[0] {
+		// Different constructed trees. The spec asks only for a stable order,
+		// but it must also be a *total* one: sort.SliceStable is fed this
+		// comparator, and answering "equal" for two roots while answering
+		// "before" for a root and the other root's descendant is not an order
+		// at all — the sort then leaves the roots bunched ahead of every
+		// descendant instead of interleaving them. Numbering each root on
+		// first comparison gives a consistent answer that never changes for a
+		// given pair.
+		switch ra, ro := detachedRootID(na[0]), detachedRootID(oa[0]); {
+		case ra < ro:
+			return -1
+		case ra > ro:
+			return 1
+		}
+		return 0
+	}
+	// Skip the shared prefix. The chains run root-first, so the first index
+	// at which they differ is the pair of siblings to compare.
+	i := 0
+	for i < len(na) && i < len(oa) && na[i] == oa[i] {
+		i++
+	}
+	if i == len(na) {
+		// n is an ancestor of o, and an ancestor precedes its descendants.
+		return -1
+	}
+	if i == len(oa) {
+		return 1
+	}
+	p := na[i-1]
+	switch ra, rb := siblingRank(p, na[i]), siblingRank(p, oa[i]); {
+	case ra < rb:
+		return -1
+	case ra > rb:
+		return 1
+	}
+	return 0
+}
+
+// detachedRootIDs numbers the roots of trees that were never finalized, so
+// that nodes from two of them have a stable total order.
+//
+// The numbers are handed out on first comparison rather than at construction:
+// the vast majority of constructed nodes are never compared across trees, and
+// the alternative is a counter increment on every element a transform builds.
+var detachedIDNext int64
+
+func detachedRootID(root *Node) int64 {
+	// The number lives on the node rather than in a side table so that it
+	// dies with the node: a table keyed by *Node would pin every constructed
+	// root for the life of the process.
+	if id := atomic.LoadInt64(&root.detachedID); id != 0 {
+		return id
+	}
+	id := atomic.AddInt64(&detachedIDNext, 1)
+	if !atomic.CompareAndSwapInt64(&root.detachedID, 0, id) {
+		return atomic.LoadInt64(&root.detachedID)
+	}
+	return id
+}
+
+// ancestorChain returns n's ancestors root-first, ending with n itself.
+func ancestorChain(n *Node) []*Node {
+	var up []*Node
+	for c := n; c != nil; c = c.Parent {
+		up = append(up, c)
+	}
+	// Reverse in place so the root comes first.
+	for i, j := 0, len(up)-1; i < j; i, j = i+1, j-1 {
+		up[i], up[j] = up[j], up[i]
+	}
+	return up
+}
+
+// siblingRank gives a node its position among all of p's children, attributes
+// and namespace nodes, in document order.
+//
+// Namespace nodes precede attribute nodes, which precede children — the same
+// order Tree.assign lays down, so a detached subtree that is finalized later
+// does not change any answer this gave before.
+func siblingRank(p, n *Node) int {
+	for i, ns := range p.Namespaces {
+		if ns == n {
+			return i
+		}
+	}
+	base := len(p.Namespaces)
+	for i, a := range p.Attrs {
+		if a == n {
+			return base + i
+		}
+	}
+	base += len(p.Attrs)
+	for i, c := range p.Children {
+		if c == n {
+			return base + i
+		}
+	}
+	return base + len(p.Children)
 }
 
 // StringValue returns the node's string value per XDM: the concatenation of

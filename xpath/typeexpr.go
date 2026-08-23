@@ -215,6 +215,20 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 
 	out, err := CastToDerived(atoms[0].(*xdm.Atomic), e.Type.AtomicType, e.Type.FacetName)
+	if err == nil && e.Type.SchemaValueValid != nil {
+		// The built-in cast succeeded, which settles the lexical form. The
+		// schema type's own facets — a range, a pattern, an enumeration —
+		// are a further constraint, and without applying them a cast to a
+		// restriction of xs:integer accepted every integer.
+		//
+		// The *source* lexical form is checked rather than the cast result,
+		// because a facet such as a pattern constrains the lexical space and
+		// the cast may have canonicalised it away.
+		if verr := e.Type.SchemaValueValid(atoms[0].(*xdm.Atomic).String()); verr != nil {
+			err = verr
+			out = nil
+		}
+	}
 	if err == nil && out != nil && e.Type.SchemaType != "" {
 		// A constructor call on an imported schema type folds into this cast,
 		// and the value it produces is an instance of that type — that is what

@@ -73,6 +73,32 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 			}
 		}
 	}
+	if t.SchemaDeclared && n.TypeAnnotation == "" {
+		// schema-element(E) and schema-attribute(A) match by *declaration*,
+		// not by name: the node must have been validated against E, not
+		// merely called E. An unvalidated node carries no annotation, so
+		// it cannot have been. This is what makes
+		// input-type-annotations="strip" observable — with the annotations
+		// gone the test must stop matching — and it is the same rule
+		// schemaDeclaredMatches applies to match patterns.
+		return false
+	}
+	if t.SchemaDeclared && t.DeclaredType != "" && t.Name != nil &&
+		n.Name.URI == t.Name.URI && n.Name.Local == t.Name.Local &&
+		!nodeTypeMatches(n, t.DeclaredType) {
+		// The node was validated, but against a declaration whose type is
+		// not the global one's — a local element declaration of the same
+		// name, which a schema may perfectly well have. Matching on the name
+		// alone would make schema-element(E) select it, which is the
+		// distinction nodetest-021 and nodetest-034 are drawn to catch.
+		//
+		// The check applies only to a node actually named E. A substitution
+		// group member is declared with its own type, related to E's by a
+		// rule the group already enforces, and comparing it against E's
+		// annotation name here rejected the members schema-element(E) exists
+		// to admit.
+		return false
+	}
 	if t.TypeName != "" {
 		return nodeTypeMatches(n, t.TypeName)
 	}

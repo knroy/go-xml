@@ -268,19 +268,55 @@ func builtinAttributes() map[xdm.QName]*AttributeDecl {
 	// knows about that namespace, so if these are not here the import
 	// resolves to nothing and the ref that follows fails.
 	//
-	// xml:lang is xs:language in that schema rather than a union with the
-	// empty string; the union is a later relaxation and is not what §F.1
-	// says.
-	lang, _ := builtinTypes()[xsName("language")].(*SimpleType)
-	ncname, _ := builtinTypes()[xsName("NCName")].(*SimpleType)
+	// The types are the ones the published xml.xsd gives, not bare built-ins:
+	// xml:lang is a union of xs:language with a type whose only value is the
+	// empty string, because xml:lang="" is how XML 1.0 §2.12 says "no
+	// language stated"; xml:space is an enumeration of default and preserve,
+	// so xml:space="foo" is invalid rather than merely odd; and xml:id is
+	// xs:ID, which is what makes id() find an element carrying one.
+	language, _ := builtinTypes()[xsName("language")].(*SimpleType)
+	id, _ := builtinTypes()[xsName("ID")].(*SimpleType)
+	collapse := WhiteCollapse
+	anySimpleT, _ := builtinTypes()[xsName("anySimpleType")].(*SimpleType)
+
+	emptyString := &SimpleType{
+		Base:      str,
+		Variety:   VarietyAtomic,
+		Primitive: str.Primitive,
+		Facets: &FacetSet{
+			Enumerations:    []string{""},
+			HasEnumerations: true,
+		},
+		builtin: true,
+	}
+	lang := &SimpleType{
+		Base:        anySimpleT,
+		Variety:     VarietyUnion,
+		MemberTypes: []*SimpleType{language, emptyString},
+		Facets:      &FacetSet{},
+		builtin:     true,
+	}
+	space := &SimpleType{
+		Base:      str,
+		Variety:   VarietyAtomic,
+		Primitive: str.Primitive,
+		Facets: &FacetSet{
+			Enumerations:    []string{"default", "preserve"},
+			HasEnumerations: true,
+			WhiteSpace:      &collapse,
+			WhiteSpaceFixed: true,
+		},
+		builtin: true,
+	}
+
 	for _, x := range []struct {
 		local string
 		t     *SimpleType
 	}{
 		{"lang", lang},
-		{"space", str},
+		{"space", space},
 		{"base", anyURI},
-		{"id", ncname},
+		{"id", id},
 	} {
 		n := xdm.QName{URI: NSXML, Local: x.local}
 		out[n] = &AttributeDecl{Name: n, Type: x.t, Scope: ScopeGlobal, builtin: true}

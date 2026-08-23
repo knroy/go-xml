@@ -199,7 +199,12 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return nil, err
 	}
 	if startA == nil {
-		return xdm.Empty, nil
+		// $startingLoc is declared xs:double, not xs:double?, so an empty
+		// sequence is a type error rather than an empty result. Returning
+		// () here let function-1022 run to completion instead of raising.
+		return nil, fmt.Errorf(
+			"XPTY0004: an empty sequence is not allowed as the second " +
+				"argument of fn:subsequence()")
 	}
 	start := roundHalfEven(startA.Float64())
 	n := float64(len(in))

@@ -227,12 +227,19 @@ func (b *outputBuilder) appendNode(n *xdm.Node) {
 		_ = b.addAttribute(n.Name, n.Value)
 		return
 	}
-	n = detach(n)
 	if b.open != nil {
+		// Copying is only needed when the node is about to be re-parented:
+		// AppendChild rewrites Parent and tree pointers, so adopting a source
+		// node in place would mutate the source document.
+		n = detach(n)
 		rebase(n, b.open.BaseURI)
 		b.open.AppendChild(n)
 		return
 	}
+	// At the top of a sequence nothing is re-parented, so the node itself is
+	// the result. xsl:sequence is defined to preserve node identity — a
+	// variable declared as="item()*" holding (doc/one, doc/two) must answer
+	// true to "is" against the source nodes — and copying here answered false.
 	b.items = append(b.items, n)
 }
 
@@ -271,6 +278,27 @@ func rebase(n *xdm.Node, parentBase string) {
 	n.BaseURI = base
 	for _, ch := range n.Children {
 		rebase(ch, base)
+	}
+}
+
+// rebaseDetached recomputes the base URI of a copy that has no parent.
+//
+// Section 11.9: "the base URI of a node is copied, except in the case of an
+// element node having an xml:base attribute, in which case the base URI of
+// the new node is taken as the value of the xml:base attribute, resolved if
+// it is relative against the base URI of the xsl:copy/xsl:copy-of
+// instruction". So an element without its own xml:base keeps the source's
+// base URI unchanged — which is why this cannot just call rebase, whose
+// empty-reference case makes the node inherit from its new parent.
+func rebaseDetached(n *xdm.Node, instrBase string) {
+	if n == nil || n.Kind != xdm.KindElement {
+		return
+	}
+	for _, a := range n.Attrs {
+		if a.Name.URI == xdm.NSXML && a.Name.Local == "base" {
+			rebase(n, instrBase)
+			return
+		}
 	}
 }
 
@@ -598,7 +626,22 @@ func (b *outputBuilder) toTree() *xdm.Node {
 	prevAtomic := false
 	for _, it := range b.items {
 		if n, ok := it.(*xdm.Node); ok {
-			tree.Root.AppendChild(detach(n))
+			if n.Kind == xdm.KindText && n.Value == "" {
+				// Section 5.7.1 removes zero-length text nodes when
+				// constructing complex content, and a variable's implicit
+				// document node is complex content. The builder keeps a lone
+				// zero-length node so that a variable declared as="text()"
+				// can be satisfied by it, but a document node built from the
+				// same body must be childless.
+				continue
+			}
+			// Every node becomes a child of the new document node, which
+			// re-parents it, so a copy is made unconditionally. detach only
+			// copies nodes that already belong to a tree, and a freshly
+			// constructed parentless element would otherwise be adopted in
+			// place — making "$x/lre is $y" true for a node xsl:document is
+			// defined to have copied.
+			tree.Root.AppendChild(deepCopy(n))
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {
 			text := a.String()

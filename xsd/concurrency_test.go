@@ -295,7 +295,12 @@ func TestConcurrentSchemaLoading(t *testing.T) {
 	if !ok {
 		t.Fatal("the built-in xml:lang went missing")
 	}
-	if d.Type == nil || d.Type.TypeName().Local != "language" {
+	// The built-in xml:lang is the union of xs:language with the empty
+	// string that the published xml.xsd gives, and it is anonymous, so the
+	// check is on its shape rather than on a name.
+	st := d.Type
+	if st == nil || st.Variety != VarietyUnion || len(st.MemberTypes) != 2 ||
+		st.MemberTypes[0].Name.Local != "language" {
 		t.Errorf("built-in xml:lang was overwritten: %v", d.Type)
 	}
 }

@@ -105,6 +105,11 @@ type copyOfInstr struct {
 	// noNamespaces records copy-namespaces="no".
 	noNamespaces bool
 	validation   validationSpec
+	// baseURI is the base URI of the xsl:copy-of instruction itself. Section
+	// 11.9.2 resolves a copied element's relative xml:base against it while
+	// the copy is still parentless; once the copy is attached to a parent,
+	// rebase takes over and the parent's base wins.
+	baseURI string
 }
 
 func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -129,10 +134,26 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				continue
 			}
 			if v.Kind == xdm.KindAttribute {
-				if err := i.validation.assess(rt, v); err != nil {
+				// Assessed on a copy, never on v. Validation strips type
+				// annotations in place, and the default mode is "strip", so
+				// assessing the source attribute erased the annotation from
+				// the *input document* — which then answered differently for
+				// every later expression that read it.
+				//
+				// Every other branch of this switch already assesses a copy;
+				// this one did not, which is why copying attributes made
+				// fn:idref appear one-directional: the first copy stripped
+				// the annotations the later lookups needed.
+				a := &xdm.Node{
+					Kind:           xdm.KindAttribute,
+					Name:           v.Name,
+					Value:          v.Value,
+					TypeAnnotation: v.TypeAnnotation,
+				}
+				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
-				if err := out.addAttribute(v.Name, v.Value); err != nil {
+				if err := out.addAttributeTyped(a.Name, a.Value, a.TypeAnnotation); err != nil {
 					return err
 				}
 				continue
@@ -147,6 +168,14 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				continue
 			}
 			c := deepCopy(v)
+			if out.open == nil {
+				// A parentless copy keeps its own xml:base, resolved against
+				// the instruction's base URI rather than against the document
+				// it came from. appendNode only rebases when there is a
+				// parent to inherit from, so a copy that lands directly in a
+				// variable would otherwise keep the source's resolved base.
+				rebaseDetached(c, i.baseURI)
+			}
 			if v.Kind == xdm.KindElement {
 				if i.noNamespaces {
 					stripNamespaces(c)
@@ -283,6 +312,14 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// children come from the body. That is the distinction from
 		// xsl:copy-of, and it is what makes the identity-transform idiom work.
 		sub := out.startElement(node.Name)
+		if out.open == nil && sub.open.BaseURI == "" {
+			// Section 11.9.1: "the base URI of a node is copied". With no
+			// parent to inherit from there is nothing else to take it from,
+			// so the source node's base URI travels with the shallow copy.
+			// An xml:base written into the body overrides it later, via the
+			// same path any other attribute takes.
+			sub.open.BaseURI = node.BaseURI
+		}
 		if !i.noNamespaces {
 			// Section 11.9.1 copies "the namespace nodes of the element",
 			// which is every binding in scope on it rather than only those it

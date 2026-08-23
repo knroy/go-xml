@@ -272,6 +272,12 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		}
 	}
 	compileSchema = c.sheet.schema
+	// XTSE1520 and XTSE1530 need the in-scope schema components, which only
+	// exist once xsl:import-schema has been hoisted, so the type attributes
+	// are checked here rather than with the rest of the static rules.
+	if err := checkTypeAttributes(root, c.sheet.schema); err != nil {
+		return err
+	}
 
 	// Import precedence is a total order over the import tree, not a depth.
 	// Section 3.10.2: a module has higher precedence than every module it
@@ -1084,6 +1090,13 @@ func (c *compiler) compileSpaceControl(el *xdm.Node) error {
 			var err error
 			if qn, err = resolveQNameAttr(el, n); err != nil {
 				return err
+			}
+			// Section 5.2 lists the elements attribute of xsl:strip-space and
+			// xsl:preserve-space among the places where an unprefixed element
+			// name takes the effective [xsl:]xpath-default-namespace rather
+			// than no namespace.
+			if qn.Prefix == "" && qn.URI == "" {
+				qn.URI = xpathDefaultNamespaceAt(el)
 			}
 		}
 		if el.Name.Local == "strip-space" {

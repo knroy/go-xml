@@ -305,7 +305,12 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, redirected string, wasRe
 				}
 				continue
 			}
-			if ok, why := r.judgeIn(c, sub, "", false, nil, set); !ok {
+			// The serialised form of *this* result document, not a fresh
+			// serialisation under the default settings. Only
+			// assert-serialization was special-cased above, so a nested
+			// serialization-matches re-serialised the tree with the wrong
+			// output definition and compared the wrong bytes.
+			if ok, why := r.judgeIn(c, sub, serialized, true, nil, set); !ok {
 				return false, a.URI + ": " + why
 			}
 		}

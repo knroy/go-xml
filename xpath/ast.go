@@ -115,6 +115,14 @@ type Step struct {
 	Axis       Axis
 	Test       NodeTest
 	Predicates []Expr
+
+	// Explicit records that the axis was written out ("child::x") rather
+	// than abbreviated ("x"). Section 5.5.3 gives the abbreviated child axis
+	// in a pattern a wider reach than the written one — it is evaluated on
+	// the child-or-top axis, so "document-node()" alone matches the document
+	// node while "child::document-node()" is legal but matches nothing,
+	// since a document node is never a child.
+	Explicit bool
 }
 
 // PathExpr is a sequence of steps evaluated left to right, each against the
@@ -189,6 +197,16 @@ type KindTest struct {
 	// every test that is not a schema-element(), and for a declaration that
 	// heads no group.
 	SubstitutionGroup []xdm.QName
+	// DeclaredType is the local name of the type the schema-element() or
+	// schema-attribute() declaration names, resolved at parse time for the
+	// same reason SubstitutionGroup is. A node whose annotation is neither
+	// that type nor derived from it was validated against some *other*
+	// declaration of the same name — a local one — and does not match.
+	//
+	// Empty when the declaration's type is anonymous, in which case there is
+	// no name to compare and the test checks only that the node was
+	// validated.
+	DeclaredType string
 }
 
 // --- Sequence-level constructs ---------------------------------------------
@@ -253,6 +271,16 @@ type SequenceType struct {
 	// is keyed by: matching a value against it means asking the schema, not
 	// the type codes here, and a derived type's identity is exactly its name.
 	SchemaType string
+
+	// SchemaValueValid checks a lexical value against the imported schema
+	// type SchemaType names, when that name is a simple type. It is captured
+	// at parse time, while the schema is still reachable through the
+	// resolver, for the same reason a schema-element() test's substitution
+	// group is: nothing carries a schema into the evaluator.
+	//
+	// nil when the type is not an imported simple type, in which case a cast
+	// is decided entirely by the built-in the type derives from.
+	SchemaValueValid func(value string) error
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string
 }

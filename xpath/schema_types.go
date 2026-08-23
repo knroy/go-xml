@@ -52,6 +52,77 @@ type SchemaTypes interface {
 	// An implementation with no schema, or a name with no members, returns
 	// nil.
 	SubstitutionGroupMembers(name xdm.QName) []xdm.QName
+
+	// SchemaDeclarationType returns the local name of the type a global
+	// element or attribute declaration names, and whether there is one.
+	//
+	// schema-element(E) matches a node only when it was validated against
+	// E's *declaration*, and a node may carry E's name while having been
+	// validated against a local declaration of a different type — which is
+	// the case the suite draws the line on. The evaluator sees only the
+	// compiled test, so the declared type is resolved here, while the schema
+	// is still reachable, and compared against the node's annotation at
+	// match time.
+	//
+	// An anonymous type has no name to return, so a declaration using one
+	// returns false and the test falls back to checking only that the node
+	// was validated at all.
+	SchemaDeclarationType(name xdm.QName, attribute bool) (string, bool)
+
+	// ValidateSchemaValue checks a lexical value against a named simple type
+	// in the static context, reporting whether the name is a simple type at
+	// all and, if so, whether the value is in its value space.
+	//
+	// "castable as my:hatsize" is that question. The engine can cast to the
+	// built-in the type derives from, but the facets the schema author wrote
+	// live only in the schema — so without asking, a cast to a restriction of
+	// xs:integer accepted every integer and the restriction meant nothing.
+	ValidateSchemaValue(name xdm.QName, value string) (known bool, err error)
+}
+
+// schemaValueValid checks a value against a named schema simple type,
+// resolving the name through the same prefix bindings as everything else.
+//
+// known is false when the name is not a simple type in the static context, in
+// which case the caller keeps whatever answer the built-in cast gave.
+func schemaValueValid(lex string, ns NamespaceResolver, value string) (known bool, err error) {
+	st, ok := ns.(SchemaTypes)
+	if !ok {
+		return false, nil
+	}
+	prefix, local := xdm.SplitQName(lex)
+	name := xdm.QName{Local: local}
+	if prefix != "" {
+		uri, found := ns.ResolvePrefix(prefix)
+		if !found {
+			return false, nil
+		}
+		name.URI = uri
+	} else {
+		name.URI = ns.DefaultElementNamespace()
+	}
+	return st.ValidateSchemaValue(name, value)
+}
+
+// schemaDeclarationType resolves the declared type of a schema-element() or
+// schema-attribute() name, through the same prefix bindings as the name.
+func schemaDeclarationType(lex string, ns NamespaceResolver, attribute bool) (string, bool) {
+	st, ok := ns.(SchemaTypes)
+	if !ok {
+		return "", false
+	}
+	prefix, local := xdm.SplitQName(lex)
+	name := xdm.QName{Local: local}
+	if prefix != "" {
+		uri, found := ns.ResolvePrefix(prefix)
+		if !found {
+			return "", false
+		}
+		name.URI = uri
+	} else if !attribute {
+		name.URI = ns.DefaultElementNamespace()
+	}
+	return st.SchemaDeclarationType(name, attribute)
 }
 
 // schemaSubstitutionGroup returns the names schema-element(lex) admits besides

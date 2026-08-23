@@ -282,6 +282,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			sel:          sel,
 			noNamespaces: n.AttrValue("copy-namespaces") == "no",
 			validation:   spec,
+			baseURI:      n.BaseURI,
 		}, nil
 	case "sequence":
 		sel, err := requiredExpr(n, "select", ns)
@@ -918,12 +919,27 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 		if a.Name.URI != "" || a.Name.Local == "href" || a.Name.Local == "format" {
 			continue
 		}
+		// validation and type are not serialisation parameters. They ask for
+		// the result tree to be assessed, and treating them as overrides
+		// would have put validation="strict" into the output settings, where
+		// nothing reads it.
+		if a.Name.Local == "validation" || a.Name.Local == "type" {
+			continue
+		}
 		t, err := compileAVT(a.Value, ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:result-document/@%s: %w", a.Name.Local, err)
 		}
 		instr.overrideAVTs[a.Name.Local] = t
 	}
+	// §19.2.2: a result document is a document node, and validation on it is
+	// document-node validation — the sole element child is assessed, and the
+	// document-level constraints are applied over it.
+	spec, err := compileValidation(n, "")
+	if err != nil {
+		return nil, err
+	}
+	instr.validation = spec
 
 	if v := n.AttrValue("href"); v != "" {
 		a, err := compileAVT(v, ns)

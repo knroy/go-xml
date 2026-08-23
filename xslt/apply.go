@@ -119,7 +119,30 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	// Record the selection state so xsl:next-match and xsl:apply-imports in
 	// the body can resume from here.
 	sub := rt.withSelection(t, next, mode, params, tunnels)
+	// The node being processed is also what fn:current() returns for the
+	// whole body. xsl:apply-templates binds it before it gets here, but the
+	// very first invocation of the transform does not, and the fallback of
+	// "current() is the context item" is wrong the moment evaluation descends
+	// into a path step: in "$temp/a/b/id(@idref, current()//dummy)" the
+	// fallback answered with the b the step was on rather than with the
+	// template's own node, so the second argument selected nothing.
+	//
+	// Binding it here rather than at the call site covers every entry point
+	// at once, and rebinding it to the same node the caller already bound
+	// costs nothing.
+	if node != nil {
+		sub = sub.withCurrentNode(node)
+	}
 	return runTemplate(sub, t, params, tunnels, out)
+}
+
+// withCurrentNode records node as what fn:current() returns, without touching
+// the focus. The focus is already node here; only the current-node binding may
+// be missing.
+func (rt *runtime) withCurrentNode(node *xdm.Node) *runtime {
+	n := *rt
+	n.ctx = rt.ctx.WithVar(currentVar, xdm.One(node))
+	return &n
 }
 
 // findTemplate returns the highest-priority template matching node in mode.
@@ -481,15 +504,18 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 
-	// Parameters given here replace the originals for the resumed call; those
-	// not mentioned carry over, which is what makes next-match usable as a
-	// pass-through.
+	// Section 6.7: the instruction "may use xsl:with-param child elements to
+	// pass parameters to the chosen template rule. It *also* passes on any
+	// tunnel parameters." Those two and nothing else — an ordinary parameter
+	// the current rule received does not carry over, so a parameter the
+	// resumed template declares falls back to its own default.
+	//
+	// Carrying the non-tunnel parameters over made next-match a
+	// pass-through for them, which is what a reader expects and not what the
+	// specification says.
 	params, tunnels, err := evalParams(rt, i.params)
 	if err != nil {
 		return err
-	}
-	if params == nil {
-		params = rt.sel.params
 	}
 	if tunnels == nil {
 		tunnels = rt.sel.tunnels

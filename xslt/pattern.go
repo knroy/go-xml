@@ -66,6 +66,9 @@ type patternStep struct {
 	// preds are predicates on this step, evaluated with the candidate node as
 	// context.
 	preds []xpath.Expr
+	// explicitAxis records that the axis was spelled out. The child-or-top
+	// widening of section 5.5.3 applies only to the abbreviated form.
+	explicitAxis bool
 }
 
 // CompilePattern compiles an XSLT match pattern.
@@ -235,7 +238,7 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 
 // convertStep reinterprets a path step as a pattern step.
 func convertStep(s *xpath.Step) (patternStep, error) {
-	ps := patternStep{nodeTest: s.Test, preds: s.Predicates}
+	ps := patternStep{nodeTest: s.Test, preds: s.Predicates, explicitAxis: s.Explicit}
 	switch s.Axis {
 	case xpath.AxisChild:
 	case xpath.AxisAttribute:
@@ -406,6 +409,12 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 		// "/" name the document node explicitly and must still match it;
 		// they differ from node() by not being the "any kind" test.
 		if kt, ok := s.nodeTest.(*xpath.KindTest); ok && kt.Any {
+			return false, nil
+		}
+		// The child-or-top widening is a property of the abbreviated syntax
+		// only. A written-out "child::document-node()" is legal but can never
+		// match, because no document node is the child of anything.
+		if s.explicitAxis && !s.descendant {
 			return false, nil
 		}
 	}

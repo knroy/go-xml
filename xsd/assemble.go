@@ -131,14 +131,35 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 // imports xdm and not the other way round. So the schema tells it, once, here.
 func registerDerivedTypes(s *Schema) {
 	for name, t := range s.Types {
-		st, ok := t.(*SimpleType)
-		if !ok || st == nil || name.Local == "" || name.URI == NSSchema {
+		if name.Local == "" || name.URI == NSSchema {
+			continue
+		}
+		var base *SimpleType
+		switch ct := t.(type) {
+		case *SimpleType:
+			if ct == nil {
+				continue
+			}
+			base, _ = ct.Base.(*SimpleType)
+		case *ComplexType:
+			// A complex type with simple content atomises as its content
+			// type, so it derives from whatever that content type does:
+			// "complexSimpleContent extends xsd:decimal" makes an element
+			// annotated with it an instance of element(E, xs:decimal).
+			// Registering only simple types left every such name unknown to
+			// the data model, so the derivation chain stopped one step short
+			// and the match never happened.
+			if ct == nil || ct.Content != ContentSimple {
+				continue
+			}
+			base = ct.SimpleContent
+		default:
 			continue
 		}
 		// The nearest named built-in ancestor is what the value atomises as,
 		// which is exactly what annotationName computes for the base.
-		if base, ok := st.Base.(*SimpleType); ok && base != nil {
-			if prim := annotationName(base); prim != "" {
+		if base != nil {
+			if prim := annotationName(base); prim != "" && prim != name.Local {
 				xdm.RegisterDerivedType(name.Local, prim)
 			}
 		}

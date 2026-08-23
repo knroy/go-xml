@@ -188,6 +188,16 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr) (xdm.Sequence, er
 		// atomic values, never a mix. Sorting a mixed result is meaningless,
 		// so it is returned as-is and the mix is an error only if a later
 		// step tries to navigate from it.
+		//
+		// Raising XPTY0018 here instead — the literal reading of XPath 2.0
+		// section 3.2, and what expression-0932/0933 ask for — was measured
+		// and costs 149 tests: `out` accumulates across every input item, so
+		// a step yielding nodes for one item and atomics for another trips a
+		// check on the accumulation even though each step result on its own
+		// is homogeneous. Testing per input item instead is correct but gains
+		// nothing — it never fires, because those two tests reach the mix
+		// through a single item whose "if" branch type this engine erases.
+		// Both variants were measured and reverted.
 		return out, nil
 	}
 	return xdm.SortDocumentOrder(out), nil

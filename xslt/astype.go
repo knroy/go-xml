@@ -91,7 +91,7 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		// against the declaration below.
 		cast := a.Type == xdm.TypeUntypedAtomic ||
 			(a.Type == xdm.TypeAnyURI && t.stype.AtomicType == xdm.TypeString) ||
-			(a.Type.IsNumeric() && t.stype.AtomicType.IsNumeric())
+			numericPromotes(a.Type, t.stype.AtomicType)
 		if !cast {
 			out = append(out, a)
 			continue
@@ -139,4 +139,29 @@ func bindParam(p *Variable, v xdm.Sequence, t *Template) (xdm.Sequence, error) {
 	}
 	return p.AsType.convertAs(v, "parameter $"+p.Name.Lexical()+
 		" of template "+templateLabel(t), "XTTE0590")
+}
+
+// numericPromotes reports whether the function conversion rules promote one
+// numeric type to another.
+//
+// The ladder runs one way only: xs:decimal (and xs:integer, which derives
+// from it) promotes to xs:float and to xs:double, and xs:float promotes to
+// xs:double. Nothing promotes *down*. Treating every numeric pair as
+// convertible let a variable declared as="xs:float" silently accept an
+// xs:double and lose precision, where the rules make it a type error —
+// which is exactly what type-0174 and type-0175 are written to detect.
+func numericPromotes(from, to xdm.TypeCode) bool {
+	if !from.IsNumeric() || !to.IsNumeric() {
+		return false
+	}
+	switch to {
+	case xdm.TypeDouble:
+		return true
+	case xdm.TypeFloat:
+		return from != xdm.TypeDouble
+	}
+	// A promotion to xs:decimal or xs:integer is not a promotion at all: an
+	// item already of that type was passed through by the subtype check
+	// above, and anything else would be a narrowing.
+	return false
 }

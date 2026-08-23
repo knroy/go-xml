@@ -66,6 +66,25 @@ func (s *Schema) HasElementDeclaration(name xdm.QName) bool {
 	return ok
 }
 
+// CanAssessStrictly reports whether strict assessment has something to assess
+// an element against.
+//
+// That is a weaker question than HasElementDeclaration, because §3.3.4 clause
+// 1.2 also assesses an element carrying xsi:type against the type it names,
+// declaration or no declaration. Validate already takes that path; without
+// this the XSLT layer refused the element as undeclared before ever getting
+// there, so <doc xsi:type="xs:anyType"> under validation="strict" reported no
+// top-level declaration rather than validating.
+func (s *Schema) CanAssessStrictly(el *xdm.Node) bool {
+	if el == nil || el.Kind != xdm.KindElement {
+		return false
+	}
+	if s.HasElementDeclaration(el.Name) {
+		return true
+	}
+	return el.Attr(NSInstance, "type") != nil
+}
+
 // HasAttributeDeclaration reports whether the schema declares a global
 // attribute of that name.
 func (s *Schema) HasAttributeDeclaration(name xdm.QName) bool {
@@ -96,7 +115,12 @@ func (s *Schema) ValidateAttribute(at *xdm.Node, lax bool, opts ValidateOptions)
 			Path: "/@" + at.Name.Local,
 		}}}
 	}
-	return s.ValidateAgainstType(at, decl.Type.Name, opts)
+	// The declaration's type is passed as a component rather than by name.
+	// An attribute may be declared with an inline <xs:simpleType>, which has
+	// no name to look up — the built-in xml:lang is one, being a union of
+	// xs:language with the empty string — and routing through the name turned
+	// every such declaration into "no type named {…}… in the schema".
+	return s.validateNodeAgainstType(at, decl.Type, decl.Type.TypeName(), opts)
 }
 
 // ValidateAgainstType checks one element or attribute against a named type.
@@ -129,6 +153,14 @@ func (s *Schema) ValidateAgainstType(n *xdm.Node, typeName xdm.QName,
 			}}}
 		}
 	}
+	return s.validateNodeAgainstType(n, typ, typeName, opts)
+}
+
+// validateNodeAgainstType is ValidateAgainstType with the type already
+// resolved, so that a caller holding an anonymous type component can use it.
+// typeName is carried alongside only for error messages and the annotation.
+func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
+	typeName xdm.QName, opts ValidateOptions) error {
 
 	if opts.MaxErrors == 0 {
 		opts.MaxErrors = DefaultMaxErrors
@@ -186,4 +218,47 @@ func showName(n xdm.QName) string {
 // name from a stylesheet carries whatever prefix that stylesheet used.
 func bareName(q xdm.QName) xdm.QName {
 	return xdm.QName{URI: q.URI, Local: q.Local}
+}
+
+// ValidateValue checks a lexical value against a named simple type, without a
+// node to hang it on.
+//
+// "castable as my:hatsize" asks exactly this question: whether a value is in
+// the value space of a schema type, facets and all. The XPath engine holds
+// only the type's name, so it has to be able to ask without constructing an
+// element or attribute first — and without that, a cast to a user-defined
+// type checked the built-in it derives from and ignored every facet the
+// schema author wrote.
+//
+// A name that is not a simple type in this schema is an error rather than a
+// pass: a caller asking about a complex type has asked a question with no
+// answer, and reporting success would make the cast succeed.
+func (s *Schema) ValidateValue(value string, typeName xdm.QName) error {
+	name := bareName(typeName)
+	t, ok := s.Types[name]
+	if !ok {
+		if bt := BuiltinType(name.Local); bt != nil && name.URI == xdm.NSXS {
+			t = bt
+		} else {
+			return fmt.Errorf("xsd: no type named %s in the schema",
+				showName(name))
+		}
+	}
+	st, ok := t.(*SimpleType)
+	if !ok {
+		return fmt.Errorf("xsd: %s is a complex type", showName(name))
+	}
+	_, err := validateSimpleValueVersion(value, st, s.Version)
+	return err
+}
+
+// HasSimpleType reports whether a name is a simple type in this schema, which
+// is the precondition ValidateValue needs a caller to have checked.
+func (s *Schema) HasSimpleType(typeName xdm.QName) bool {
+	t, ok := s.Types[bareName(typeName)]
+	if !ok {
+		return false
+	}
+	_, ok = t.(*SimpleType)
+	return ok
 }

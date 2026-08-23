@@ -451,6 +451,45 @@ func (r *nsResolver) LookupSchemaDeclaration(name xdm.QName, attribute bool) boo
 	return ok
 }
 
+// SchemaDeclarationType implements xpath.SchemaTypes.
+//
+// Only a *named* type is reported. A declaration using an inline anonymous
+// type has no name for the node test to compare against, and inventing one
+// would make the comparison fail for every node rather than pass for the
+// right ones.
+func (r *nsResolver) SchemaDeclarationType(name xdm.QName, attribute bool) (string, bool) {
+	if r.schema == nil {
+		return "", false
+	}
+	var t xsd.Type
+	if attribute {
+		d, ok := r.schema.Attributes[name]
+		if !ok || d == nil || d.Type == nil {
+			return "", false
+		}
+		t = d.Type
+	} else {
+		d, ok := r.schema.Elements[name]
+		if !ok || d == nil || d.Type == nil {
+			return "", false
+		}
+		t = d.Type
+	}
+	local := t.TypeName().Local
+	if local == "" {
+		return "", false
+	}
+	return local, true
+}
+
+// ValidateSchemaValue implements xpath.SchemaTypes.
+func (r *nsResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
+	if r.schema == nil || !r.schema.HasSimpleType(name) {
+		return false, nil
+	}
+	return true, r.schema.ValidateValue(value, name)
+}
+
 // SubstitutionGroupMembers implements xpath.SchemaTypes.
 //
 // The schema has already computed the transitive closure and cached it on the
@@ -511,6 +550,24 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 		// cannot be cast to directly — made one:mp3 and first:mp3 compare
 		// unequal even though both prefixes bind the same namespace.
 		return xdm.TypeQName, true, true
+	}
+	// The nearest built-in *ancestor*, not the XSD primitive. They differ
+	// wherever the built-in hierarchy has steps below a primitive: a
+	// restriction of xs:integer has xs:decimal as its primitive, so erasing
+	// to the primitive made "cast as my:derivedInteger" produce an
+	// xs:decimal, and "instance of xs:integer" then answered false for the
+	// value the cast had just produced.
+	for cur := st; cur != nil; {
+		if cur.Name.URI == xsd.NSSchema && cur.Name.Local != "" {
+			if code, ok := xpath.BuiltinAtomicTypeCode(cur.Name.Local); ok {
+				return code, true, true
+			}
+		}
+		base, ok := cur.Base.(*xsd.SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
 	}
 	code, ok := xpath.BuiltinAtomicTypeCode(st.Primitive.Name.Local)
 	if !ok {

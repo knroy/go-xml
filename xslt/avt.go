@@ -151,9 +151,11 @@ func (a *avt) eval(rt *runtime) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// An AVT concatenates the string values of every item, space
-		// separated, which is fn:string-join(seq, ' ').
-		sb.WriteString(stringJoin(seq, " "))
+		// Section 5.7.2 applies to an attribute value template too: zero-length
+		// text nodes are dropped and adjacent text nodes merged before the
+		// separator is inserted, so a function returning a sequence of text
+		// nodes contributes one string rather than one per node.
+		sb.WriteString(constructedText(seq, " "))
 	}
 	return sb.String(), nil
 }

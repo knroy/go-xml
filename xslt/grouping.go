@@ -1572,7 +1572,7 @@ func (i *forEachGroupInstr) resolveCollation(rt *runtime) (xpath.Collation, erro
 		if i.defaultCollation == "" {
 			return nil, nil
 		}
-		return xpath.ResolveCollation(i.defaultCollation)
+		return resolveGroupCollation(i.defaultCollation)
 	}
 	uri, err := i.collation.eval(rt)
 	if err != nil {
@@ -1581,7 +1581,24 @@ func (i *forEachGroupInstr) resolveCollation(rt *runtime) (xpath.Collation, erro
 	if strings.TrimSpace(uri) == "" {
 		return nil, nil
 	}
-	return xpath.ResolveCollation(uri)
+	return resolveGroupCollation(uri)
+}
+
+// resolveGroupCollation is xpath.ResolveCollation with xsl:for-each-group's
+// own error code.
+//
+// Section 14.2: "it is a non-recoverable dynamic error if the collation URI
+// specified to xsl:for-each-group ... is a collation that is not recognized by
+// the implementation". FOCH0002 is fn:compare's code for the same condition,
+// and reporting it here named the wrong instruction.
+func resolveGroupCollation(uri string) (xpath.Collation, error) {
+	coll, err := xpath.ResolveCollation(uri)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"XTDE1110: xsl:for-each-group/@collation %q is not a recognized "+
+				"collation", uri)
+	}
+	return coll, nil
 }
 
 // collationKey is the string a grouping key is indexed by.

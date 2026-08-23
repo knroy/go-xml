@@ -108,12 +108,38 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 		spec.typeName = &qn
 		return spec, nil
 	}
+	if v == "" {
+		// §3.6: with neither attribute present "the effect is the same as
+		// specifying the validation attribute with the value specified in
+		// the default-validation attribute of the containing xsl:stylesheet
+		// element". The default is read from the module the instruction is
+		// written in, because the specification says in as many words that
+		// it "does not extend to included or imported stylesheet modules" —
+		// so it is found by walking up from this node rather than held once
+		// on the compiler.
+		v = moduleDefaultValidation(n)
+	}
 	mode, err := parseValidationMode(v)
 	if err != nil {
 		return spec, err
 	}
 	spec.mode = mode
 	return spec, nil
+}
+
+// moduleDefaultValidation returns the default-validation attribute of the
+// xsl:stylesheet element containing n, or "" when there is none.
+func moduleDefaultValidation(n *xdm.Node) string {
+	for a := n; a != nil; a = a.Parent {
+		if a.Kind != xdm.KindElement || a.Name.URI != xdm.NSXSL {
+			continue
+		}
+		switch a.Name.Local {
+		case "stylesheet", "transform":
+			return a.AttrValue("default-validation")
+		}
+	}
+	return ""
 }
 
 // assess validates a constructed node, if the instruction asked for it.
@@ -204,12 +230,18 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		return nil
 	}
 
+	// XTTE1555: validating a *document* node applies the document-level
+	// constraints, ID/IDREF among them, over the whole tree. They are checked
+	// after the element has been assessed, because it is that assessment
+	// which annotates the tree and so says which nodes carry IDs at all.
+	docNode := false
 	if n.Kind == xdm.KindDocument {
 		elem, err := soleElementChild(n)
 		if err != nil {
 			return err
 		}
 		n = elem
+		docNode = true
 	}
 
 	if n.Kind == xdm.KindAttribute {
@@ -224,8 +256,8 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		}
 		if err := schema.ValidateAttribute(n, spec.mode != validateStrict,
 			xsd.ValidateOptions{Annotate: true}); err != nil {
-			return fmt.Errorf("XTTE1510: %s is not valid: %w",
-				describeNode(n), err)
+			return fmt.Errorf("%s: %s is not valid: %w",
+				invalidCode(spec.mode), describeNode(n), err)
 		}
 		return nil
 	}
@@ -236,21 +268,43 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	}
 	var err error
 	if spec.mode == validateStrict {
-		if !schema.HasElementDeclaration(n.Name) {
+		// CanAssessStrictly rather than HasElementDeclaration: an element
+		// carrying xsi:type is assessed against the type it names even with
+		// no declaration of its own, so refusing it here would report a
+		// missing declaration for a document the schema can in fact assess.
+		if !schema.CanAssessStrictly(n) {
 			// XTTE1512 is the specific code for strict validation finding no
 			// top-level declaration to assess against, as distinct from
 			// XTTE1510, which says the node was assessed and found invalid.
 			return fmt.Errorf(
 				"XTTE1512: no top-level declaration for %s", describeNode(n))
 		}
-		err = schema.ValidateElement(n, xsd.ValidateOptions{Annotate: true})
+		err = schema.Validate(n, xsd.ValidateOptions{Annotate: true})
 	} else {
 		err = schema.ValidateElementLax(n, xsd.ValidateOptions{Annotate: true})
 	}
 	if err != nil {
-		return fmt.Errorf("XTTE1510: %s is not valid: %w", describeNode(n), err)
+		return fmt.Errorf("%s: %s is not valid: %w",
+			invalidCode(spec.mode), describeNode(n), err)
+	}
+	if docNode {
+		return checkDocumentIDs(n)
 	}
 	return nil
+}
+
+// invalidCode is the error code for a node that was assessed and found
+// invalid, which differs by mode.
+//
+// XTTE1510 is the strict code and XTTE1515 the lax one. They are distinct
+// because lax has two outcomes strict does not — "no declaration, so not
+// assessed" is a pass under lax — so a stylesheet catching one is not asking
+// about the other.
+func invalidCode(mode validationMode) string {
+	if mode == validateLax {
+		return "XTTE1515"
+	}
+	return "XTTE1510"
 }
 
 // soleElementChild returns the one element child a validated document node is
@@ -334,4 +388,72 @@ func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
 		local = next
 	}
 	return false, ""
+}
+
+// checkDocumentIDs applies the ID/IDREF half of the document-level constraints
+// to an already-annotated tree.
+//
+// Only nodes carrying an annotation count: an unvalidated attribute named "id"
+// is not an xs:ID, and treating it as one would invent constraints the
+// stylesheet never asked for.
+func checkDocumentIDs(doc *xdm.Node) error {
+	owners := map[string]*xdm.Node{}
+	var refs []string
+	var walk func(n *xdm.Node)
+	noteRefs := func(ann, value string) {
+		switch ann {
+		case "IDREF":
+			refs = append(refs, value)
+		case "IDREFS":
+			refs = append(refs, strings.Fields(value)...)
+		}
+	}
+	// A value bound to two *different* elements is the clash. The same value
+	// twice on one element is one binding, which is why the owner is
+	// compared rather than the value counted.
+	var dupes []string
+	noteID := func(owner *xdm.Node, value string) {
+		prev, seen := owners[value]
+		switch {
+		case !seen:
+			owners[value] = owner
+		case prev != owner:
+			dupes = append(dupes, value)
+		}
+	}
+	walk = func(n *xdm.Node) {
+		if n == nil {
+			return
+		}
+		for _, a := range n.Attrs {
+			if a.TypeAnnotation == "ID" {
+				noteID(n, a.Value)
+			} else {
+				noteRefs(a.TypeAnnotation, a.Value)
+			}
+		}
+		if n.Kind == xdm.KindElement {
+			if n.TypeAnnotation == "ID" {
+				noteID(n, n.StringValue())
+			} else {
+				noteRefs(n.TypeAnnotation, n.StringValue())
+			}
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if len(dupes) > 0 {
+		return fmt.Errorf(
+			"XTTE1555: ID value %q is defined more than once in the "+
+				"document", dupes[0])
+	}
+	for _, r := range refs {
+		if _, ok := owners[r]; !ok {
+			return fmt.Errorf(
+				"XTTE1555: IDREF %q does not match any ID in the document", r)
+		}
+	}
+	return nil
 }

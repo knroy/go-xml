@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -437,8 +438,21 @@ func ratOf(a *xdm.Atomic) *big.Rat {
 	if r := a.Rat(); r != nil {
 		return new(big.Rat).Set(r)
 	}
+	// A double is formatted from its *shortest* decimal representation, not
+	// from the exact binary value it holds. Section 16.4.2 defines the result
+	// in terms of the value converted to a string, and xs:double's lexical
+	// form is the shortest one that round-trips: format-number(1E23,
+	// '####...') is "100000000000000000000000", where the exact binary value
+	// would print 99999999999999991611392.
+	f := a.Float64()
 	r := new(big.Rat)
-	r.SetFloat64(a.Float64())
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		r.SetFloat64(0)
+		return r
+	}
+	if _, ok := r.SetString(strconv.FormatFloat(f, 'g', -1, 64)); !ok {
+		r.SetFloat64(f)
+	}
 	return r
 }
 

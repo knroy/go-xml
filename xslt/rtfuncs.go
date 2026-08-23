@@ -316,7 +316,11 @@ func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
 			case "supports-serialization":
 				return xdm.One(xdm.NewString("yes")), nil
 			case "supports-backwards-compatibility":
-				return xdm.One(xdm.NewString("yes")), nil
+				// XSLT 1.0 compatibility mode (version="1.0" on the
+				// stylesheet changing the meaning of expressions) is not
+				// implemented, and the property must say so: a stylesheet
+				// that asks before relying on it was being told yes.
+				return xdm.One(xdm.NewString("no")), nil
 			}
 			return xdm.One(xdm.NewString("")), nil
 		},
@@ -494,9 +498,10 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 
 	// The third argument, when present, names the document to search; without
 	// it the search covers the tree containing the context node.
-	var root *xdm.Node
+	var root, top *xdm.Node
 	if len(args) > 2 && len(args[2]) > 0 {
 		if n, isNode := args[2][0].(*xdm.Node); isNode {
+			top = n
 			root = n.Root()
 		}
 	}
@@ -546,7 +551,34 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		}
 		out = append(out, index[k]...)
 	}
+	if top != nil && top.Kind != xdm.KindDocument {
+		// Section 16.3: the third argument names a *subtree*, not a document.
+		// "The selected subtree is the set of nodes that have $top as an
+		// ancestor-or-self node", and a node is selected only when
+		// "$N/ancestor-or-self::node() intersect $top" is non-empty. The index
+		// is still built over the whole tree — that is what makes it an index
+		// — so the restriction is applied to the result. Treating $top as its
+		// own root returned every matching node in the document instead of
+		// the ones under it.
+		var kept xdm.Sequence
+		for _, it := range out {
+			if n, isNode := it.(*xdm.Node); isNode && hasAncestorOrSelf(n, top) {
+				kept = append(kept, it)
+			}
+		}
+		out = kept
+	}
 	return xdm.SortDocumentOrder(out), nil
+}
+
+// hasAncestorOrSelf reports whether top is n or one of its ancestors.
+func hasAncestorOrSelf(n, top *xdm.Node) bool {
+	for p := n; p != nil; p = p.Parent {
+		if p == top {
+			return true
+		}
+	}
+	return false
 }
 
 // keyLookupKey is the string a key value is indexed and looked up by.
@@ -582,7 +614,16 @@ func (rt *runtime) keySearchKey(a *xdm.Atomic, coll xpath.Collation) (string, er
 // is the key. Both may yield several values, which puts the node under each.
 func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*xdm.Atomic, error) {
 	if def.use != nil {
-		vals, err := def.use.Eval(ctx.WithFocus(n, 1, 1))
+		// current() inside xsl:key/@use is the node being keyed. WithFocus
+		// sets the context item but not the current-node variable the
+		// function reads, so the use expression saw whatever current() meant
+		// where the index happened to be built.
+		// current() inside xsl:key/@use is the node being keyed. WithFocus
+		// sets the context item but not the current-node variable the
+		// function reads, so the use expression saw whatever current() meant
+		// where the index happened to be built.
+		vals, err := def.use.Eval(
+			ctx.WithFocus(n, 1, 1).WithVar(currentVar, xdm.One(n)))
 		if err != nil {
 			return nil, err
 		}
