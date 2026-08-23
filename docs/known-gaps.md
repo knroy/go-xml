@@ -741,14 +741,14 @@ tests/check.sh fast     # build, vet, unit tests, race only
 It reports a missing suite as skipped and a present-but-silent suite as a
 failure, because a check that did not run must not look like one that
 succeeded. That distinction is not theoretical: the first run of this script
-caught a relative `GOXSLT_QT3` resolving against `./qt3/` rather than the
+caught a relative `GOXSLT_QT3` resolving against `./tests/qt3/` rather than the
 repository root, which made the suite skip itself while `go test` reported
 PASS.
 
 QT3 also runs from the test suite directly:
 
 ```
-GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -run TestQT3 -v
+GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -run TestQT3 -v
 ```
 
 Set `GOXSLT_QT3_VERBOSE=1` to list every failure with the expression it ran,

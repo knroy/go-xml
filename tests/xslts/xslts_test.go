@@ -19,7 +19,7 @@ import (
 func TestXSLTSuite(t *testing.T) {
 	root := os.Getenv("GOXSLT_XSLTS")
 	if root == "" {
-		root = "../testdata/xslt30-test"
+		root = "../../testdata/xslt30-test"
 	}
 	if _, err := os.Stat(root + "/catalog.xml"); err != nil {
 		t.Skip("set GOXSLT_XSLTS to a checkout of w3c/xslt30-test to run the suite")

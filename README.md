@@ -1164,7 +1164,7 @@ unaffected.
 
 ```
 $ git clone --depth 1 https://github.com/w3c/qt3tests.git testdata/qt3tests
-$ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./qt3/ -v -timeout 1800s
+$ GOXSLT_QT3=$PWD/testdata/qt3tests go test ./tests/qt3/ -v -timeout 1800s
 QT3: 31821 cases, 15181 in scope, 16640 skipped
 in-scope: 15180 passed, 1 failed (99.99%)
 ```

@@ -14,6 +14,7 @@
 #
 #   GOXSLT_QT3=<dir>    github.com/w3c/qt3tests    (default testdata/qt3tests)
 #   GOXSLT_XSDTS=<dir>  github.com/w3c/xsdtests    (default testdata/xsdtests)
+#   GOXSLT_XSLTS=<dir>  github.com/w3c/xslt30-test (default testdata/xslt30-test)
 #   GOXSLT_RNG=<file>   spectest.xml from relaxng/jing-trang
 #                                                  (default testdata/relaxng/spectest.xml)
 #   GOXSLT_UBL=<dir>    UBL 2.1, the directory holding maindoc/
@@ -47,6 +48,7 @@ abspath() {
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
 RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
+XSLTS=$(abspath "${GOXSLT_XSLTS:-testdata/xslt30-test}")
 UBL="${GOXSLT_UBL:-}"
 CII="${GOXSLT_CII:-}"
 [ -n "$UBL" ] && UBL=$(abspath "$UBL")
@@ -83,7 +85,7 @@ if [ -f "$QT3/catalog.xml" ]; then
 	# The percentage is the result, so it is printed rather than asserted: a
 	# hard threshold would turn every upstream suite update into a build
 	# break. What *is* asserted is that a summary appeared at all.
-	out=$(GOXSLT_QT3="$QT3" $GO test ./qt3/ -count=1 -run TestQT3 -v 2>&1) || true
+	out=$(GOXSLT_QT3="$QT3" $GO test ./tests/qt3/ -count=1 -run TestQT3 -v 2>&1) || true
 	if printf '%s' "$out" | grep -q 'in-scope:'; then
 		printf '%s\n' "$out" | grep -E 'QT3:|in-scope:'
 	else
@@ -125,6 +127,20 @@ else
 	skip "spectest.xml not at $RNG
     git clone --depth 1 https://github.com/relaxng/jing-trang.git
     cp jing-trang/mod/rng-validate/test/spectest.xml $RNG"
+fi
+
+section "W3C XSLT suite (filtered to XSLT 2.0)"
+if [ -f "$XSLTS/catalog.xml" ]; then
+	out=$(GOXSLT_XSLTS="$XSLTS" $GO test ./tests/xslts/ -count=1 -run TestXSLTSuite -v 2>&1) || true
+	if printf '%s' "$out" | grep -q 'in-scope:'; then
+		printf '%s\n' "$out" | grep -E 'XSLT suite:|in-scope:'
+	else
+		fail "the XSLT suite ran but reported no summary — did it skip?"
+		printf '%s\n' "$out" | tail -5
+	fi
+else
+	skip "the XSLT suite is not at $XSLTS
+    git clone --depth 1 https://github.com/w3c/xslt30-test.git $XSLTS"
 fi
 
 section "production corpora"
