@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -502,11 +503,28 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if !ok {
 				continue
 			}
-			conv, err := xpath.CastAtomic(at, xdm.TypeInteger)
+			// Section 12.1 gives the conversion exactly:
+			// xs:integer(round(number($V))). Casting straight to integer
+			// does the number() and the xs:integer() but not the round(),
+			// so it truncates: 3.6 numbered as 3 and 99.5 as 99.
+			num, err := xpath.CastAtomic(at, xdm.TypeDouble)
 			if err != nil {
-				return err
+				// "If any value in the sequence cannot be converted to an
+				// integer ... a dynamic error occurs": the failure to convert
+				// is XTDE0980 here, not the cast's own FORG0001.
+				return fmt.Errorf(
+					"XTDE0980: the value %q cannot be converted to an integer",
+					at.String())
 			}
-			nums = append(nums, conv.Int64())
+			f := num.Float64()
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return fmt.Errorf(
+					"XTDE0980: the value %q cannot be converted to an integer",
+					at.String())
+			}
+			// round() is half-up towards positive infinity, which is not
+			// what math.Round does for a negative half.
+			nums = append(nums, int64(math.Floor(f+0.5)))
 		}
 		out.appendText(formatNumberSeq(nums, format, opts))
 		return nil
@@ -618,8 +636,10 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 		// itself when it also matches @count. Stopping the upward walk at the
 		// first @from match dropped that node's own number, and stopping
 		// before testing @count meant a @from ancestor never contributed one.
+		// ancestor-or-self::node() includes the document node, so the walk
+		// runs to the root rather than stopping short of it.
 		var chain []*xdm.Node
-		for cur := node; cur != nil && cur.Kind != xdm.KindDocument; cur = cur.Parent {
+		for cur := node; cur != nil; cur = cur.Parent {
 			chain = append(chain, cur)
 		}
 		// chain is innermost-first, so the first @from match in it is the
@@ -660,10 +680,12 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 
 	// level="single": the nearest self-or-ancestor that the count pattern
 	// selects is the node that gets numbered.
+	//
+	// The axis the spec names is ancestor-or-self::node(), which includes the
+	// document node. Breaking before testing it meant xsl:number produced
+	// nothing at all when the node being numbered was the root — which is the
+	// context a simplified stylesheet starts in.
 	for cur := node; cur != nil; cur = cur.Parent {
-		if cur.Kind == xdm.KindDocument {
-			break
-		}
 		stop, err := i.matchesFrom(rt, cur)
 		if err != nil {
 			return nil, err
