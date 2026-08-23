@@ -144,7 +144,22 @@ func ResolveCollation(uri string) (Collation, error) {
 // collation it names, so a caller can actually use it rather than only
 // checking that it is supported.
 func collationArg(fn string, args []xdm.Sequence, i int) (Collation, error) {
+	return collationArgCtx(nil, fn, args, i)
+}
+
+// collationArgCtx is collationArg with the context supplying the default.
+//
+// Omitting the collation argument does not mean the codepoint collation: it
+// means the default collation from the static context, which
+// [xsl:]default-collation sets. Hard-coding codepoint here made
+// default-collation affect only the functions that read it directly, so
+// fn:contains and fn:compare kept comparing by codepoint inside a stylesheet
+// that had asked for a case-insensitive default.
+func collationArgCtx(ctx *Context, fn string, args []xdm.Sequence, i int) (Collation, error) {
 	if i >= len(args) {
+		if ctx != nil && ctx.collation != nil {
+			return ctx.collation, nil
+		}
 		return codepointCollation{}, nil
 	}
 	uri, err := argString(args, i)

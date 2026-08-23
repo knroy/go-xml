@@ -20,6 +20,21 @@ type Compiled struct {
 	// for the expressions within it, so the module's own is only a default.
 	// Empty means the context's applies.
 	staticBase string
+	// staticCollation is the default collation for this expression, which
+	// [xsl:]default-collation sets and which is static for the same reason
+	// the base URI is: it is written in the stylesheet.
+	staticCollation Collation
+}
+
+// WithDefaultCollation returns a copy of c whose functions use coll when no
+// collation argument is given.
+func (c *Compiled) WithDefaultCollation(coll Collation) *Compiled {
+	if c == nil || coll == nil {
+		return c
+	}
+	n := *c
+	n.staticCollation = coll
+	return &n
 }
 
 // WithStaticBaseURI returns a copy of c whose expressions resolve relative
@@ -79,9 +94,15 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// intermediate sequences may grow, which is exactly the thing that has to
 	// fit in memory at once.
 	ctx.resetItems()
-	if c.staticBase != "" && c.staticBase != ctx.StaticBaseURI {
+	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
+		c.staticCollation != nil {
 		sub := *ctx
-		sub.StaticBaseURI = c.staticBase
+		if c.staticBase != "" {
+			sub.StaticBaseURI = c.staticBase
+		}
+		if c.staticCollation != nil {
+			sub.collation = c.staticCollation
+		}
 		return c.expr.Eval(&sub)
 	}
 	return c.expr.Eval(ctx)

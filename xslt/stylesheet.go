@@ -426,8 +426,17 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	if err != nil {
 		return nil, err
 	}
-	if r, ok := ns.(*nsResolver); ok && r.baseURI != "" {
-		c = c.WithStaticBaseURI(r.baseURI)
+	if r, ok := ns.(*nsResolver); ok {
+		if r.baseURI != "" {
+			c = c.WithStaticBaseURI(r.baseURI)
+		}
+		// [xsl:]default-collation is static in the same way, and is what the
+		// collation-taking functions use when given no collation argument.
+		if r.collation != "" {
+			if coll, err := xpath.ResolveCollation(r.collation); err == nil {
+				c = c.WithDefaultCollation(coll)
+			}
+		}
 	}
 	return c, nil
 }

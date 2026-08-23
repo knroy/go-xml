@@ -16,7 +16,7 @@ func registerMiscFuncs(l *Library) {
 		// The collation applies to every string comparison the traversal
 		// makes. It was validated nowhere and applied nowhere, so
 		// deep-equal(("a","A"), ("A","a"), <case-insensitive>) was false.
-		coll, err := collationArg("deep-equal", args, 2)
+		coll, err := collationArgCtx(ctx, "deep-equal", args, 2)
 		if err != nil {
 			return nil, err
 		}

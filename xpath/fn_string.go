@@ -132,8 +132,8 @@ func registerStringFuncs(l *Library) {
 		return strSeq(lower.String(s)), nil
 	})
 
-	l.registerFn("contains", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("contains", args, 2)
+	l.registerFn("contains", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "contains", args, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -149,8 +149,8 @@ func registerStringFuncs(l *Library) {
 		return boolSeq(coll.Contains(a, b)), nil
 	})
 
-	l.registerFn("starts-with", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("starts-with", args, 2)
+	l.registerFn("starts-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "starts-with", args, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -165,8 +165,8 @@ func registerStringFuncs(l *Library) {
 		return boolSeq(coll.StartsWith(a, b)), nil
 	})
 
-	l.registerFn("ends-with", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("ends-with", args, 2)
+	l.registerFn("ends-with", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "ends-with", args, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -181,8 +181,8 @@ func registerStringFuncs(l *Library) {
 		return boolSeq(coll.EndsWith(a, b)), nil
 	})
 
-	l.registerFn("substring-before", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("substring-before", args, 2)
+	l.registerFn("substring-before", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "substring-before", args, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -201,8 +201,8 @@ func registerStringFuncs(l *Library) {
 		return strSeq(a[:i]), nil
 	})
 
-	l.registerFn("substring-after", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("substring-after", args, 2)
+	l.registerFn("substring-after", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "substring-after", args, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -282,8 +282,8 @@ func registerStringFuncs(l *Library) {
 		return out, nil
 	})
 
-	l.registerFn("compare", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		coll, err := collationArg("compare", args, 2)
+	l.registerFn("compare", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		coll, err := collationArgCtx(ctx, "compare", args, 2)
 		if err != nil {
 			return nil, err
 		}
