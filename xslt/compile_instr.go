@@ -601,25 +601,26 @@ func nonSortChildren(n *xdm.Node) []*xdm.Node {
 // attribute value template, since a stylesheet routinely computes one output
 // file per input node.
 func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &resultDocumentInstr{output: c.sheet.output}
+	instr := &resultDocumentInstr{}
 
+	// The output definition is selected when the instruction runs rather than
+	// here. xsl:output is a top-level declaration, and section 3.13 puts no
+	// ordering constraint on top-level elements, so the unnamed definition
+	// may be declared below the template that uses it — and an imported
+	// module's definitions merge in later still. Copying c.sheet.output at
+	// this point captured whatever had been seen so far, which for a
+	// stylesheet that declares its output after its templates was nothing.
 	if v := n.AttrValue("format"); v != "" {
 		qn, err := resolveQNameAttr(n, v)
 		if err != nil {
 			return nil, err
 		}
-		named, ok := c.sheet.namedOutputs[qn.Clark()]
-		if !ok {
-			return nil, fmt.Errorf(
-				"xsl:result-document/@format=%q names no xsl:output declaration", v)
-		}
-		instr.output = *named
+		instr.format = qn.Clark()
 	}
 	// Serialisation attributes written on the instruction itself override
-	// whatever @format supplied.
-	if err := applyOutputAttrs(n, &instr.output); err != nil {
-		return nil, err
-	}
+	// whatever the selected definition supplies, so they are kept separately
+	// and applied over it at run time.
+	instr.overrides = n
 
 	if v := n.AttrValue("href"); v != "" {
 		a, err := compileAVT(v, ns)

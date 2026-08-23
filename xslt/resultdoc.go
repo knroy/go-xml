@@ -31,10 +31,34 @@ type SecondaryResult struct {
 // resultDocumentInstr implements xsl:result-document.
 type resultDocumentInstr struct {
 	href *avt
-	// output is the settings resolved at compile time from @format plus any
-	// serialisation attributes written directly on the instruction.
-	output OutputSettings
-	body   []Instruction
+	// format is the Clark name of the xsl:output declaration @format names,
+	// or "" for the unnamed one. It is resolved when the instruction runs,
+	// not when it compiles: xsl:output is a top-level declaration and may be
+	// written after the template that uses it.
+	format string
+	// overrides is the instruction element itself, whose serialisation
+	// attributes take precedence over the selected definition.
+	overrides *xdm.Node
+	body      []Instruction
+}
+
+// settings selects the output definition this instruction writes with.
+func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
+	out := rt.sheet.output
+	if i.format != "" {
+		named, ok := rt.sheet.namedOutputs[i.format]
+		if !ok {
+			return out, fmt.Errorf(
+				"XTDE1460: xsl:result-document/@format names no xsl:output declaration")
+		}
+		out = *named
+	}
+	if i.overrides != nil {
+		if err := applyOutputAttrs(i.overrides, &out); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -67,10 +91,14 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	settings, err := i.settings(rt)
+	if err != nil {
+		return err
+	}
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
 		Href:   href,
 		Nodes:  sub.sequence(),
-		Output: i.output,
+		Output: settings,
 	})
 	return nil
 }

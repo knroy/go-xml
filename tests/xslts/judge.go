@@ -27,7 +27,34 @@ import (
 // res is nil whenever terr is non-nil, so every branch that reads a result
 // checks the error first. Only the combinators and <error> are reachable
 // without one.
+// principalOf returns the tree an assertion about "the result" should read.
+//
+// An xsl:result-document with no href produces a final result tree identified
+// by the base output URI — the zero-length string is a legal relative URI, and
+// the specification treats the tree it makes as a result like any other rather
+// than as the principal one. A stylesheet whose whole body sits inside such an
+// instruction therefore leaves the principal result empty, and the suite still
+// asserts against what it produced. Reading the unnamed secondary result when
+// the principal is empty is what makes those assertions see it.
+func principalOf(res *xslt.Result) (*xslt.Result, string, bool) {
+	if res == nil || len(res.Nodes) > 0 {
+		return res, "", false
+	}
+	for i := range res.Secondary {
+		if res.Secondary[i].Href == "" {
+			// The text comes back alongside the nodes because this tree
+			// serialises with the instruction's own output settings, which
+			// a Result built from its nodes cannot express — the unnamed
+			// xsl:output selecting method="text" is exactly the case.
+			return &xslt.Result{Nodes: res.Secondary[i].Nodes},
+				res.Secondary[i].String(), true
+		}
+	}
+	return res, "", false
+}
+
 func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) (bool, string) {
+	res, redirected, wasRedirected := principalOf(res)
 	// A nil result with no error should not happen; treating it as a failure
 	// rather than dereferencing it keeps a harness bug from looking like an
 	// engine crash.
@@ -137,7 +164,11 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		got, want := stripDecl(res.String()), strings.TrimSpace(a.Value)
+		text := res.String()
+		if wasRedirected {
+			text = redirected
+		}
+		got, want := stripDecl(text), strings.TrimSpace(a.Value)
 		if a.Normalize {
 			got, want = normalize(got), normalize(want)
 		}
@@ -154,7 +185,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		sub := secondaryByURI(res, a.URI)
+		sub, serialized := secondaryByURI(res, a.URI)
 		if sub == nil {
 			var hrefs []string
 			for _, s := range res.Secondary {
@@ -164,6 +195,23 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 				a.URI, hrefs)
 		}
 		for _, c := range a.Children {
+			// A secondary result is serialised with its *own* xsl:output
+			// settings, which the Result built from its nodes alone does
+			// not carry. assert-serialization is the only assertion that
+			// can tell the difference, so it is given the text the engine
+			// produced rather than a re-serialisation with defaults.
+			if c.Kind == "assert-serialization" {
+				got := stripDecl(serialized)
+				want := strings.TrimSpace(c.Value)
+				if c.Normalize {
+					got, want = normalize(got), normalize(want)
+				}
+				if got != want {
+					return false, fmt.Sprintf("%s: serialization %q, want %q",
+						a.URI, trunc(got), trunc(want))
+				}
+				continue
+			}
 			if ok, why := r.judge(c, sub, nil, set); !ok {
 				return false, a.URI + ": " + why
 			}
@@ -336,15 +384,18 @@ func evalAssert(res *xslt.Result, expr string) (bool, string) {
 // The href is compared by its last path segment: the suite writes "out.xml"
 // where the engine records whatever the stylesheet's @href resolved to, and
 // the two agree on the name rather than on the path.
-func secondaryByURI(res *xslt.Result, uri string) *xslt.Result {
+func secondaryByURI(res *xslt.Result, uri string) (*xslt.Result, string) {
 	want := lastSegment(uri)
 	for i := range res.Secondary {
 		s := &res.Secondary[i]
 		if s.Href == uri || lastSegment(s.Href) == want {
-			return &xslt.Result{Nodes: s.Nodes}
+			// The text is taken alongside the nodes because a secondary
+			// result serialises with its own output settings, which a
+			// Result assembled from the nodes cannot express.
+			return &xslt.Result{Nodes: s.Nodes}, s.String()
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 func lastSegment(s string) string {
