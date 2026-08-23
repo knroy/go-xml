@@ -323,8 +323,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// A declared parameter type converts the argument. Without this a
 		// parameter declared "as=xs:decimal?" receives an untypedAtomic and
 		// the body's arithmetic silently becomes double arithmetic.
-		v, err := p.AsType.convert(args[i], "parameter $"+p.Name.Lexical()+
-			" of "+f.name.Lexical())
+		// A function parameter whose supplied value will not convert to its
+		// declared type is XTTE0590.
+		v, err := p.AsType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
+			" of "+f.name.Lexical(), "XTTE0590")
 		if err != nil {
 			return nil, err
 		}
@@ -343,7 +345,10 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if err := execSequence(f.body, sub, out); err != nil {
 		return nil, err
 	}
-	return f.returns.convert(out.sequence(), "result of "+f.name.Lexical())
+	// A stylesheet function whose result will not convert to its declared
+	// type is XTTE0780.
+	return f.returns.convertAs(out.sequence(), "result of "+f.name.Lexical(),
+		"XTTE0780")
 }
 
 // nextMatchInstr implements xsl:next-match and xsl:apply-imports.

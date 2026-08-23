@@ -43,6 +43,16 @@ func compileSequenceType(src string, ns xpath.NamespaceResolver) (*sequenceType,
 
 // convert applies the function conversion rules to a value.
 func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, error) {
+	return t.convertAs(seq, what, "XPTY0004")
+}
+
+// convertAs is convert with the error code the caller's context requires.
+//
+// The same conversion failure has different codes depending on what was being
+// converted: a variable or parameter whose value will not convert is XTTE0570,
+// a function result is XTTE0780, and a plain expression is XPTY0004. The
+// machinery is identical, so only the code is passed in.
+func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Sequence, error) {
 	if t == nil {
 		return seq, nil
 	}
@@ -53,7 +63,7 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 		if t.stype.Matches(seq) {
 			return seq, nil
 		}
-		return nil, fmt.Errorf("XPTY0004: %s does not match its declared type %s", what, t.src)
+		return nil, fmt.Errorf("%s: %s does not match its declared type %s", code, what, t.src)
 	}
 
 	// Atomise, then cast each untypedAtomic item to the declared type. A
@@ -92,7 +102,8 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 	}
 
 	if !t.stype.Matches(out) {
-		return nil, fmt.Errorf("XPTY0004: %s does not match its declared type %s (got %d item(s))",
+		return nil, fmt.Errorf("%s: %s does not match its declared type %s (got %d item(s))",
+			code,
 			what, t.src, len(out))
 	}
 	return out, nil
