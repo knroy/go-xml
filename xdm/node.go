@@ -255,6 +255,18 @@ func (n *Node) Atomize() *Atomic {
 			return NewUntypedAtomic(n.StringValue())
 		}
 		if a := atomicForAnnotation(n.TypeAnnotation, n.StringValue()); a != nil {
+			// The annotation is kept on the value as its derived type, so
+			// that "instance of" can answer for a user-defined type. Without
+			// it the value knows only the primitive it erased to, and every
+			// question about the schema type it was validated against
+			// answered false.
+			return a.WithDerived(n.TypeAnnotation)
+		}
+		// A user-defined type this package cannot construct still atomises:
+		// it is the primitive its schema type derives from, and the schema
+		// name is what "instance of" needs. Returning a bare untypedAtomic
+		// discarded the annotation entirely.
+		if a := atomicForDerivedAnnotation(n); a != nil {
 			return a
 		}
 	}
@@ -600,4 +612,55 @@ func (t *Tree) positionAt(off int) (line, col int, ok bool) {
 		return 0, 0, false
 	}
 	return i + 1, off - t.lineStarts[i] + 1, true
+}
+
+// derivedPrimitives maps a schema type annotation to the built-in it erases to.
+//
+// It is populated by the xsd package when a schema is loaded, which is the
+// only place that knows a user-defined type's base. Keeping it here rather
+// than in xsd is what lets xdm.Node.Atomize consult it without importing xsd,
+// which it cannot: xsd already imports xdm.
+var derivedPrimitives = map[string]string{}
+
+// RegisterDerivedType records that a schema type erases to a built-in one.
+//
+// The xsd package calls this as it loads a schema, so that a node annotated
+// with a user-defined type still atomises to a typed value rather than to
+// untypedAtomic. Without it, "instance of my:partNumberType" could never be
+// true for a value read out of a validated document, because the value would
+// have discarded the annotation on the way out of the tree.
+func RegisterDerivedType(name, primitive string) {
+	if name == "" || primitive == "" || name == primitive {
+		return
+	}
+	derivedPrimitives[name] = primitive
+}
+
+// DerivedBase returns the type a schema type derives from, or "" if the name
+// is not a registered schema type.
+//
+// It is what makes the subtype relation work for schema types: a value
+// annotated as a restriction of xs:NOTATION is an instance of xs:NOTATION as
+// well as of its own type, and answering that means walking the chain the
+// schema recorded.
+func DerivedBase(name string) string { return derivedPrimitives[name] }
+
+// atomicForDerivedAnnotation builds a typed value for a user-defined schema
+// type, using the built-in it derives from.
+func atomicForDerivedAnnotation(n *Node) *Atomic {
+	prim, ok := derivedPrimitives[n.TypeAnnotation]
+	if !ok {
+		return nil
+	}
+	switch prim {
+	case "QName", "NOTATION":
+		if q, ok := n.resolveQNameValue(); ok {
+			return NewQNameValue(q).WithDerived(n.TypeAnnotation)
+		}
+		return nil
+	}
+	if a := atomicForAnnotation(prim, n.StringValue()); a != nil {
+		return a.WithDerived(n.TypeAnnotation)
+	}
+	return nil
 }

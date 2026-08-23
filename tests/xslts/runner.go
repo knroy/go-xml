@@ -333,6 +333,9 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 			// The initial context is the *document* node: a stylesheet
 			// matching "/" needs a root to match, and passing the document
 			// element leaves it with none.
+			if err := r.annotate(set, env, s, tree.Root); err != nil {
+				return nil, err
+			}
 			return tree.Root, nil
 		}
 		if s.File != "" {
@@ -344,6 +347,9 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 			tree, err := xdm.ParseString(string(stripBOM(data)),
 				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
 			if err != nil {
+				return nil, err
+			}
+			if err := r.annotate(set, env, s, tree.Root); err != nil {
 				return nil, err
 			}
 			return tree.Root, nil
@@ -393,4 +399,75 @@ func fileURI(path string) string {
 		}
 	}
 	return "file://" + filepath.ToSlash(path)
+}
+
+// annotate validates a source against the environment's schema so that the
+// tree carries type annotations.
+//
+// A source declared validation="strict" is meant to reach the transform
+// already validated: that is what makes "$v instance of my:partNumberType"
+// answer true for a value read out of it, and what the whole notation, type
+// and import-schema group of tests depends on. Loading the document without
+// validating it leaves every node untyped, so those tests measured nothing
+// but the absence of annotations.
+//
+// A validation failure is not reported. The suite includes documents that are
+// deliberately invalid, and refusing to run them would turn a test about what
+// the stylesheet does into an error about its input. Whatever annotations the
+// validator managed to stamp are kept.
+func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.Node) error {
+	switch s.Validation {
+	case "strict", "lax":
+	default:
+		return nil
+	}
+	if env == nil || len(env.Schemas) == 0 {
+		return nil
+	}
+	schema := xsd.NewSchema()
+	for _, sc := range env.Schemas {
+		if sc.File == "" {
+			continue
+		}
+		p := filepath.Join(set.Dir, filepath.FromSlash(sc.File))
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		tree, err := xdm.ParseString(string(stripBOM(data)), xdm.ParseOptions{})
+		if err != nil {
+			continue
+		}
+		loaded, err := xsd.Load(tree.Root, p, xsd.Options{Resolver: &xsd.FileResolver{}})
+		if err != nil || loaded == nil {
+			continue
+		}
+		mergeInto(schema, loaded)
+	}
+	if len(schema.Elements) == 0 && len(schema.Types) == 0 {
+		return nil
+	}
+	// The validator stamps annotations as it goes, so the error is discarded
+	// rather than propagated, for the reason given above.
+	_ = schema.Validate(root, xsd.ValidateOptions{Annotate: true})
+	return nil
+}
+
+// mergeInto folds one schema's global components into another.
+func mergeInto(dst, src *xsd.Schema) {
+	for n, t := range src.Types {
+		if _, ok := dst.Types[n]; !ok {
+			dst.Types[n] = t
+		}
+	}
+	for n, d := range src.Elements {
+		if _, ok := dst.Elements[n]; !ok {
+			dst.Elements[n] = d
+		}
+	}
+	for n, a := range src.Attributes {
+		if _, ok := dst.Attributes[n]; !ok {
+			dst.Attributes[n] = a
+		}
+	}
 }

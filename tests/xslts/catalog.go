@@ -104,6 +104,11 @@ type Source struct {
 	File    string `xml:"file,attr"`
 	URI     string `xml:"uri,attr"`
 	Content string `xml:"content"`
+	// Validation is "strict", "lax" or "skip". A source declared strict is
+	// meant to reach the transform carrying type annotations from the
+	// environment's schema, which is what makes "instance of my:type"
+	// answer true for a value read out of it.
+	Validation string `xml:"validation,attr"`
 }
 
 type Param struct {

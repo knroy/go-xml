@@ -116,7 +116,33 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if err := checkAllGroupLimited(s); err != nil {
 		return nil, err
 	}
+	registerDerivedTypes(s)
 	return s, nil
+}
+
+// registerDerivedTypes tells the data model which built-in each user-defined
+// simple type erases to.
+//
+// A node annotated with a schema type has to atomise to a *typed* value, or
+// every question about that type answers false: "instance of my:partNumberType"
+// needs the value to remember what it was validated as, and a value that
+// atomised to untypedAtomic has already forgotten. The data model cannot work
+// this out for itself — it has no schema — and it cannot ask, because xsd
+// imports xdm and not the other way round. So the schema tells it, once, here.
+func registerDerivedTypes(s *Schema) {
+	for name, t := range s.Types {
+		st, ok := t.(*SimpleType)
+		if !ok || st == nil || name.Local == "" || name.URI == NSSchema {
+			continue
+		}
+		// The nearest named built-in ancestor is what the value atomises as,
+		// which is exactly what annotationName computes for the base.
+		if base, ok := st.Base.(*SimpleType); ok && base != nil {
+			if prim := annotationName(base); prim != "" {
+				xdm.RegisterDerivedType(name.Local, prim)
+			}
+		}
+	}
 }
 
 // LoadFile assembles a schema from a file on disk.

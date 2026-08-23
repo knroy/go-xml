@@ -105,11 +105,16 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 		// The root of the atomic hierarchy: every atomic value is one.
 		return true
 	case "NOTATION":
-		// xs:NOTATION is abstract: no value can have it as its type, so
-		// nothing is an instance of one. Asking is legal — it is only casting
-		// that the spec forbids — and the answer is always false. Falling
-		// through resolved it to xs:string and made every string match.
-		return false
+		// xs:NOTATION is abstract: no value can have it as its type directly,
+		// so an unannotated value is not an instance of one. Asking is legal
+		// — it is only casting that the spec forbids — and falling through
+		// resolved it to xs:string and made every string match.
+		//
+		// A value validated against a schema type *derived* from xs:NOTATION
+		// is a different case: it is an instance of its own type and of every
+		// type that type derives from, xs:NOTATION included. That is the only
+		// way anything can be an instance of it, since the type is abstract.
+		return schemaTypeNameMatches(a.Derived(), "NOTATION")
 	case "":
 		return atomicTypeMatches(a.Type, want)
 	}
@@ -268,5 +273,21 @@ func schemaTypeNameMatches(annotation, want string) bool {
 	// that is the known limit recorded above.
 	_, a := xdm.SplitQName(annotation)
 	_, w := xdm.SplitQName(want)
-	return a != "" && a == w
+	if a != "" && a == w {
+		return true
+	}
+	// A value is an instance of every type its own derives from, so the
+	// chain the schema recorded is walked upwards. Without this a value
+	// annotated as a restriction of xs:NOTATION answered true for its own
+	// type and false for xs:NOTATION, which is half the relation.
+	//
+	// The walk is bounded: a schema whose derivations somehow formed a cycle
+	// would otherwise not terminate, and this runs on every comparison.
+	for i := 0; i < 32 && a != ""; i++ {
+		a = xdm.DerivedBase(a)
+		if a != "" && a == w {
+			return true
+		}
+	}
+	return false
 }
