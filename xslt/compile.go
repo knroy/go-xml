@@ -42,7 +42,28 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 		return fmt.Errorf("unsupported stylesheet version %q", v)
 	}
 
+	// xsl:import-schema is processed before anything else in the module.
+	//
+	// The schema is part of the *static context* of every expression in the
+	// stylesheet, not of the declarations that happen to follow it: section
+	// 3.13 puts no ordering constraint on top-level elements, so a stylesheet
+	// may perfectly well declare a template using my:partNumberType above the
+	// xsl:import-schema that defines it. Compiling in document order made that
+	// stylesheet fail with XPST0051 while the same declarations in the other
+	// order compiled.
 	for _, el := range root.ChildElements() {
+		if el.Name.URI == xdm.NSXSL && el.Name.Local == "import-schema" {
+			if err := c.compileTopLevel(el, precedence); err != nil {
+				return err
+			}
+		}
+	}
+	compileSchema = c.sheet.schema
+
+	for _, el := range root.ChildElements() {
+		if el.Name.URI == xdm.NSXSL && el.Name.Local == "import-schema" {
+			continue
+		}
 		if err := c.compileTopLevel(el, precedence); err != nil {
 			return err
 		}

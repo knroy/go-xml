@@ -225,6 +225,13 @@ type SequenceType struct {
 	// The code alone cannot express the bound, and dropping it made
 	// "128 castable as xs:byte" answer true.
 	FacetName string
+	// SchemaType is the lexical name of a type that came from an imported
+	// schema rather than from the built-in table.
+	//
+	// It is kept as written because that is what the schema's own type table
+	// is keyed by: matching a value against it means asking the schema, not
+	// the type codes here, and a derived type's identity is exactly its name.
+	SchemaType string
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string
 }

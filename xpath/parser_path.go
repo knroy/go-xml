@@ -696,6 +696,17 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			if p.cur().Kind == TokOp && p.cur().Val == "(" {
 				return st, p.errorf("%q is not a kind test", t.Val)
 			}
+			// A name the built-in table does not know may still be a type,
+			// if a schema was imported. Asking only here is what keeps a
+			// schema from redefining xs:integer, and keeps the built-in
+			// path free of a map lookup.
+			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
+				st.SchemaType = t.Val
+				if isAtomic {
+					st.AtomicType, st.HasAtomicType = prim, true
+				}
+				return st, nil
+			}
 			return st, p.errorf("XPST0051: unknown type %q", t.Val)
 		}
 		st.AtomicType, st.HasAtomicType = code, true

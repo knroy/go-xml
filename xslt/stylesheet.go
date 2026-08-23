@@ -178,6 +178,12 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			},
 		},
 	}
+	// compileSchema is package state for the duration of this call; see its
+	// declaration. Clearing it on the way out keeps one compilation from
+	// leaking a schema into the next.
+	compileSchema = nil
+	defer func() { compileSchema = nil }()
+
 	if err := c.compileDocument(doc, 0); err != nil {
 		return nil, err
 	}
@@ -243,13 +249,58 @@ func (s *Stylesheet) Output() OutputSettings { return s.output }
 type nsResolver struct {
 	bindings  map[string]string
 	defaultNS string
+	// schema is what xsl:import-schema brought in, or nil. It makes the
+	// stylesheet's imported types part of the static context, which is what
+	// lets "instance of my:partNumberType" resolve at all.
+	schema *xsd.Schema
 }
+
+// compileSchema is the schema in force while a stylesheet is being compiled.
+//
+// It is package state rather than a parameter because newNSResolver is called
+// from a dozen places that build a resolver for one element and have no
+// compiler in scope, and threading a schema through all of them would touch
+// far more code than the feature is worth. Compilation is single-threaded
+// through Compile, which sets and clears this around the whole run; a compiled
+// Stylesheet holds its own schema and never reads this again.
+var compileSchema *xsd.Schema
 
 func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	return &nsResolver{
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: defaultElementNS,
+		schema:    compileSchema,
 	}
+}
+
+// LookupSchemaType implements xpath.SchemaTypes.
+//
+// A type an imported schema defines is in the static context, so a stylesheet
+// may write "instance of my:partNumberType" exactly as it writes
+// "instance of xs:integer". Without this the name is XPST0051 and the whole
+// stylesheet fails to compile, which is why importing a schema and then never
+// naming one of its types was the only case that worked.
+func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool) {
+	if r.schema == nil {
+		return 0, false, false
+	}
+	t, ok := r.schema.Types[name]
+	if !ok {
+		return 0, false, false
+	}
+	// Only an atomic simple type erases to a primitive. A complex type, a
+	// list or a union is a real type — the name resolves — but there is no
+	// single code that describes its values, so it is reported as known and
+	// non-atomic rather than guessed at.
+	st, ok := t.(*xsd.SimpleType)
+	if !ok || st.Variety != xsd.VarietyAtomic || st.Primitive == nil {
+		return 0, false, true
+	}
+	code, ok := xpath.BuiltinAtomicTypeCode(st.Primitive.Name.Local)
+	if !ok {
+		return 0, false, true
+	}
+	return code, true, true
 }
 
 func (r *nsResolver) ResolvePrefix(p string) (string, bool) {

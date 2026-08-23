@@ -35,6 +35,21 @@ func (t SequenceType) Matches(seq xdm.Sequence) bool {
 
 func (t SequenceType) matchesItem(it xdm.Item) bool {
 	switch {
+	case t.SchemaType != "":
+		// A type from an imported schema. Like the built-in derived types,
+		// it matches only a value annotated as that type or as one derived
+		// from it — an untyped value that merely *would* be valid against
+		// it is not an instance of it, which is the whole point of the
+		// distinction between validating and asking.
+		a, ok := it.(*xdm.Atomic)
+		if !ok {
+			// A node carries its type annotation rather than a code; an
+			// unvalidated node is xs:untyped and is an instance of no
+			// named type.
+			return false
+		}
+		return schemaTypeNameMatches(a.Derived(), t.SchemaType)
+
 	case t.HasAtomicType:
 		a, ok := it.(*xdm.Atomic)
 		if !ok {
@@ -228,4 +243,30 @@ func isLiteralOperand(e Expr) bool {
 			return false
 		}
 	}
+}
+
+// schemaTypeNameMatches compares a value's type annotation with a schema type
+// named in a sequence type.
+//
+// Both are lexical QNames, and the comparison is on the local part together
+// with the prefix as written. That is narrower than the specification, which
+// compares expanded names and walks the derivation hierarchy: a value
+// annotated as a type *derived* from the named one is also an instance of it,
+// and this does not see that. The narrow answer is the safe one — it says
+// false where the full rule might say true, so nothing is claimed to have a
+// type it does not have.
+func schemaTypeNameMatches(annotation, want string) bool {
+	if annotation == "" {
+		return false
+	}
+	if annotation == want {
+		return true
+	}
+	// A prefix is a spelling, not an identity, so a bare local name matches
+	// a prefixed one with the same local part. Two schemas that both define
+	// "partNumberType" in different namespaces would be conflated by this;
+	// that is the known limit recorded above.
+	_, a := xdm.SplitQName(annotation)
+	_, w := xdm.SplitQName(want)
+	return a != "" && a == w
 }

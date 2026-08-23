@@ -93,6 +93,11 @@ func RegisterXSLTFuncs(l *Library) {
 		return boolSeq(false), nil
 	})
 
+	// fn:document is XSLT's own document loader, and differs from fn:doc in
+	// ways a stylesheet depends on: a sequence of URIs, a base-supplying
+	// second argument, and deduplication by identity. See fn_document.go.
+	l.registerFn("document", []int{1, 2}, fnDocument)
+
 	registerFormatDateTime(l)
 }
 
