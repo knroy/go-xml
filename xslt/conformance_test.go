@@ -285,3 +285,72 @@ func TestCollationMayBeAnAVT(t *testing.T) {
 		t.Errorf("got %s, want A,a,b under a computed collation", got)
 	}
 }
+
+// Section 19.2: a constructed element may be assessed against the schema, in
+// one of four modes. strict requires a global declaration and validity
+// against it; lax passes an element the schema does not describe; preserve
+// and strip assess nothing, and strip is the default — which is why a
+// stylesheet saying nothing about validation gets none.
+func TestElementValidation(t *testing.T) {
+	const head = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+	  <xsl:import-schema>
+	    <xs:schema><xs:element name="n" type="xs:integer"/></xs:schema>
+	  </xsl:import-schema>
+	  <xsl:template match="/"><out>`
+	const tail = `</out></xsl:template></xsl:stylesheet>`
+
+	cases := []struct {
+		name, body string
+		wantErr    bool
+	}{
+		{"strict and valid", `<xsl:element name="n" validation="strict">42</xsl:element>`, false},
+		{"strict and invalid", `<xsl:element name="n" validation="strict">abc</xsl:element>`, true},
+		{"strict with no declaration", `<xsl:element name="zz" validation="strict">x</xsl:element>`, true},
+		{"lax with no declaration", `<xsl:element name="zz" validation="lax">x</xsl:element>`, false},
+		{"lax and invalid", `<xsl:element name="n" validation="lax">abc</xsl:element>`, true},
+		{"a named type", `<xsl:element name="q" type="xs:integer">7</xsl:element>`, false},
+		{"a named type, violated", `<xsl:element name="q" type="xs:integer">no</xsl:element>`, true},
+		// strip is the default, so an invalid element passes unremarked.
+		{"strip is the default", `<xsl:element name="n">abc</xsl:element>`, false},
+		{"preserve assesses nothing",
+			`<xsl:element name="n" validation="preserve">abc</xsl:element>`, false},
+	}
+	for _, c := range cases {
+		_, err := runErr(t, head+c.body+tail, `<r/>`)
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, want error = %v", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// validation and type name the same thing two ways, so giving both leaves no
+// rule for reconciling them.
+func TestValidationAndTypeAreExclusive(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+	  <xsl:template match="/">
+	    <xsl:element name="n" validation="strict" type="xs:integer">1</xsl:element>
+	  </xsl:template></xsl:stylesheet>`
+	doc, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Compile(doc.Root, CompileOptions{}); err == nil {
+		t.Error("an element with both validation and type was accepted")
+	}
+}
+
+// A type in the XSD namespace needs no imported schema: the built-ins are
+// always available, and requiring an import for type="xs:integer" would
+// refuse stylesheets that import nothing and need nothing.
+func TestBuiltinTypeNeedsNoImport(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+	  <xsl:template match="/"><out>
+	    <xsl:element name="d" type="xs:date">2026-08-24</xsl:element>
+	  </out></xsl:template></xsl:stylesheet>`
+	if got := run(t, sheet, `<r/>`); !strings.Contains(got, "2026-08-24") {
+		t.Errorf("got %s, want the date element", got)
+	}
+}

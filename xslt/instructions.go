@@ -238,6 +238,9 @@ type elementInstr struct {
 	scope     *xdm.Node
 	attrSets  []xdm.QName
 	body      []Instruction
+	// validation is the validation or type attribute, which asks for the
+	// constructed element to be assessed against the imported schema.
+	validation validationSpec
 }
 
 func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -256,7 +259,13 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
 		return err
 	}
-	return execSequence(i.body, rt, sub)
+	if err := execSequence(i.body, rt, sub); err != nil {
+		return err
+	}
+	// The element is complete only now, so validity is assessed here rather
+	// than at construction: a content model cannot be checked against
+	// content that has not been built yet.
+	return i.validation.assess(rt, sub.open)
 }
 
 // resolveName turns a computed lexical name into an expanded QName, using the

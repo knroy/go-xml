@@ -452,6 +452,9 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		return nil, err
 	}
 	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets}
+	if instr.validation, err = compileValidation(n, ""); err != nil {
+		return nil, err
+	}
 	if v := n.AttrValue("namespace"); v != "" {
 		avt, err := compileAVT(v, ns)
 		if err != nil {
