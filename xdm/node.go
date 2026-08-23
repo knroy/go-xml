@@ -496,7 +496,13 @@ func (n *Node) LookupPrefix(prefix string) (string, bool) {
 // inner declarations shadowing outer ones. Used when copying elements and when
 // resolving QNames in stylesheet attribute values.
 func (n *Node) InScopeNamespaces() map[string]string {
-	out := map[string]string{}
+	// Every element has the xml prefix bound, whether or not the document
+	// declares it: the binding is fixed by the XML Namespaces specification
+	// and, unlike every other prefix, it cannot be undeclared or rebound.
+	// Omitting it left the namespace axis one node short on every element,
+	// and made an expression naming the xml prefix fail to resolve in a tree
+	// the stylesheet built rather than parsed.
+	out := map[string]string{"xml": NSXML}
 	var chain []*Node
 	for cur := n; cur != nil; cur = cur.Parent {
 		if cur.Kind == KindElement {

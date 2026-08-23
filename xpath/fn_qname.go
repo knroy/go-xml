@@ -141,9 +141,9 @@ func registerQNameFuncs(l *Library) {
 		for prefix := range scope {
 			prefixes = append(prefixes, prefix)
 		}
-		// "xml" is always in scope and is never declared, so it does not
-		// appear in the declaration walk.
-		prefixes = append(prefixes, "xml")
+		// "xml" needs no special case here: it is always in scope and
+		// InScopeNamespaces supplies it, so appending it too produced it
+		// twice.
 		sort.Strings(prefixes)
 
 		out := make(xdm.Sequence, 0, len(prefixes))

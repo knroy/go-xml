@@ -862,7 +862,9 @@ func TestNamespaceAxisOrderIsStable(t *testing.T) {
 	doc := `<r xmlns:a="urn:a" xmlns:b="urn:b" xmlns:c="urn:c" xmlns:d="urn:d"><e/></r>`
 	for i := 0; i < 20; i++ {
 		got := evalStr(t, doc, `string-join(for $n in /r/namespace::* return name($n), ',')`)
-		if want := "a,b,c,d"; got != want {
+		// xml is in scope on every element and cannot be undeclared, so it
+		// is a node on this axis too.
+		if want := "a,b,c,d,xml"; got != want {
 			t.Fatalf("namespace axis order = %q, want %q", got, want)
 		}
 		// The positional predicate is the reason the order matters.
