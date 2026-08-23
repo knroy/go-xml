@@ -340,14 +340,28 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 		return err
 	}
 	k := &keyDef{match: pat}
-	if use != "" {
+	hasBody := len(el.ChildElements()) > 0
+	switch {
+	case use != "" && hasBody:
+		// Section 16.3: giving the value both ways leaves no rule for
+		// reconciling them.
+		return fmt.Errorf(
+			"XTSE1205: xsl:key has both a use attribute and a sequence constructor")
+	case use != "":
 		if k.use, err = xpath.Compile(use, ns); err != nil {
 			return err
 		}
-	} else {
-		// The use attribute may instead be given as content; compiling the
-		// content form is not supported, so require the attribute.
-		return fmt.Errorf("xsl:key requires a use attribute")
+	case hasBody:
+		// The value may be given as content instead, which is what lets a
+		// key be computed by anything a sequence constructor can express —
+		// an xsl:choose over the matched node, say, rather than a single
+		// expression.
+		if k.body, err = c.compileSequence(el, el); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf(
+			"XTSE1205: xsl:key needs a use attribute or a sequence constructor")
 	}
 	c.sheet.keys[qn.Clark()] = append(c.sheet.keys[qn.Clark()], k)
 	return nil

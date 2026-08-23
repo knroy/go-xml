@@ -105,7 +105,14 @@ type Variable struct {
 // keyDef is a compiled xsl:key.
 type keyDef struct {
 	match *Pattern
-	use   *xpath.Compiled
+	// use is the @use expression. Exactly one of use and body is set:
+	// section 16.3 allows the key value to be given either way, and requires
+	// that it not be given both ways.
+	use *xpath.Compiled
+	// body is the sequence constructor form of the key value. It builds a
+	// temporary tree per matched node, exactly as a variable's content does,
+	// and the tree's string value is the key.
+	body []Instruction
 }
 
 // OutputSettings holds the xsl:output declaration.

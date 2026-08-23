@@ -287,6 +287,38 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	return xdm.SortDocumentOrder(out), nil
 }
 
+// keyValues computes the key strings one node contributes.
+//
+// A key is declared either with a use expression or with a sequence
+// constructor, and the two produce their value differently: the expression is
+// atomized, while the constructor builds a temporary tree whose string value
+// is the key. Both may yield several values, which puts the node under each.
+func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]string, error) {
+	if def.use != nil {
+		vals, err := def.use.Eval(ctx.WithFocus(n, 1, 1))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, 0, len(vals))
+		for _, v := range xdm.Atomize(vals) {
+			if a, ok := v.(*xdm.Atomic); ok {
+				out = append(out, a.String())
+			}
+		}
+		return out, nil
+	}
+
+	// The constructor form. The focus is the matched node, as it is for the
+	// expression form, so the same key definition reads the same way.
+	sub := *rt
+	sub.ctx = ctx.WithFocus(n, 1, 1)
+	out := newOutputBuilder()
+	if err := execSequence(def.body, &sub, out); err != nil {
+		return nil, err
+	}
+	return []string{out.toTree().StringValue()}, nil
+}
+
 // keyIndexFor returns the index for a key over a document, building it if
 // necessary.
 func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
@@ -308,12 +340,11 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			if !ok {
 				continue
 			}
-			vals, err := def.use.Eval(ctx.WithFocus(n, 1, 1))
+			vals, err := rt.keyValues(def, ctx, n)
 			if err != nil {
 				return err
 			}
-			for _, v := range xdm.Atomize(vals) {
-				k := v.(*xdm.Atomic).String()
+			for _, k := range vals {
 				idx[k] = append(idx[k], n)
 			}
 		}
@@ -327,12 +358,11 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				if !ok {
 					continue
 				}
-				vals, err := def.use.Eval(ctx.WithFocus(a, 1, 1))
+				vals, err := rt.keyValues(def, ctx, a)
 				if err != nil {
 					return err
 				}
-				for _, v := range xdm.Atomize(vals) {
-					k := v.(*xdm.Atomic).String()
+				for _, k := range vals {
 					idx[k] = append(idx[k], a)
 				}
 			}

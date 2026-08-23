@@ -117,3 +117,50 @@ func TestRealStylesheetCompiles(t *testing.T) {
 		t.Fatalf("compile: %v", err)
 	}
 }
+
+// Section 16.3 allows a key's value to be given as a sequence constructor
+// instead of a use attribute, which is what lets a key be computed by
+// anything a constructor can express — an xsl:choose over the matched node
+// rather than a single expression.
+func TestKeyWithSequenceConstructor(t *testing.T) {
+	const sheet = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:key name="k" match="p">
+	    <xsl:choose>
+	      <xsl:when test="@id"><xsl:value-of select="@id"/></xsl:when>
+	      <xsl:otherwise>none</xsl:otherwise>
+	    </xsl:choose>
+	  </xsl:key>
+	  <xsl:template match="/">
+	    <out>
+	      <xsl:value-of select="key('k','b')"/>
+	      <xsl:text>|</xsl:text>
+	      <xsl:value-of select="key('k','none')"/>
+	    </out>
+	  </xsl:template>
+	</xsl:stylesheet>`
+	got := run(t, sheet, `<r><p id="a">first</p><p id="b">second</p><p>third</p></r>`)
+	if !strings.Contains(got, "second|third") {
+		t.Errorf("key by sequence constructor gave %q, want it to contain %q",
+			got, "second|third")
+	}
+}
+
+// Giving the value both ways leaves no rule for reconciling them, and giving
+// it neither leaves the key undefined. Both are static errors.
+func TestKeyNeedsExactlyOneValueForm(t *testing.T) {
+	const both = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:key name="k" match="p" use="@id"><xsl:value-of select="@id"/></xsl:key>
+	  <xsl:template match="/"><out/></xsl:template></xsl:stylesheet>`
+	const neither = `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+	  <xsl:key name="k" match="p"/>
+	  <xsl:template match="/"><out/></xsl:template></xsl:stylesheet>`
+	for name, src := range map[string]string{"both": both, "neither": neither} {
+		doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Compile(doc.Root, CompileOptions{}); err == nil {
+			t.Errorf("xsl:key with %s form was accepted", name)
+		}
+	}
+}
