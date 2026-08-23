@@ -227,6 +227,9 @@ type literalElemInstr struct {
 	namespaces []nsBinding
 	attrSets   []xdm.QName
 	body       []Instruction
+	// validation carries xsl:validation and xsl:type, which a literal result
+	// element may have exactly as xsl:element may.
+	validation validationSpec
 }
 
 type attrTemplate struct {
@@ -255,7 +258,12 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 	}
-	return execSequence(i.body, rt, sub)
+	if err := execSequence(i.body, rt, sub); err != nil {
+		return err
+	}
+	// Assessed once the element is complete, since validity is a property of
+	// its content as well as its name.
+	return i.validation.assess(rt, sub.open)
 }
 
 // elementInstr implements xsl:element, whose name is computed at run time.

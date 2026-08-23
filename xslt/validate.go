@@ -68,6 +68,21 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 	}
 	v := n.AttrValue(vAttr)
 	t := n.AttrValue(tAttr)
+	// On a literal result element the attributes are spelled xsl:validation
+	// and xsl:type — an unprefixed one there would be an ordinary attribute
+	// of the output. They live in the XSLT namespace, which AttrValue does
+	// not search, so a literal result element asking to be validated was
+	// silently not being validated at all.
+	if v == "" {
+		if a := n.Attr(xdm.NSXSL, "validation"); a != nil {
+			v = a.Value
+		}
+	}
+	if t == "" {
+		if a := n.Attr(xdm.NSXSL, "type"); a != nil {
+			t = a.Value
+		}
+	}
 	if v != "" && t != "" {
 		return spec, fmt.Errorf(
 			"XTSE1505: %s and %s cannot both be present", vAttr, tAttr)

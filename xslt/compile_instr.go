@@ -87,6 +87,9 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 		return nil, err
 	}
 	instr := &literalElemInstr{name: n.Name, attrSets: sets}
+	if instr.validation, err = compileValidation(n, ""); err != nil {
+		return nil, err
+	}
 
 	// Namespace declarations on the literal element are copied to the result,
 	// minus the XSLT namespace itself and anything listed in
