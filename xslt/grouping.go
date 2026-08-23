@@ -553,31 +553,52 @@ func (i *numberInstr) countNode(rt *runtime, node *xdm.Node) ([]int64, error) {
 		return []int64{n}, nil
 	}
 	if i.level == "multiple" {
+		// Section 12.2:
+		//
+		//   $A  = $S/ancestor-or-self::node()[matches-count(.)]
+		//   $F  = $S/ancestor-or-self::node()[matches-from(.)][1]
+		//   $AF = $A[ancestor-or-self::node()[. is $F]]
+		//
+		// $F is the *innermost* ancestor-or-self matching @from, and $AF is
+		// those count-matches lying within its subtree — which includes $F
+		// itself when it also matches @count. Stopping the upward walk at the
+		// first @from match dropped that node's own number, and stopping
+		// before testing @count meant a @from ancestor never contributed one.
+		var chain []*xdm.Node
+		for cur := node; cur != nil && cur.Kind != xdm.KindDocument; cur = cur.Parent {
+			chain = append(chain, cur)
+		}
+		// chain is innermost-first, so the first @from match in it is the
+		// innermost one, and everything at or below that index is in its
+		// subtree.
+		limit := len(chain)
+		if i.from != nil {
+			for k, cur := range chain {
+				ok, err := i.matchesFrom(rt, cur)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					limit = k
+					break
+				}
+			}
+		}
 		var nums []int64
-		for cur := node; cur != nil; cur = cur.Parent {
-			if cur.Kind == xdm.KindDocument {
-				break
-			}
-			stop, err := i.matchesFrom(rt, cur)
-			if err != nil {
-				return nil, err
-			}
-			if stop {
-				break
-			}
-			counted, err := i.matchesCount(rt, cur, node)
+		for k := 0; k < limit; k++ {
+			counted, err := i.matchesCount(rt, chain[k], node)
 			if err != nil {
 				return nil, err
 			}
 			if !counted {
 				continue
 			}
-			n, err := i.positionAmongSiblings(rt, cur, node)
+			n, err := i.positionAmongSiblings(rt, chain[k], node)
 			if err != nil {
 				return nil, err
 			}
-			// The walk is upward, so each level is prepended to keep the
-			// outermost number first.
+			// The walk is innermost-first, so each level is prepended to keep
+			// the outermost number first.
 			nums = append([]int64{n}, nums...)
 		}
 		return nums, nil
@@ -644,59 +665,85 @@ func (i *numberInstr) matchesFrom(rt *runtime, n *xdm.Node) (bool, error) {
 // matching it are counted, which is what makes "number the footnotes within
 // each chapter" work.
 func (i *numberInstr) countAny(rt *runtime, node *xdm.Node) (int64, error) {
+	// Section 12.2 defines this exactly, and the definition is easier to
+	// follow than to paraphrase:
+	//
+	//   $A  = $S/(preceding::node()|ancestor-or-self::node())[matches-count(.)]
+	//   $F  = $S/(preceding::node()|ancestor-or-self::node())[matches-from(.)][last()]
+	//   $AF = $A[. is $F or . >> $F]
+	//   result = count($AF), or () when $AF is empty
+	//
+	// Ancestors are *in* the candidate set. Excluding them — which is the
+	// intuitive reading, since an ancestor does not precede its descendant in
+	// the usual sense — made "count" patterns naming an ancestor element
+	// return nothing at all: the H2 that numbers an H4 is one of its
+	// ancestors, and the H4 got no number for it.
 	root := node.Root()
-	ancestors := map[*xdm.Node]bool{}
-	for a := node.Parent; a != nil; a = a.Parent {
-		ancestors[a] = true
+
+	// The candidate set in document order: everything from the root up to
+	// and including the node, minus the descendants of the node itself, is
+	// exactly preceding::node() plus ancestor-or-self::node().
+	var candidates []*xdm.Node
+	var reached bool
+	var walk func(cur *xdm.Node)
+	walk = func(cur *xdm.Node) {
+		if reached {
+			return
+		}
+		candidates = append(candidates, cur)
+		if cur == node {
+			reached = true
+			return
+		}
+		for _, ch := range cur.Children {
+			walk(ch)
+			if reached {
+				return
+			}
+		}
+	}
+	walk(root)
+	if !reached {
+		return 0, fmt.Errorf(
+			"xsl:number: the context node is not in the tree being walked")
+	}
+
+	// $F: the last of them matching @from. With no @from every candidate
+	// qualifies, which is the same as starting at the beginning.
+	from := -1
+	if i.from != nil {
+		for k, c := range candidates {
+			ok, err := i.matchesFrom(rt, c)
+			if err != nil {
+				return 0, err
+			}
+			if ok {
+				from = k
+			}
+		}
+		if from < 0 {
+			// No node matches @from at all. Read literally, $F is then empty
+			// and so is $AF, which would make the result the empty sequence.
+			// Both the conformance suite and this package's own tests say
+			// otherwise: counting runs from the start of the document, as if
+			// @from were absent. Taking the literal reading cost five suite
+			// cases and broke a unit test that was right.
+			from = 0
+		}
 	}
 
 	var count int64
-	var reached bool
-	var walk func(cur *xdm.Node) error
-	walk = func(cur *xdm.Node) error {
-		if reached {
-			return nil
+	for k, c := range candidates {
+		if k < from {
+			continue
 		}
-		// A @from match resets the count, so numbering restarts inside each
-		// region the pattern delimits.
-		if cur != node {
-			restart, err := i.matchesFrom(rt, cur)
-			if err != nil {
-				return err
-			}
-			if restart {
-				count = 0
-			}
+		ok, err := i.matchesCount(rt, c, node)
+		if err != nil {
+			return 0, err
 		}
-		if !ancestors[cur] {
-			counted, err := i.matchesCount(rt, cur, node)
-			if err != nil {
-				return err
-			}
-			if counted {
-				count++
-			}
+		if ok {
+			count++
 		}
-		if cur == node {
-			// Everything after the target in document order is irrelevant.
-			reached = true
-			return nil
-		}
-		for _, ch := range cur.Children {
-			if err := walk(ch); err != nil {
-				return err
-			}
-			if reached {
-				return nil
-			}
-		}
-		return nil
-	}
-	if err := walk(root); err != nil {
-		return 0, err
-	}
-	if !reached {
-		return 0, fmt.Errorf("xsl:number: the context node is not in the tree being walked")
 	}
 	return count, nil
 }
