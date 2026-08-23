@@ -7,16 +7,44 @@ import (
 	"time"
 )
 
+// TestDumpFailures writes the failing cases to a file, for working through
+// them one cluster at a time.
+//
+// It is a development aid rather than a check: it asserts nothing and passes
+// whatever the suite reports. Set GOXSLT_DUMP to the file to write; without it
+// the test does nothing, so an ordinary `go test ./...` neither needs the
+// suite checked out nor writes anywhere.
+//
+//	GOXSLT_DUMP=/tmp/failures.txt go test ./tests/xslts/ -run TestDumpFailures
 func TestDumpFailures(t *testing.T) {
-	root := "../../testdata/xslt30-test"
+	dest := os.Getenv("GOXSLT_DUMP")
+	if dest == "" {
+		t.Skip("set GOXSLT_DUMP to a file path to dump the failing cases")
+	}
+
+	root := os.Getenv("GOXSLT_XSLTS")
+	if root == "" {
+		root = "../../testdata/xslt30-test"
+	}
+	if _, err := os.Stat(root + "/catalog.xml"); err != nil {
+		t.Skip("set GOXSLT_XSLTS to a checkout of w3c/xslt30-test to run the suite")
+	}
+
 	r := &Runner{Root: root, Timeout: 10 * time.Second}
 	sum, err := r.Run()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("run: %v", err)
 	}
-	f, _ := os.Create("/private/tmp/claude-501/-Users-roy-Desktop-Hash-go-xml-validator/459f7818-f853-42e2-9b12-62fa295bd029/scratchpad/failures.txt")
+
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatalf("create dump: %v", err)
+	}
 	defer f.Close()
 	for _, o := range sum.Failures {
-		fmt.Fprintf(f, "%s\t%s\t%s\n", o.Set, o.Name, o.Why)
+		if _, err := fmt.Fprintf(f, "%s\t%s\t%s\n", o.Set, o.Name, o.Why); err != nil {
+			t.Fatalf("write dump: %v", err)
+		}
 	}
+	t.Logf("wrote %d failures to %s", len(sum.Failures), dest)
 }
