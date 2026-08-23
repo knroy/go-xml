@@ -43,6 +43,10 @@ type patternAlt struct {
 	call *xpath.FuncCall
 	// callSteps are the steps that follow the call, as in "key('k','v')/para".
 	callSteps []patternStep
+	// callDescendant records that the step immediately after the call used
+	// the descendant axis, so that key('k','v')//para admits any ancestor
+	// rather than only the parent.
+	callDescendant bool
 	// predicate expressions are attached to the step they qualify.
 }
 
@@ -135,7 +139,18 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 			}}
 			return a, nil
 		}
-		for _, s := range e.Steps {
+		rest := e.Steps
+		// A path may begin with id() or key(), as in "key('k','v')//para".
+		// The call selects the starting set and the steps that follow are
+		// walked up from the candidate; only the *first* step may be a call.
+		if call, ok := rest[0].(*xpath.FuncCall); ok {
+			if err := checkPatternCall(call); err != nil {
+				return nil, err
+			}
+			a.call = call
+			rest = rest[1:]
+		}
+		for _, s := range rest {
 			step, ok := s.(*xpath.Step)
 			if !ok {
 				return nil, fmt.Errorf("not a valid pattern step: %s", s.String())
@@ -143,6 +158,13 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 			ps, err := convertStep(step)
 			if err != nil {
 				return nil, err
+			}
+			if a.call != nil {
+				if len(a.callSteps) == 0 {
+					a.callDescendant = ps.descendant
+				}
+				a.callSteps = append(a.callSteps, ps)
+				continue
 			}
 			a.steps = append(a.steps, ps)
 		}
@@ -490,23 +512,50 @@ func (a *patternAlt) matchesCall(node *xdm.Node, ctx *xpath.Context) (bool, erro
 	if err != nil || !ok {
 		return false, err
 	}
-	anc := node
-	for i := len(rest) - 2; i >= 0; i-- {
-		anc = anc.Parent
-		if anc == nil {
-			return false, nil
+	// The remaining steps are verified against ancestors, and the node the
+	// walk arrives above must be in the set the call selected. A descendant
+	// step ("//") admits any ancestor rather than only the parent, which is
+	// what makes key('k','v')//para work.
+	return a.callAncestors(rest[:len(rest)-1], node, seq, ctx)
+}
+
+// callAncestors verifies the steps preceding the candidate and then tests
+// whether the call's result contains a node above them.
+func (a *patternAlt) callAncestors(steps []patternStep, node *xdm.Node,
+	seq xdm.Sequence, ctx *xpath.Context) (bool, error) {
+
+	if len(steps) == 0 {
+		// Every step is satisfied; some ancestor must be in the set. The
+		// first step of the path was the call, and the axis joining it to
+		// what follows is a descendant one in the "//" form, so any
+		// ancestor will do.
+		for p := node.Parent; p != nil; p = p.Parent {
+			for _, it := range seq {
+				if n, ok := it.(*xdm.Node); ok && n == p {
+					return true, nil
+				}
+			}
+			if !a.callDescendant {
+				return false, nil
+			}
 		}
-		ok, err := matchStep(rest[i], anc, ctx)
-		if err != nil || !ok {
-			return false, err
-		}
-	}
-	if anc.Parent == nil {
 		return false, nil
 	}
-	for _, it := range seq {
-		if n, ok := it.(*xdm.Node); ok && n == anc.Parent {
-			return true, nil
+
+	last := steps[len(steps)-1]
+	for anc := node.Parent; anc != nil; anc = anc.Parent {
+		ok, err := matchStep(last, anc, ctx)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			found, err := a.callAncestors(steps[:len(steps)-1], anc, seq, ctx)
+			if err != nil || found {
+				return found, err
+			}
+		}
+		if !last.descendant {
+			return false, nil
 		}
 	}
 	return false, nil

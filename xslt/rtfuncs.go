@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"net/url"
 	"fmt"
 	"strconv"
 	"strings"
@@ -147,6 +148,47 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		},
 	})
 
+	// fn:unparsed-entity-uri and fn:unparsed-entity-public-id report the
+	// identifiers of an entity the processor never reads. They are XSLT's
+	// own functions, and they answer from the document containing the
+	// context node, which is what makes them runtime functions rather than
+	// static ones.
+	for _, fn := range []struct {
+		name   string
+		public bool
+	}{
+		{"unparsed-entity-uri", false},
+		{"unparsed-entity-public-id", true},
+	} {
+		public := fn.public
+		l.Add(xpath.Function{
+			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 1,
+			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+				name := stringArg(args[0])
+				n, ok := ctx.Item.(*xdm.Node)
+				if !ok {
+					// No context node means no document to ask, and the
+					// specification makes the answer the zero-length string
+					// rather than an error.
+					return xdm.One(xdm.NewAnyURI("")), nil
+				}
+				sys, pub, _, found := n.Tree().UnparsedEntity(name)
+				if !found {
+					// An entity that is not declared, or is declared parsed,
+					// yields the zero-length string.
+					return xdm.One(xdm.NewAnyURI("")), nil
+				}
+				if public {
+					return xdm.One(xdm.NewString(pub)), nil
+				}
+				// The system identifier is resolved against the base URI of
+				// the document holding the declaration, which is where a
+				// relative one is written.
+				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI, sys))), nil
+			},
+		})
+	}
+
 	// The static functions are registered separately so that use-when, whose
 	// context has no runtime at all, can have exactly these and nothing else.
 	registerStaticFuncs(l)
@@ -201,6 +243,53 @@ func registerStaticFuncs(l *xpath.Library) {
 				}
 			}
 			return xdm.One(xdm.NewBoolean(false)), nil
+		},
+	})
+
+	// The two-argument form names an arity: function-available('fn:concat', 2)
+	// asks whether the function exists with exactly that many arguments,
+	// where the one-argument form asks whether it exists at all.
+	l.Add(xpath.Function{
+		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 2,
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			name := stringArg(args[0])
+			arity := 0
+			for _, a := range xdm.Atomize(args[1]) {
+				if at, ok := a.(*xdm.Atomic); ok {
+					arity = int(at.Int64())
+				}
+			}
+			prefix, local := xdm.SplitQName(name)
+			uri := xdm.NSFN
+			if prefix != "" {
+				switch prefix {
+				case "fn":
+					uri = xdm.NSFN
+				case "xs":
+					uri = xdm.NSXS
+				default:
+					return xdm.One(xdm.NewBoolean(false)), nil
+				}
+			}
+			_, ok := ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity)
+			return xdm.One(xdm.NewBoolean(ok)), nil
+		},
+	})
+
+	// fn:type-available asks whether a type is in the static context. Only
+	// the built-in xs: types can be answered here: the imported schema is a
+	// property of the stylesheet, which this library does not see, so a
+	// user-defined name answers false rather than guessing.
+	l.Add(xpath.Function{
+		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
+		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			name := stringArg(args[0])
+			prefix, local := xdm.SplitQName(name)
+			if prefix != "" && prefix != "xs" && prefix != "xsd" {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			_, ok := xpath.BuiltinAtomicTypeCode(local)
+			return xdm.One(xdm.NewBoolean(ok)), nil
 		},
 	})
 
@@ -462,4 +551,21 @@ func onlyEmptyURIs(seq xdm.Sequence) bool {
 		}
 	}
 	return true
+}
+
+// resolveAgainst resolves a possibly-relative reference against a base URI,
+// returning the reference unchanged when the base is unusable.
+func resolveAgainst(base, ref string) string {
+	if ref == "" || base == "" {
+		return ref
+	}
+	b, err := url.Parse(base)
+	if err != nil || !b.IsAbs() {
+		return ref
+	}
+	r, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	return b.ResolveReference(r).String()
 }

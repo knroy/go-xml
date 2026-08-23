@@ -51,6 +51,9 @@ type entityTable struct {
 	raw      map[string]string // name -> replacement text, unexpanded
 	expanded map[string]string // name -> fully expanded, memoised
 	external map[string]bool   // names declared SYSTEM or PUBLIC
+	// unparsed holds the external entities declared with an NDATA notation,
+	// which fn:unparsed-entity-uri reports. They are recorded, never read.
+	unparsed map[string]unparsedEntity
 	// total is the expanded size of everything resolved so far, so that a
 	// bomb divided among many entities cannot slip under the per-entity cap.
 	total int
@@ -115,6 +118,19 @@ func parseInternalEntities(subset string) *entityTable {
 		// caller the difference between a typo and a blocked fetch.
 		if fields[1] == "SYSTEM" || fields[1] == "PUBLIC" {
 			t.external[name] = true
+			// An unparsed entity is an external one with an NDATA notation,
+			// and unlike a parsed external entity it is never fetched: the
+			// data model records its system identifier and notation so that
+			// fn:unparsed-entity-uri can return them. Nothing here reads the
+			// resource, so this does not widen what AllowDOCTYPE admits.
+			if u := unparsedEntityOf(fields); u != nil {
+				if t.unparsed == nil {
+					t.unparsed = map[string]unparsedEntity{}
+				}
+				if _, dup := t.unparsed[name]; !dup {
+					t.unparsed[name] = *u
+				}
+			}
 			continue
 		}
 		val := fields[1]
@@ -594,4 +610,80 @@ func unscannedRegion(src string, i int) int {
 		return i + len(r.open) + end + len(r.close)
 	}
 	return i
+}
+
+// unparsedEntity is an external entity declared with an NDATA notation.
+//
+// It is the one kind of entity a document may name without the processor ever
+// reading it: the reference appears in an attribute of type ENTITY, and a
+// stylesheet asks for its system identifier through fn:unparsed-entity-uri.
+type unparsedEntity struct {
+	// systemID is the entity's system identifier, as written.
+	systemID string
+	// publicID is its public identifier, empty for a SYSTEM declaration.
+	publicID string
+	// notation is the NDATA name.
+	notation string
+}
+
+// unparsedEntityOf reads an entity declaration's fields, returning the
+// unparsed entity it declares or nil when it declares a parsed one.
+//
+// The two forms are
+//
+//	name SYSTEM "uri" NDATA notation
+//	name PUBLIC "public" "uri" NDATA notation
+//
+// and it is the NDATA keyword that makes an external entity unparsed.
+func unparsedEntityOf(fields []string) *unparsedEntity {
+	ndata := -1
+	for i, f := range fields {
+		if f == "NDATA" {
+			ndata = i
+			break
+		}
+	}
+	if ndata < 0 || ndata+1 >= len(fields) {
+		return nil
+	}
+	u := unparsedEntity{notation: fields[ndata+1]}
+	switch fields[1] {
+	case "SYSTEM":
+		if ndata > 2 {
+			u.systemID = unquote(fields[2])
+		}
+	case "PUBLIC":
+		if ndata > 3 {
+			u.publicID = unquote(fields[2])
+			u.systemID = unquote(fields[3])
+		}
+	}
+	return &u
+}
+
+// UnparsedEntity returns the system identifier and notation of an unparsed
+// entity declared in a document's internal subset.
+//
+// An unparsed entity is the one kind a processor never reads: it is declared
+// SYSTEM or PUBLIC with an NDATA notation, referenced from an attribute of
+// type ENTITY, and its identifier is data for the application rather than
+// something to fetch. fn:unparsed-entity-uri and fn:unparsed-entity-public-id
+// return exactly these.
+//
+// The declarations are re-read from the retained DOCTYPE text rather than
+// carried on every tree, since a document with unparsed entities is rare and
+// the lookup happens at most once per call.
+func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string, ok bool) {
+	if t == nil || t.DocType == "" {
+		return "", "", "", false
+	}
+	tbl := parseInternalEntities(t.DocType)
+	if tbl == nil {
+		return "", "", "", false
+	}
+	u, found := tbl.unparsed[name]
+	if !found {
+		return "", "", "", false
+	}
+	return u.systemID, u.publicID, u.notation, true
 }
