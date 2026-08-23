@@ -133,10 +133,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := ""
-			if len(args[0]) > 0 {
-				name = args[0][0].(*xdm.Atomic).String()
-			}
+			name := stringArg(args[0])
 			switch {
 			case strings.HasSuffix(name, "version"):
 				return xdm.One(xdm.NewString("2.0")), nil
@@ -156,10 +153,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := ""
-			if len(args[0]) > 0 {
-				name = args[0][0].(*xdm.Atomic).String()
-			}
+			name := stringArg(args[0])
 			prefix, local := xdm.SplitQName(name)
 			uri := xdm.NSFN
 			if prefix != "" {
@@ -186,10 +180,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := ""
-			if len(args[0]) > 0 {
-				name = args[0][0].(*xdm.Atomic).String()
-			}
+			name := stringArg(args[0])
 			_, local := xdm.SplitQName(name)
 			return xdm.One(xdm.NewBoolean(supportedInstructions[local])), nil
 		},
@@ -226,6 +217,24 @@ func generateID(it xdm.Item) (xdm.Sequence, error) {
 // Building it eagerly for every declared key would scan the document once per
 // key even when a stylesheet uses none of them, and rule sets routinely
 // declare keys for code lists they only consult on some documents.
+// stringArg reads a function argument declared xs:string.
+//
+// The parameter is atomized, which is what the function calling rules
+// require: a node reaches it as its typed value, not as itself. Asserting
+// *xdm.Atomic instead panics on any node argument, and the XSLT suite calls
+// system-property() with one — a panic in a request handler is a denial of
+// service, so this is a safety fix rather than a conformance one.
+func stringArg(seq xdm.Sequence) string {
+	atoms := xdm.Atomize(seq)
+	if len(atoms) == 0 {
+		return ""
+	}
+	if a, ok := atoms[0].(*xdm.Atomic); ok {
+		return a.String()
+	}
+	return ""
+}
+
 func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	nameSeq := xdm.Atomize(args[0])
 	if len(nameSeq) == 0 {

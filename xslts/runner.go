@@ -1,0 +1,306 @@
+package xslts
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
+	"github.com/knroy/go-xml/xslt"
+)
+
+// Runner executes the suite against this engine.
+type Runner struct {
+	// Root is the suite checkout.
+	Root string
+	// Timeout bounds one transform. A stylesheet that does not terminate is a
+	// failure of that test rather than of the run.
+	Timeout time.Duration
+}
+
+// Outcome is what happened to one test.
+type Outcome struct {
+	Set, Name string
+	Pass      bool
+	Skipped   bool
+	// Why explains a skip or a failure.
+	Why string
+}
+
+// Summary counts a run.
+type Summary struct {
+	Total, Passed, Failed, Skipped int
+	// Failures holds the failing outcomes, for reporting.
+	Failures []Outcome
+	// SkipReasons counts why tests were left out, so that the scope of a run
+	// is visible rather than implied by the total.
+	SkipReasons map[string]int
+}
+
+// Run executes every test set in the catalog.
+func (r *Runner) Run() (*Summary, error) {
+	data, err := os.ReadFile(filepath.Join(r.Root, "catalog.xml"))
+	if err != nil {
+		return nil, err
+	}
+	var cat Catalog
+	if err := decode(data, &cat); err != nil {
+		return nil, fmt.Errorf("catalog.xml: %w", err)
+	}
+
+	sum := &Summary{SkipReasons: map[string]int{}}
+	for _, ref := range cat.TestSets {
+		set, err := r.loadSet(ref)
+		if err != nil {
+			// A test-set that will not parse is reported rather than skipped
+			// silently: it is a gap in the run, and a run whose scope is
+			// unclear is worse than one with a lower number.
+			sum.Total++
+			sum.Failed++
+			sum.Failures = append(sum.Failures, Outcome{
+				Set: ref.Name, Name: "(test-set)",
+				Why: "could not read: " + err.Error(),
+			})
+			continue
+		}
+		for i := range set.Cases {
+			out := r.runCase(set, &set.Cases[i])
+			sum.Total++
+			switch {
+			case out.Skipped:
+				sum.Skipped++
+				sum.SkipReasons[out.Why]++
+			case out.Pass:
+				sum.Passed++
+			default:
+				sum.Failed++
+				sum.Failures = append(sum.Failures, out)
+			}
+		}
+	}
+	return sum, nil
+}
+
+func (r *Runner) loadSet(ref TestSetRef) (*TestSet, error) {
+	path := filepath.Join(r.Root, filepath.FromSlash(ref.File))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var set TestSet
+	if err := decode(data, &set); err != nil {
+		return nil, err
+	}
+	// Stylesheet and source paths are relative to the test-set file rather
+	// than to the suite root, so the directory travels with the parsed set.
+	set.Dir = filepath.Dir(path)
+	if set.Name == "" {
+		set.Name = ref.Name
+	}
+	return &set, nil
+}
+
+// runCase runs one test and judges the result.
+func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
+	out := Outcome{Set: set.Name, Name: tc.Name}
+	if ok, why := inScope(set, tc); !ok {
+		out.Skipped, out.Why = true, why
+		return out
+	}
+
+	assert, err := ParseAssert([]byte(tc.Result.Inner))
+	if err != nil {
+		out.Why = "unreadable result: " + err.Error()
+		return out
+	}
+
+	res, terr := r.transformSafely(set, tc)
+	ok, why := r.judge(assert, res, terr, set)
+	out.Pass, out.Why = ok, why
+	return out
+}
+
+// transformSafely runs one test and turns a panic into a failure.
+//
+// A panic is a bug worth fixing rather than tolerating — it is a denial of
+// service in a request handler — but it must not end the run: fifteen
+// thousand tests reduced to one stack trace hides every other result. So the
+// panic is recorded as this test's failure and the run continues, and the
+// message says "panic" so it is not mistaken for an ordinary mismatch.
+func (r *Runner) transformSafely(set *TestSet, tc *TestCase) (res *xslt.Result, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			res, err = nil, fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return r.transform(set, tc)
+}
+
+// transform compiles the stylesheet and runs it, returning the result or the
+// error the engine reported.
+func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
+	sheets := tc.Test.Stylesheets
+	if len(sheets) == 0 {
+		// A test-set may declare one stylesheet in an environment and share
+		// it across every case, which is how the larger generated sets are
+		// written.
+		if env := r.environment(set, tc); env != nil {
+			sheets = env.Stylesheets
+		}
+	}
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("the test names no stylesheet")
+	}
+	// The principal stylesheet is the one with no role, or the first.
+	var main string
+	for _, s := range sheets {
+		if s.Role == "" || s.Role == "principal" {
+			main = s.File
+			break
+		}
+	}
+	if main == "" {
+		main = sheets[0].File
+	}
+	sheetPath := filepath.Join(set.Dir, filepath.FromSlash(main))
+	sheetSrc, err := os.ReadFile(sheetPath)
+	if err != nil {
+		return nil, err
+	}
+	sheetDoc, err := xdm.ParseString(string(stripBOM(sheetSrc)),
+		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: sheetPath})
+	if err != nil {
+		return nil, err
+	}
+	ss, err := xslt.Compile(sheetDoc.Root, xslt.CompileOptions{
+		// The suite's stylesheets import schemas by relative path, and call
+		// document() on the test-set's own files. Both resolvers are rooted
+		// at the test-set directory: the tests are trusted input, and
+		// confining them there is what keeps that true.
+		SchemaResolver: &xsd.FileResolver{},
+		// The suite's stylesheets include one another by relative path, and
+		// a resolver rooted at the test-set directory is what makes that
+		// work without opening the filesystem generally.
+		Resolver: &xslt.FileResolver{Roots: []string{set.Dir}},
+		// A filesystem path rather than a file: URI: the schema resolver
+		// joins the base with filepath.Dir, which turns a URI into a
+		// directory literally named "file:".
+		BaseURI: sheetPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	src, err := r.principalSource(set, tc)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := xslt.TransformOptions{
+		Documents: &xslt.FileResolver{Roots: []string{set.Dir}},
+	}
+	if tc.Test.InitialTemplate != nil {
+		opts.InitialTemplate = tc.Test.InitialTemplate.Name
+	}
+	if tc.Test.InitialMode != nil {
+		opts.InitialMode = tc.Test.InitialMode.Name
+	}
+	if len(tc.Test.Params) > 0 {
+		opts.Params = map[string]xdm.Sequence{}
+		for _, p := range tc.Test.Params {
+			v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
+				noNS{})
+			if err != nil {
+				return nil, fmt.Errorf("parameter %s: %w", p.Name, err)
+			}
+			opts.Params[p.Name] = v
+		}
+	}
+
+	timeout := r.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return ss.Transform(ctx, src, opts)
+}
+
+// noNS resolves no prefixes, which is what a parameter expression written in
+// the catalog has available.
+type noNS struct{}
+
+func (noNS) ResolvePrefix(string) (string, bool) { return "", false }
+func (noNS) DefaultElementNamespace() string     { return "" }
+func (noNS) DefaultFunctionNamespace() string    { return xdm.NSFN }
+
+// principalSource loads the document the transform starts on.
+//
+// A test with no source runs from an initial template, which is how a
+// stylesheet that generates its own content is tested. Returning nil for that
+// case is correct rather than an error.
+func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) {
+	env := r.environment(set, tc)
+	if env == nil {
+		return nil, nil
+	}
+	for _, s := range env.Sources {
+		if s.Role != "." {
+			continue
+		}
+		if s.Content != "" {
+			tree, err := xdm.ParseString(s.Content,
+				xdm.ParseOptions{AllowDOCTYPE: true})
+			if err != nil {
+				return nil, err
+			}
+			// The initial context is the *document* node: a stylesheet
+			// matching "/" needs a root to match, and passing the document
+			// element leaves it with none.
+			return tree.Root, nil
+		}
+		if s.File != "" {
+			p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return nil, err
+			}
+			tree, err := xdm.ParseString(string(stripBOM(data)),
+				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: p})
+			if err != nil {
+				return nil, err
+			}
+			return tree.Root, nil
+		}
+	}
+	return nil, nil
+}
+
+// environment finds the environment a case runs in, following a ref into the
+// test set's own definitions.
+func (r *Runner) environment(set *TestSet, tc *TestCase) *Environment {
+	for i := range tc.Environments {
+		e := &tc.Environments[i]
+		if e.Ref == "" {
+			return e
+		}
+		for j := range set.Environments {
+			if set.Environments[j].Name == e.Ref {
+				return &set.Environments[j]
+			}
+		}
+	}
+	return nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

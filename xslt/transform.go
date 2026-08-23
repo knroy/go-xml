@@ -83,15 +83,21 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if source == nil {
-		return nil, fmt.Errorf("Transform: source document is nil")
+	// A nil source is legal when the transform starts from a named template.
+	// XSLT 2.0 section 2.3 makes the source document optional in exactly that
+	// case, and it is how a stylesheet that generates its own content is
+	// invoked — so this is checked where a source is actually needed rather
+	// than on the way in.
+	if source == nil && opts.InitialTemplate == "" {
+		return nil, fmt.Errorf(
+			"Transform: source document is nil and no initial template was named")
 	}
 
 	// Whitespace stripping is applied to a copy so that the caller's tree is
 	// left as they parsed it. Stripping in place would surprise a caller that
 	// reuses one parsed document across several stylesheets with different
 	// strip-space declarations.
-	if len(s.strip) > 0 {
+	if source != nil && len(s.strip) > 0 {
 		source = s.stripWhitespace(source)
 	}
 
