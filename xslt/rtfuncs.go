@@ -137,6 +137,16 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		},
 	})
 
+	// The static functions are registered separately so that use-when, whose
+	// context has no runtime at all, can have exactly these and nothing else.
+	registerStaticFuncs(l)
+}
+
+// registerStaticFuncs adds the four functions section 3.12 makes available to
+// a use-when expression: they answer questions about the *processor* rather
+// than about the stylesheet or the source, so they need no runtime and are
+// legal in a context that has none.
+func registerStaticFuncs(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {

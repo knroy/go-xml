@@ -148,8 +148,18 @@ type Instruction interface {
 // own base URI, or the one the caller supplied when the document came from
 // somewhere with no location of its own.
 func stylesheetBase(doc *xdm.Node, opt string) string {
-	if doc != nil && doc.BaseURI != "" {
-		return doc.BaseURI
+	// xml:base on the stylesheet element overrides where the module was read
+	// from, and it is the static base URI that fn:static-base-uri returns and
+	// that every relative reference in the module resolves against. Reading
+	// the document node alone ignored it, so a stylesheet that declared its
+	// own base got the file it happened to be loaded from instead.
+	if doc != nil {
+		if root := firstElement(doc); root != nil && root.BaseURI != "" {
+			return root.BaseURI
+		}
+		if doc.BaseURI != "" {
+			return doc.BaseURI
+		}
 	}
 	return opt
 }

@@ -27,6 +27,13 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 		return fmt.Errorf("stylesheet has no root element")
 	}
 
+	// Conditional element inclusion runs before anything else looks at the
+	// tree. An excluded element must produce no error at all, so it has to be
+	// gone before compilation can object to it.
+	if err := applyUseWhen(doc); err != nil {
+		return err
+	}
+
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
 	if !isXSL(root, "stylesheet") && !isXSL(root, "transform") {

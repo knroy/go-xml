@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"net/url"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -375,8 +376,15 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 				Value: a.Value,
 			}
 			// xml:base changes the base URI for the subtree.
+			//
+			// Its value is a URI *reference*, so a relative one is resolved
+			// against the base already in force — the parent's, which is the
+			// document's own location at the top. Storing it raw made
+			// fn:base-uri return "sub/" for xml:base="sub/" instead of the
+			// document's directory joined with it, and made every nested
+			// xml:base lose everything its ancestors contributed.
 			if a.Name.Space == NSXML && a.Name.Local == "base" {
-				el.BaseURI = a.Value
+				el.BaseURI = resolveBase(el.BaseURI, a.Value)
 			}
 			el.AddAttr(attr)
 		}
@@ -512,4 +520,29 @@ func parseExpanded(src string, ents *entityTable, opts ParseOptions) (*Tree, err
 	sub := opts
 	sub.entitiesExpanded = true
 	return Parse(strings.NewReader(expanded), sub)
+}
+
+// resolveBase resolves an xml:base value against the base already in force.
+//
+// An absolute reference replaces the base outright; a relative one is merged
+// with it by the ordinary RFC 3986 rules. A base that is not usable as one is
+// left alone rather than reported: parsing is not the place to raise a URI
+// error, and fn:base-uri and fn:resolve-uri report it themselves when the
+// value is actually used.
+func resolveBase(base, ref string) string {
+	if ref == "" {
+		return base
+	}
+	r, err := url.Parse(ref)
+	if err != nil {
+		return ref
+	}
+	if r.IsAbs() || base == "" {
+		return ref
+	}
+	b, err := url.Parse(base)
+	if err != nil || !b.IsAbs() {
+		return ref
+	}
+	return b.ResolveReference(r).String()
 }

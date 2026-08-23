@@ -52,6 +52,14 @@ type SetStats struct{ Passed, Failed, Skipped int }
 
 // Run executes every test set in the catalog.
 func (r *Runner) Run() (*Summary, error) {
+	// Every base URI in a run derives from the root, and fn:base-uri and
+	// fn:resolve-uri require an absolute one: a relative root made the whole
+	// base-uri set fail with FORG0002 on a path that was perfectly correct,
+	// which measured the harness rather than the engine.
+	if abs, err := filepath.Abs(r.Root); err == nil {
+		r.Root = abs
+	}
+
 	data, err := os.ReadFile(filepath.Join(r.Root, "catalog.xml"))
 	if err != nil {
 		return nil, err
@@ -313,7 +321,11 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 			// which is the xslts package.
 			tree, err := xdm.ParseString(s.Content, xdm.ParseOptions{
 				AllowDOCTYPE: true,
-				BaseURI:      filepath.Join(set.Dir, "inline.xml"),
+				// A file: URI rather than a path. fn:base-uri and
+				// fn:resolve-uri are defined over URIs, and a bare
+				// filesystem path has no scheme, so it is not an
+				// absolute URI however absolute the path is.
+				BaseURI:      fileURI(filepath.Join(set.Dir, "inline.xml")),
 			})
 			if err != nil {
 				return nil, err
@@ -330,7 +342,7 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 				return nil, err
 			}
 			tree, err := xdm.ParseString(string(stripBOM(data)),
-				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: p})
+				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
 			if err != nil {
 				return nil, err
 			}
@@ -362,4 +374,23 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// fileURI turns an absolute filesystem path into a file: URI.
+//
+// The distinction matters to fn:base-uri and fn:resolve-uri, which are defined
+// over URIs: "/a/b.xml" is an absolute *path* but a relative *URI reference*,
+// having no scheme, and FORG0002 is the correct answer for it. Only the
+// documents the suite parses get one; the resolvers are given paths, because
+// they join with filepath and a URI turns into a directory called "file:".
+func fileURI(path string) string {
+	if path == "" || strings.HasPrefix(path, "file:") {
+		return path
+	}
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	return "file://" + filepath.ToSlash(path)
 }
