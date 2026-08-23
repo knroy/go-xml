@@ -172,6 +172,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// as a slice because a document rarely declares more than a handful, and
 	// the common case is none at all.
 	var attDefaults []attDefault
+	var attTypes []attDeclaredType
 
 	for {
 		// InputOffset after Token() is the position *after* the token, so the
@@ -201,6 +202,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				t = applyAttDefaults(t, attDefaults)
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
+			if len(attTypes) > 0 {
+				applyAttTypes(el, attTypes)
+			}
 			// Attributes and namespaces are nodes too, and a document made
 			// of elements carrying many attributes allocates most of its
 			// memory in them, so they count against the limit.
@@ -265,7 +269,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// Retained so a caller can validate against the document's
 				// own DTD; see Tree.DocType.
 				tree.DocType = d
-				attDefaults = append(attDefaults, parseAttListDefaults(d)...)
+				defs, types := parseAttList(d)
+				attDefaults = append(attDefaults, defs...)
+				attTypes = append(attTypes, types...)
 				// Internal general entities are declared here and referenced
 				// in content, so the table has to be installed before the
 				// decoder reads any. encoding/xml consults dec.Entity lazily,

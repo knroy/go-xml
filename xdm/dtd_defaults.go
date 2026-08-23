@@ -5,6 +5,19 @@ import (
 	"strings"
 )
 
+// attDeclaredType is one attribute whose ATTLIST declaration gives it a type
+// the data model can observe: ID, IDREF or IDREFS.
+//
+// Section 4.5 of the XSLT specification and F&O's fn:id both work from the
+// attribute's *type*, not its name, and a DTD is the other way — besides a
+// schema — that a document says which attributes are IDs. Parsing the type and
+// then discarding it made fn:id fall back to guessing from the name.
+type attDeclaredType struct {
+	element string
+	attr    string
+	typ     string
+}
+
 // attDefault is one defaulted attribute from an ATTLIST declaration.
 type attDefault struct {
 	element string
@@ -30,16 +43,24 @@ type attDefault struct {
 // '...'" is how a DTD supplies a binding — which is why the result has to
 // reach the element before its namespaces are built.
 func parseAttListDefaults(subset string) []attDefault {
+	out, _ := parseAttList(subset)
+	return out
+}
+
+// parseAttList reads both the defaults and the declared ID types from the
+// internal subset.
+func parseAttList(subset string) ([]attDefault, []attDeclaredType) {
 	var out []attDefault
+	var types []attDeclaredType
 	for {
 		i := strings.Index(subset, "<!ATTLIST")
 		if i < 0 {
-			return out
+			return out, types
 		}
 		subset = subset[i+len("<!ATTLIST"):]
 		end := strings.IndexByte(subset, '>')
 		if end < 0 {
-			return out
+			return out, types
 		}
 		body := subset[:end]
 		subset = subset[end+1:]
@@ -56,6 +77,10 @@ func parseAttListDefaults(subset string) []attDefault {
 		for i := 1; i+1 < len(fields); {
 			name, decl := fields[i], fields[i+1]
 			i += 2
+			switch decl {
+			case "ID", "IDREF", "IDREFS":
+				types = append(types, attDeclaredType{element, name, decl})
+			}
 			switch {
 			case decl == "#REQUIRED", decl == "#IMPLIED":
 				// No default to supply.
@@ -192,4 +217,27 @@ func attrLexical(n xml.Name) string {
 		return n.Local
 	}
 	return n.Space + ":" + n.Local
+}
+
+// applyAttTypes stamps the ID, IDREF and IDREFS annotations a DTD declares.
+//
+// A DTD is one of the two ways a document says which of its attributes are
+// IDs, and fn:id is defined over the attribute's type rather than its name.
+// Recording the annotation here puts a DTD-validated document on the same
+// footing as a schema-validated one, so fn:id finds the same attributes in
+// both.
+func applyAttTypes(el *Node, types []attDeclaredType) {
+	for _, t := range types {
+		if t.element != el.Name.Lexical() && t.element != el.Name.Local {
+			continue
+		}
+		for _, a := range el.Attrs {
+			if a.Name.Lexical() != t.attr && a.Name.Local != t.attr {
+				continue
+			}
+			if a.TypeAnnotation == "" {
+				a.TypeAnnotation = t.typ
+			}
+		}
+	}
 }

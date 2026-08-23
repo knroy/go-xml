@@ -140,10 +140,18 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 	walk = func(n *xdm.Node) {
 		if n.Kind == xdm.KindElement {
 			for _, a := range n.Attrs {
-				isIDAttr := (a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
+				// A validated document says which attributes are of type
+				// xs:ID, and that is what the specification asks for. The
+				// name-based test below is the fallback for a document that
+				// was never validated, not a substitute: an attribute
+				// annotated ID counts however it is spelled, and one merely
+				// called "id" in a validated document does not.
+				isIDAttr := isIDAnnotation(a.TypeAnnotation) ||
+					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
 					(a.Name.URI == "" && a.Name.Local == "id")
-				isRefAttr := a.Name.URI == "" &&
-					(a.Name.Local == "idref" || a.Name.Local == "idrefs")
+				isRefAttr := isIDREFAnnotation(a.TypeAnnotation) ||
+					(a.Name.URI == "" &&
+						(a.Name.Local == "idref" || a.Name.Local == "idrefs"))
 
 				if wantID && isIDAttr && want[a.Value] {
 					out = append(out, n)
@@ -708,4 +716,36 @@ func maxWidth(width string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// isIDAnnotation reports whether a type annotation names xs:ID or a type
+// derived from it.
+//
+// fn:id is defined over attributes "of type xs:ID", which includes every
+// restriction of it — a schema that names its own IDs is the ordinary case,
+// not an exotic one.
+func isIDAnnotation(annotation string) bool {
+	return annotationDerivesFrom(annotation, "ID")
+}
+
+// isIDREFAnnotation reports whether an annotation names xs:IDREF or xs:IDREFS,
+// or a type derived from either.
+func isIDREFAnnotation(annotation string) bool {
+	return annotationDerivesFrom(annotation, "IDREF") ||
+		annotationDerivesFrom(annotation, "IDREFS")
+}
+
+// annotationDerivesFrom walks the derivation chain a schema recorded.
+//
+// The walk is bounded for the same reason the one in typeexpr.go is: this runs
+// once per attribute of every node, and a schema whose derivations formed a
+// cycle would otherwise not terminate.
+func annotationDerivesFrom(annotation, base string) bool {
+	for i := 0; i < 32 && annotation != ""; i++ {
+		if annotation == base {
+			return true
+		}
+		annotation = xdm.DerivedBase(annotation)
+	}
+	return false
 }
