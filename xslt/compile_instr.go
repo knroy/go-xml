@@ -299,7 +299,13 @@ func (c *compiler) compileCallTemplate(n *xdm.Node, ns xpath.NamespaceResolver) 
 	if err != nil {
 		return nil, err
 	}
-	return &callTemplateInstr{name: qn, params: params}, nil
+	instr := &callTemplateInstr{name: qn, params: params}
+	// XTSE0680 is checked after every module has compiled, because the
+	// template being called may be declared below this call or in a module
+	// imported afterwards. The call is recorded here, where the source
+	// element is still to hand for the error message.
+	c.calls = append(c.calls, instr)
+	return instr, nil
 }
 
 // compileParamsAndSorts collects xsl:with-param and xsl:sort children.

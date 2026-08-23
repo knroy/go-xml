@@ -212,6 +212,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.resolveCharacterMapIncludes(); err != nil {
 		return nil, err
 	}
+	if err := c.checkCallTemplateParams(); err != nil {
+		return nil, err
+	}
 	// Character maps are resolved last, so that an xsl:output in the
 	// importing module can name a map declared in an imported one.
 	if err := c.sheet.resolveOutputCharacterMaps(c.sheet.output.UseCharacterMaps); err != nil {

@@ -23,6 +23,16 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 		seq = v
+		// XTTE0520: the select expression must yield nodes. An atomic value
+		// among them has no template to match it, and processing it silently
+		// would drop it rather than report the mistake.
+		for _, it := range seq {
+			if _, ok := it.(*xdm.Node); !ok {
+				return fmt.Errorf(
+					"XTTE0520: xsl:apply-templates/@select returned an item "+
+						"that is not a node (%s)", it.TypeName())
+			}
+		}
 	} else {
 		// With no select, the default is the children of the context node —
 		// which is what drives the recursive descent that XSLT is built on.

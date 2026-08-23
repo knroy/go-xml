@@ -67,7 +67,9 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 		}
 		r := []rune(v)
 		if len(r) != 1 {
-			return fmt.Errorf("xsl:decimal-format/@%s must be a single character, got %q", attr, v)
+			return fmt.Errorf(
+				"XTSE0020: xsl:decimal-format/@%s must be a single character, got %q",
+				attr, v)
 		}
 		*dst = r[0]
 		return nil
@@ -94,6 +96,30 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node) error {
 	}
 	if v := el.AttrValue("NaN"); v != "" {
 		df.NaN = v
+	}
+
+	// XTSE1300: the characters used in a picture string must be distinct.
+	// Two symbols with the same character make a picture ambiguous, so the
+	// specification requires them to differ rather than picking a winner.
+	seen := map[rune]string{}
+	for _, sym := range []struct {
+		name string
+		r    rune
+	}{
+		{"decimal-separator", df.DecimalSeparator},
+		{"grouping-separator", df.GroupingSeparator},
+		{"percent", df.Percent},
+		{"per-mille", df.PerMille},
+		{"zero-digit", df.ZeroDigit},
+		{"digit", df.Digit},
+		{"pattern-separator", df.PatternSeparator},
+	} {
+		if prev, dup := seen[sym.r]; dup {
+			return fmt.Errorf(
+				"XTSE1300: xsl:decimal-format/@%s and @%s are both %q",
+				prev, sym.name, string(sym.r))
+		}
+		seen[sym.r] = sym.name
 	}
 
 	c.sheet.decimalFormats[df.Name.Clark()] = df

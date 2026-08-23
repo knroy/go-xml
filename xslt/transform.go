@@ -122,7 +122,8 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if opts.InitialTemplate != "" {
 		t, ok := s.named[xdm.QName{Local: opts.InitialTemplate}.Clark()]
 		if !ok {
-			return nil, fmt.Errorf("no template named %q", opts.InitialTemplate)
+			return nil, fmt.Errorf(
+				"XTDE0040: no template named %q", opts.InitialTemplate)
 		}
 		if err := runTemplate(rt, t, nil, nil, out); err != nil {
 			return nil, err

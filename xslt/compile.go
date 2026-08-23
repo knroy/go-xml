@@ -20,6 +20,43 @@ type compiler struct {
 	// charMapIncludes records the use-character-maps of each
 	// xsl:character-map, resolved after every module has compiled.
 	charMapIncludes []charMapInclusion
+	// calls records every xsl:call-template, so that XTSE0680 can be checked
+	// once every template is known.
+	calls []*callTemplateInstr
+}
+
+// checkCallTemplateParams implements XTSE0680.
+//
+// "It is a static error to pass a non-tunnel parameter named x to a template
+// that does not have a template parameter named x." A tunnel parameter is
+// exempt: passing one through a template that does not declare it is the whole
+// point of tunnelling.
+//
+// It runs after every module, because the template being called may be
+// declared below the call or in a module imported afterwards.
+func (c *compiler) checkCallTemplateParams() error {
+	for _, call := range c.calls {
+		t, ok := c.sheet.named[call.name.Clark()]
+		if !ok {
+			// A call to a template that does not exist is XTSE0650, reported
+			// where the call is executed rather than here.
+			continue
+		}
+		declared := map[string]bool{}
+		for _, p := range t.Params {
+			declared[p.Name.Clark()] = true
+		}
+		for _, p := range call.params {
+			if p.Tunnel || declared[p.Name.Clark()] {
+				continue
+			}
+			return fmt.Errorf(
+				"XTSE0680: xsl:call-template passes parameter $%s to template %s, "+
+					"which does not declare it",
+				p.Name.Lexical(), call.name.Lexical())
+		}
+	}
+	return nil
 }
 
 // compileDocument compiles one stylesheet module at the given import
@@ -219,7 +256,25 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		t.Priority = v
 	}
 	if m := el.AttrValue("mode"); m != "" {
-		t.Mode = strings.Fields(m)
+		modes := strings.Fields(m)
+		// XTSE0550: the list may not be empty, may not repeat a token, and
+		// "#all" may not appear beside anything else.
+		if len(modes) == 0 {
+			return fmt.Errorf("XTSE0550: xsl:template/@mode is empty")
+		}
+		seen := map[string]bool{}
+		for _, tok := range modes {
+			if seen[tok] {
+				return fmt.Errorf(
+					"XTSE0550: xsl:template/@mode names %q more than once", tok)
+			}
+			seen[tok] = true
+		}
+		if seen["#all"] && len(modes) > 1 {
+			return fmt.Errorf(
+				"XTSE0550: xsl:template/@mode=#all cannot appear with other modes")
+		}
+		t.Mode = modes
 	}
 
 	// Leading xsl:param children declare the template's parameters; they must
@@ -517,7 +572,9 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 	}
 	doc, resolved, err := c.opts.Resolver.ResolveModule(href, base)
 	if err != nil {
-		return fmt.Errorf("%s %q: %w", el.Name.Lexical(), href, err)
+		// XTSE0165: the processor could not retrieve the resource the href
+		// names, or what it retrieved is not a stylesheet module.
+		return fmt.Errorf("XTSE0165: %s %q: %w", el.Name.Lexical(), href, err)
 	}
 	if c.seen[resolved] {
 		// A module that includes or imports itself, directly or indirectly,
