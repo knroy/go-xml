@@ -175,7 +175,7 @@ func (c *compiler) compileNamespace(n *xdm.Node, ns xpath.NamespaceResolver) (In
 	}
 	instr := &namespaceInstr{name: nameAVT}
 	if sel := n.AttrValue("select"); sel != "" {
-		if instr.sel, err = xpath.Compile(sel, ns); err != nil {
+		if instr.sel, err = compileExpr(sel, ns); err != nil {
 			return nil, err
 		}
 		return instr, nil
@@ -233,7 +233,7 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 	instr := &performSortInstr{}
 	var err error
 	if sel := n.AttrValue("select"); sel != "" {
-		if instr.sel, err = xpath.Compile(sel, ns); err != nil {
+		if instr.sel, err = compileExpr(sel, ns); err != nil {
 			return nil, err
 		}
 	}

@@ -242,13 +242,13 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 
 	count := 0
 	if v := n.AttrValue("group-by"); v != "" {
-		if instr.groupBy, err = xpath.Compile(v, ns); err != nil {
+		if instr.groupBy, err = compileExpr(v, ns); err != nil {
 			return nil, err
 		}
 		count++
 	}
 	if v := n.AttrValue("group-adjacent"); v != "" {
-		if instr.groupAdjacent, err = xpath.Compile(v, ns); err != nil {
+		if instr.groupAdjacent, err = compileExpr(v, ns); err != nil {
 			return nil, err
 		}
 		count++
@@ -866,7 +866,7 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 
 	var err error
 	if v := n.AttrValue("value"); v != "" {
-		if instr.value, err = xpath.Compile(v, ns); err != nil {
+		if instr.value, err = compileExpr(v, ns); err != nil {
 			return nil, err
 		}
 	}

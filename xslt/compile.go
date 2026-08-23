@@ -137,7 +137,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		if el.Name.Local == "param" {
 			if s, ok := c.opts.StaticParams[v.Name.Clark()]; ok {
 				lit := "'" + strings.ReplaceAll(s, "'", "''") + "'"
-				comp, err := xpath.Compile(lit, newNSResolver(el, ""))
+				comp, err := compileExpr(lit, newNSResolver(el, ""))
 				if err != nil {
 					return err
 				}
@@ -270,7 +270,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	}
 
 	if sel := el.AttrValue("select"); sel != "" {
-		comp, err := xpath.Compile(sel, newNSResolver(el, ""))
+		comp, err := compileExpr(sel, newNSResolver(el, ""))
 		if err != nil {
 			return nil, fmt.Errorf("in %s/@select: %w", el.Name.Lexical(), err)
 		}
@@ -393,7 +393,7 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 		return fmt.Errorf(
 			"XTSE1205: xsl:key has both a use attribute and a sequence constructor")
 	case use != "":
-		if k.use, err = xpath.Compile(use, ns); err != nil {
+		if k.use, err = compileExpr(use, ns); err != nil {
 			return err
 		}
 	case hasBody:

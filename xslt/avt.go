@@ -57,7 +57,7 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 				return nil, err
 			}
 			exprSrc := src[i+1 : end]
-			comp, err := xpath.Compile(exprSrc, ns)
+			comp, err := compileExpr(exprSrc, ns)
 			if err != nil {
 				return nil, fmt.Errorf("in attribute value template {%s}: %w", exprSrc, err)
 			}

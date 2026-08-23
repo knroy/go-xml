@@ -181,8 +181,20 @@ func registerURIFuncs(l *Library) {
 			if base, err = argString(args, 1); err != nil {
 				return nil, err
 			}
-		} else if n, ok := ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI
+		} else {
+			// The one-argument form resolves against the *static* base URI —
+			// the base of the expression, from the stylesheet or query it
+			// was written in. The context node's base is what the
+			// two-argument form takes explicitly, and preferring it here
+			// resolved against the source document instead of against the
+			// stylesheet, which is a different answer whenever the two
+			// documents come from different places.
+			base = ctx.StaticBaseURI
+			if base == "" {
+				if n, ok := ctx.Item.(*xdm.Node); ok {
+					base = n.BaseURI
+				}
+			}
 		}
 
 		ref, err := url.Parse(rel)

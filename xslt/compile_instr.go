@@ -251,7 +251,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		instr.separator, instr.hasSeparator = s, true
 	}
 	if sel := n.AttrValue("select"); sel != "" {
-		comp, err := xpath.Compile(sel, ns)
+		comp, err := compileExpr(sel, ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:value-of/@select: %w", err)
 		}
@@ -269,7 +269,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
 	instr := &applyTemplatesInstr{}
 	if sel := n.AttrValue("select"); sel != "" {
-		comp, err := xpath.Compile(sel, ns)
+		comp, err := compileExpr(sel, ns)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:apply-templates/@select: %w", err)
 		}
@@ -333,7 +333,7 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 	if sel == "" {
 		sel = "." // sorting on the item itself is the default
 	}
-	comp, err := xpath.Compile(sel, ns)
+	comp, err := compileExpr(sel, ns)
 	if err != nil {
 		return nil, fmt.Errorf("in xsl:sort/@select: %w", err)
 	}
@@ -494,7 +494,7 @@ func (c *compiler) compileAttribute(n *xdm.Node, ns xpath.NamespaceResolver) (In
 		instr.namespace = avt
 	}
 	if sel := n.AttrValue("select"); sel != "" {
-		comp, err := xpath.Compile(sel, ns)
+		comp, err := compileExpr(sel, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -547,7 +547,7 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 		instr.terminate = avt
 	}
 	if sel := n.AttrValue("select"); sel != "" {
-		comp, err := xpath.Compile(sel, ns)
+		comp, err := compileExpr(sel, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -568,7 +568,7 @@ func requiredExpr(n *xdm.Node, attr string, ns xpath.NamespaceResolver) (*xpath.
 	if v == "" {
 		return nil, fmt.Errorf("%s requires a %s attribute", n.Name.Lexical(), attr)
 	}
-	comp, err := xpath.Compile(v, ns)
+	comp, err := compileExpr(v, ns)
 	if err != nil {
 		return nil, fmt.Errorf("in %s/@%s: %w", n.Name.Lexical(), attr, err)
 	}

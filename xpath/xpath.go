@@ -14,6 +14,28 @@ import (
 type Compiled struct {
 	expr Expr
 	src  string
+	// staticBase is the base URI of the element this expression was written
+	// on, when the host language tracks one per expression rather than per
+	// module. XSLT does: xml:base on any element changes the static base URI
+	// for the expressions within it, so the module's own is only a default.
+	// Empty means the context's applies.
+	staticBase string
+}
+
+// WithStaticBaseURI returns a copy of c whose expressions resolve relative
+// references against base.
+//
+// It exists because the static base URI really is static: xml:base is written
+// in the stylesheet and cannot change between evaluations, so binding it to
+// the compiled expression is both correct and cheaper than threading it
+// through the dynamic context.
+func (c *Compiled) WithStaticBaseURI(base string) *Compiled {
+	if c == nil || base == "" {
+		return c
+	}
+	n := *c
+	n.staticBase = base
+	return &n
 }
 
 // Compile parses src, resolving namespace prefixes with ns.
@@ -57,6 +79,11 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// intermediate sequences may grow, which is exactly the thing that has to
 	// fit in memory at once.
 	ctx.resetItems()
+	if c.staticBase != "" && c.staticBase != ctx.StaticBaseURI {
+		sub := *ctx
+		sub.StaticBaseURI = c.staticBase
+		return c.expr.Eval(&sub)
+	}
 	return c.expr.Eval(ctx)
 }
 

@@ -273,6 +273,9 @@ func (s *Stylesheet) Output() OutputSettings { return s.output }
 type nsResolver struct {
 	bindings  map[string]string
 	defaultNS string
+	// baseURI is the base URI of the element this resolver was built for,
+	// which is the static base URI of the expressions written on it.
+	baseURI string
 	// schema is what xsl:import-schema brought in, or nil. It makes the
 	// stylesheet's imported types part of the static context, which is what
 	// lets "instance of my:partNumberType" resolve at all.
@@ -293,6 +296,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	return &nsResolver{
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: defaultElementNS,
+		baseURI:   el.BaseURI,
 		schema:    compileSchema,
 	}
 }
@@ -342,6 +346,24 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 		return 0, false, true
 	}
 	return code, true, true
+}
+
+// compileExpr compiles an expression in an element's namespace context and
+// binds the element's base URI to it.
+//
+// The static base URI is a property of the element the expression is written
+// on, not of the module: section 5.8 makes xml:base on any element change it
+// for everything within. Compiling through here is what keeps that true
+// without threading a base URI through every call site.
+func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error) {
+	c, err := xpath.Compile(src, ns)
+	if err != nil {
+		return nil, err
+	}
+	if r, ok := ns.(*nsResolver); ok && r.baseURI != "" {
+		c = c.WithStaticBaseURI(r.baseURI)
+	}
+	return c, nil
 }
 
 func (r *nsResolver) ResolvePrefix(p string) (string, bool) {
