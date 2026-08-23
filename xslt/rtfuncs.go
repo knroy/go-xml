@@ -108,14 +108,24 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "document"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			// fn:document is the XSLT 1.0 spelling of fn:doc, and is subject
-			// to the same resolver gate.
-			if ctx.Docs == nil {
+			// to the same resolver gate — except for document(""), which
+			// fetches nothing and is handled below.
+			if ctx.Docs == nil && !onlyEmptyURIs(args[0]) {
 				return nil, fmt.Errorf(
 					"FODC0002: document() is disabled (no resolver configured)")
 			}
 			var out xdm.Sequence
 			for _, it := range xdm.Atomize(args[0]) {
 				uri := it.(*xdm.Atomic).String()
+				// The zero-length URI names the document containing the
+				// expression, which for a stylesheet is the stylesheet
+				// itself. It is how a stylesheet carrying its own lookup
+				// tables as literal data reads them, and it needs no
+				// resolver because nothing is fetched.
+				if strings.TrimSpace(uri) == "" && rt.sheet.source != nil {
+					out = append(out, rt.sheet.source)
+					continue
+				}
 				base := ""
 				if n, ok := ctx.Item.(*xdm.Node); ok {
 					base = n.BaseURI
@@ -439,4 +449,17 @@ func registerGroupingFuncs(l *xpath.Library) {
 			return xdm.One(groups[n]), nil
 		},
 	})
+}
+
+// onlyEmptyURIs reports whether every argument item is the zero-length URI.
+//
+// document("") names the stylesheet and reaches no resolver, so the gate that
+// refuses document access without one must not refuse it.
+func onlyEmptyURIs(seq xdm.Sequence) bool {
+	for _, it := range xdm.Atomize(seq) {
+		if strings.TrimSpace(it.(*xdm.Atomic).String()) != "" {
+			return false
+		}
+	}
+	return true
 }

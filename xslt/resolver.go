@@ -24,6 +24,13 @@ type FileResolver struct {
 	// inside. A path escaping all of them is refused.
 	Roots []string
 
+	// AllowDOCTYPE permits a DOCTYPE declaration in the documents this
+	// resolver parses. It is off by default, which is what keeps a
+	// stylesheet from reaching a document that expands entities or names an
+	// external one — the XXE entry point. A caller whose inputs are trusted,
+	// a conformance suite among them, can turn it on.
+	AllowDOCTYPE bool
+
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
 	// need to fetch rule sets at transform time.
@@ -155,7 +162,10 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: path})
+	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
+		BaseURI:      path,
+		AllowDOCTYPE: r.AllowDOCTYPE,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}

@@ -27,6 +27,13 @@ func (c *compiler) compileDocument(doc *xdm.Node, precedence int) error {
 		return fmt.Errorf("stylesheet has no root element")
 	}
 
+	// The principal module's own tree is what document("") returns. It is
+	// recorded before conditional inclusion prunes anything, since the
+	// document a stylesheet reads through document("") is the one on disk.
+	if c.sheet.source == nil {
+		c.sheet.source = doc
+	}
+
 	// Conditional element inclusion runs before anything else looks at the
 	// tree. An excluded element must produce no error at all, so it has to be
 	// gone before compilation can object to it.

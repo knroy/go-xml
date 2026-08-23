@@ -246,7 +246,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// confining each set to itself refuses those as if the engine could
 		// not read them. The suite is trusted input; the root is what keeps
 		// the run from reaching outside it.
-		Resolver: &xslt.FileResolver{Roots: []string{r.Root}},
+		Resolver: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
 		// A filesystem path rather than a file: URI: the schema resolver
 		// joins the base with filepath.Dir, which turns a URI into a
 		// directory literally named "file:".
@@ -262,7 +262,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 
 	opts := xslt.TransformOptions{
-		Documents: &xslt.FileResolver{Roots: []string{r.Root}},
+		// The suite's documents legitimately carry DOCTYPE declarations,
+		// which the resolver refuses by default because following one is
+		// the XXE entry point. The suite is trusted input read from a
+		// checkout, so it is enabled here and nowhere else.
+		Documents: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
 	}
 	if tc.Test.InitialTemplate != nil {
 		opts.InitialTemplate = tc.Test.InitialTemplate.Name

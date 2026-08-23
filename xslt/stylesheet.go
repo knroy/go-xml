@@ -61,6 +61,14 @@ type Stylesheet struct {
 	// namedOutputs holds named xsl:output definitions by Clark name, which
 	// xsl:result-document/@format selects.
 	namedOutputs map[string]*OutputSettings
+	// source is the stylesheet's own document, which document("") returns.
+	//
+	// Section 16.1 defines the zero-length URI as naming the document
+	// containing the expression, so a stylesheet carrying its own lookup
+	// tables as literal data — a long-standing XSLT 1.0 idiom that XSLT 2.0
+	// keeps — reads them through it. Keeping the tree costs one reference
+	// per compiled stylesheet.
+	source *xdm.Node
 }
 
 // Template is a compiled xsl:template.
