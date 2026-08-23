@@ -267,7 +267,7 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 	}
 	if count != 1 {
 		return nil, fmt.Errorf(
-			"xsl:for-each-group requires exactly one grouping attribute, found %d", count)
+			"XTSE1080: xsl:for-each-group requires exactly one grouping attribute, found %d", count)
 	}
 
 	_, sorts, err := c.compileParamsAndSorts(n, ns)
@@ -483,7 +483,7 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	node, ok := rt.ctx.Item.(*xdm.Node)
 	if !ok {
-		return fmt.Errorf("xsl:number requires a node context or a value attribute")
+		return fmt.Errorf("XTTE0990: xsl:number requires a node context or a value attribute")
 	}
 
 	numbers, err := i.countNode(rt, node)

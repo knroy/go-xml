@@ -28,7 +28,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// which is what drives the recursive descent that XSLT is built on.
 		node, ok := rt.ctx.Item.(*xdm.Node)
 		if !ok {
-			return fmt.Errorf("xsl:apply-templates requires a node as the context item")
+			return fmt.Errorf("XTTE0510: xsl:apply-templates requires a node as the context item")
 		}
 		for _, ch := range node.Children {
 			seq = append(seq, ch)

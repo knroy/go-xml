@@ -203,7 +203,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		t.Name, t.HasName = qn, true
 	}
 	if t.Match == nil && !t.HasName {
-		return fmt.Errorf("xsl:template must have a match or name attribute")
+		return fmt.Errorf("XTSE0500: xsl:template must have a match or name attribute")
 	}
 	// An explicit priority overrides the computed default.
 	if p := el.AttrValue("priority"); p != "" {
@@ -515,7 +515,14 @@ func (c *compiler) compileInclude(el *xdm.Node, precedence int) error {
 		return fmt.Errorf("%s %q: %w", el.Name.Lexical(), href, err)
 	}
 	if c.seen[resolved] {
-		return fmt.Errorf("circular %s of %q", el.Name.Local, resolved)
+		// A module that includes or imports itself, directly or indirectly,
+		// has its own error code, and they differ between the two: XTSE0180
+		// for xsl:include, XTSE0210 for xsl:import.
+		code := "XTSE0180"
+		if el.Name.Local == "import" {
+			code = "XTSE0210"
+		}
+		return fmt.Errorf("%s: circular %s of %q", code, el.Name.Local, resolved)
 	}
 	c.seen[resolved] = true
 	defer delete(c.seen, resolved)

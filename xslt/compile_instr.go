@@ -444,7 +444,7 @@ func (c *compiler) compileChoose(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 		}
 	}
 	if len(instr.whens) == 0 {
-		return nil, fmt.Errorf("xsl:choose requires at least one xsl:when")
+		return nil, fmt.Errorf("XTSE0010: xsl:choose requires at least one xsl:when")
 	}
 	return instr, nil
 }

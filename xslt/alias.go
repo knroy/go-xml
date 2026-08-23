@@ -181,7 +181,7 @@ const maxCharMapDepth = 32
 func (c *compiler) mergeCharMaps(dst map[rune]string, names []string, depth int) error {
 	if depth > maxCharMapDepth {
 		return fmt.Errorf(
-			"XTSE1580: xsl:character-map inclusion nests more than %d deep, "+
+			"XTSE1600: xsl:character-map inclusion nests more than %d deep, "+
 				"which means it is circular", maxCharMapDepth)
 	}
 	for _, n := range names {

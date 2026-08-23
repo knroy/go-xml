@@ -174,7 +174,7 @@ type copyInstr struct {
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 	node, ok := rt.ctx.Item.(*xdm.Node)
 	if !ok {
-		return fmt.Errorf("xsl:copy requires a node as the context item")
+		return fmt.Errorf("XTTE0945: xsl:copy requires a node as the context item")
 	}
 
 	switch node.Kind {
