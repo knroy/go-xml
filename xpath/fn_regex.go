@@ -310,6 +310,14 @@ func classUnicodeEscape(esc byte) (string, bool) {
 
 // translatePattern rewrites the XPath-specific escapes into RE2 syntax.
 func translatePattern(p string, dotAll bool) (string, error) {
+	// The grammar is checked before anything is rewritten. A construct this
+	// language does not define has to be refused rather than translated: RE2
+	// accepts most of Perl, so passing one through gives a different answer
+	// from a conforming processor instead of an error. See regex_grammar.go.
+	if err := checkRegexGrammar(p); err != nil {
+		return "", err
+	}
+
 	var sb strings.Builder
 	inClass := false
 	// Where the class currently being read starts in p, so a subtraction
