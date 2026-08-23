@@ -206,6 +206,12 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.sheet.sortTemplates()
+	// Character-map inclusion is resolved before the xsl:output tables are
+	// flattened, and both after every module, so that a map may name one
+	// declared later or in a module imported afterwards.
+	if err := c.resolveCharacterMapIncludes(); err != nil {
+		return nil, err
+	}
 	// Character maps are resolved last, so that an xsl:output in the
 	// importing module can name a map declared in an imported one.
 	if err := c.sheet.resolveOutputCharacterMaps(c.sheet.output.UseCharacterMaps); err != nil {

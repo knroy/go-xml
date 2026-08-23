@@ -86,19 +86,21 @@ func (c *compiler) compileCharacterMap(el *xdm.Node) error {
 
 	m := map[rune]string{}
 
-	// A map may include others; the including map's own entries win.
+	// A map may include others. The names are recorded and resolved after
+	// every module has compiled, because xsl:character-map is a top-level
+	// declaration and may name one written below it — or in a module imported
+	// afterwards. Resolving here reported XTSE1590 for a map that existed.
+	var includes []string
 	for _, u := range strings.Fields(el.AttrValue("use-character-maps")) {
 		uq, err := resolveQNameAttr(el, u)
 		if err != nil {
 			return err
 		}
-		used, ok := c.sheet.characterMaps[uq.Clark()]
-		if !ok {
-			return fmt.Errorf("XTSE1590: no xsl:character-map named %q", u)
-		}
-		for k, v := range used {
-			m[k] = v
-		}
+		includes = append(includes, uq.Clark())
+	}
+	if len(includes) > 0 {
+		c.charMapIncludes = append(c.charMapIncludes,
+			charMapInclusion{name: qn.Clark(), includes: includes})
 	}
 
 	for _, ch := range el.ChildElements() {
@@ -141,5 +143,63 @@ func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
 		}
 	}
 	s.activeCharMap = merged
+	return nil
+}
+
+// charMapInclusion records one xsl:character-map's use-character-maps, to be
+// resolved once every module has compiled.
+type charMapInclusion struct {
+	name     string
+	includes []string
+}
+
+// resolveCharacterMapIncludes folds included maps into the maps that include
+// them.
+//
+// The including map's own entries win, which is why they are applied over the
+// included ones rather than under. Inclusion is resolved transitively, with a
+// bound: a map that includes itself, directly or through a cycle, would
+// otherwise not terminate.
+func (c *compiler) resolveCharacterMapIncludes() error {
+	for _, inc := range c.charMapIncludes {
+		own := c.sheet.characterMaps[inc.name]
+		merged := map[rune]string{}
+		if err := c.mergeCharMaps(merged, inc.includes, 0); err != nil {
+			return err
+		}
+		for k, v := range own {
+			merged[k] = v
+		}
+		c.sheet.characterMaps[inc.name] = merged
+	}
+	return nil
+}
+
+// maxCharMapDepth bounds transitive inclusion.
+const maxCharMapDepth = 32
+
+func (c *compiler) mergeCharMaps(dst map[rune]string, names []string, depth int) error {
+	if depth > maxCharMapDepth {
+		return fmt.Errorf(
+			"XTSE1580: xsl:character-map inclusion nests more than %d deep, "+
+				"which means it is circular", maxCharMapDepth)
+	}
+	for _, n := range names {
+		m, ok := c.sheet.characterMaps[n]
+		if !ok {
+			return fmt.Errorf("XTSE1590: no xsl:character-map named %q", n)
+		}
+		for _, inc := range c.charMapIncludes {
+			if inc.name != n {
+				continue
+			}
+			if err := c.mergeCharMaps(dst, inc.includes, depth+1); err != nil {
+				return err
+			}
+		}
+		for k, v := range m {
+			dst[k] = v
+		}
+	}
 	return nil
 }

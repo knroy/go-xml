@@ -17,6 +17,9 @@ type compiler struct {
 	// seen guards against include cycles, which would otherwise recurse until
 	// the stack runs out.
 	seen map[string]bool
+	// charMapIncludes records the use-character-maps of each
+	// xsl:character-map, resolved after every module has compiled.
+	charMapIncludes []charMapInclusion
 }
 
 // compileDocument compiles one stylesheet module at the given import
