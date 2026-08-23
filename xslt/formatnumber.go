@@ -1,11 +1,11 @@
 package xslt
 
 import (
-	"unicode"
 	"fmt"
 	"math"
 	"math/big"
 	"strings"
+	"unicode"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"

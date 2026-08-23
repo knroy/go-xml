@@ -28,10 +28,10 @@ import (
 // variable whose name collides with one the specifications reserve for
 // themselves.
 var reservedNamespaces = map[string]bool{
-	xdm.NSXSL:                              true,
-	xdm.NSXS:                               true,
+	xdm.NSXSL: true,
+	xdm.NSXS:  true,
 	"http://www.w3.org/2001/XMLSchema-instance": true,
-	xdm.NSFN:                                true,
+	xdm.NSFN: true,
 	"http://www.w3.org/2005/xpath-functions/math": true,
 	"http://www.w3.org/XML/1998/namespace":        true,
 }

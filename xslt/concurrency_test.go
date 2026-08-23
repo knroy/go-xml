@@ -246,3 +246,37 @@ func TestResolverCacheIsBounded(t *testing.T) {
 		t.Errorf("re-resolving after the cache cleared: %v", err)
 	}
 }
+
+// TestConcurrentCompile compiles stylesheets from several goroutines at once.
+//
+// Compile keeps the imported schema in package state while it runs, so that
+// the namespace resolvers it builds — a dozen call sites, none of which has
+// the compiler in scope — can see it. That is safe only because Compile holds
+// a lock; without one this races, and a race in a public entry point is a bug
+// for every caller that compiles a rule set per request.
+func TestConcurrentCompile(t *testing.T) {
+	sheets := []string{
+		`<xsl:template match="/"><a><xsl:value-of select="1+1"/></a></xsl:template>`,
+		`<xsl:template match="/"><b><xsl:value-of select="2*3"/></b></xsl:template>`,
+		`<xsl:variable name="v" select="'x'"/>` +
+			`<xsl:template match="/"><c><xsl:value-of select="$v"/></c></xsl:template>`,
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			src := wrap(sheets[i%len(sheets)])
+			tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+			if err != nil {
+				t.Errorf("parse: %v", err)
+				return
+			}
+			if _, err := Compile(tree.Root, CompileOptions{}); err != nil {
+				t.Errorf("compile: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}

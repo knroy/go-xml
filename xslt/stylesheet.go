@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -224,8 +225,11 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		},
 	}
 	// compileSchema is package state for the duration of this call; see its
-	// declaration. Clearing it on the way out keeps one compilation from
-	// leaking a schema into the next.
+	// declaration. The lock makes concurrent Compile calls safe, and clearing
+	// it on the way out keeps one compilation from leaking a schema into the
+	// next.
+	compileMu.Lock()
+	defer compileMu.Unlock()
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
 
@@ -317,10 +321,18 @@ type nsResolver struct {
 // It is package state rather than a parameter because newNSResolver is called
 // from a dozen places that build a resolver for one element and have no
 // compiler in scope, and threading a schema through all of them would touch
-// far more code than the feature is worth. Compilation is single-threaded
-// through Compile, which sets and clears this around the whole run; a compiled
-// Stylesheet holds its own schema and never reads this again.
-var compileSchema *xsd.Schema
+// far more code than the feature is worth. A compiled Stylesheet holds its
+// own schema and never reads this again.
+//
+// compileMu makes that safe. Compile is a public entry point, so nothing stops
+// a caller compiling two stylesheets at once, and package state written
+// without a lock is a data race whether or not a test happens to exercise it.
+// Compilation is not on any hot path — a stylesheet compiles once and
+// transforms many documents — so serialising it costs nothing that matters.
+var (
+	compileMu     sync.Mutex
+	compileSchema *xsd.Schema
+)
 
 func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 	return &nsResolver{

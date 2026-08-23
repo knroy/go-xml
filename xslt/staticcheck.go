@@ -28,12 +28,12 @@ import (
 // Section 3.5 lists them: they are not part of any element's own summary
 // because they belong to all of them.
 var standardAttributes = map[string]bool{
-	"version":                   true,
-	"exclude-result-prefixes":   true,
+	"version":                    true,
+	"exclude-result-prefixes":    true,
 	"extension-element-prefixes": true,
-	"xpath-default-namespace":   true,
-	"default-collation":         true,
-	"use-when":                  true,
+	"xpath-default-namespace":    true,
+	"default-collation":          true,
+	"use-when":                   true,
 }
 
 // checkStaticGrammar verifies one element against the table.

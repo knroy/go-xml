@@ -1,11 +1,11 @@
 package xdm
 
 import (
-	"net/url"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"strings"
 )
 

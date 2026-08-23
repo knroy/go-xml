@@ -620,7 +620,16 @@ func (t *Tree) positionAt(off int) (line, col int, ok bool) {
 // only place that knows a user-defined type's base. Keeping it here rather
 // than in xsd is what lets xdm.Node.Atomize consult it without importing xsd,
 // which it cannot: xsd already imports xdm.
-var derivedPrimitives = map[string]string{}
+//
+// It is guarded by a mutex because schemas load concurrently — that is the
+// documented use, and xsd has a test for it — while atomisation reads the
+// map on every typed value. A sync.Map is not used because reads vastly
+// outnumber writes only *after* loading, and a plain RWMutex makes the
+// read path a single atomic in the common case where no schema is loaded.
+var (
+	derivedMu         sync.RWMutex
+	derivedPrimitives = map[string]string{}
+)
 
 // RegisterDerivedType records that a schema type erases to a built-in one.
 //
@@ -633,7 +642,9 @@ func RegisterDerivedType(name, primitive string) {
 	if name == "" || primitive == "" || name == primitive {
 		return
 	}
+	derivedMu.Lock()
 	derivedPrimitives[name] = primitive
+	derivedMu.Unlock()
 }
 
 // DerivedBase returns the type a schema type derives from, or "" if the name
@@ -643,12 +654,19 @@ func RegisterDerivedType(name, primitive string) {
 // annotated as a restriction of xs:NOTATION is an instance of xs:NOTATION as
 // well as of its own type, and answering that means walking the chain the
 // schema recorded.
-func DerivedBase(name string) string { return derivedPrimitives[name] }
+func DerivedBase(name string) string {
+	derivedMu.RLock()
+	base := derivedPrimitives[name]
+	derivedMu.RUnlock()
+	return base
+}
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema
 // type, using the built-in it derives from.
 func atomicForDerivedAnnotation(n *Node) *Atomic {
+	derivedMu.RLock()
 	prim, ok := derivedPrimitives[n.TypeAnnotation]
+	derivedMu.RUnlock()
 	if !ok {
 		return nil
 	}

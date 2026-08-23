@@ -1,8 +1,8 @@
 package xslt
 
 import (
-	"strings"
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xsd"

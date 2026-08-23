@@ -329,7 +329,7 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 				// fn:resolve-uri are defined over URIs, and a bare
 				// filesystem path has no scheme, so it is not an
 				// absolute URI however absolute the path is.
-				BaseURI:      fileURI(filepath.Join(set.Dir, "inline.xml")),
+				BaseURI: fileURI(filepath.Join(set.Dir, "inline.xml")),
 			})
 			if err != nil {
 				return nil, err

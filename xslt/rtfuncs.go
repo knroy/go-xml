@@ -1,8 +1,8 @@
 package xslt
 
 import (
-	"net/url"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
