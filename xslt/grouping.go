@@ -595,7 +595,12 @@ func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
 	if len(body) == 0 {
 		return nil
 	}
-	sub := rt.withFocus(xdm.NewString(text), pos, size).clearCurrentRule()
+	// Section 16.6.1 defines current() as the context item at the point the
+	// expression was invoked from the stylesheet, and section 15.1 makes the
+	// substring the context item here — so it is the current item too, and
+	// withFocus leaves current() pointing at whatever the enclosing
+	// instruction was processing.
+	sub := rt.withCurrent(xdm.NewString(text), pos, size).clearCurrentRule()
 	// Section 15.2: the captured substrings are set for xsl:matching-substring
 	// and set to the empty sequence for xsl:non-matching-substring. Leaving
 	// the outer binding in place let regex-group() inside a non-matching run

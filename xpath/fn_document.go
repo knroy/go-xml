@@ -41,11 +41,15 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		base = n.BaseURI
-	} else {
-		if n, ok := ctx.Item.(*xdm.Node); ok {
-			base = n.BaseURI
-		}
 	}
+	// Without a $base-node the relative URI resolves against "the base URI
+	// from the static context (this will usually be the base URI of the
+	// stylesheet module)", not against the context item.
+	//
+	// Using the context node's base URI resolved against the *source*
+	// document instead, so document('x.xml') written in an included module
+	// looked for x.xml beside the input rather than beside the module — and
+	// an included module in a subdirectory could never reach its own files.
 	if base == "" {
 		base = ctx.StaticBaseURI
 	}
