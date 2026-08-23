@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.79% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 61.79% — 3,319 of 5,371 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 62.64% — 3,363 of 5,369 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 61.79%, and the newest — so it is a
+The weakest of the measured numbers, at 62.64%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -79,24 +79,37 @@ There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
 2007 behind a click-through licence, with no repository. This runs the XSLT
 3.0 suite filtered by each test's declared version dependency, which measures
 something different from running a suite written for the version under test.
-5,371 of 14,601 cases are in scope; the largest exclusions are 5,681 needing
+5,369 of 14,601 cases are in scope; the largest exclusions are 6,136 needing
 XSLT 3.0, 1,580 depending on a Unicode version, and 347 on `xsl:package`.
 
-Of the 2,052 failures, the largest groups are:
+`GOXSLT_XSLTS_BYSET=1` prints the result of each test-set separately, which is
+what shows where the work is. A set failing nearly everything is an
+unimplemented feature; one failing a handful is edge cases. The largest gaps
+by that measure:
 
-| what | count |
-|---|---:|
-| the result differs from the expected document | ~384 |
-| an error the suite expects that the engine does not raise | ~438 |
-| `FORX0002` — a backreference the engine resolves and the suite expects refused | 80 |
-| `id()` and `key()` patterns in `xsl:template match` | 29 |
-| `fn:document` with two arguments | 16 |
+| set | passing | what is missing |
+|---|---|---|
+| `result-document` | 5/79 | secondary outputs do not carry their own `xsl:output` |
+| `import-schema` | 30/189 | `@validation`/`@type` on instructions other than `xsl:element` |
+| `output` | 35/138 | serialisation attributes |
+| `use-when` | 26/80 | static conditional inclusion |
+| `number` | 66/136 | `xsl:number` levels and languages |
+| `format-date` | 10/34 | calendars, languages, timezone pictures |
+| `collations` | 17/42 | collations beyond codepoint and ASCII-case-insensitive |
 
-The 438 missing errors are the same shape as the XSD schema-validity gap: the
-engine accepts a stylesheet the specification says to reject. That is the
-lower-risk direction — a wrong stylesheet runs rather than being reported —
-but it is a real gap, and it is the largest single thing standing between this
-number and the others.
+Roughly 335 failures are errors the suite expects that the engine does not
+raise. That is the same shape as the XSD schema-validity gap: the engine
+accepts a stylesheet the specification says to reject. It is the lower-risk
+direction — a wrong stylesheet runs rather than being reported — but it is a
+real gap, and the largest single thing standing between this number and the
+others.
+
+Appendix E of the specification lists 79 static errors. The W3C also
+publishes a [schema for XSLT 2.0
+stylesheets](https://www.w3.org/2007/schema-for-xslt20.xsd), which this
+project's own XSD validator can load: validating a stylesheet against it
+mechanically produces most of XTSE0010 and XTSE0020, the two commonest.
+That is the obvious next step and is not yet taken.
 
 The `FORX0002` group is not a defect. Those tests expect a backreference to be
 refused; this engine resolves the fixed-width ones exactly, which is more than
