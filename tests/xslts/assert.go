@@ -24,6 +24,9 @@ type Assertion struct {
 	// Normalize records @normalize-space on an assert-xml, which says
 	// whitespace differences do not count.
 	Normalize bool
+	// URI is the @uri of an assert-result-document, naming which secondary
+	// output the nested assertions apply to.
+	URI string
 	// Children are the operands of all-of, any-of and not.
 	Children []Assertion
 }
@@ -52,6 +55,8 @@ func ParseAssert(raw []byte) (Assertion, error) {
 					a.File = at.Value
 				case "normalize-space":
 					a.Normalize = at.Value == "true" || at.Value == "yes"
+				case "uri":
+					a.URI = at.Value
 				}
 			}
 			top := stack[len(stack)-1]

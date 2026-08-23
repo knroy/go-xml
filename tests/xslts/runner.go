@@ -40,7 +40,15 @@ type Summary struct {
 	// SkipReasons counts why tests were left out, so that the scope of a run
 	// is visible rather than implied by the total.
 	SkipReasons map[string]int
+	// BySet counts each test-set separately. A single percentage hides which
+	// features work: a set failing 96 of 100 is an unimplemented feature,
+	// while one failing 5 of 300 is a handful of edge cases, and the two want
+	// entirely different work.
+	BySet map[string]*SetStats
 }
+
+// SetStats counts one test-set.
+type SetStats struct{ Passed, Failed, Skipped int }
 
 // Run executes every test set in the catalog.
 func (r *Runner) Run() (*Summary, error) {
@@ -53,7 +61,7 @@ func (r *Runner) Run() (*Summary, error) {
 		return nil, fmt.Errorf("catalog.xml: %w", err)
 	}
 
-	sum := &Summary{SkipReasons: map[string]int{}}
+	sum := &Summary{SkipReasons: map[string]int{}, BySet: map[string]*SetStats{}}
 	for _, ref := range cat.TestSets {
 		set, err := r.loadSet(ref)
 		if err != nil {
@@ -71,15 +79,23 @@ func (r *Runner) Run() (*Summary, error) {
 		for i := range set.Cases {
 			out := r.runCase(set, &set.Cases[i])
 			sum.Total++
+			st := sum.BySet[out.Set]
+			if st == nil {
+				st = &SetStats{}
+				sum.BySet[out.Set] = st
+			}
 			switch {
 			case out.Skipped:
 				sum.Skipped++
 				sum.SkipReasons[out.Why]++
+				st.Skipped++
 			case out.Pass:
 				sum.Passed++
+				st.Passed++
 			default:
 				sum.Failed++
 				sum.Failures = append(sum.Failures, out)
+				st.Failed++
 			}
 		}
 	}

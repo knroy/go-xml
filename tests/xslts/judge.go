@@ -147,6 +147,29 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 		return false, fmt.Sprintf("serialization %q, want %q",
 			trunc(got), trunc(want))
 
+	case "assert-result-document":
+		// A secondary output produced by xsl:result-document. The nested
+		// assertions are judged against it as if it were the principal
+		// result, which is how the suite states them.
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		sub := secondaryByURI(res, a.URI)
+		if sub == nil {
+			var hrefs []string
+			for _, s := range res.Secondary {
+				hrefs = append(hrefs, s.Href)
+			}
+			return false, fmt.Sprintf("no result document for %q; got %v",
+				a.URI, hrefs)
+		}
+		for _, c := range a.Children {
+			if ok, why := r.judge(c, sub, nil, set); !ok {
+				return false, a.URI + ": " + why
+			}
+		}
+		return true, ""
+
 	case "assert-message":
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
@@ -305,6 +328,30 @@ func evalAssert(res *xslt.Result, expr string) (bool, string) {
 		return true, ""
 	}
 	return false, "assertion is false: " + trunc(expr)
+}
+
+// secondaryByURI finds the result document a URI names, as a Result so that
+// the ordinary assertions can be applied to it unchanged.
+//
+// The href is compared by its last path segment: the suite writes "out.xml"
+// where the engine records whatever the stylesheet's @href resolved to, and
+// the two agree on the name rather than on the path.
+func secondaryByURI(res *xslt.Result, uri string) *xslt.Result {
+	want := lastSegment(uri)
+	for i := range res.Secondary {
+		s := &res.Secondary[i]
+		if s.Href == uri || lastSegment(s.Href) == want {
+			return &xslt.Result{Nodes: s.Nodes}
+		}
+	}
+	return nil
+}
+
+func lastSegment(s string) string {
+	if i := strings.LastIndexAny(s, "/\\"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 func resultString(res *xslt.Result) string {

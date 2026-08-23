@@ -60,6 +60,33 @@ func TestXSLTSuite(t *testing.T) {
 		t.Logf("  skipped %5d  %s", r.n, r.why)
 	}
 
+	// Per-feature results, worst first. A single percentage hides which
+	// features work: a set failing nearly everything is unimplemented, while
+	// one failing a handful is edge cases, and the two want different work.
+	if os.Getenv("GOXSLT_XSLTS_BYSET") != "" {
+		type row struct {
+			name       string
+			pass, fail int
+		}
+		var rows []row
+		for name, st := range sum.BySet {
+			if st.Failed > 0 {
+				rows = append(rows, row{name, st.Passed, st.Failed})
+			}
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].fail != rows[j].fail {
+				return rows[i].fail > rows[j].fail
+			}
+			return rows[i].name < rows[j].name
+		})
+		for _, r := range rows {
+			total := r.pass + r.fail
+			t.Logf("  %-28s %4d/%-4d %5.1f%%", r.name, r.pass, total,
+				100*float64(r.pass)/float64(total))
+		}
+	}
+
 	if os.Getenv("GOXSLT_XSLTS_VERBOSE") != "" {
 		for i, f := range sum.Failures {
 			if i >= 20000 {
