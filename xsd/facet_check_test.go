@@ -165,3 +165,100 @@ func TestRedefineAndOverrideChildren(t *testing.T) {
 	  </xs:redefine>
 	</xs:schema>`)
 }
+
+// cos-list-of-atomic (Part 2 §4.1.5): a list's item type must be atomic, or a
+// union whose members are ultimately atomic. The recursion through nested
+// unions is not optional — the test suite's own catalog schema defines a list
+// of a union of eight unions, and rejecting it took 91 instance tests with it.
+func TestListOfAtomic(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"a list whose item type is a list (stJ019)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="inner"><xs:list itemType="xs:integer"/></xs:simpleType>
+		  <xs:simpleType name="outer"><xs:list itemType="inner"/></xs:simpleType>
+		 </xs:schema>`, false},
+		{"a list of a union of atomic types", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="u">
+		   <xs:union memberTypes="xs:integer xs:date"/></xs:simpleType>
+		  <xs:simpleType name="l"><xs:list itemType="u"/></xs:simpleType>
+		 </xs:schema>`, true},
+		{"a list of a union of unions of atomic types (xsts.xsd)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="u1">
+		   <xs:union memberTypes="xs:integer xs:date"/></xs:simpleType>
+		  <xs:simpleType name="u2">
+		   <xs:union memberTypes="xs:token xs:boolean"/></xs:simpleType>
+		  <xs:simpleType name="u"><xs:union memberTypes="u1 u2"/></xs:simpleType>
+		  <xs:simpleType name="l"><xs:list itemType="u"/></xs:simpleType>
+		 </xs:schema>`, true},
+		{"a list of a union with a list member", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="inner"><xs:list itemType="xs:integer"/></xs:simpleType>
+		  <xs:simpleType name="u">
+		   <xs:union memberTypes="xs:integer inner"/></xs:simpleType>
+		  <xs:simpleType name="l"><xs:list itemType="u"/></xs:simpleType>
+		 </xs:schema>`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := loadVer(t, c.doc, Version10)
+			if c.ok && err != nil {
+				t.Errorf("the schema must load: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("the schema loaded; cos-list-of-atomic must reject it")
+			}
+		})
+	}
+}
+
+// §3.14.2: name and final are prohibited on a <simpleType> that is not a child
+// of <schema> or <redefine>. stA008, stA009 and stA010 write the same named
+// inline type inside a restriction, a list and a union.
+func TestLocalSimpleTypeForm(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"a named simpleType inside a restriction (stA008)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="p"><xs:restriction>
+		   <xs:simpleType name="foo"><xs:restriction base="xs:string">
+		    <xs:length value="4"/></xs:restriction></xs:simpleType>
+		  </xs:restriction></xs:simpleType></xs:schema>`, false},
+		{"a named simpleType inside a list (stA009)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="p"><xs:list>
+		   <xs:simpleType name="foo"><xs:restriction base="xs:string"/></xs:simpleType>
+		  </xs:list></xs:simpleType></xs:schema>`, false},
+		{"a named simpleType inside a union (stA010)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="p"><xs:union>
+		   <xs:simpleType name="foo"><xs:restriction base="xs:string"/></xs:simpleType>
+		  </xs:union></xs:simpleType></xs:schema>`, false},
+		{"the same shapes without a name", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="p"><xs:union>
+		   <xs:simpleType><xs:restriction base="xs:string"/></xs:simpleType>
+		  </xs:union></xs:simpleType>
+		  <xs:simpleType name="q" final="restriction">
+		   <xs:restriction base="xs:string"/></xs:simpleType></xs:schema>`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := loadVer(t, c.doc, Version10)
+			if c.ok && err != nil {
+				t.Errorf("the schema must load: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("the schema loaded; the local-form rule must reject it")
+			}
+		})
+	}
+}

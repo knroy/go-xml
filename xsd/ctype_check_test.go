@@ -99,3 +99,192 @@ func TestLocalTargetNamespaceOwnNamespaceAllowed(t *testing.T) {
 		t.Fatalf("naming the document's own namespace must be allowed: %v", err)
 	}
 }
+
+// src-ct.1 and src-ct.2.1 (§3.4.3): which base shape each content form may
+// sit on. Every one of these is a suite schema the W3C expects rejected that
+// loaded clean before checkContentDerivationForm existed.
+func TestContentDerivationFormRejected(t *testing.T) {
+	cases := []struct{ name, doc string }{
+		{"complexContent extension of a named simple type (ctJ002)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="my"><xs:restriction base="xs:string"/></xs:simpleType>
+		  <xs:complexType name="foo"><xs:complexContent>
+		   <xs:extension base="my"><xs:all>
+		    <xs:element name="e" type="xs:string"/></xs:all>
+		   </xs:extension></xs:complexContent></xs:complexType></xs:schema>`},
+		{"complexContent extension of xs:string (ctJ003)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="foo"><xs:complexContent>
+		   <xs:extension base="xs:string"><xs:all>
+		    <xs:element name="e" type="xs:string"/></xs:all>
+		   </xs:extension></xs:complexContent></xs:complexType></xs:schema>`},
+		{"simpleContent restriction of a simple type (ctM001)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:simpleType name="my"><xs:restriction base="xs:string"/></xs:simpleType>
+		  <xs:complexType name="foo"><xs:simpleContent>
+		   <xs:restriction base="my"><xs:length value="5"/></xs:restriction>
+		  </xs:simpleContent></xs:complexType></xs:schema>`},
+		{"simpleContent restriction of xs:string (ctD001)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="foo"><xs:simpleContent>
+		   <xs:restriction base="xs:string"/>
+		  </xs:simpleContent></xs:complexType></xs:schema>`},
+		{"simpleContent extension of element-only content (ctE003)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="my"><xs:sequence>
+		   <xs:element name="e" type="xs:string"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="foo"><xs:simpleContent>
+		   <xs:extension base="my"/></xs:simpleContent></xs:complexType></xs:schema>`},
+		{"simpleContent extension of xs:anyType (ctE004)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="foo"><xs:simpleContent>
+		   <xs:extension base="xs:anyType"/>
+		  </xs:simpleContent></xs:complexType></xs:schema>`},
+		{"simpleContent restriction of a mixed base with no simpleType child (ctD004)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="foo"><xs:simpleContent>
+		   <xs:restriction base="xs:anyType"/>
+		  </xs:simpleContent></xs:complexType></xs:schema>`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := loadVer(t, c.doc, Version10); err == nil {
+				t.Error("the schema loaded; src-ct.1/src-ct.2 must reject it")
+			}
+		})
+	}
+}
+
+// The two legal simpleContent shapes must keep loading. Extending a simple
+// type is src-ct.2.1.3, and restricting a complex type whose content is a
+// simple type is 2.1.1 — the two forms every schema with attributes on a
+// text-only element uses.
+func TestContentDerivationFormAccepted(t *testing.T) {
+	doc := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	 <xs:complexType name="a"><xs:simpleContent>
+	  <xs:extension base="xs:string">
+	   <xs:attribute name="u" type="xs:string"/></xs:extension>
+	 </xs:simpleContent></xs:complexType>
+	 <xs:complexType name="b"><xs:simpleContent>
+	  <xs:restriction base="a"><xs:maxLength value="4"/></xs:restriction>
+	 </xs:simpleContent></xs:complexType></xs:schema>`
+	if err := loadVer(t, doc, Version10); err != nil {
+		t.Fatalf("the two legal simpleContent shapes must load: %v", err)
+	}
+}
+
+// cos-ct-extends.1.4.3.2.2.1 and derivation-ok-restriction.5.4.1.2 are not the
+// same rule, and reading them as one symmetric "mixedness must match" cost
+// addB150, ctZ010h, particlesL012 and cta0001. An extension may not change
+// mixedness in either direction; a restriction may only take it away.
+func TestMixedConsistency(t *testing.T) {
+	mixedBase := `<xs:complexType name="base" mixed="true"><xs:sequence>
+	  <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType>`
+	plainBase := `<xs:complexType name="base"><xs:sequence>
+	  <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType>`
+	wrap := func(base, derived string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">` +
+			base + derived + `</xs:schema>`
+	}
+	ext := func(mixed string) string {
+		return `<xs:complexType name="d"><xs:complexContent` + mixed + `>
+		  <xs:extension base="base"><xs:sequence>
+		   <xs:element name="f" type="xs:string" minOccurs="0"/></xs:sequence>
+		  </xs:extension></xs:complexContent></xs:complexType>`
+	}
+	res := func(mixed string) string {
+		return `<xs:complexType name="d"><xs:complexContent` + mixed + `>
+		  <xs:restriction base="base"><xs:sequence>
+		   <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence>
+		  </xs:restriction></xs:complexContent></xs:complexType>`
+	}
+	cases := []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"mixed extension of an element-only base (ctZ010a)",
+			wrap(plainBase, ext(` mixed="true"`)), false},
+		{"element-only extension of a mixed base (ctZ010d)",
+			wrap(mixedBase, ext(``)), false},
+		{"mixed restriction of an element-only base (ctZ010e)",
+			wrap(plainBase, res(` mixed="true"`)), false},
+		{"element-only restriction of a mixed base (ctZ010h)",
+			wrap(mixedBase, res(``)), true},
+		{"mixed extension of a mixed base",
+			wrap(mixedBase, ext(` mixed="true"`)), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := loadVer(t, c.doc, Version10)
+			if c.ok && err != nil {
+				t.Errorf("the schema must load: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("the schema loaded; the mixedness rule must reject it")
+			}
+		})
+	}
+}
+
+// derivation-ok-restriction.4 (§3.4.6) through Wildcard Subset (§3.10.6).
+func TestAttributeWildcardRestriction(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		v    Version
+		ok   bool
+	}{
+		{"a wildcard on a restriction of a base with none (ctO005)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="b"><xs:sequence>
+		   <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="d"><xs:complexContent><xs:restriction base="b">
+		   <xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence>
+		   <xs:anyAttribute namespace="##other"/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`,
+			Version10, false},
+		{"##any is not a subset of ##other (ctO007)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="b"><xs:sequence>
+		   <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence>
+		   <xs:anyAttribute namespace="##other"/></xs:complexType>
+		  <xs:complexType name="d"><xs:complexContent><xs:restriction base="b">
+		   <xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence>
+		   <xs:anyAttribute namespace="##any"/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`,
+			Version10, false},
+		{"##other is a subset of ##any", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="b"><xs:sequence>
+		   <xs:element name="e" type="xs:string" minOccurs="0"/></xs:sequence>
+		   <xs:anyAttribute namespace="##any"/></xs:complexType>
+		  <xs:complexType name="d"><xs:complexContent><xs:restriction base="b">
+		   <xs:sequence><xs:element name="e" type="xs:string"/></xs:sequence>
+		   <xs:anyAttribute namespace="##other"/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`,
+			Version10, true},
+		// wild017: XSD 1.1 notNamespace names a *set*, and excluding more
+		// namespaces is narrower, not incomparable.
+		{"notNamespace excluding more is a subset (wild017)", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="b"><xs:sequence/>
+		   <xs:anyAttribute notNamespace="urn:a urn:b" processContents="lax"/></xs:complexType>
+		  <xs:complexType name="d"><xs:complexContent><xs:restriction base="b">
+		   <xs:sequence/>
+		   <xs:anyAttribute notNamespace="urn:b urn:a urn:c" processContents="lax"/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`,
+			Version11, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := loadVer(t, c.doc, c.v)
+			if c.ok && err != nil {
+				t.Errorf("the schema must load: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("the schema loaded; derivation-ok-restriction.4 must reject it")
+			}
+		})
+	}
+}

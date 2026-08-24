@@ -20,6 +20,7 @@ func (p *parser) checkFacetConstraints() {
 		p.checkTypeFacets(site.typ, site.el)
 		p.checkSimpleTypeFinal(site.typ, site.el)
 		p.checkNotationEnumerated(site.typ, site.el)
+		p.checkListOfAtomic(site.typ, site.el)
 	}
 }
 
@@ -675,4 +676,77 @@ func lengthEscape(t *SimpleType, min bool, want uint64) bool {
 		}
 	}
 	return false
+}
+
+// checkListOfAtomic enforces cos-list-of-atomic (Part 2 §4.1.5): the {item
+// type definition} of a list must have {variety} atomic, or union with every
+// member atomic.
+//
+// A list of lists has no readable lexical form. Both varieties separate their
+// items with whitespace, so the two levels are indistinguishable in an
+// instance: "1 2 3" against a list whose item type is a list of integers could
+// be one item, three items, or anything between, and no rule in Part 2 says
+// which. The spec closes the question by forbidding the construction outright
+// rather than picking an arbitrary reading.
+//
+// A union member is followed one level because a union of lists has exactly
+// the same problem — the list's items would be whitespace-separated values
+// that are themselves whitespace-separated. The walk stops there: a union
+// whose member is a union is resolved by the same rule applied to that inner
+// union, which has its own site in the sweep.
+//
+// Pinned by msData/simpleType stJ019: a list whose itemType names a type that
+// is itself a list. It loaded clean before this check existed.
+func (p *parser) checkListOfAtomic(t *SimpleType, el *xdm.Node) {
+	if t == nil || t.Variety != VarietyList || t.ItemType == nil {
+		return
+	}
+	item := t.ItemType
+	switch item.Variety {
+	case VarietyAtomic:
+		return
+	case VarietyUnion:
+		if bad := nonAtomicUnionMember(item, 0); bad != nil {
+			p.errs = append(p.errs, errorAt(el, "cos-list-of-atomic",
+				"the item type of a list must be atomic, or a union whose "+
+					"members are all atomic: member %q of %q is a list",
+				bad.Name, item.Name))
+		}
+	default:
+		p.errs = append(p.errs, errorAt(el, "cos-list-of-atomic",
+			"the item type of a list must be atomic or a union of atomic "+
+				"types, but %q is a list", item.Name))
+	}
+}
+
+// nonAtomicUnionMember finds a list among the members a union ultimately
+// admits, or nil if every one of them is atomic.
+//
+// The recursion through nested unions is the whole point. A union's members
+// may themselves be unions — the test suite's own xsts.xsd defines
+// version-token as a list of known-token, and known-token is a union of eight
+// unions, each an enumeration of atomic values. Checking only the immediate
+// members and calling any union member non-atomic rejected the catalog schema
+// itself, and with it the 91 instance tests that load through it. A union of
+// unions of atomic types is a union of atomic values, which is exactly what
+// cos-list-of-atomic permits.
+//
+// The depth bound guards a union whose member chain reaches itself. Such a
+// schema is ill-formed and reported elsewhere; this walk must not hang on it.
+func nonAtomicUnionMember(t *SimpleType, depth int) *SimpleType {
+	if t == nil || depth > 32 {
+		return nil
+	}
+	switch t.Variety {
+	case VarietyAtomic:
+		return nil
+	case VarietyList:
+		return t
+	}
+	for _, m := range unionMemberTypesOf(t) {
+		if bad := nonAtomicUnionMember(m, depth+1); bad != nil {
+			return bad
+		}
+	}
+	return nil
 }

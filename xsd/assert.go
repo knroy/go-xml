@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/knroy/go-xml/xdm"
@@ -504,7 +505,28 @@ func newAssertContext(item xdm.Item) *xpath.Context {
 	ctx := xpath.NewContext(item, xpath.Builtins())
 	ctx.Now = time.Now()
 	ctx.HasNow = true
+	// XSD 1.1 Structures fixes the XPath dynamic context an assertion or a
+	// type alternative is evaluated in: "available documents" and "available
+	// collections" are both empty, and the *default collection* is the empty
+	// sequence. That last clause is the one that matters here — an empty
+	// default collection is a value, not an absence, so fn:collection() with
+	// no argument returns () rather than raising FODC0002. Leaving the
+	// resolver nil made "empty(collection())" raise instead of being true,
+	// and a type alternative whose test raises is silently skipped, so
+	// cta0022 fell through to its declared union type.
+	ctx.Collections = emptyCollections{}
 	return ctx
+}
+
+// emptyCollections is the collection resolver an assertion sees: the default
+// collection is the empty sequence and every named collection is unknown.
+type emptyCollections struct{}
+
+func (emptyCollections) ResolveCollection(uri, base string) (xdm.Sequence, error) {
+	if uri == "" {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("FODC0002: collection %q is not available", uri)
 }
 
 // checkSimpleAssertions evaluates the <xs:assertion> facets of a simple type.

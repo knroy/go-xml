@@ -6,6 +6,41 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### A valid document was being refused because an assertion crashed
+
+XSD 1.1 defines the default collection in the dynamic context of an assertion
+or type alternative as the empty sequence. It was left nil, so `fn:collection()`
+raised FODC0002 — and because a type alternative whose test *raises* is silently
+skipped, the failure was indistinguishable from a test that simply returned
+false. `cta0022` fell through to its declared union and rejected a perfectly
+valid `xs:date`. A crash wearing the costume of a wrong answer.
+
+### Schema-validity: 99.40% on XSD 1.0, 98.72% on 1.1
+
+A third round, +29 on 1.0 and +38 on 1.1 with nothing lost. Five rules:
+
+* src-ct.1 and src-ct.2.1 (section 3.4.3) — which base shape each content form
+  may sit on. `readSimpleContent` is the only path that sets a content type to
+  simple, so the source form is recoverable without a new component field.
+* cos-ct-extends.1.4.3.2.2.1 and derivation-ok-restriction.5.4.1.2 — mixedness
+  consistency between a type and its base.
+* derivation-ok-restriction.4, via Wildcard Subset (section 3.10.6), for
+  attribute wildcards.
+* Section 3.14.2 local simpleType form, and cos-list-of-atomic (Part 2 section
+  4.1.5).
+
+**Two over-broad readings were caught only by re-measuring**, and both would
+have shipped as wins:
+
+* **Mixedness is not symmetric.** Restricting a mixed base to element-only is a
+  legitimate narrowing; only the reverse is forbidden. Extension is an "if and
+  only if", restriction is one-directional. Reading them as one rule cost four
+  tests.
+* **cos-list-of-atomic must recurse through nested unions.** A union's members
+  may themselves be unions. The test suite's own catalog schema defines a list
+  of a union of eight unions, so rejecting any union-typed member rejected the
+  catalog itself — and with it 91 instance tests per version.
+
 ### Instance validation reaches 99.88% on XSD 1.0 and 99.89% on 1.1
 
 Instance disagreements fall from 48 to 31 on 1.0 and from 51 to 29 on 1.1,
@@ -303,8 +338,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.19% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.48% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.40% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.72% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -346,7 +381,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.19% (1.0) and 98.48% (1.1). Instance validation —
+* XSD schema-validity, at 99.40% (1.0) and 98.72% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

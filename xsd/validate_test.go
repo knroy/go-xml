@@ -856,3 +856,60 @@ func TestAnnotateHonoursXMLSpacePreserve(t *testing.T) {
 		t.Error("xml:space=\"preserve\" did not preserve the whitespace")
 	}
 }
+
+// The XPath dynamic context XSD 1.1 gives an assertion or a type alternative
+// defines the *default collection* to be the empty sequence, not an absence.
+// fn:collection() with no argument therefore returns () rather than raising
+// FODC0002.
+//
+// The distinction is not academic: a type alternative whose test raises is
+// silently skipped, so a false answer and an error are indistinguishable from
+// the outside. saxonData/CTA cta0022 writes "empty(collection())" into an
+// alternative deliberately, and with no resolver configured the alternative was
+// passed over and the element fell through to its declared union type — which
+// made a valid xs:date fail as "no member type of the union", the worst kind of
+// failure this validator can produce.
+func TestAlternativeSeesAnEmptyDefaultCollection(t *testing.T) {
+	schema := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	  elementFormDefault="qualified">
+	 <xs:element name="doc">
+	  <xs:complexType><xs:sequence>
+	   <xs:element ref="when"/></xs:sequence></xs:complexType></xs:element>
+	 <xs:element name="when" type="u">
+	  <xs:alternative test="empty(collection())" type="xs:date"/>
+	  <xs:alternative type="xs:error"/>
+	 </xs:element>
+	 <xs:simpleType name="u"><xs:union memberTypes="xs:time xs:gYearMonth"/></xs:simpleType>
+	</xs:schema>`
+	tree, err := xdm.ParseString(schema, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the schema: %v", err)
+	}
+	s, err := Load(tree.Root, "s.xsd", Options{Version: Version11})
+	if err != nil {
+		t.Fatalf("loading the schema: %v", err)
+	}
+	inst, err := xdm.ParseString(`<doc><when>2010-10-16</when></doc>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the instance: %v", err)
+	}
+	if err := s.Validate(inst.Root, ValidateOptions{}); err != nil {
+		t.Errorf("the alternative must select xs:date, not fall through to "+
+			"the declared union:\n%v", err)
+	}
+}
+
+// A *named* collection is still unavailable: the empty default collection is
+// one specific value, not a blanket "every collection is empty" resolver.
+func TestAssertionNamedCollectionIsStillUnavailable(t *testing.T) {
+	ctx := newAssertContext(nil)
+	if ctx.Collections == nil {
+		t.Fatal("an assertion context must carry a collection resolver")
+	}
+	if _, err := ctx.Collections.ResolveCollection("", ""); err != nil {
+		t.Errorf("the default collection must be the empty sequence: %v", err)
+	}
+	if _, err := ctx.Collections.ResolveCollection("urn:x", ""); err == nil {
+		t.Error("a named collection must not resolve")
+	}
+}

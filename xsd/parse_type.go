@@ -14,6 +14,7 @@ func (p *parser) readSimpleType(el *xdm.Node) *SimpleType {
 	// Recorded for the deferred Part 2 facet constraints, which need the
 	// defining element to place their diagnostics.
 	p.simpleTypes = append(p.simpleTypes, simpleTypeSite{typ: t, el: el})
+	p.checkLocalSimpleTypeForm(el)
 	if name := el.AttrValue("name"); name != "" {
 		t.Name = p.qnameFor(name)
 	}
@@ -990,6 +991,9 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	p.attrsDone[t] = true
 	// The base is fully resolved by now, so its {final} can be trusted.
 	p.checkComplexDerivationFinal(t)
+	p.checkContentDerivationForm(t)
+	p.checkMixedConsistency(t)
+	p.checkAttributeWildcardRestriction(t)
 	p.inheritAttributesNow(t)
 
 	// A prohibited use is never one of the type's {attribute uses}, whether
