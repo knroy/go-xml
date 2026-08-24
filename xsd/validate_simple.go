@@ -29,7 +29,10 @@ func (v *validator) validateSimpleContent(n *xdm.Node, lexical string, t *Simple
 	// The comparison is on the normalised form, since that is what the
 	// spec's [schema normalized value] holds.
 	if decl != nil && decl.Constraint != nil && decl.Constraint.Fixed {
-		want, err := validateSimpleValue(decl.Constraint.Lexical, t)
+		// The schema's version — see validateAttribute on why the 1.0
+		// default silently disarms this check on a 1.1 lexical form.
+		want, err := validateSimpleValueVersion(decl.Constraint.Lexical, t,
+			v.schema.Version)
 		if err == nil && !fixedValueEqual(want, normalized, t) {
 			v.fail(n, "cvc-elt.5.2.2.2.1",
 				"value %q does not equal the fixed value %q",
@@ -524,18 +527,57 @@ func fixedValueEqual(want, got string, t *SimpleType) bool {
 			return c == d
 		}
 	}
-	// A union takes the primitive of whichever member validated, which
-	// differs between the two values in general, so each is canonicalised
-	// under every member and a match under any one is a match. That is what
-	// makes fixed="1" equal to "true" where the union admits xs:boolean.
+	// A union takes the primitive of whichever member validated, and
+	// §3.14.4 selects that member per *value*: the first member whose
+	// lexical space the literal belongs to. Each side is therefore
+	// canonicalised under its OWN winning member, not under every member
+	// until one pair happens to agree.
+	//
+	// Trying every member is what was here before, and it made a union
+	// equate values of different primitives. stE054 is the case: the union
+	// is (boolean, int, double), the fixed value "1.0" and the instance
+	// "1". The instance is a boolean — boolean is first and "1" is in its
+	// lexical space — and the fixed value is a double; true is not 1.0d,
+	// and the instance is invalid. Scanning members found "double" for
+	// both and called them equal.
+	//
+	// fixed="1" against "true" (stE050) still holds, because both pick the
+	// same member: boolean accepts each, and canonicalValue maps both to
+	// boolean/true.
 	if t != nil && t.Variety == VarietyUnion {
-		for _, m := range t.MemberTypes {
-			if m != nil && fixedValueEqual(want, got, m) {
-				return true
-			}
+		mw := unionMemberFor(want, t)
+		mg := unionMemberFor(got, t)
+		if mw == nil || mg == nil || mw != mg {
+			return false
 		}
+		return fixedValueEqual(want, got, mw)
 	}
 	return false
+}
+
+// unionMemberFor returns the member type of a union that validates a value.
+//
+// §3.14.4 makes this "the first member type in {member type definitions} whose
+// lexical space contains the literal", which is the same order and the same
+// test validateUnionValueIn walks. Only the member is wanted here, so the
+// facets the union itself imposes are left to the validation that already ran.
+func unionMemberFor(lexical string, t *SimpleType) *SimpleType {
+	if t == nil {
+		return nil
+	}
+	members := t.MemberTypes
+	if len(members) == 0 {
+		members = unionMemberTypesOf(t)
+	}
+	for _, m := range members {
+		if m == nil {
+			continue
+		}
+		if _, err := validateSimpleValue(lexical, m); err == nil {
+			return m
+		}
+	}
+	return nil
 }
 
 // atomicBaseOf reduces a list to its item type, so that primitiveOf sees
@@ -1102,12 +1144,53 @@ func isNmtoken(v string) bool {
 	return true
 }
 
+// isNameStartRune reports whether r may begin an XML Name, per the
+// NameStartChar production of XML 1.0 Fifth Edition and XML 1.1 (which agree).
+// The colon is deliberately absent: callers that permit one add it, and NCName
+// is defined by its absence.
+//
+// The ranges are the production's, not "anything above ASCII". Treating every
+// rune >= 0x80 as a name character accepted values the production excludes, and
+// two of the exclusions are separators an XML 1.1 document can write as
+// character references without their becoming whitespace: NEL (#x85) and LINE
+// SEPARATOR (#x2028). saxonData's xv009.n02 and xv009.n03 are exactly those,
+// each expected invalid as an xs:NMTOKENS item, and both were accepted.
 func isNameStartRune(r rune) bool {
-	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= 0x80
+	switch {
+	case r == '_':
+		return true
+	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		return true
+	case r >= 0xC0 && r <= 0xD6, r >= 0xD8 && r <= 0xF6, r >= 0xF8 && r <= 0x2FF:
+		return true
+	case r >= 0x370 && r <= 0x37D, r >= 0x37F && r <= 0x1FFF:
+		return true
+	case r >= 0x200C && r <= 0x200D, r >= 0x2070 && r <= 0x218F:
+		return true
+	case r >= 0x2C00 && r <= 0x2FEF, r >= 0x3001 && r <= 0xD7FF:
+		return true
+	case r >= 0xF900 && r <= 0xFDCF, r >= 0xFDF0 && r <= 0xFFFD:
+		return true
+	case r >= 0x10000 && r <= 0xEFFFF:
+		return true
+	}
+	return false
 }
 
+// isNameRune reports whether r may appear after the first character of an XML
+// Name, per the NameChar production.
 func isNameRune(r rune) bool {
-	return isNameStartRune(r) || r == '-' || r == '.' || r >= '0' && r <= '9'
+	switch {
+	case isNameStartRune(r):
+		return true
+	case r == '-', r == '.', r >= '0' && r <= '9':
+		return true
+	case r == 0xB7:
+		return true
+	case r >= 0x300 && r <= 0x36F, r >= 0x203F && r <= 0x2040:
+		return true
+	}
+	return false
 }
 
 // isLanguage reports whether v matches xs:language: a primary subtag of one to

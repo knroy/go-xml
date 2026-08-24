@@ -261,7 +261,16 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		c = decl.Constraint
 	}
 	if c != nil && c.Fixed {
-		want, err := validateSimpleValue(c.Lexical, decl.Type)
+		// The schema's version, not 1.0: the fixed value is a lexical
+		// form and a few lexical spaces differ between the versions.
+		// "+INF" is one — 1.1 admits it for xs:float and xs:double,
+		// 1.0 does not — so under 1.0 defaults this validation failed
+		// and, because the comparison is guarded on err == nil, the
+		// whole fixed check was silently skipped. saxonData's
+		// simple001.n01 (fixed="+INF", instance "-INF") and
+		// simple001.n02 ("NaN") were accepted for exactly that reason.
+		want, err := validateSimpleValueVersion(c.Lexical, decl.Type,
+			v.schema.Version)
 		if err == nil && !fixedValueEqual(want, normalized, decl.Type) {
 			v.fail(a, "cvc-attribute.4",
 				"attribute %s is fixed at %q but is %q",
@@ -760,8 +769,14 @@ func isDurationFields(v, designators string) bool {
 		}
 		if dots > 0 {
 			// A fraction is admitted only on seconds, and only one
-			// point, with digits on the left of it.
-			if v[n] != 'S' || dots > 1 || v[0] == '.' {
+			// point, with digits on BOTH sides of it. Part 2
+			// §3.2.6.1 spells the seconds field \d+(\.\d+)?: the
+			// fractional part is optional as a whole, but writing
+			// the point commits you to at least one digit after it.
+			// "PT12H30M12.S" (simple086.n01) has the point and no
+			// digits, and was accepted because only the left side
+			// was checked.
+			if v[n] != 'S' || dots > 1 || v[0] == '.' || v[n-1] == '.' {
 				return false
 			}
 		}

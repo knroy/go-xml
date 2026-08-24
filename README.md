@@ -70,8 +70,8 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,182 of 15,183 in scope) |
 | **XSLT 2.0** | 99.63% of the W3C XSLT suite filtered to 2.0 (6,136 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.81% of the W3C xsdtests *instance* tests (24,955 of 25,003); **99.03%** of its *schema-validity* tests (14,265 of 14,405) |
-| **XSD 1.1** | 99.81% instance (26,158 of 26,209); **98.33%** schema-validity (15,109 of 15,365); opt-in via `Version11` |
+| **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,969 of 25,000); **99.19%** of its *schema-validity* tests (14,289 of 14,405) |
+| **XSD 1.1** | 99.89% instance (26,177 of 26,206); **98.48%** schema-validity (15,132 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
@@ -81,8 +81,8 @@ Requires Go 1.26 or later.
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Schema-validity is the weakest of the measured numbers**, at 99.03% (1.0)
-   and 98.33% (1.1) — a schema invalid in one of the remaining ways is
+1. **Schema-validity is the weakest of the measured numbers**, at 99.19% (1.0)
+   and 98.48% (1.1) — a schema invalid in one of the remaining ways is
    accepted rather than reported. Instance validation, which is what most
    callers actually do, is above 99.7% in both versions. The remaining
    disagreements are listed in *Where it fails*, along with what the suite
@@ -748,8 +748,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,265 / 14,405 (99.03%) | 24,955 / 25,003 (99.81%) |
-| XSD 1.1 | 15,109 / 15,365 (98.33%) | 26,158 / 26,209 (99.81%) |
+| XSD 1.0 | 14,289 / 14,405 (99.19%) | 24,969 / 25,000 (99.88%) |
+| XSD 1.1 | 15,132 / 15,365 (98.48%) | 26,177 / 26,206 (99.89%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -1354,8 +1354,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,265 / 14,405 (99.03%) | 24,955 / 25,003 (99.81%) |
-| XSD 1.1 | 15,109 / 15,365 (98.33%) | 26,158 / 26,209 (99.81%) |
+| XSD 1.0 | 14,289 / 14,405 (99.19%) | 24,969 / 25,000 (99.88%) |
+| XSD 1.1 | 15,132 / 15,365 (98.48%) | 26,177 / 26,206 (99.89%) |
 
 Every failure and the reason it is open is catalogued in
 [docs/known-gaps.md](docs/known-gaps.md).

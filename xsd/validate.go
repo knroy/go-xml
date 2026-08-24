@@ -222,6 +222,16 @@ type validator struct {
 	// constraint may have to compare by value rather than by spelling.
 	keyValues map[*xdm.Node]keyValue
 
+	// complexTyped holds every element assessed against a complex type
+	// whose {content type} is not a simple type definition. §3.11.4 clause 3
+	// requires each field of an identity constraint to select a node "which
+	// must have a simple type", and a complex-typed element cannot supply a
+	// ·key-sequence· member. Recording the positive fact — this node was
+	// validated, and against a type with no simple value — is what lets the
+	// constraint tell it apart from a node validation never reached, which
+	// is laxly assessed and must not be failed on this ground.
+	complexTyped map[*xdm.Node]bool
+
 	// defaultedAttrs holds the value of each attribute a type supplied by
 	// default rather than the document writing it, so an identity
 	// constraint's field can select it. The tree is not mutated to carry
@@ -453,6 +463,22 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 			// evidence that validation happened at all, so a nilled element
 			// answered FALSE to nilled() — the one question it exists to
 			// answer true.
+			//
+			// Nilling suppresses the *content* checks, not the whole
+			// of Element Locally Valid (Type). §3.3.4 clause 5.2
+			// applies precisely when "clause 3.2 has applied", and
+			// 5.2.1 sends the item through Element Locally Valid
+			// (Type) all the same. Only clause 3.1.3 there is
+			// conditioned on nilling ("If clause 3.2 ... did not
+			// apply, then the ·normalized value· must be ·valid·");
+			// 3.1.1, which forbids any non-xsi attribute on an
+			// element with a simple type, is not. typeDef01201m1 and
+			// typeDef01202m1 are the pair: xsi:nil="true" with
+			// xsi:type="xsd:string" and an ordinary attribute
+			// alongside, expected invalid.
+			if st, ok := typ.(*SimpleType); ok && st != nil {
+				v.checkNoForeignAttributes(el, nil, nil)
+			}
 			v.annotate(el, typ)
 			return nil
 		}
@@ -463,11 +489,105 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 		return nil
 	}
 	childTables := v.validateAgainstType(el, typ, decl)
+	v.checkFixedValueConstraint(el, typ, decl)
 
 	// The identity constraints run after the content, because a key is
 	// defined over the subtree and the subtree has to have been walked for
 	// its tables to exist.
 	return v.checkIdentityConstraints(el, decl, childTables)
+}
+
+// particleAcceptsEmpty reports whether a particle admits the empty sequence,
+// per §3.9.6 "Particle Emptiable".
+//
+// It differs from particleMatchesOnlyEmpty in the one case that matters here:
+// that function asks whether a particle admits NOTHING BUT the empty sequence
+// and answers a group with no members "yes" by vacuous quantification, which is
+// right for a sequence and wrong for a choice. A choice requires one of its
+// members to be satisfied; with no members there is nothing to satisfy, so an
+// empty choice occurring at least once admits no sequence whatever — the empty
+// one included.
+//
+// The depth bound guards a model group that reaches itself, matching
+// particleMatchesOnlyEmpty. Running out of depth answers "emptiable", which
+// keeps the caller from failing a document on a model it could not analyse.
+func particleAcceptsEmpty(p *Particle, depth int) bool {
+	if p == nil || p.MinOccurs == 0 || depth > 32 {
+		return true
+	}
+	g, ok := p.Term.(*ModelGroup)
+	if !ok {
+		// An element or wildcard particle that must occur is not
+		// emptiable.
+		return false
+	}
+	if g.Compositor == CompositorChoice {
+		// Emptiable exactly when some member is: §3.9.6 clause 2.2.2.
+		// With no members, none is.
+		for _, child := range g.Particles {
+			if particleAcceptsEmpty(child, depth+1) {
+				return true
+			}
+		}
+		return false
+	}
+	// Sequence and all: emptiable when every member is — §3.9.6 clause
+	// 2.2.1. An empty sequence or all group is emptiable, which is the
+	// vacuous case and the correct one.
+	for _, child := range g.Particles {
+		if !particleAcceptsEmpty(child, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkFixedValueConstraint applies §3.3.4 clause 5.2.2 — the part of the
+// fixed-value rule that the simple-type path cannot see.
+//
+// Clause 5.2 governs an element that HAS content; clause 5.1 governs the empty
+// one that takes its value from the constraint instead, and effectiveValue
+// already handles that. Under 5.2 a fixed constraint imposes two further
+// requirements, and only one of them was implemented:
+//
+//   - 5.2.2.1: the item must have no element children. This holds whatever the
+//     content type is. A mixed type that admits child elements still may not
+//     have any when the declaration fixes a value, because a fixed value is a
+//     *string* and an element child is not part of one.
+//   - 5.2.2.2.1: if the {content type} is mixed, the item's ·initial value·
+//     (its character data, unnormalised) must match the fixed value.
+//
+// 5.2.2.2.2 — the simple-content case — is checked in validateSimpleContent,
+// where the type is at hand to compare values rather than spellings.
+//
+// The mixed comparison is on the lexical form because a mixed content type has
+// no simple type to give the characters a value: §3.3.4 says "the ·initial
+// value· of the item must match the canonical lexical representation of the
+// {value constraint} value", a string comparison and nothing more.
+func (v *validator) checkFixedValueConstraint(el *xdm.Node, typ Type, decl *ElementDecl) {
+	if decl == nil || decl.Constraint == nil || !decl.Constraint.Fixed {
+		return
+	}
+	// Clause 5.2 applies only when the item has children; an empty item is
+	// clause 5.1, and a nilled one has been returned on long before here.
+	if len(el.Children) == 0 {
+		return
+	}
+	if len(el.ChildElements()) > 0 {
+		v.fail(el, "cvc-elt.5.2.2.1",
+			"an element with a fixed value constraint may not have "+
+				"element children")
+		return
+	}
+	ct, ok := typ.(*ComplexType)
+	if !ok || ct.Content != ContentMixed {
+		return
+	}
+	if got := el.StringValue(); got != decl.Constraint.Lexical {
+		v.fail(el, "cvc-elt.5.2.2.2.1",
+			"value %q does not equal the fixed value %q",
+			truncate(got), truncate(decl.Constraint.Lexical))
+	}
 }
 
 // resolveXSIType expands an xsi:type value against the namespaces in scope.
@@ -564,6 +684,16 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		return nil
 	}
 
+	// A complex type with simple content still gives the element a value,
+	// so only the other three content types disqualify it as an identity
+	// constraint field. See the complexTyped field's comment.
+	if t.Content != ContentSimple {
+		if v.complexTyped == nil {
+			v.complexTyped = map[*xdm.Node]bool{}
+		}
+		v.complexTyped[el] = true
+	}
+
 	v.validateAttributes(el, t)
 
 	// XSD 1.1 assertions are checked after the content, because an
@@ -607,6 +737,21 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		// indentation to sit between. A model matching nothing but the
 		// empty sequence is empty content in every sense, and empty
 		// content admits no character data at all.
+		// A content model that admits nothing at all is not the same as
+		// one that admits only the empty sequence, and only the second
+		// lets an element be empty. <xs:choice/> with the default
+		// minOccurs="1" is the first kind: the instance must satisfy
+		// some branch of the choice, and there are no branches, so its
+		// language is the empty *language* rather than the language
+		// containing the empty *string*. saxonData's complex022 says so
+		// outright — "empty content does not satisfy empty choice".
+		if !particleAcceptsEmpty(t.Particle, 0) && v.openContentFor(t) == nil &&
+			len(el.ChildElements()) == 0 {
+			v.fail(el, "cvc-complex-type.2.4.b",
+				"element has no children, and the content model "+
+					"admits no sequence at all")
+			return nil
+		}
 		if isEmptyContent(t) && v.openContentFor(t) == nil {
 			if s := strings.TrimSpace(el.StringValue()); s != "" {
 				v.fail(el, "cvc-complex-type.2.1",

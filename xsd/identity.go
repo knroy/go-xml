@@ -199,6 +199,24 @@ func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq [
 		}
 
 		n := nodes[0]
+		// §3.11.4 clause 3: the single selected node "must have a
+		// simple type". An element assessed against a complex type
+		// with empty, element-only or mixed content has no
+		// ·type-determined value·, so there is no ·key-sequence· to
+		// build and the constraint fails outright — for unique as much
+		// as for key, since clause 3 is above the case split in clause
+		// 4. idG006 (key over a field naming an empty complex type
+		// carrying an attribute) and idK012 (unique over a field
+		// naming an element-only complex type) are the pair; both are
+		// expected invalid and both were accepted, because the key
+		// string quietly fell back to the node's string value.
+		if v.complexTyped[n] {
+			v.fail(target, "cvc-identity-constraint.3",
+				"%s %q: a field selects an element with a complex type, "+
+					"which has no simple value",
+				ic.Kind, ic.Name.Local)
+			return nil, false, false
+		}
 		// The key sequence uses the [schema normalized value], so a
 		// defaulted or fixed value participates. For most primitives
 		// the normalized lexical form is canonical, so collapsing

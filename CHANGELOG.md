@@ -6,14 +6,62 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
-### Schema-validity: 98.60% to 99.03% on XSD 1.0, 97.96% to 98.33% on 1.1
+### Instance validation reaches 99.88% on XSD 1.0 and 99.89% on 1.1
 
-122 schema tests that were accepted despite being invalid are now rejected,
-with no instance test and no other suite moving. Every one of them is a test
-the W3C's own metadata records as `accepted`; no `queried` or bug-tied test
-changed state, which is the line this project holds — 52 of the remaining 1.0
-disagreements and 54 of the 1.1 ones are suite disputes, 18 of them bug 4113
-alone, where "passing" would mean freezing a Unicode 3.1 table.
+Instance disagreements fall from 48 to 31 on 1.0 and from 51 to 29 on 1.1,
+with no schema-side regression. Nine rules, each measured on its own:
+
+* cvc-elt 5.2.2.1 (section 3.3.4) — a fixed value constraint forbids element
+  children. And 5.2.2.2.1: for a *mixed* content type the element's initial
+  value must match the fixed value. Only the simple-content half of that
+  clause, 5.2.2.2.2, had been implemented.
+* cvc-type 3.1.1 on a nilled element. Clause 5.2 applies exactly when 3.2 has
+  applied, and 5.2.1 still runs Element Locally Valid (Type); only 3.1.3 is
+  conditioned on nilling. The whole rule was being skipped.
+* Section 3.11.4 clause 3 — an identity-constraint field must select a node
+  with a simple type. A complex-typed one fell back to its string value.
+* Part 2 section 3.2.6.1 — duration seconds are `\d+(\.\d+)?`, so digits are
+  required after the point; `PT12H30M12.S` was accepted.
+* Both fixed-value checks validated the fixed literal as XSD 1.0 regardless of
+  the schema's version. Under 1.1 `+INF` failed that validation, and since the
+  comparison is guarded on it succeeding, the fixed check was silently skipped
+  altogether.
+* Section 3.14.4 — union member selection is per value: each side takes the
+  first member whose lexical space contains its own literal. Trying every
+  member until a pair agreed equated values of different primitive types.
+* Section 3.9.6 Particle Emptiable 2.2.2 — an empty `<xs:choice/>` with
+  `minOccurs="1"` admits the empty *language*, not the empty *string*. The
+  vacuous-quantification answer is right for a sequence and wrong for a choice.
+* The XML NameStartChar production. `isNameStartRune` accepted any rune at or
+  above U+0080, which is far wider than the production; NEL and LS are among
+  the characters it must exclude. This also governs `Name`, `NCName`, `ID`,
+  `IDREF` and `ENTITY`.
+
+### Schema-validity: 98.60% to 99.19% on XSD 1.0, 97.96% to 98.48% on 1.1
+
+A second round adds src-redefine 6.2.2 and 7.2.2 (section 4.2.2): a `<group>`
+or `<attributeGroup>` redefined without a self-reference must be a valid
+restriction of what it replaces. The group form defers to Particle Valid
+(Restriction); the attribute form applies derivation-ok-restriction clauses
+2.1.1, 2.1.2, 2.1.3, 2.2 and 3.
+
+Two things about where that check can run. It belongs in `applyRedefine` — the
+only point where the original and its replacement both exist — and the
+attribute half must be deferred to the post-fixup pass, because until type
+fixups drain every base attribute still reads as untyped and the derivation
+clause passes vacuously. Version gating came for free: threading the schema
+version into the particle check makes the 1.1 all-group rule decide the one
+test annotated invalid for 1.0 and valid for 1.1.
+
+### Schema-validity, first round: the constraint that never ran
+
+122 schema documents that were accepted despite being invalid are now
+rejected, with no instance test and no other suite moving. Every one is a test
+the W3C's own metadata records as `accepted`; no `queried` or bug-tied test was
+targeted, which is the line this project holds — 48 of the remaining 1.0
+disagreements and 50 of the 1.1 ones are suite disputes, 18 of them bug 4113
+alone, where "passing" would mean freezing a Unicode 3.1 table and being wrong
+about modern text.
 
 The largest single cause was not a missing rule. `checkParticleRestriction`
 walked `schema.Types`, which holds only *named* types, so Particle Valid
@@ -255,8 +303,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.81% instance · 99.03% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.81% instance · 98.33% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.19% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.48% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -298,7 +346,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.03% (1.0) and 98.33% (1.1). Instance validation —
+* XSD schema-validity, at 99.19% (1.0) and 98.48% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

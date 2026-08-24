@@ -1,6 +1,9 @@
 package xsd
 
 import (
+	"fmt"
+	"sort"
+
 	"github.com/knroy/go-xml/xdm"
 )
 
@@ -313,10 +316,11 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 	// fixups it registers are run immediately so that they bind to the
 	// original rather than to whatever holds the name later.
 	type built struct {
-		q xdm.QName
-		t Type
-		g *ModelGroupDef
-		a *AttributeGroupDef
+		q  xdm.QName
+		el *xdm.Node
+		t  Type
+		g  *ModelGroupDef
+		a  *AttributeGroupDef
 	}
 	var results []built
 
@@ -333,6 +337,7 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 		mark := len(a.p.fixups)
 		var b built
 		b.q = q
+		b.el = c
 		switch c.Name.Local {
 		case "simpleType":
 			b.t = a.p.readSimpleType(c)
@@ -356,6 +361,38 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 		a.p.fixups = a.p.fixups[:mark]
 
 		results = append(results, b)
+	}
+
+	// src-redefine 6.2.2 and 7.2.2: a group or attribute group redefined
+	// *without* a self-reference must be a valid restriction of the
+	// component it replaces. This is the only moment both exist — the
+	// original is in hold, the replacement is in results, and neither is
+	// installed under the name yet.
+	for _, b := range results {
+		switch {
+		case b.g != nil:
+			if orig, ok := hold.groups[b.q]; ok &&
+				len(selfGroupRefs(b.el, doc, a.p, b.q, "group")) == 0 {
+				a.checkRedefinedGroup(b.el, b.q, b.g, orig)
+			}
+		case b.a != nil:
+			if orig, ok := hold.attrGroups[b.q]; ok &&
+				len(selfGroupRefs(b.el, doc, a.p, b.q, "attributeGroup")) == 0 {
+				// Deferred: an attribute declaration's type is
+				// bound by a fixup that has not run yet at this
+				// point in assembly, so a check here would see
+				// every base attribute as untyped. postFixups
+				// runs after the whole fixup drain, and the two
+				// components are captured by value, so the
+				// displaced original stays reachable even
+				// though the map no longer holds it.
+				el, q, repl, orig := b.el, b.q, b.a, orig
+				a.p.postFixups = append(a.p.postFixups, func() error {
+					a.checkRedefinedAttrGroup(el, q, repl, orig)
+					return nil
+				})
+			}
+		}
 	}
 
 	// Install the replacements only now, so that references from outside
@@ -421,4 +458,110 @@ func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
 		return false
 	}
 	return look(root)
+}
+
+// checkRedefinedGroup enforces src-redefine clause 6.2.2 (§4.2.2).
+//
+// A <group> inside a redefine that does *not* refer to itself is not building
+// on the original at all — it is stating a different content model under the
+// same name. The spec allows that only when the new model is one the original
+// already accepted, so that every use of the name elsewhere still validates
+// what it did before. The test is Particle Valid (Restriction) (§3.9.6), the
+// same structural table a complex-type restriction is measured against.
+//
+// The two particles are wrapped so that the group's own compositor is the term
+// being compared: a ModelGroupDef holds a ModelGroup, not a particle, and the
+// restriction table is keyed on particle terms.
+func (a *assembler) checkRedefinedGroup(el *xdm.Node, q xdm.QName, repl, orig *ModelGroupDef) {
+	if repl == nil || orig == nil || repl.Group == nil || orig.Group == nil {
+		return
+	}
+	r := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: repl.Group}
+	b := &Particle{MinOccurs: 1, MaxOccurs: 1, Term: orig.Group}
+	if err := particleValidRestrictionVersion(r, b, a.schema.Version); err != nil {
+		a.p.errs = append(a.p.errs, errorAt(el, "src-redefine.6.2.2",
+			"the redefinition of group %q does not refer to itself, so it "+
+				"must be a valid restriction of the group it replaces: %s",
+			q.Local, err))
+	}
+}
+
+// checkRedefinedAttrGroup enforces src-redefine clause 7.2.2 (§4.2.2).
+//
+// The attribute-group form of the same rule. There is no particle here, so the
+// comparison is the attribute half of Derivation Valid (Restriction, Complex)
+// (§3.4.6 derivation-ok-restriction clauses 2 and 3), applied between the two
+// groups' attribute uses: the redefinition may narrow a use or drop an optional
+// one, but may not introduce an attribute the original did not admit, may not
+// make a required attribute optional, and may not change a fixed value.
+func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, orig *AttributeGroupDef) {
+	if repl == nil || orig == nil {
+		return
+	}
+	base := map[xdm.QName]*AttributeUse{}
+	for _, u := range groupUses(orig, nil) {
+		if u.Decl != nil {
+			base[u.Decl.Name] = u
+		}
+	}
+	baseWild := groupWildcard(orig, nil)
+
+	bad := func(format string, args ...any) {
+		a.p.errs = append(a.p.errs, errorAt(el, "src-redefine.7.2.2",
+			"the redefinition of attribute group %q does not refer to "+
+				"itself, so it must be a valid restriction of the "+
+				"attribute group it replaces: %s",
+			q.Local, fmt.Sprintf(format, args...)))
+	}
+
+	present := map[xdm.QName]bool{}
+	for _, r := range groupUses(repl, nil) {
+		if r.Decl == nil || r.Prohibited {
+			continue
+		}
+		present[r.Decl.Name] = true
+		bu, inBase := base[r.Decl.Name]
+		if !inBase {
+			// Clause 2.2: only the original's attribute wildcard can
+			// admit a name it never declared.
+			if baseWild == nil || !baseWild.AllowsName(r.Decl.Name, nil) {
+				bad("it adds attribute %q", r.Decl.Name.Local)
+			}
+			continue
+		}
+		// Clause 2.1.1: a required attribute may not become optional.
+		if bu.Required && !r.Required {
+			bad("it makes required attribute %q optional", r.Decl.Name.Local)
+		}
+		// Clause 2.1.2: the redefinition's attribute type must derive
+		// from the original's. Narrowing an attribute's type is the
+		// commonest way to restrict an attribute group; swapping it for
+		// an unrelated one admits values the original rejected (schM4
+		// replaces an xs:boolean attribute with an xs:int one).
+		if bu.Decl != nil && r.Decl != nil && bu.Decl.Type != nil &&
+			!typeRestricts(r.Decl.Type, bu.Decl.Type) {
+			bad("it changes the type of attribute %q to one that does not "+
+				"derive from the replaced group's", r.Decl.Name.Local)
+		}
+		// Clause 2.1.3: a value the original fixes may not change.
+		if bv := effectiveValueConstraint(bu); bv != nil && bv.Fixed {
+			rv := effectiveValueConstraint(r)
+			if rv == nil || !rv.Fixed || rv.Lexical != bv.Lexical {
+				bad("it changes attribute %q, which the replaced group "+
+					"fixes to %q", r.Decl.Name.Local, bv.Lexical)
+			}
+		}
+	}
+
+	// Clause 3: an attribute the original requires must still be there.
+	names := make([]xdm.QName, 0, len(base))
+	for n := range base {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool { return qnameLess(names[i], names[j]) })
+	for _, n := range names {
+		if base[n].Required && !present[n] {
+			bad("it drops attribute %q, which the replaced group requires", n.Local)
+		}
+	}
 }
