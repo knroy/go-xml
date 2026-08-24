@@ -43,7 +43,15 @@ func run() error {
 			"comma-separated directories that xsl:include and document() may read; "+
 				"empty disables both")
 		allowDoctype = flag.Bool("allow-doctype", false,
-			"permit a DOCTYPE in the source document (enables XXE and entity expansion)")
+			"permit a DOCTYPE in the source document and expand the entities it "+
+				"declares internally; external entities still require "+
+				"-allow-external-entities")
+		allowExternalEnts = flag.Bool("allow-external-entities", false,
+			"let the source document read entities declared SYSTEM or PUBLIC, and "+
+				"an external DTD subset, from the -allow-dir roots (this is the "+
+				"XXE surface; it also requires -allow-doctype)")
+		allowUnparsedText = flag.Bool("allow-unparsed-text", false,
+			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
 		timeout  = flag.Duration("timeout", 60*time.Second, "abort a transform after this long")
 		initial  = flag.String("initial-template", "", "start at this named template")
 		mode     = flag.String("mode", "", "initial mode for apply-templates")
@@ -61,6 +69,11 @@ func run() error {
 			"write xsl:result-document outputs into this directory; without it a "+
 				"stylesheet that produces secondary results is an error")
 
+		maxDepth = flag.Int("max-depth", 0,
+			"bound template recursion; 0 uses the default, negative removes the "+
+				"bound (the default guards against a stylesheet that recurses "+
+				"without a base case)")
+
 		keepGoing = flag.Bool("keep-going", false,
 			"with several inputs, report failures and continue instead of stopping")
 		params = paramFlag{}
@@ -72,8 +85,12 @@ func run() error {
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Security defaults: xsl:include, xsl:import, fn:doc and fn:document are all
-disabled unless -allow-dir names the directories they may read, and a DOCTYPE
-in the source document is rejected unless -allow-doctype is given.
+disabled unless -allow-dir names the directories they may read. A DOCTYPE in
+the source document is rejected unless -allow-doctype is given, and even then
+only its internal declarations are expanded: reading an external entity, an
+external DTD subset, or a file through fn:unparsed-text each needs its own
+flag as well. Every one of those reads is confined to the -allow-dir roots,
+with symlinks resolved before the check.
 
 Exit status: 0 if every input transformed, 1 otherwise.
 `)
@@ -116,6 +133,19 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	if err != nil {
 		return err
 	}
+	// Both are off unless asked for, and both read only inside the roots
+	// above: the resolver rejects a non-file scheme before touching the
+	// filesystem and resolves symlinks before checking containment.
+	resolver.ExternalEntities = *allowExternalEnts
+	resolver.UnparsedText = *allowUnparsedText
+	// An external entity is read while the *document* is parsed, so admitting
+	// one without admitting a DOCTYPE would leave the flag with nothing to
+	// act on. Saying so is better than silently ignoring it.
+	if *allowExternalEnts && !*allowDoctype {
+		return fmt.Errorf(
+			"-allow-external-entities needs -allow-doctype: external entities are " +
+				"declared in a DOCTYPE, which is refused without it")
+	}
 
 	sheet, err := compileStylesheet(*sheetPath, resolver)
 	if err != nil {
@@ -153,6 +183,8 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		multiple:     len(inputs) > 1,
 		resultDir:    *resultDir,
 		trackPos:     *trackPos,
+		externalEnts: *allowExternalEnts,
+		maxDepth:     *maxDepth,
 	}
 
 	// A batch is processed to the end by default only when asked: stopping at
@@ -210,6 +242,8 @@ type transformCfg struct {
 	multiple     bool
 	resultDir    string
 	trackPos     bool
+	externalEnts bool
+	maxDepth     int
 }
 
 func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformCfg) error {
@@ -218,11 +252,20 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		return err
 	}
 	abs, _ := filepath.Abs(inPath)
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
-		BaseURI:        abs,
+	popts := xdm.ParseOptions{
+		BaseURI: abs,
+		// The document URI is what fn:document-uri returns, and it is a
+		// separate property from the base URI: a base URI is inherited and
+		// can be overridden by xml:base, while the document URI names where
+		// this document came from and nothing below it changes.
+		DocumentURI:    abs,
 		AllowDOCTYPE:   cfg.allowDoctype,
 		TrackPositions: cfg.trackPos,
-	})
+	}
+	if cfg.externalEnts {
+		popts.ExternalEntities = cfg.resolver
+	}
+	tree, err := xdm.ParseString(string(data), popts)
 	if err != nil {
 		return err
 	}
@@ -237,6 +280,11 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		InitialMode:      cfg.mode,
 		ImplicitTimezone: cfg.timezone,
 		Now:              cfg.now,
+		MaxDepth:         cfg.maxDepth,
+		// Texts is the same resolver, which refuses every read unless
+		// -allow-unparsed-text turned it on. Passing it unconditionally keeps
+		// the gate in one place rather than two.
+		Texts: cfg.resolver,
 	})
 	if err != nil {
 		return err

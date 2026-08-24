@@ -268,8 +268,8 @@ func (t *entityTable) resolve(name string) (string, error) {
 		// budget by fetchExternal, before this expansion runs.
 		if t.resolver == nil {
 			return "", fmt.Errorf(
-				"entity %q is declared SYSTEM or PUBLIC; external entities are "+
-					"never resolved", name)
+				"entity %q is declared SYSTEM or PUBLIC; set ExternalEntities "+
+					"to a resolver to permit reading it", name)
 		}
 		text, err := t.resolveExternalText(name)
 		if err != nil {

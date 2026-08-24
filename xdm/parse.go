@@ -316,7 +316,9 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			d := strings.TrimSpace(string(t))
 			if strings.HasPrefix(d, "DOCTYPE") && !opts.AllowDOCTYPE {
 				return nil, fmt.Errorf("parse XML: DOCTYPE declaration rejected " +
-					"(set AllowDOCTYPE to permit; it enables XXE and entity expansion)")
+					"(set AllowDOCTYPE to permit its internal declarations; " +
+					"reading external entities additionally requires " +
+					"ExternalEntities)")
 			}
 			// An ATTLIST may give an attribute a #FIXED or literal default,
 			// which a processor is required to add to every matching element
