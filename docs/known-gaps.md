@@ -104,6 +104,16 @@ by that measure:
 | `use-when` | 79/80 | unprefixed type names in the default element namespace |
 | `variable` | 102/103 | XSLT 3.0 text value templates |
 
+**Not all 27 are open problems, and the table above does not say so on its own.**
+Nine of them — the `regex` and `analyze-string` rows — pass with
+`xpath.SetBacktrackingRegex(true)`; the engine for them is written, tested and
+shipped, and the failures are a consequence of a deliberate default rather than
+of missing work. Six more are cases where this engine is right and the suite is
+not, or where matching the suite would cost XSD tests, which is a trade this
+project does not make. Six need XSLT 3.0 features, the network, or
+byte-identical reproduction of another processor's indentation. That leaves six
+genuinely open, and they are the ones worth reading this file for.
+
 Six of the remaining failures are errors the suite expects that the engine
 does not raise. That is the same shape as the XSD schema-validity gap: the
 engine accepts a stylesheet the specification says to reject. It is the

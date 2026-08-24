@@ -1382,10 +1382,14 @@ include.
 
 ## Where this is going
 
-The conformance tail is no longer the interesting work: 16 of the 26 remaining
-QT3 failures are structural or harness artifacts, and the other ten are one
-case each. Three
-larger things are open, in rough order of how much they would change:
+The conformance tail is no longer the interesting work. QT3 is down to a single
+failure, and it passes with `xpath.SetBacktrackingRegex(true)`. Of the 27 XSLT
+failures, 9 are the same story — they pass with that switch on — 6 are cases
+where the suite disagrees with the specification or where matching it would
+cost XSD tests, and 6 need XSLT 3.0 features, the network, or byte-identical
+reproduction of another processor's indentation. That leaves 6 genuinely open,
+each catalogued in [docs/known-gaps.md](docs/known-gaps.md). Three larger
+things are open, in rough order of how much they would change:
 
 * **Receiver-based output.** The runtime builds a result tree and serialises
   it. Emitting events to a receiver instead is what makes streaming possible
