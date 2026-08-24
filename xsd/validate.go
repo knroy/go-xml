@@ -74,6 +74,22 @@ type ValidateOptions struct {
 	// tree the caller passed in.
 	Annotate bool
 
+	// SkipIDConstraints suppresses "Validation Root Valid (ID/IDREF)"
+	// (§3.3.4 clause 2) — the check that ID values are unique and that
+	// every IDREF resolves.
+	//
+	// That rule is scoped to the *document*, not to the subtree being
+	// assessed, so a caller assessing a bare element has no document for it
+	// to be true of. XSLT 2.0 §19.2.1.3 says so outright: when validating a
+	// constructed element, "the validation rule 'Validation Root Valid
+	// (ID/IDREF)' is not applied ... validation will not fail if there are
+	// non-unique ID values or dangling IDREF values in the subtree being
+	// validated". The same section applies it again for a document node.
+	//
+	// Off by default: validating a parsed document is the ordinary case and
+	// there the rule does apply.
+	SkipIDConstraints bool
+
 	// MaxDepth bounds how deep validation will recurse. Zero means
 	// DefaultMaxDepth; a negative value means no limit.
 	//
@@ -140,7 +156,9 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 				return v.result()
 			}
 			v.validateAgainstType(el, t, nil)
-			v.checkIDs()
+			if !opts.SkipIDConstraints {
+				v.checkIDs()
+			}
 			return v.result()
 		}
 		v.fail(el, "cvc-elt.1",
@@ -148,7 +166,9 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 		return v.result()
 	}
 	v.validateElement(el, decl)
-	v.checkIDs()
+	if !opts.SkipIDConstraints {
+		v.checkIDs()
+	}
 	return v.result()
 }
 
@@ -1357,6 +1377,41 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 			if d, ok := v.schema.Elements[name]; ok {
 				return v.validateElement(kid, d)
 			}
+			// No declaration to assess against, so the item is
+			// "laxly assessed": §3.3.4 defines that as validating
+			// with respect to the *ur-type definition* as per Element
+			// Locally Valid (Type). It is not "do nothing" — that is
+			// what skip means. Validating against xs:anyType applies
+			// its lax element wildcard to the children (so a declared
+			// grandchild is still assessed) and its lax attribute
+			// wildcard to the attributes (so xml:id is assessed
+			// against the global attribute declaration and recorded
+			// as an ID).
+			//
+			// The element itself gets no type annotation: §3.3.5
+			// gives a laxly assessed item [validity] notKnown and no
+			// [type definition], and XPath reads an unannotated
+			// element as xs:untyped. Annotating it xs:anyType would
+			// claim an assessment outcome the rule does not produce.
+			//
+			// xsi:type comes first, as it does under strict:
+			// §3.3.4 clause 1.2 strictly assesses an item against
+			// the type it names, and the note under clause 1 says
+			// clause 1.2 takes precedence when xsi:type is present.
+			// That path does annotate, because the item really was
+			// strictly assessed.
+			if xsiType := kid.Attr(NSInstance, "type"); xsiType != nil {
+				t, err := v.resolveXSIType(kid, xsiType.Value)
+				if err != nil {
+					v.fail(kid, "cvc-elt.4.2", "%v", err)
+					return nil
+				}
+				v.validateAgainstType(kid, t, nil)
+				return nil
+			}
+			prev := kid.TypeAnnotation
+			v.validateAgainstType(kid, v.schema.anyType(), nil)
+			kid.SetTypeAnnotation(prev)
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]

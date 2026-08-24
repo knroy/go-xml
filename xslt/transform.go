@@ -442,13 +442,23 @@ func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node,
 		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}
 
 	case xdm.KindElement:
+		// The type annotation travels with the copy. Whitespace stripping is
+		// defined over which text nodes survive, not over what the surviving
+		// nodes are: section 4.4 says nothing about types, and dropping them
+		// here would mean declaring xsl:strip-space silently untyped a
+		// document the caller had validated. This pass is gated on there
+		// being a strip-space declaration at all, which is the only reason
+		// the loss was not visible — removing that gate cost 115 tests.
 		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
-			IsID: n.IsID, IsIDREFS: n.IsIDREFS}
+			TypeAnnotation: n.TypeAnnotation,
+			IsID:           n.IsID, IsIDREFS: n.IsIDREFS}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
 		for _, a := range n.Attrs {
-			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
+				TypeAnnotation: a.TypeAnnotation,
+				IsID:           a.IsID, IsIDREFS: a.IsIDREFS}
 			c.AddAttr(ac)
 			if a == want {
 				*found = ac

@@ -108,6 +108,23 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		if ctx.Item == nil {
 			return nil, fmt.Errorf("XPDY0002: no context item for path expression")
 		}
+		// A relative path starts from the CONTEXT ITEM, and when that is not
+		// a node the error is XPTY0020 — "the context item is not a node" —
+		// not XPTY0019, which is about the value a preceding step produced.
+		// XPath 2.0 3.2.1 attaches XPTY0020 to the axis step itself, and
+		// evalStepOver cannot tell the two apart because by then the context
+		// item is indistinguishable from a step result.
+		//
+		// The distinction is observable: analyze-string-085 evaluates
+		// following-sibling::text inside xsl:matching-substring, where the
+		// context item is the matched SUBSTRING, and the suite asks for
+		// XPTY0020 by name.
+		if _, ok := ctx.Item.(*xdm.Node); !ok && len(e.Steps) > 0 &&
+			stepIsAxisStep(e.Steps[0]) {
+			return nil, xdm.Errorf("XPTY0020",
+				"the context item for an axis step is %s, not a node",
+				ctx.Item.TypeName())
+		}
 		cur = xdm.One(ctx.Item)
 	}
 
@@ -507,4 +524,18 @@ func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Seque
 		cur = next
 	}
 	return cur, nil
+}
+
+// stepIsAxisStep reports whether a path step navigates an axis, as opposed to
+// a filter, function call, or parenthesised expression that merely happens to
+// occupy a step position. Only an axis step raises XPTY0020 for a non-node
+// context item; a filter such as ".[1]" is defined on any item.
+func stepIsAxisStep(step Expr) bool {
+	switch st := step.(type) {
+	case *Step:
+		return true
+	case *FilterExpr:
+		return stepIsAxisStep(st.Base)
+	}
+	return false
 }

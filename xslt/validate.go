@@ -196,6 +196,21 @@ func moduleDefaultValidation(n *xdm.Node) string {
 // declared what it was building and built something else, and continuing
 // would write output the author said was wrong.
 func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
+	// XSLT 2.0 §11.9.1 and §11.9.2, in identical words for xsl:copy and
+	// xsl:copy-of: "These attributes are ignored when copying an item that is
+	// not an element, attribute or document node." Only those three kinds
+	// carry a type annotation, so there is nothing for a validation or type
+	// attribute to say about a comment, a text node or a processing
+	// instruction. Passing one through reached xsd.ValidateAgainstType, which
+	// answered with a complaint about its caller ("needs an element or
+	// attribute") rather than about the stylesheet.
+	if n != nil {
+		switch n.Kind {
+		case xdm.KindElement, xdm.KindAttribute, xdm.KindDocument:
+		default:
+			return nil
+		}
+	}
 	if spec.typeName == nil && spec.mode == validatePreserve {
 		// preserve keeps whatever the source carried, which the copy already
 		// has: there is nothing to assess and nothing to remove — except on
@@ -353,6 +368,16 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// assess.
 		return nil
 	}
+	// XSLT 2.0 §19.2.1.3: validating a constructed *element* takes into
+	// account only constraints on its own content. "The validation rule
+	// 'Validation Root Valid (ID/IDREF)' is not applied. This means that
+	// validation will not fail if there are non-unique ID values or dangling
+	// IDREF values in the subtree being validated." §19.2.2 applies the same
+	// rule when the validation root is a document node, and XTTE1555 is the
+	// code for failing it there. Applying it to a bare element reported five
+	// duplicate-ID failures as XTTE1510 for element constructions the spec
+	// says are valid.
+	vopts := xsd.ValidateOptions{Annotate: true, SkipIDConstraints: !docNode}
 	var err error
 	if spec.mode == validateStrict {
 		// CanAssessStrictly rather than HasElementDeclaration: an element
@@ -366,9 +391,9 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			return fmt.Errorf(
 				"XTTE1512: no top-level declaration for %s", describeNode(n))
 		}
-		err = schema.Validate(n, xsd.ValidateOptions{Annotate: true})
+		err = schema.Validate(n, vopts)
 	} else {
-		err = schema.ValidateElementLax(n, xsd.ValidateOptions{Annotate: true})
+		err = schema.ValidateElementLax(n, vopts)
 	}
 	if err != nil {
 		// XTTE1555 rather than XTTE1510/XTTE1515 when the only thing the

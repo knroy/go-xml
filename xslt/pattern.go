@@ -307,6 +307,9 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	for _, alt := range p.alts {
 		ok, err := alt.matches(node, ctx)
 		if err != nil {
+			if recoverPatternError(err) {
+				continue
+			}
 			return false, err
 		}
 		if ok {
@@ -314,6 +317,44 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// recoverPatternError decides whether a failure while matching one alternative
+// is recovered by treating that alternative as a non-match.
+//
+// XSLT 2.0 5.5.4: "Any dynamic error or type error that occurs during the
+// evaluation of a pattern against a particular node is treated as a
+// recoverable error even if the error would not be recoverable under other
+// circumstances. The optional recovery action is to treat the pattern as not
+// matching that node." The Rec's own note gives the reason: a stylesheet
+// author cannot predict which patterns are evaluated against which node, so a
+// predicate that is nonsensical for a node it was never written for must not
+// fail the transformation. import-1201 is exactly that: the union stylesheet
+// has match="*[.=117]", and conflict resolution tests it against the document
+// element, whose untyped string value is every number in the file
+// concatenated. Casting that to xs:double is FORG0001, and propagating it
+// killed a transform whose expected output does not mention the error at all.
+//
+// Recovery is deliberately NOT applied to the XSLT-level errors a pattern can
+// raise about the stylesheet rather than about this node — XTDE0640's key
+// recursion is a property of the stylesheet and reporting it is the point.
+func recoverPatternError(err error) bool {
+	msg := err.Error()
+	for _, code := range nonRecoverablePatternCodes {
+		if strings.HasPrefix(msg, code) || strings.Contains(msg, ": "+code) {
+			return false
+		}
+	}
+	return true
+}
+
+// nonRecoverablePatternCodes are the errors a pattern may report that are
+// about the stylesheet, not about the node being matched, and so are outside
+// what 5.5.4 makes recoverable.
+var nonRecoverablePatternCodes = []string{
+	"XTDE0640", // circular xsl:key definition
+	"XTDE1270", // key() called with an unknown key name
+	"XPDY0001", // recursion guard: masking it would hide a runaway
 }
 
 func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {

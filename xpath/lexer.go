@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -450,6 +449,13 @@ func (l *Lexer) lexQName() (string, error) {
 
 func (l *Lexer) lexNCName() (string, error) {
 	start := l.pos
+	// End of input decodes as (RuneError, 0), and RuneError is U+FFFD, which
+	// is INSIDE NameStartChar's [#xFDF0-#xFFFD] range. Without this guard a
+	// trailing colon — "prefix:" or "*:" — consumed zero bytes and returned
+	// an empty name instead of the syntax error the grammar requires.
+	if l.pos >= len(l.src) {
+		return "", fmt.Errorf("XPST0003: expected a name at offset %d", l.pos)
+	}
 	r, size := utf8.DecodeRuneInString(l.src[l.pos:])
 	if !isNameStart(r) {
 		return "", fmt.Errorf("XPST0003: expected a name at offset %d", l.pos)
@@ -467,12 +473,64 @@ func (l *Lexer) lexNCName() (string, error) {
 
 // isNameStart reports whether r may begin an NCName. Note that ':' is excluded:
 // it separates the parts of a QName rather than being part of one.
+//
+// This is XML 1.0 fifth edition's NameStartChar production minus the colon,
+// transcribed, rather than the "_ or unicode.IsLetter" approximation it
+// replaced. The two differ, and the difference is exactly what the suite
+// tests: U+00B5 MICRO SIGN is category Ll, so IsLetter accepts it, but the
+// production's Latin-1 range starts at U+00C0 and deliberately leaves it out.
+// error-XPST0003o writes it as an element name and requires XPST0003 — a name
+// no conforming XML parser would ever hand back cannot be a valid name test.
+// xdm/qname.go carries the same transcription for the same reason.
 func isNameStart(r rune) bool {
-	return r == '_' || unicode.IsLetter(r)
+	switch {
+	case r == '_':
+		return true
+	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		return true
+	case r >= 0xC0 && r <= 0xD6:
+		return true
+	case r >= 0xD8 && r <= 0xF6:
+		return true
+	case r >= 0xF8 && r <= 0x2FF:
+		return true
+	case r >= 0x370 && r <= 0x37D:
+		return true
+	case r >= 0x37F && r <= 0x1FFF:
+		return true
+	case r >= 0x200C && r <= 0x200D:
+		return true
+	case r >= 0x2070 && r <= 0x218F:
+		return true
+	case r >= 0x2C00 && r <= 0x2FEF:
+		return true
+	case r >= 0x3001 && r <= 0xD7FF:
+		return true
+	case r >= 0xF900 && r <= 0xFDCF:
+		return true
+	case r >= 0xFDF0 && r <= 0xFFFD:
+		return true
+	case r >= 0x10000 && r <= 0xEFFFF:
+		return true
+	}
+	return false
 }
 
+// isNameChar is NameChar minus the colon: NameStartChar plus the characters
+// that may appear only after the first.
 func isNameChar(r rune) bool {
-	return r == '_' || r == '-' || r == '.' ||
-		unicode.IsLetter(r) || unicode.IsDigit(r) ||
-		unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r)
+	if isNameStart(r) {
+		return true
+	}
+	switch {
+	case r == '-', r == '.', r == 0xB7:
+		return true
+	case r >= '0' && r <= '9':
+		return true
+	case r >= 0x300 && r <= 0x36F:
+		return true
+	case r >= 0x203F && r <= 0x2040:
+		return true
+	}
+	return false
 }

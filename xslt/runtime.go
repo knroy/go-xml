@@ -595,6 +595,27 @@ func (b *outputBuilder) freshPrefix(want string) string {
 	}
 }
 
+// noteDeclared records a namespace node the element was constructed with, so
+// that a later xsl:namespace binding the same prefix elsewhere is seen as the
+// XTDE0430 conflict it is.
+//
+// The distinction is which namespaces reach "the result sequence". A prefix
+// carried only by the element's *name* is not a namespace node the sequence
+// constructor produced, and section 11.7 resolves a clash with it by renaming
+// — namespace-alias-1903 writes xsl:element name="ns:e" with xmlns:ns on the
+// instruction, which is not copied to the result, and requires the rename.
+// A literal result element is the other case: 11.7 copies its namespace nodes
+// into the result, so two conflicting bindings for one prefix really are two
+// namespace nodes with the same name and different values. namespace-2618 is
+// the spec's own "Conflicting Namespace Prefixes" example and expects the
+// error.
+func (b *outputBuilder) noteDeclared(prefix, uri string) {
+	if b.declared == nil {
+		b.declared = map[string]string{}
+	}
+	b.declared[prefix] = uri
+}
+
 // startElement opens a new element, returning a builder scoped to it.
 func (b *outputBuilder) startElement(name xdm.QName) *outputBuilder {
 	el := &xdm.Node{Kind: xdm.KindElement, Name: name}

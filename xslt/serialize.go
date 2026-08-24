@@ -687,6 +687,18 @@ func (s *serializer) representable(r rune) bool {
 	return true
 }
 
+// encodingHoldsAll reports whether the declared encoding can hold every
+// character, so that a caller may escape a whole run at once instead of
+// asking representable() about each rune. It is the run-level form of
+// representable and must agree with it: the two switch on the same names.
+func (s *serializer) encodingHoldsAll() bool {
+	switch strings.ToLower(s.opts.Encoding) {
+	case "us-ascii", "ascii", "iso-8859-1", "latin1":
+		return false
+	}
+	return true
+}
+
 // normalized applies the requested Unicode normalisation, if any.
 func (s *serializer) normalized(text string) string {
 	if s.normalize == nil {
@@ -818,7 +830,14 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 		if uri {
 			run = escapeURIAttribute(run)
 		}
-		if len(s.charMap) == 0 && !s.html {
+		// The whole-run spelling is only safe when every character of the run
+		// can be written in the declared encoding. escapeAttr knows nothing
+		// about the encoding and writes each rune raw, so an iso-8859-1 or
+		// us-ascii output would carry UTF-8 bytes the declared encoding
+		// cannot hold — element text goes through representable() and comes
+		// out as "&#776;", while the same character in an attribute did not.
+		// normalize-unicode-017/018 are exactly that asymmetry.
+		if len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() {
 			sb.WriteString(escapeAttr(run))
 		} else {
 			for _, r := range run {

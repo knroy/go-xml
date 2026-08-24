@@ -543,9 +543,11 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 				continue
 			}
 			sub.open.AddNamespace(a.prefix, a.uri)
+			sub.noteDeclared(a.prefix, a.uri)
 			continue
 		}
 		sub.open.AddNamespace(ns.prefix, ns.uri)
+		sub.noteDeclared(ns.prefix, ns.uri)
 	}
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace

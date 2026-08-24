@@ -126,7 +126,7 @@ func elementIncluded(el *xdm.Node) (bool, error) {
 	// No context item, no variables, and the static function library only.
 	// A use-when that calls a stylesheet function must fail rather than
 	// resolve, which is what makes function-available() answer false for one.
-	ctx := xpath.NewContext(nil, useWhenFuncs())
+	ctx := xpath.NewContext(nil, useWhenFuncs(ns.bindings))
 	ctx.StaticBaseURI = el.BaseURI
 
 	v, err := compiled.Eval(ctx)
@@ -146,9 +146,38 @@ func elementIncluded(el *xdm.Node) (bool, error) {
 // nothing else — in particular no stylesheet functions, which is a rule with
 // an observable consequence rather than an implementation detail:
 // function-available() is required to return false for them.
-func useWhenFuncs() *xpath.Library {
+// bindings are the namespace declarations in scope on the element carrying the
+// use-when, which function-available and type-available need in order to
+// expand the prefix of the lexical QName they are handed. Passing nil left
+// every prefix unbound, so a name like exsl:node-set could not be resolved at
+// all — and once an unbound prefix became XTDE1400 rather than false, that
+// gap turned four passing tests into errors.
+func useWhenFuncs(bindings map[string]string) *xpath.Library {
 	l := xpath.NewLibrary(xpath.Builtins())
 	xpath.RegisterXSLTFuncs(l)
-	registerStaticFuncs(l, nil)
+	resolveIn := func(name string) (uri, local string, ok bool) {
+		prefix, local := xdm.SplitQName(name)
+		if u, found := bindings[prefix]; found {
+			return u, local, true
+		}
+		return "", local, false
+	}
+	fnRes := func(name string) (uri, local string, ok bool) {
+		if prefix, local := xdm.SplitQName(name); prefix == "" {
+			// An unprefixed function name is in the default function
+			// namespace, never in a default element namespace binding.
+			return xdm.NSFN, local, true
+		}
+		return resolveIn(name)
+	}
+	typeRes := func(name string) (uri, local string, ok bool) {
+		if prefix, local := xdm.SplitQName(name); prefix == "" {
+			return "", local, true
+		}
+		return resolveIn(name)
+	}
+	// No schema: 3.12 makes the in-scope type definitions of a use-when
+	// those available "in the absence of any xsl:import-schema".
+	registerStaticFuncs(l, fnRes, typeRes, nil)
 	return l
 }

@@ -927,6 +927,15 @@ func (i *numberInstr) conversionOptions(rt *runtime) (numberOptions, error) {
 		if err != nil {
 			return o, err
 		}
+		// XTDE0030: the effective value of an attribute value template, in a
+		// position where one is permitted, that is not one of the permitted
+		// values for that attribute. number-0826 computes lang="{$lang}"
+		// from a parameter defaulting to 42.
+		if a.src == i.lang && !isLanguageTag(v) {
+			return o, fmt.Errorf(
+				"XTDE0030: xsl:number/@lang evaluated to %q, which is not "+
+					"a valid language identifier", v)
+		}
 		*a.dst = v
 	}
 	if i.groupingSize != nil {
@@ -1376,6 +1385,17 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 		{"grouping-size", &instr.groupingSize},
 	} {
 		if v := n.AttrValue(a.name); v != "" {
+			// XTSE0020 is about an attribute whose *fixed* value is not one
+			// of the permitted values. A value written with curly brackets
+			// is excluded by the error's own wording and is checked when it
+			// is evaluated instead, under XTDE0030. number-0825 writes
+			// lang="#####" literally and expects the static error.
+			if a.name == "lang" && !strings.Contains(v, "{") &&
+				!isLanguageTag(v) {
+				return nil, fmt.Errorf(
+					"XTSE0020: xsl:number/@lang value %q is not a valid "+
+						"language identifier", v)
+			}
 			if *a.dst, err = compileAVT(v, ns); err != nil {
 				return nil, fmt.Errorf("in xsl:number/@%s: %w", a.name, err)
 			}
@@ -1401,6 +1421,42 @@ type numberOptions struct {
 	// digits of a decimal sequence, which is how "1,000" is written.
 	groupingSep  string
 	groupingSize int
+}
+
+// isLanguageTag reports whether v is a well-formed xs:language value, which
+// is what xsl:number/@lang and xsl:sort/@lang are declared to hold.
+//
+// The lexical space is the BCP 47 shape XML Schema fixes as
+// [a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*: subtags of one to eight alphanumerics,
+// the first of them alphabetic. That is a lexical test, not a registry
+// lookup — an unregistered but well-formed tag is a *valid* value the
+// processor falls back to English for, per section 12.3, while "#####" or
+// "42" are not values of the type at all and are errors.
+func isLanguageTag(v string) bool {
+	if v == "" {
+		return false
+	}
+	for i, sub := range strings.Split(v, "-") {
+		if len(sub) < 1 || len(sub) > 8 {
+			return false
+		}
+		for j := 0; j < len(sub); j++ {
+			c := sub[j]
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+			case c >= '0' && c <= '9':
+				// Only the first subtag is restricted to letters; the rest
+				// may be alphanumeric, which is how "en-US" and "zh-Hant"
+				// and the numeric region subtags of "es-419" all fit.
+				if i == 0 {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // spellNumberLang spells n in the language @lang asks for.

@@ -317,14 +317,14 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 
 	// The static functions are registered separately so that use-when, whose
 	// context has no runtime at all, can have exactly these and nothing else.
-	registerStaticFuncs(l, rt.resolveFunctionName)
+	registerStaticFuncs(l, rt.resolveFunctionName, rt.resolveTypeName, rt.schemaHasType)
 }
 
 // registerStaticFuncs adds the four functions section 3.12 makes available to
 // a use-when expression: they answer questions about the *processor* rather
 // than about the stylesheet or the source, so they need no runtime and are
 // legal in a context that has none.
-func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
+func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, schemaHasType func(xdm.QName) bool) {
 	// A nil resolver means there is no stylesheet to resolve prefixes
 	// against: this is the use-when library, built before the prefix map
 	// exists. system-property must not report XTDE1390 there, because it
@@ -333,6 +333,15 @@ func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
 	haveStylesheet := resolve != nil
 	if resolve == nil {
 		resolve = defaultFunctionNS
+	}
+	// A use-when library has no stylesheet: there is no prefix map and no
+	// imported schema, so a type name can only be resolved conventionally
+	// and no schema type exists to find.
+	if resolveType == nil {
+		resolveType = defaultElementNS
+	}
+	if schemaHasType == nil {
+		schemaHasType = func(xdm.QName) bool { return false }
 	}
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
@@ -419,7 +428,7 @@ func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
 			}
 			uri, local, ok := resolve(name)
 			if !ok {
-				return xdm.One(xdm.NewBoolean(false)), nil
+				return nil, unboundPrefixError("function-available", name)
 			}
 			for arity := 0; arity <= 4; arity++ {
 				if _, ok := ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity); ok {
@@ -448,24 +457,36 @@ func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
 			}
 			uri, local, ok := resolve(name)
 			if !ok {
-				return xdm.One(xdm.NewBoolean(false)), nil
+				return nil, unboundPrefixError("function-available", name)
 			}
 			_, ok = ctx.Funcs.Lookup(xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
 		},
 	})
 
-	// fn:type-available asks whether a type is in the static context. Only
-	// the built-in xs: types can be answered here: the imported schema is a
-	// property of the stylesheet, which this library does not see, so a
-	// user-defined name answers false rather than guessing.
+	// fn:type-available asks whether a type is in the static context. That is
+	// the built-in xs: types plus whatever xsl:import-schema brought in, so
+	// the schema has to be consulted as well: a stylesheet that imports a
+	// schema declaring my:hatsize must answer true for it.
+	//
+	// The name is a TYPE name, not a function name, so it is resolved with
+	// resolveType rather than with resolve: an unprefixed type name is in the
+	// default *element* namespace (XPath 2.0 2.1.1), where an unprefixed
+	// function name is in the default function namespace. Answering
+	// type-available('shortString') by looking for fn:shortString was the
+	// second half of why an imported schema never registered.
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			uri, local, ok := resolve(name)
-			if !ok || uri != xdm.NSXS {
+			uri, local, ok := resolveType(name)
+			if !ok {
 				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			if uri != xdm.NSXS {
+				// Not a built-in: the only way it can be available is for the
+				// imported schema to declare it.
+				return xdm.One(xdm.NewBoolean(schemaHasType(xdm.QName{URI: uri, Local: local}))), nil
 			}
 			if _, found := xpath.BuiltinAtomicTypeCode(local); found {
 				return xdm.One(xdm.NewBoolean(true)), nil
@@ -476,7 +497,10 @@ func registerStaticFuncs(l *xpath.Library, resolve prefixResolver) {
 			// three built-in list types. Asking whether a type is available
 			// is not asking whether a value can have it, so an abstract or
 			// complex type answers true.
-			return xdm.One(xdm.NewBoolean(builtinNonAtomicTypes[local])), nil
+			if builtinNonAtomicTypes[local] {
+				return xdm.One(xdm.NewBoolean(true)), nil
+			}
+			return xdm.One(xdm.NewBoolean(schemaHasType(xdm.QName{URI: uri, Local: local}))), nil
 		},
 	})
 
@@ -977,6 +1001,19 @@ func (rt *runtime) keyCollation(def *keyDef) (xpath.Collation, error) {
 // absent function are otherwise indistinguishable: both would answer false,
 // so a stylesheet asking about "c#" would silently be told the instruction
 // does not exist rather than that it asked a meaningless question.
+// unboundPrefixError reports XTDE1400 for a lexically valid QName whose prefix
+// nothing binds.
+//
+// XSLT 2.0 appendix E gives XTDE1400 both halves of the condition: "if the
+// argument does not evaluate to a string that is a valid lexical QName, or if
+// there is no namespace declaration in scope for the prefix of the QName".
+// checkAvailableArg already raised it for the first half; answering false for
+// the second let extension-functions-0104 run to completion.
+func unboundPrefixError(fn, name string) error {
+	prefix, _ := xdm.SplitQName(name)
+	return fmt.Errorf("XTDE1400: %s(%q): no namespace declaration is in scope for prefix %q", fn, name, prefix)
+}
+
 func checkAvailableArg(code, fn, name string) error {
 	if isLexicalQName(name) {
 		return nil
@@ -1008,6 +1045,57 @@ func (rt *runtime) resolveFunctionName(name string) (uri, local string, ok bool)
 	}
 	// A prefix nothing binds cannot name a function. Answering false is what
 	// the spec requires of a name that does not resolve.
+	return "", local, false
+}
+
+// resolveTypeName expands the lexical QName fn:type-available is given.
+//
+// It differs from resolveFunctionName in exactly one place, and the difference
+// is the whole point: an unprefixed name here is in the default ELEMENT
+// namespace, not in the function namespace. XPath 2.0 2.1.1 says so, and
+// type-available-0149 depends on it — its schema has no targetNamespace, so
+// its four type names are unprefixed and live in no namespace at all.
+//
+// The stylesheet-wide prefix map is used for a prefixed name, the same
+// superset-is-the-safe-direction reasoning resolveFunctionName records.
+func (rt *runtime) resolveTypeName(name string) (uri, local string, ok bool) {
+	prefix, local := xdm.SplitQName(name)
+	if prefix == "" {
+		// No default element namespace is tracked per expression here, so an
+		// unprefixed name is taken as being in no namespace, which is what a
+		// stylesheet without xpath-default-namespace means.
+		return "", local, true
+	}
+	if rt != nil && rt.sheet != nil {
+		if u, found := rt.sheet.prefixes[prefix]; found {
+			return u, local, true
+		}
+	}
+	return "", local, false
+}
+
+// schemaHasType reports whether xsl:import-schema brought in a global type
+// declaration of this name. The schema is a property of the stylesheet, which
+// the runtime does hold — the function library simply never asked.
+func (rt *runtime) schemaHasType(name xdm.QName) bool {
+	if rt == nil || rt.sheet == nil || rt.sheet.schema == nil {
+		return false
+	}
+	_, ok := rt.sheet.schema.Types[name]
+	return ok
+}
+
+// defaultElementNS is the type-name resolver used where no stylesheet is in
+// scope. Unprefixed means no namespace; the conventional prefixes are all it
+// otherwise knows.
+func defaultElementNS(name string) (uri, local string, ok bool) {
+	prefix, local := xdm.SplitQName(name)
+	switch prefix {
+	case "":
+		return "", local, true
+	case "xs", "xsd":
+		return xdm.NSXS, local, true
+	}
 	return "", local, false
 }
 

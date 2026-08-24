@@ -69,9 +69,9 @@ Requires Go 1.26 or later.
 | | |
 |---|---|
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
-| **XSLT 2.0** | 98.51% of the W3C XSLT suite filtered to 2.0 (5,963 of 6,053 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,954 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
-| **XSD 1.1** | 99.80% instance (26,156 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
+| **XSLT 2.0** | 98.83% of the W3C XSLT suite filtered to 2.0 (5,982 of 6,053 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,955 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
+| **XSD 1.1** | 99.80% instance (26,157 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
@@ -96,7 +96,7 @@ true here:
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
 3. **XSLT is the weakest of the measured numbers, by a long way.** It sits at
-   98.51% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
+   98.83% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
    else here. Two things follow from that. The figure is young — the suite was
    only wired up recently, and the first runs were dominated by harness bugs
    rather than engine ones, so it should be read as a floor. And it is not
@@ -747,8 +747,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,954 / 25,003 (99.80%) |
-| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,156 / 26,209 (99.80%) |
+| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,955 / 25,003 (99.81%) |
+| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,157 / 26,209 (99.80%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -1188,7 +1188,7 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
 XSLT suite: 14601 cases, 6053 in scope, 8548 skipped
-in-scope: 5963 passed, 90 failed (98.51%)
+in-scope: 5982 passed, 71 failed (98.83%)
 ```
 
 The filter decides what the number means, so the run prints its own exclusions:
@@ -1349,8 +1349,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,954 / 25,003 (99.80%) |
-| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,156 / 26,209 (99.80%) |
+| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,955 / 25,003 (99.81%) |
+| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,157 / 26,209 (99.80%) |
 
 Every failure and the reason it is open is catalogued in
 [docs/known-gaps.md](docs/known-gaps.md).
