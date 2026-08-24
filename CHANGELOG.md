@@ -6,6 +6,35 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Backtracking regular expressions, off by default
+
+`xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command
+line, enables a matcher for the backreferences RE2 cannot express:
+variable-width groups, backreferences in the middle of a pattern, alternation
+and lazy quantifiers.
+
+It is off by default and should stay off for untrusted input. RE2 is linear in
+the length of the input and cannot be made to backtrack; this engine has no
+such guarantee, and a pattern is not always the caller's own — `matches($s,
+$node/@pattern)` takes one from document data, so enabling it globally would
+let a document being validated choose how long the validation takes.
+
+Even enabled, a step budget bounds every match, and exhausting it raises
+FORX0002 rather than returning a silent "no match": a budget that guessed
+would do it precisely on the inputs where the answer was hardest to get. The
+budget is measured from both ends — the hardest honest pattern in either
+conformance suite answers in 525 steps, while `(a*)*\1b` against sixty `a`s
+exhausts the whole budget in about 200 ms.
+
+The default path is unchanged. Patterns whose backreferences are decidable by
+the existing fixed-width analysis still take it, since that path is exact and
+faster, and with the switch off the conformance failure set is byte-identical
+to before.
+
+With it on, nine XSLT tests and the last QT3 failure pass — XSLT 2.0 at 99.69%
+and QT3 at 15,183 of 15,183. The headline figures below report the default
+configuration.
+
 ### XSLT 2.0 conformance: 98.83% to 99.54%
 
 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two

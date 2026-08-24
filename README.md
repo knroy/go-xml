@@ -723,8 +723,9 @@ stylesheet fails to compile and discovering it did not.
 `fn-matches-51`:
 `fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
 `([)(]*)`, a group whose width can vary, *and* places the backreference in the
-middle of the pattern. Both are refused deliberately — see *The hard floor*
-below.
+middle of the pattern. Both are refused by the default engine — see *The hard
+floor* below. It passes with `xpath.SetBacktrackingRegex(true)`, which takes
+QT3 to 15,183 of 15,183; the figure above reports the default configuration.
 
 Two things about how that number was reached are worth more than the number
 itself.
@@ -905,14 +906,18 @@ measured on `([a-z])\1*`, 4,000 characters in 53 µs and 64,000 in 567 µs.
 
 So the split is by what can be **decided**, not by what a caller asked for.
 `(a)\1` and `([md])[aeiou]\1` are resolved; `(a*)\1` raises `FORX0002`. There
-is deliberately no option to switch this on — an engine that answers correctly
-or says it cannot is safe to have on always, where one that guesses is not safe
-at any setting. No backtracking engine was added and the linear-time guarantee
-is intact.
+is no option to switch *this* part off — an engine that answers correctly or
+says it cannot is safe to have on always, where one that guesses is not safe at
+any setting. The default keeps RE2's linear-time guarantee intact.
 
-`fn-matches-51` is the case that stays: it names a variable-width group *and*
-puts the backreference mid-pattern, which would need the comparison to feed
-back into the automaton.
+`fn-matches-51` is the case that needs more: it names a variable-width group
+*and* puts the backreference mid-pattern, which needs the comparison to feed
+back into the automaton. A backtracking matcher that does exactly that is
+available behind `xpath.SetBacktrackingRegex(true)` (`-backtracking-regex` on
+the command line). It is off by default because it has no linear-time
+guarantee and patterns can come from document data; even enabled, a step
+budget bounds every match and exhausting it is an error rather than a silent
+"no match".
 
 Everything else about the XML Schema regex flavour *is* implemented, and most
 of it had to be, because RE2 silently disagrees rather than refusing: XML

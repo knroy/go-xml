@@ -31,7 +31,18 @@ func registerRegexFuncs(l *Library) {
 		// Anything outside that subset still raises FORX0002, so no answer is
 		// ever guessed. See regex_backref.go.
 		if br, err := compileArgBackref(args, 1, 2); err != nil {
-			return nil, err
+			// The fixed-width analysis declined. When the backtracking engine
+			// is enabled it gets the pattern next; when it is not, this is the
+			// FORX0002 it has always been.
+			bt, btErr := argBacktrack(args, 1, 2, err)
+			if btErr != nil {
+				return nil, btErr
+			}
+			ok := bt.MatchString(matchInput(s, flags))
+			if e := bt.Err(); e != nil {
+				return nil, e
+			}
+			return boolSeq(ok), nil
 		} else if br != nil {
 			return boolSeq(br.MatchString(matchInput(s, flags))), nil
 		}
@@ -52,11 +63,14 @@ func registerRegexFuncs(l *Library) {
 		// and the text the backreference consumed is part of what gets
 		// replaced. See regex_backref.go.
 		br, err := compileArgBackref(args, 1, 3)
+		var bt *btRegexp
 		if err != nil {
-			return nil, err
+			if bt, err = argBacktrack(args, 1, 3, err); err != nil {
+				return nil, err
+			}
 		}
 		var re *regexp.Regexp
-		if br == nil {
+		if br == nil && bt == nil {
 			if re, err = compileArgRegexp(args, 1, 3); err != nil {
 				return nil, err
 			}
@@ -66,6 +80,24 @@ func registerRegexFuncs(l *Library) {
 		repl, err := argStringRequired(args, 2)
 		if err != nil {
 			return nil, err
+		}
+		if bt != nil {
+			empty := bt.MatchString("")
+			if e := bt.Err(); e != nil {
+				return nil, e
+			}
+			if empty {
+				return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
+			}
+			goRepl, err := translateReplacement(repl, bt.NumSubexp())
+			if err != nil {
+				return nil, err
+			}
+			out := bt.ReplaceAllString(s, goRepl)
+			if e := bt.Err(); e != nil {
+				return nil, e
+			}
+			return strSeq(out), nil
 		}
 		if br != nil {
 			if br.MatchString("") {
@@ -97,7 +129,14 @@ func registerRegexFuncs(l *Library) {
 		}
 		re, err := compileArgRegexp(args, 1, 2)
 		if err != nil {
-			return nil, err
+			// fn:tokenize has no fixed-width backreference path — splitting on
+			// a backreference pattern was never supported — so the backtracking
+			// engine is the only one that can take it.
+			bt, btErr := argBacktrack(args, 1, 2, err)
+			if btErr != nil {
+				return nil, btErr
+			}
+			return tokenizeBacktrack(bt, s)
 		}
 		if re.MatchString("") {
 			return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
@@ -693,12 +732,119 @@ func translateReplacement(r string, groups int) (string, error) {
 	return sb.String(), nil
 }
 
+// Regexp is what CompileRegexp hands back: the subset of *regexp.Regexp that
+// the XSLT layer uses, so that a pattern needing the backtracking engine can be
+// returned in its place without the caller knowing which it got.
+//
+// The two implementations differ in one way callers must respect. RE2 cannot
+// fail at match time, so *regexp.Regexp's methods have nowhere to report an
+// error and need none. The backtracking engine *can* fail at match time, by
+// exhausting its step budget, and it reports that through Err() rather than by
+// answering false — answering false would be a guess, and precisely on the
+// inputs where the answer was hardest to get. So a caller that may be holding a
+// backtracking pattern must check Err() after any operation whose result it
+// intends to use. RegexpErr does that check for both implementations.
+type Regexp interface {
+	MatchString(s string) bool
+	FindAllStringSubmatchIndex(s string, n int) [][]int
+	NumSubexp() int
+}
+
+// RegexpErr reports a match-time failure from the most recent operation on re.
+//
+// It is nil for an RE2 pattern, which cannot fail at match time, and it is the
+// budget error for a backtracking pattern that ran out of steps.
+func RegexpErr(re Regexp) error {
+	if b, ok := re.(*btRegexp); ok {
+		return b.Err()
+	}
+	return nil
+}
+
 // CompileRegexp exposes the XPath-to-Go regular expression translation for the
 // XSLT layer, which needs it for xsl:analyze-string. The compiled result is
 // cached exactly as it is for fn:matches.
-func CompileRegexp(pattern, flags string) (*regexp.Regexp, error) {
-	return compileXPathRegexp(pattern, flags)
+//
+// A pattern with a backreference RE2 cannot express is compiled by the
+// backtracking engine instead, but only when that engine is enabled; when it is
+// not, the pattern is refused exactly as before.
+func CompileRegexp(pattern, flags string) (Regexp, error) {
+	re, err := compileXPathRegexp(pattern, flags)
+	if err == nil {
+		return re, nil
+	}
+	bt, btErr := compileBacktrackFallback(pattern, flags, err)
+	if btErr != nil {
+		return nil, btErr
+	}
+	return bt, nil
 }
+
+// compileBacktrackFallback is the shared "RE2 said no, may the backtracker try"
+// decision.
+//
+// It exists in one place so that every entry point applies the same three
+// conditions: the switch must be on, the pattern must actually contain a
+// backreference, and the original RE2 error must be one about a backreference
+// rather than about something genuinely malformed. That last condition is what
+// stops a typo in a pattern that happens to contain a "\1" from being
+// re-parsed by a more permissive engine and quietly accepted.
+//
+// When any condition fails it returns the original error, so the caller's
+// behaviour is byte-identical to what it was before this file existed.
+func compileBacktrackFallback(pattern, flags string, orig error) (*btRegexp, error) {
+	if !backtrackingRegex.Load() || !hasBackref(pattern) {
+		return nil, orig
+	}
+	if !strings.Contains(orig.Error(), "backreference") {
+		return nil, orig
+	}
+	bt, err := compileBacktrackCached(pattern, flags)
+	if err != nil {
+		return nil, err
+	}
+	if bt == nil {
+		return nil, orig
+	}
+	return bt, nil
+}
+
+// compileBacktrackCached memoises the parsed tree.
+//
+// The key carries the mode as well as the flags and the pattern, because the
+// mode is toggleable at run time and the same key must not name two different
+// compilations. It shares regexCache's storage and therefore its bound: the
+// reason that cache is bounded — a pattern read from document data is a pattern
+// an attacker chooses — applies here at least as strongly.
+func compileBacktrackCached(pattern, flags string) (*btRegexp, error) {
+	key := "bt\x00" + flags + "\x00" + pattern
+	if v, ok := regexCache.Load(key); ok {
+		switch t := v.(type) {
+		case *btRegexp:
+			return t.clone(), nil
+		case error:
+			return nil, t
+		case nilBacktrack:
+			return nil, nil
+		}
+	}
+	bt, err := compileBacktrack(pattern, flags)
+	if err != nil {
+		storeRegex(key, err)
+		return nil, err
+	}
+	if bt == nil {
+		storeRegex(key, nilBacktrack{})
+		return nil, nil
+	}
+	storeRegex(key, bt)
+	return bt.clone(), nil
+}
+
+// nilBacktrack records that the backtracking engine declined the pattern — the
+// "q" flag case — so the decision is not re-derived on every call. A nil value
+// cannot be stored in the cache and distinguished from a miss.
+type nilBacktrack struct{}
 
 // matchInput adapts the subject string for fn:matches in multi-line mode.
 //
@@ -1079,4 +1225,51 @@ func TranslateSchemaRegexpVersion(pattern string, xsd11 bool) (string, error) {
 		pattern = rewriteUnknownBlocks(pattern)
 	}
 	return translatePattern(escapeSchemaAnchors(pattern), false)
+}
+
+// argBacktrack is the fn:matches / fn:replace / fn:tokenize entry to the
+// backtracking engine.
+//
+// orig is the error the ordinary path produced; it is returned unchanged
+// whenever the backtracking engine is disabled or does not apply, which is what
+// makes the default behaviour byte-identical to what it was before.
+func argBacktrack(args []xdm.Sequence, pat, flags int, orig error) (*btRegexp, error) {
+	p, err := argStringRequired(args, pat)
+	if err != nil {
+		return nil, err
+	}
+	f := ""
+	if flags < len(args) {
+		if f, err = argFlags(args, flags); err != nil {
+			return nil, err
+		}
+	}
+	return compileBacktrackFallback(p, f, orig)
+}
+
+// tokenizeBacktrack is fn:tokenize's body once the pattern has been compiled by
+// the backtracking engine. It repeats the RE2 version's rules — a pattern that
+// matches the empty string is an error, and the empty input tokenizes to the
+// empty sequence rather than to one empty token — because those are properties
+// of the function, not of the engine.
+func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
+	empty := bt.MatchString("")
+	if e := bt.Err(); e != nil {
+		return nil, e
+	}
+	if empty {
+		return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
+	}
+	if s == "" {
+		return xdm.Empty, nil
+	}
+	parts := bt.Split(s, -1)
+	if e := bt.Err(); e != nil {
+		return nil, e
+	}
+	out := make(xdm.Sequence, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, xdm.NewString(p))
+	}
+	return out, nil
 }

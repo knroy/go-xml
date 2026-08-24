@@ -136,12 +136,15 @@ declare. Two more are XSLT 3.0 tests whose catalog metadata claims 2.0.
 Matching them would mean breaking conformance elsewhere — the character-class
 definitions are shared with XSD's pattern facet.
 
-The `FORX0002` group is a real gap, narrowed. This engine resolves a
-backreference exactly whenever the group it names *and the text between the
-group and the reference* are fixed-width, and refuses the rest rather than
-guessing; RE2 reports only the greedy submatch assignment, so a variable-width
-split cannot be reconstructed after the fact. Resolving those needs a
-backtracking matcher, which would cost the linear-time guarantee.
+The `FORX0002` group is a deliberate default rather than a gap. By default this
+engine resolves a backreference exactly whenever the group it names *and the
+text between the group and the reference* are fixed-width, and refuses the rest
+rather than guessing; RE2 reports only the greedy submatch assignment, so a
+variable-width split cannot be reconstructed after the fact. The general case
+is implemented behind `xpath.SetBacktrackingRegex(true)`, which trades RE2's
+linear-time guarantee for it and is off unless a caller asks — see *Regular
+expression backreferences* below. With it enabled the nine tests in this group
+pass, so the reachable figure is 99.69% rather than 99.54%.
 
 ### DTD
 
@@ -279,36 +282,52 @@ attempt was zero: one false reject fixed, one false accept introduced.
 Deciding both needs the base read as *(empty) | (every budget met)* — two
 alternatives checked separately.
 
-### Regular expression backreferences — the variable-width case
+### Regular expression backreferences — two engines, one default
 
-One case remains: `fn-matches-51`,
-`fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`.
-
-**The rest are implemented.** RE2 has no backreference, but it does return
-capture positions, and a backreference is only *hard* when the group it names
-can match more than one width. RE2 returns a single submatch assignment — the
-greedy one — and cannot enumerate alternatives, so for `(a*)\1` against `"aa"`
-it reports the group as `"aa"`, leaving nothing for the backreference, and a
-comparison against that answers **false** where the correct answer is true (the
-split is `"a"` + `"a"`). The information needed was discarded before the
-comparison ran.
+**The default engine is RE2 and stays RE2.** RE2 has no backreference, but it
+does return capture positions, and a backreference is only *hard* when the
+group it names can match more than one width. RE2 returns a single submatch
+assignment — the greedy one — and cannot enumerate alternatives, so for
+`(a*)\1` against `"aa"` it reports the group as `"aa"`, leaving nothing for the
+backreference, and a comparison against that answers **false** where the
+correct answer is true (the split is `"a"` + `"a"`). The information needed was
+discarded before the comparison ran.
 
 When every group a backreference names has a *fixed* width, the greedy
 assignment is the only assignment. There is nothing to enumerate, so
 capture-and-compare is not an approximation — it is exact, and it runs in RE2's
 linear time with one comparison pass per candidate position. Measured on
-`([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs.
+`([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs. That path is
+unconditional, and it is what the default uses.
 
-So the split is by what can be *decided*, not by what a caller asked for. A
-fixed-width backreference is resolved; a variable-width one still raises
-`FORX0002`. That is why this needs no option to enable — an engine that answers
-correctly or says it cannot is safe to have on always, where one that guesses
-is not safe at any setting. The linear-time guarantee is intact, and no
-backtracking engine was added.
+A variable-width backreference is refused with `FORX0002` rather than guessed
+at, because an engine that answers correctly or says it cannot is safe to have
+on always, where one that guesses is not safe at any setting.
 
-`fn-matches-51` names `([)(]*)`, a variable-width group, *and* puts the
-backreference mid-pattern, which would need the comparison to feed back into
-the automaton. Both are refused.
+**The general case is available, and off by default.**
+`xpath.SetBacktrackingRegex(true)` — or `-backtracking-regex` on the command
+line — enables a backtracking matcher that decides the rest: variable-width
+groups, backreferences mid-pattern, alternation, and lazy quantifiers.
+
+It is off by default because it has no linear-time guarantee, and a pattern is
+not always the caller's own: `matches($s, $node/@pattern)` takes one from
+document data, so enabling it globally would let a document being validated
+choose how long the validation takes. Catastrophic backtracking is a denial of
+service with a one-line payload.
+
+Even enabled, a step budget bounds every match, and exhausting it raises
+`FORX0002` rather than returning a silent "no match" — a budget that guessed
+would do it precisely on the inputs where the answer was hardest to get. The
+budget is measured from both ends: the hardest honest pattern in either
+conformance suite (`regex-032`, fifteen lazy groups and a `\14` against 180
+characters) answers in 525 steps, five orders of magnitude below the ceiling,
+while `(a*)*\1b` against sixty `a`s exhausts the full budget in about 200 ms.
+
+Character-class semantics are not duplicated between the two engines. The
+backtracking matcher parses the *already-translated* pattern and compiles each
+single-character leaf with RE2, so subtraction, `\p{IsGreek}`, `\i`, `\c` and
+the Unicode-wide reading of `\d` and `\w` are owned by `translatePattern` and
+applied in exactly one place.
 
 The XML Schema pattern facet is unaffected: Appendix F's `atom` production has
 no form for a backreference, so `xsd` still rejects `\1` under both versions.
@@ -714,13 +733,17 @@ stop short of 100%, not a defect to fix.**
 
 So the reachable ceiling is roughly **99.5% on 1.0 and 99.1% on 1.1**, not 100.
 
-### XPath: one case, refused on purpose
+### XPath: one case, refused by default
 
 `fn-matches-51` names a group whose width can vary *and* places the
-backreference mid-pattern. Both are refused: RE2 returns a single submatch
-assignment, so for a variable-width group the split it reports may not be the
-one that matches, and a comparison against it would answer confidently and
-wrongly.
+backreference mid-pattern. Under the default engine both are refused: RE2
+returns a single submatch assignment, so for a variable-width group the split
+it reports may not be the one that matches, and a comparison against it would
+answer confidently and wrongly.
+
+It passes with `xpath.SetBacktrackingRegex(true)`, which takes QT3 to
+15,183 of 15,183. That figure is not the headline one, because the switch is
+off by default and the headline number reports the default configuration.
 
 Eleven of the twelve backreference cases that used to sit here are fixed. When
 every named group has a **fixed** width the greedy assignment is the only

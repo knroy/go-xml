@@ -35,15 +35,16 @@ do more than be rejected is in scope:
   conformance bug — file it as an issue, they are taken seriously, but it is
   not a security matter.
 * **Behaviour after a feature was explicitly enabled.** `AllowDOCTYPE`, a
-  `DocumentResolver`, a `relaxng.Resolver`, an `xsd` network resolver: each is
-  off by default and each exists to let a caller decide what may be reached.
+  `DocumentResolver`, a `relaxng.Resolver`, an `xsd` network resolver,
+  `xpath.SetBacktrackingRegex`: each is off by default and each exists to let a
+  caller decide what may be reached.
   Enabling one and then reaching what it permits is the feature working.
 * **The known gaps.** Every measured conformance failure is listed in
   [docs/known-gaps.md](docs/known-gaps.md).
 
 ## The defaults, and why they are what they are
 
-Three that most often surprise:
+Four that most often surprise:
 
 * **A `DOCTYPE` is refused** unless `AllowDOCTYPE` is set. It is the entry
   point for XXE and for entity expansion, so permitting one is a decision to
@@ -52,6 +53,14 @@ Three that most often surprise:
   schema it is validated against, which is the document grading its own work.
 * **No schema, document or entity is fetched** unless a resolver is supplied.
   There is no default resolver anywhere in this library, in any package.
+* **Regular expressions are matched by RE2**, which is linear in the length of
+  the input and cannot be made to backtrack. A backreference RE2 cannot express
+  is refused with `FORX0002` rather than guessed at, and the general case is
+  available only behind `xpath.SetBacktrackingRegex(true)`. That matters
+  because a pattern is not always the caller's: `matches($s, $node/@pattern)`
+  takes one from document data, and catastrophic backtracking is a denial of
+  service with a one-line payload. Even enabled, a step budget bounds every
+  match and exhausting it is an error, never a silent "no match".
 
 [docs/security.md](docs/security.md) has the threat model, the audit results,
 and the two things a caller must still do themselves.

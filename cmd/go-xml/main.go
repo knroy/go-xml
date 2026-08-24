@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xslt"
 )
 
@@ -61,6 +62,12 @@ func run() error {
 				"XXE surface; it also requires -allow-doctype)")
 		allowUnparsedText = flag.Bool("allow-unparsed-text", false,
 			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
+		backtrackRegex = flag.Bool("backtracking-regex", false,
+			"evaluate regular expressions whose backreferences the default "+
+				"engine cannot decide, using a backtracking matcher that has no "+
+				"linear-time guarantee; bounded by a step budget, but enable it "+
+				"only for patterns you trust, since a pattern taken from "+
+				"document data can be made expensive on purpose")
 		timeout  = flag.Duration("timeout", 60*time.Second, "abort a transform after this long")
 		initial  = flag.String("initial-template", "", "start at this named template")
 		mode     = flag.String("mode", "", "initial mode for apply-templates")
@@ -158,6 +165,11 @@ Exit status: 0 if every input transformed, 1 otherwise.
 			"-allow-external-entities needs -allow-doctype: external entities are " +
 				"declared in a DOCTYPE, which is refused without it")
 	}
+
+	// Process-wide rather than per-transform, because the regex functions are
+	// registered once and the compiled-pattern cache is shared. The cache is
+	// keyed on the setting, so this cannot serve a stale compilation.
+	xpath.SetBacktrackingRegex(*backtrackRegex)
 
 	sheet, err := compileStylesheet(*sheetPath, resolver)
 	if err != nil {
