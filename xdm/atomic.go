@@ -129,16 +129,52 @@ type Atomic struct {
 	// identical. It is empty for every value that is not built by a derived
 	// constructor, so the common path pays only the field.
 	derived string
+	// derivedMember names the member type of a union that actually accepted
+	// this value, when derived names a union simple type (or a complex type
+	// whose simple content is one).
+	//
+	// A union's members are siblings, not ancestors, so the upward derivation
+	// walk that answers "instance of" for derived cannot reach them: nothing
+	// links xs:integer to my:partIntegerUnion in the direction the walk runs.
+	// Nor can the member simply replace derived, because a value of a union
+	// type is an instance of the union as well — both names are true of the
+	// same value at once, and the value is the only place that pairing is
+	// known, member selection being a per-value fact rather than a per-type
+	// one.
+	//
+	// Empty for every value not validated against a union.
+	derivedMember string
 }
 
 // Derived returns the narrower XML Schema type this value was constructed as,
 // or "" if it was not built by a derived-type constructor.
 func (a *Atomic) Derived() string { return a.derived }
 
+// DerivedMember returns the union member type this value was validated as, or
+// "" when the value's type is not a union.
+//
+// It is a second answer alongside Derived, not a replacement for it: a value
+// of a union type is an instance of both the union and the selected member.
+func (a *Atomic) DerivedMember() string { return a.derivedMember }
+
 // WithDerived returns a copy of a annotated as the named derived type.
+//
+// The union member is cleared: re-annotating the value as a different type
+// makes any member recorded for the previous one meaningless, and carrying it
+// forward would let a value claim membership in a union it no longer has.
 func (a *Atomic) WithDerived(name string) *Atomic {
 	c := *a
 	c.derived = name
+	c.derivedMember = ""
+	return &c
+}
+
+// WithDerivedUnion returns a copy of a annotated as the named union type with
+// the named member recorded as the one that accepted it.
+func (a *Atomic) WithDerivedUnion(name, member string) *Atomic {
+	c := *a
+	c.derived = name
+	c.derivedMember = member
 	return &c
 }
 

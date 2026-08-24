@@ -132,6 +132,24 @@ type Node struct {
 	// yields xs:untypedAtomic, which is the schemaless default.
 	TypeAnnotation string
 
+	// UnionMember records which member type of a union simple type actually
+	// accepted this node's value, when TypeAnnotation names (or has simple
+	// content of) a union.
+	//
+	// It is separate state from TypeAnnotation because the two facts are
+	// different and both are needed. XSD 1.0 §3.14.4 makes member selection a
+	// property of the *value*, not of the type: "100" validated against
+	// union(my:partNumberType, xs:integer) is an xs:integer while "123-AB" is
+	// a my:partNumberType, and the same annotation covers both. Folding the
+	// winner into TypeAnnotation would answer "instance of xs:integer" at the
+	// cost of "instance of my:partIntegerUnion", which the union's own
+	// identity requires; keeping only the union answers the second and loses
+	// the first. A node must answer both, so both are recorded.
+	//
+	// Empty for every node whose type is not a union, which is almost all of
+	// them, so the common path pays only the field.
+	UnionMember string
+
 	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
 	// (XDM §5.2, §6.2). They are deliberately *separate* state from
 	// TypeAnnotation rather than being derived from it, because XSLT 2.0
@@ -517,6 +535,15 @@ func (n *Node) Atomize() *Atomic {
 				return NewQNameValue(q)
 			}
 			return NewUntypedAtomic(n.StringValue())
+		}
+		// A union-typed node is atomised from the member that accepted its
+		// value, which is the only thing that knows what the value *is*: the
+		// union's own derivation chain runs to xs:anySimpleType and stops, so
+		// the walk below would return nil and the node would atomise to
+		// xs:untypedAtomic. The value keeps the annotation as its derived name
+		// so the union's identity survives, and carries the member alongside.
+		if a := atomicForUnionAnnotation(n); a != nil {
+			return a
 		}
 		if a := atomicForAnnotation(n.TypeAnnotation, n.StringValue()); a != nil {
 			// The annotation is kept on the value as its derived type, so
@@ -1059,6 +1086,58 @@ func RegisterDerivedType(name, primitive string) {
 	derivedMu.Unlock()
 }
 
+var (
+	unionMu      sync.RWMutex
+	unionMembers = map[string][]string{}
+)
+
+// RegisterUnionType records that a schema type is a union, and what its member
+// types are.
+//
+// The xsd package calls this as it loads a schema, for the reason it calls
+// RegisterListType: a union's base is always xs:anySimpleType, so the
+// derivation chain RegisterDerivedType records dead-ends immediately and
+// carries no information about what the value actually is. Without the member
+// list a union-typed node atomises to xs:untypedAtomic — the walk finds
+// anySimpleType, cannot build a value for it, and gives up — which makes
+// "data(u) instance of xs:untypedAtomic" true for a node the schema plainly
+// gave a typed value, and makes every question about the member it validated
+// as answer false.
+//
+// The members are the *declared* members, in declaration order; which of them
+// a given value belongs to is a per-value fact recorded on the node, because
+// XSD 1.0 §3.14.4 chooses the member by trying each one's lexical space
+// against the value in turn.
+func RegisterUnionType(name string, members []string) {
+	if name == "" || len(members) == 0 {
+		return
+	}
+	cp := make([]string, 0, len(members))
+	for _, m := range members {
+		if m != "" && m != name {
+			cp = append(cp, m)
+		}
+	}
+	if len(cp) == 0 {
+		return
+	}
+	unionMu.Lock()
+	unionMembers[name] = cp
+	unionMu.Unlock()
+}
+
+// UnionMembersOf returns the member types of a registered union type, or nil
+// when the name does not denote one.
+//
+// The result must not be modified: it is the stored slice, shared with every
+// other caller.
+func UnionMembersOf(name string) []string {
+	unionMu.RLock()
+	m := unionMembers[name]
+	unionMu.RUnlock()
+	return m
+}
+
 // DerivedBase returns the type a schema type derives from, or "" if the name
 // is not a registered schema type.
 //
@@ -1071,6 +1150,41 @@ func DerivedBase(name string) string {
 	base := derivedPrimitives[name]
 	derivedMu.RUnlock()
 	return base
+}
+
+// atomicForUnionAnnotation builds a typed value for a node whose type is a
+// union, using the member that validation recorded as having accepted it.
+//
+// It returns nil unless the node carries a member — a union with no recorded
+// member is one this package cannot say anything about, and guessing a member
+// here would be wrong: which member accepts "100" depends on the member list
+// and on facets this package does not hold, and XSD 1.0 §3.14.4 makes the
+// choice a property of the value rather than of the type. The schema layer
+// already performs that selection while validating, so the answer is carried
+// rather than recomputed.
+//
+// The member's own name may itself be a user-defined schema type, so the value
+// is built through the same lexical walk a list item uses.
+func atomicForUnionAnnotation(n *Node) *Atomic {
+	member := n.UnionMember
+	if member == "" {
+		return nil
+	}
+	// xs:QName and xs:NOTATION members need the node's in-scope namespaces to
+	// resolve the prefix, which a lexical form alone does not carry — the same
+	// reason Atomize handles them before consulting the annotation table.
+	switch member {
+	case "QName", "NOTATION":
+		if q, ok := n.resolveQNameValue(); ok {
+			return NewQNameValue(q).WithDerivedUnion(n.TypeAnnotation, member)
+		}
+		return nil
+	}
+	a := atomicForLexical(member, n.StringValue())
+	if a == nil {
+		return nil
+	}
+	return a.WithDerivedUnion(n.TypeAnnotation, member)
 }
 
 // atomicForDerivedAnnotation builds a typed value for a user-defined schema

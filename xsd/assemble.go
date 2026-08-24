@@ -153,6 +153,21 @@ func registerDerivedTypes(s *Schema) {
 					xdm.RegisterListType(name.Local, in)
 				}
 			}
+			// A UNION type's base is always xs:anySimpleType — that is what
+			// the specification says a union derives from — so the chain
+			// registered below dead-ends at a name the data model can build
+			// no value for, and the node atomises to xs:untypedAtomic. The
+			// member list is the only thing that says what such a value can
+			// be, so it is recorded separately, the way a list's item type is.
+			if members := unionMemberTypesOf(ct); len(members) > 0 {
+				names := make([]string, 0, len(members))
+				for _, m := range members {
+					if mn := annotationName(m); mn != "" && mn != name.Local {
+						names = append(names, mn)
+					}
+				}
+				xdm.RegisterUnionType(name.Local, names)
+			}
 			base, _ = ct.Base.(*SimpleType)
 		case *ComplexType:
 			// A complex type with simple content atomises as its content
@@ -174,6 +189,23 @@ func registerDerivedTypes(s *Schema) {
 					}
 				}
 				continue
+			}
+			// A complex type with simple content whose content type is a
+			// union is a union for atomisation purposes: its typed value is
+			// drawn from the same members. DateType in the XSLT suite is
+			// exactly this — an extension of union(StandardDate, xs:string)
+			// with an attribute — and without registering it here the union
+			// only reachable through the simple-content path stayed invisible.
+			if sc := ct.SimpleContent; sc != nil {
+				if members := unionMemberTypesOf(sc); len(members) > 0 {
+					names := make([]string, 0, len(members))
+					for _, m := range members {
+						if mn := annotationName(m); mn != "" && mn != name.Local {
+							names = append(names, mn)
+						}
+					}
+					xdm.RegisterUnionType(name.Local, names)
+				}
 			}
 			base = ct.SimpleContent
 		default:

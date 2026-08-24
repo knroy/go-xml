@@ -57,6 +57,13 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 			// named type.
 			return false
 		}
+		// A union-typed value is an instance of the union *and* of the
+		// member that accepted it. The two are siblings in no hierarchy the
+		// upward walk can cross, so the member is offered as a second
+		// starting point rather than being reached from the first.
+		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(m, t.SchemaType) {
+			return true
+		}
 		return schemaTypeNameMatches(a.Derived(), t.SchemaType)
 
 	case t.HasAtomicType:

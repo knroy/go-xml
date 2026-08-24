@@ -646,3 +646,32 @@ func inScopeNamespaces(el *xdm.Node) map[string]string {
 	}
 	return out
 }
+
+// unionMemberTypesOf returns the member types of a union, seeing through
+// restrictions.
+//
+// A restriction of a union is itself of the union variety but carries no
+// member list of its own: the members are the ones it inherits, exactly as a
+// restriction of a list inherits its item type. Reading only the type's own
+// field left every such restriction looking like a union with no members, so
+// nothing was registered and the node atomised untyped.
+func unionMemberTypesOf(t *SimpleType) []*SimpleType {
+	seen := 0
+	for cur := t; cur != nil; {
+		if cur.Variety != VarietyUnion {
+			return nil
+		}
+		if len(cur.MemberTypes) > 0 {
+			return cur.MemberTypes
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			return nil
+		}
+		cur = base
+		if seen++; seen > 64 {
+			return nil
+		}
+	}
+	return nil
+}

@@ -357,10 +357,23 @@ func validateUnionValue(lexical string, t *SimpleType) (string, error) {
 func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, error) {
 	steps := facetChain(t)
 
-	for _, m := range t.MemberTypes {
+	// A restriction of a union carries no member list of its own; the members
+	// it validates against are the ones it inherits. Reading only t.MemberTypes
+	// made every such restriction admit nothing at all.
+	members := t.MemberTypes
+	if len(members) == 0 {
+		members = unionMemberTypesOf(t)
+	}
+
+	for _, m := range members {
 		if m == nil {
 			continue
 		}
+		// The node is passed down: the QName and enumeration checks below the
+		// member need it. A member that is itself a union will record its own
+		// winner on the way through, but the outer winner is written *after*
+		// this call returns and so overwrites it, which is the right order —
+		// the outermost union is the one the node's annotation names.
 		normalized, err := validateSimpleValueIn(lexical, m, Version10, at)
 		if err != nil {
 			continue
@@ -380,6 +393,24 @@ func validateUnionValueIn(lexical string, t *SimpleType, at *xdm.Node) (string, 
 		// slip through as a member the schema did not intend.
 		if err := checkSimpleAssertions(steps, normalized, t); err != nil {
 			return "", err
+		}
+		// The winning member is recorded on the node, because which member
+		// accepted the value is the one fact about a union that neither the
+		// type nor the lexical form carries and that atomisation cannot
+		// recover: XSD 1.0 §3.14.4 selects the member per *value*, so "100"
+		// and "123-AB" under the same union are an xs:integer and a
+		// my:partNumberType respectively. Discarding it — which is what this
+		// function did — left the data model with a union whose derivation
+		// chain runs to xs:anySimpleType and stops, so the node atomised to
+		// xs:untypedAtomic.
+		//
+		// The node keeps its own annotation: the union's identity is still
+		// true of the value and a large family of tests asks for it. Only the
+		// second, per-value fact is added here.
+		if at != nil {
+			if mn := annotationName(m); mn != "" {
+				at.UnionMember = mn
+			}
 		}
 		return normalized, nil
 	}

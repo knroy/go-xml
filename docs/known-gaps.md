@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.55% — 6,025 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.59% — 6,027 of 6,052 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 99.55%, and the newest — so it is a
+The weakest of the measured numbers, at 99.59%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -93,7 +93,6 @@ by that measure:
 | `unparsed-text` | 1/2 | one case needs the network, which is refused |
 | `collection` | 5/6 | one case needs XSLT 3.0 packages |
 | `regex` | 42/49 | variable-width backreferences |
-| `strip-type-annotations` | 8/9 | union types in the data model |
 | `validation` | 40/43 | Saxon's `indent="yes"` layout; QName type keying |
 | `analyze-string` | 43/45 | variable-width backreferences |
 | `format-number` | 61/62 | a suite defect, not an engine gap |
