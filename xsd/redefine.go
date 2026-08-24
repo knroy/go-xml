@@ -35,6 +35,186 @@ type redefineHold struct {
 	notations  map[xdm.QName]*NotationDecl
 }
 
+// checkRedefine enforces the Schema Representation Constraints on the children
+// of an <xs:redefine> (§4.2.2, "Individual Component Redefinition").
+//
+// It runs before the redefinition is read, while the redefined document's
+// components are still installed under their own names — which is what makes
+// clauses 6.2.1 and 7.2.1 ("the name must resolve in the redefined document")
+// answerable at all.
+//
+// The clauses implemented here are the ones that are decidable from the source
+// form alone. Clause 6.2.2 and 7.2.2 — that a redefinition without a
+// self-reference must be a valid restriction of the original — are a derivation
+// check, and live with the derivation machinery instead.
+func (a *assembler) checkRedefine(el *xdm.Node, doc *schemaDoc) {
+	// §4.2.2 clause 2 makes the children of one redefine a set of
+	// *distinct* redefinitions: two children redefining the same name say
+	// two different things about one component, and the second silently
+	// replacing the first is exactly the misreading to refuse (schT2).
+	seen := map[string]bool{}
+	for _, c := range el.ChildElements() {
+		if c.Name.URI != NSSchema {
+			continue
+		}
+		switch c.Name.Local {
+		case "simpleType", "complexType", "group", "attributeGroup":
+		default:
+			continue
+		}
+		key := c.Name.Local + " " + c.AttrValue("name")
+		if c.Name.Local == "simpleType" || c.Name.Local == "complexType" {
+			// Types share one symbol space.
+			key = "type " + c.AttrValue("name")
+		}
+		if seen[key] {
+			a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.2",
+				"the redefine has more than one child redefining %q",
+				c.AttrValue("name")))
+		}
+		seen[key] = true
+	}
+
+	for _, c := range el.ChildElements() {
+		if c.Name.URI != NSSchema {
+			continue
+		}
+		name := c.AttrValue("name")
+		if name == "" {
+			continue
+		}
+		self := xdm.QName{URI: doc.targetNS, Local: name}
+
+		switch c.Name.Local {
+		case "simpleType", "complexType":
+			// src-redefine.5: a type definition among the children
+			// of a redefine must have a <restriction> or
+			// <extension> whose base is the type itself. That is
+			// what makes it a *redefinition* rather than an
+			// unrelated declaration wearing the same name.
+			base, ok := a.redefineBase(c)
+			if !ok {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.5",
+					"the %s %q inside a redefine must derive by "+
+						"restriction or extension", c.Name.Local, name))
+				continue
+			}
+			q, err := a.p.resolveQName(c, "base", base)
+			if err != nil {
+				a.p.errs = append(a.p.errs, err)
+				continue
+			}
+			if q != self {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.5",
+					"the %s %q inside a redefine must have base %q, not %q",
+					c.Name.Local, name, self.Local, base))
+			}
+
+		case "group":
+			// src-redefine.6.1.1: at most one self-reference.
+			// src-redefine.6.1.2: that self-reference must have
+			// minOccurs = maxOccurs = 1 — a redefinition that could
+			// repeat or omit itself would not name a fixed
+			// component.
+			// src-redefine.6.2.1: with no self-reference, the name
+			// must be one the redefined document actually defines.
+			refs := selfGroupRefs(c, doc, a.p, self, "group")
+			if len(refs) > 1 {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.6.1.1",
+					"the group %q inside a redefine refers to itself "+
+						"%d times; at most one is allowed", name, len(refs)))
+				continue
+			}
+			if len(refs) == 1 {
+				r := refs[0]
+				if r.AttrValue("minOccurs") != "" && r.AttrValue("minOccurs") != "1" ||
+					r.AttrValue("maxOccurs") != "" && r.AttrValue("maxOccurs") != "1" {
+					a.p.errs = append(a.p.errs, errorAt(r, "src-redefine.6.1.2",
+						"the self-reference in the redefinition of group %q "+
+							"must have minOccurs = maxOccurs = 1", name))
+				}
+				continue
+			}
+			if !a.definedIn(el, "group", name) {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.6.2.1",
+					"the group %q is not defined in the redefined schema", name))
+			}
+
+		case "attributeGroup":
+			// src-redefine.7.1: at most one self-reference.
+			// src-redefine.7.2.1: with none, the name must be one
+			// the redefined document defines.
+			refs := selfGroupRefs(c, doc, a.p, self, "attributeGroup")
+			if len(refs) > 1 {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.7.1",
+					"the attribute group %q inside a redefine refers to "+
+						"itself %d times; at most one is allowed",
+					name, len(refs)))
+				continue
+			}
+			if len(refs) == 1 {
+				continue
+			}
+			if !a.definedIn(el, "attributeGroup", name) {
+				a.p.errs = append(a.p.errs, errorAt(c, "src-redefine.7.2.1",
+					"the attribute group %q is not defined in the "+
+						"redefined schema", name))
+			}
+		}
+	}
+}
+
+// redefineBase returns the base= of the single derivation step a redefined type
+// definition must contain, and whether one was found.
+//
+// A simple type carries <restriction> directly; a complex type carries it under
+// <simpleContent> or <complexContent>, and a complex type written with a bare
+// content model has no derivation step at all (schK3).
+func (a *assembler) redefineBase(c *xdm.Node) (string, bool) {
+	for _, k := range c.ChildElements() {
+		if k.Name.URI != NSSchema {
+			continue
+		}
+		switch k.Name.Local {
+		case "restriction", "extension":
+			return k.AttrValue("base"), true
+		case "simpleContent", "complexContent":
+			for _, d := range k.ChildElements() {
+				if d.Name.URI == NSSchema &&
+					(d.Name.Local == "restriction" || d.Name.Local == "extension") {
+					return d.AttrValue("base"), true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// selfGroupRefs collects the <group ref> or <attributeGroup ref> elements
+// beneath a redefinition that name the redefinition itself.
+//
+// The search is over the whole subtree because §4.2.2 counts self-references
+// wherever they appear, not only as immediate children: schR3 buries one in
+// the middle of a <choice>.
+func selfGroupRefs(c *xdm.Node, doc *schemaDoc, p *parser, self xdm.QName, kind string) []*xdm.Node {
+	var out []*xdm.Node
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		for _, k := range n.ChildElements() {
+			if k.IsElement(NSSchema, kind) {
+				if ref := k.AttrValue("ref"); ref != "" {
+					if q, err := p.resolveQName(k, "ref", ref); err == nil && q == self {
+						out = append(out, k)
+					}
+				}
+			}
+			walk(k)
+		}
+	}
+	walk(c)
+	return out
+}
+
 // prepareRedefine displaces the components a redefine is about to replace.
 //
 // It runs after the redefined document has been read and before the
@@ -193,4 +373,52 @@ func (a *assembler) applyRedefine(el *xdm.Node, doc *schemaDoc, hold *redefineHo
 		}
 	}
 	a.p.doc = prev
+}
+
+// definedIn reports whether the document a redefine names declares a global of
+// the given kind and name.
+//
+// The search follows the redefined document's own includes and redefines,
+// because §4.2.1 makes an included document's components components of the
+// including one: a redefine may legitimately name something the document it
+// points at got from elsewhere. Imports are not followed — those bring in a
+// different namespace, which a redefine cannot reach.
+func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
+	root, ok := a.redefined[redefine]
+	if !ok {
+		// The location did not resolve. Nothing is known about what it
+		// declares, so nothing is asserted about it either: a rule
+		// cannot fire on a document that was never read.
+		return true
+	}
+	seen := map[*xdm.Node]bool{}
+	var look func(n *xdm.Node) bool
+	look = func(n *xdm.Node) bool {
+		if n == nil || seen[n] {
+			return false
+		}
+		seen[n] = true
+		if n.Kind == xdm.KindDocument {
+			els := n.ChildElements()
+			if len(els) == 0 {
+				return false
+			}
+			n = els[0]
+		}
+		for _, c := range n.ChildElements() {
+			if c.Name.URI != NSSchema {
+				continue
+			}
+			if c.Name.Local == kind && c.AttrValue("name") == name {
+				return true
+			}
+			if c.Name.Local == "include" || c.Name.Local == "redefine" {
+				if look(a.redefined[c]) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return look(root)
 }

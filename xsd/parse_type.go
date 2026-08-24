@@ -387,6 +387,22 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 		t.Prohibits = p.doc.blockDefault
 	}
 
+	// §3.4.2: a complex type that is not a child of <xs:schema>,
+	// <xs:redefine> or <xs:override> is a *localComplexType*, and the
+	// schema for schemas marks name, abstract, final and block prohibited
+	// on it. A name on a local type is the reading that actually misleads:
+	// it looks like a global definition and is not one — nothing can refer
+	// to it (ctA042).
+	if !topLevelType(el) {
+		for _, a := range []string{"name", "abstract", "final", "block"} {
+			if el.Attr("", a) != nil {
+				p.errs = append(p.errs, errorAt(el, "src-ct",
+					"%s is not permitted on a complexType that is "+
+						"not a child of schema, redefine or override", a))
+			}
+		}
+	}
+
 	mixed := p.boolAttr(el, "mixed", false)
 
 	if sc := p.childElement(el, "simpleContent"); sc != nil {
@@ -1639,4 +1655,19 @@ func (p *parser) checkAllOccurs(el *xdm.Node, max int) {
 		p.errs = append(p.errs, errorAt(el, "cos-all-limited.1.2",
 			"an xs:all group must have maxOccurs=1"))
 	}
+}
+
+// topLevelType reports whether a type definition element sits where a global
+// definition may sit: directly under <xs:schema>, or under an <xs:redefine> or
+// <xs:override>, which stand in for the schema of the document they name.
+func topLevelType(el *xdm.Node) bool {
+	parent := el.Parent
+	if parent == nil || parent.Name.URI != NSSchema {
+		return false
+	}
+	switch parent.Name.Local {
+	case "schema", "redefine", "override":
+		return true
+	}
+	return false
 }

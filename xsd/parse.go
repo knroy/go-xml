@@ -897,7 +897,13 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 	// Accepting every token everywhere let elemF004 write
 	// final="substitution" on an <element>, which reads as though it
 	// prevented substitution and does not — that is what block says.
-	blocking := name == "block" || name == "blockDefault"
+	// blockSet — which admits substitution — is the type of blockDefault on
+	// <xs:schema> and of block on <xs:element>. block on a *type* is
+	// xs:derivationSet, "#all or (possibly empty) subset of {extension,
+	// restriction}": substitution is something an element does, not
+	// something a type definition can prohibit (ctA016).
+	blocking := name == "blockDefault" ||
+		(name == "block" && el.Name.Local == "element")
 	simple := el.Name.Local == "simpleType" ||
 		(name == "finalDefault" && !blocking)
 

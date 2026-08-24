@@ -40,11 +40,18 @@ import (
 // schemaTest cases expect it rejected.
 func (p *parser) checkParticleRestriction() error {
 	var errs []error
-	for name, t := range p.schema.Types {
-		ct, ok := t.(*ComplexType)
-		if !ok || ct.DerivationMethod != DerivationRestriction {
+	// allComplexTypes rather than Types: the constraint is a property of
+	// every complex type component, and an inline <xs:complexType> inside
+	// an element declaration is a component like any other. Types holds
+	// only the named ones, so walking it skipped every restriction written
+	// anonymously — which is how the suite writes most of them. The slice
+	// is in document order, so the errors below stay stable between runs
+	// where a map walk would not.
+	for _, ct := range p.schema.allComplexTypes {
+		if ct.DerivationMethod != DerivationRestriction {
 			continue
 		}
+		name := ct.Name
 		base, ok := ct.Base.(*ComplexType)
 		if !ok {
 			continue
@@ -91,8 +98,9 @@ func (p *parser) checkParticleRestriction() error {
 	if len(errs) == 0 {
 		return nil
 	}
-	// The map walk above has no stable order, and a schema author
-	// comparing two runs should see the same list.
+	// The walk above is in document order, but a schema reached through
+	// several <xs:include>s contributes its types in file order rather than
+	// any order the author would recognise, so the list is sorted anyway.
 	msgs := make([]string, len(errs))
 	for i, e := range errs {
 		msgs[i] = e.Error()
@@ -327,6 +335,58 @@ func stripPointless(p *Particle, keepChoice bool) *Particle {
 	}
 }
 
+// inlineSameCompositor is the other half of clause 2.2: a <sequence> directly
+// inside a <sequence>, or a <choice> inside a <choice>, with unit occurrence,
+// is pointless and its members belong to the parent's list.
+//
+// stripPointless only unwraps a group that *is* the particle being compared;
+// it cannot see a pointless wrapper sitting among a group's members. Without
+// this the two sides of a Recurse land at different depths and the walk
+// compares R's elements against B's groups. groupB003 is the case: R is
+// <sequence><group ref="g1"/></sequence> and B is <sequence><group
+// ref="g1"/><group ref="g2" minOccurs="0"/></sequence>, where g1 is itself a
+// sequence. R unwraps to g1's bare <sequence>, so its members are elements,
+// while B keeps g1 as a nested sequence — and r1 is compared against the whole
+// group. Inlining g1 into B puts both sides on the same footing.
+//
+// Only a wrapper with the *same* compositor is inlined. A choice inside a
+// sequence orders nothing the sequence orders and flattening it would change
+// the language; the clause names only the matching pair.
+func inlineSameCompositor(g *ModelGroup) []*Particle {
+	if g.Compositor != CompositorSequence && g.Compositor != CompositorChoice {
+		return g.Particles
+	}
+	changed := false
+	for _, p := range g.Particles {
+		if inlinable(p, g.Compositor) {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return g.Particles
+	}
+	out := make([]*Particle, 0, len(g.Particles))
+	for _, p := range g.Particles {
+		if inlinable(p, g.Compositor) {
+			out = append(out, inlineSameCompositor(p.Term.(*ModelGroup))...)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// inlinable reports whether a member particle is a pointless wrapper of the
+// containing compositor.
+func inlinable(p *Particle, outer Compositor) bool {
+	if p.MinOccurs != 1 || p.MaxOccurs != 1 {
+		return false
+	}
+	g, ok := p.Term.(*ModelGroup)
+	return ok && g.Compositor == outer
+}
+
 // particleIgnorable reports whether clause 2.2.1 erases this particle
 // entirely: an empty <sequence> or <all>, or an empty <choice> whose
 // containing particle may occur zero times.
@@ -408,6 +468,20 @@ func nameAndTypeOK(r *Particle, rd *ElementDecl, b *Particle, bd *ElementDecl) e
 				rd.Name.Local, bd.Constraint.Lexical)
 		}
 	}
+	// Clause 3.2.4: R's {disallowed substitutions} must be a *superset* of
+	// B's. block= says which derivations may not stand in for this element
+	// at validation time, so a restriction that blocks less than its base
+	// admits substitutes the base refuses — widening rather than narrowing.
+	//
+	// The comparison is over the whole set including #all, which is why the
+	// bitmask is tested directly rather than member by member: particlesIg006
+	// blocks "#all" in the base and only "substitution extension" in the
+	// restriction, which is exactly the missing member the clause forbids.
+	if blockSet(bd.DisallowedSubstitutions)&^blockSet(rd.DisallowedSubstitutions) != 0 {
+		return fmt.Errorf(
+			"element %s does not block everything the base blocks (base %q, restriction %q)",
+			rd.Name.Local, bd.DisallowedSubstitutions, rd.DisallowedSubstitutions)
+	}
 	// Clause 3.2.5: the type must be a restriction of the base's. An
 	// unresolved type reference is reported where it is used, not here, so
 	// a declaration missing its type is left alone rather than blamed for
@@ -417,6 +491,23 @@ func nameAndTypeOK(r *Particle, rd *ElementDecl, b *Particle, bd *ElementDecl) e
 			rd.Name.Local)
 	}
 	return nil
+}
+
+// blockSet narrows a {disallowed substitutions} value to the three derivations
+// block= can actually name, so that #all and the explicit list compare equal.
+//
+// All is stored as 0xff, a mask wide enough to hold list and union too. Those
+// are simple-type derivations that never substitute for an element, so block=
+// cannot name them and #all does not really mean them either. Comparing the
+// raw masks would make block="#all" a strict superset of
+// block="substitution extension restriction" when the two name the same set —
+// and that is precisely W3C bug 4144: particlesIg004 writes exactly that pair
+// and the working group ruled the schema valid. Ig006 keeps the rule honest by
+// omitting "restriction" from the list, which really is a missing member.
+func blockSet(s DerivationSet) DerivationSet {
+	const blockable = DerivationSet(uint8(DerivationSubstitution) |
+		uint8(DerivationExtension) | uint8(DerivationRestriction))
+	return s & blockable
 }
 
 // typeRestricts reports whether a type is validly derived from another,
@@ -663,11 +754,16 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 	if err := occurrenceRangeOK(r, b); err != nil {
 		return fmt.Errorf("%s group: %w", rg.Compositor, err)
 	}
+	// Clause 2.2 again, this time on the member lists: a same-compositor
+	// wrapper among the members is pointless, and leaving it in place makes
+	// the walk compare one side's elements against the other's groups.
+	rps := inlineSameCompositor(rg)
+	bps := inlineSameCompositor(bg)
 	bi := 0
-	for _, rp := range rg.Particles {
+	for _, rp := range rps {
 		matched := false
-		for bi < len(bg.Particles) {
-			bp := bg.Particles[bi]
+		for bi < len(bps) {
+			bp := bps[bi]
 			bi++
 			if particleRestricts(rp, bp, expanded, v) == nil {
 				matched = true
@@ -690,11 +786,11 @@ func recurse(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expanded 
 	}
 	// Clause 2.2: whatever remains unmapped at the tail must be emptiable
 	// too.
-	for ; bi < len(bg.Particles); bi++ {
-		if !particleEmptiable(bg.Particles[bi]) {
+	for ; bi < len(bps); bi++ {
+		if !particleEmptiable(bps[bi]) {
 			return fmt.Errorf(
 				"%s group: the base requires %s, which the restriction omits",
-				rg.Compositor, particleKind(bg.Particles[bi]))
+				rg.Compositor, particleKind(bps[bi]))
 		}
 	}
 	return nil

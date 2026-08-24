@@ -272,6 +272,18 @@ func (p *parser) readAttributeDecl(el *xdm.Node, scope Scope) *AttributeDecl {
 			d.Name = xdm.QName{Local: name}
 		}
 	}
+	// no-xsi (§3.2.6): the {target namespace} of an attribute declaration,
+	// local or global, must not be the schema-instance namespace. That
+	// namespace holds xsi:type, xsi:nil and the two schemaLocation
+	// attributes, whose meaning is fixed by the specification; a schema
+	// that declared attributes there would be redefining the machinery a
+	// processor uses to read instances (attKa015, attKb018a).
+	if d.Name.URI == NSInstance {
+		p.errs = append(p.errs, errorAt(el, "no-xsi",
+			"an attribute declaration may not be in the "+
+				"schema-instance namespace"))
+	}
+
 	d.Constraint = p.valueConstraint(el)
 
 	typeAttr := el.Attr("", "type")

@@ -475,3 +475,135 @@ func TestAllGroupBudgetsSubstitutionGroup(t *testing.T) {
 	  <xs:element name="A2" substitutionGroup="a"/>
 	</xs:schema>`)
 }
+
+// TestAnonymousRestrictionIsChecked pins the loop in checkParticleRestriction
+// walking allComplexTypes rather than Types.
+//
+// Only named types live in Types, and the suite writes most of its restriction
+// tests as an inline <xs:complexType> inside an element declaration — so every
+// one of them was loading without the constraint ever running. particlesHb001
+// is the shape: a wildcard restricting a named element, which the table
+// (§3.9.6) has no cell for at all.
+func TestAnonymousRestrictionIsChecked(t *testing.T) {
+	load := func(src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the test schema as XML: %v", err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{})
+		return err
+	}
+
+	// A wildcard may not restrict an element declaration: Forbidden.
+	if err := load(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:choice><xs:element name="e1" minOccurs="2" maxOccurs="10"/></xs:choice>
+	  </xs:complexType>
+	  <xs:element name="doc">
+	    <xs:complexType><xs:complexContent>
+	      <xs:restriction base="base">
+	        <xs:choice><xs:any minOccurs="3" maxOccurs="9"/></xs:choice>
+	      </xs:restriction>
+	    </xs:complexContent></xs:complexType>
+	  </xs:element>
+	</xs:schema>`); err == nil {
+		t.Fatal("a wildcard restricting an element should be rejected even in an anonymous type")
+	}
+
+	// The same restriction written as a named type was always caught; it
+	// must stay caught.
+	if err := load(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:choice><xs:element name="e1"/></xs:choice>
+	  </xs:complexType>
+	  <xs:complexType name="r"><xs:complexContent>
+	    <xs:restriction base="base"><xs:choice><xs:any/></xs:choice></xs:restriction>
+	  </xs:complexContent></xs:complexType>
+	</xs:schema>`); err == nil {
+		t.Fatal("the named form should still be rejected")
+	}
+}
+
+// TestPointlessGroupInlinedIntoMembers pins inlineSameCompositor.
+//
+// Clause 2.2 calls a same-compositor group with unit occurrence pointless, and
+// stripPointless only unwraps the particle being compared — never a wrapper
+// sitting among a group's members. groupB003 is the case that exposed it: both
+// sides reference the same <xs:group>, but R's single-member sequence unwraps
+// to the group's own <sequence> while B keeps it nested, so the walk compared
+// R's elements against B's group and reported the base "requires" a particle
+// the restriction had in fact kept.
+func TestPointlessGroupInlinedIntoMembers(t *testing.T) {
+	tree, err := xdm.ParseString(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="base">
+	    <xs:sequence>
+	      <xs:group ref="g1"/>
+	      <xs:group ref="g2" minOccurs="0"/>
+	    </xs:sequence>
+	  </xs:complexType>
+	  <xs:element name="elem">
+	    <xs:complexType><xs:complexContent>
+	      <xs:restriction base="base"><xs:sequence><xs:group ref="g1"/></xs:sequence></xs:restriction>
+	    </xs:complexContent></xs:complexType>
+	  </xs:element>
+	  <xs:group name="g1"><xs:sequence><xs:element name="r1"/><xs:element name="r2"/></xs:sequence></xs:group>
+	  <xs:group name="g2"><xs:sequence><xs:element name="r3"/><xs:element name="r4"/></xs:sequence></xs:group>
+	</xs:schema>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the test schema as XML: %v", err)
+	}
+	if _, err := Load(tree.Root, "s.xsd", Options{}); err != nil {
+		t.Fatalf("dropping an optional trailing group is a valid restriction, got: %v", err)
+	}
+}
+
+// TestBlockSupersetOnRestriction pins NameAndTypeOK clause 3.2.4 and the
+// bug-4144 reading of #all that goes with it.
+//
+// R's {disallowed substitutions} must be a superset of B's, or the derived
+// element admits substitutes the base refuses. The subtlety is that block=
+// names only three derivations, so #all and "substitution extension
+// restriction" denote the same set — W3C bug 4144, whose test particlesIg004
+// the working group ruled *valid*. Comparing the stored masks directly would
+// reject it, because All is stored wide enough to cover list and union too.
+func TestBlockSupersetOnRestriction(t *testing.T) {
+	load := func(src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the test schema as XML: %v", err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{})
+		return err
+	}
+	schema := func(baseBlock, derivedBlock string) string {
+		return `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="base">
+		    <xs:choice><xs:element name="e1" block="` + baseBlock + `"/></xs:choice>
+		  </xs:complexType>
+		  <xs:complexType name="r"><xs:complexContent>
+		    <xs:restriction base="base">
+		      <xs:choice><xs:element name="e1" block="` + derivedBlock + `"/></xs:choice>
+		    </xs:restriction>
+		  </xs:complexContent></xs:complexType>
+		</xs:schema>`
+	}
+
+	// Dropping a member the base blocks widens the derivation: invalid.
+	// This is particlesIg006, which omits "restriction".
+	if err := load(schema("#all", "substitution extension")); err == nil {
+		t.Fatal("a restriction that blocks less than its base should be rejected")
+	}
+
+	// #all against the three members it stands for is the same set, not a
+	// wider one. particlesIg004: the suite expects this schema to load.
+	if err := load(schema("#all", "substitution extension restriction")); err != nil {
+		t.Fatalf("#all and the full explicit list denote the same set, got: %v", err)
+	}
+
+	// Blocking more than the base is always fine. particlesIg005.
+	if err := load(schema("substitution extension restriction", "#all")); err != nil {
+		t.Fatalf("blocking more than the base is a narrowing, got: %v", err)
+	}
+}

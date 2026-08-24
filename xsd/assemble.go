@@ -447,6 +447,11 @@ type assembler struct {
 	// replacement does not derive from what it replaces.
 	pendingOverrides []pendingRedefine
 
+	// redefined maps an <xs:redefine> element to the root of the document
+	// it names, so that the "is this name defined there" clauses can be
+	// answered against that document rather than the whole schema.
+	redefined map[*xdm.Node]*xdm.Node
+
 	// pendingRedefines are the <xs:redefine> elements whose children have
 	// still to be read. They are deferred to the end of assembly because a
 	// redefinition is defined in terms of the document it redefines, which
@@ -505,6 +510,15 @@ func (a *assembler) run() error {
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	doc := &schemaDoc{root: root, baseURI: item.base}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
+		// §3.15.2 (schema-namespace): targetNamespace names a
+		// namespace, and "" names none. A document meaning "no target
+		// namespace" leaves the attribute off; writing it empty is a
+		// representation fault (schZ014_b).
+		if attr.Value == "" {
+			a.p.errs = append(a.p.errs, errorAt(root, "src-schema",
+				"targetNamespace=\"\" is not a namespace name; "+
+					"omit the attribute for the absent namespace"))
+		}
 		doc.targetNS = attr.Value
 		doc.hasTargetNS = true
 	} else if item.chameleonNS != "" {
@@ -566,6 +580,17 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 			a.queueRef(el, doc, "", el.AttrValue("schemaLocation"), true, false)
 		case "import":
 			ns := el.AttrValue("namespace")
+			// §4.2.6.1: the namespace attribute names a namespace,
+			// and no namespace may be named by the empty string.
+			// Writing namespace="" is not the same as omitting it —
+			// omitting it means "the absent namespace", while ""
+			// names nothing at all (schZ014_a).
+			if el.Attr("", "namespace") != nil && ns == "" {
+				a.p.errs = append(a.p.errs, errorAt(el, "src-import.1.1",
+					"namespace=\"\" is not a namespace name; "+
+						"omit the attribute to import the absent namespace"))
+				continue
+			}
 			if ns == doc.targetNS && doc.hasTargetNS {
 				a.p.errs = append(a.p.errs, errorAt(el, "src-import.1.1",
 					"a schema may not import its own namespace %q", ns))
@@ -683,6 +708,38 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 		return
 	}
 
+	// §4.2.1 src-include.1 / §4.2.2 src-redefine.1: the referenced document
+	// must either have the same target namespace as the referring one, or
+	// none at all (in which case it is a chameleon and adopts it).
+	// §4.2.6.2 src-import.3.1/3.2: an import's namespace attribute, if
+	// present, must equal the imported document's target namespace; if
+	// absent, the imported document must have none.
+	refNS, refHasNS := targetNSOf(tree.Root)
+	if isInclude {
+		if refHasNS && refNS != doc.targetNS {
+			code := "src-include.1"
+			if redefining {
+				code = "src-redefine.1"
+			}
+			a.p.errs = append(a.p.errs, errorAt(el, code,
+				"the document at %q has target namespace %q, "+
+					"which differs from %q", resolved, refNS, doc.targetNS))
+			return
+		}
+	} else if namespace != "" {
+		if !refHasNS || refNS != namespace {
+			a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.1",
+				"import names namespace %q but the document at %q "+
+					"has target namespace %q", namespace, resolved, refNS))
+			return
+		}
+	} else if refHasNS {
+		a.p.errs = append(a.p.errs, errorAt(el, "src-import.3.2",
+			"import has no namespace attribute but the document at %q "+
+				"has target namespace %q", resolved, refNS))
+		return
+	}
+
 	chameleon := ""
 	if isInclude && doc.hasTargetNS && !declaresTargetNS(tree.Root) {
 		// Only an include can be a chameleon: an import brings in a
@@ -704,7 +761,38 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	}
 	a.seen[key] = true
 
+	if isInclude {
+		// Clauses 6.2.1 and 7.2.1 of §4.2.2 ask whether a name is
+		// defined *in the document this redefine names* — not merely
+		// somewhere in the assembled schema. The redefining document
+		// may well declare a global of the same name itself (schS1),
+		// so the question cannot be answered from Schema's maps.
+		// The map is keyed on the <xs:include> and <xs:redefine>
+		// elements alike, because a redefined document may itself have
+		// got the component from an include of its own.
+		if a.redefined == nil {
+			a.redefined = map[*xdm.Node]*xdm.Node{}
+		}
+		a.redefined[el] = tree.Root
+	}
+
 	a.push(tree.Root, resolved, chameleon, redefining)
+}
+
+// targetNSOf returns a schema document's target namespace and whether it
+// declares one at all.
+func targetNSOf(root *xdm.Node) (string, bool) {
+	if root.Kind == xdm.KindDocument {
+		els := root.ChildElements()
+		if len(els) == 0 {
+			return "", false
+		}
+		root = els[0]
+	}
+	if attr := root.Attr("", "targetNamespace"); attr != nil {
+		return attr.Value, true
+	}
+	return "", false
 }
 
 // declaresTargetNS reports whether a schema document element carries a
@@ -824,6 +912,13 @@ func (d *ElementDecl) Substitutable() []*ElementDecl { return d.substitutable }
 func (a *assembler) runRedefines() {
 	for i := len(a.pendingRedefines) - 1; i >= 0; i-- {
 		r := a.pendingRedefines[i]
+		// The source-form constraints are checked while the redefined
+		// document's components are still under their own names, since
+		// clauses 6.2.1 and 7.2.1 ask whether the name is defined there.
+		prev := a.p.doc
+		a.p.doc = r.doc
+		a.checkRedefine(r.el, r.doc)
+		a.p.doc = prev
 		hold := a.prepareRedefine(r.el, r.doc)
 		a.applyRedefine(r.el, r.doc, hold)
 	}

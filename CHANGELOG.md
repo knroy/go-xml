@@ -6,6 +6,50 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Schema-validity: 98.60% to 99.03% on XSD 1.0, 97.96% to 98.33% on 1.1
+
+122 schema tests that were accepted despite being invalid are now rejected,
+with no instance test and no other suite moving. Every one of them is a test
+the W3C's own metadata records as `accepted`; no `queried` or bug-tied test
+changed state, which is the line this project holds — 52 of the remaining 1.0
+disagreements and 54 of the 1.1 ones are suite disputes, 18 of them bug 4113
+alone, where "passing" would mean freezing a Unicode 3.1 table.
+
+The largest single cause was not a missing rule. `checkParticleRestriction`
+walked `schema.Types`, which holds only *named* types, so Particle Valid
+(Restriction) (section 3.9.6) never ran on a restriction written as an inline
+`<xs:complexType>` — which is how most of them are written. The dispatch table
+had been correct all along and was simply never reached for those types.
+
+The rules that were genuinely missing:
+
+* Clause 2.2 pointless-group inlining. `stripPointless` unwraps only the
+  particle being compared, so a same-compositor wrapper among a group's
+  *members* left the two sides of a Recurse at different depths.
+* NameAndTypeOK clause 3.2.4 — the restricting declaration must block
+  everything the base blocks. `#all` is masked to the three derivations
+  `block` can name, since `#all` and "substitution extension restriction"
+  denote the same set there (W3C bug 4144).
+* src-include.1, src-redefine.1 and src-import.3.1/3.2: the referenced
+  document's target namespace must match the referring one.
+* src-redefine clauses 5, 6.1.1, 6.1.2, 6.2.1, 7.1, 7.2.1 and 2 — a redefined
+  type must derive from itself, a redefined group has at most one
+  self-reference with unit occurrence, and two children of one redefine may
+  not redefine the same name. Answering the "defined in the redefined
+  document" clauses needed a new fact: which document each include or redefine
+  actually names, since the redefining document may declare the same name.
+* localComplexType: `name`, `abstract`, `final` and `block` are prohibited on
+  an inline complexType; `substitution` is not a legal token in a type's
+  `block`; `targetNamespace=""` names no namespace; and an attribute
+  declaration may not be in the schema-instance namespace.
+
+Three XSD 1.1 particle tests move from passing to failing, and the change is
+still correct: they are annotated `invalid version="1.0"` / `valid
+version="1.1"` in the suite's own catalog, so they were false accepts in both
+versions before and are now right in 1.0. Passing them in 1.1 needs the
+section 3.4.6.4 intensional-restriction check — true language inclusion rather
+than the structural table — which is not implemented.
+
 ### Entity replacement text inside an attribute value is included literally
 
 XML 1.0 section 4.4.5, "Included in Literal": a reference inside an attribute
@@ -211,8 +255,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.81% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.81% instance · 99.03% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.81% instance · 98.33% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -254,7 +298,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 98.60% (1.0) and 97.96% (1.1). Instance validation —
+* XSD schema-validity, at 99.03% (1.0) and 98.33% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.
