@@ -879,7 +879,7 @@ func TestAlternativeSeesAnEmptyDefaultCollection(t *testing.T) {
 	  <xs:alternative test="empty(collection())" type="xs:date"/>
 	  <xs:alternative type="xs:error"/>
 	 </xs:element>
-	 <xs:simpleType name="u"><xs:union memberTypes="xs:time xs:gYearMonth"/></xs:simpleType>
+	 <xs:simpleType name="u"><xs:union memberTypes="xs:date xs:time xs:gYearMonth"/></xs:simpleType>
 	</xs:schema>`
 	tree, err := xdm.ParseString(schema, xdm.ParseOptions{})
 	if err != nil {

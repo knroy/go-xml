@@ -44,7 +44,15 @@ func supportedTokens(only11 bool) map[string]bool {
 		t["1.1"] = true
 		// Conditional type assignment is implemented with the full
 		// XPath subset the tests use, not only the restricted one.
-		t["restricted-xpath-in-CTA"] = true
+		//
+		// These two name *mutually exclusive* processor configurations,
+		// so claiming both is not generosity, it is a contradiction. A
+		// CTA test states an expectation for each -- cta0022 is valid
+		// under full-xpath and invalid under restricted-xpath -- and
+		// the later <expected> wins, so claiming the restricted token
+		// as well made the harness demand rejection of schemas this
+		// processor correctly accepts. Only the token that describes
+		// what is implemented may be claimed.
 		t["full-xpath-in-CTA"] = true
 	} else {
 		t["1.0"] = true

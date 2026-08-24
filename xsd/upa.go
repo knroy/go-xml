@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // Unique Particle Attribution (§3.8.6).
@@ -105,6 +107,15 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 		if err := checkElementDeclarationsConsistent(m, where, s.Version); err != nil {
 			errs = append(errs, err)
 		}
+		if err := checkWildcardEDC(s, m, where); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// Conditional type assignment is 1.1 only, and its two schema-level
+	// constraints are checked here rather than at parse time because an
+	// alternative's type= may name a type the parser had not yet resolved.
+	if s.Version >= Version11 {
+		errs = append(errs, checkTypeTables(s)...)
 	}
 	if len(errs) == 0 {
 		return nil
@@ -334,6 +345,103 @@ func checkElementDeclarationsConsistent(m *contentModel, where string, v Version
 	return nil
 }
 
+// checkWildcardEDC extends Element Declarations Consistent (§3.8.6) to the
+// wildcards in a content model.
+//
+// The 1.0 constraint compares element *particles* with each other. XSD 1.1
+// adds the case the suite calls out directly: a wildcard with
+// processContents="strict" or "lax" can match an element that a global
+// declaration governs, and if a like-named element particle sits in the same
+// model, the same name in one content model again means two things — once
+// through the particle, once through the wildcard resolving to the global
+// declaration.
+//
+// wild078 and wild079 are the pair that differ only in strict versus lax, and
+// wild081 is the mirror where the local particle carries the type table and the
+// global declaration does not. All three are expected invalid.
+//
+// processContents="skip" is exempt: a skipped element is not validated against
+// any declaration, so no second meaning arises. That exemption is what keeps
+// this from firing on the ordinary "a wildcard beside an element" model, which
+// is legal and common.
+func checkWildcardEDC(s *Schema, m *contentModel, where string) error {
+	if s.Version < Version11 {
+		return nil
+	}
+	var wildcards []*Wildcard
+	locals := map[xdm.QName]*ElementDecl{}
+	for _, p := range m.positions {
+		switch t := p.term.(type) {
+		case *ElementDecl:
+			if _, seen := locals[t.Name]; !seen {
+				locals[t.Name] = t
+			}
+		case *Wildcard:
+			if t.ProcessContents != ProcessSkip {
+				wildcards = append(wildcards, t)
+			}
+		}
+	}
+	if len(wildcards) == 0 || len(locals) == 0 {
+		return nil
+	}
+	defined := func(n xdm.QName) bool { _, ok := s.Elements[n]; return ok }
+
+	// The names are sorted so that a schema with two faults reports the
+	// same one on every run; s.Elements is a map and locals is keyed by one.
+	names := make([]xdm.QName, 0, len(locals))
+	for n := range locals {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
+
+	for _, n := range names {
+		global, ok := s.Elements[n]
+		if !ok || global == locals[n] {
+			continue
+		}
+		for _, w := range wildcards {
+			if !w.AllowsName(n, defined) {
+				continue
+			}
+			local := locals[n]
+			// Only the TYPE TABLE half of the constraint is a
+			// schema-validity rule. A differing {type definition}
+			// is checked when a document is validated, not when
+			// the schema is read: wild061 says so outright —
+			// "schema is valid, though in 1.1 no document can
+			// satisfy it" — and wild061..wild076 are ten valid
+			// schemas that a type comparison here rejects. The
+			// three the suite expects invalid, wild078/079/081,
+			// all differ in their <xs:alternative>s.
+			if !sameTypeTable(local, global) {
+				return fmt.Errorf(
+					"cos-element-consistent: %s: a %s wildcard can match the "+
+						"global declaration of %s, whose type table differs "+
+						"from that of the like-named element particle beside it",
+					where, processWord(w.ProcessContents), n.Local)
+			}
+		}
+	}
+	return nil
+}
+
+// processWord names a processContents mode for a diagnostic.
+func processWord(pc ProcessContents) string {
+	switch pc {
+	case ProcessStrict:
+		return "strict"
+	case ProcessLax:
+		return "lax"
+	}
+	return "skip"
+}
+
 // checkAllGroupLimited enforces clause 1 of All Group Limited (§3.8.6): a
 // model group whose {compositor} is all "appears only as" the {model group} of
 // a model group definition (1.1), or the {term} of a particle with
@@ -385,9 +493,55 @@ func checkAllGroupLimited(s *Schema) error {
 			for _, sub := range g.Particles {
 				if inner, ok := sub.Term.(*ModelGroup); ok &&
 					inner.Compositor == CompositorAll && s.Version >= Version11 {
+					// §3.8.3: a <xs:group ref> inside an all
+					// group is how 1.1 shares one, but the
+					// reference stands in for a member of the
+					// all group, and a member is chosen at
+					// most once — so it may not repeat.
+					// all010 gives it maxOccurs="3" and is
+					// expected invalid on that ground alone.
+					//
+					// minOccurs is deliberately NOT checked
+					// here, even though all009 makes the
+					// reference optional and is also expected
+					// invalid. A nested all group in the
+					// settled component graph has two
+					// possible origins — a group reference,
+					// and the merge §3.4.2.3.3 clause 2.2
+					// performs when an all group extends an
+					// all group — and the graph does not
+					// record which. all314 is the guard: it
+					// extends an all group with minOccurs="0"
+					// by another with minOccurs="0", is
+					// expected VALID, and a minOccurs rule
+					// here rejects it. Catching all009 needs
+					// the distinction the parser can see and
+					// this pass cannot.
+					if sub.MaxOccurs != 1 {
+						errs = append(errs, fmt.Errorf(
+							"cos-all-limited.1.2: %s: a group reference "+
+								"to an xs:all group inside an xs:all "+
+								"group may not repeat",
+							where))
+					}
 					for _, deep := range inner.Particles {
 						errs = append(errs, badNestedAll(deep, where, s.Version)...)
 					}
+					continue
+				}
+				// A member of an all group is an element, a
+				// wildcard, or — in 1.1 only, handled above —
+				// another all group. A sequence or a choice
+				// here can only have arrived through a
+				// <xs:group ref> naming one, which §3.8.3 does
+				// not permit: all008 references a sequence and
+				// all011 a choice, both expected invalid.
+				if inner, ok := sub.Term.(*ModelGroup); ok &&
+					inner.Compositor != CompositorAll {
+					errs = append(errs, fmt.Errorf(
+						"cos-all-limited.1: %s: a model group inside an "+
+							"xs:all group must itself be an xs:all group",
+						where))
 					continue
 				}
 				errs = append(errs, badNestedAll(sub, where, s.Version)...)
@@ -476,4 +630,151 @@ func containsScope(scopes []int, want int) bool {
 		}
 	}
 	return false
+}
+
+// typeAlternativesOK enforces the two schema-level constraints on a
+// declaration's {type table} that hold regardless of any instance.
+//
+// Clause 1 is the Schema Representation Constraint on <xs:alternative>
+// (§3.3.3): an alternative with no test is the *default*, chosen when no
+// earlier test held, so it can only be the last one. An earlier bare
+// alternative makes every alternative after it dead code, and the spec
+// spells the arrangement out — {type table} has {alternatives}, which all
+// carry a test, and a separate {default type definition}. cta9001err is the
+// suite's case: a bare <xs:alternative type="messageTypeDate"/> sitting
+// fourth of seven.
+//
+// Clause 2 is Element Declaration Properties Correct (§3.3.6) clause 5:
+// every type an alternative can select must be validly derived from the
+// declaration's own {type definition}. Conditional type assignment narrows
+// the declared type; it does not replace it, and a document validated
+// against the alternative must still satisfy anything written against the
+// declared type. cta9008err declares chap as docType and then offers two
+// anonymous types descending from xs:anyType, which docType does not reach.
+//
+// xs:error is exempt: it is the type that accepts nothing, and §3.16.7.3
+// gives it as the way to write "this combination is an error", so it is
+// deliberately not a restriction of whatever was declared. cta0007 uses it
+// exactly so.
+func typeAlternativesOK(d *ElementDecl, where string) []error {
+	if len(d.Alternatives) == 0 {
+		return nil
+	}
+	var errs []error
+	for i, alt := range d.Alternatives {
+		if alt.Test == nil && i != len(d.Alternatives)-1 {
+			errs = append(errs, fmt.Errorf(
+				"src-type-alternative: element %s: an alternative "+
+					"with no test is the default and must be "+
+					"the last one, but one appears at position %d of %d",
+				where, i+1, len(d.Alternatives)))
+		}
+		if alt.Type == nil || d.Type == nil || isErrorType(alt.Type) {
+			continue
+		}
+		if !typeDerivedFrom(alt.Type, d.Type) {
+			errs = append(errs, fmt.Errorf(
+				"e-props-correct.5: element %s: the type selected by "+
+					"alternative %d is not validly derived from the "+
+					"declared type %s",
+				where, i+1, d.Type.TypeName().Local))
+		}
+	}
+	return errs
+}
+
+// isErrorType reports whether t is xs:error, the type with no valid instances.
+func isErrorType(t Type) bool {
+	n := t.TypeName()
+	return n.URI == NSSchema && n.Local == "error"
+}
+
+// typeDerivedFrom reports whether t is, or descends from, want.
+//
+// This is the schema-time twin of (*validator).derivedFrom: the same walk up
+// the base chain, with the same two terminations — a self-referential base
+// (xs:anyType is its own) and a depth bound, because a malformed schema can
+// build a cycle that is not a self-loop. It is a free function rather than a
+// validator method because the constraint it serves is a property of the
+// schema, checked before any document exists.
+func typeDerivedFrom(t, want Type) bool {
+	if want == nil || t == nil {
+		return true
+	}
+	// A member of a union is validly derived from it (§3.14.6 clause 2.2.3).
+	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion {
+		for _, m := range u.MemberTypes {
+			if m != nil && typeDerivedFrom(t, m) {
+				return true
+			}
+		}
+	}
+	for cur, seen := t, 0; cur != nil; seen++ {
+		if cur == want {
+			return true
+		}
+		if n := cur.TypeName(); n.Local != "" && n == want.TypeName() {
+			return true
+		}
+		base := cur.BaseType()
+		if base == cur || base == nil || seen > 256 {
+			return false
+		}
+		cur = base
+	}
+	return false
+}
+
+// checkTypeTables applies typeAlternativesOK to every element declaration in
+// the schema.
+//
+// Local declarations are not indexed on the Schema — they are reachable only
+// through the type that contains them — so the walk descends every complex
+// type's content model as well as the global map. allComplexTypes is in
+// document order, which keeps the error list stable; the global map is walked
+// too, and checkContentModelConstraints sorts the messages before reporting,
+// so the map's unordered walk cannot change the outcome.
+func checkTypeTables(s *Schema) []error {
+	var errs []error
+	seen := map[*ElementDecl]bool{}
+
+	visit := func(d *ElementDecl, where string) {
+		if d == nil || seen[d] {
+			return
+		}
+		seen[d] = true
+		errs = append(errs, typeAlternativesOK(d, where)...)
+	}
+
+	for name, d := range s.Elements {
+		visit(d, name.Local)
+	}
+	for _, ct := range s.allComplexTypes {
+		if ct.Particle == nil {
+			continue
+		}
+		walkParticleElements(ct.Particle, 0, func(d *ElementDecl) {
+			visit(d, d.Name.Local)
+		})
+	}
+	return errs
+}
+
+// walkParticleElements calls fn for every element declaration a particle
+// reaches, descending through model groups.
+//
+// The depth bound is what makes a recursive model safe: a group may reach
+// itself, and following terms rather than nodes would otherwise not terminate.
+func walkParticleElements(p *Particle, depth int, fn func(*ElementDecl)) {
+	if p == nil || depth > 64 {
+		return
+	}
+	switch t := p.Term.(type) {
+	case *ElementDecl:
+		fn(t)
+	case *ModelGroup:
+		for _, c := range t.Particles {
+			walkParticleElements(c, depth+1, fn)
+		}
+	}
 }

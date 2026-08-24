@@ -130,7 +130,11 @@ func TestConditionalTypeAssignment(t *testing.T) {
 	      <xs:extension base="xs:string"><xs:attribute name="kind" type="xs:string"/></xs:extension>
 	    </xs:simpleContent>
 	  </xs:complexType>
-	  <xs:element name="value" type="textual">
+	  <!-- The declaration names the common base: §3.3.6 requires every
+	       type an alternative can select to be validly derived from the
+	       declared type, and neither numeric nor textual is derived from
+	       the other. -->
+	  <xs:element name="value" type="xs:anyType">
 	    <xs:alternative test="@kind = 'number'" type="numeric"/>
 	    <xs:alternative type="textual"/>
 	  </xs:element>
@@ -160,7 +164,7 @@ func TestConditionalTypeAssignment(t *testing.T) {
 func TestAlternativeTestSeesNoContent(t *testing.T) {
 	s := load11(t, `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-	  <xs:element name="when" type="xs:string">
+	  <xs:element name="when" type="xs:anySimpleType">
 	    <!-- Every conjunct here is a property of the confined copy: no
 	         content, no parent, its own root, and untyped because
 	         nothing has been validated yet. -->
@@ -3814,7 +3818,7 @@ func TestIdentityConstraintRefRejectsRefer(t *testing.T) {
 func TestAlternativeSeesBothBaseURIs(t *testing.T) {
 	src := `
 	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-	  <xs:element name="when" type="xs:string">
+	  <xs:element name="when" type="xs:anySimpleType">
 	    <xs:alternative test="ends-with(base-uri(.), 'inst.xml')
 	                          and ends-with(static-base-uri(), 'sch.xsd')"
 	                    type="xs:date"/>

@@ -1056,6 +1056,7 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	p.checkContentDerivationForm(t)
 	p.checkMixedConsistency(t)
 	p.checkAttributeWildcardRestriction(t)
+	p.checkOpenContentRestriction(t)
 	p.inheritAttributesNow(t)
 
 	// A prohibited use is never one of the type's {attribute uses}, whether

@@ -384,6 +384,87 @@ func (p *parser) checkAttributeWildcardRestriction(t *ComplexType) {
 	}
 }
 
+// checkOpenContentRestriction enforces the open-content half of Content Type
+// Restricts (§3.4.6.2, clause 2).
+//
+// XSD 1.1 open content is a wildcard bolted onto a content model, so the two
+// rules here are the ones any wildcard derivation obeys, restated for
+// {open content}: a restriction may not widen the namespaces the wildcard
+// admits, and it may not loosen how strictly matches are validated.
+// open017 adds http://other.com/ to a base admitting only http://open.com/,
+// and open018 goes from strict to lax.
+//
+// Three things this deliberately does NOT check, each because a valid schema
+// in the suite disproves the obvious rule:
+//
+//   - "the base is closed, so any open content is a widening" is wrong.
+//     open022 restricts a base whose {open content} is absent but whose
+//     particle carries an equivalent explicit wildcard, and is valid. What
+//     the base admits is a property of the whole content model, not of the
+//     {open content} property alone, so the comparison needs the particle —
+//     which is the language-inclusion problem of §3.4.6.4, not a property
+//     comparison.
+//
+//   - "interleave cannot restrict suffix" is wrong as stated. It holds only
+//     when there is something to interleave among: open020 and open021
+//     restrict a suffix base by an interleaved derived type whose own
+//     particle is empty, and with an empty model the two modes denote the
+//     same language. Both are valid.
+//
+//   - The extension mirror does not exist in the form it appears to. A type
+//     extending a base that declared open content and declaring none of its
+//     own INHERITS the base's (§3.4.2.3.3) rather than closing it — open027
+//     and open031 are exactly that shape and are valid. open030 and open033
+//     are invalid for reasons about <xs:defaultOpenContent> preference and
+//     mode, which need the derivation machinery rather than this comparison.
+//
+// mode="none" closes the model, which restricts anything, so it returns early.
+func (p *parser) checkOpenContentRestriction(t *ComplexType) {
+	if t == nil || t.Name.URI == NSSchema || t.Content == ContentSimple ||
+		t.DerivationMethod != DerivationRestriction {
+		return
+	}
+	base, ok := t.Base.(*ComplexType)
+	if !ok || base == t || isUrType(base) {
+		return
+	}
+	derived, inherited := t.OpenContent, base.OpenContent
+	if derived == nil || derived.Mode == OpenNone ||
+		inherited == nil || inherited.Mode == OpenNone ||
+		derived.Wildcard == nil || inherited.Wildcard == nil {
+		return
+	}
+	if !wildcardSubset(derived.Wildcard, inherited.Wildcard) {
+		p.errs = append(p.errs, errorAt(nil, "cos-ct-restricts.2",
+			"the open content wildcard of complex type %q is not a "+
+				"subset of the open content wildcard of its base %q",
+			t.Name, base.Name))
+	}
+	if processContentsWeaker(derived.Wildcard.ProcessContents,
+		inherited.Wildcard.ProcessContents) {
+		p.errs = append(p.errs, errorAt(nil, "cos-ct-restricts.2",
+			"the open content wildcard of complex type %q validates its "+
+				"matches less strictly than that of its base %q",
+			t.Name, base.Name))
+	}
+}
+
+// processContentsWeaker reports whether a validates its matches less strictly
+// than b: strict is stronger than lax, and lax than skip.
+func processContentsWeaker(a, b ProcessContents) bool {
+	rank := func(pc ProcessContents) int {
+		switch pc {
+		case ProcessStrict:
+			return 2
+		case ProcessLax:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return rank(a) < rank(b)
+}
+
 // checkLocalSimpleTypeForm is the simple-type half of the local-form rule
 // already enforced for complex types (§3.14.2).
 //

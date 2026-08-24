@@ -6,6 +6,46 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### The harness claimed two mutually exclusive processor configurations
+
+XSD 1.1 schema validity reaches 99.00%, and 10 of the 22 tests gained were
+never a validator defect. `tests/xsdsuite` claimed support for both
+`restricted-xpath-in-CTA` and `full-xpath-in-CTA`. Those name *mutually
+exclusive* configurations, and a CTA test states an expectation for each:
+`cta0022` is `valid` under full-xpath and `invalid` under restricted-xpath. The
+later `<expected>` wins, so claiming both made the harness demand rejection of
+schemas this processor correctly accepts. Only the token describing what is
+implemented may be claimed.
+
+The denominator is unchanged at 15,365 — these tests moved from failing to
+passing, not from failing to skipped.
+
+### Conditional type assignment, all-groups, and open content
+
+Four rules, +12 on XSD 1.1 with XSD 1.0 untouched:
+
+* `e-props-correct.5` (section 3.3.6) — every type an alternative can select
+  must be validly derived from the element's declared type, `xs:error`
+  excepted. Four of this project's own test fixtures declared schemas that
+  violate this; they now name a common base, and what each test asserts is
+  unchanged.
+* A default alternative — one with no `test` — must come last (section 3.3.3).
+* `cos-all-limited` (section 3.8.3) — a model group inside `xs:all` must
+  itself be an all-group, and a nested all-group may not repeat.
+* `cos-ct-restricts.2` (section 3.4.6.2) — an open-content wildcard must be a
+  subset of the base's and may not loosen `processContents`.
+* The wildcard arm of Element Declarations Consistent (section 3.8.6), where a
+  strict or lax wildcard matches a global declaration whose type table differs
+  from a like-named local particle's.
+
+Three over-broad readings were caught and reverted before they shipped. A type
+extending a base with open content and declaring none *inherits* it (section
+3.4.2.3.3) rather than closing it, so the "extension mirror" rule rejected six
+valid schemas. "`interleave` cannot restrict `suffix`" holds only when there is
+something to interleave among. And the *type* half of wildcard EDC is a
+validation-time check rather than a schema constraint — `wild061` says so
+outright: the schema is valid though no document can satisfy it.
+
 ### XSD 1.1 wildcard attributes
 
 Schema validity reaches 99.47% on XSD 1.0 and 98.85% on 1.1.
@@ -394,7 +434,7 @@ libxml2.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
 | XSD 1.0 | W3C xsdtests | 99.88% instance · 99.47% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.85% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.00% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -436,7 +476,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.47% (1.0) and 98.85% (1.1). Instance validation —
+* XSD schema-validity, at 99.47% (1.0) and 99.00% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

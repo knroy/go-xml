@@ -71,7 +71,7 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,182 of 15,183 in scope) |
 | **XSLT 2.0** | 99.63% of the W3C XSLT suite filtered to 2.0 (6,136 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,969 of 25,000); **99.47%** of its *schema-validity* tests (14,328 of 14,405) |
-| **XSD 1.1** | 99.89% instance (26,178 of 26,206); **98.85%** schema-validity (15,189 of 15,365); opt-in via `Version11` |
+| **XSD 1.1** | 99.89% instance (26,178 of 26,206); **99.00%** schema-validity (15,211 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
@@ -82,7 +82,7 @@ Requires Go 1.26 or later.
 true here:
 
 1. **Schema-validity is the weakest of the measured numbers**, at 99.47% (1.0)
-   and 98.85% (1.1) — a schema invalid in one of the remaining ways is
+   and 99.00% (1.1) — a schema invalid in one of the remaining ways is
    accepted rather than reported. Instance validation, which is what most
    callers actually do, is above 99.7% in both versions. The remaining
    disagreements are listed in *Where it fails*, along with what the suite
@@ -749,7 +749,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,328 / 14,405 (99.47%) | 24,969 / 25,000 (99.88%) |
-| XSD 1.1 | 15,189 / 15,365 (98.85%) | 26,178 / 26,206 (99.89%) |
+| XSD 1.1 | 15,211 / 15,365 (99.00%) | 26,178 / 26,206 (99.89%) |
 
 **Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
 measured wrongly, and the correction is large enough to state outright.**
@@ -1355,7 +1355,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,328 / 14,405 (99.47%) | 24,969 / 25,000 (99.88%) |
-| XSD 1.1 | 15,189 / 15,365 (98.85%) | 26,178 / 26,206 (99.89%) |
+| XSD 1.1 | 15,211 / 15,365 (99.00%) | 26,178 / 26,206 (99.89%) |
 
 Every failure and the reason it is open is catalogued in
 [docs/known-gaps.md](docs/known-gaps.md).
