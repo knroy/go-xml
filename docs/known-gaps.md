@@ -809,8 +809,23 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
 | XSD 1.0 instance | 99.81% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
 | XSD 1.1 instance | 99.81% | ~99.9% | same |
-| XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
-| XSD 1.1 schema | 97.96% | ~99.9% | 285 constraints, one at a time |
+| XSD 1.0 schema | 98.60% | **~99.6%** | 170 addressable false accepts, one at a time |
+| XSD 1.1 schema | 97.96% | **~99.6%** | 278 addressable false accepts, one at a time |
+
+The two schema rows previously read `~99.9%`, which contradicted the ceiling
+derived under *What 100% would take* above and could not be reached: it would
+mean fixing 200 of the 201 1.0 schema disagreements and 313 of the 314 in 1.1,
+while 52 and 54 of them respectively are disputed by the W3C's own metadata.
+The figures here are the addressable counts, measured from a live run by
+splitting each disagreement on the `<current status=...>` the suite records:
+
+| | XSD 1.0 | XSD 1.1 |
+|---|---:|---:|
+| disagreements | 249 | 365 |
+| `accepted` — addressable | 197 | 311 |
+| `queried` or bug-tied — the ceiling | 52 | 54 |
+
+Eighteen of the 1.0 disputes are bug 4113 alone.
 
 Nothing here is blocked on a missing idea. XPath's last case is a deliberate
 refusal, the XSD false accepts are volume rather than difficulty, and the false
