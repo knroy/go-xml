@@ -76,7 +76,7 @@ Requires Go 1.26 or later.
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
-| **API** | pre-1.0; the shape is settled but not frozen |
+| **API** | 1.0; the exported surface is stable, and a breaking change means 2.0 with a new module path |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
@@ -143,11 +143,12 @@ Six packages, each usable on its own:
   limits that bound a parse, a validation and a transform.
 * **[SECURITY.md](SECURITY.md)** — how to report a vulnerability, and what
   counts as one.
-* **[docs/security.md](docs/security.md)** — threat model and audit results:
-  XXE and entity expansion are closed even with `AllowDOCTYPE` on, and the two
-  things a caller must still do themselves.
-* **[CHANGELOG.md](CHANGELOG.md)** — what each release contains, and what is
-  still allowed to change while the API is pre-1.0.
+* **[docs/security.md](docs/security.md)** — threat model and the results of
+  three audits: XXE is closed, entity expansion is bounded per *reference*
+  rather than per entity, and the third audit's findings are written up
+  including the one left open.
+* **[CHANGELOG.md](CHANGELOG.md)** — what each release contains, and what the
+  1.0 stability promise does and does not cover.
 * **[docs/known-gaps.md](docs/known-gaps.md)** — every measured failure and why
   it is still open, including the fix attempts that were reverted because they
   cost more than they gained.
@@ -751,8 +752,11 @@ Two figures, and the second is the one that matters.
 | XSD 1.0 | 14,341 / 14,405 (99.56%) | 24,968 / 24,999 (99.88%) |
 | XSD 1.1 | 15,239 / 15,365 (99.18%) | 26,177 / 26,205 (99.89%) |
 
-**Earlier revisions of this file reported 99.56% and "XSD 1.1: 100%". Both were
-measured wrongly, and the correction is large enough to state outright.**
+**Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
+"XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
+to state outright.** (That old figure is not the 99.56% in the table above,
+which is today's *schema-validity* number; the old one conflated the two
+scores and counted a whole category as skipped.)
 
 *The schema-validity tests were never scored.* A test group whose schema the
 suite marks invalid by design was counted as a "skip" on the grounds that

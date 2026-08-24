@@ -1,10 +1,10 @@
 # Changelog
 
 Notable changes, newest first. Versions follow [semantic
-versioning](https://semver.org), with the caveat that a `0.x` release may
-break the API — see *Stability* below.
+versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
+breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.0.0 — 2026-08-24
 
 ### Security: three bounds that were not bounding
 
@@ -567,7 +567,21 @@ The largest are:
 
 ### Stability
 
-The API is pre-1.0. The shape is settled and the conformance figures are not
-expected to move down, but names may still change — `relaxng` narrowed its
-exported surface from 27 symbols to 7 shortly before this release, which is
-the kind of change a `0.x` version exists to allow.
+**This is the 1.0 release: the exported API is now stable.** Every exported
+name and signature keeps its meaning, and anything that has to break goes to
+2.0 with a new module path.
+
+The surface was reviewed before freezing rather than after, which is the only
+time such a review is cheap. `relaxng` had already narrowed from 27 exported
+symbols to 7; the same pass over the other packages found an exported mutable
+global that any importer could corrupt, a package-scope `All` that named only
+derivation methods, three exported fields typed by unexported types, and one
+exported function with no callers at all. Those are fixed. A handful of
+further narrowings are recorded in the commit log as deliberate non-changes,
+because they are judgement calls rather than defects and 1.0 can carry them.
+
+What is *not* frozen by this: the conformance figures, which are expected to
+rise; the internal representation behind every interface; and the default
+values of the resource limits, which may tighten if an audit finds a bound
+that does not bound — three such were found and fixed shortly before this
+release.
