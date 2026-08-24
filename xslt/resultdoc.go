@@ -149,6 +149,16 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the principal result. Passing `out` here is exactly the merging bug
 	// this instruction used to be rejected to avoid.
 	sub := newOutputBuilder()
+	// The separator this document's output definition asks for is part of
+	// sequence normalisation, so the builder applies it as the tree is
+	// formed rather than the serialiser painting it on afterwards. The
+	// settings are resolved early for that reason alone; the value is used
+	// again below and recorded with the document.
+	sepSettings, serr := i.settings(rt)
+	if serr != nil {
+		return serr
+	}
+	sub.setItemSeparator(sepSettings.ItemSeparator)
 	// execSequence rather than a bare loop: the body is a sequence
 	// constructor, so an xsl:variable inside it is in scope for the
 	// instructions that follow, and a plain Execute loop never binds it —
@@ -182,10 +192,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
-	settings, err := i.settings(rt)
-	if err != nil {
-		return err
-	}
+	settings := sepSettings
 	// The nodes carry the resolved base before they are recorded, so that
 	// base-uri() inside this document answers relative to where the document
 	// goes rather than to where the stylesheet was. rebase applies xml:base
@@ -195,7 +202,11 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if resolvedHref == "" {
 		resolvedHref = rt.sheet.baseURI
 	}
-	nodes := sub.sequence()
+	// The recorded sequence carries the separators too: the suite evaluates
+	// its assertions against these nodes, not against the serialised text,
+	// so a separator that existed only in the document node toDocument built
+	// would be invisible to /text() = '+++'.
+	nodes := insertItemSeparator(sub.sequence(), settings.ItemSeparator)
 	if resolvedHref != "" {
 		for _, it := range nodes {
 			if n, ok := it.(*xdm.Node); ok {
@@ -207,6 +218,9 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// Normalisation has already run over these nodes, so the serialiser must
+	// not run it a second time and double every separator.
+	settings.ItemSeparator = nil
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
 		Href:    href,
 		BaseURI: resolvedHref,

@@ -199,7 +199,21 @@ type outputBuilder struct {
 	// happened, so the flag lives here rather than being rediscovered by
 	// looking at the trailing text — which cannot tell "a" "b" from "ab".
 	lastAtomic bool
+
+	// itemSep is xsl:output/@item-separator for the result tree this builder
+	// is producing, or nil when the attribute is absent.
+	//
+	// It is set only on the builder for a final result tree or a result
+	// document, never on one building a temporary tree: 5.7.1's separator
+	// rule is part of sequence normalisation, which is what turns the result
+	// *of a transformation* into a document, and a variable's content is not
+	// normalised that way.
+	itemSep *string
 }
+
+// setItemSeparator records the item-separator that applies to the tree this
+// builder produces. A nil argument leaves the default 5.7.1 rules in force.
+func (b *outputBuilder) setItemSeparator(sep *string) { b.itemSep = sep }
 
 func newOutputBuilder() *outputBuilder {
 	return &outputBuilder{tree: xdm.NewTree()}
@@ -669,7 +683,40 @@ func (b *outputBuilder) toTree() *xdm.Node {
 	// giving each value its own text node would both break the no-adjacent-
 	// text invariant and lose the separators.
 	prevAtomic := false
+	// 5.7.1 step 3: when an item separator is in force it goes between every
+	// pair of adjacent items, replacing the default rules entirely — the
+	// single space between adjacent atomic values, and the nothing between
+	// adjacent nodes. So the separator is emitted from the second item on,
+	// and prevAtomic's run-merging is switched off: two atomic values with an
+	// explicit separator between them are no longer one run.
+	//
+	// The separator is a text node in the constructed tree, not something
+	// the serialiser paints on. validation-0214 depends on that: the result
+	// document it builds is (comment, html, comment), so the separators land
+	// as text at document level and validation="strict" reports XTTE1550 for
+	// a document node whose children are not exactly one element.
+	sep := b.itemSep
+	emitted := 0
 	for _, it := range b.items {
+		if sep != nil && emitted > 0 {
+			// A zero-length separator inserts nothing, which is exactly what
+			// item-separator="" asks for; it must still suppress the default
+			// space between atomic values, which it does because prevAtomic
+			// is cleared below.
+			if *sep != "" {
+				if kids := tree.Root.Children; len(kids) > 0 &&
+					kids[len(kids)-1].Kind == xdm.KindText {
+					kids[len(kids)-1].Value += *sep
+				} else {
+					tree.Root.AppendChild(&xdm.Node{
+						Kind: xdm.KindText, Value: *sep})
+				}
+			}
+			prevAtomic = false
+		}
+		if sep != nil {
+			emitted++
+		}
 		if n, ok := it.(*xdm.Node); ok {
 			if n.Kind == xdm.KindText && n.Value == "" {
 				// Section 5.7.1 removes zero-length text nodes when
@@ -716,13 +763,23 @@ func (b *outputBuilder) toTree() *xdm.Node {
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {
 			text := a.String()
-			if prevAtomic {
-				kids := tree.Root.Children
+			kids := tree.Root.Children
+			switch {
+			case prevAtomic:
 				kids[len(kids)-1].Value += " " + text
-			} else {
+			case sep != nil && len(kids) > 0 &&
+				kids[len(kids)-1].Kind == xdm.KindText:
+				// The separator just written is a text node, and XDM forbids
+				// adjacent text nodes, so this value joins it rather than
+				// becoming a second one.
+				kids[len(kids)-1].Value += text
+			default:
 				tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: text})
 			}
-			prevAtomic = true
+			// With a separator in force there are no runs of adjacent atomic
+			// values left to merge with a space: the separator already sits
+			// between them.
+			prevAtomic = sep == nil
 		}
 	}
 	tree.Finalize()
@@ -741,6 +798,15 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 		// that follow it, so it rebinds the runtime for the rest of the loop
 		// rather than only for its own execution.
 		if v, ok := instr.(*varInstr); ok {
+			if v.unused {
+				// Nothing after this declaration can name the variable, so
+				// section 5.2's permission not to evaluate it applies and
+				// the binding is skipped entirely. Forcing it here made
+				// param-0301 report XTDE0640 for a circularity its own
+				// comment says must not be reported, because the value the
+				// variable would have taken is never demanded.
+				continue
+			}
 			val, err := evalVariable(v.v, rt)
 			if err != nil {
 				return err

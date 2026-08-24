@@ -6,11 +6,36 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
-### XSLT 2.0 conformance: 98.83% to 99.24%
+### XSLT 2.0 conformance: 98.83% to 99.52%
 
-6,006 of 6,052 in scope, up from 5,982 of 6,053. 25 tests fixed, no
-regressions. XSD 1.1 gained one instance test (26,158 of 26,209); XSD 1.0,
-QT3 and RELAX NG are unchanged.
+6,023 of 6,052 in scope, up from 5,982 of 6,053. 42 tests fixed across two
+rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
+XSD 1.0, QT3 and RELAX NG are unchanged.
+
+The second round added `xsl:mode/@on-no-match` (all six values of section
+6.6 — the attribute had been parsed and discarded, though 335 stylesheets in
+the suite use it), the `item-separator` serialization parameter, `case-order`
+as a tertiary tiebreak under a language collation, and per-node base URIs for
+content that arrives through an external entity, so `xml:base` inside an
+entity now resolves against the entity rather than its including document.
+
+Two further wrong answers, both in the parser:
+
+- Attribute values were not normalized per XML 1.0 section 3.3.3, so a
+  literal tab or newline inside an attribute survived into the value. This
+  had to be done at the lexical layer: after `encoding/xml` decodes, a
+  character reference and the character it denotes are indistinguishable, and
+  section 3.3.3 requires `&#10;` to survive where a raw newline becomes a
+  space.
+- Whitespace in element-only content declared by a schema was not treated as
+  ignorable, the schema-side counterpart to the DTD fix in the first round.
+
+`xsl:variable` bindings in a sequence constructor are now skipped when the
+name is never referenced later, which XSLT 2.0 section 5.2 permits: a
+circularity is an error only if the variable involved is actually evaluated.
+The check is deliberately one-sided, and a declaration whose own select
+references its own name still binds eagerly, since XPST0008 is a static
+error and is due whether or not the value is demanded.
 
 New in the engine: `xsl:evaluate` and `xsl:iterate` (recognised under 2.0
 semantics, which is what the suite's `XSLT20+` dependency means); the XPath
@@ -60,7 +85,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.24% — 6,006 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.52% — 6,023 of 6,052 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

@@ -28,7 +28,14 @@ func (i *blockInstr) Execute(rt *runtime, out *outputBuilder) error {
 // varInstr declares a variable. It is intercepted by execSequence, which
 // rebinds the runtime for the following instructions; executing it directly is
 // a no-op because a variable with no subsequent instructions has no effect.
-type varInstr struct{ v *Variable }
+type varInstr struct {
+	v *Variable
+	// unused records that no instruction after this one in the same sequence
+	// constructor mentions the name. Section 5.2 leaves such a variable
+	// unevaluated, and the difference is observable: evaluating it can raise
+	// an error the stylesheet never asked for. See compileNodes.
+	unused bool
+}
 
 func (i *varInstr) Execute(rt *runtime, out *outputBuilder) error { return nil }
 
@@ -1272,6 +1279,9 @@ type sortValue struct {
 	caseOrder  bool
 	// strColl is the collation from xsl:sort/@collation, if one was named.
 	strColl xpath.Collation
+	// collFoldKey is collKey for the case-folded form of str, present only
+	// when @lang and @case-order are both given. See where it is built.
+	collFoldKey []byte
 	// collKey is the locale-aware sort key for str, precomputed because a
 	// collator is stateful and cannot be shared across the comparisons that
 	// sort.Slice runs. Comparing two of these byte slices is equivalent to
@@ -1354,6 +1364,16 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 	}
 	if s.coll != nil {
 		v.collKey = s.coll.key(text)
+		if s.caseOrder == "upper-first" || s.caseOrder == "lower-first" {
+			// case-order is the caseFirst tailoring: it decides which of a
+			// pair that agrees on every other weight comes first. x/text
+			// exposes no caseFirst option, so the tailoring is reconstructed
+			// by ordering on a case-insensitive key and letting case break
+			// the exact ties. The case-folded key is taken through the same
+			// collator so the language's own placement of accented letters
+			// still governs the primary ordering.
+			v.collFoldKey = s.coll.key(strings.ToLower(text))
+		}
 	}
 	// case-order only has an effect on text sorts; without it a plain
 	// codepoint comparison puts every uppercase letter before every
@@ -1414,9 +1434,33 @@ func compareSortValues(a, b sortValue) int {
 	}
 
 	// A language-sensitive collation replaces codepoint order entirely: it
-	// already places accented and cased letters where that language expects,
-	// so applying the case-order folding on top would fight it.
+	// already places accented and cased letters where that language expects.
 	if a.collKey != nil && b.collKey != nil {
+		// @case-order alongside @lang does not fight the collation, it
+		// tailors it: 13.1.3 makes case-order the choice of which of two
+		// values that are "equal apart from case" comes first, which is
+		// exactly the caseFirst tailoring UCA defines as a tertiary-level
+		// setting. So the case-insensitive keys order the pair, and case
+		// only breaks a tie the language's own rules left.
+		if a.caseOrder && b.caseOrder &&
+			a.collFoldKey != nil && b.collFoldKey != nil {
+			if c := bytes.Compare(a.collFoldKey, b.collFoldKey); c != 0 {
+				return c
+			}
+			if c := bytes.Compare(a.collKey, b.collKey); c == 0 {
+				return 0
+			}
+			c := strings.Compare(a.str, b.str)
+			if c == 0 {
+				return 0
+			}
+			// Codepoint order puts uppercase first, so "upper-first" keeps
+			// that sign and "lower-first" inverts it.
+			if a.upperFirst {
+				return c
+			}
+			return -c
+		}
 		if c := bytes.Compare(a.collKey, b.collKey); c != 0 {
 			return c
 		}

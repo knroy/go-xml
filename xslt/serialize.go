@@ -13,6 +13,14 @@ import (
 
 // serialize writes a result sequence using the given output settings.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
+	// when an item separator is in force it is inserted between every pair
+	// of adjacent items in the sequence, in place of the default rules. It
+	// is done here, before anything looks at the sequence, so that the
+	// default method chosen from the result and the string joining below
+	// both see the normalised form.
+	seq = insertItemSeparator(seq, opts.ItemSeparator)
+
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
 	if len(opts.CDataElements) > 0 {
@@ -633,7 +641,17 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 			// that it survives a transport that mangles non-ASCII bytes and
 			// stays visible to anyone reading the source. XML output has no
 			// such convention and keeps the character.
-			if s.html {
+			//
+			// XHTML is excluded, which is why the guard is the file's usual
+			// "html && !xhtml" and not a bare s.html: s.html is set for the
+			// xhtml method too (see where it is assigned), but XHTML escapes
+			// as XML, and "nbsp" is not one of XML's five predefined entity
+			// names. Writing it there produced a document that references an
+			// undeclared entity — unparseable by the XML parser the method
+			// exists to satisfy — and the character needs no escape anyway:
+			// it is representable in every encoding this serialiser emits
+			// that the document would otherwise have to escape it for.
+			if s.html && !s.xhtml {
 				sb.WriteString("&nbsp;")
 				continue
 			}
@@ -1387,4 +1405,28 @@ func isPubidLiteral(s string) bool {
 		}
 	}
 	return true
+}
+
+// insertItemSeparator implements step 3 of sequence normalisation: with an
+// item separator in force, a text node holding it goes between every pair of
+// adjacent items of the result sequence.
+//
+// A nil separator means the attribute was absent and the default rules stand
+// — a single space between adjacent atomic values, nothing between nodes —
+// so the sequence is returned untouched. An empty separator is not the same
+// thing: it asks for nothing between any pair, including between two atomic
+// values that would otherwise be spaced, so it still runs and still clears
+// the runs the serialiser would have joined.
+func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
+	if sep == nil || len(seq) < 2 {
+		return seq
+	}
+	out := make(xdm.Sequence, 0, 2*len(seq)-1)
+	for i, it := range seq {
+		if i > 0 {
+			out = append(out, &xdm.Node{Kind: xdm.KindText, Value: *sep})
+		}
+		out = append(out, it)
+	}
+	return out
 }

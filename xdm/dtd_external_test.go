@@ -405,3 +405,69 @@ func TestTextDeclarationIsStripped(t *testing.T) {
 		}
 	}
 }
+
+// A node written inside an external parsed entity takes its base URI from
+// that entity, not from the document that referenced it. XML Base section 4.2
+// and the XDM base-uri accessor both say so, and the XSLT suite asserts it
+// directly in resolve-uri-021: a processing instruction and an element pulled
+// in from two different files each report their own.
+func TestExternalEntityGivesItsNodesItsOwnBaseURI(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"level1/element.xml": `<extEnt attr="x"><sub2>z</sub2></extEnt>`,
+		"level1/pi.xml":      `<?pi data?>`,
+		"doc.xml": `<!DOCTYPE test [
+  <!ENTITY extElement SYSTEM "level1/element.xml">
+  <!ENTITY extPI SYSTEM "level1/pi.xml">
+]>
+<test>&extElement;&extPI;</test>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	root := tree.Root.ChildElements()[0]
+
+	el := root.ChildElements()[0]
+	if !strings.HasSuffix(el.BaseURI, "level1/element.xml") {
+		t.Errorf("element base URI = %q, want it to end in level1/element.xml",
+			el.BaseURI)
+	}
+	// The base travels down: a descendant inherits from the element it was
+	// written under, which is inside the same entity.
+	if kid := el.ChildElements()[0]; kid.BaseURI != el.BaseURI {
+		t.Errorf("child base URI = %q, want %q", kid.BaseURI, el.BaseURI)
+	}
+
+	var pi *Node
+	for _, c := range root.Children {
+		if c.Kind == KindPI {
+			pi = c
+		}
+	}
+	if pi == nil {
+		t.Fatal("no processing instruction in the tree")
+	}
+	if !strings.HasSuffix(pi.BaseURI, "level1/pi.xml") {
+		t.Errorf("PI base URI = %q, want it to end in level1/pi.xml", pi.BaseURI)
+	}
+
+	// And the document's own nodes are unaffected: the rule is per entity,
+	// not a blanket override.
+	if !strings.HasSuffix(root.BaseURI, "doc.xml") {
+		t.Errorf("document element base URI = %q, want it to end in doc.xml",
+			root.BaseURI)
+	}
+}
+
+// xml:base inside an external entity resolves against the ENTITY's URI, which
+// is the base in force where the attribute was written — not against the
+// including document's.
+func TestXMLBaseInsideExternalEntityResolvesAgainstTheEntity(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"level1/frag.xml": `<frag xml:base="deeper/"><kid/></frag>`,
+		"doc.xml": `<!DOCTYPE r [ <!ENTITY e SYSTEM "level1/frag.xml"> ]>
+<r>&e;</r>`,
+	})
+	tree := mustParseExternal(t, dir, "doc.xml")
+	frag := tree.Root.ChildElements()[0].ChildElements()[0]
+	if !strings.HasSuffix(frag.BaseURI, "level1/deeper/") {
+		t.Errorf("base URI = %q, want it to end in level1/deeper/", frag.BaseURI)
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
 	"github.com/knroy/go-xml/xslt"
 )
 
@@ -103,7 +104,7 @@ func compileMatchPattern(pat, flags string) (*regexp.Regexp, error) {
 	return regexp.Compile(pat)
 }
 
-func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) (bool, string) {
+func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet, schema *xsd.Schema) (bool, string) {
 	res, redirected, wasRedirected := principalOf(res)
 	// The result tree is built once, here, and handed to every assertion
 	// underneath. Result.Tree re-parents the result's nodes into the fresh
@@ -111,7 +112,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet) 
 	// out of the tree the previous assertion was evaluated against: an all-of
 	// with several assert children saw every rooted path after the first
 	// return nothing.
-	return r.judgeIn(a, res, treeOf(res), redirected, wasRedirected, terr, set)
+	return r.judgeIn(a, res, treeOf(res), redirected, wasRedirected, terr, set, schema)
 }
 
 // treeOf builds the document node an XPath assertion is evaluated against.
@@ -163,7 +164,7 @@ func treeOf(res *xslt.Result) *xdm.Node {
 // result, whose principal tree is no longer empty, and every nested
 // assert-serialization would then read a re-serialisation with default output
 // settings instead of the text xsl:result-document actually produced.
-func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirected string, wasRedirected bool, terr error, set *TestSet) (bool, string) {
+func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirected string, wasRedirected bool, terr error, set *TestSet, schema *xsd.Schema) (bool, string) {
 	// A nil result with no error should not happen; treating it as a failure
 	// rather than dereferencing it keeps a harness bug from looking like an
 	// engine crash.
@@ -174,7 +175,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 	switch a.Kind {
 	case "all-of":
 		for _, c := range a.Children {
-			if ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); !ok {
+			if ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema); !ok {
 				return false, why
 			}
 		}
@@ -188,7 +189,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// an engine bug from a harness one without re-running it by hand.
 		var reasons []string
 		for _, c := range a.Children {
-			ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set)
+			ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema)
 			if ok {
 				return true, ""
 			}
@@ -202,7 +203,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 
 	case "not":
 		for _, c := range a.Children {
-			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set); ok {
+			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema); ok {
 				return false, "the negated assertion held"
 			}
 		}
@@ -264,7 +265,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		return evalAssert(res, root, a.Value, a.NS)
+		return evalAssert(res, root, a.Value, a.NS, schema)
 
 	case "assert-string-value":
 		if terr != nil {
@@ -368,7 +369,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 			// assert-serialization was special-cased above, so a nested
 			// serialization-matches re-serialised the tree with the wrong
 			// output definition and compared the wrong bytes.
-			if ok, why := r.judgeIn(c, sub, treeOf(sub), serialized, true, nil, set); !ok {
+			if ok, why := r.judgeIn(c, sub, treeOf(sub), serialized, true, nil, set, schema); !ok {
 				return false, a.URI + ": " + why
 			}
 		}
@@ -659,7 +660,138 @@ func hasDocumentChild(n *xdm.Node) bool {
 	return false
 }
 
-func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]string) (bool, string) {
+// schemaNS is mapNS carrying the environment's schema into the static context.
+//
+// It exists because the suite's assertions are written in the same static
+// context as the stylesheet under test: validation-1601 and its siblings
+// assert "(/) instance of document-node(schema-element(Q{...}doc))" about a
+// result the stylesheet validated against the schema the environment
+// declares. A bare prefix map cannot answer that — xpath.schemaDeclared only
+// consults a resolver that implements xpath.SchemaTypes — so every such
+// assertion failed with no schema in scope.
+//
+// The methods mirror xslt's own resolver over the same *xsd.Schema; only the
+// four an assertion can reach are answered with anything but a zero value,
+// because the assertion language names declarations and types, never casts to
+// a schema simple type in a position this harness evaluates.
+type schemaNS struct {
+	mapNS
+	schema *xsd.Schema
+}
+
+// LookupSchemaDeclaration implements xpath.SchemaTypes.
+func (s schemaNS) LookupSchemaDeclaration(name xdm.QName, attribute bool) bool {
+	if s.schema == nil {
+		return false
+	}
+	if attribute {
+		_, ok := s.schema.Attributes[name]
+		return ok
+	}
+	_, ok := s.schema.Elements[name]
+	return ok
+}
+
+// SchemaDeclarationType implements xpath.SchemaTypes.
+//
+// Only a named type is reported: a declaration using an inline anonymous type
+// has no name for the node test to compare an annotation against, and
+// inventing one would make the test fail for every node rather than match the
+// right ones.
+func (s schemaNS) SchemaDeclarationType(name xdm.QName, attribute bool) (string, bool) {
+	if s.schema == nil {
+		return "", false
+	}
+	var t xsd.Type
+	if attribute {
+		d, ok := s.schema.Attributes[name]
+		if !ok || d == nil || d.Type == nil {
+			return "", false
+		}
+		t = d.Type
+	} else {
+		d, ok := s.schema.Elements[name]
+		if !ok || d == nil || d.Type == nil {
+			return "", false
+		}
+		t = d.Type
+	}
+	local := t.TypeName().Local
+	if local == "" {
+		return "", false
+	}
+	return local, true
+}
+
+// SubstitutionGroupMembers implements xpath.SchemaTypes.
+func (s schemaNS) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
+	if s.schema == nil {
+		return nil
+	}
+	head, ok := s.schema.Elements[name]
+	if !ok {
+		return nil
+	}
+	members := head.Substitutable()
+	if len(members) == 0 {
+		return nil
+	}
+	out := make([]xdm.QName, 0, len(members))
+	for _, d := range members {
+		out = append(out, xdm.QName{URI: d.Name.URI, Local: d.Name.Local})
+	}
+	return out
+}
+
+// LookupSchemaType implements xpath.SchemaTypes.
+//
+// A complex type, list or union is reported as known but non-atomic: the name
+// resolves, which is what stops XPST0051, but no single primitive describes
+// its values.
+func (s schemaNS) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool) {
+	if s.schema == nil {
+		return 0, false, false
+	}
+	t, ok := s.schema.Types[name]
+	if !ok {
+		return 0, false, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok || st.Variety != xsd.VarietyAtomic || st.Primitive == nil {
+		return 0, false, true
+	}
+	// The nearest built-in ancestor rather than the XSD primitive: a
+	// restriction of xs:integer has xs:decimal as its primitive, so erasing
+	// to the primitive would make "instance of xs:integer" false for a value
+	// of the derived type.
+	for cur := st; cur != nil; {
+		if cur.Name.URI == xsd.NSSchema && cur.Name.Local != "" {
+			if code, ok := xpath.BuiltinAtomicTypeCode(cur.Name.Local); ok {
+				return code, true, true
+			}
+		}
+		base, ok := cur.Base.(*xsd.SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	code, ok := xpath.BuiltinAtomicTypeCode(st.Primitive.Name.Local)
+	if !ok {
+		return 0, false, true
+	}
+	return code, true, true
+}
+
+// ValidateSchemaValue implements xpath.SchemaTypes.
+func (s schemaNS) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
+	if s.schema == nil || !s.schema.HasSimpleType(name) {
+		return false, nil
+	}
+	return true, s.schema.ValidateValue(value, name)
+}
+
+func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]string, schema *xsd.Schema) (bool, string) {
 	// The result tree itself, not a re-parse of its serialisation.
 	//
 	// Serialising and re-parsing asks the XML parser to accept whatever the
@@ -679,6 +811,15 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	}
 	ctx := xpath.NewContext(root, xpath.Builtins())
 	resolver := xpath.NamespaceResolver(mapNS(ns))
+	// The assertion is evaluated in the same static context the stylesheet
+	// had, which includes the schema the environment declares. An assertion
+	// naming schema-element(E) is XPST0008 without it — and because the
+	// XPST0003 fallback in evalAssertExpr reports the 2.0 parser's message
+	// rather than the extended parser's, that surfaced as a bogus syntax
+	// error rather than as the missing schema it really was.
+	if schema != nil {
+		resolver = schemaNS{mapNS: mapNS(ns), schema: schema}
+	}
 	got, evalErr := evalAssertExpr(expr, ctx, resolver)
 	if err := evalErr; err != nil {
 		return false, fmt.Sprintf("%s: %v", trunc(expr), err)

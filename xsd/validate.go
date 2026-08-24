@@ -130,6 +130,20 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 		opts.MaxDepth = DefaultMaxDepth
 	}
 	v := &validator{schema: s, opts: opts, ids: map[string]int{}}
+	// Whitespace-only text in an element whose declared content is
+	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
+	// stripping it unconditional — it outranks xsl:preserve-space, exactly as
+	// the DTD-derived rule does. The DTD case can be handled at parse time
+	// because a DOCTYPE's content models are known then; a schema's are not,
+	// so it has to happen here, where the content model is first consulted.
+	//
+	// It is confined to annotating a whole DOCUMENT. Annotate already mutates
+	// the tree, but a caller assessing a CONSTRUCTED element — xsl:copy-of
+	// with validation="strict", XSLT 2.0 §19.2.1 — is validating a result
+	// tree, not a source document, and §4.4 says nothing about those. Those
+	// callers hand in the element itself, so the document node is what
+	// separates the two.
+	v.stripIgnorable = opts.Annotate && root.Kind == xdm.KindDocument
 
 	el := root
 	if el.Kind == xdm.KindDocument {
@@ -180,6 +194,12 @@ type validator struct {
 
 	// path is the element path to the node being validated, for messages.
 	path []string
+
+	// stripIgnorable removes whitespace-only text from elements whose
+	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
+	// require of a source document. See Schema.Validate for why it is scoped
+	// to annotating a document node.
+	stripIgnorable bool
 
 	// ids records every xs:ID value seen and every xs:IDREF, so that
 	// Validation Root Valid (ID/IDREF) can be checked once at the end. A
@@ -602,6 +622,12 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 			v.fail(el, "cvc-complex-type.2.3",
 				"element-only content may not contain character data %q",
 				truncate(s))
+		}
+		// Done after the check above, not before: the check reads the
+		// element's character data, and removing it first would make
+		// element-only content that is genuinely wrong look right.
+		if v.stripIgnorable {
+			stripIgnorableWhitespace(el)
 		}
 		return v.validateChildren(el, t)
 
@@ -1808,4 +1834,39 @@ func anonComplexAnnotation(t Type) string {
 		cur = base
 	}
 	return "anyType"
+}
+
+// stripIgnorableWhitespace removes whitespace-only text children of an element
+// whose declared content is element-only.
+//
+// XML 1.0 §2.10 calls that text ignorable: with a content model that admits no
+// character data, the only thing whitespace between the children can be is
+// layout. XSLT 2.0 §4.4 makes removing it unconditional for a source document
+// — "whitespace text nodes are stripped from elements with element-only
+// content regardless of xsl:preserve-space" — which is why this is not gated
+// on a strip-space declaration.
+//
+// xml:space="preserve" is honoured, on the same footing as it has in the
+// DTD-derived rule: the author has said the whitespace here is content.
+func stripIgnorableWhitespace(el *xdm.Node) {
+	if a := el.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
+		return
+	}
+	kept := el.Children[:0]
+	changed := false
+	for _, c := range el.Children {
+		if c.Kind == xdm.KindText && xdm.IsXMLWhitespace(c.Value) {
+			changed = true
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if !changed {
+		return
+	}
+	// The document-order indices assigned at parse time are left alone. They
+	// are only ever compared, never counted, so the gaps a removal leaves
+	// behind cost nothing: the surviving children stay in order relative to
+	// each other and to every node outside this element.
+	el.Children = kept
 }

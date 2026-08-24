@@ -96,6 +96,14 @@ type ParseOptions struct {
 	// the second parse would re-expand text that is already expanded, and an
 	// entity whose replacement mentions another would double.
 	entitiesExpanded bool
+
+	// entityBases maps byte ranges of the substituted source to the external
+	// entity each came from, so that a node built from entity text gets that
+	// entity's URI as its base rather than the including document's.
+	//
+	// It is unexported for the same reason as entitiesExpanded: it describes
+	// the source this parse was handed, not a choice a caller makes.
+	entityBases []entityBaseSpan
 }
 
 // Limits applied when the corresponding ParseOptions field is zero.
@@ -137,6 +145,17 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		return nil, fmt.Errorf("parse XML: %w", err)
 	}
 	r = decoded
+
+	// XML 1.0 section 3.3.3 normalizes a literal TAB, LF or CR inside an
+	// attribute value to a single space, while a character reference to the
+	// same character survives. That distinction only exists in the raw bytes
+	// — encoding/xml decodes "&#10;" while tokenising, after which it is
+	// indistinguishable from a newline the author typed — so the rewrite has
+	// to happen here, upstream of the decoder. See xdm/attnorm.go.
+	//
+	// It replaces one byte with one byte, so every offset downstream, both
+	// TrackPositions and the entity base spans, still means what it did.
+	r = newAttNormReader(r)
 
 	// The byte limit wraps the reader, so it bounds what is read rather
 	// than what a caller remembered to check. One byte over the limit is
@@ -260,6 +279,22 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				t = applyAttDefaults(t, attDefaults)
 			}
 			el := buildElement(t, cur, encodeOffset(start, trackPos))
+			// A node written inside an external parsed entity takes its base
+			// URI from that entity, not from its parent in the tree — XML
+			// Base section 4.2 and the XDM base-uri accessor. The entity's
+			// text has already been spliced into this source, so the only
+			// record of where it came from is the byte offset.
+			//
+			// This runs after buildElement so that an xml:base ON the element
+			// still resolves against the entity's URI, which is the base in
+			// force where the attribute was written.
+			if b := baseAt(opts.entityBases, int(start)); b != "" {
+				if xb := el.Attr(NSXML, "base"); xb != nil {
+					el.BaseURI = resolveBase(b, xb.Value)
+				} else {
+					el.BaseURI = b
+				}
+			}
 			if len(attTypes) > 0 {
 				applyAttTypes(el, attTypes)
 			}
@@ -316,11 +351,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			if strings.EqualFold(t.Target, "xml") {
 				continue // the XML declaration is not a PI node in the XDM
 			}
-			cur.AppendChild(&Node{
+			pi := &Node{
 				Kind:  KindPI,
 				Name:  QName{Local: t.Target},
 				Value: string(t.Inst),
-			})
+			}
+			// Same entity rule as for elements: a PI pulled in from an
+			// external entity has that entity's URI as its base. This is
+			// exactly what resolve-uri-021 asserts.
+			if b := baseAt(opts.entityBases, int(start)); b != "" {
+				pi.BaseURI = b
+			}
+			cur.AppendChild(pi)
 
 		case xml.Directive:
 			d := strings.TrimSpace(string(t))
@@ -680,6 +722,7 @@ func parseExpanded(src string, ents *entityTable, opts ParseOptions) (*Tree, err
 	// the re-parse is of text of a size this package has agreed to.
 	sub := opts
 	sub.entitiesExpanded = true
+	sub.entityBases = ents.baseSpans
 	return Parse(strings.NewReader(expanded), sub)
 }
 

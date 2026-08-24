@@ -110,9 +110,45 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		return false
 	}
 	if t.TypeName != "" {
-		return nodeTypeMatches(n, t.TypeName)
+		if !nodeTypeMatches(n, t.TypeName) {
+			return false
+		}
+		// The "?" of element(name, type?) is what admits a NILLED element.
+		// XDM's element test rule has two parts: the annotation must match,
+		// and — when the test carries no "?" — the node's dm:nilled property
+		// must be false. Without the second part element(t:test, t:testType)
+		// and element(t:test, t:testType?) match exactly the same nodes, so
+		// the higher-priority "not nilled" template in validation-2001 won
+		// for the nilled document too.
+		//
+		// Only an element has the property; an attribute test carrying "?"
+		// is not something the grammar produces, and asking the question of
+		// a non-element would answer false and reject a node the annotation
+		// already matched.
+		if !t.TypeNillable && n.Kind == xdm.KindElement && nodeIsNilled(n) {
+			return false
+		}
+		return true
 	}
 	return true
+}
+
+// nodeIsNilled reports the data model's dm:nilled property for an element.
+//
+// It is a PSVI property, so it takes both an xsi:nil marking AND evidence
+// that the element was validated: xsi:nil on an element whose declaration is
+// not nillable is an error rather than a nilled element, and only validation
+// distinguishes them. A non-empty type annotation is the evidence available
+// in the data model — an untyped tree leaves it empty on every node.
+//
+// fn:nilled and the element() kind test must agree on this, which is why the
+// rule lives in one place rather than being written out at each.
+func nodeIsNilled(n *xdm.Node) bool {
+	if n == nil || n.Kind != xdm.KindElement || n.TypeAnnotation == "" {
+		return false
+	}
+	a := n.Attr(xdm.NSXSI, "nil")
+	return a != nil && (a.Value == "true" || a.Value == "1")
 }
 
 // substitutes reports whether name is a member of the substitution group the

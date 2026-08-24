@@ -86,6 +86,11 @@ type entityTable struct {
 	// resolve against.
 	docBase string
 
+	// baseSpans records which byte ranges of the substituted source came
+	// from which external entity, so the second parse can set per-node base
+	// URIs. Populated by substituteMarkupEntities; empty otherwise.
+	baseSpans []entityBaseSpan
+
 	// reparsed says the expansion feeds a second *parse* rather than the
 	// decoder's substitution map.
 	//
@@ -658,6 +663,22 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		if written > maxTotalEntityBytes {
 			return "", fmt.Errorf(
 				"entity expansion exceeds %d bytes", maxTotalEntityBytes)
+		}
+		// Where this replacement lands is recorded so the second parse can
+		// give the nodes it produces the base URI of the entity they were
+		// written in rather than of the including document. See
+		// entityBaseSpan.
+		at := sb.Len()
+		if t.external[name] {
+			t.baseSpans = append(t.baseSpans, entityBaseSpan{
+				start: at, end: at + len(rep), base: t.externalBase[name],
+			})
+			if inner, ok := t.externalText[name]; ok {
+				t.baseSpans = append(t.baseSpans,
+					t.externalSpansIn(inner, at, 1)...)
+			}
+		} else if src, ok := t.raw[name]; ok {
+			t.baseSpans = append(t.baseSpans, t.externalSpansIn(src, at, 1)...)
 		}
 		sb.WriteString(rep)
 		i += j + 1

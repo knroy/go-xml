@@ -43,16 +43,119 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
 	nodes = mergeAcrossComments(nodes)
 	var out []Instruction
-	for _, n := range nodes {
+	for i, n := range nodes {
 		instr, err := c.compileNode(n, nsScope)
 		if err != nil {
 			return nil, err
 		}
-		if instr != nil {
-			out = append(out, instr)
+		if instr == nil {
+			continue
 		}
+		// Section 5.2 makes the evaluation of a variable lazy: a processor
+		// "is not required to evaluate a variable if the value is not used".
+		// The distinction is observable through XTDE0640, and param-0301 is
+		// written to prove it — a local variable bound to a global that is
+		// mid-evaluation, and never referenced, is not a circularity because
+		// nothing ever forces it.
+		//
+		// The decision has to be made here, at compile time: an Instruction
+		// exposes only Execute, so execSequence cannot inspect what the
+		// instructions after a variable refer to. What it can be told is
+		// whether any of them mention the name, which is decided from the
+		// source elements that produced them.
+		if v, ok := instr.(*varInstr); ok && n.Kind == xdm.KindElement {
+			// A declaration that names itself is XPST0008 — a *static*
+			// error, so it is due whether or not the value is ever demanded,
+			// and skipping the evaluation would silently accept it.
+			// error-XPST0008b is exactly that stylesheet.
+			v.unused = !nameReferencedIn(nodes[i+1:], v.v.Name) &&
+				!nameReferencedIn([]*xdm.Node{n}, v.v.Name)
+		}
+		out = append(out, instr)
 	}
 	return out, nil
+}
+
+// nameReferencedIn reports whether any of the given source subtrees could
+// refer to the variable name.
+//
+// The test is deliberately one-sided. A "yes" costs nothing — the variable is
+// evaluated, which is what always happened — while a "no" skips an evaluation,
+// so the answer must be "yes" whenever there is any doubt. Every construct
+// that can name a variable does so with "$" followed by the name somewhere in
+// an attribute value or in text, so a scan for that token over the whole
+// subtree cannot miss one; it only over-reports, for instance on a "$b" that
+// happens to sit inside a string literal.
+func nameReferencedIn(nodes []*xdm.Node, name xdm.QName) bool {
+	// Only the local part is matched, and any prefix bound to the variable's
+	// namespace would spell the reference differently, so a name in a
+	// namespace is never treated as unreferenced.
+	if name.URI != "" {
+		return true
+	}
+	want := "$" + name.Local
+	var scan func(*xdm.Node) bool
+	scan = func(n *xdm.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch n.Kind {
+		case xdm.KindText, xdm.KindComment:
+			if mentions(n.Value, want) {
+				return true
+			}
+		case xdm.KindElement:
+			for _, a := range n.Attrs {
+				if mentions(a.Value, want) {
+					return true
+				}
+			}
+		}
+		for _, ch := range n.Children {
+			if scan(ch) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, n := range nodes {
+		if scan(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// mentions reports whether s contains want as a variable reference, that is,
+// not immediately followed by another name character which would make it a
+// different and longer name.
+func mentions(s, want string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], want)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(want)
+		if end >= len(s) || !isNameContinuation(rune(s[end])) {
+			return true
+		}
+		i = end
+	}
+}
+
+// isNameContinuation reports whether r may continue an NCName. Only the ASCII
+// range is decided here; anything above it is treated as a continuation, which
+// keeps the over-reporting direction that nameReferencedIn requires.
+func isNameContinuation(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '-' || r == '_' || r == '.' || r == ':':
+		return true
+	case r >= 0x80:
+		return true
+	}
+	return false
 }
 
 // compileNode compiles one node of a sequence constructor.

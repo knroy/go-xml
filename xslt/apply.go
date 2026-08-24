@@ -271,6 +271,39 @@ func (t *Template) matchesMode(mode string) bool {
 func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
+	// Section 6.6: xsl:mode/@on-no-match selects which set of built-in rules
+	// is in force. text-only-copy is the default and the historical XSLT 1.0
+	// and 2.0 behaviour, so it falls through to the switch below; the others
+	// replace it wholesale.
+	switch rt.sheet.modeNoMatch[mode] {
+	case "deep-skip":
+		// Nothing is produced and nothing is recursed into.
+		return nil
+	case "shallow-skip":
+		// The node itself produces nothing, but its children are still
+		// processed — which is the text-only rule minus the text copying.
+		return builtInDescend(rt, node, mode, params, tunnels, out, false)
+	case "fail":
+		// XTDE0555: with on-no-match="fail" the absence of a matching rule
+		// is the error, so it is reported for the node that had none rather
+		// than silently producing the default output.
+		return fmt.Errorf(
+			"XTDE0555: no template rule matches %s in mode %q, and the mode "+
+				"declares on-no-match=\"fail\"", builtInNodeLabel(node), mode)
+	case "deep-copy":
+		// The whole subtree is copied, so there is no recursion: the copy
+		// already carries the descendants a shallow rule would have
+		// processed.
+		out.appendNode(node)
+		return nil
+	case "shallow-copy", "copy":
+		// "copy" is the XSLT 3.0 working-draft spelling that the suite still
+		// carries; it means shallow-copy. The node is copied without its
+		// content and the children are then processed into it, which is the
+		// identity transform written as a mode declaration.
+		return builtInShallowCopy(rt, node, mode, params, tunnels, out)
+	}
+
 	switch node.Kind {
 	case xdm.KindDocument, xdm.KindElement:
 		if err := rt.descend(); err != nil {
@@ -594,4 +627,101 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	defer rt.ascend()
 	sub := rt.withSelection(t, nxt, rt.sel.mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
+}
+
+// builtInDescend applies the mode's rules to node's children, optionally
+// copying text and attribute values through as the text-only rule does.
+func builtInDescend(rt *runtime, node *xdm.Node, mode string,
+	params, tunnels map[string]xdm.Sequence, out *outputBuilder,
+	copyText bool) error {
+
+	switch node.Kind {
+	case xdm.KindDocument, xdm.KindElement:
+		if err := rt.descend(); err != nil {
+			return err
+		}
+		defer rt.ascend()
+		size := len(node.Children)
+		for idx, ch := range node.Children {
+			sub := rt.withCurrent(ch, idx+1, size)
+			if err := applyToNode(sub, ch, mode, params, tunnels, out); err != nil {
+				return err
+			}
+		}
+		return nil
+	case xdm.KindText, xdm.KindAttribute:
+		if copyText {
+			out.appendText(node.StringValue())
+		}
+		return nil
+	}
+	return nil
+}
+
+// builtInShallowCopy is the on-no-match="shallow-copy" rule: copy the node
+// itself without its content, then process its children into the copy.
+//
+// An element's namespace nodes travel with it, exactly as xsl:copy carries
+// them (11.9.1), because a copied element whose prefix was declared on an
+// ancestor would otherwise lose the declaration its own name needs.
+// Attributes do not: the rule processes them like any other child in the
+// mode, and the built-in attribute rule is what puts their values back.
+func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
+	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+
+	switch node.Kind {
+	case xdm.KindDocument:
+		return builtInDescend(rt, node, mode, params, tunnels, out, false)
+	case xdm.KindElement:
+		sub := out.startElement(node.Name)
+		if out.open == nil && sub.open.BaseURI == "" {
+			sub.open.BaseURI = node.BaseURI
+		}
+		copyNamespacesTo(sub, node)
+		// The attributes are processed first so that they reach the element
+		// before any child content closes it to them; section 6.7's rule
+		// selects attributes as well as children.
+		if err := rt.descend(); err != nil {
+			return err
+		}
+		defer rt.ascend()
+		for _, a := range node.Attrs {
+			an := rt.withCurrent(a, 1, len(node.Attrs))
+			if err := applyToNode(an, a, mode, params, tunnels, sub); err != nil {
+				return err
+			}
+		}
+		size := len(node.Children)
+		for idx, ch := range node.Children {
+			cn := rt.withCurrent(ch, idx+1, size)
+			if err := applyToNode(cn, ch, mode, params, tunnels, sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		// Text, comments, processing instructions and attributes have no
+		// content to descend into, so a shallow copy is the whole node.
+		out.appendNode(node)
+		return nil
+	}
+}
+
+// builtInNodeLabel names a node for the on-no-match="fail" diagnostic.
+func builtInNodeLabel(node *xdm.Node) string {
+	switch node.Kind {
+	case xdm.KindDocument:
+		return "the document node"
+	case xdm.KindElement:
+		return "element " + node.Name.Lexical()
+	case xdm.KindAttribute:
+		return "attribute " + node.Name.Lexical()
+	case xdm.KindText:
+		return "a text node"
+	case xdm.KindComment:
+		return "a comment"
+	case xdm.KindPI:
+		return "processing instruction " + node.Name.Local
+	}
+	return "a node"
 }

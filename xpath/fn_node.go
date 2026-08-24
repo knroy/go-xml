@@ -316,11 +316,7 @@ func registerNodeFuncs(l *Library) {
 		// A non-empty TypeAnnotation is the data model evidence available here
 		// that the element went through validation; an untyped tree leaves it
 		// empty on every node.
-		if n.TypeAnnotation == "" {
-			return boolSeq(false), nil
-		}
-		a := n.Attr(xdm.NSXSI, "nil")
-		return boolSeq(a != nil && (a.Value == "true" || a.Value == "1")), nil
+		return boolSeq(nodeIsNilled(n)), nil
 	})
 }
 

@@ -204,7 +204,9 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		}
 	}
 
-	ok, why := r.judge(assert, res, terr, set)
+	// The schema the environment declares is part of the static context the
+	// assertions are evaluated in, exactly as it is for the stylesheet.
+	ok, why := r.judge(assert, res, terr, set, envSchema(set, r.environment(set, tc)))
 	out.Pass, out.Why = ok, why
 	return out
 }
@@ -355,6 +357,15 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if srcPath != "" && src != nil && src.Kind == xdm.KindDocument {
 		docs.Preload(fileURI(srcPath), &xdm.Tree{Root: src})
 	}
+	// Every other source the environment declares with a validation is
+	// preloaded the same way. An environment may name documents the
+	// stylesheet reaches through fn:doc rather than as the principal input —
+	// validation-20 declares two, and validation-2001 loads both by URI — and
+	// the specification's validation attribute applies to them exactly as it
+	// does to the principal source. Leaving them to the resolver parsed the
+	// file fresh and untyped, so fn:nilled and a schema-element() pattern had
+	// no annotation to read and every such template failed to match.
+	r.preloadSources(set, tc, docs)
 	opts := xslt.TransformOptions{
 		// The suite's documents legitimately carry DOCTYPE declarations,
 		// which the resolver refuses by default because following one is
@@ -424,6 +435,64 @@ type noNS struct{}
 func (noNS) ResolvePrefix(string) (string, bool) { return "", false }
 func (noNS) DefaultElementNamespace() string     { return "" }
 func (noNS) DefaultFunctionNamespace() string    { return xdm.NSFN }
+
+// preloadSources validates the environment's non-principal sources and hands
+// the resulting trees to the document resolver.
+//
+// A <source> with a uri and a validation is a document the stylesheet loads
+// itself, by that URI, and expects to find already annotated. Parsing and
+// annotating it here — then preloading it under the URI the environment
+// declares — is what makes fn:doc return the tree the environment described
+// rather than a fresh untyped parse of the same bytes. Node identity comes
+// along with it, for the same reason the principal source is preloaded.
+//
+// The principal source is skipped: it is preloaded by the caller, already
+// annotated, and parsing it a second time here would replace the tree the
+// transform is about to run on with a different one.
+//
+// A source that will not parse is skipped rather than reported, exactly as
+// annotate skips a schema it cannot load: the transform then reads the file
+// through the resolver as it did before, which is the behaviour this replaces
+// rather than a new failure.
+func (r *Runner) preloadSources(set *TestSet, tc *TestCase, docs *xslt.FileResolver) {
+	env := r.environment(set, tc)
+	if env == nil {
+		return
+	}
+	for _, s := range env.Sources {
+		if s.Role == "." || s.File == "" || s.URI == "" {
+			continue
+		}
+		switch s.Validation {
+		case "strict", "lax":
+		default:
+			// Only a validated source needs the harness to intervene. An
+			// unvalidated one is exactly what the resolver would produce on
+			// its own, and preloading it would add a second parse for no
+			// difference in the tree.
+			continue
+		}
+		p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		tree, err := xdm.ParseString(string(stripBOM(data)),
+			xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+				DocumentURI:      fileURI(p),
+				ExternalEntities: r.entityResolver()})
+		if err != nil {
+			continue
+		}
+		if err := r.annotate(set, env, s, tree.Root); err != nil {
+			continue
+		}
+		// Under the path the declared URI resolves to. The suite writes the
+		// uri relative to the test-set directory and the stylesheet names it
+		// the same way, so both arrive at the same file.
+		docs.Preload(fileURI(filepath.Join(set.Dir, filepath.FromSlash(s.URI))), tree)
+	}
+}
 
 // principalSource loads the document the transform starts on.
 //
@@ -631,6 +700,32 @@ func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.No
 	default:
 		return nil
 	}
+	schema := envSchema(set, env)
+	if schema == nil {
+		return nil
+	}
+	// The validator stamps annotations as it goes, so the error is discarded
+	// rather than propagated, for the reason given above.
+	_ = schema.Validate(root, xsd.ValidateOptions{Annotate: true})
+	return nil
+}
+
+// envSchema loads and merges every schema an environment declares.
+//
+// The environment's <schema> elements are what both the source validation in
+// annotate and the static context an assertion is evaluated in need: the
+// suite states the schema once, on the environment, and the stylesheet
+// imports the same file by relative path. Loading it in one place is what
+// keeps the two from disagreeing about which components are in scope.
+//
+// A schema that fails to load is skipped rather than reported. The suite
+// includes schemas this validator does not accept, and refusing the whole
+// test for one of them measures the loader rather than the transform.
+//
+// nil is returned when the environment declares none, or when nothing loaded
+// — callers treat that as "no schema in the static context", which is the
+// same answer they gave before any schema was consulted at all.
+func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 	if env == nil || len(env.Schemas) == 0 {
 		return nil
 	}
@@ -657,10 +752,7 @@ func (r *Runner) annotate(set *TestSet, env *Environment, s Source, root *xdm.No
 	if len(schema.Elements) == 0 && len(schema.Types) == 0 {
 		return nil
 	}
-	// The validator stamps annotations as it goes, so the error is discarded
-	// rather than propagated, for the reason given above.
-	_ = schema.Validate(root, xsd.ValidateOptions{Annotate: true})
-	return nil
+	return schema
 }
 
 // mergeInto folds one schema's global components into another.

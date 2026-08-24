@@ -78,6 +78,15 @@ type Stylesheet struct {
 	// namedOutputs holds named xsl:output definitions by Clark name, which
 	// xsl:result-document/@format selects.
 	namedOutputs map[string]*OutputSettings
+	// modeNoMatch holds xsl:mode/@on-no-match by Clark mode name, which
+	// selects which built-in template rules apply in that mode.
+	//
+	// A mode with no declaration is absent from the map and gets
+	// "text-only-copy", the value section 6.6 makes the default. The map
+	// stores only what a declaration set, so an xsl:mode that names a mode
+	// without giving @on-no-match records nothing and the default still
+	// stands.
+	modeNoMatch map[string]string
 	// source is the stylesheet's own document, which document("") returns.
 	//
 	// Section 16.1 defines the zero-length URI as naming the document
@@ -212,6 +221,16 @@ type OutputSettings struct {
 	// UndeclarePrefixes emits namespace undeclarations, which only XML 1.1
 	// permits. This parser implements XML 1.0, so it is recorded and ignored.
 	UndeclarePrefixes bool
+	// ItemSeparator is xsl:output/@item-separator: the string inserted
+	// between adjacent items of the result sequence during sequence
+	// normalisation (XSLT 3.0 section 5.7.1 step 3).
+	//
+	// It is a pointer because an explicit zero-length separator is not the
+	// same as the attribute being absent: absent means the default rule
+	// (adjacent atomic values separated by a single space, nodes not
+	// separated at all), while item-separator="" means every adjacency gets
+	// nothing, including between two atomic values.
+	ItemSeparator *string
 	// MediaType is the media type of the output. It affects no serialised
 	// character; it is metadata a caller passes on.
 	MediaType string

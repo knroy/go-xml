@@ -459,13 +459,14 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "import-schema":
 		return c.compileImportSchema(el)
 	case "mode":
-		// An xsl:mode declaration carries nothing an XSLT 2.0 processor has
-		// to act on: its streamable attribute requests a streaming
-		// evaluation, and a processor is always free to answer that request
-		// by building the tree, which is what this one does. Accepting and
-		// ignoring it is therefore the whole of its 2.0 meaning. Its
-		// attributes were checked by the element table before this point.
-		return nil
+		// @streamable requests a streaming evaluation, and a processor is
+		// always free to answer that request by building the tree, which is
+		// what this one does — so it is accepted and ignored. @on-no-match
+		// is not ignorable: it selects which built-in template rules apply,
+		// and the default (text-only-copy) produces visibly different output
+		// from shallow-copy or deep-skip. Its attributes were checked by the
+		// element table before this point.
+		return c.compileMode(el)
 	}
 	// Section 3.9: where forwards-compatible behaviour is enabled, an XSLT
 	// element that XSLT 2.0 does not allow as a child of xsl:stylesheet "must
@@ -961,6 +962,13 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	}
 	if el.Attr("", "doctype-system") != nil {
 		o.DocTypeSystem = value("doctype-system")
+	}
+	// Presence rather than non-emptiness: item-separator="" is a meaningful
+	// value (no separator anywhere, not even between atomic values), so it
+	// must be distinguishable from the attribute being absent.
+	if el.Attr("", "item-separator") != nil {
+		v := value("item-separator")
+		o.ItemSeparator = &v
 	}
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is
@@ -1602,4 +1610,33 @@ func (c *compiler) pruneOverriddenGlobals() {
 		}
 	}
 	c.sheet.globals = kept
+}
+
+// compileMode records the parts of an xsl:mode declaration this processor acts
+// on. Only @on-no-match is one of them; see the switch that calls this.
+//
+// The mode name is expanded like any other, and an absent @name declares the
+// unnamed mode, which is the empty Clark name. "#default" spells the same
+// thing and "#unnamed" is its XSLT 3.0 synonym, so both normalise to it.
+func (c *compiler) compileMode(el *xdm.Node) error {
+	name := ""
+	if na := el.Attr("", "name"); na != nil {
+		tok := strings.TrimSpace(na.Value)
+		switch tok {
+		case "", "#default", "#unnamed":
+		default:
+			qn, err := resolveQNameAttr(el, tok)
+			if err != nil {
+				return err
+			}
+			name = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
+		}
+	}
+	if nm := el.Attr("", "on-no-match"); nm != nil {
+		if c.sheet.modeNoMatch == nil {
+			c.sheet.modeNoMatch = map[string]string{}
+		}
+		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+	}
+	return nil
 }

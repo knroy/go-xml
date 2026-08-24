@@ -347,16 +347,16 @@ var xsltElements = map[string]elementDef{
 		"suppress-indentation": {},
 		// item-separator is the string written between adjacent items of the
 		// sequence being serialised. It is an XSLT 3.0 / Serialization 3.1
-		// parameter, accepted here for the same reason as the two above: the
-		// suite carries it in tests declared XSLT20+ whose subject is
-		// something else entirely, and rejecting the whole stylesheet hides
-		// the condition the test is actually about. validation-0214 is that
-		// case exactly — it expects XTTE1550 from xsl:result-document
-		// validation, which is never reached if the attribute is refused.
+		// parameter, accepted here because the suite carries it in tests
+		// declared XSLT20+ and rejecting the whole stylesheet would hide the
+		// condition those tests are about.
 		//
-		// Accepted, not implemented: this serialiser writes no separator, so
-		// a test that asserts the separator appears in the output still
-		// fails, and fails on the right thing.
+		// It is applied during sequence normalisation (5.7.1 step 3), in the
+		// tree rather than at serialisation: validation-0214 asks for
+		// XTTE1550 from validating the result document, and the error is due
+		// precisely because the inserted separators are text nodes at
+		// document level. A separator written only by the serialiser would
+		// leave that document schema-valid.
 		"item-separator":         {},
 		"byte-order-mark":        {values: []string{"yes", "no"}},
 		"cdata-section-elements": {},

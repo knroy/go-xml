@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // External entity resolution.
@@ -579,4 +580,105 @@ func endOfDTDConstruct(s string, i int) int {
 		return len(s)
 	}
 	return i + end + 1
+}
+
+// entityBaseSpan marks a byte range of the substituted source that came from
+// an external parsed entity, together with the URI that entity was read from.
+//
+// XML Base and the XDM both derive a node's base URI from the ENTITY it was
+// written in, not from its parent in the tree: an element pulled in from
+// "level1/element.xml" has that file as its base even though its parent is in
+// the including document. The rewrite in substituteMarkupEntities splices the
+// entity's text into the source, so after the splice the only record of where
+// a byte came from is its position — hence a span.
+//
+// Spans nest: an external entity may itself reference another. They are
+// recorded outermost first, so the LAST span containing an offset is the
+// innermost entity, and that is the one whose URI applies.
+type entityBaseSpan struct {
+	start, end int
+	base       string
+}
+
+// baseAt returns the base URI in force at a byte offset of the substituted
+// source, or "" when the offset is in the document's own text.
+func baseAt(spans []entityBaseSpan, off int) string {
+	base := ""
+	for _, s := range spans {
+		if off >= s.start && off < s.end {
+			base = s.base
+		}
+	}
+	return base
+}
+
+// externalSpansIn locates the external entity references inside already
+// expanded replacement text and reports where their contribution lands, so a
+// nested entity's own base is recorded as well as its parent's.
+//
+// It re-walks the raw text rather than instrumenting expand, because expand is
+// memoised: the same entity expanded twice must produce spans at both places,
+// which a cache on the string cannot express.
+func (t *entityTable) externalSpansIn(raw string, at int, depth int) []entityBaseSpan {
+	if depth > maxEntityDepth {
+		return nil
+	}
+	var out []entityBaseSpan
+	pos := at
+	for i := 0; i < len(raw); {
+		if raw[i] != '&' {
+			pos++
+			i++
+			continue
+		}
+		j := strings.IndexByte(raw[i:], ';')
+		if j < 0 {
+			pos++
+			i++
+			continue
+		}
+		name := raw[i+1 : i+j]
+		// A character reference is decoded by expand into one rune; the five
+		// predefined entities are left as written for the second parse to
+		// decode. Both must be accounted for in the output position or every
+		// span after them slides.
+		if name == "" {
+			pos++
+			i++
+			continue
+		}
+		if name[0] == '#' {
+			if r, ok := decodeCharRef(name); ok {
+				pos += utf8.RuneLen(r)
+			} else {
+				pos += j + 1
+			}
+			i += j + 1
+			continue
+		}
+		if _, ok := predefinedRune(name); ok {
+			pos += j + 1
+			i += j + 1
+			continue
+		}
+		rep, err := t.resolve(name)
+		if err != nil {
+			pos += j + 1
+			i += j + 1
+			continue
+		}
+		if t.external[name] {
+			out = append(out, entityBaseSpan{
+				start: pos, end: pos + len(rep), base: t.externalBase[name],
+			})
+			if inner, ok := t.externalText[name]; ok {
+				out = append(out, t.externalSpansIn(inner, pos, depth+1)...)
+			}
+		} else if src, ok := t.raw[name]; ok {
+			out = append(out, t.externalSpansIn(src, pos, depth+1)...)
+		}
+		pos += len(rep)
+		i += j + 1
+	}
+	return out
 }

@@ -201,20 +201,30 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr) (xdm.Sequence, er
 	}
 
 	if !allNodes {
-		// XPTY0018/XPTY0019: a path step must yield either all nodes or all
-		// atomic values, never a mix. Sorting a mixed result is meaningless,
-		// so it is returned as-is and the mix is an error only if a later
-		// step tries to navigate from it.
+		// XPath 2.0 section 3.2.1: "If the result of the last step in a path
+		// expression contains both nodes and atomic values, a type error is
+		// raised [err:XPTY0018]." A result that is entirely atomic is legal
+		// and common — "a/string(@b)" is an ordinary path — so only a genuine
+		// MIX is an error, and only a mix is checked for here.
 		//
-		// Raising XPTY0018 here instead — the literal reading of XPath 2.0
-		// section 3.2, and what expression-0932/0933 ask for — was measured
-		// and costs 149 tests: `out` accumulates across every input item, so
-		// a step yielding nodes for one item and atomics for another trips a
-		// check on the accumulation even though each step result on its own
-		// is homogeneous. Testing per input item instead is correct but gains
-		// nothing — it never fires, because those two tests reach the mix
-		// through a single item whose "if" branch type this engine erases.
-		// Both variants were measured and reverted.
+		// The distinction matters and an earlier attempt missed it: raising
+		// the error for the whole !allNodes branch condemns every all-atomic
+		// path as well, which is most of them, and was measured to cost 149
+		// tests. Testing per INPUT ITEM instead never fires: "//item/(if
+		// (position()=3) then @* else string(@val))" yields nodes for one
+		// item and strings for the others, so each item's own result is
+		// homogeneous and only the accumulation is mixed. The accumulation is
+		// exactly what the spec calls "the result of the last step", so that
+		// is what is examined.
+		//
+		// A mixed result is also unsortable, which is why the check precedes
+		// the sort: document order is not defined over atomic values.
+		for _, r := range out {
+			if _, ok := r.(*xdm.Node); ok {
+				return nil, xdm.Errorf("XPTY0018",
+					"the result of a path step contains both nodes and atomic values")
+			}
+		}
 		return out, nil
 	}
 	return xdm.SortDocumentOrder(out), nil

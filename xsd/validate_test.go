@@ -745,3 +745,114 @@ func TestValidateMaxDepth(t *testing.T) {
 		}
 	}
 }
+
+// Whitespace-only text in an element whose declared content is element-only
+// is ignorable (XML 1.0 section 2.10), and XSLT 2.0 section 4.4 makes removing
+// it unconditional for a source document. The schema is where the content
+// model first becomes known, so this is where the removal has to happen — the
+// DTD-derived counterpart can do it at parse time, but a schema is not read
+// until after the parse.
+//
+// This is the producer half of what strip-space-007 in the XSLT suite asserts.
+func TestAnnotateStripsIgnorableWhitespace(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence>
+	        <xs:element name="a" type="xs:string"/>
+	        <xs:element name="keep" type="xs:string"/>
+	      </xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	const doc = "<root>\n  <a>x</a>\n  <keep>   </keep>\n</root>"
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(tree.Root, ValidateOptions{Annotate: true}); err != nil {
+		t.Fatalf("should be valid: %v", err)
+	}
+	root := tree.Root.ChildElements()[0]
+	for _, c := range root.Children {
+		if c.Kind == xdm.KindText {
+			t.Errorf("element-only content kept whitespace text %q", c.Value)
+		}
+	}
+	if n := len(root.Children); n != 2 {
+		t.Errorf("root has %d children, want 2", n)
+	}
+	// The whitespace inside "keep" is CONTENT: its type is xs:string, so
+	// there is nothing ignorable about it.
+	keep := root.ChildElements()[1]
+	if got := keep.StringValue(); got != "   " {
+		t.Errorf("simple content lost its whitespace: got %q", got)
+	}
+}
+
+// The removal is scoped to annotating a whole DOCUMENT. A caller assessing a
+// CONSTRUCTED element — xsl:copy-of with validation="strict", XSLT 2.0
+// section 19.2.1 — is validating a result tree, and section 4.4 says nothing
+// about those, so its whitespace must survive.
+func TestAnnotateDoesNotStripWhenValidatingABareElement(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	tree, err := xdm.ParseString("<root>\n  <a>x</a>\n</root>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	el := tree.Root.ChildElements()[0]
+	if err := s.Validate(el, ValidateOptions{Annotate: true}); err != nil {
+		t.Fatalf("should be valid: %v", err)
+	}
+	text := 0
+	for _, c := range el.Children {
+		if c.Kind == xdm.KindText {
+			text++
+		}
+	}
+	if text == 0 {
+		t.Error("validating a bare element stripped its whitespace")
+	}
+}
+
+// xml:space="preserve" says the whitespace here is content, and it is honoured
+// on the same footing as it is in the DTD-derived rule.
+func TestAnnotateHonoursXMLSpacePreserve(t *testing.T) {
+	s := mustParseSchema(t, `
+	<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	           xmlns:xml="http://www.w3.org/XML/1998/namespace">
+	  <xs:element name="root">
+	    <xs:complexType>
+	      <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+	      <xs:attribute ref="xml:space"/>
+	    </xs:complexType>
+	  </xs:element>
+	</xs:schema>`)
+
+	tree, err := xdm.ParseString(
+		"<root xml:space=\"preserve\">\n  <a>x</a>\n</root>", xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Validate(tree.Root, ValidateOptions{Annotate: true})
+	root := tree.Root.ChildElements()[0]
+	text := 0
+	for _, c := range root.Children {
+		if c.Kind == xdm.KindText {
+			text++
+		}
+	}
+	if text == 0 {
+		t.Error("xml:space=\"preserve\" did not preserve the whitespace")
+	}
+}
