@@ -31,6 +31,10 @@ var supportedFeatures = map[string]bool{
 	"dtd": true,
 	// The XSD 1.1 built-in types are available through the xsd package.
 	"built_in_derived_types": true,
+	// XSLT 1.0 backwards-compatible behaviour is implemented: the XPath 2.0
+	// appendix B.1 coercion rules are in force for expressions written inside
+	// a version="1.0" scope. See compatModeAt in the xslt package.
+	"backwards_compatibility": true,
 }
 
 // unsupportedFeatures are the ones this engine does not implement, listed so
@@ -41,7 +45,6 @@ var unsupportedFeatures = map[string]string{
 	"streaming-fallback":                    "XSLT 3.0",
 	"XPath_3.1":                             "XPath 3.1",
 	"dynamic_evaluation":                    "not implemented; xsl:evaluate is XSLT 3.0",
-	"backwards_compatibility":               "XSLT 1.0 compatibility mode is not implemented",
 	"disabling_output_escaping":             "not implemented; the serializer escapes always",
 	"XML_1.1":                               "the parser implements XML 1.0",
 	"XSD_1.1":                               "available, but the suite's tests assume 1.1 defaults",

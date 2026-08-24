@@ -65,6 +65,22 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		seq = sub.sequence()
 	}
 
+	// 3.8: in backwards-compatible mode xsl:value-of takes the string value
+	// of the *first* item of the selected sequence and discards the rest,
+	// which is the whole of what XSLT 1.0 could express -- select yielded a
+	// node-set and string() of a node-set is the first node's. It applies only
+	// to @select: content built by a sequence constructor is 2.0-only syntax
+	// and has no 1.0 reading to be compatible with. backwards-006 pairs the
+	// two versions in one stylesheet and requires exactly that split.
+	// An explicit @separator disables it. The attribute is 2.0-only syntax --
+	// 1.0 had no way to write it -- so a stylesheet that writes one is asking
+	// for the whole sequence joined however its version reads, and
+	// backwards-009 pairs a 1.0 and a 2.0 xsl:value-of with the same separator
+	// and requires the same answer from both.
+	if i.sel != nil && i.sel.CompatMode() && !i.hasSeparator && len(seq) > 1 {
+		seq = seq[:1]
+	}
+
 	// XSLT 1.0 took only the first item; 2.0 joins the whole sequence, with a
 	// space separator when select is used and none otherwise. Defaulting to
 	// the 2.0 behaviour matters for rule sets that rely on it, and the

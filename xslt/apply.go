@@ -476,6 +476,9 @@ func evalParams(rt *runtime, params []*Variable) (map[string]xdm.Sequence, map[s
 type callTemplateInstr struct {
 	name   xdm.QName
 	params []*Variable
+	// compat records that the xsl:call-template was written in a 1.0 scope,
+	// which exempts it from XTSE0680. See checkCallTemplateParams.
+	compat bool
 }
 
 func (i *callTemplateInstr) Execute(rt *runtime, out *outputBuilder) error {

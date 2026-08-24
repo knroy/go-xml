@@ -82,6 +82,18 @@ type Context struct {
 	// than reading it as a parsed document. See TextResolver.
 	Texts TextResolver
 
+	// Compat is XPath 1.0 compatibility mode, which XSLT 3.8 puts in force for
+	// expressions written on an element whose effective [xsl:]version is below
+	// 2.0. Under it the coercion rules of XPath 2.0 appendix B.1 apply: a
+	// multi-item argument to a parameter expecting a string, a number or a
+	// node is truncated to its first item instead of raising XPTY0004,
+	// arithmetic on a non-numeric operand yields NaN rather than a type error,
+	// and a general comparison converts its operands the way XPath 1.0 did.
+	//
+	// It defaults to false and is set only by a Compiled that was given it, so
+	// ordinary 2.0 evaluation never sees it.
+	Compat bool
+
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
 	Depth int

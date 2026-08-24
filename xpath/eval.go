@@ -441,6 +441,21 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 	fn, ok := ctx.Funcs.Lookup(e.Name, len(e.Args))
 	if !ok {
+		// XSLT 18.1, and B.1 rule 6: under XPath 1.0 compatibility a call to
+		// an unknown function in a non-null namespace is not the static error
+		// XPST0017. 1.0 could not resolve extension functions statically at
+		// all, so the call binds to a fallback that raises the *dynamic*
+		// XTDE1425 -- and only if it is actually evaluated, which is why a
+		// stylesheet guarded by function-available() still compiles.
+		//
+		// A function in no namespace is excluded: that is a call to a builtin
+		// this processor does not have, which is a genuine XPST0017 whatever
+		// mode it is written in.
+		if ctx.Compat && e.Name.URI != "" && e.Name.URI != xdm.NSFN {
+			return nil, xdm.Errorf("XTDE1425",
+				"no implementation is available for the extension function "+
+					"%s with %d argument(s)", e.Name.Clark(), len(e.Args))
+		}
 		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 			e.Name.Clark(), len(e.Args))
 	}
@@ -464,6 +479,13 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		args[i] = v
+	}
+
+	// B.1 rule 1: under XPath 1.0 compatibility an argument supplied where a
+	// string, a number or a single node is expected is reduced to its first
+	// item instead of raising XPTY0004. See compatCoerceArgs.
+	if ctx.Compat {
+		args = compatCoerceArgs(e.Name, args)
 	}
 
 	sub, err := ctx.Descend()

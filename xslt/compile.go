@@ -144,6 +144,15 @@ func (c *compiler) checkCallTemplateParams() error {
 			if p.Tunnel || declared[p.Name.Clark()] {
 				continue
 			}
+			// 3.8: in backwards-compatible mode an xsl:with-param naming a
+			// parameter the template does not declare is ignored rather than
+			// being XTSE0680. XSLT 1.0 had no such error, and every 1.0
+			// stylesheet that passes a parameter defensively -- the DocBook
+			// stylesheets do it throughout -- would fail to compile at all if
+			// the rule applied to them. backwards-013 states it directly.
+			if call.compat {
+				continue
+			}
 			return fmt.Errorf(
 				"XTSE0680: xsl:call-template passes parameter $%s to template %s, "+
 					"which does not declare it",

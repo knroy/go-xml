@@ -178,33 +178,18 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 		return nil, nil
 
 	case xdm.KindElement:
-		// XTDE0160: evaluating an element that enables backwards-compatible
-		// behaviour is a non-recoverable dynamic error when the processor
-		// does not implement it. It is dynamic rather than static — the whole
-		// point of initial-template-080/081 is that the same stylesheet is
-		// an error only when the 1.0 code is actually reached — so it is
-		// compiled into an instruction that raises when executed rather than
-		// reported here.
-		if backwardsMode(n) {
-			return &backwardsCompatInstr{name: n.Name}, nil
-		}
+		// An element whose effective version is below 2.0 puts XSLT 1.0
+		// backwards-compatible behaviour in force for what is written on it.
+		// This processor implements that behaviour, so there is nothing to
+		// refuse here: XTDE0160 applies only to a processor that does not,
+		// and the mode is carried into the expressions by the namespace
+		// resolver each of them is compiled through. See compatModeAt.
 		if n.Name.URI == xdm.NSXSL {
 			return c.compileXSLInstruction(n)
 		}
 		return c.compileLiteralElement(n)
 	}
 	return nil, nil
-}
-
-// backwardsCompatInstr stands in for an element whose effective version puts
-// it in XSLT 1.0 backwards-compatible mode, which this processor does not
-// implement. Executing it is XTDE0160.
-type backwardsCompatInstr struct{ name xdm.QName }
-
-func (i *backwardsCompatInstr) Execute(rt *runtime, out *outputBuilder) error {
-	return fmt.Errorf("XTDE0160: %s specifies a version below 2.0, and this "+
-		"processor does not support backwards-compatible behaviour",
-		i.name.Local)
 }
 
 // compileLiteralElement compiles a literal result element: an element in the
@@ -672,7 +657,7 @@ func (c *compiler) compileCallTemplate(n *xdm.Node, ns xpath.NamespaceResolver) 
 	if err != nil {
 		return nil, err
 	}
-	instr := &callTemplateInstr{name: qn, params: params}
+	instr := &callTemplateInstr{name: qn, params: params, compat: compatModeAt(n)}
 	// XTSE0680 is checked after every module has compiled, because the
 	// template being called may be declared below this call or in a module
 	// imported afterwards. The call is recorded here, where the source

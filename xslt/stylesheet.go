@@ -439,6 +439,11 @@ type nsResolver struct {
 	// nearest ancestor-or-self carrying [xsl:]default-collation. It is a
 	// static property, inherited exactly as the base URI is.
 	collation string
+	// compat is XPath 1.0 compatibility mode, in force for the expressions
+	// written on the element this resolver was built for. It is a static
+	// property inherited exactly as the base URI and the default collation
+	// are, and compileExpr binds it to every expression it compiles.
+	compat bool
 	// schema is what xsl:import-schema brought in, or nil. It makes the
 	// stylesheet's imported types part of the static context, which is what
 	// lets "instance of my:partNumberType" resolve at all.
@@ -480,6 +485,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		defaultNS: defaultElementNS,
 		baseURI:   el.BaseURI,
 		collation: defaultCollationAt(el),
+		compat:    compatModeAt(el),
 		schema:    compileSchema,
 	}
 }
@@ -649,6 +655,11 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 				c = c.WithDefaultCollation(coll)
 			}
 		}
+		// XSLT 1.0 backwards compatibility is static in the same way, and
+		// binding it here is what puts every expression written inside a
+		// version="1.0" scope -- and only those -- under the appendix B.1
+		// coercion rules.
+		c = c.WithCompatMode(r.compat)
 	}
 	return c, nil
 }

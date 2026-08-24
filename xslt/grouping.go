@@ -546,7 +546,19 @@ func analyzeStringInput(seq xdm.Sequence) (string, error) {
 // to an untypedAtomic string and sorted 100 before 99.
 func (s *sortKey) evalKey(rt *runtime) (xdm.Sequence, error) {
 	if s.sel != nil {
-		return s.sel.Eval(rt.ctx)
+		seq, err := s.sel.Eval(rt.ctx)
+		if err != nil {
+			return nil, err
+		}
+		// 3.8: a sort key under backwards compatibility is a single value.
+		// XSLT 1.0 sorted on string() or number() of the key expression, both
+		// of which read a node-set as its first node, so a multi-item key is
+		// truncated rather than being XTTE1020. backwards-012 sorts by
+		// "(-., 'banana')" and expects the sort to run on the "-." alone.
+		if s.sel.CompatMode() {
+			seq = seq[:min(len(seq), 1)]
+		}
+		return seq, nil
 	}
 	sub := rt.temporaryOutput()
 	out := newOutputBuilder()
@@ -821,6 +833,38 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// separated by the format's own separators. Taking only the first
 		// silently dropped the rest.
 		atoms := xdm.Atomize(seq)
+
+		// 3.8: under backwards compatibility @value is a single number, not a
+		// sequence of them, and the conversion is number() -- which yields NaN
+		// rather than an error for anything that is not a number, and formats
+		// as the string "NaN". XSLT 1.0 defined it that way and had no
+		// XTDE0980 to raise. backwards-015 numbers the empty sequence and
+		// backwards-016 numbers "apples"; both want NaN.
+		if i.value.CompatMode() {
+			if len(atoms) == 0 {
+				out.appendText("NaN")
+				return nil
+			}
+			at, ok := atoms[0].(*xdm.Atomic)
+			if !ok {
+				out.appendText("NaN")
+				return nil
+			}
+			num, cerr := xpath.CastAtomic(at, xdm.TypeDouble)
+			if cerr != nil || math.IsNaN(num.Float64()) ||
+				math.IsInf(num.Float64(), 0) {
+				out.appendText("NaN")
+				return nil
+			}
+			n := int64(math.Floor(num.Float64() + 0.5))
+			if n < 0 {
+				out.appendText("NaN")
+				return nil
+			}
+			out.appendText(formatNumberSeq([]int64{n}, format, opts))
+			return nil
+		}
+
 		nums := make([]int64, 0, len(atoms))
 		for _, a := range atoms {
 			at, ok := a.(*xdm.Atomic)

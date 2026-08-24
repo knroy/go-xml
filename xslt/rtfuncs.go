@@ -409,11 +409,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 			case "supports-serialization":
 				return xdm.One(xdm.NewString("yes")), nil
 			case "supports-backwards-compatibility":
-				// XSLT 1.0 compatibility mode (version="1.0" on the
-				// stylesheet changing the meaning of expressions) is not
-				// implemented, and the property must say so: a stylesheet
-				// that asks before relying on it was being told yes.
-				return xdm.One(xdm.NewString("no")), nil
+				// XSLT 1.0 compatibility mode is implemented: the appendix
+				// B.1 coercion rules are in force for expressions written
+				// inside a version="1.0" scope. See compatModeAt.
+				return xdm.One(xdm.NewString("yes")), nil
 			}
 			return xdm.One(xdm.NewString("")), nil
 		},
@@ -653,11 +652,35 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		}
 	}
 	for _, kv := range xdm.Atomize(args[1]) {
-		k, err := rt.keySearchKey(kv.(*xdm.Atomic), coll)
+		a := kv.(*xdm.Atomic)
+		k, err := rt.keySearchKey(a, coll)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, index[k]...)
+
+		// 3.8: under backwards compatibility key() compares by string value,
+		// as 1.0's did -- 1.0 had one string type and one numeric type, and
+		// key('k', 1.0) found the nodes keyed on "1". The index is typed, so
+		// the untyped form of the sought value is looked up *as well as* the
+		// typed one rather than instead of it: backwards-043 declares the same
+		// key twice, once in a 1.0 module and once in a 2.0 one, and both
+		// declarations feed the one shared index, so coercing the index side
+		// would split it in two.
+		if !ctx.Compat {
+			continue
+		}
+		alt := compatKeyValue(a)
+		if alt == a {
+			continue
+		}
+		ak, err := rt.keySearchKey(alt, coll)
+		if err != nil {
+			return nil, err
+		}
+		if ak != k {
+			out = append(out, index[ak]...)
+		}
 	}
 	if top != nil && top.Kind != xdm.KindDocument {
 		// Section 16.3: the third argument names a *subtree*, not a document.
@@ -1163,4 +1186,14 @@ func inScopeBaseURI(n *xdm.Node) string {
 		}
 	}
 	return ""
+}
+
+// compatKeyValue gives the xs:untypedAtomic form of a key value sought under
+// XSLT 1.0 backwards compatibility, or the value unchanged when it already is
+// one. fnKey looks it up alongside the typed form; see there for why both.
+func compatKeyValue(a *xdm.Atomic) *xdm.Atomic {
+	if a.Type == xdm.TypeUntypedAtomic || a.IsNaN() {
+		return a
+	}
+	return xdm.NewUntypedAtomic(a.String())
 }

@@ -35,7 +35,34 @@ With it on, nine XSLT tests and the last QT3 failure pass — XSLT 2.0 at 99.69%
 and QT3 at 15,183 of 15,183. The headline figures below report the default
 configuration.
 
-### XSLT 2.0 conformance: 98.83% to 99.60%
+### XSLT 1.0 backwards-compatible behaviour
+
+`[xsl:]version="1.0"` now enables the behaviour XSLT 2.0 section 3.8 and XPath
+2.0 section B.1 define for it, instead of raising XTDE0160. Argument coercion
+takes the first item of a sequence where 2.0 raises a type error; comparison
+with a node-set uses the existential 1.0 rules; arithmetic on a non-numeric
+yields NaN rather than failing; `xsl:value-of` takes the first item;
+`system-property('xsl:supports-backwards-compatibility')` answers "yes"; and a
+call to an unavailable extension function becomes a *dynamic* XTDE1425 raised
+only if it is evaluated, rather than a static XPST0017.
+
+The flag is static, resolved at compile time and carried on the compiled
+expression, so it reaches evaluation through a single write site. A stylesheet
+that does not declare 1.0 is byte-identical to before; QT3 was measured five
+times across the work and never moved.
+
+One subtlety: the constant folder was baking in 2.0 answers, folding `1 + 1` to
+an `xs:integer` where 1.0 requires `xs:double`. Folding is now withheld for the
+operators B.1 redefines.
+
+**This grows the measured denominator**, because 112 tests that declared the
+feature as a dependency were previously skipped. 104 of the 107 newly in-scope
+tests pass. The absolute count went from 6,028 passing to 6,132; the percentage
+moved from 99.60% to 99.56%, because the admitted set is harder than the corpus
+average. The number below is the honest one, and it is not comparable to
+earlier figures measured over the smaller scope.
+
+### XSLT 2.0 conformance: 98.83% to 99.56% over a scope that grew
 
 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two
 rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
@@ -139,7 +166,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.60% — 6,028 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.56% — 6,132 of 6,159 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

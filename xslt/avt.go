@@ -151,6 +151,13 @@ func (a *avt) eval(rt *runtime) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// 3.8: in backwards-compatible mode each expression in an AVT
+		// contributes the string value of its first item alone, which is what
+		// XPath 1.0's string() of a node-set gave. backwards-010 pairs a 1.0
+		// and a 2.0 AVT in one stylesheet and requires the split.
+		if p.expr.CompatMode() && len(seq) > 1 {
+			seq = seq[:1]
+		}
 		// Section 5.7.2 applies to an attribute value template too: zero-length
 		// text nodes are dropped and adjacent text nodes merged before the
 		// separator is inserted, so a function returning a sequence of text

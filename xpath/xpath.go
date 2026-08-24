@@ -24,6 +24,13 @@ type Compiled struct {
 	// [xsl:]default-collation sets and which is static for the same reason
 	// the base URI is: it is written in the stylesheet.
 	staticCollation Collation
+	// compat is XPath 1.0 compatibility mode, which XSLT 3.8 turns on for the
+	// expressions written within an element whose effective [xsl:]version is
+	// below 2.0. It is static, so it belongs here rather than on the Context.
+	compat bool
+	// ns is the namespace resolver src was parsed with, kept so that
+	// WithCompatMode can re-parse. See there for why re-parsing is necessary.
+	ns NamespaceResolver
 }
 
 // WithDefaultCollation returns a copy of c whose functions use coll when no
@@ -62,7 +69,7 @@ func Compile(src string, ns NamespaceResolver) (*Compiled, error) {
 	// Optimisation happens once per compiled expression, and a compiled
 	// stylesheet is reused across every node and every document, so anything
 	// folded here is work removed from the inner loop rather than deferred.
-	return &Compiled{expr: optimize(e), src: src}, nil
+	return &Compiled{expr: optimize(e), src: src, ns: ns}, nil
 }
 
 // MustCompile is Compile, panicking on error. For tests and for expressions
@@ -95,7 +102,7 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// fit in memory at once.
 	ctx.resetItems()
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
-		c.staticCollation != nil {
+		c.staticCollation != nil || c.compat != ctx.Compat {
 		sub := *ctx
 		if c.staticBase != "" {
 			sub.StaticBaseURI = c.staticBase
@@ -103,6 +110,11 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 		if c.staticCollation != nil {
 			sub.collation = c.staticCollation
 		}
+		// The compiled expression's mode is authoritative in both
+		// directions. A 2.0 expression evaluated from inside a 1.0 scope --
+		// an xsl:function called from a 1.0 template, say -- is a 2.0
+		// expression, so the flag has to be cleared as well as set.
+		sub.Compat = c.compat
 		return c.expr.Eval(&sub)
 	}
 	return c.expr.Eval(ctx)
@@ -146,3 +158,43 @@ func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) 
 	}
 	return c.Eval(ctx)
 }
+
+// WithCompatMode returns a copy of c evaluated under XPath 1.0
+// compatibility mode.
+//
+// The mode is static, exactly as the base URI and the default collation are:
+// XSLT 3.8 fixes it from the [xsl:]version attribute of the nearest
+// ancestor-or-self of the element the expression is written on, which cannot
+// change between evaluations. Binding it to the compiled expression rather
+// than threading it through the dynamic context is therefore both correct and
+// what keeps an ordinary 2.0 expression byte-identical to what it was: a
+// Compiled that was never given the flag never sets it on the context, so no
+// evaluation outside a 1.0 scope can observe it.
+func (c *Compiled) WithCompatMode(on bool) *Compiled {
+	if c == nil || !on {
+		return c
+	}
+	n := *c
+	n.compat = true
+
+	// The optimiser folds a closed sub-expression by evaluating it against a
+	// bare context, and a bare context is not in compatibility mode: "1 + 1"
+	// folds to the xs:integer 2, where under 1.0 it is the xs:double 2, and
+	// backwards-027 asks the question directly with "instance of xs:double".
+	//
+	// Re-parsing rather than re-optimising is deliberate. optimizeChildren
+	// rewrites the tree in place, so the folded AST no longer holds the
+	// operands to fold differently; the source is the only thing left that
+	// does. It costs one parse per expression at stylesheet-compile time,
+	// which is once per stylesheet rather than once per node, and only for
+	// expressions actually written in a 1.0 scope.
+	if c.ns != nil {
+		if e, err := Parse(c.src, c.ns); err == nil {
+			n.expr = optimizeCompat(e)
+		}
+	}
+	return &n
+}
+
+// CompatMode reports whether c evaluates under XPath 1.0 compatibility mode.
+func (c *Compiled) CompatMode() bool { return c != nil && c.compat }

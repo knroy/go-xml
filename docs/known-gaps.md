@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.60% — 6,028 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.56% — 6,132 of 6,159 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 99.60%, and the newest — so it is a
+The weakest of the measured numbers, at 99.56%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -79,7 +79,7 @@ There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
 2007 behind a click-through licence, with no repository. This runs the XSLT
 3.0 suite filtered by each test's declared version dependency, which measures
 something different from running a suite written for the version under test.
-6,052 of 14,601 cases are in scope; the largest exclusions are 6,115 needing
+6,159 of 14,601 cases are in scope; the largest exclusions are 6,115 needing
 XSLT 3.0, 1,580 depending on a Unicode version, and 347 on `xsl:package`.
 
 `GOXSLT_XSLTS_BYSET=1` prints the result of each test-set separately, which is
@@ -89,17 +89,20 @@ by that measure:
 
 | set | passing | what is missing |
 |---|---|---|
-| `xpath-compat` | 0/1 | XSLT 1.0 backwards-compatible mode |
+| `docbook` | 0/2 | one needs the EXSLT `node-set` extension; one is a malformed include in the vendored DocBook tree |
 | `unparsed-text` | 1/2 | one case needs the network, which is refused |
 | `collection` | 5/6 | one case needs XSLT 3.0 packages |
-| `regex` | 42/49 | variable-width backreferences |
-| `validation` | 40/43 | Saxon's `indent="yes"` layout; QName type keying |
-| `analyze-string` | 43/45 | variable-width backreferences |
-| `format-number` | 61/62 | a suite defect, not an engine gap |
+| `regex` | 42/49 | variable-width backreferences, off by default |
+| `analyze-string` | 43/45 | the same |
+| `regex-syntax-xslt20` | 981/987 | three suite defects, three that would cost XSD tests |
+| `xpath-compat` | 17/18 | `string(xs:float(-0))` serialisation |
+| `backwards` | 45/46 | one harness base-URI case for inline sources |
+| `validation` | 42/43 | Saxon-specific `indent="yes"` layout |
+| `format-number` | 67/68 | a suite defect, not an engine gap |
 | `import-schema` | 190/191 | static content-model checking against a declared `as` |
-| `sequence` | 86/87 | catalog metadata separates it from a passing twin |
+| `sequence` | 87/88 | catalog metadata separates it from a passing twin |
 | `use-when` | 79/80 | unprefixed type names in the default element namespace |
-| `variable` | 100/101 | XSLT 3.0 text value templates |
+| `variable` | 102/103 | XSLT 3.0 text value templates |
 
 Six of the remaining failures are errors the suite expects that the engine
 does not raise. That is the same shape as the XSD schema-validity gap: the

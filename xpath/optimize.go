@@ -36,7 +36,14 @@ func optimize(e Expr) Expr {
 }
 
 // optimizeChildren rewrites the sub-expressions of e in place.
-func optimizeChildren(e Expr) Expr {
+func optimizeChildren(e Expr) Expr { return optimizeWith(e, optimize) }
+
+// optimizeWith rewrites the sub-expressions of e in place using rec, which is
+// the whole-expression pass to apply to each of them. The recursion is a
+// parameter because there are two passes -- the ordinary one and the XPath 1.0
+// compatibility one, which withholds a rule -- and each must descend through
+// itself rather than through the other.
+func optimizeWith(e Expr, optimize func(Expr) Expr) Expr {
 	switch v := e.(type) {
 	case *BinaryOp:
 		v.Left, v.Right = optimize(v.Left), optimize(v.Right)
@@ -215,6 +222,40 @@ func isComparisonOp(op string) bool {
 	switch op {
 	case "eq", "ne", "lt", "le", "gt", "ge",
 		"=", "!=", "<", "<=", ">", ">=":
+		return true
+	}
+	return false
+}
+
+// optimizeCompat is optimize for an expression that will evaluate under XPath
+// 1.0 compatibility mode.
+//
+// It runs every rule except constant folding of arithmetic and comparison.
+// Those two are the operators B.1 redefines, and folding one means evaluating
+// it here against a context that is not in compatibility mode -- which gives
+// the 2.0 answer and the 2.0 type, permanently, for an expression that will
+// never be evaluated under 2.0 rules. Everything else the optimiser does is
+// mode-independent.
+func optimizeCompat(e Expr) Expr {
+	if e == nil {
+		return nil
+	}
+	e = optimizeWith(e, optimizeCompat)
+	if b, ok := e.(*BinaryOp); ok && compatSensitiveOp(b.Op) {
+		return e
+	}
+	if lit, ok := foldConstant(e); ok {
+		return lit
+	}
+	return e
+}
+
+// compatSensitiveOp reports whether B.1 redefines the operator, and therefore
+// whether folding it at compile time would bake in the wrong answer.
+func compatSensitiveOp(op string) bool {
+	switch op {
+	case "+", "-", "*", "div", "idiv", "mod",
+		"=", "!=", "<", "<=", ">", ">=", "to":
 		return true
 	}
 	return false

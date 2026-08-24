@@ -200,6 +200,23 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	}
 	la, ra := xdm.Atomize(l), xdm.Atomize(r)
 
+	// B.1 rule 3: under XPath 1.0 compatibility the operands of a general
+	// comparison are converted by the 1.0 rules before being compared, which
+	// makes pairs that 2.0 refuses as incomparable — a string against a
+	// boolean, a string against a number — answer the way 1.0 did. See
+	// compatGeneralCompare for the precedence.
+	if ctx.Compat {
+		// The raw sequences are passed alongside the atomized ones because the
+		// boolean rule uses the effective boolean value, and that is defined
+		// on the sequence rather than on its atomization: a result tree
+		// fragment is a document node, which is true however empty its string
+		// value is, and backwards-030 compares exactly such a fragment against
+		// true().
+		if cl, cr, ok := compatGeneralCompare(l, r, la, ra, e.Op); ok {
+			la, ra = cl, cr
+		}
+	}
+
 	valueOp := map[string]string{
 		"=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
 	}[e.Op]
@@ -577,6 +594,13 @@ func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 		return nil, err
 	}
 	atoms := xdm.Atomize(v)
+	// B.1 rule 1 reaches "to" as well: its operands are declared xs:integer,
+	// so under XPath 1.0 compatibility a multi-item operand is reduced to its
+	// first item rather than raising XPTY0004. backwards-042 writes
+	// "(1 to 5) to (3,4)" and expects "1,2,3".
+	if ctx.Compat {
+		atoms = compatFirst(atoms)
+	}
 	if len(atoms) == 0 {
 		return nil, nil
 	}
@@ -662,6 +686,29 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 	la, ra := xdm.Atomize(l), xdm.Atomize(r)
+
+	// B.1 rules 1 and 2: an arithmetic operator expects a numeric operand, so
+	// under XPath 1.0 compatibility a multi-item operand is reduced to its
+	// first item and anything that is not a number has number() applied to it,
+	// which gives NaN rather than XPTY0004 when it is not convertible.
+	//
+	// Date and duration arithmetic is left alone. It did not exist in 1.0, so
+	// there is no 1.0 behaviour to be compatible with, and coercing a date to
+	// NaN would break "current-date() - $d" inside any stylesheet that happens
+	// to declare version="1.0" on an ancestor.
+	if ctx.Compat && !temporalOperands(la, ra) {
+		// compatNumberSeq casts to xs:double unconditionally, not just when
+		// the operand is not already numeric. 1.0 had one numeric type, so
+		// "1 + 1" is an xs:double there and an xs:integer in 2.0;
+		// backwards-027 asks the result directly with "instance of xs:double".
+		ln, rn := compatNumberSeq(la), compatNumberSeq(ra)
+		res, err := arithmetic(ln, rn, e.Op)
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(res), nil
+	}
+
 	// Arithmetic on an empty operand yields the empty sequence.
 	if len(la) == 0 || len(ra) == 0 {
 		return xdm.Empty, nil

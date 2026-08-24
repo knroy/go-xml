@@ -520,41 +520,31 @@ func forwardsMode(el *xdm.Node) bool {
 	return false
 }
 
-// backwardsMode reports whether el's effective version enables XSLT 1.0
-// backwards-compatible behaviour, which this processor does not implement.
+// compatModeAt reports whether XPath 1.0 compatibility mode is in force for
+// the expressions written on el.
 //
-// Section 3.9 makes the compatibility mode of an element the one stated by the
-// nearest ancestor-or-self carrying a [xsl:]version attribute, so the walk is
-// forwardsMode's, run against the other end of the range. XTDE0160 makes it a
-// non-recoverable *dynamic* error to evaluate such an element when the
-// processor does not support the behaviour — and system-property
-// ('xsl:supports-backwards-compatibility') already answers "no" here, so the
-// error is due. Reporting it is what initial-template-081 and version-031 ask
-// for; initial-template-080 is the guard, running the same stylesheet from a
-// template whose own version="2.0" overrides the module's version="1.0", and
-// requiring no error at all.
+// Section 3.8 makes the mode a property of the nearest ancestor-or-self
+// carrying a [xsl:]version attribute, and the mode is on when that version is
+// below 2.0. It is the same walk forwardsMode makes, run against the other end
+// of the range, and unlike forwardsMode it consults the module element too: a
+// module-wide version="1.0" is how the great majority of 1.0-era stylesheets
+// are written -- 314 of the suite's own stylesheets are shaped that way -- and
+// predicate-001 and select-3301 declare it on xsl:stylesheet and nowhere else.
 //
-// The stylesheet root is deliberately NOT consulted. A module-wide
-// version="1.0" is how the great majority of 1.0-era stylesheets are written,
-// and 314 of the suite's own stylesheets are shaped that way while only six
-// test cases declare the backwards_compatibility dependency at all. Treating a
-// module-level declaration as an error would reject all of them for a rule the
-// suite plainly does not intend to exercise there. Only a version stated on an
-// element *inside* the module — which is how both failing tests are written —
-// enables the mode as far as this check is concerned.
-func backwardsMode(el *xdm.Node) bool {
+// A predecessor of this function refused such a stylesheet outright with
+// XTDE0160, on the grounds that the processor did not implement the behaviour,
+// and had to exempt the module element to avoid rejecting all 314. That
+// objection does not apply now the behaviour exists. Every rule the mode turns
+// on is a coercion that admits an expression 2.0 refuses, so a module-level
+// declaration can change what a 1.0 stylesheet produces but cannot make one
+// fail that did not.
+func compatModeAt(el *xdm.Node) bool {
 	for cur := el; cur != nil; cur = cur.Parent {
 		if cur.Kind != xdm.KindElement {
 			continue
 		}
 		if !hasVersionAttr(cur) {
 			continue
-		}
-		// The module element's own version is the module's declaration, not
-		// an element enabling the mode; see the note above.
-		if cur.Name.URI == xdm.NSXSL &&
-			(cur.Name.Local == "stylesheet" || cur.Name.Local == "transform") {
-			return false
 		}
 		return versionAt(cur) < 2.0
 	}
