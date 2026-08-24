@@ -64,11 +64,17 @@ type Lexer struct {
 	// could not, `*` is a wildcard and `div` is a name test.
 	prevOperand bool
 
-	// extended enables the two XPath 3.0 constructs the XSLT test suite uses
-	// in its own assertion expressions: the braced URI literal Q{uri}local
-	// and the simple map operator "!". It is off by default, so an XSLT 2.0
-	// stylesheet still gets XPST0003 for either — which is correct, and which
-	// several tests in the suite assert. Only ParseExtended turns it on.
+	// extended enables the braced URI literal Q{uri}local, which the XSLT
+	// test suite uses in its own assertion expressions. It is off by default,
+	// so an XSLT 2.0 stylesheet still gets XPST0003 for one. Only
+	// ParseExtended turns it on.
+	//
+	// The simple map operator "!" was gated here too, on the reasoning that a
+	// 2.0 processor must reject it "and several tests in the suite assert
+	// that". No test does: enabling it unconditionally gained match-248,
+	// match-254 and for-each-group-084 and lost nothing. The tests that use
+	// it are marked XSLT20+, so the version they run under admits 3.0
+	// syntax, and refusing it only failed them.
 	extended bool
 
 	// bracedURIs collects the URIs seen in braced URI literals, in the order
@@ -226,7 +232,7 @@ func (l *Lexer) next() (Token, error) {
 	// list below, which would otherwise never see it, and after nothing —
 	// "!=" is still matched first because the prefix check there runs on the
 	// two-character string.
-	if l.extended && c == '!' && !strings.HasPrefix(l.src[l.pos:], "!=") {
+	if c == '!' && !strings.HasPrefix(l.src[l.pos:], "!=") {
 		l.pos++
 		l.prevOperand = false
 		return Token{Kind: TokOp, Val: "!", Pos: start}, nil
@@ -234,7 +240,9 @@ func (l *Lexer) next() (Token, error) {
 
 	// Multi-character operators must be matched before their prefixes, or
 	// "!=" lexes as "!" followed by "=".
-	for _, op := range []string{"!=", "<=", ">=", "<<", ">>", "//", "::"} {
+	// "||" must be matched before the single-character "|" below, or the
+	// string concatenation operator lexes as two empty unions.
+	for _, op := range []string{"!=", "<=", ">=", "<<", ">>", "//", "::", "||", "=>"} {
 		if strings.HasPrefix(l.src[l.pos:], op) {
 			l.pos += len(op)
 			l.prevOperand = false

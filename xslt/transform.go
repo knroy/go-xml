@@ -608,7 +608,16 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 	switch n.Kind {
 	case xdm.KindElement:
-		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI}
+		// IsID and IsIDREFS are carried over for the same reason they are on
+		// the attributes below: section 3.5 changes the annotation and the
+		// typed value but leaves is-id and is-idrefs alone. An element whose
+		// schema type derives from xs:ID holds the identity in its CONTENT,
+		// so dropping the property here made fn:id miss it — id('id1') found
+		// nothing for an <id-elem> of type xs:ID once the annotations went.
+		c := &xdm.Node{
+			Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
+			IsID: n.IsID, IsIDREFS: n.IsIDREFS,
+		}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}

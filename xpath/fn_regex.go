@@ -47,15 +47,35 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		re, err := compileArgRegexp(args, 1, 3)
+		// A pattern with a backreference takes the same separate path
+		// matches() uses: the fixed-width subset is decided by comparison,
+		// and the text the backreference consumed is part of what gets
+		// replaced. See regex_backref.go.
+		br, err := compileArgBackref(args, 1, 3)
 		if err != nil {
 			return nil, err
+		}
+		var re *regexp.Regexp
+		if br == nil {
+			if re, err = compileArgRegexp(args, 1, 3); err != nil {
+				return nil, err
+			}
 		}
 		// The replacement is declared xs:string, not xs:string?, so an empty
 		// sequence is a type error rather than an empty replacement.
 		repl, err := argStringRequired(args, 2)
 		if err != nil {
 			return nil, err
+		}
+		if br != nil {
+			if br.MatchString("") {
+				return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
+			}
+			goRepl, err := translateReplacement(repl, br.NumSubexp())
+			if err != nil {
+				return nil, err
+			}
+			return strSeq(br.ReplaceAllString(s, goRepl)), nil
 		}
 		// A pattern that matches the empty string would loop forever in some
 		// engines and produce surprising output here; the spec makes it an

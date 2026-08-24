@@ -176,6 +176,91 @@ func fixedWidthGroup(p string, n int) bool {
 	return ok && w >= 0
 }
 
+// groupEnd returns the offset just past the nth capturing group's closing
+// paren, together with any quantifier applied to the group itself.
+//
+// This is what decides whether capture-and-compare is sound. RE2 hands back
+// one submatch assignment — the greedy or lazy one its own semantics chose —
+// and the comparison cannot ask for a different one. That is only harmless
+// when nothing between the group and the backreference could have absorbed
+// text the backreference needed. "(a)(b)\1" is safe because "(b)" matches one
+// width and no other split exists; "(['\"])(.*?)\1" is not, because ".*?"
+// stops at the first opportunity and the correct match needs it to run on.
+func groupEnd(p string, n int) (int, bool) {
+	count := 0
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case '\\':
+			i++
+		case '[':
+			for i++; i < len(p); i++ {
+				if p[i] == '\\' {
+					i++
+					continue
+				}
+				if p[i] == ']' {
+					break
+				}
+			}
+		case '(':
+			capturing := !strings.HasPrefix(p[i:], "(?")
+			if capturing {
+				count++
+			}
+			if capturing && count == n {
+				depth, j := 1, i+1
+				for ; j < len(p) && depth > 0; j++ {
+					switch p[j] {
+					case '\\':
+						j++
+					case '[':
+						for j++; j < len(p); j++ {
+							if p[j] == '\\' {
+								j++
+								continue
+							}
+							if p[j] == ']' {
+								break
+							}
+						}
+					case '(':
+						depth++
+					case ')':
+						depth--
+					}
+				}
+				if depth != 0 {
+					return 0, false
+				}
+				return j, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// betweenIsFixed reports whether the text from the end of group n to the end
+// of head always matches the same number of characters.
+//
+// A quantifier on the referenced group itself counts as intervening: "(ki){2}"
+// leaves RE2 free to place group 1 on either repetition, and only the last one
+// is reported, so a backreference comparing against it is comparing against a
+// choice it did not get to make.
+func betweenIsFixed(head string, n int) bool {
+	end, ok := groupEnd(head, n)
+	if !ok {
+		return false
+	}
+	rest := head[end:]
+	// A quantifier directly on the group makes the captured occurrence
+	// ambiguous even when the text after it is fixed.
+	if rest != "" && strings.ContainsRune("*+?{", rune(rest[0])) {
+		return false
+	}
+	w, ok := fixedWidth(rest)
+	return ok && w >= 0
+}
+
 // groupBody returns the text inside the nth capturing group.
 func groupBody(p string, n int) (string, bool) {
 	count := 0
@@ -390,6 +475,17 @@ func (b *backrefRegexp) MatchString(s string) bool {
 
 // tailMatches checks the captured groups against the text after the match.
 func (b *backrefRegexp) tailMatches(s string, at int, loc []int, base int) bool {
+	_, ok := b.tailEnd(s, at, loc, base)
+	return ok
+}
+
+// tailEnd is tailMatches with the end of the consumed text.
+//
+// replace() needs the span the backreferences covered, not just whether they
+// matched: the text they consumed is part of the match and must be replaced
+// along with it. matches() discards the position, which is why the boolean
+// wrapper above exists.
+func (b *backrefRegexp) tailEnd(s string, at int, loc []int, base int) (int, bool) {
 	pos := at
 	for _, r := range b.refs {
 		gi := 2 * r.group
@@ -408,12 +504,12 @@ func (b *backrefRegexp) tailMatches(s string, at int, loc []int, base int) bool 
 			continue
 		}
 		if !b.hasPrefix(s[pos:], text) {
-			return false
+			return 0, false
 		}
 		pos += len(text)
 		if r.literal != "" {
 			if !b.hasPrefix(s[pos:], r.literal) {
-				return false
+				return 0, false
 			}
 			pos += len(r.literal)
 		}
@@ -421,9 +517,72 @@ func (b *backrefRegexp) tailMatches(s string, at int, loc []int, base int) bool 
 	// A pattern that ended with "$" required the whole input; one that did not
 	// is a containment test and may leave a tail.
 	if b.anchoredEnd() {
-		return pos == len(s)
+		return pos, pos == len(s)
 	}
-	return true
+	return pos, true
+}
+
+// NumSubexp is the group count of the stripped pattern, which is the same as
+// the original's: stripping removes backreferences, never groups.
+func (b *backrefRegexp) NumSubexp() int { return b.stripped.NumSubexp() }
+
+// ReplaceAllString substitutes repl for every non-overlapping match.
+//
+// The match is the stripped pattern's span *plus* the text its backreferences
+// consumed, because a backreference is part of the pattern and the text it
+// matched is part of what replace() must remove. Scanning is left to right and
+// non-overlapping, as fn:replace requires: after a replacement the search
+// resumes at the end of the whole span, never inside it.
+//
+// repl is already in Go's "${n}" form — translateReplacement produced it — so
+// expansion is delegated to RE2's own Expand against the stripped pattern's
+// submatch indices. The backreference tail contributes no group of its own, so
+// no index needs adjusting.
+func (b *backrefRegexp) ReplaceAllString(s, repl string) string {
+	var sb strings.Builder
+	last := 0
+	for start := 0; start <= len(s); {
+		loc := b.stripped.FindStringSubmatchIndex(s[start:])
+		if loc == nil {
+			break
+		}
+		mStart, mEnd := start+loc[0], start+loc[1]
+		end, ok := b.tailEnd(s, mEnd, loc, start)
+		if ok {
+			sb.WriteString(s[last:mStart])
+			// Expand indexes into s[start:], so it is given that slice and the
+			// loc that belongs to it.
+			sb.Write(b.stripped.ExpandString(nil, repl, s[start:], loc))
+			last = end
+			// A zero-width span would not advance; step one rune past it so
+			// the scan terminates.
+			if end > mStart {
+				start = end
+				continue
+			}
+			start = mStart + runeLenAt(s, mStart)
+			continue
+		}
+		if b.anchoredStart() {
+			break
+		}
+		start = mStart + runeLenAt(s, mStart)
+	}
+	sb.WriteString(s[last:])
+	return sb.String()
+}
+
+// runeLenAt is the width of the rune at i, and 1 past the end so a scan that
+// reaches the end still advances rather than spinning.
+func runeLenAt(s string, i int) int {
+	if i >= len(s) {
+		return 1
+	}
+	_, size := utf8.DecodeRuneInString(s[i:])
+	if size < 1 {
+		return 1
+	}
+	return size
 }
 
 func (b *backrefRegexp) anchoredEnd() bool {
@@ -524,6 +683,18 @@ func buildBackrefRegexp(pattern, flags string) (*backrefRegexp, error) {
 			return nil, fmt.Errorf(
 				"FORX0002: backreference \\%d names a group of variable width, "+
 					"which RE2 cannot resolve", refs[i].group)
+		}
+		// A fixed-width group is not enough on its own. If anything between
+		// that group and the backreference can vary in width, RE2's single
+		// assignment is one of several and the comparison cannot reach the
+		// others — so the pattern must be refused rather than answered from
+		// the wrong split. Without this check "(['\"])(.*?)\\1" compiled and
+		// returned false for text it matches.
+		if !betweenIsFixed(head, refs[i].group) {
+			return nil, fmt.Errorf(
+				"FORX0002: backreference \\%d is separated from its group by a "+
+					"variable-width expression, which RE2 cannot resolve",
+				refs[i].group)
 		}
 	}
 	return &backrefRegexp{

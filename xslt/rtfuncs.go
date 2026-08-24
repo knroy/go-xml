@@ -940,16 +940,30 @@ func resolveAgainst(base, ref string) string {
 	if err != nil {
 		return ref
 	}
-	// EscapedPath rather than String: ResolveReference re-encodes characters
-	// that are already legal in a path, and a system identifier is written as
-	// a URI reference, not as text to be escaped. A DTD naming
-	// "images\epub\pic.gif" came back with the backslashes as %5C, which the
-	// stylesheet that splits the path on them could no longer see.
 	resolved := b.ResolveReference(r)
 	if resolved.RawPath != "" {
 		resolved.Path, resolved.RawPath = resolved.RawPath, ""
 	}
-	return resolved.String()
+	out := resolved.String()
+	// net/url percent-escapes on the way out anything it does not consider
+	// legal in a path, and a system identifier is a URI reference the
+	// document author wrote, not text to be escaped. The case that matters
+	// is the backslash: a DTD naming "images\repository\pic.jpg" came back
+	// as "images%5Crepository%5Cpic.jpg", and unparsed-entity-50 is a
+	// stylesheet that splits the returned path on "\" to get the filename —
+	// after escaping there is no separator left to split on, so it keeps the
+	// whole directory chain.
+	//
+	// Setting RawPath does not help: EscapedPath validates it against Path
+	// and discards any RawPath it would itself have escaped, so the value
+	// has to be put back after String() has run. Only escapes this function
+	// introduced are undone — a %5C the author wrote survives, because it
+	// was never a literal backslash in ref to begin with.
+	if strings.ContainsAny(ref, "\\") && !strings.Contains(ref, "%5C") &&
+		!strings.Contains(ref, "%5c") {
+		out = strings.ReplaceAll(out, "%5C", "\\")
+	}
+	return out
 }
 
 // isLexicalQName reports whether s has the form of a QName: an NCName, or two

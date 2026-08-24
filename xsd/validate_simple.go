@@ -123,6 +123,21 @@ func validateSimpleValueIn(lexical string, t *SimpleType, version Version, at *x
 	case VarietyUnion:
 		return validateUnionValueIn(lexical, t, at)
 	}
+	// Part 2 §3.2.18: an xs:QName value is a (namespace name, local name)
+	// pair, and the namespace name is the one the prefix is bound to where
+	// the value was written. A prefix with no binding therefore denotes no
+	// value at all. That is a different failure from a bad lexical form and
+	// is not reachable from the lexical check, which sees only that "a:one"
+	// is shaped like a QName — true whichever prefixes happen to be in
+	// scope. It needs the node, so it is checked here, where the node is
+	// still in hand, rather than among the facets.
+	if !qnamePrefixBound(at, lexical, t) {
+		return "", &ParseError{
+			Code: "cvc-datatype-valid.1.2.1",
+			Message: "\"" + truncate(strings.TrimSpace(lexical)) +
+				"\" uses a prefix with no in-scope namespace declaration",
+		}
+	}
 	return validateAtomicValueBoundsIn(lexical, t, version, true, at)
 }
 
@@ -399,8 +414,20 @@ func checkEnumerationIn(steps []facetStep, normalized string, t *SimpleType, at 
 	// even though the two prefixes name one namespace.
 	var want xdm.QName
 	haveQName := false
-	if (prim == "QName" || prim == "NOTATION") && at != nil {
-		want, haveQName = resolveInstanceQName(at, normalized)
+	if prim == "QName" || prim == "NOTATION" {
+		if at != nil {
+			want, haveQName = resolveInstanceQName(at, normalized)
+		} else if q, ok := ParseExpandedName(normalized); ok {
+			// No node, so no in-scope namespaces to expand a prefix against.
+			// A caller that has already resolved the prefix — the XPath
+			// constructor of a NOTATION-derived type does it while the static
+			// context still exists — hands the expanded name over in Clark
+			// notation instead, and that is comparable with the enumeration
+			// QNames the schema expanded at load time. Without this the
+			// comparison fell back to matching prefixes literally, so
+			// one:mp3 was refused by an enumeration written smokey:mp3.
+			want, haveQName = q, true
+		}
 	}
 
 	for _, st := range steps {
@@ -1171,4 +1198,51 @@ func resolveInstanceQName(at *xdm.Node, value string) (xdm.QName, bool) {
 	// Only URI and Local are set: an xdm.QName compares as a whole struct,
 	// and a prefix carried on one side would defeat every comparison.
 	return xdm.QName{URI: uri, Local: local}, true
+}
+
+// ParseExpandedName reads the "{uri}local" spelling of an already-expanded
+// name.
+//
+// It is how a caller with no instance node states a QName value whose prefix
+// it has already resolved. A lexical QName never has this shape — "{" is not
+// an NCName character — so accepting it here cannot capture a real instance
+// value, and no schema document can contain one.
+func ParseExpandedName(v string) (xdm.QName, bool) {
+	if !strings.HasPrefix(v, "{") {
+		return xdm.QName{}, false
+	}
+	i := strings.IndexByte(v, '}')
+	if i < 0 {
+		return xdm.QName{}, false
+	}
+	local := v[i+1:]
+	if local == "" || strings.ContainsAny(local, "{}:") {
+		return xdm.QName{}, false
+	}
+	return xdm.QName{URI: v[1:i], Local: local}, true
+}
+
+// qnamePrefixBound reports whether a QName- or NOTATION-valued lexical form
+// has its prefix bound where it was written.
+//
+// Only those two primitives carry a namespace binding in their value space;
+// for every other type the value is the characters and there is no prefix to
+// resolve. A list or union of them is left alone: its items are checked where
+// the list is split and where the member type is chosen, each with the same
+// node in hand.
+func qnamePrefixBound(n *xdm.Node, normalized string, t *SimpleType) bool {
+	if n == nil || t.Variety != VarietyAtomic {
+		return true
+	}
+	p := primitiveOf(t)
+	if p == nil || (p.Name.Local != "QName" && p.Name.Local != "NOTATION") {
+		return true
+	}
+	if !strings.Contains(normalized, ":") {
+		// An unprefixed name takes the default namespace, or none. Either
+		// way there is no binding that can be missing.
+		return true
+	}
+	_, ok := resolveInstanceQName(n, normalized)
+	return ok
 }

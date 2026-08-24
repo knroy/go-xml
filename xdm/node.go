@@ -678,7 +678,13 @@ func atomicForAnnotation(typeName, value string) *Atomic {
 		return NewString(value)
 
 	case "boolean":
-		switch value {
+		// Trimmed, as every other branch here trims: xs:boolean carries
+		// whiteSpace="collapse", so the value a validated node atomises to is
+		// the collapsed form and not the characters as they were written.
+		// Matching the raw text made "<e>   true   </e>" atomise to nothing
+		// at all, so a value the schema had validated as a restriction of
+		// xs:boolean fell back to untypedAtomic and compared as a string.
+		switch strings.TrimSpace(value) {
 		case "true", "1":
 			return NewBoolean(true)
 		case "false", "0":

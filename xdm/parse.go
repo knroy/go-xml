@@ -216,6 +216,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// the common case is none at all.
 	var attDefaults []attDefault
 	var attTypes []attDeclaredType
+	// Element names whose DTD content model is element-only. Whitespace-only
+	// text in such an element is ignorable (XML §2.10) and is stripped
+	// regardless of what the stylesheet declares (XSLT 2.0 §4.4).
+	var elementOnly map[string]bool
 
 	for {
 		// InputOffset after Token() is the position *after* the token, so the
@@ -282,6 +286,12 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				return nil, fmt.Errorf(
 					"parse XML: element %q closed by end element %q", want, got)
 			}
+			// Ignorable whitespace goes first and unconditionally: the
+			// DTD-derived rule outranks the stylesheet-declared one, so it
+			// must not be gated on a strip-space declaration existing.
+			if elementOnly != nil {
+				stripIgnorableWhitespace(cur, elementOnly)
+			}
 			if opts.StripSpace != nil {
 				stripWhitespaceChildren(cur, opts.StripSpace)
 			}
@@ -336,6 +346,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				defs, types := parseAttList(d)
 				attDefaults = append(attDefaults, defs...)
 				attTypes = append(attTypes, types...)
+				elementOnly = parseElementOnlyDecls(d)
 				// Internal general entities are declared here and referenced
 				// in content, so the table has to be installed before the
 				// decoder reads any. encoding/xml consults dec.Entity lazily,
@@ -375,6 +386,13 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					// is governed by is not always the text it was written
 					// with.
 					tree.externalSubset = ents.subsetText
+					// Declarations pulled in from the external subset are read
+					// before ents may be discarded below: loading one that
+					// declared no entities still nils ents out, and the
+					// <!ELEMENT> models it brought in would be lost with it.
+					if ents.subsetText != "" {
+						elementOnly = parseElementOnlyDecls(ents.subsetText)
+					}
 					if len(ents.raw) == 0 && len(ents.external) == 0 {
 						ents = nil
 					}
@@ -390,6 +408,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						defs, types := parseAttList(text)
 						attDefaults = defs
 						attTypes = types
+						elementOnly = parseElementOnlyDecls(text)
 					}
 				} else {
 					ents = parseEntityDecls(d, opts.BaseURI)

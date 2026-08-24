@@ -1,6 +1,11 @@
 package xslts
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
 
 // Deciding which tests are in scope.
 //
@@ -97,6 +102,16 @@ func inScope(set *TestSet, tc *TestCase) (bool, string) {
 	if tc.Test.InitialFunction != nil {
 		return false, "initial function (XSLT 3.0)"
 	}
+	// And so is a stylesheet that can only be read as XSLT 3.0, whatever the
+	// catalog's <spec> says. Two cases are mislabelled XSLT20+ in the suite's
+	// own metadata: character-map-026 asks for the adaptive output method,
+	// and variable-4802 relies on text value templates. Neither exists in
+	// XSLT 2.0, so a 2.0 processor cannot produce the asserted result and
+	// counting the disagreement as a conformance failure measures the
+	// catalog rather than the engine.
+	if why := xslt30OnlyConstruct(set, tc); why != "" {
+		return false, why
+	}
 
 	// The version gate. A case with no spec dependency at any level states no
 	// constraint, and runs.
@@ -150,4 +165,52 @@ func inScope(set *TestSet, tc *TestCase) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// XSLT 3.0 constructs that no forwards-compatible reading of a 2.0 stylesheet
+// can accommodate.
+//
+// Deliberately narrow. The stylesheet's own version="3.0" is *not* usable as
+// the signal: 2,878 of the suite's stylesheet files carry it, and most are
+// perfectly good 2.0 stylesheets that this engine runs and passes, so gating
+// on it would delete thousands of passing tests from the denominator. Each
+// pattern below names a construct that changes the meaning of the stylesheet
+// rather than merely its declared version.
+var xslt30Constructs = []struct {
+	re  *regexp.Regexp
+	why string
+}{
+	{
+		// The adaptive and JSON output methods are XSLT 3.0 serialization
+		// methods. Every other test using one is already out of scope
+		// through a correct <spec> value; character-map-026 leaks through a
+		// mislabelled one.
+		regexp.MustCompile(`method\s*=\s*["'](adaptive|json)["']`),
+		"adaptive/json output method (XSLT 3.0)",
+	},
+}
+
+// xslt30OnlyConstruct reports why a case's stylesheets put it outside XSLT
+// 2.0, or "" if nothing does.
+func xslt30OnlyConstruct(set *TestSet, tc *TestCase) string {
+	for _, sr := range tc.Test.Stylesheets {
+		src := sr.Content
+		if sr.File != "" {
+			data, err := os.ReadFile(
+				filepath.Join(set.Dir, filepath.FromSlash(sr.File)))
+			if err != nil {
+				continue
+			}
+			src = string(data)
+		}
+		if src == "" {
+			continue
+		}
+		for _, c := range xslt30Constructs {
+			if c.re.MatchString(src) {
+				return c.why
+			}
+		}
+	}
+	return ""
 }

@@ -248,6 +248,17 @@ func (s *Schema) ValidateValue(value string, typeName xdm.QName) error {
 	if !ok {
 		return fmt.Errorf("xsd: %s is a complex type", showName(name))
 	}
+	// A QName-valued type may be asked about in the expanded "{uri}local"
+	// spelling, by a caller that resolved the prefix while it still had a
+	// namespace context and has none now. Its lexical checks are the caller's
+	// to have made — a QName literal has no lexical space beyond being a
+	// QName — so only the facets are left to apply. See
+	// ValidateExpandedQNameValue, which is the same check reached by name.
+	if q, expanded := ParseExpandedName(value); expanded {
+		if known, err := s.ValidateExpandedQNameValue(name, q); known {
+			return err
+		}
+	}
 	_, err := validateSimpleValueVersion(value, st, s.Version)
 	return err
 }
@@ -261,4 +272,40 @@ func (s *Schema) HasSimpleType(typeName xdm.QName) bool {
 	}
 	_, ok = t.(*SimpleType)
 	return ok
+}
+
+// ValidateExpandedQNameValue checks an already-expanded QName against a named
+// simple type whose value space is the QName one.
+//
+// The constructor of a type derived from xs:NOTATION or xs:QName has to
+// resolve its argument's prefix while the static context of the expression
+// still exists, so by the time the facets can be checked there is no node and
+// no in-scope namespaces left — and comparing the raw lexical form against the
+// schema's enumeration matched prefixes rather than namespaces, which made
+// one:mp3 fail an enumeration written smokey:mp3 for the same URI. The
+// expanded name is passed instead, in the "{uri}local" spelling that no
+// lexical QName can have, and the lexical checks are skipped because the
+// caller has already done the only one that applies to a QName literal.
+//
+// known is false when the name is not a QName-valued simple type in this
+// schema, in which case the caller keeps whatever answer it already had.
+func (s *Schema) ValidateExpandedQNameValue(typeName, value xdm.QName) (known bool, err error) {
+	t, ok := s.Types[bareName(typeName)]
+	if !ok {
+		return false, nil
+	}
+	st, ok := t.(*SimpleType)
+	if !ok {
+		return false, nil
+	}
+	if p := primitiveOf(st); p == nil ||
+		(p.Name.Local != "QName" && p.Name.Local != "NOTATION") {
+		return false, nil
+	}
+	clark := "{" + value.URI + "}" + value.Local
+	steps := facetChain(st)
+	if perr := checkEnumerationIn(steps, clark, st, nil); perr != nil {
+		return true, perr
+	}
+	return true, nil
 }

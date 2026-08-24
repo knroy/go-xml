@@ -61,6 +61,17 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		for _, it := range seq {
 			switch v := it.(type) {
 			case *xdm.Node:
+				// XSLT Serialization 3.0 section 10: the text output method
+				// writes the string value of every text node in the result,
+				// and nothing else. Comments and processing instructions are
+				// not text nodes and contribute nothing — the same rule that
+				// keeps them out of an ancestor's string value. Reaching them
+				// through StringValue here would have written a comment's text
+				// and a PI's data as if they were character content, which is
+				// exactly the markup the method exists to suppress.
+				if v.Kind == xdm.KindComment || v.Kind == xdm.KindPI {
+					continue
+				}
 				s.writeString(s.normalized(s.mapChars(v.StringValue())))
 			case *xdm.Atomic:
 				s.writeString(s.normalized(s.mapChars(v.String())))
@@ -432,8 +443,18 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 				// see rather than what the author would prefer.
 				media = "text/html"
 			}
-			tag := `<meta http-equiv="Content-Type" content="` + media +
-				`; charset=` + enc + `">`
+			// A character map applies to the value of every attribute the
+			// serializer writes, and this one is no exception: XSLT 3.0
+			// section 27.1 puts the character map at the very end of the
+			// serialization pipeline, after the HTML method has added its
+			// meta element, so the substitution sees the injected value like
+			// any other. The suite says so outright — character-map-017
+			// carries the note "this character map will modify characters in
+			// the generated meta element. Not very desirable but that's what
+			// the spec says." Only the value is mapped; the element and
+			// attribute names are markup the map never touches.
+			content := s.mapChars(media + `; charset=` + enc)
+			tag := `<meta http-equiv="Content-Type" content="` + content + `">`
 			if s.xhtml {
 				// XHTML is XML: an empty element must be closed. The space
 				// before the slash is what the HTML compatibility guidelines

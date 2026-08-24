@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.80% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 98.83% — 5,982 of 6,053 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.24% — 6,006 of 6,052 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 98.83%, and the newest — so it is a
+The weakest of the measured numbers, at 99.24%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -79,7 +79,7 @@ There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
 2007 behind a click-through licence, with no repository. This runs the XSLT
 3.0 suite filtered by each test's declared version dependency, which measures
 something different from running a suite written for the version under test.
-5,369 of 14,601 cases are in scope; the largest exclusions are 6,136 needing
+6,052 of 14,601 cases are in scope; the largest exclusions are 6,115 needing
 XSLT 3.0, 1,580 depending on a Unicode version, and 347 on `xsl:package`.
 
 `GOXSLT_XSLTS_BYSET=1` prints the result of each test-set separately, which is
@@ -89,22 +89,23 @@ by that measure:
 
 | set | passing | what is missing |
 |---|---|---|
-| `error` | 245/398 | the remaining error conditions of Appendix E |
-| `import-schema` | 93/189 | schema-aware assessment in the harder cases |
-| `output` | 45/138 | serialisation errors, CDATA sections, encodings |
-| `match` | 93/179 | patterns over schema components |
-| `result-document` | 25/79 | the base output URI, and output-state rules |
-| `namespace` | 140/189 | namespace fixup on constructed elements |
-| `number` | 91/136 | languages other than English |
-| `collations` | 17/42 | collations beyond codepoint and ASCII-case-insensitive |
-| `base-uri` | 24/48 | remaining base-URI edge cases |
+| `xpath-compat` | 0/1 | XSLT 1.0 backwards-compatible mode |
+| `validation` | 32/43 | schema-aware validation of constructed trees |
+| `unparsed-text` | 1/2 | one case needs the network, which is refused |
+| `collection` | 5/6 | one case needs XSLT 3.0 packages |
+| `regex` | 42/49 | variable-width backreferences |
+| `strip-space` | 22/24 | schema-derived element-only content models |
+| `strip-type-annotations` | 8/9 | type derivation over user-defined types |
+| `include` | 12/13 | per-node base URI from external entity expansion |
+| `analyze-string` | 43/45 | variable-width backreferences |
+| `resolve-uri` | 20/21 | per-node base URI from external entity expansion |
+| `param` | 25/26 | lazy evaluation of unreferenced local variables |
 
-Roughly 240 failures are errors the suite expects that the engine does not
-raise. That is the same shape as the XSD schema-validity gap: the engine
-accepts a stylesheet the specification says to reject. It is the lower-risk
-direction — a wrong stylesheet runs rather than being reported — but it is a
-real gap, and the largest single thing standing between this number and the
-others.
+Eight of the remaining failures are errors the suite expects that the engine
+does not raise. That is the same shape as the XSD schema-validity gap: the
+engine accepts a stylesheet the specification says to reject. It is the
+lower-risk direction — a wrong stylesheet runs rather than being reported —
+but it is a real gap.
 
 Appendix E of the specification lists 79 static errors. The three commonest —
 XTSE0010, XTSE0020 and XTSE0090 — are now decided by the element grammar in
@@ -115,22 +116,30 @@ it states. Forwards-compatible processing (section 3.9) rides on the same
 table, since an unknown element or attribute is ignored rather than rejected
 wherever a version greater than 2.0 is in force.
 
-Appendix E defines 154 error codes. 81 can now be raised; 73 cannot. All 154
-definitions were extracted from the specification's own markup rather than
-transcribed, which is also how the element grammar in `xslt/elementtable.go`
-and the content models behind XTSE0260 were built — a hand-written list of
-"elements that must be empty" wrongly included `xsl:value-of` and refused 65
+Appendix E defines 154 error codes. 143 are raised somewhere in the engine;
+11 are not. All 154 definitions were extracted from the specification's own
+markup rather than transcribed, which is also how the element grammar in
+`xslt/elementtable.go` and the content models behind XTSE0260 were built — a
+hand-written list of "elements that must be empty" wrongly included
+`xsl:value-of` and refused 65
 valid stylesheets before it was replaced with the specification's own.
 
-**A ceiling below 100% is structural, not a matter of effort.** Three tests
-expect `XTDE3160` and `XTTE1535`, which appear nowhere in the XSLT 2.0
-Recommendation; fifteen more assert a *serialization error*, and this
-serialiser has no error path. Those eighteen cannot pass against a conforming
-XSLT 2.0 processor. The reachable maximum is about 99.7%.
+**Part of the remaining gap is structural, not a matter of effort.** Several
+of the failures are suite defects rather than engine defects, each verified
+against the normative text: three `regex-syntax` cases assert matches that
+contradict XML Schema Appendix F (U+2308 is category `Ps`, so `\w` must not
+match it; U+1369 is `No`, not `Nd`, so `\d` must not match it), and
+`format-number-070` names an initial template its own stylesheet does not
+declare. Two more are XSLT 3.0 tests whose catalog metadata claims 2.0.
+Matching them would mean breaking conformance elsewhere — the character-class
+definitions are shared with XSD's pattern facet.
 
-The `FORX0002` group is not a defect. Those tests expect a backreference to be
-refused; this engine resolves the fixed-width ones exactly, which is more than
-the suite expects rather than less. See the backreference note in the README.
+The `FORX0002` group is a real gap, narrowed. This engine resolves a
+backreference exactly whenever the group it names *and the text between the
+group and the reference* are fixed-width, and refuses the rest rather than
+guessing; RE2 reports only the greedy submatch assignment, so a variable-width
+split cannot be reconstructed after the fact. Resolving those needs a
+backtracking matcher, which would cost the linear-time guarantee.
 
 ### DTD
 

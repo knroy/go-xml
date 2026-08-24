@@ -229,6 +229,13 @@ type OutputRef struct {
 // with struct tags.
 type Result struct {
 	Inner string `xml:",innerxml"`
+	// NS holds the prefix-to-URI bindings in scope at the <result> element
+	// itself. encoding/xml's innerxml keeps only what is *inside* the
+	// element, so a declaration written on <result> — which is where the
+	// suite puts the XHTML binding an assertion's XPath needs — is not in
+	// Inner and cannot be recovered by parsing it. Filled in by
+	// resolveResultNamespaces.
+	NS map[string]string `xml:"-"`
 }
 
 // resolveInitialTemplateNames fills in NamedThing.URI for every
@@ -317,6 +324,102 @@ func scanInitialTemplateNames(data []byte) (map[string]string, error) {
 			if len(scopes) > 0 {
 				scopes = scopes[:len(scopes)-1]
 			}
+			if t.Name.Local == "test-case" {
+				caseName = ""
+			}
+		}
+	}
+	return out, nil
+}
+
+// resolveResultNamespaces fills in Result.NS for every test-case, with the
+// namespace bindings in scope at that case's <result> element.
+//
+// The suite writes them there rather than on the assertion:
+//
+//	<result xmlns:h="http://www.w3.org/1999/xhtml">
+//	   <all-of>
+//	      <assert-result-document uri="...">
+//	         <assert>/h:html/h:head/h:title/... = "Index of names"</assert>
+//
+// innerxml starts after the <result> start tag, so the xmlns:h is gone by the
+// time ParseAssert runs and the XPath fails with XPST0081 on an unbound
+// prefix — a failure of the assertion, not of the transform.
+func resolveResultNamespaces(data []byte, set *TestSet) error {
+	found, err := scanResultNamespaces(data)
+	if err != nil {
+		return err
+	}
+	for i := range set.Cases {
+		if ns, ok := found[set.Cases[i].Name]; ok {
+			set.Cases[i].Result.NS = ns
+		}
+	}
+	return nil
+}
+
+// scanResultNamespaces maps test-case name -> the prefixes in scope at that
+// case's <result>. A case whose result inherits no declaration is absent.
+func scanResultNamespaces(data []byte) (map[string]map[string]string, error) {
+	dec := xml.NewDecoder(strings.NewReader(string(stripBOM(data))))
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
+		return input, nil
+	}
+	out := map[string]map[string]string{}
+	var scopes []map[string]string
+	caseName := ""
+	depth := 0
+	resultDepth := -1
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			decls := map[string]string{}
+			for _, a := range t.Attr {
+				// Prefixed declarations only. The catalog's own default
+				// namespace is on its root element and means nothing to an
+				// assertion's XPath, which addresses the *result* tree;
+				// seeding it as the default element namespace makes every
+				// unprefixed step in every assertion in the suite fail to
+				// match.
+				if a.Name.Space == "xmlns" {
+					decls[a.Name.Local] = a.Value
+				}
+			}
+			scopes = append(scopes, decls)
+			depth++
+			if t.Name.Local == "test-case" {
+				caseName = attrValue(t, "name")
+			}
+			// Only the <result> that is the test-case's own child; an
+			// "result" appearing deeper inside an assertion's expected XML
+			// is not one.
+			if t.Name.Local == "result" && caseName != "" && resultDepth < 0 {
+				resultDepth = depth
+				flat := map[string]string{}
+				for _, sc := range scopes {
+					for k, v := range sc {
+						flat[k] = v
+					}
+				}
+				if len(flat) > 0 {
+					out[caseName] = flat
+				}
+			}
+		case xml.EndElement:
+			if resultDepth == depth {
+				resultDepth = -1
+			}
+			if len(scopes) > 0 {
+				scopes = scopes[:len(scopes)-1]
+			}
+			depth--
 			if t.Name.Local == "test-case" {
 				caseName = ""
 			}

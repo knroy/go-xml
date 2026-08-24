@@ -123,3 +123,65 @@ func TestBackrefStaysLinear(t *testing.T) {
 		t.Errorf("long input = %q, want false", got)
 	}
 }
+
+// A fixed-width group is not enough on its own: if a variable-width expression
+// sits between the group and the backreference, RE2 reports one split and the
+// comparison cannot try the others. Before this was checked, these patterns
+// compiled and answered false for text they match — a wrong answer, which is
+// worse than the FORX0002 they now raise.
+func TestBackrefRefusesVariableGap(t *testing.T) {
+	for _, p := range []string{
+		`(['"])(.*?)\1`,
+		`(!).*\1`,
+		`(ki){2}ke.*\1`,
+		`(ki){2}ke.*\12`,
+	} {
+		if _, err := buildBackrefRegexp(p, ""); err == nil {
+			t.Errorf("%s: expected FORX0002, got a usable matcher", p)
+		}
+	}
+}
+
+// The gap check must not swallow the patterns that were already exact: what
+// separates them is whether another split exists, not whether a quantifier
+// appears anywhere in the pattern.
+func TestBackrefStillAcceptsSound(t *testing.T) {
+	cases := []struct {
+		pattern, input string
+		want           bool
+	}{
+		{`(ki|ke)\1`, "kikikeriki", true},
+		{`(a)(b)\1\2`, "abab", true},
+		{`(.)\1`, "aa", true},
+		{`( )\1`, " ", false},
+		{`^([a-z])\1*$`, "aaaa", true},
+		{`^([a-z])\1*$`, "abc", false},
+	}
+	for _, c := range cases {
+		br, err := buildBackrefRegexp(c.pattern, "")
+		if err != nil {
+			t.Errorf("%s: refused: %v", c.pattern, err)
+			continue
+		}
+		if got := br.MatchString(c.input); got != c.want {
+			t.Errorf("%s on %q = %v, want %v", c.pattern, c.input, got, c.want)
+		}
+	}
+}
+
+// fn:replace goes through the same path as fn:matches. The text a
+// backreference consumed is part of the match, so it is replaced along with
+// the rest — HEAD raised FORX0002 for every one of these.
+func TestBackrefReplace(t *testing.T) {
+	cases := []struct{ expr, want string }{
+		{`replace("kikikeriki", "(ki|ke)\1", "*")`, "*keriki"},
+		{`replace("abab", "(a)(b)\1\2", "X")`, "X"},
+		{`replace("aabb", "(.)\1", "<$1>")`, "<a><b>"},
+		{`replace("aaaa", "^([a-z])\1*$", "*")`, "*"},
+	}
+	for _, c := range cases {
+		if got := evalStr(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+}

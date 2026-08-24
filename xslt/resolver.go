@@ -189,6 +189,35 @@ func (r *FileResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	return r.load(path)
 }
 
+// Preload records a tree that has already been parsed as the answer for uri,
+// so that a later fn:doc or fn:document naming the same resource hands back
+// the very same nodes rather than a second parse of the same bytes.
+//
+// Node identity is the point. XSLT 2.0 section 16.1 requires two retrievals of
+// one absolute URI to return the same node, and the test the specification is
+// written for is "fn:doc(fn:document-uri($arg)) is $arg". A caller that parses
+// the principal source itself — every conformance harness does, because it has
+// to annotate the tree before the transform sees it — supplies a document node
+// the resolver has never heard of, and doc() of its own document-uri then
+// parses the file again and answers a different node. Preloading closes that
+// gap without weakening the containment check: the uri still has to resolve to
+// a path inside a permitted root, and an unresolvable one is a no-op.
+func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
+	if tree == nil {
+		return
+	}
+	path, err := r.resolvePath(uri, "")
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cache == nil {
+		r.cache = map[string]*xdm.Tree{}
+	}
+	r.cache[path] = tree
+}
+
 // load parses a file, caching the result.
 //
 // The cache matters for correctness as well as speed: fn:doc is defined to
@@ -330,6 +359,17 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 		// US-ASCII is a subset of UTF-8, so the same decode is correct for
 		// it, and a byte above 0x7F is caught by the validity check below
 		// either way.
+	case "iso-8859-1", "iso8859-1", "latin1", "latin-1", "iso_8859-1", "cp819":
+		// ISO-8859-1 maps each byte to the code point of the same value, so
+		// the decode is a byte-by-byte widening and needs no tables. It is
+		// worth having: it is the one non-Unicode encoding the suite's own
+		// files are written in, and refusing it made unparsed-text() report
+		// FOUT1190 for a file it could read perfectly well.
+		runes := make([]rune, len(data))
+		for i, b := range data {
+			runes[i] = rune(b)
+		}
+		data = []byte(string(runes))
 	default:
 		return "", fmt.Errorf("FOUT1190: encoding %q is not supported", encoding)
 	}

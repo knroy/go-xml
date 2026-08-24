@@ -44,13 +44,17 @@ type Assertion struct {
 }
 
 // ParseAssert parses the raw result XML into an assertion tree.
-func ParseAssert(raw []byte) (Assertion, error) {
+//
+// outer holds the namespace bindings in scope at the element raw was taken
+// from the inside of — the suite declares the XHTML prefix on <result>
+// itself, and innerxml does not carry it.
+func ParseAssert(raw []byte, outer map[string]string) (Assertion, error) {
 	dec := xml.NewDecoder(strings.NewReader(string(raw)))
 	root := Assertion{Kind: "all-of"}
 	stack := []*Assertion{&root}
 	// Namespace scopes parallel the element stack, so a binding declared on a
 	// combinator reaches the assertions nested inside it.
-	nsStack := []map[string]string{nil}
+	nsStack := []map[string]string{outer}
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {

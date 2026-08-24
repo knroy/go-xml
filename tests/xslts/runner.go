@@ -149,6 +149,10 @@ func (r *Runner) loadSet(ref TestSetRef) (*TestSet, error) {
 	if err := resolveInitialTemplateNames(data, &set); err != nil {
 		return nil, err
 	}
+	// Likewise for the bindings on <result>, which innerxml drops.
+	if err := resolveResultNamespaces(data, &set); err != nil {
+		return nil, err
+	}
 	// Stylesheet and source paths are relative to the test-set file rather
 	// than to the suite root, so the directory travels with the parsed set.
 	set.Dir = filepath.Dir(path)
@@ -166,7 +170,7 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		return out
 	}
 
-	assert, err := ParseAssert([]byte(tc.Result.Inner))
+	assert, err := ParseAssert([]byte(tc.Result.Inner), tc.Result.NS)
 	if err != nil {
 		out.Why = "unreadable result: " + err.Error()
 		return out
@@ -328,7 +332,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		return nil, err
 	}
 
-	src, err := r.principalSource(set, tc)
+	src, srcPath, err := r.principalSource(set, tc)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +341,19 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		Roots:        []string{r.Root},
 		AllowDOCTYPE: true,
 		UnparsedText: true,
+		// A source document may itself declare external entities; the
+		// principal source is read with them enabled, and a document the
+		// stylesheet loads later has the same claim on them.
+		ExternalEntities: true,
+	}
+	// The harness parses the principal source itself, because it has to
+	// schema-annotate the tree before the transform starts. Telling the
+	// document resolver about that tree is what makes
+	// "doc(document-uri(.)) is ." true, which section 16.1 requires and
+	// accessor-008 tests: without it doc() parses the same file a second
+	// time and answers a node with a different identity.
+	if srcPath != "" && src != nil && src.Kind == xdm.KindDocument {
+		docs.Preload(fileURI(srcPath), &xdm.Tree{Root: src})
 	}
 	opts := xslt.TransformOptions{
 		// The suite's documents legitimately carry DOCTYPE declarations,
@@ -413,10 +430,14 @@ func (noNS) DefaultFunctionNamespace() string    { return xdm.NSFN }
 // A test with no source runs from an initial template, which is how a
 // stylesheet that generates its own content is tested. Returning nil for that
 // case is correct rather than an error.
-func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) {
+// The second result is the filesystem path the document came from, empty for
+// an inline or computed source. It is used to seed the document resolver's
+// cache so that fn:doc of that URI answers this very tree — see
+// FileResolver.Preload.
+func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string, error) {
 	env := r.environment(set, tc)
 	if env == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	for _, s := range env.Sources {
 		if s.Role != "." {
@@ -430,7 +451,8 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 		// node, or -- with nothing else in the environment -- at no node,
 		// which surfaced as "source document is nil".
 		if s.Select != "" {
-			return r.selectedSource(set, env, s)
+			n, err := r.selectedSource(set, env, s)
+			return n, "", err
 		}
 		if s.Content != "" {
 			// An inline source has no file of its own, but fn:doc inside the
@@ -445,23 +467,29 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 				// filesystem path has no scheme, so it is not an
 				// absolute URI however absolute the path is.
 				BaseURI: fileURI(filepath.Join(set.Dir, "inline.xml")),
+				// An inline source may declare an external entity of its
+				// own — copy-1401 writes <!ENTITY extEnt SYSTEM "ent22.xml">
+				// in its <content> — and without a resolver the reference is
+				// an undeclared-entity parse error rather than the content
+				// of the file beside the test set.
+				ExternalEntities: r.entityResolver(),
 			})
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			// The initial context is the *document* node: a stylesheet
 			// matching "/" needs a root to match, and passing the document
 			// element leaves it with none.
 			if err := r.annotate(set, env, s, tree.Root); err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			return tree.Root, nil
+			return tree.Root, "", nil
 		}
 		if s.File != "" {
 			p := filepath.Join(set.Dir, filepath.FromSlash(s.File))
 			data, err := os.ReadFile(p)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			tree, err := xdm.ParseString(string(stripBOM(data)),
 				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
@@ -472,15 +500,15 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 					DocumentURI:      fileURI(p),
 					ExternalEntities: r.entityResolver()})
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if err := r.annotate(set, env, s, tree.Root); err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			return tree.Root, nil
+			return tree.Root, p, nil
 		}
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
 // selectedSource evaluates a source's @select to get the initial context node.
@@ -493,8 +521,9 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 	switch {
 	case s.Content != "":
 		tree, err := xdm.ParseString(s.Content, xdm.ParseOptions{
-			AllowDOCTYPE: true,
-			BaseURI:      fileURI(filepath.Join(set.Dir, "inline.xml")),
+			AllowDOCTYPE:     true,
+			BaseURI:          fileURI(filepath.Join(set.Dir, "inline.xml")),
+			ExternalEntities: r.entityResolver(),
 		})
 		if err != nil {
 			return nil, err

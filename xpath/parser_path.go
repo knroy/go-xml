@@ -513,6 +513,19 @@ func numericLiteral(t Token) *xdm.Atomic {
 }
 
 func (p *Parser) parseFunctionCall() (Expr, error) {
+	return p.parseFunctionCallWith(nil)
+}
+
+// parseFunctionCallWith parses a function call, optionally with an argument
+// supplied from outside the argument list.
+//
+// The arrow operator "$x => f(1)" is defined as the call "f($x, 1)", so it
+// needs a call whose first argument comes from the left of the operator
+// rather than from between the parentheses. Threading it here rather than
+// rewriting the AST afterwards keeps arity right at the point where the
+// function is resolved, which is what QName folding and schema-constructor
+// folding both key on.
+func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 	nameTok := p.cur()
 	// A handful of names are reserved by the grammar: they introduce a kind
 	// test or a type, so they cannot name a function however the expression
@@ -534,6 +547,9 @@ func (p *Parser) parseFunctionCall() (Expr, error) {
 	}
 
 	var args []Expr
+	if first != nil {
+		args = append(args, first)
+	}
 	if !p.peekIs(TokOp, ")") {
 		for {
 			a, err := p.parseExprSingle()
@@ -593,6 +609,23 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		// different prefixes for the same namespace compare unequal and two
 		// values with the same prefix for different namespaces compare equal.
 		if q, ok, err := p.foldQNameLiteral(args[0]); err == nil && ok {
+			// The fold resolves the prefix but says nothing about the facets
+			// the schema author wrote, so z:notat('z:de') built a NOTATION
+			// value for a notation the enumeration does not admit. The check
+			// belongs here for the same reason the fold does: it needs the
+			// expanded name, and the namespace context that produced it is
+			// gone by evaluation time. The expanded spelling is what is
+			// handed over, because comparing the raw lexical form matches
+			// prefixes rather than namespaces — see ValidateExpandedQNameValue.
+			//
+			// The failure is deferred to evaluation rather than raised here:
+			// FORG0001 is a dynamic error, and a constructor call in a branch
+			// that is never taken must not stop the stylesheet compiling.
+			expanded := q.Val.QName()
+			clark := "{" + expanded.URI + "}" + expanded.Local
+			if known, verr := schemaValueValid(lex, p.ns, clark); known && verr != nil {
+				return &errorExpr{err: xdm.Errorf("FORG0001", "%v", verr)}, true
+			}
 			q.Val = q.Val.WithDerived(lex)
 			return q, true
 		}
@@ -977,3 +1010,15 @@ func isReservedFunctionName(name string) bool {
 	}
 	return false
 }
+
+// errorExpr is an expression that always raises one dynamic error.
+//
+// It exists so that a fold performed at parse time can report a *dynamic*
+// failure. The constructor of a schema type is resolved during parsing,
+// because it needs the static namespace context, but a value outside the
+// type's value space is FORG0001 — a dynamic error, which must not be raised
+// until the expression is actually evaluated.
+type errorExpr struct{ err error }
+
+func (e *errorExpr) Eval(c *Context) (xdm.Sequence, error) { return nil, e.err }
+func (e *errorExpr) String() string                        { return "error()" }

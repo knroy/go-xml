@@ -72,6 +72,17 @@ func TestGrammarCoverage(t *testing.T) {
 		"SeqType occ *":    `1 instance of xs:integer*`,
 		"SeqType occ +":    `1 instance of xs:integer+`,
 		"Comment":          `1 (: c :) + 2`,
+		// XPath 3.0 operators. They were gated behind ParseExtended on the
+		// reasoning that a 2.0 processor must refuse them; no test in the
+		// W3C suite asserts that, and refusing them only failed the tests
+		// marked XSLT20+ that use them.
+		"SimpleMap":      `(1,2)!string(.)`,
+		"SimpleMapChain": `(1,2)!string(.)!concat(.,'x')`,
+		"StringConcat":   `'a' || 'b'`,
+		"ConcatChain":    `'a' || 'b' || 'c'`,
+		"Arrow":          `'abc' => substring(1, 2)`,
+		"ArrowChain":     `'abc' => substring(1, 2) => string-length()`,
+		"ArrowNoArgs":    `' a ' => normalize-space()`,
 	}
 	var fails []string
 	for name, e := range exprs {

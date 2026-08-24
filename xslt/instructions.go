@@ -257,13 +257,16 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 		Value:          n.Value,
 		BaseURI:        n.BaseURI,
 		TypeAnnotation: n.TypeAnnotation,
+		IsID:           n.IsID,
+		IsIDREFS:       n.IsIDREFS,
 	}
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)
 	}
 	for _, a := range n.Attrs {
 		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
-			Value: a.Value, TypeAnnotation: a.TypeAnnotation})
+			Value: a.Value, TypeAnnotation: a.TypeAnnotation,
+			IsID: a.IsID, IsIDREFS: a.IsIDREFS})
 	}
 	for _, ch := range n.Children {
 		c.AppendChild(deepCopy(ch))

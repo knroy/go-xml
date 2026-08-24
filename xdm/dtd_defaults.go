@@ -246,3 +246,92 @@ func applyAttTypes(el *Node, types []attDeclaredType) {
 		}
 	}
 }
+
+// parseElementOnlyDecls returns the set of element names whose <!ELEMENT>
+// declaration gives them an element-only content model.
+//
+// XML §3.2.1 calls such a model "element content", and §2.10 makes the
+// whitespace between its children *ignorable*: a validating processor knows
+// no character data can appear there, so the text nodes carry no information.
+// XSLT 2.0 §4.4 turns that into a rule with priority over the stylesheet:
+// whitespace-only text in element-only content is stripped regardless of
+// xsl:preserve-space, because the schema- or DTD-derived fact outranks the
+// stylesheet-declared preference.
+//
+// Like parseAttList this is deliberately not a DTD parser. It reads the one
+// bit of an <!ELEMENT> declaration the data model can observe — whether the
+// model mentions #PCDATA or is EMPTY/ANY — and skips anything it does not
+// understand. A model it cannot classify is treated as NOT element-only, so a
+// misparse loses the optimisation rather than deleting content.
+func parseElementOnlyDecls(subset string) map[string]bool {
+	var out map[string]bool
+	for {
+		i := strings.Index(subset, "<!ELEMENT")
+		if i < 0 {
+			return out
+		}
+		subset = subset[i+len("<!ELEMENT"):]
+		end := strings.IndexByte(subset, '>')
+		if end < 0 {
+			return out
+		}
+		body := subset[:end]
+		subset = subset[end+1:]
+
+		fields := strings.Fields(body)
+		if len(fields) < 2 {
+			continue
+		}
+		name := fields[0]
+		model := strings.Join(fields[1:], " ")
+		if !isElementOnlyModel(model) {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[name] = true
+	}
+}
+
+// isElementOnlyModel reports whether a content model is element content.
+//
+// EMPTY and ANY are not: EMPTY admits nothing at all, and ANY admits character
+// data, so neither makes surrounding whitespace ignorable. A mixed model is
+// written (#PCDATA | ...) and is excluded by the same reasoning — there the
+// whitespace is real content. What remains is a parenthesised model naming
+// only elements, which is exactly element content.
+func isElementOnlyModel(model string) bool {
+	model = strings.TrimSpace(model)
+	if model == "" || model == "EMPTY" || model == "ANY" {
+		return false
+	}
+	if !strings.HasPrefix(model, "(") {
+		return false
+	}
+	return !strings.Contains(model, "#PCDATA")
+}
+
+// stripIgnorableWhitespace removes the whitespace-only text children of an
+// element whose DTD content model is element-only.
+//
+// This runs independently of, and before, the stylesheet's own strip-space
+// rules: it is not a preference that xsl:preserve-space can turn off. An
+// explicit xml:space="preserve" is still honoured, since XML §2.10 makes that
+// the document's own statement about its whitespace.
+func stripIgnorableWhitespace(el *Node, elementOnly map[string]bool) {
+	if !elementOnly[el.Name.Lexical()] && !elementOnly[el.Name.Local] {
+		return
+	}
+	if a := el.Attr(NSXML, "space"); a != nil && a.Value == "preserve" {
+		return
+	}
+	kept := el.Children[:0]
+	for _, c := range el.Children {
+		if c.Kind == KindText && IsXMLWhitespace(c.Value) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	el.Children = kept
+}

@@ -349,6 +349,14 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			validation:   spec,
 			baseURI:      n.BaseURI,
 		}, nil
+	case "evaluate":
+		return c.compileEvaluate(n, ns)
+	case "iterate":
+		return c.compileIterate(n, ns)
+	case "break":
+		return c.compileBreak(n, ns)
+	case "next-iteration":
+		return c.compileNextIteration(n, ns)
 	case "sequence":
 		sel, err := requiredExpr(n, "select", ns)
 		if err != nil {
@@ -1174,4 +1182,449 @@ func mergeAcrossComments(nodes []*xdm.Node) []*xdm.Node {
 		kept = append(kept, n)
 	}
 	return kept
+}
+
+// --- xsl:evaluate -----------------------------------------------------------
+
+// evaluateInstr implements xsl:evaluate, section 10.4: an XPath expression
+// computed as a string at run time and then evaluated.
+//
+// Everything about it is decided by the two static-context rules of 10.4.1
+// that a 2.0 processor can honour without new machinery. The namespaces, the
+// base URI and the default collation are those in force at the instruction, so
+// the resolver built for it at compile time is exactly the static context the
+// target expression needs — @default-collation on the instruction itself
+// overrides the inherited one, which is what separates collations-0128's three
+// templates from one another.
+//
+// The second rule is subtractive: "this set deliberately excludes XSLT-defined
+// functions in the standard function namespace including for example, key,
+// current-group, and system-property". That exclusion is not decoration. It is
+// the whole subject of system-property-022, where calling system-property from
+// inside xsl:evaluate must fail — and 10.4's XTDE3160 is the code for it,
+// because a call to a function outside the static context is a static error
+// when the target expression is analysed.
+type evaluateInstr struct {
+	// xpathExpr computes the target expression's source text.
+	xpathExpr *xpath.Compiled
+	// contextItem computes the focus for the target expression, or is nil
+	// when @context-item is absent and the target expression runs with no
+	// focus at all.
+	contextItem *xpath.Compiled
+	// ns is the static context: namespaces, base URI and default collation as
+	// they stand at the xsl:evaluate element.
+	ns *nsResolver
+	// params are the xsl:with-param children, the only variables in scope
+	// within the target expression.
+	params []*Variable
+	// as is @as, or nil for the item()* that permits anything.
+	as *sequenceType
+}
+
+// xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
+// standard function namespace, which section 10.4.1 excludes from the target
+// expression's static context.
+//
+// It is deliberately not runtimeFuncNames. That map exists to tell a static
+// check which names are *declared* despite being absent from the compile-time
+// library, and it is missing the XSLT-defined functions that need no runtime —
+// unparsed-entity-uri and unparsed-entity-public-id among them. Reusing it
+// here would have let those through.
+var xsltOnlyFunctions = map[string]bool{
+	"current":                   true,
+	"current-group":             true,
+	"current-grouping-key":      true,
+	"document":                  true,
+	"element-available":         true,
+	"format-date":               true,
+	"format-dateTime":           true,
+	"format-number":             true,
+	"format-time":               true,
+	"function-available":        true,
+	"generate-id":               true,
+	"key":                       true,
+	"regex-group":               true,
+	"system-property":           true,
+	"type-available":            true,
+	"unparsed-entity-public-id": true,
+	"unparsed-entity-uri":       true,
+	"unparsed-text":             true,
+	"unparsed-text-available":   true,
+}
+
+// restrictedLibrary hides the XSLT-defined functions from a function library.
+type restrictedLibrary struct{ inner xpath.FunctionLibrary }
+
+func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
+	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
+		return xpath.Function{}, false
+	}
+	if r.inner == nil {
+		return xpath.Function{}, false
+	}
+	return r.inner.Lookup(name, arity)
+}
+
+// compileEvaluate compiles xsl:evaluate.
+func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, error) {
+	xp, err := requiredExpr(n, "xpath", ns)
+	if err != nil {
+		return nil, err
+	}
+	instr := &evaluateInstr{xpathExpr: xp, ns: ns}
+
+	if a := n.Attr("", "context-item"); a != nil {
+		ci, err := compileExpr(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@context-item: %w", err)
+		}
+		instr.contextItem = ci
+	}
+	if a := n.Attr("", "as"); a != nil {
+		st, err := compileSequenceType(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@as: %w", err)
+		}
+		instr.as = st
+	}
+	params, _, err := c.compileParamsAndSorts(n, ns)
+	if err != nil {
+		return nil, err
+	}
+	instr.params = params
+	return instr, nil
+}
+
+func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
+	src, err := i.xpathExpr.EvalString(rt.ctx)
+	if err != nil {
+		return err
+	}
+
+	// A static error in the target expression is XTDE3160 whatever its XPath
+	// code would have been: 10.4 defines the error by *when* it happens, not
+	// by which rule was broken.
+	comp, err := xpath.Compile(src, i.ns)
+	if err != nil {
+		return fmt.Errorf("XTDE3160: the target expression of xsl:evaluate "+
+			"is not a valid XPath expression: %w", err)
+	}
+	if i.ns.baseURI != "" {
+		comp = comp.WithStaticBaseURI(i.ns.baseURI)
+	}
+	// 10.4.1: "Default collation: the same as the default collation defined at
+	// this point in the stylesheet". compileExpr applies this for a statically
+	// written expression; the target expression is compiled here instead, so
+	// it has to be applied here too — and without it collations-0128 compares
+	// under the codepoint collation and answers false three times.
+	if i.ns.collation != "" {
+		if coll, cerr := xpath.ResolveCollation(i.ns.collation); cerr == nil {
+			comp = comp.WithDefaultCollation(coll)
+		}
+	}
+
+	sub := rt
+	for _, p := range i.params {
+		v, err := evalVariable(p, rt)
+		if err != nil {
+			return fmt.Errorf("evaluating parameter $%s of xsl:evaluate: %w",
+				p.Name.Lexical(), err)
+		}
+		sub = sub.withVar(p.Name, v)
+	}
+
+	// 10.4.2: with no @context-item the target expression has no focus, and
+	// with one it has a singleton focus on the single item that expression
+	// returns. More than one item is XTTE3210.
+	var focus xdm.Item
+	if i.contextItem != nil {
+		seq, err := i.contextItem.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		if len(seq) > 1 {
+			return fmt.Errorf("XTTE3210: the context-item attribute of "+
+				"xsl:evaluate selected %d items, not one", len(seq))
+		}
+		if len(seq) == 1 {
+			focus = seq[0]
+		}
+	}
+	if focus != nil {
+		sub = sub.withFocus(focus, 1, 1)
+	} else {
+		sub = sub.withFocus(nil, 0, 0)
+	}
+
+	// The XSLT-specific dynamic context is absent inside the target
+	// expression, and so is every XSLT-defined function.
+	ctx := sub.ctx
+	inner := *ctx
+	inner.Funcs = restrictedLibrary{inner: ctx.Funcs}
+	seq, err := comp.Eval(&inner)
+	if err != nil {
+		// A call to a function the restricted library hides surfaces here as
+		// XPST0017 rather than at compile time, because this engine resolves
+		// function names when it evaluates them. It is still the static error
+		// 10.4.1 describes, so it carries 10.4's code.
+		if strings.Contains(err.Error(), "XPST0017") {
+			return fmt.Errorf("XTDE3160: the target expression of "+
+				"xsl:evaluate is not valid in its static context: %w", err)
+		}
+		return err
+	}
+	if i.as != nil {
+		seq, err = i.as.convertAs(seq, "result of xsl:evaluate", "XTTE0505")
+		if err != nil {
+			return err
+		}
+	}
+	for _, it := range seq {
+		switch v := it.(type) {
+		case *xdm.Node:
+			out.appendNode(v)
+		case *xdm.Atomic:
+			out.appendValue(v)
+		}
+	}
+	return nil
+}
+
+// --- xsl:iterate ------------------------------------------------------------
+
+// iterateInstr implements xsl:iterate, section 8.4.
+//
+// It is xsl:for-each with a memory: the body runs once per item as for-each's
+// does, but xsl:next-iteration may hand a new set of parameter values to the
+// next turn, so the loop can carry a running total that for-each cannot. The
+// two escape hatches are xsl:break, which stops the loop and contributes its
+// own body to the result, and xsl:on-completion, which runs only when the
+// sequence is exhausted without a break.
+type iterateInstr struct {
+	sel *xpath.Compiled
+	// params are the xsl:param children: the loop's carried state, holding
+	// their declared defaults on the first turn.
+	params []*Variable
+	body   []Instruction
+	// onCompletion is the xsl:on-completion body, nil when absent.
+	onCompletion []Instruction
+	// hasOnCompletion distinguishes an absent xsl:on-completion from one with
+	// an empty body, which matters only for reading the code.
+	hasOnCompletion bool
+	// onCompletionSelect is @select on xsl:on-completion, an alternative to
+	// its sequence constructor.
+	onCompletionSelect *xpath.Compiled
+}
+
+// breakSignal unwinds the body of an xsl:iterate when xsl:break runs.
+//
+// The signal travels as an error because that is the only channel an
+// Instruction has: Execute returns nothing else, and every enclosing
+// instruction already propagates errors unchanged, which is exactly the
+// unwinding xsl:break needs. iterateInstr recognises it and stops; anything
+// outside an xsl:iterate never sees one, because compileBreak is only reached
+// from a body compiled here.
+type breakSignal struct{}
+
+func (breakSignal) Error() string { return "xsl:break" }
+
+// nextIterationSignal unwinds to the end of one turn of the loop, carrying the
+// parameter values for the next.
+type nextIterationSignal struct{ params map[string]xdm.Sequence }
+
+func (nextIterationSignal) Error() string { return "xsl:next-iteration" }
+
+type breakInstr struct {
+	sel  *xpath.Compiled
+	body []Instruction
+}
+
+func (i *breakInstr) Execute(rt *runtime, out *outputBuilder) error {
+	// Section 8.4: the select expression or sequence constructor "is
+	// evaluated using the same context item, position, and size as the
+	// xsl:break instruction itself, and the result is appended to the result
+	// of the xsl:iterate instruction as a whole" — so it writes to the same
+	// output builder before the loop unwinds, not after.
+	if i.sel != nil {
+		seq, err := i.sel.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		appendSequence(seq, out)
+	} else if err := execSequence(i.body, rt, out); err != nil {
+		return err
+	}
+	return breakSignal{}
+}
+
+type nextIterationInstr struct{ params []*Variable }
+
+func (i *nextIterationInstr) Execute(rt *runtime, out *outputBuilder) error {
+	vals := map[string]xdm.Sequence{}
+	for _, p := range i.params {
+		v, err := evalVariable(p, rt)
+		if err != nil {
+			return fmt.Errorf("evaluating parameter $%s of xsl:next-iteration: %w",
+				p.Name.Lexical(), err)
+		}
+		vals[p.Name.Clark()] = v
+	}
+	return nextIterationSignal{params: vals}
+}
+
+// appendSequence writes a sequence to an output builder, the same way
+// xsl:sequence does.
+func appendSequence(seq xdm.Sequence, out *outputBuilder) {
+	for _, it := range seq {
+		switch v := it.(type) {
+		case *xdm.Node:
+			out.appendNode(v)
+		case *xdm.Atomic:
+			out.appendValue(v)
+		}
+	}
+}
+
+func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
+	seq, err := i.sel.Eval(rt.ctx)
+	if err != nil {
+		return err
+	}
+
+	// The carried state starts at the declared defaults, which are evaluated
+	// in the focus of the xsl:iterate instruction itself rather than of any
+	// item, because on the first turn no item has been reached yet.
+	carried := map[string]xdm.Sequence{}
+	for _, p := range i.params {
+		v, err := evalVariable(p, rt)
+		if err != nil {
+			return fmt.Errorf("evaluating parameter $%s of xsl:iterate: %w",
+				p.Name.Lexical(), err)
+		}
+		carried[p.Name.Clark()] = v
+	}
+
+	broke := false
+	for idx, it := range seq {
+		sub := rt.withCurrent(it, idx+1, len(seq))
+		for _, p := range i.params {
+			sub = sub.withVar(p.Name, carried[p.Name.Clark()])
+		}
+		err := execSequence(i.body, sub, out)
+		if err != nil {
+			if _, ok := err.(breakSignal); ok {
+				broke = true
+				break
+			}
+			if nx, ok := err.(nextIterationSignal); ok {
+				// Only the parameters xsl:next-iteration named change; the
+				// rest "unchanged from the previous iteration".
+				for k, v := range nx.params {
+					carried[k] = v
+				}
+				continue
+			}
+			return err
+		}
+	}
+
+	// "It is not evaluated if the evaluation is terminated using xsl:break."
+	if broke || !i.hasOnCompletion {
+		return nil
+	}
+	// "During evaluation of its select expression or sequence constructor the
+	// context item, position, and size are absent (that is, any reference to
+	// these values is an error)." That absence is the whole of number-1004:
+	// xsl:number with no context node is XTTE0990.
+	done := rt.withFocus(nil, 0, 0)
+	for _, p := range i.params {
+		done = done.withVar(p.Name, carried[p.Name.Clark()])
+	}
+	if i.onCompletionSelect != nil {
+		vals, err := i.onCompletionSelect.Eval(done.ctx)
+		if err != nil {
+			return err
+		}
+		appendSequence(vals, out)
+		return nil
+	}
+	return execSequence(i.onCompletion, done, out)
+}
+
+// compileIterate compiles xsl:iterate.
+func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, error) {
+	sel, err := requiredExpr(n, "select", ns)
+	if err != nil {
+		return nil, err
+	}
+	instr := &iterateInstr{sel: sel}
+
+	// xsl:param and xsl:on-completion are read directly by this compiler and
+	// are not part of the sequence constructor. Section 8.4's content model
+	// puts them first, and stripping them here is what leaves the body.
+	var bodyNodes []*xdm.Node
+	for _, ch := range n.Children {
+		if ch.Kind == xdm.KindElement && ch.Name.URI == xdm.NSXSL {
+			switch ch.Name.Local {
+			case "param":
+				v, err := c.compileVariable(ch)
+				if err != nil {
+					return nil, err
+				}
+				instr.params = append(instr.params, v)
+				continue
+			case "on-completion":
+				instr.hasOnCompletion = true
+				if a := ch.Attr("", "select"); a != nil {
+					sc, err := compileExpr(a.Value, newNSResolver(ch, ""))
+					if err != nil {
+						return nil, fmt.Errorf(
+							"in xsl:on-completion/@select: %w", err)
+					}
+					instr.onCompletionSelect = sc
+					continue
+				}
+				body, err := c.compileSequence(ch, ch)
+				if err != nil {
+					return nil, err
+				}
+				instr.onCompletion = body
+				continue
+			}
+		}
+		bodyNodes = append(bodyNodes, ch)
+	}
+
+	body, err := c.compileNodes(bodyNodes, n)
+	if err != nil {
+		return nil, err
+	}
+	instr.body = body
+	return instr, nil
+}
+
+func (c *compiler) compileBreak(n *xdm.Node, ns *nsResolver) (Instruction, error) {
+	instr := &breakInstr{}
+	if a := n.Attr("", "select"); a != nil {
+		sel, err := compileExpr(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:break/@select: %w", err)
+		}
+		instr.sel = sel
+		return instr, nil
+	}
+	body, err := c.compileSequence(n, n)
+	if err != nil {
+		return nil, err
+	}
+	instr.body = body
+	return instr, nil
+}
+
+func (c *compiler) compileNextIteration(n *xdm.Node, ns *nsResolver) (Instruction, error) {
+	params, _, err := c.compileParamsAndSorts(n, ns)
+	if err != nil {
+		return nil, err
+	}
+	return &nextIterationInstr{params: params}, nil
 }

@@ -149,10 +149,12 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// the principal result. Passing `out` here is exactly the merging bug
 	// this instruction used to be rejected to avoid.
 	sub := newOutputBuilder()
-	for _, instr := range i.body {
-		if err := instr.Execute(rt, sub); err != nil {
-			return err
-		}
+	// execSequence rather than a bare loop: the body is a sequence
+	// constructor, so an xsl:variable inside it is in scope for the
+	// instructions that follow, and a plain Execute loop never binds it —
+	// which made every reference to such a variable XPST0008.
+	if err := execSequence(i.body, rt, sub); err != nil {
+		return err
 	}
 
 	// The tree is assessed as a document node before it is recorded, so that

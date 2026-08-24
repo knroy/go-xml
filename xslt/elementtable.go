@@ -205,6 +205,42 @@ var xsltElements = map[string]elementDef{
 		"type":            {},
 		"validation":      {},
 	}},
+	// xsl:evaluate is an XSLT 3.0 instruction, listed here for the same reason
+	// xsl:mode is: rejecting it under XTSE0010 is the wrong error at the wrong
+	// moment. Section 10.4 defines it entirely in terms of machinery a 2.0
+	// processor already has — an XPath expression compiled from a string,
+	// against a static context the instruction itself describes — so it can be
+	// supported rather than refused. The suite treats it as reachable from a
+	// version="2.0" stylesheet: system-property-022 and collations-0128 are
+	// both XSLT20+ tests whose subject is a *different* error, or none, and
+	// neither is observable while the element is a static error.
+	// xsl:iterate and its three companions are XSLT 3.0, and are here for the
+	// reason xsl:evaluate is: an XSLT 2.0 processor can execute them exactly,
+	// because section 8.4 defines the loop in terms of a sequence, a
+	// parameter set and two escape hatches, none of which is new machinery.
+	// number-1004 is the case that makes the difference visible — an XSLT 2.0
+	// test whose subject is the XTTE0990 that xsl:number raises inside
+	// xsl:on-completion, where section 8.4 makes the focus absent. That error
+	// is unreachable while the surrounding element is refused outright.
+	"iterate": {attrs: map[string]attrDef{
+		"select": {required: true},
+	}},
+	"next-iteration": {attrs: map[string]attrDef{}},
+	"break": {attrs: map[string]attrDef{
+		"select": {},
+	}},
+	"on-completion": {attrs: map[string]attrDef{
+		"select": {},
+	}},
+	"evaluate": {attrs: map[string]attrDef{
+		"xpath":             {required: true},
+		"as":                {},
+		"base-uri":          {avt: true},
+		"with-params":       {},
+		"context-item":      {},
+		"namespace-context": {},
+		"schema-aware":      {avt: true},
+	}},
 	"sequence": {attrs: map[string]attrDef{
 		"select": {required: true},
 	}},
@@ -392,6 +428,11 @@ var contentModels = map[string]contentModel{
 	"for-each-group":         {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
 	"function":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
 	"if":                     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"iterate":                {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "on-completion": true}, model: "(xsl:param*, xsl:on-completion?, sequence-constructor)"},
+	"next-iteration":         {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
+	"break":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"on-completion":          {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"evaluate":               {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true, "fallback": true}, model: "(xsl:with-param | xsl:fallback)*"},
 	"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
 	"include":                {seqCtor: false, pcdata: false, kids: nil, model: ""},
@@ -443,6 +484,10 @@ var xsltInstructions = map[string]bool{
 	"copy-of":                true,
 	"document":               true,
 	"element":                true,
+	"evaluate":               true,
+	"iterate":                true,
+	"next-iteration":         true,
+	"break":                  true,
 	"fallback":               true,
 	"for-each":               true,
 	"for-each-group":         true,

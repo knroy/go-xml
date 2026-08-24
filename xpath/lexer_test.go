@@ -3,6 +3,8 @@ package xpath
 import (
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 func lex(t *testing.T, src string) []Token {
@@ -182,5 +184,148 @@ func TestLexVariables(t *testing.T) {
 func TestLexRejectsUnterminatedString(t *testing.T) {
 	if _, err := NewLexer(`"abc`).Tokens(); err == nil {
 		t.Error("unterminated string accepted")
+	}
+}
+
+// schemaNS is a resolver that also carries a one-declaration schema, so that
+// a braced URI literal can be checked against it.
+type schemaNS struct{ testNS }
+
+func (schemaNS) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool) {
+	return 0, false, false
+}
+
+func (schemaNS) LookupSchemaDeclaration(name xdm.QName, attribute bool) bool {
+	return !attribute && name.URI == "http://ns.example.com/val16/" &&
+		name.Local == "doc"
+}
+
+func (schemaNS) SubstitutionGroupMembers(xdm.QName) []xdm.QName { return nil }
+
+func (schemaNS) SchemaDeclarationType(xdm.QName, bool) (string, bool) {
+	return "", false
+}
+
+func (schemaNS) ValidateSchemaValue(xdm.QName, string) (bool, error) {
+	return false, nil
+}
+
+// A braced URI literal must not cost the resolver its schema.
+//
+// The lexer rewrites Q{uri}local to a synthetic prefixed name and the parser
+// wraps the resolver so that prefix resolves. The wrapper embedded only
+// NamespaceResolver, so it promoted only that interface's methods: a resolver
+// carrying a schema stopped carrying one for exactly those expressions that
+// used a braced URI, and schema-element(Q{uri}local) reported XPST0008 —
+// "no schema is imported" — against a context that had imported one.
+func TestBracedURIKeepsSchema(t *testing.T) {
+	const braced = `. instance of ` +
+		`document-node(schema-element(Q{http://ns.example.com/val16/}doc))`
+	if _, err := ParseExtended(braced, schemaNS{}); err != nil {
+		t.Errorf("braced URI schema-element: %v", err)
+	}
+	// A name the schema does not declare must still be XPST0008: the fix
+	// carries the schema through, it does not stop consulting it.
+	const undeclared = `. instance of ` +
+		`schema-element(Q{http://ns.example.com/val16/}nosuch)`
+	err := func() error { _, e := ParseExtended(undeclared, schemaNS{}); return e }()
+	if err == nil || !strings.Contains(err.Error(), "XPST0008") {
+		t.Errorf("undeclared braced name: want XPST0008, got %v", err)
+	}
+}
+
+// The XPath 3.0 operators must bind at the precedence the grammar gives them,
+// not merely parse.
+//
+// StringConcatExpr sits between ComparisonExpr and RangeExpr, so "||" binds
+// tighter than "eq" and looser than "+"; ArrowExpr sits between unary and
+// simple map, so "=>" binds tighter than "||".
+func TestXPath30OperatorPrecedence(t *testing.T) {
+	evalString := func(t *testing.T, expr string) (string, error) {
+		t.Helper()
+		seq, err := Eval(expr, NewContext(nil, Builtins()), testNS{})
+		if err != nil {
+			return "", err
+		}
+		return renderSeq(seq), nil
+	}
+	for _, c := range []struct{ expr, want string }{
+		// "||" is fn:concat on two arguments: the empty sequence is the
+		// zero-length string rather than an empty result.
+		{`'a' || 'b'`, "ab"},
+		{`() || 'x'`, "x"},
+		{`1 || 2`, "12"},
+		{`'a' || 'b' || 'c'`, "abc"},
+		// Looser than "+": the addition happens first.
+		{`'n=' || 1 + 2`, "n=3"},
+		// Tighter than "eq": the concatenation happens first, so this
+		// compares "ab" with "ab" rather than concatenating a boolean.
+		{`('a' || 'b') eq 'ab'`, "true"},
+		{`'a' || 'b' eq 'ab'`, "true"},
+		// "=>" is a call with the left operand as first argument, and binds
+		// tighter than "||".
+		{`'abc' => substring(2)`, "bc"},
+		{`' a ' => normalize-space()`, "a"},
+		{`'x' || 'abc' => substring(2)`, "xbc"},
+		{`'abc' => substring(2) => upper-case()`, "BC"},
+		// "!" maps over atomic items, where "/" would be XPTY0019.
+		{`string-join((1,2,3)!string(.), '')`, "123"},
+		{`string-join((1,2)!(. + 1)!string(.), ',')`, "2,3"},
+	} {
+		got, err := evalString(t, c.expr)
+		if err != nil {
+			t.Errorf("%s: %v", c.expr, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+}
+
+// "!=" must still lex as one operator, not as the simple map "!" followed by
+// "=". The lexer tests "!=" first for exactly this reason.
+func TestSimpleMapDoesNotSwallowNotEqual(t *testing.T) {
+	evalString := func(t *testing.T, expr string) (string, error) {
+		t.Helper()
+		seq, err := Eval(expr, NewContext(nil, Builtins()), testNS{})
+		if err != nil {
+			return "", err
+		}
+		return renderSeq(seq), nil
+	}
+	got, err := evalString(t, `string(1 != 2)`)
+	if err != nil {
+		t.Fatalf("1 != 2: %v", err)
+	}
+	if got != "true" {
+		t.Errorf("1 != 2 = %q, want \"true\"", got)
+	}
+}
+
+// "||" must not be mistaken for two unions, and ">=" must not be mistaken for
+// an arrow: both are matched before the single-character forms.
+func TestConcatAndArrowDoNotBreakNeighbours(t *testing.T) {
+	evalString := func(t *testing.T, expr string) (string, error) {
+		t.Helper()
+		seq, err := Eval(expr, NewContext(nil, Builtins()), testNS{})
+		if err != nil {
+			return "", err
+		}
+		return renderSeq(seq), nil
+	}
+	for _, c := range []struct{ expr, want string }{
+		{`string(count(() | ()))`, "0"},
+		{`string(2 >= 1)`, "true"},
+		{`string(1 <= 2)`, "true"},
+	} {
+		got, err := evalString(t, c.expr)
+		if err != nil {
+			t.Errorf("%s: %v", c.expr, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
 	}
 }

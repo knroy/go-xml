@@ -4,6 +4,45 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org), with the caveat that a `0.x` release may
 break the API — see *Stability* below.
 
+## Unreleased
+
+### XSLT 2.0 conformance: 98.83% to 99.24%
+
+6,006 of 6,052 in scope, up from 5,982 of 6,053. 25 tests fixed, no
+regressions. XSD 1.1 gained one instance test (26,158 of 26,209); XSD 1.0,
+QT3 and RELAX NG are unchanged.
+
+New in the engine: `xsl:evaluate` and `xsl:iterate` (recognised under 2.0
+semantics, which is what the suite's `XSLT20+` dependency means); the XPath
+3.0 `||` and `=>` operators alongside the simple map `!`; the
+`http://www.w3.org/2013/collation/UCA` collation family, backed by the CLDR
+tables already vendored for `xsl:sort`; and backreferences in `replace()`.
+
+Corrections worth noting, because each was a wrong answer rather than a
+missing feature:
+
+- `matches()` returned `false` for text it matches whenever a backreference
+  was separated from its group by a variable-width expression. The soundness
+  check examined only the group. A wrong answer is worse than the `FORX0002`
+  refusal it now gives.
+- Whitespace in DTD element-only content was not ignorable, so
+  `xsl:preserve-space` could preserve what XML 1.0 section 2.10 defines away.
+- `xsl:result-document` ran its body without binding variables declared
+  inside it, so every reference to one raised `XPST0008`.
+- An expression containing a braced URI literal silently lost the schema from
+  its static context, sending every schema lookup down its "no schema" branch.
+- `deepCopy` and the type-annotation stripper dropped the is-id and is-idrefs
+  properties they were documented to preserve.
+- A value derived by restriction from `xs:boolean` atomised to nothing when
+  its lexical form carried the whitespace `xs:boolean` collapses.
+- An `xs:QName` with no in-scope binding for its prefix was accepted; Part 2
+  section 3.2.18 makes it denote no value.
+
+The UCA collation refuses `caseFirst`, `alternate`, `maxVariable`, `reorder`
+and `backwards` even under `fallback=yes`, where the specification permits
+ignoring them. Ignoring a parameter that changes the *order* yields a sort
+that is quietly wrong, which is worse for the caller than a refusal.
+
 ## v0.1.0 — 2026-08-22
 
 First tagged release. Everything before this was unversioned, so this entry
@@ -18,10 +57,10 @@ libxml2.
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
 | XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.80% instance · 97.96% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 98.83% — 5,982 of 6,053 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.24% — 6,006 of 6,052 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

@@ -318,6 +318,22 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 					"XTTE1545: attribute %s cannot be validated against %s, "+
 						"which is %s", n.Name.Local, spec.typeName.Lexical(), why)
 			}
+			// XTTE1535: "It is a type error if the value of the type
+			// attribute of an xsl:copy or xsl:copy-of instruction refers to a
+			// complex type definition and one or more of the items being
+			// copied is an attribute node." The instruction is not recorded
+			// on the spec, but it does not need to be: xsl:attribute naming a
+			// complex type is already the static error XTSE1530, and no other
+			// instruction carrying a type attribute can produce an attribute
+			// node at all. So an attribute reaching here against a complex
+			// type came from xsl:copy or xsl:copy-of, and 1535 is the code
+			// the spec gives it rather than the general 1540.
+			if _, complex := schema.Types[xdm.QName{URI: spec.typeName.URI, Local: spec.typeName.Local}].(*xsd.ComplexType); complex {
+				return fmt.Errorf(
+					"XTTE1535: attribute %s cannot be copied against %s, "+
+						"which is a complex type",
+					n.Name.Local, spec.typeName.Lexical())
+			}
 		}
 		// Annotate: the whole point of validating a constructed node is that
 		// the result carries the type it was validated against, so that

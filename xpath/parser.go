@@ -33,10 +33,6 @@ type Parser struct {
 	pos  int
 	src  string
 	ns   NamespaceResolver
-
-	// extended mirrors the lexer's flag: the XPath 3.0 constructs the test
-	// harness's own assertions use are accepted. See ParseExtended.
-	extended bool
 }
 
 // Parse compiles an XPath 2.0 expression.
@@ -44,17 +40,17 @@ func Parse(src string, ns NamespaceResolver) (Expr, error) {
 	return parse(src, ns, false)
 }
 
-// ParseExtended compiles an expression in which two XPath 3.0 constructs are
-// also accepted: the braced URI literal Q{uri}local, and the simple map
-// operator "!".
+// ParseExtended compiles an expression in which the XPath 3.0 braced URI
+// literal Q{uri}local is also accepted.
 //
-// This is not a relaxation of the XPath 2.0 language. Nothing in the XSLT
-// engine calls it: a stylesheet compiled with Parse still rejects both, which
-// is what a 2.0 processor must do and what several tests in the W3C suite
-// assert. It exists for a caller that is itself writing XPath rather than
-// running someone else's — specifically the conformance harness, whose
-// assertion expressions are written in the 3.0 language even for tests whose
-// stylesheets are 2.0.
+// A stylesheet compiled with Parse still rejects it, which is what a 2.0
+// processor must do. It exists for a caller that is itself writing XPath
+// rather than running someone else's — specifically the conformance harness,
+// whose assertion expressions are written in the 3.0 language even for tests
+// whose stylesheets are 2.0.
+//
+// The simple map operator "!" used to be gated here too. It is now accepted
+// unconditionally, along with "||" and "=>": see Lexer.extended.
 func ParseExtended(src string, ns NamespaceResolver) (Expr, error) {
 	return parse(src, ns, true)
 }
@@ -72,9 +68,9 @@ func parse(src string, ns NamespaceResolver, extended bool) (Expr, error) {
 		return nil, fmt.Errorf("%w in %q", err, src)
 	}
 	if len(lex.bracedURIs) > 0 {
-		ns = bracedResolver{NamespaceResolver: ns, uris: lex.bracedURIs}
+		ns = wrapBraced(ns, lex.bracedURIs)
 	}
-	p := &Parser{toks: toks, src: src, ns: ns, extended: extended}
+	p := &Parser{toks: toks, src: src, ns: ns}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -107,6 +103,33 @@ func (b bracedResolver) ResolvePrefix(prefix string) (string, bool) {
 		return b.uris[n], true
 	}
 	return b.NamespaceResolver.ResolvePrefix(prefix)
+}
+
+// bracedSchemaResolver is bracedResolver for a resolver that also carries a
+// schema.
+//
+// Embedding only NamespaceResolver promotes only that interface's methods, so
+// the wrapper answered ResolvePrefix and nothing else: a resolver that
+// implemented SchemaTypes stopped implementing it the moment an expression
+// contained a braced URI literal, and every schema lookup in schema_types.go
+// took its "no schema in the static context" branch. That made
+// schema-element(Q{uri}local) report XPST0008 — "no schema is imported" —
+// against a static context that had imported one, while the same test written
+// with an ordinary prefix resolved fine. Carrying the inner SchemaTypes
+// through restores the one property the wrapper was never meant to change.
+type bracedSchemaResolver struct {
+	bracedResolver
+	SchemaTypes
+}
+
+// wrapBraced wraps ns so the synthetic prefixes resolve, preserving the inner
+// resolver's schema when it has one.
+func wrapBraced(ns NamespaceResolver, uris []string) NamespaceResolver {
+	b := bracedResolver{NamespaceResolver: ns, uris: uris}
+	if st, ok := ns.(SchemaTypes); ok {
+		return bracedSchemaResolver{bracedResolver: b, SchemaTypes: st}
+	}
+	return b
 }
 
 // defaultResolver binds no prefixes and uses the standard function namespace.
@@ -427,12 +450,12 @@ var comparisonOps = []string{
 }
 
 func (p *Parser) parseComparison() (Expr, error) {
-	left, err := p.parseRange()
+	left, err := p.parseStringConcat()
 	if err != nil {
 		return nil, err
 	}
 	if op, ok := p.acceptOp(comparisonOps...); ok {
-		right, err := p.parseRange()
+		right, err := p.parseStringConcat()
 		if err != nil {
 			return nil, err
 		}
@@ -461,6 +484,31 @@ func (p *Parser) qnameResolver() func(string) (string, bool) {
 			return "", true
 		}
 		return ns.ResolvePrefix(prefix)
+	}
+}
+
+// parseStringConcat parses the string concatenation operator:
+// StringConcatExpr ::= RangeExpr ("||" RangeExpr)*.
+//
+// XPath 3.0 introduced it, and it sits between comparison and range so that
+// "$a || $b eq $c" concatenates before it compares. It is exactly fn:concat
+// on two arguments, including concat's treatment of the empty sequence as the
+// zero-length string, so it compiles to a call rather than to an operator of
+// its own.
+func (p *Parser) parseStringConcat() (Expr, error) {
+	left, err := p.parseRange()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		if _, ok := p.acceptOp("||"); !ok {
+			return left, nil
+		}
+		right, err := p.parseRange()
+		if err != nil {
+			return nil, err
+		}
+		left = &StringConcat{Left: left, Right: right}
 	}
 }
 
@@ -671,20 +719,43 @@ func (p *Parser) parseUnary() (Expr, error) {
 		}
 		return &UnaryOp{Op: op, Operand: operand}, nil
 	}
-	return p.parseSimpleMap()
+	return p.parseArrow()
+}
+
+// parseArrow parses the XPath 3.0 arrow operator:
+// ArrowExpr ::= SimpleMapExpr ("=>" ArrowFunctionSpecifier ArgumentList)*.
+//
+// "$x => f(1)" is "f($x, 1)": the left operand becomes the call's first
+// argument and the written arguments follow it. Because it lowers to an
+// ordinary call, everything a call already does — reserved names, QName and
+// schema-constructor folding, arity-keyed lookup — applies without change.
+func (p *Parser) parseArrow() (Expr, error) {
+	left, err := p.parseSimpleMap()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		if _, ok := p.acceptOp("=>"); !ok {
+			return left, nil
+		}
+		if p.cur().Kind != TokName {
+			return nil, p.errorf("expected a function name after \"=>\"")
+		}
+		left, err = p.parseFunctionCallWith(left)
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 // parseSimpleMap parses the XPath 3.0 simple map operator, which sits between
-// unary and path in the grammar: SimpleMapExpr ::= PathExpr ("!" PathExpr)*.
-//
-// Outside extended mode the "!" never reaches here — the lexer does not
-// produce the token — so this is a plain call through to parsePath.
+// arrow and path in the grammar: SimpleMapExpr ::= PathExpr ("!" PathExpr)*.
 func (p *Parser) parseSimpleMap() (Expr, error) {
 	left, err := p.parsePath()
 	if err != nil {
 		return nil, err
 	}
-	for p.extended {
+	for {
 		if _, ok := p.acceptOp("!"); !ok {
 			return left, nil
 		}
@@ -694,7 +765,6 @@ func (p *Parser) parseSimpleMap() (Expr, error) {
 		}
 		left = &SimpleMap{Left: left, Right: right}
 	}
-	return left, nil
 }
 
 // SimpleMap is the XPath 3.0 "!" operator: the right operand is evaluated once
@@ -729,6 +799,42 @@ func (e *SimpleMap) Eval(ctx *Context) (xdm.Sequence, error) {
 }
 
 func (e *SimpleMap) String() string { return e.Left.String() + "!" + e.Right.String() }
+
+// StringConcat is the XPath 3.0 "||" operator.
+//
+// It is defined as fn:concat($a, $b), which means it atomizes each operand,
+// requires at most one item from each, and treats the empty sequence as the
+// zero-length string rather than propagating it — so "() || 'x'" is "x" and
+// not the empty sequence.
+type StringConcat struct {
+	Left  Expr
+	Right Expr
+}
+
+func (e *StringConcat) Eval(ctx *Context) (xdm.Sequence, error) {
+	l, err := e.Left.Eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r, err := e.Right.Eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := []xdm.Sequence{l, r}
+	ls, err := argAnyAtomicString(args, 0)
+	if err != nil {
+		return nil, err
+	}
+	rs, err := argAnyAtomicString(args, 1)
+	if err != nil {
+		return nil, err
+	}
+	return strSeq(ls + rs), nil
+}
+
+func (e *StringConcat) String() string {
+	return e.Left.String() + " || " + e.Right.String()
+}
 
 // checkCastTarget rejects a cast whose target cannot be a target.
 //
