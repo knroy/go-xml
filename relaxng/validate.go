@@ -48,12 +48,33 @@ type ValidateOptions struct {
 	// xdm.ParseOptions.MaxDepth to accept a deep document has not thereby
 	// agreed to let the validator spend a gigabyte on it.
 	MaxDepth int
+
+	// MaxPatternSize bounds the size of the derivative pattern carried
+	// during validation. Zero means DefaultMaxPatternSize; a negative value
+	// means no limit.
+	//
+	// It is a separate knob from MaxDepth because it bounds a different
+	// thing. MaxDepth bounds cost that grows with how deep the document is;
+	// this bounds cost that grows with how WIDE it is, which a schema
+	// nesting oneOrMore inside oneOrMore makes multiplicative — a 63-byte
+	// instance of fourteen children measured at 1.2 GB before this existed,
+	// at a depth of two, where no depth bound could reach it.
+	MaxPatternSize int
 }
 
 // DefaultMaxDepth bounds validation recursion when MaxDepth is zero. It
 // matches xdm.DefaultMaxDepth, so a document the parser accepts is one the
 // validator will not refuse for depth alone.
 const DefaultMaxDepth = 1000
+
+// DefaultMaxPatternSize bounds the derivative pattern when MaxPatternSize is
+// zero.
+//
+// It is set high enough that no schema in the RELAX NG spec test suite comes
+// near it — the whole suite passes unchanged — and low enough that the
+// multiplicative blowup is refused in milliseconds rather than after a
+// gigabyte of allocation.
+const DefaultMaxPatternSize = 100_000
 
 // ValidateWithOptions checks a document, with limits on the run.
 func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error {
@@ -77,8 +98,21 @@ func (s *Schema) ValidateWithOptions(doc *xdm.Node, opts ValidateOptions) error 
 	if maxDepth == 0 {
 		maxDepth = DefaultMaxDepth
 	}
-	v := &validator{maxDepth: maxDepth}
+	maxPattern := opts.MaxPatternSize
+	if maxPattern == 0 {
+		maxPattern = DefaultMaxPatternSize
+	}
+	v := &validator{maxDepth: maxDepth, maxPattern: maxPattern}
 	p := v.childDeriv(s.start, root)
+	if v.tooBig {
+		return &Error{
+			Path: v.deepPath,
+			Message: fmt.Sprintf(
+				"the derivative pattern exceeds %d nodes; a oneOrMore nested "+
+					"inside a oneOrMore grows the pattern multiplicatively in "+
+					"the number of children", maxPattern),
+		}
+	}
 	if v.tooDeep {
 		return &Error{
 			Path: v.deepPath,
@@ -111,6 +145,13 @@ type validator struct {
 	deepest string
 	why     string
 	path    []string
+	// maxPattern bounds the size of the derivative pattern; a negative value
+	// means no bound. See patternSize.
+	maxPattern int
+	// tooBig records that the pattern bound was reached, so the caller is
+	// told why rather than being handed a validity failure that is really a
+	// limit.
+	tooBig bool
 }
 
 // tailPath renders the last few segments of a deep path.
@@ -193,6 +234,15 @@ func (v *validator) childDeriv(p pattern, n *xdm.Node) pattern {
 		}()
 
 		name := xdm.QName{URI: n.Name.URI, Local: n.Name.Local}
+		// The pattern the derivative carries is checked before the next one
+		// is taken, for the same reason the depth bound is fatal here: the
+		// derivative about to be computed is the expensive one, so noticing
+		// afterwards would spend exactly what the bound exists to refuse.
+		if v.maxPattern >= 0 && patternSize(p, v.maxPattern+1) > v.maxPattern {
+			v.tooBig = true
+			v.deepPath = tailPath(v.path, n.Name.Local)
+			return notAllowedPat{}
+		}
 		p1 := startTagOpenDeriv(p, name)
 		if isNotAllowed(p1) {
 			v.note(fmt.Sprintf("element %s is not permitted here", n.Name.Local))

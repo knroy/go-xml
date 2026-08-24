@@ -614,7 +614,18 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
-	if re.MatchString("") {
+	zeroLen := re.MatchString("")
+	// A backtracking pattern reports an exhausted step budget out of band,
+	// through Err(), because the Regexp interface returns a bare bool. An
+	// unchecked bool is then indistinguishable from a genuine non-match, so
+	// the instruction would answer with silence on exactly the inputs where
+	// the answer was hardest to get — which is the guess this package
+	// declines to make everywhere else. See xpath.RegexpErr.
+	if err := xpath.RegexpErr(re); err != nil {
+		return fmt.Errorf(
+			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
+	}
+	if zeroLen {
 		// XTDE1150: xsl:analyze-string's own error for a regex that matches
 		// a zero-length string. FORX0003 is fn:tokenize's; the instruction
 		// has its own code and a caller matching on one needs the right one.
@@ -632,7 +643,16 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	var runs []run
 	pos := 0
-	for _, loc := range re.FindAllStringSubmatchIndex(input, -1) {
+	all := re.FindAllStringSubmatchIndex(input, -1)
+	// Checked for the same reason as the zero-length test above: a budget
+	// exhausted part way through the scan returns the matches found so far,
+	// which is a truncated answer rather than a wrong-shaped one and so is
+	// even easier to mistake for the truth.
+	if err := xpath.RegexpErr(re); err != nil {
+		return fmt.Errorf(
+			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
+	}
+	for _, loc := range all {
 		if loc[0] > pos {
 			runs = append(runs, run{text: input[pos:loc[0]]})
 		}

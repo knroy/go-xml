@@ -184,9 +184,25 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// replacing the decoder mid-stream, which loses its lookahead — so the
 	// copy stays. entitiesExpanded marks the second parse, which has no
 	// entities left to find and so needs no copy at all.
+
 	keepSrc := trackPos || (opts.AllowDOCTYPE && !opts.entitiesExpanded)
 	if keepSrc {
 		r = io.TeeReader(r, &srcBuf)
+	}
+
+	// The charge reader sits between the decoder and the source so that an
+	// entity reference is charged against the expansion budget BEFORE the
+	// decoder substitutes it. Checking afterwards reports the same verdict at
+	// a cost that makes reporting it pointless: encoding/xml coalesces every
+	// substitution in a run of character data into one token, so a document
+	// whose references expand to gigabytes has allocated them all before any
+	// post-parse check can look. It is installed unconditionally when a
+	// DOCTYPE is permitted, and stays inert — one comparison against a nil
+	// table per read — until the DOCTYPE actually declares entities.
+	var charger *entityChargeReader
+	if opts.AllowDOCTYPE && !opts.entitiesExpanded {
+		charger = &entityChargeReader{r: r}
+		r = charger
 	}
 
 	dec := xml.NewDecoder(r)
@@ -484,6 +500,15 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 							return nil, fmt.Errorf("parse XML: %w", err)
 						}
 						return parseExpanded(srcBuf.String(), ents, opts)
+					}
+					// Arm the charge reader now that the declarations are
+					// known. Everything the decoder has already buffered was
+					// read before any entity could be referenced in content,
+					// and the remainder streams through the reader, so every
+					// reference in the document body is charged before the
+					// decoder expands it.
+					if charger != nil {
+						charger.t = ents
 					}
 					if dec.Entity == nil {
 						dec.Entity = map[string]string{}

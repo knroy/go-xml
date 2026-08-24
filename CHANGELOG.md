@@ -6,6 +6,32 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Security: three bounds that were not bounding
+
+A third audit. Full detail in [docs/security.md](docs/security.md).
+
+* **Entity expansion was charged once per entity, not once per reference.**
+  Reachable with `AllowDOCTYPE: true` alone. A 70 KB document allocated 741 MB
+  and was accepted. `MaxBytes` and `MaxNodes` both missed it — a reference is
+  three bytes and a run of them coalesces into one text node. The bound was
+  reported as working because a *different* code path charged correctly, so
+  which path a document took decided whether it was bounded.
+* **A nested XPath expression could kill the process rather than the request.**
+  Reachable from a hostile stylesheet. A stack overflow in Go is a fatal error
+  `recover()` cannot catch. Expression nesting is now bounded at 1000 levels.
+* **RELAX NG nested `oneOrMore` is exponential in document width.** Reachable
+  with default options from a hostile instance — a 189-byte schema and a
+  63-byte instance cost over a second and a gigabyte. `MaxDepth` cannot bound
+  it: the document is two levels deep however wide it grows. `MaxPatternSize`
+  now holds the cost flat. This is a bound, not a cure; the structural fix is
+  pattern interning.
+* **`xsl:analyze-string` ignored the regex step budget**, so with the
+  backtracking matcher enabled an exhausted budget was indistinguishable from a
+  genuine non-match and the transform silently emitted wrong output.
+
+One finding is left open and documented: compiling an *untrusted schema* can be
+exponential in the depth of its group-reference graph.
+
 ### A constraint that never ran against the ordinary spelling
 
 Unique Particle Attribution and Element Declarations Consistent were checked

@@ -33,7 +33,29 @@ type Parser struct {
 	pos  int
 	src  string
 	ns   NamespaceResolver
+	// depth counts nested expressions, so that a deeply nested one is a
+	// static error rather than a crash. See maxParseDepth.
+	depth int
 }
+
+// maxParseDepth bounds expression nesting.
+//
+// The parser is recursive descent through a fifteen-function precedence
+// chain, so one level of nesting costs roughly 5 kB of stack. Without a bound
+// a sufficiently nested expression exhausts the goroutine stack, and Go makes
+// that "fatal error: stack overflow" — which recover() cannot catch, so it
+// kills the process rather than failing the request. Measured before this
+// bound existed: 130,000 nested parentheses crashed the process at Go's
+// default 1 GB stack ceiling, and 7,000 crashed it under a 32 MB one, which
+// is a plausible server setting. A 14 kB expression should not be able to
+// take a service down.
+//
+// The limit matches xdm.DefaultMaxDepth. Both bound the same thing — how far
+// a recursive descent may go before the stack is at risk — and the deepest
+// expression in either conformance suite is nowhere near it, so a legal
+// expression is not refused. An expression this nested is machine-generated
+// whatever its intent.
+const maxParseDepth = 1000
 
 // Parse compiles an XPath 2.0 expression.
 func Parse(src string, ns NamespaceResolver) (Expr, error) {
@@ -297,6 +319,16 @@ func (p *Parser) parseExpr() (Expr, error) {
 // parseExprSingle is an expression without a top-level comma: the operand of
 // a function argument, a predicate, or a sequence member.
 func (p *Parser) parseExprSingle() (Expr, error) {
+	// Every nesting construct in the grammar — a parenthesised expression, a
+	// predicate, a function argument, the branches of "if", the body of "for"
+	// and of a quantifier — reaches its operand through here, so counting at
+	// this one point bounds them all.
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		return nil, fmt.Errorf("XPST0003: expression nesting exceeds %d levels",
+			maxParseDepth)
+	}
 	t := p.cur()
 	if t.Kind == TokName {
 		switch t.Val {

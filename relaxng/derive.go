@@ -344,3 +344,58 @@ func splitTokens(s string) []string {
 	}
 	return out
 }
+
+// patternSize measures a pattern's node count, stopping once it exceeds the
+// limit so that measuring an already-huge pattern is not itself expensive.
+//
+// It exists to bound the derivative's growth. The algorithm's cost is the size
+// of the pattern it is carrying, and the constructors' simplifications keep
+// that bounded for ordinary schemas — but not for all of them. A oneOrMore
+// nested inside a oneOrMore duplicates its operand on every child, so the
+// pattern grows multiplicatively in the number of children: measured, a
+// 189-byte schema and a 63-byte instance of fourteen children reached 1.2 GB
+// and 1.35 seconds, growing about ninefold for every two children added.
+// Nothing else bounded it — MaxDepth does not, because the document is two
+// levels deep whatever its width.
+//
+// A structural fix is to intern patterns so that equal branches collapse, the
+// way jing does. That is a redesign of this file rather than a bound, so what
+// is here is the bound: the size is checked as the derivative is taken, and a
+// pattern past the limit ends validation with an error that says so rather
+// than with a verdict that cost a gigabyte to reach.
+func patternSize(p pattern, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	n := 1
+	switch t := p.(type) {
+	case choicePat:
+		n += patternSize(t.Left, limit-n)
+		if n <= limit {
+			n += patternSize(t.Right, limit-n)
+		}
+	case groupPat:
+		n += patternSize(t.Left, limit-n)
+		if n <= limit {
+			n += patternSize(t.Right, limit-n)
+		}
+	case interleavePat:
+		n += patternSize(t.Left, limit-n)
+		if n <= limit {
+			n += patternSize(t.Right, limit-n)
+		}
+	case afterPat:
+		n += patternSize(t.Left, limit-n)
+		if n <= limit {
+			n += patternSize(t.Right, limit-n)
+		}
+	case oneOrMorePat:
+		n += patternSize(t.Pattern, limit-n)
+	case listPat:
+		n += patternSize(t.Pattern, limit-n)
+	}
+	// An elementPat's and attributePat's content is not descended into: it is
+	// the schema's own structure, which is fixed, and only the derivative's
+	// accumulation is what grows with the document.
+	return n
+}

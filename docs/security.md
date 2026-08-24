@@ -18,6 +18,88 @@ stylesheet-driven writes. Input size, node count, nesting depth and recursion
 depth are all bounded by default. The one thing you must still do yourself is
 **sanitise URLs if you render transform output as HTML**.
 
+Two further cautions, from the third audit. If you set `AllowDOCTYPE: true` —
+which some real formats require — the entity expansion bound now counts every
+*reference* rather than every distinct entity; before that fix a 70 KB document
+could allocate hundreds of megabytes. And if you compile *untrusted schemas*
+rather than only validating untrusted documents, one exponential case remains
+open and is described under *Open findings*.
+
+---
+
+## Fixed in the third audit
+
+Four issues, each with a regression test. Two of the three high-severity ones
+were reachable without any opt-in beyond what this document already tells real
+callers to set.
+
+### Entity expansion was charged once per entity, not once per reference
+
+**Reachable with `AllowDOCTYPE: true` alone** — no external entities, no
+resolver, no hostile schema. `maxTotalEntityBytes` was charged where an
+entity's replacement text is first memoised, which happens once per *distinct
+name*. The decoder then substituted it any number of times with no further
+accounting. Neither `MaxBytes` nor `MaxNodes` caught it: a reference is three
+bytes, and a run of them coalesces into a single text node.
+
+A 70 KB document allocated 741 MB and was accepted; a 356 KB one reached 14 GB.
+The bound existed and was reported as working because the *rewrite* path
+charged per reference — so which of two code paths a document happened to take
+decided whether it was bounded at all.
+
+The charge now happens as the document streams past, before the decoder expands
+anything. Checking after the parse was tried first and rejected: `encoding/xml`
+coalesces a run of references into one token, so the refusal arrived only after
+the memory had been allocated.
+
+### A nested expression could kill the process, not the request
+
+**Reachable from a hostile stylesheet or `xs:assert/@test`**, not from a
+document. The XPath parser had no depth limit, so deeply nested parentheses
+exhausted the goroutine stack. In Go that is a *fatal error*: `recover()`
+cannot catch it, so a server does not fail the request, it dies. The XML
+parser's element-nesting limit is no help, because the whole expression lives
+inside one attribute value. Under a hardened `SetMaxStack`, 14 KB was enough.
+
+Expression nesting is now bounded at 1000 levels, counted at the single point
+every nesting construct passes through, and reported as `XPST0003`.
+
+### RELAX NG: nested `oneOrMore` is exponential in document *width*
+
+**Reachable with default options from a hostile instance** — the most exposed
+of the three. A 189-byte schema and a 63-byte instance cost over a second and
+more than a gigabyte, growing several times over for every two children added.
+
+`MaxDepth` provably cannot bound this: the document is two levels deep however
+wide it grows. The derivative pattern is now bounded by size
+(`MaxPatternSize`, default 100,000 nodes), which holds the cost flat.
+
+**This is a bound, not a cure.** The structural fix is interning the pattern
+so that shared sub-patterns are not duplicated, which is a redesign of the
+derivative engine. A legitimately very wide document validated against a
+`oneOrMore` nested in a `oneOrMore` will hit the limit and get an error naming
+the cause rather than a verdict. The spec suite passes unchanged.
+
+### `xsl:analyze-string` ignored the regex step budget
+
+**Only when the backtracking matcher is explicitly enabled**, which is a
+documented opt-in. The grouping code called the matcher without checking
+whether the budget had been exhausted, which the interface's own contract
+requires. An exhausted budget was indistinguishable from a genuine non-match,
+so the transform silently produced wrong output on exactly the inputs where the
+answer was hardest to compute — the guess this package refuses to make
+everywhere else. It now raises `XTDE1140`.
+
+### Still open: XSD group references are exponential at schema load
+
+**Hostile schema only**, so materially lower severity than the above: a caller
+compiling an untrusted schema has already accepted more than a caller
+validating an untrusted document. A 3.8 KB acyclic schema takes over 30
+seconds. The cycle check enumerates paths rather than traversing the graph, so
+cost is exponential in the depth of the reference DAG while memory stays flat —
+invisible to a memory limit. The fix is mark-acyclic memoisation, which
+preserves the disjoint-route semantics the current code deliberately keeps.
+
 ---
 
 ## Fixed in the second audit
@@ -394,10 +476,17 @@ when no resolver is configured. `collection()` has its own switch —
 `Collections`, separate from `Documents` — so enabling `fn:doc` for a known
 code list does not also let a stylesheet enumerate whatever a collection URI
 names; a resolver that accepts one should validate the URI it is handed, which
-arrives from the stylesheet. `unparsed-text()` is disabled *unconditionally*
-— it cannot read a file even with a resolver set. `xsl:result-document` never
-writes to disk; the engine returns secondary results to the caller as data.
-XInclude is not implemented.
+arrives from the stylesheet. `unparsed-text()` has its own switch too —
+`FileResolver.UnparsedText`, off by default and implied by nothing else. It is
+separate because it is the widest of them: `ResolveDocument` hands back a
+parsed XML document, so a file that is not well-formed XML discloses nothing,
+while `unparsed-text` hands back the raw bytes of any file inside `Roots`. A
+root holding one XML data file and one private key leaks the key. An earlier
+revision of this document said the function was disabled *unconditionally*;
+that was true when written and is no longer, and the distinction matters to
+anyone deciding what a root may contain. `xsl:result-document` never writes to
+disk; the engine returns secondary results to the caller as data. XInclude is
+not implemented.
 
 `AllowHost` resists spoofing: it uses `u.Hostname()`, so userinfo tricks
 (`http://good.example@127.0.0.1/`) and ports do not fool it, and it is
