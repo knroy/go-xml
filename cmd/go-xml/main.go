@@ -15,6 +15,15 @@ import (
 )
 
 func main() {
+	// "validate" is a subcommand; everything else keeps the original
+	// invocation, so a command line that worked before still works.
+	if len(os.Args) > 1 && os.Args[1] == "validate" {
+		if err := runValidate(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "go-xml:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "go-xml:", err)
 		os.Exit(1)
@@ -81,7 +90,10 @@ func run() error {
 	flag.Var(params, "p", "stylesheet parameter, name=value (repeatable)")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n\n")
+		fmt.Fprintf(os.Stderr,
+			"usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n"+
+				"       go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml ...\n"+
+				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Security defaults: xsl:include, xsl:import, fn:doc and fn:document are all
