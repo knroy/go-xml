@@ -95,7 +95,7 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 	}
 	if t.SchemaDeclared && t.DeclaredType != "" && t.Name != nil &&
 		n.Name.URI == t.Name.URI && n.Name.Local == t.Name.Local &&
-		!nodeTypeMatches(n, t.DeclaredType) {
+		!declaredTypeMatches(n, t.DeclaredType) {
 		// The node was validated, but against a declaration whose type is
 		// not the global one's — a local element declaration of the same
 		// name, which a schema may perfectly well have. Matching on the name
@@ -174,7 +174,11 @@ func (t *KindTest) substitutes(name xdm.QName) bool {
 // attribute(*, xs:NOTATION)" true for a DTD-declared attribute, which is the
 // exact distinction the test exists to draw.
 func nodeTypeMatches(n *xdm.Node, want string) bool {
-	_, w := xdm.SplitQName(want)
+	// SplitAnnotationName, not SplitQName: want is an annotation key, and a
+	// qualified one is in Clark notation, which a prefix-splitter mis-reads
+	// into nonsense rather than rejecting.
+	w := xdm.AnnotationLocal(want)
+	qualified := xdm.IsQualifiedAnnotation(want)
 	// xs:anyAtomicType is the root of the ATOMIC hierarchy, not of the type
 	// hierarchy: an element's type is xs:untyped or a complex type, and
 	// neither is an atomic type, so element(*, xs:anyAtomicType) is false for
@@ -185,7 +189,13 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	if w == "anyAtomicType" && n.Kind == xdm.KindElement {
 		return false
 	}
+	// The roots of the hierarchy are built-ins, so they only answer for an
+	// UNQUALIFIED want. A schema type that happens to be called "anyType" in
+	// its own namespace is an ordinary named type, not the root.
 	if n.TypeAnnotation == "" {
+		if qualified {
+			return false
+		}
 		switch w {
 		case "anyType", "anySimpleType", "anyAtomicType":
 			return true
@@ -196,9 +206,11 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 		}
 		return false
 	}
-	switch w {
-	case "anyType", "anySimpleType", "anyAtomicType":
-		return true
+	if !qualified {
+		switch w {
+		case "anyType", "anySimpleType", "anyAtomicType":
+			return true
+		}
 	}
 	if schemaTypeNameMatches(n.TypeAnnotation, want) {
 		return true
@@ -207,17 +219,76 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// registers that xs:ID restricts xs:NCName — so it is walked separately.
 	// Subtype substitution applies to it just the same: an attribute
 	// annotated xs:ID satisfies attribute(*, xs:string).
-	_, a := xdm.SplitQName(n.TypeAnnotation)
-	if derivedSubtypeOf(a, w) {
+	// The built-in table is keyed by bare local names, so it is consulted
+	// with the annotation's local part — but only when the want side names a
+	// built-in too. A qualified want is a schema type and is never reachable
+	// through the built-in hierarchy; letting it in here would restore the
+	// local-name conflation this change removes.
+	a := n.TypeAnnotation
+	if !xdm.IsQualifiedAnnotation(a) {
+		_, a = xdm.SplitQName(a)
+	}
+	if !qualified && !xdm.IsQualifiedAnnotation(a) && derivedSubtypeOf(a, w) {
 		return true
 	}
 	// A schema type ultimately grounded in a built-in reaches it through the
 	// registered chain; from there the built-in table takes over. Walking both
 	// in one pass is what lets a restriction of xs:token satisfy
 	// attribute(*, xs:string).
+	// The walk goes up the chain the schema recorded. Each step is compared
+	// as a whole key first — that is how a QUALIFIED want is satisfied by a
+	// value annotated with a type derived from it — and only an unqualified
+	// step is offered to the built-in table.
 	for i := 0; i < 32 && a != ""; i++ {
 		a = xdm.DerivedBase(a)
-		if a != "" && derivedSubtypeOf(a, w) {
+		if a == "" {
+			break
+		}
+		if a == want {
+			return true
+		}
+		if !qualified && !xdm.IsQualifiedAnnotation(a) && derivedSubtypeOf(a, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// declaredTypeMatches is nodeTypeMatches for a schema-element() or
+// schema-attribute() declaration's type, which arrives as a bare LOCAL name
+// rather than as an annotation key.
+//
+// The distinction from an element() test's type argument is real. That
+// argument is written by the query author, is resolved against the static
+// context at parse time, and is compared as an expanded name — two types
+// sharing a local part in different namespaces must not match each other.
+// This one is reported by a SchemaTypes implementation, which the interface
+// only obliges to produce a local name, so the comparison drops to local
+// parts. It loses nothing that matters here: the check exists to distinguish a
+// node validated against the GLOBAL declaration of E from one validated
+// against a LOCAL declaration of E in the same schema, and both types live in
+// the same target namespace, so the namespace was never the discriminator.
+func declaredTypeMatches(n *xdm.Node, want string) bool {
+	if nodeTypeMatches(n, want) {
+		return true
+	}
+	// A qualified annotation is offered again by its local part, which is the
+	// form the declaration reported. Only the annotation is re-spelled; want
+	// stays as given, so a bare want never gains reach it did not have.
+	if !xdm.IsQualifiedAnnotation(n.TypeAnnotation) {
+		return false
+	}
+	local := xdm.AnnotationLocal(n.TypeAnnotation)
+	if local == want {
+		return true
+	}
+	// The derivation chain is walked for the same reason nodeTypeMatches
+	// walks it, and bounded for the same reason: a schema whose derivations
+	// formed a cycle must not spin here.
+	a := n.TypeAnnotation
+	for i := 0; i < 32 && a != ""; i++ {
+		a = xdm.DerivedBase(a)
+		if a != "" && xdm.AnnotationLocal(a) == want {
 			return true
 		}
 	}
@@ -234,12 +305,12 @@ func (t *KindTest) String() string {
 	}
 	if t.HasName && t.Name != nil {
 		if t.TypeName != "" {
-			return base + "(" + t.Name.Lexical() + ", " + t.TypeName + ")"
+			return base + "(" + t.Name.Lexical() + ", " + t.TypeNameLexical + ")"
 		}
 		return base + "(" + t.Name.Lexical() + ")"
 	}
 	if t.TypeName != "" {
-		return base + "(*, " + t.TypeName + ")"
+		return base + "(*, " + t.TypeNameLexical + ")"
 	}
 	return base + "()"
 }

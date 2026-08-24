@@ -35,7 +35,7 @@ With it on, nine XSLT tests and the last QT3 failure pass — XSLT 2.0 at 99.69%
 and QT3 at 15,183 of 15,183. The headline figures below report the default
 configuration.
 
-### XSLT 2.0 conformance: 98.83% to 99.59%
+### XSLT 2.0 conformance: 98.83% to 99.60%
 
 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two
 rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
@@ -58,6 +58,13 @@ Two further wrong answers, both in the parser:
   space.
 - Whitespace in element-only content declared by a schema was not treated as
   ignorable, the schema-side counterpart to the DTD fix in the first round.
+- Type annotations are namespace-qualified. They were keyed on the bare local
+  name in a process-global map, so a schema defining its own type with a
+  built-in's local name displaced the built-in for every schema loaded
+  afterwards — permanently, and across documents. The XSLT 2.0 schema does
+  exactly that with `QName`, and says in its own text why. Names in the XML
+  Schema namespace stay bare so that built-in comparisons are unaffected; only
+  genuinely ambiguous names change spelling.
 - A node whose type was a union atomised to `xs:untypedAtomic`, because a
   union's base is `xs:anySimpleType` and the derivation chain dead-ended there.
   A union's members are *siblings* rather than ancestors, so no single name can
@@ -132,7 +139,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.59% — 6,027 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.60% — 6,028 of 6,052 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

@@ -56,6 +56,16 @@ type SchemaTypes interface {
 	// SchemaDeclarationType returns the local name of the type a global
 	// element or attribute declaration names, and whether there is one.
 	//
+	// It is a LOCAL name, unlike the type name in an element() test, which is
+	// resolved to a namespace-qualified annotation key at parse time. The
+	// difference is deliberate: this string is produced by an implementation
+	// of this interface, which has no obligation to know about annotation
+	// keys, so the comparison against it (in nodeTypeMatches, reached through
+	// KindTest.DeclaredType) accepts a bare name as a local-part match. That
+	// is narrower ground than it sounds: the check exists only to tell a
+	// global declaration from a LOCAL declaration of the same name in the
+	// same schema, where the namespace is not in question.
+	//
 	// schema-element(E) matches a node only when it was validated against
 	// E's *declaration*, and a node may carry E's name while having been
 	// validated against a local declaration of a different type — which is
@@ -227,4 +237,42 @@ func schemaTypeOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool, bool) {
 		name.URI = ns.DefaultElementNamespace()
 	}
 	return st.LookupSchemaType(name)
+}
+
+// annotationKeyOf resolves a lexical type name into the key the data model
+// records type annotations under.
+//
+// The two sides of a type comparison reach it by different routes. The
+// annotation on a value was produced by the schema layer, which knows the
+// type's namespace outright. The name in a sequence type was written by the
+// query author as a lexical QName, and its namespace is whatever the static
+// context binds its prefix to — information that exists while parsing and is
+// gone by evaluation time. Resolving here is what lets the comparison be on
+// expanded names rather than on local parts, which is what the specification
+// asks for and what the local-part comparison could not do: it answered true
+// for any two types that happened to share a local name.
+//
+// An unprefixed name takes the default element/type namespace, matching
+// schemaTypeOf — a type name is not in no namespace merely for being written
+// without a prefix.
+//
+// A resolver that cannot resolve the prefix yields the lexical form unchanged.
+// That is the pre-existing behaviour for an unbound prefix, which the caller
+// has already reported as XPST0081 where it is an error.
+func annotationKeyOf(lex string, ns NamespaceResolver) string {
+	if lex == "" {
+		return ""
+	}
+	prefix, local := xdm.SplitQName(lex)
+	if ns == nil {
+		return xdm.AnnotationName("", local)
+	}
+	if prefix == "" {
+		return xdm.AnnotationName(ns.DefaultElementNamespace(), local)
+	}
+	uri, found := ns.ResolvePrefix(prefix)
+	if !found {
+		return lex
+	}
+	return xdm.AnnotationName(uri, local)
 }

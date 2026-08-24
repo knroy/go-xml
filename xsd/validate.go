@@ -1797,7 +1797,7 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		return
 	}
 	if n := typ.TypeName(); n.Local != "" {
-		el.SetTypeAnnotation(n.Local)
+		el.SetTypeAnnotation(xdm.AnnotationName(n.URI, n.Local))
 		return
 	}
 	if a := annotationName(typ); a != "" {
@@ -1825,7 +1825,7 @@ func anonComplexAnnotation(t Type) string {
 	}
 	for cur := Type(ct); cur != nil; {
 		if n := cur.TypeName(); n.Local != "" {
-			return n.Local
+			return xdm.AnnotationName(n.URI, n.Local)
 		}
 		base := cur.BaseType()
 		if base == nil || base == cur {

@@ -285,15 +285,30 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 // whose values carry a namespace prefix that must stay bound.
 //
 // XTTE0950 defines it as "its typed value contains an item of type xs:QName or
-// xs:NOTATION or a type derived therefrom". The annotation this data model
-// records is the type's LOCAL NAME with no namespace URI (see xdm.Node's
-// TypeAnnotation), so the check is by local name. That is exact for the two
-// built-ins, which is what the suite exercises; a user-defined restriction of
-// xs:QName carries its own local name and is not recognised here. Recognising
-// it needs the annotation to name a schema component, which is a change to the
-// data model rather than to this instruction.
+// xs:NOTATION or a type derived therefrom". Annotations are now qualified —
+// a built-in keys under its bare local name, a schema type under {uri}local —
+// so "QName" and "NOTATION" name the built-ins exactly, and a schema type
+// that merely shares one of those local names no longer answers true. That
+// distinction was previously unavailable, and it matters: schema-for-xslt20.xsd
+// declares an xsl:QName which is a restriction of xs:Name and carries no
+// namespace-sensitive value at all.
+//
+// "or a type derived therefrom" is answered by walking the derivation chain
+// the schema recorded, which the qualified keys make exact end to end. The
+// walk is bounded like every other in the engine, so a schema whose
+// derivations formed a cycle cannot spin here.
 func isNamespaceSensitiveType(ann string) bool {
-	return ann == "QName" || ann == "NOTATION"
+	for i := 0; i < 32 && ann != ""; i++ {
+		if ann == "QName" || ann == "NOTATION" {
+			return true
+		}
+		next := xdm.DerivedBase(ann)
+		if next == ann {
+			return false
+		}
+		ann = next
+	}
+	return false
 }
 
 // hasNamespaceSensitiveContent reports whether a node's typed value, or that

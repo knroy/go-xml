@@ -279,7 +279,7 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		a.SetTypeAnnotation(decl.Type.Name.Local)
+		a.SetTypeAnnotation(xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local))
 	}
 }
 

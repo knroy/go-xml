@@ -414,7 +414,13 @@ func (p *Parser) readTypeAnnotation(kt *KindTest) {
 		return
 	}
 	if p.cur().Kind == TokName {
-		kt.TypeName = p.cur().Val
+		// Resolved to the annotation key here, while the static context that
+		// binds the prefix is still reachable. Keeping it lexical meant the
+		// comparison against the node's annotation had to fall back to local
+		// parts, which conflated types that shared a local name across
+		// namespaces.
+		kt.TypeName = annotationKeyOf(p.cur().Val, p.ns)
+		kt.TypeNameLexical = p.cur().Val
 		p.pos++
 	}
 	if _, ok := p.acceptOp("?"); ok {
@@ -626,7 +632,12 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 			if known, verr := schemaValueValid(lex, p.ns, clark); known && verr != nil {
 				return &errorExpr{err: xdm.Errorf("FORG0001", "%v", verr)}, true
 			}
-			q.Val = q.Val.WithDerived(lex)
+			// The ANNOTATION KEY, not the lexical name: the derived name is
+			// compared against annotation keys, and a lexical "one:not1-…"
+			// matches none of them. Leaving it lexical made the constructor's
+			// own result fail "instance of" against the very type it was
+			// built for.
+			q.Val = q.Val.WithDerived(annotationKeyOf(lex, p.ns))
 			return q, true
 		}
 		return nil, false
@@ -636,7 +647,7 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		Type: SequenceType{
 			AtomicType:    prim,
 			HasAtomicType: true,
-			SchemaType:    lex,
+			SchemaType:    annotationKeyOf(lex, p.ns),
 			Occurrence:    "?",
 		},
 	}, true
@@ -838,7 +849,7 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 			// schema type no occurrence indicator at all, so "foo:testType*"
 			// reported a syntax error at the "*" while "xs:integer*" parsed.
 			if prim, isAtomic, found := schemaTypeOf(t.Val, p.ns); found {
-				st.SchemaType = t.Val
+				st.SchemaType = annotationKeyOf(t.Val, p.ns)
 				// The facets of an imported simple type are only in the
 				// schema, so the check is captured here rather than being
 				// reconstructed from the type code at cast time.

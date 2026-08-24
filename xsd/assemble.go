@@ -149,8 +149,9 @@ func registerDerivedTypes(s *Schema) {
 			// listItemTypeOf sees through restrictions of a list, which carry
 			// no item type of their own.
 			if item := listItemTypeOf(ct); item != nil {
-				if in := annotationName(item); in != "" && in != name.Local {
-					xdm.RegisterListType(name.Local, in)
+				key := xdm.AnnotationName(name.URI, name.Local)
+				if in := annotationName(item); in != "" && in != key {
+					xdm.RegisterListType(key, in)
 				}
 			}
 			// A UNION type's base is always xs:anySimpleType — that is what
@@ -160,13 +161,14 @@ func registerDerivedTypes(s *Schema) {
 			// member list is the only thing that says what such a value can
 			// be, so it is recorded separately, the way a list's item type is.
 			if members := unionMemberTypesOf(ct); len(members) > 0 {
+				key := xdm.AnnotationName(name.URI, name.Local)
 				names := make([]string, 0, len(members))
 				for _, m := range members {
-					if mn := annotationName(m); mn != "" && mn != name.Local {
+					if mn := annotationName(m); mn != "" && mn != key {
 						names = append(names, mn)
 					}
 				}
-				xdm.RegisterUnionType(name.Local, names)
+				xdm.RegisterUnionType(key, names)
 			}
 			base, _ = ct.Base.(*SimpleType)
 		case *ComplexType:
@@ -183,9 +185,11 @@ func registerDerivedTypes(s *Schema) {
 			// PROBE ONLY (wave 8): complex content derivation.
 			if ct.Content != ContentSimple {
 				if b, ok := ct.Base.(*ComplexType); ok && b != nil {
-					if bn := b.Name; bn.Local != "" && bn.Local != name.Local &&
-						bn.URI != NSSchema {
-						xdm.RegisterDerivedType(name.Local, bn.Local)
+					if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
+						!(bn.URI == name.URI && bn.Local == name.Local) {
+						xdm.RegisterDerivedType(
+							xdm.AnnotationName(name.URI, name.Local),
+							xdm.AnnotationName(bn.URI, bn.Local))
 					}
 				}
 				continue
@@ -198,13 +202,14 @@ func registerDerivedTypes(s *Schema) {
 			// only reachable through the simple-content path stayed invisible.
 			if sc := ct.SimpleContent; sc != nil {
 				if members := unionMemberTypesOf(sc); len(members) > 0 {
+					key := xdm.AnnotationName(name.URI, name.Local)
 					names := make([]string, 0, len(members))
 					for _, m := range members {
-						if mn := annotationName(m); mn != "" && mn != name.Local {
+						if mn := annotationName(m); mn != "" && mn != key {
 							names = append(names, mn)
 						}
 					}
-					xdm.RegisterUnionType(name.Local, names)
+					xdm.RegisterUnionType(key, names)
 				}
 			}
 			base = ct.SimpleContent
@@ -214,8 +219,9 @@ func registerDerivedTypes(s *Schema) {
 		// The nearest named built-in ancestor is what the value atomises as,
 		// which is exactly what annotationName computes for the base.
 		if base != nil {
-			if prim := annotationName(base); prim != "" && prim != name.Local {
-				xdm.RegisterDerivedType(name.Local, prim)
+			key := xdm.AnnotationName(name.URI, name.Local)
+			if prim := annotationName(base); prim != "" && prim != key {
+				xdm.RegisterDerivedType(key, prim)
 			}
 		}
 	}

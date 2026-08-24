@@ -575,13 +575,20 @@ func typedSequenceFor(normalized string, t *SimpleType) xdm.Sequence {
 //
 // A named built-in still returns its own name, since a restriction of xs:int
 // atomises as xs:int rather than as xs:decimal.
+// The name is QUALIFIED with its namespace, through xdm.AnnotationName, and
+// the namespace was the piece this function used to discard. Returning
+// st.Name.Local alone meant a schema type keyed under the same string as a
+// built-in with the same local part, and since the data model's derivation
+// table is package-level and process-global, the schema's meaning replaced the
+// built-in's for the rest of the process. xdm.AnnotationName leaves built-ins
+// bare, so only names that were genuinely ambiguous change spelling.
 func annotationName(t Type) string {
 	st, ok := t.(*SimpleType)
 	if !ok || st == nil {
 		return ""
 	}
 	if st.Name.Local != "" {
-		return st.Name.Local
+		return xdm.AnnotationName(st.Name.URI, st.Name.Local)
 	}
 	// Walk to the nearest named ancestor: a restriction of xs:int atomises
 	// as xs:int, which the primitive alone (xs:decimal) would lose.
@@ -596,7 +603,7 @@ func annotationName(t Type) string {
 		cur = base
 	}
 	if p := st.Primitive; p != nil {
-		return p.Name.Local
+		return xdm.AnnotationName(p.Name.URI, p.Name.Local)
 	}
 	return ""
 }

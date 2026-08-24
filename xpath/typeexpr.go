@@ -300,13 +300,19 @@ func isLiteralOperand(e Expr) bool {
 // schemaTypeNameMatches compares a value's type annotation with a schema type
 // named in a sequence type.
 //
-// Both are lexical QNames, and the comparison is on the local part together
-// with the prefix as written. That is narrower than the specification, which
-// compares expanded names and walks the derivation hierarchy: a value
-// annotated as a type *derived* from the named one is also an instance of it,
-// and this does not see that. The narrow answer is the safe one — it says
-// false where the full rule might say true, so nothing is claimed to have a
-// type it does not have.
+// Both sides are annotation keys — namespace-qualified {uri}local for a schema
+// type, the bare local name for a built-in — so the comparison is on EXPANDED
+// names, which is what the specification asks for. It used to be on local
+// parts with the prefix ignored, and the comment here used to record the
+// consequence as an accepted limit: "two schemas that both define
+// partNumberType in different namespaces would be conflated by this". They
+// were, and not only in the hypothetical. The W3C's own schema-for-xslt20.xsd
+// declares an xsl:QName that restricts xs:Name, so once it loaded, every
+// xs:QName in the process compared equal to it.
+//
+// The derivation walk below is unchanged: a value is an instance of every type
+// its own derives from, and the chain the schema recorded is now keyed by the
+// same qualified names, so the walk stays exact end to end.
 func schemaTypeNameMatches(annotation, want string) bool {
 	if annotation == "" {
 		return false
@@ -314,14 +320,23 @@ func schemaTypeNameMatches(annotation, want string) bool {
 	if annotation == want {
 		return true
 	}
-	// A prefix is a spelling, not an identity, so a bare local name matches
-	// a prefixed one with the same local part. Two schemas that both define
-	// "partNumberType" in different namespaces would be conflated by this;
-	// that is the known limit recorded above.
-	_, a := xdm.SplitQName(annotation)
-	_, w := xdm.SplitQName(want)
-	if a != "" && a == w {
-		return true
+	// SplitAnnotationName rather than SplitQName: an annotation key may be in
+	// Clark notation, and SplitQName cuts at the first colon, so it would
+	// read "{http://x}foo" as the prefix "{http" and the local part
+	// "//x}foo" — silently wrong rather than an error.
+	//
+	// The local parts are compared only when BOTH sides are unqualified,
+	// which is the built-in and no-namespace case where a bare key is already
+	// unambiguous. A qualified key never matches on its local part alone;
+	// that fallback is exactly what conflated namespaces.
+	a := annotation
+	w := want
+	if !xdm.IsQualifiedAnnotation(a) && !xdm.IsQualifiedAnnotation(w) {
+		_, a = xdm.SplitQName(a)
+		_, w = xdm.SplitQName(w)
+		if a != "" && a == w {
+			return true
+		}
 	}
 	// A value is an instance of every type its own derives from, so the
 	// chain the schema recorded is walked upwards. Without this a value

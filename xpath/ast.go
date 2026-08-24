@@ -187,9 +187,20 @@ type KindTest struct {
 	// unconstrained.
 	Content NodeTest
 	// TypeName is the second argument of element(name, type) and its
-	// attribute() counterpart, written lexically. The empty string means the
+	// attribute() counterpart, resolved to the key the data model records
+	// type annotations under: a namespace-qualified {uri}local for a schema
+	// type, the bare local name for a built-in. The empty string means the
 	// test carried no type argument and constrains only the name.
+	//
+	// It is resolved at parse time because the prefix binding lives in the
+	// static context, which is gone by the time the test runs. Comparing the
+	// lexical form instead forced the comparison down to local parts, and two
+	// types sharing a local name in different namespaces then matched each
+	// other.
 	TypeName string
+	// TypeNameLexical is TypeName as the author wrote it, kept only so that
+	// String() renders the test back in the syntax it was parsed from.
+	TypeNameLexical string
 	// TypeNillable records the "?" of element(name, type?), which lets a
 	// nilled element match even though its content is absent.
 	TypeNillable bool

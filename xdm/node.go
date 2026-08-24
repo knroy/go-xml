@@ -130,6 +130,19 @@ type Node struct {
 	// TypeAnnotation records a schema type when the document has been
 	// validated. Untyped documents leave this empty, and atomisation then
 	// yields xs:untypedAtomic, which is the schemaless default.
+	//
+	// It holds an ANNOTATION NAME, which AnnotationName builds and
+	// SplitAnnotationName takes apart: a type in the XML Schema namespace
+	// keys under its bare local name ("string", "QName"), and any other type
+	// under Clark notation, {uri}local. Producers must go through
+	// AnnotationName; consumers comparing against a qualified name must use
+	// SplitAnnotationName rather than SplitQName, which would cut a Clark key
+	// at the colon inside its URI and yield nonsense without an error.
+	//
+	// The namespace is load-bearing rather than decorative. This string is
+	// the key into a process-global derivation table, so a bare local name
+	// let one schema's type displace a built-in of the same name for every
+	// later schema in the process — see the commentary on derivedPrimitives.
 	TypeAnnotation string
 
 	// UnionMember records which member type of a union simple type actually
@@ -145,6 +158,9 @@ type Node struct {
 	// cost of "instance of my:partIntegerUnion", which the union's own
 	// identity requires; keeping only the union answers the second and loses
 	// the first. A node must answer both, so both are recorded.
+	//
+	// It is an annotation name, like TypeAnnotation, and for the same reason:
+	// it is compared against, and walked through, the same registries.
 	//
 	// Empty for every node whose type is not a union, which is almost all of
 	// them, so the common path pays only the field.
@@ -529,6 +545,14 @@ func (n *Node) Atomize() *Atomic {
 		// node's in-scope namespaces, which a lexical form alone does
 		// not carry. That is the whole difference between a QName and
 		// the string that spells it.
+		//
+		// These are the BUILT-INS, which key under their bare local names
+		// (see AnnotationName). A schema type that merely shares one of
+		// those local names is qualified, does not match here, and takes
+		// the derivation walk below instead. That distinction is the point:
+		// schema-for-xslt20.xsd declares an xsl:QName that restricts
+		// xs:Name and holds no QName value at all, and matching it here
+		// atomised it as a QName it is not.
 		switch n.TypeAnnotation {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
@@ -675,6 +699,8 @@ var (
 // list-typed node atomises to one untypedAtomic holding the whole literal, so
 // count(data(@list)) answers 1 and "data(@list) instance of xs:untypedAtomic"
 // answers true for a node the schema plainly gave a typed value.
+//
+// Both arguments are annotation names, as RegisterDerivedType's are.
 //
 // itemType is the item type's own name, which may itself be a registered
 // schema type; atomicForAnnotation and the derivation walk resolve it.
@@ -1055,6 +1081,13 @@ func (t *Tree) positionAt(off int) (line, col int, ok bool) {
 
 // derivedPrimitives maps a schema type annotation to the built-in it erases to.
 //
+// It is keyed by ANNOTATION NAME (see AnnotationName): a built-in under its
+// bare local name, a schema type under {uri}local. Keying it by the bare local
+// name conflated the two, and because this map is package-level and
+// process-global the conflation was permanent — one schema declaring its own
+// type named "QName" rewrote the built-in's entry for every later schema in
+// the process. See TestShadowedBuiltinCoexistsWithItsShadow.
+//
 // It is populated by the xsd package when a schema is loaded, which is the
 // only place that knows a user-defined type's base. Keeping it here rather
 // than in xsd is what lets xdm.Node.Atomize consult it without importing xsd,
@@ -1071,6 +1104,10 @@ var (
 )
 
 // RegisterDerivedType records that a schema type erases to a built-in one.
+//
+// Both arguments are annotation names, which AnnotationName builds; passing a
+// bare local name for a type that has a namespace re-creates the conflation
+// this keying exists to prevent.
 //
 // The xsd package calls this as it loads a schema, so that a node annotated
 // with a user-defined type still atomises to a typed value rather than to
@@ -1103,6 +1140,11 @@ var (
 // "data(u) instance of xs:untypedAtomic" true for a node the schema plainly
 // gave a typed value, and makes every question about the member it validated
 // as answer false.
+//
+// The name and every member are annotation names, as RegisterDerivedType's
+// arguments are. This registry is keyed by the same strings as
+// derivedPrimitives and listItems, so qualifying one of the three and not the
+// others would leave unions silently unresolvable.
 //
 // The members are the *declared* members, in declaration order; which of them
 // a given value belongs to is a per-value fact recorded on the node, because
@@ -1139,7 +1181,8 @@ func UnionMembersOf(name string) []string {
 }
 
 // DerivedBase returns the type a schema type derives from, or "" if the name
-// is not a registered schema type.
+// is not a registered schema type. The name is an annotation name, and so is
+// the result, so a chain can be walked by feeding one back in.
 //
 // It is what makes the subtype relation work for schema types: a value
 // annotated as a restriction of xs:NOTATION is an instance of xs:NOTATION as
@@ -1209,6 +1252,9 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 		if !ok {
 			return nil
 		}
+		// The bare names are the built-ins, for the same reason as in
+		// Atomize: a qualified key naming a schema type never lands here,
+		// and the walk continues past it to whatever it really derives from.
 		switch prim {
 		case "QName", "NOTATION":
 			if q, ok := n.resolveQNameValue(); ok {
