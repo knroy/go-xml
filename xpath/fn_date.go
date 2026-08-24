@@ -16,7 +16,7 @@ func registerDateFuncs(l *Library) {
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -50,7 +50,7 @@ func registerDateFuncs(l *Library) {
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -62,7 +62,7 @@ func registerDateFuncs(l *Library) {
 				return nil, xdm.ErrType("%s(): expected a date/time value", name)
 			}
 			if !dt.HasTZ {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			d := &xdm.Duration{
 				Negative: dt.TZOffset < 0,
@@ -80,7 +80,7 @@ func registerDateFuncs(l *Library) {
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -138,7 +138,7 @@ func registerTimezoneAdjust(l *Library) {
 		l.registerFn(name, []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {

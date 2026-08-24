@@ -144,7 +144,7 @@ func registerRegexFuncs(l *Library) {
 		if s == "" {
 			// Tokenizing the empty string gives the empty sequence, not one
 			// empty token.
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		parts := re.Split(s, -1)
 		out := make(xdm.Sequence, 0, len(parts))
@@ -1261,7 +1261,7 @@ func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
 	}
 	if s == "" {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	parts := bt.Split(s, -1)
 	if e := bt.Err(); e != nil {

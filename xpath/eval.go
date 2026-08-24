@@ -505,7 +505,7 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	if len(atoms) == 0 {
 		// Unary operators on the empty sequence return the empty sequence
 		// rather than raising, which keeps "-$maybe-absent" usable.
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	it, err := atoms.Single()
 	if err != nil {

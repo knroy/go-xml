@@ -46,7 +46,7 @@ func registerMiscFuncs(l *Library) {
 		da := xdm.Atomize(args[0])
 		ta := xdm.Atomize(args[1])
 		if len(da) == 0 || len(ta) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		d := da[0].(*xdm.Atomic).DateTimeVal()
 		t := ta[0].(*xdm.Atomic).DateTimeVal()
@@ -184,7 +184,7 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 		}
 	}
 	if len(want) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 
 	var out xdm.Sequence
@@ -433,7 +433,7 @@ func registerFormatDateTime(l *Library) {
 		l.registerFn(name, []int{2, 3, 4, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			a, ok := atoms[0].(*xdm.Atomic)
 			if !ok || a.DateTimeVal() == nil {
@@ -1631,7 +1631,7 @@ func RegisterHarnessFuncs(l *Library) {
 		// The parameter is xs:string?, so an empty sequence is the empty
 		// sequence rather than a parse of "".
 		if len(args) > 0 && len(args[0]) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		s, err := argStringRequired(args, 0)
 		if err != nil {

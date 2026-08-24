@@ -93,7 +93,7 @@ func registerConstructors(l *Library) {
 			// A constructor applied to the empty sequence yields the empty
 			// sequence rather than raising, so "xs:date($optional)" is safe.
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -147,7 +147,7 @@ func registerStringSubtypes(l *Library) {
 		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -267,7 +267,7 @@ func registerIntegerSubtypes(l *Library) {
 		l.register(xdm.NSXS, f.name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			it, err := atoms.Single()
 			if err != nil {
@@ -297,7 +297,7 @@ func registerIntegerSubtypes(l *Library) {
 	l.register(xdm.NSXS, "dateTimeStamp", 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		atoms := xdm.Atomize(args[0])
 		if len(atoms) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		it, err := atoms.Single()
 		if err != nil {

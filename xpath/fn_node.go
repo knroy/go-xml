@@ -42,7 +42,7 @@ func registerNumericFuncs(l *Library) {
 	l.registerFn("abs", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		a, err := argNumber(args, 0)
 		if err != nil || a == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		if a.Rat() != nil {
 			r := new(big.Rat).Abs(a.Rat())
@@ -87,7 +87,7 @@ func numericRounder(ffn func(float64) float64, rfn func(*big.Rat) *big.Rat) func
 	return func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		a, err := argNumber(args, 0)
 		if err != nil || a == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		switch a.Type {
 		case xdm.TypeInteger:
@@ -103,7 +103,7 @@ func numericRounder(ffn func(float64) float64, rfn func(*big.Rat) *big.Rat) func
 func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, error) {
 	a, err := argNumber(args, 0)
 	if err != nil || a == nil {
-		return xdm.Empty, err
+		return xdm.Empty(), err
 	}
 	places := 0
 	if len(args) > 1 {
@@ -221,7 +221,7 @@ func registerNodeFuncs(l *Library) {
 	l.registerFn("root", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		return xdm.One(n.Root()), nil
 	})
@@ -229,19 +229,19 @@ func registerNodeFuncs(l *Library) {
 	l.registerFn("node-name", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		switch n.Kind {
 		case xdm.KindElement, xdm.KindAttribute, xdm.KindPI, xdm.KindNamespace:
 			return xdm.One(xdm.NewQNameValue(n.Name)), nil
 		}
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	})
 
 	l.registerFn("document-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		// Defined only for a document node, and empty for one that was not
 		// retrieved by URI. Returning "" instead would make a stylesheet
@@ -259,7 +259,7 @@ func registerNodeFuncs(l *Library) {
 		// document actually loaded by URI has a document URI, which is what
 		// ParseOptions.DocumentURI records and what leaving it empty means.
 		if n.Kind != xdm.KindDocument || n.DocumentURI == "" {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		return xdm.One(xdm.NewAnyURI(n.DocumentURI)), nil
 	})
@@ -267,14 +267,14 @@ func registerNodeFuncs(l *Library) {
 	l.registerFn("base-uri", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		if n.Kind == xdm.KindNamespace {
 			// The data model defines no dm:base-uri for a namespace node, so
 			// the accessor returns the empty sequence rather than inheriting
 			// the element's. accessor-027/028 pin this: base-uri() over the
 			// namespace axis must yield nothing, not the document URI.
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		return xdm.One(xdm.NewAnyURI(inheritedBaseURI(n))), nil
 	})
@@ -294,10 +294,10 @@ func registerNodeFuncs(l *Library) {
 	l.registerFn("nilled", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
-			return xdm.Empty, err
+			return xdm.Empty(), err
 		}
 		if n.Kind != xdm.KindElement {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		// dm:nilled is a PSVI property: it is set by schema validation, not by
 		// the presence of xsi:nil in the source. An element that was never
@@ -374,7 +374,7 @@ func registerContextFuncs(l *Library) {
 		if n, ok := ctx.Item.(*xdm.Node); ok && n.BaseURI != "" {
 			return xdm.One(xdm.NewAnyURI(n.BaseURI)), nil
 		}
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	})
 
 	l.registerFn("doc", []int{1}, fnDoc)
@@ -451,7 +451,7 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	// error: fn:doc(()) is the empty sequence, and fn:doc-available(()) is
 	// false.
 	if len(args) > 0 && len(args[0]) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	// The parameter is xs:string?, so a non-string is a type error rather
 	// than a URI to stringify: fn:doc-available(xs:integer(2)) is XPTY0004,
@@ -515,13 +515,6 @@ func clampPlaces(n int64) int {
 	}
 	return int(n)
 }
-
-// InheritedBaseURI is inheritedBaseURI for callers outside this package.
-//
-// xslt/rtfuncs.go registers its own fn:document#1, which shadows the one in
-// package xpath for arity 1, and needs the same "base URI in force at a node"
-// rule when resolving a relative reference taken from a node.
-func InheritedBaseURI(n *xdm.Node) string { return inheritedBaseURI(n) }
 
 // exactTieDirection reports which side of the halfway point f really falls on
 // when scaling it by 10^places produced an exact .5.

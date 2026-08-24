@@ -55,7 +55,7 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	}
 
 	if len(args) == 0 || len(args[0]) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 
 	// Each item contributes a URI: a node by its string value, an atomic by

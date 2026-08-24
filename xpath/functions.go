@@ -254,7 +254,7 @@ func RegisterEXSLTFuncs(l *Library) {
 	l.register(NSEXSLTCommon, "node-set", 1,
 		func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			if len(args) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			return args[0], nil
 		})

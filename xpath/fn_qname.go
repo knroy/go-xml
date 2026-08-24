@@ -67,7 +67,7 @@ func registerQNameFuncs(l *Library) {
 
 	l.registerFn("resolve-QName", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args[0]) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		lex, err := argStringRequired(args, 0)
 		if err != nil {
@@ -99,7 +99,7 @@ func registerQNameFuncs(l *Library) {
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			a, ok := atoms[0].(*xdm.Atomic)
 			if !ok || a.QName() == nil {
@@ -107,7 +107,7 @@ func registerQNameFuncs(l *Library) {
 			}
 			v, present := get(*a.QName())
 			if !present {
-				return xdm.Empty, nil
+				return xdm.Empty(), nil
 			}
 			return xdm.One(v), nil
 		})
@@ -145,7 +145,7 @@ func registerQNameFuncs(l *Library) {
 		}
 		uri, ok := el.LookupPrefix(prefix)
 		if !ok || uri == "" {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		return xdm.One(xdm.NewAnyURI(uri)), nil
 	})
@@ -203,7 +203,7 @@ func singleNodeArg(args []xdm.Sequence, i int) (*xdm.Node, error) {
 func registerURIFuncs(l *Library) {
 	l.registerFn("resolve-uri", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args[0]) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		rel, err := argStringRequired(args, 0)
 		if err != nil {
@@ -311,7 +311,7 @@ func registerURIFuncs(l *Library) {
 
 	l.registerFn("codepoint-equal", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args[0]) == 0 || len(args[1]) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		a, err := argString(args, 0)
 		if err != nil {

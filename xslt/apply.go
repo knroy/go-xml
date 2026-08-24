@@ -394,7 +394,7 @@ func runTemplate(rt *runtime, t *Template,
 		// Both previously fell through to evalVariable's generic XTTE0570.
 		val, err := evalVariable(p, sub)
 		if err != nil {
-			if p.AsType != nil {
+			if p.asType != nil {
 				if hasExplicitDefault(p) {
 					// Only the type conversion itself is XTTE0600; an error
 					// raised from inside the default's own evaluation keeps
@@ -406,14 +406,14 @@ func runTemplate(rt *runtime, t *Template,
 				}
 				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s of template %s, "+
 					"and the empty sequence is not a valid instance of %s",
-					p.Name.Lexical(), templateLabel(t), p.AsType.source())
+					p.Name.Lexical(), templateLabel(t), p.asType.source())
 			}
 			return err
 		}
 		sub = sub.withVar(p.Name, val)
 	}
 
-	if t.AsType == nil {
+	if t.asType == nil {
 		return execSequence(t.Body, sub, out)
 	}
 
@@ -425,7 +425,7 @@ func runTemplate(rt *runtime, t *Template,
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
-	converted, err := t.AsType.convertAs(tmp.sequence(),
+	converted, err := t.asType.convertAs(tmp.sequence(),
 		"result of template "+templateLabel(t), "XTTE0505")
 	if err != nil {
 		return err
@@ -529,7 +529,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// section 10.3's XTTE0790 is written specifically for "the value of a
 		// parameter to a stylesheet function". Reporting 0590 here made
 		// error-0790a report the template code for a function call.
-		v, err := p.AsType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
+		v, err := p.asType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
 			" of "+f.name.Lexical(), "XTTE0790")
 		if err != nil {
 			return nil, err

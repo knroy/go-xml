@@ -103,7 +103,7 @@ func (e *BinaryOp) evalNodeComparison(ctx *Context) (xdm.Sequence, error) {
 	}
 	// An empty operand yields the empty sequence, not false.
 	if len(l) == 0 || len(r) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	ln, err := singleNode(l, e.Op)
 	if err != nil {
@@ -154,7 +154,7 @@ func (e *BinaryOp) evalValueComparison(ctx *Context) (xdm.Sequence, error) {
 	}
 	la, ra := xdm.Atomize(l), xdm.Atomize(r)
 	if len(la) == 0 || len(ra) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	lit, err := la.Single()
 	if err != nil {
@@ -543,11 +543,11 @@ func (e *BinaryOp) evalRange(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 	if lo == nil || hi == nil {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	// A descending range is empty, not reversed.
 	if lo.Cmp(hi) > 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	// What bounds a range is the number of items in it, not how large the
 	// numbers are. xs:integer is arbitrary-precision, so
@@ -711,7 +711,7 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 
 	// Arithmetic on an empty operand yields the empty sequence.
 	if len(la) == 0 || len(ra) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	lit, err := la.Single()
 	if err != nil {

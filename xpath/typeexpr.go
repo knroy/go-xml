@@ -180,7 +180,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			if e.Castable {
 				return xdm.One(xdm.NewBoolean(true)), nil
 			}
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		if e.Castable {
 			return xdm.One(xdm.NewBoolean(false)), nil

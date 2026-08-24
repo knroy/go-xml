@@ -216,12 +216,12 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return nil, err
 		}
 		if lenA == nil {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		end = start + roundHalfEven(lenA.Float64())
 	}
 	if isNaNf(start) || isNaNf(end) {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	lo, hi := start, end
 	if lo < 1 {
@@ -231,7 +231,7 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		hi = n + 1
 	}
 	if hi <= lo {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	return in[int(lo)-1 : int(hi)-1], nil
 }
@@ -455,7 +455,7 @@ func fnSum(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 func fnAvg(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	atoms := xdm.Atomize(args[0])
 	if len(atoms) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	sum, err := fnSum(ctx, []xdm.Sequence{args[0]})
 	if err != nil {
@@ -504,7 +504,7 @@ func toNumericOrDuration(a *xdm.Atomic) (*xdm.Atomic, error) {
 func minMax(ctx *Context, seq xdm.Sequence, wantMin bool) (xdm.Sequence, error) {
 	atoms := xdm.Atomize(seq)
 	if len(atoms) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 
 	// Every item is converted first, so a sequence containing something

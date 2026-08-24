@@ -114,7 +114,7 @@ func TestBooleanLexicalForm(t *testing.T) {
 }
 
 func TestSequenceSingle(t *testing.T) {
-	if _, err := Empty.Single(); err == nil {
+	if _, err := Empty().Single(); err == nil {
 		t.Error("Single on empty sequence should error, not return nil silently")
 	}
 	if _, err := (Sequence{NewInteger(1), NewInteger(2)}).Single(); err == nil {

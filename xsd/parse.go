@@ -888,7 +888,7 @@ func (p *parser) derivationSet(el *xdm.Node, name string) (DerivationSet, error)
 		return 0, nil
 	}
 	if v == "#all" {
-		return All, nil
+		return AllDerivations, nil
 	}
 	// Which tokens are legal depends on the attribute, and the schema for
 	// schemas gives each its own type rather than one shared list.

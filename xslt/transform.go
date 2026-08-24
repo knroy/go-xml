@@ -325,7 +325,7 @@ func registerCurrentOutputURI(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current-output-uri"}, Arity: 0,
 		Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		},
 	})
 }

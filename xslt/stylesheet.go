@@ -106,10 +106,10 @@ type Template struct {
 	Priority float64
 	Params   []*Variable
 	Body     []Instruction
-	// AsType is xsl:template/@as, which constrains what the template's
+	// asType is xsl:template/@as, which constrains what the template's
 	// sequence constructor may produce. Section 6.1 applies the function
 	// conversion rules to the result, so it converts as well as checks.
-	AsType *sequenceType
+	asType *sequenceType
 	// importPrecedence orders templates from imported stylesheets below those
 	// of the importing one.
 	importPrecedence int
@@ -163,10 +163,10 @@ type Variable struct {
 	// variable, so that a duplicate at the *same* precedence can be
 	// distinguished from a legitimate override at a higher one.
 	precedence int
-	// AsType is the compiled "as" declaration, applied to the value when
+	// asType is the compiled "as" declaration, applied to the value when
 	// present. XSLT converts the value to this type rather than merely
 	// checking it, so it changes results and not just error messages.
-	AsType *sequenceType
+	asType *sequenceType
 	// baseURI is the base URI in force at the declaration, which the
 	// temporary tree a content-valued variable builds takes as its own.
 	baseURI string

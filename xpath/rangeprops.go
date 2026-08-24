@@ -150,7 +150,7 @@ func rangeAggregate(ctx *Context, e *FuncCall) (xdm.Sequence, bool, error) {
 	case "min", "max", "avg":
 		// These return the empty sequence for an empty input, unlike sum.
 		if r.empty {
-			return xdm.Empty, true, nil
+			return xdm.Empty(), true, nil
 		}
 		switch e.Name.Local {
 		case "min":

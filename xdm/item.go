@@ -55,7 +55,13 @@ func (o *Opaque) TypeName() string { return "opaque(" + o.Label + ")" }
 type Sequence []Item
 
 // Empty is the canonical empty sequence.
-var Empty = Sequence(nil)
+//
+// A function rather than a variable. An exported package-level var of slice
+// type is writable by anyone who imports the package, and a single stray
+// assignment would corrupt the value every other caller reads -- a
+// process-wide fault with no owner and no way to detect it. The value is
+// nil, so this compiles to nothing.
+func Empty() Sequence { return nil }
 
 // One wraps a single item as a sequence. Named for how often it is needed:
 // most XPath operations produce exactly one item and must still return a
@@ -97,7 +103,7 @@ func Concat(seqs ...Sequence) Sequence {
 		n += len(s)
 	}
 	if n == 0 {
-		return Empty
+		return Empty()
 	}
 	out := make(Sequence, 0, n)
 	for _, s := range seqs {

@@ -289,7 +289,7 @@ func registerStringFuncs(l *Library) {
 		}
 		// An empty argument yields the empty sequence, not 0.
 		if len(args[0]) == 0 || len(args[1]) == 0 {
-			return xdm.Empty, nil
+			return xdm.Empty(), nil
 		}
 		a, err := argString(args, 0)
 		if err != nil {

@@ -665,7 +665,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		if err != nil {
 			return fmt.Errorf("in xsl:template/@as: %w", err)
 		}
-		t.AsType = at
+		t.asType = at
 	}
 
 	// Leading xsl:param children declare the template's parameters; they must
@@ -766,7 +766,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 		if err != nil {
 			return nil, fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), err)
 		}
-		v.AsType = t
+		v.asType = t
 	}
 
 	if sel := el.AttrValue("select"); sel != "" {

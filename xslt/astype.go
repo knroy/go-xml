@@ -135,10 +135,10 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 // stayed a node, and the template's own "instance of xs:double" answered
 // false on a value the rules should have atomised and cast.
 func bindParam(p *Variable, v xdm.Sequence, t *Template) (xdm.Sequence, error) {
-	if p.AsType == nil {
+	if p.asType == nil {
 		return v, nil
 	}
-	return p.AsType.convertAs(v, "parameter $"+p.Name.Lexical()+
+	return p.asType.convertAs(v, "parameter $"+p.Name.Lexical()+
 		" of template "+templateLabel(t), "XTTE0590")
 }
 

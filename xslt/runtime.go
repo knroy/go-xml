@@ -830,7 +830,7 @@ func evalVariable(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	}
 	// A variable or parameter whose value will not convert to its declared
 	// type is XTTE0570, not the generic XPTY0004.
-	return v.AsType.convertAs(seq, "$"+v.Name.Lexical(), "XTTE0570")
+	return v.asType.convertAs(seq, "$"+v.Name.Lexical(), "XTTE0570")
 }
 
 // evalVariableRaw computes the value before the "as" declaration is applied.
@@ -848,7 +848,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 		// permits an empty sequence" for that row, so a zero-length string
 		// would fail every declaration that is not a string type — including
 		// the document-node()? that the empty body was written for.
-		if v.AsType != nil {
+		if v.asType != nil {
 			return nil, nil
 		}
 		return xdm.One(xdm.NewString("")), nil
@@ -867,7 +867,7 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	// three literal elements is those three elements; wrapping them in a
 	// document node made the value a single node that does not match the
 	// declared type at all, so the variable failed rather than binding.
-	if v.AsType != nil {
+	if v.asType != nil {
 		return out.sequence(), nil
 	}
 	// Content otherwise builds a temporary tree rooted at a document node,
@@ -1176,10 +1176,10 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			// the caller supplying nothing is XTDE0610 rather than the type
 			// error the conversion itself reports. This is the same rule
 			// that governs template parameters in runTemplate.
-			if g.IsParam && g.AsType != nil && !hasExplicitDefault(g) {
+			if g.IsParam && g.asType != nil && !hasExplicitDefault(g) {
 				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s, "+
 					"and the empty sequence is not a valid instance of %s",
-					g.Name.Lexical(), g.AsType.source())
+					g.Name.Lexical(), g.asType.source())
 			}
 			// Only a failure of the *type conversion itself* becomes
 			// XTTE0600. Evaluating the default can fail for reasons that
@@ -1187,7 +1187,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			// validation error inside the default's sequence constructor
 			// carries its own code, and rebranding that as a type error
 			// reported XTTE0600 where the suite expects XTTE1510.
-			if g.IsParam && g.AsType != nil &&
+			if g.IsParam && g.asType != nil &&
 				strings.HasPrefix(err.Error(), "XTTE0570") {
 				return fmt.Errorf("evaluating global $%s: %w",
 					g.Name.Lexical(), recodeError(err, "XTTE0600"))

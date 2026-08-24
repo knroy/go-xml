@@ -40,7 +40,7 @@ func registerPositionFuncs(l *xpath.Library) {
 					n := arg(ctx, args)
 					line, col, ok := n.Position()
 					if !ok {
-						return xdm.Empty, nil
+						return xdm.Empty(), nil
 					}
 					return xdm.One(xdm.NewInteger(pick(line, col))), nil
 				},

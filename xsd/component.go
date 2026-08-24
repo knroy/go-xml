@@ -111,15 +111,20 @@ func (s DerivationSet) With(d Derivation) DerivationSet {
 	return DerivationSet(uint8(s) | uint8(d))
 }
 
-// All is the set of every derivation method, the meaning of final="#all".
-const All = DerivationSet(0xff)
+// AllDerivations is the set of every derivation method, the meaning of
+// final="#all" or block="#all".
+//
+// Named for what it is a set *of*. A bare "All" at package scope reads as
+// something universal when it means only this, and a package-level name in a
+// surface this large cannot be corrected once it is frozen.
+const AllDerivations = DerivationSet(0xff)
 
 // String renders the set the way a schema author wrote it.
 func (s DerivationSet) String() string {
 	if s == 0 {
 		return ""
 	}
-	if s == All {
+	if s == AllDerivations {
 		return "#all"
 	}
 	var out []byte

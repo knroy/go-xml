@@ -88,8 +88,8 @@ func TestLexNumericLiteralTypes(t *testing.T) {
 			t.Errorf("lex(%q): want one number token, got %+v", c.src, toks)
 			continue
 		}
-		if toks[0].NumType != c.want {
-			t.Errorf("lex(%q).NumType = %v, want %v", c.src, toks[0].NumType, c.want)
+		if toks[0].numType != c.want {
+			t.Errorf("lex(%q).numType = %v, want %v", c.src, toks[0].numType, c.want)
 		}
 	}
 }
@@ -114,7 +114,7 @@ func TestLexTrailingEIsNotAnExponent(t *testing.T) {
 	// A literal followed by something that is not a name character is fine,
 	// and "1e5" is still one double.
 	toks := lex(t, `1e5`)
-	if len(toks) != 1 || toks[0].NumType != numDouble {
+	if len(toks) != 1 || toks[0].numType != numDouble {
 		t.Errorf("lex(\"1e5\") = %+v, want one double", toks)
 	}
 	if toks := lex(t, `1+2`); len(toks) != 3 {

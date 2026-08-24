@@ -500,7 +500,7 @@ func (p *Parser) parsePrimary() (Expr, error) {
 // numericLiteral converts a numeric token to a typed atomic value. The
 // lexical form determines the type, which is why the lexer recorded it.
 func numericLiteral(t Token) *xdm.Atomic {
-	switch t.NumType {
+	switch t.numType {
 	case numInteger:
 		r := new(big.Rat)
 		if _, ok := r.SetString(t.Val); ok {

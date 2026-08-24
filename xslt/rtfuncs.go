@@ -577,7 +577,7 @@ func stringArg(seq xdm.Sequence) string {
 func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	nameSeq := xdm.Atomize(args[0])
 	if len(nameSeq) == 0 {
-		return xdm.Empty, nil
+		return xdm.Empty(), nil
 	}
 	lexName := nameSeq[0].(*xdm.Atomic).String()
 

@@ -35,7 +35,7 @@ type Token struct {
 	// by its lexical form: no dot or E means integer, a dot means decimal, an
 	// E means double.
 	Num     float64
-	NumType numLiteralKind
+	numType numLiteralKind
 }
 
 type numLiteralKind int
@@ -409,7 +409,7 @@ func (l *Lexer) lexNumber(start int) (Token, error) {
 		// which is the right value.
 	}
 	l.prevOperand = true
-	return Token{Kind: TokNumber, Val: text, Pos: start, Num: f, NumType: kind}, nil
+	return Token{Kind: TokNumber, Val: text, Pos: start, Num: f, numType: kind}, nil
 }
 
 // lexQName reads an NCName, optionally followed by ':' and a second NCName.

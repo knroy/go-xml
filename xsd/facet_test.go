@@ -176,8 +176,8 @@ func TestDerivationSetString(t *testing.T) {
 	if s.String() != "" {
 		t.Errorf("empty set rendered %q", s.String())
 	}
-	if All.String() != "#all" {
-		t.Errorf("All rendered %q, want #all", All.String())
+	if AllDerivations.String() != "#all" {
+		t.Errorf("AllDerivations rendered %q, want #all", AllDerivations.String())
 	}
 	s = s.With(DerivationExtension).With(DerivationRestriction)
 	if got := s.String(); got != "extension restriction" {
