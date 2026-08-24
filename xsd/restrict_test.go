@@ -607,3 +607,101 @@ func TestBlockSupersetOnRestriction(t *testing.T) {
 		t.Fatalf("blocking more than the base is a narrowing, got: %v", err)
 	}
 }
+
+// derivation-ok-restriction clause 2.1.2 (§3.4.6): where a restriction
+// redeclares an attribute the base declares, the type it gives must be a
+// restriction of the type the base gave.
+//
+// parse_decl.go checks the rest of clause 2 but leaves this sub-clause to the
+// type-derivation machinery here, so nothing enforced it and a restriction
+// could widen an attribute's type freely. particlesZ013 is the shape: att1
+// goes from xs:integer to a union that admits floats, booleans and strings.
+func TestAttributeTypeMustRestrictBase(t *testing.T) {
+	mustLoadFail(t, `
+	<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	  <xsd:simpleType name="wide">
+	    <xsd:union memberTypes="xsd:float xsd:integer xsd:boolean"/>
+	  </xsd:simpleType>
+	  <xsd:complexType name="CT1">
+	    <xsd:attribute name="att1" type="xsd:integer"/>
+	  </xsd:complexType>
+	  <xsd:complexType name="CT2">
+	    <xsd:complexContent>
+	      <xsd:restriction base="CT1">
+	        <xsd:attribute name="att1" type="wide"/>
+	      </xsd:restriction>
+	    </xsd:complexContent>
+	  </xsd:complexType>
+	</xsd:schema>`, "derivation-ok-restriction.2.1.2")
+}
+
+// The same clause must not fire on a genuine narrowing: xs:int derives from
+// xs:integer, so redeclaring the attribute with it is exactly what a
+// restriction is for. A rule written as type *equality* would reject this.
+func TestAttributeTypeNarrowingAllowed(t *testing.T) {
+	mustLoadOK(t, `
+	<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	  <xsd:complexType name="CT1">
+	    <xsd:attribute name="att1" type="xsd:integer"/>
+	  </xsd:complexType>
+	  <xsd:complexType name="CT2">
+	    <xsd:complexContent>
+	      <xsd:restriction base="CT1">
+	        <xsd:attribute name="att1" type="xsd:int"/>
+	      </xsd:restriction>
+	    </xsd:complexContent>
+	  </xsd:complexType>
+	</xsd:schema>`)
+}
+
+// Wildcard Subset (§3.10.6) clause 2 under XSD 1.1, where notNamespace names a
+// *set*: not-S1 is a subset of not-S2 exactly when S2 is a subset of S1. The
+// larger exclusion set is the smaller wildcard, so narrowing means excluding
+// more, and restricting not-{cain, abel, adam} to not-{cain, abel, adam, eve}
+// is legal while widening it to not-{adam} is not.
+//
+// Reading the clause as set equality — correct for 1.0, where a negation names
+// one namespace — refuses every genuine 1.1 narrowing.
+func TestElementWildcardNotNamespaceSubset(t *testing.T) {
+	schema := func(baseNot, derivedNot string) string {
+		return `
+		<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+		  <xsd:complexType name="B">
+		    <xsd:sequence>
+		      <xsd:any notNamespace="` + baseNot + `" processContents="lax"/>
+		    </xsd:sequence>
+		  </xsd:complexType>
+		  <xsd:complexType name="R">
+		    <xsd:complexContent>
+		      <xsd:restriction base="B">
+		        <xsd:sequence>
+		          <xsd:any notNamespace="` + derivedNot + `" processContents="lax"/>
+		        </xsd:sequence>
+		      </xsd:restriction>
+		    </xsd:complexContent>
+		  </xsd:complexType>
+		</xsd:schema>`
+	}
+	t.Run("excluding more is a narrowing", func(t *testing.T) {
+		src := schema("http://cain.com/ http://abel.com/",
+			"http://cain.com/ http://abel.com/ http://eve.com/")
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing: %v", err)
+		}
+		if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err != nil {
+			t.Fatalf("excluding more namespaces must be a valid restriction: %v", err)
+		}
+	})
+	t.Run("excluding fewer is a widening", func(t *testing.T) {
+		src := schema("http://cain.com/ http://abel.com/ http://adam.com/",
+			"http://adam.com/")
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing: %v", err)
+		}
+		if _, err := Load(tree.Root, "s.xsd", Options{Version: Version11}); err == nil {
+			t.Fatal("excluding fewer namespaces admits more, and must be rejected")
+		}
+	})
+}

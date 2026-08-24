@@ -6,6 +6,40 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Restricting xs:anySimpleType, and a contravariant wildcard rule
+
+Schema validity reaches 99.45% on XSD 1.0 and 98.78% on 1.1.
+
+`<xs:restriction base="xs:anySimpleType"/>` is now rejected. No clause forbids
+it by name, which is why reading section 3.14.6 alone does not find it; the
+rule is a three-step chain through the `{variety}` property. Part 2 section
+4.1.1 makes `anySimpleType` the simple ur-type definition, whose variety is
+*absent*; `cos-st-restricts` has a restriction inherit its base's variety; and
+`st-props-correct.1` requires every simple type definition's variety to be
+atomic, list or union. Absent is none of them. xmllint reports the same case as
+"The variety is absent."
+
+The rule stays narrow deliberately: naming `xs:anySimpleType` as a
+*declaration's* type creates no new simple type definition and remains legal.
+
+Wildcard Subset (section 3.10.6) clause 2 is **contravariant** in the excluded
+set. The shared helper required two negated wildcards to exclude exactly the
+same namespaces — correct for XSD 1.0, where a negation names one namespace. In
+1.1 `notNamespace` names a *set*, and a negation of S1 is a subset of a
+negation of S2 exactly when S2 is a subset of S1: excluding more admits fewer.
+Equality is the special case where each set contains the other, so the fix
+subsumes the 1.0 reading and needs no version gate. This also retires a
+duplicate of the rule that had been added locally for attribute wildcards.
+
+Also: derivation-ok-restriction clause 2.1.2 — where a restriction redeclares
+an attribute, its type must derive from the base's, so a restriction could
+previously widen an attribute's type freely. Only a simpleContent *extension*
+may name a simple type as its base. And an unresolvable union member type is a
+hard error rather than a deferred one, since a union cannot be built without
+its members; the same treatment is deliberately *not* applied to a list's item
+type, where two suite tests contradict each other and the existing deferral is
+pinned by `missing006`.
+
 ### A valid document was being refused because an assertion crashed
 
 XSD 1.1 defines the default collection in the dynamic context of an assertion
@@ -338,8 +372,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.40% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.72% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.45% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.78% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -381,7 +415,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.40% (1.0) and 98.72% (1.1). Instance validation —
+* XSD schema-validity, at 99.45% (1.0) and 98.78% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

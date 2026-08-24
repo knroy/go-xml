@@ -51,6 +51,7 @@ func (p *parser) checkParticleRestriction() error {
 		if ct.DerivationMethod != DerivationRestriction {
 			continue
 		}
+		errs = append(errs, attributeTypeRestrictions(ct)...)
 		name := ct.Name
 		base, ok := ct.Base.(*ComplexType)
 		if !ok {
@@ -107,6 +108,66 @@ func (p *parser) checkParticleRestriction() error {
 	}
 	sort.Strings(msgs)
 	return &SchemaErrors{Errors: sortedErrors(msgs)}
+}
+
+// attributeTypeRestrictions is derivation-ok-restriction clause 2.1.2 (§3.4.6):
+// where a restriction redeclares an attribute its base already declares, the
+// type it gives that attribute must be a valid restriction of the type the
+// base gave it.
+//
+// checkAttributeRestriction in parse_decl.go enforces the rest of clause 2 —
+// use, {inheritable} and the value constraint — but deliberately leaves this
+// sub-clause alone, on the grounds that the type-derivation machinery lives
+// here and a second, weaker copy of it would risk disagreeing with the first.
+// So it is implemented here, against the same typeRestricts the particle rules
+// use, rather than duplicated there.
+//
+// The consequence of the gap was that a restriction could give an attribute a
+// *wider* type than its base and still load. particlesZ013 is the shape:
+// CT2 restricts CT1 and redeclares att1, narrowing it from xs:integer to a
+// union of float, integer, boolean and an enumerated string — which admits
+// every integer the base did and a great deal else besides, so the "restricted"
+// type accepts documents the base rejects.
+//
+// typeRestricts already answers the question correctly for the cases that
+// matter: it walks the base chain, treats xs:anyType as the universal base,
+// and accepts a derivation from any member of a union. An attribute whose type
+// is missing on either side is skipped rather than guessed at — an unresolved
+// type reference is reported by the normal resolution path, and inventing a
+// second error for it here would only obscure that one.
+func attributeTypeRestrictions(ct *ComplexType) []error {
+	base, ok := ct.Base.(*ComplexType)
+	if !ok || base == ct || isUrType(base) {
+		return nil
+	}
+	baseType := make(map[xdm.QName]Type, len(base.AttributeUses))
+	for _, u := range base.AttributeUses {
+		if u.Decl != nil && u.Decl.Type != nil {
+			baseType[u.Decl.Name] = u.Decl.Type
+		}
+	}
+	var errs []error
+	for _, u := range ct.AttributeUses {
+		if u.Decl == nil || u.Decl.Type == nil || u.Prohibited {
+			continue
+		}
+		want, inBase := baseType[u.Decl.Name]
+		if !inBase {
+			// Clause 2.2 governs an attribute the base never declared;
+			// it is checked in parse_decl.go and is not this clause's
+			// business.
+			continue
+		}
+		if typeRestricts(u.Decl.Type, want) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf(
+			"derivation-ok-restriction.2.1.2: %s gives attribute %s a type "+
+				"that is not a restriction of the type %s gives it",
+			typeLabel(ct.Name, ct), u.Decl.Name.Local,
+			typeLabel(base.Name, base)))
+	}
+	return errs
 }
 
 // typeLabel names a type for a diagnostic, distinguishing the anonymous ones
@@ -646,14 +707,34 @@ func wildcardSubset(sub, super *Wildcard) bool {
 		// ##any is a subset only of ##any, already handled.
 		return false
 	case NSNot:
-		// Clause 2: a negation is a subset of a negation of the same
-		// value. Two negations of *different* values are incomparable:
-		// each admits a namespace the other excludes.
+		// Clause 2: a negation is a subset of another negation exactly
+		// when it excludes at least as much.
+		//
+		// In XSD 1.0 a negation names a single namespace, so "excludes
+		// at least as much" collapses to "excludes the same one", and
+		// the rule was written as set equality. XSD 1.1's
+		// notNamespace names a *set*, and there the relation is
+		// contravariant: not-S1 admits everything outside S1, so
+		// not-S1 is a subset of not-S2 exactly when S2 is a subset of
+		// S1 — the *larger* exclusion set is the smaller wildcard.
+		//
+		// Equality is the special case where each contains the other,
+		// so this subsumes the 1.0 reading rather than replacing it,
+		// and needs no version gate. Reading it as equality refuses
+		// every genuine narrowing of a 1.1 notNamespace, such as
+		// restricting not-{cain, abel, adam} to not-{adam}.
 		if super.Kind != NSNot {
 			return false
 		}
-		return sameNamespaceSet(sub.Namespace, super.Namespace) &&
-			sub.ExcludesAbsent == super.ExcludesAbsent
+		for _, ns := range super.Namespace {
+			if !containsNamespace(sub.Namespace, ns) {
+				return false
+			}
+		}
+		// Excluding the absent namespace narrows in the same
+		// direction: sub may exclude it where super does not, but not
+		// the reverse.
+		return !(super.ExcludesAbsent && !sub.ExcludesAbsent)
 	default:
 		// Clause 3: an enumerated set is a subset of a superset of
 		// itself, or of a negation excluding nothing the set contains.
@@ -683,18 +764,6 @@ func containsNamespace(set []string, ns string) bool {
 		}
 	}
 	return false
-}
-
-func sameNamespaceSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for _, x := range a {
-		if !containsNamespace(b, x) {
-			return false
-		}
-	}
-	return true
 }
 
 // nsRecurseCheckCardinality is Particle Derivation OK (All/Choice/Sequence:Any)

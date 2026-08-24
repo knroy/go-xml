@@ -377,46 +377,11 @@ func (p *parser) checkAttributeWildcardRestriction(t *ComplexType) {
 			t.Name, base.Name))
 		return
 	}
-	if !attrWildcardSubset(t.AttributeWildcard, base.AttributeWildcard) {
+	if !wildcardSubset(t.AttributeWildcard, base.AttributeWildcard) {
 		p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.4.2",
 			"the attribute wildcard of complex type %q is not a subset of the "+
 				"attribute wildcard of its base %q", t.Name, base.Name))
 	}
-}
-
-// attrWildcardSubset is Wildcard Subset (§3.10.6) with the XSD 1.1 negation
-// clause the shared wildcardSubset does not carry.
-//
-// The shared helper reads clause 2 the XSD 1.0 way, where a negation names a
-// single namespace and two negations are comparable only when they name the
-// same one. XSD 1.1's notNamespace names a *set*, and then a negation of S1 is
-// a subset of a negation of S2 exactly when S2 is a subset of S1: excluding
-// more namespaces admits fewer, which is what being narrower means. Reading it
-// as "the two sets must be equal" rejected wild017, whose own comment says it
-// is a valid restriction that "disallows more namespaces than base type".
-//
-// Only this check uses it. Changing the shared helper would move particle
-// restriction too, and that is a different and much larger blast radius than
-// the constraint being fixed here needs.
-func attrWildcardSubset(sub, super *Wildcard) bool {
-	if sub == nil || super == nil {
-		return wildcardSubset(sub, super)
-	}
-	if sub.Kind == NSNot && super.Kind == NSNot {
-		// Every namespace super excludes must also be excluded by sub.
-		for _, ns := range super.Namespace {
-			if !containsNamespace(sub.Namespace, ns) {
-				return false
-			}
-		}
-		// Excluding the absent namespace is the same kind of narrowing:
-		// sub may exclude it where super does not, but not the reverse.
-		if super.ExcludesAbsent && !sub.ExcludesAbsent {
-			return false
-		}
-		return true
-	}
-	return wildcardSubset(sub, super)
 }
 
 // checkLocalSimpleTypeForm is the simple-type half of the local-form rule

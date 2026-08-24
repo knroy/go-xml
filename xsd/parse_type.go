@@ -64,6 +64,41 @@ func (p *parser) readSimpleRestriction(el *xdm.Node, t *SimpleType) {
 					"simpleType restriction base %q is a complex type", base))
 				return
 			}
+			// st-props-correct.1 (Part 2 §4.1.5), via the {variety}
+			// property — NOT an exclusion of anySimpleType by name,
+			// which is why reading §3.14.6 alone does not find it:
+			//
+			//  1. Part 2 §4.1.1 (Part 1 §3.16.1) makes xs:anySimpleType
+			//     the *simple ur-type definition*. It is a special
+			//     component rather than a datatype, and its {variety}
+			//     is *absent*.
+			//  2. Part 1 §3.16.6 cos-st-restricts has a restriction
+			//     inherit its base's {variety}, so restricting the
+			//     ur-type yields a definition whose variety is absent.
+			//  3. st-props-correct.1 requires the {variety} of every
+			//     simple type definition to be one of atomic, list or
+			//     union. Absent is none of them, so the derived type is
+			//     not a legal component.
+			//
+			// xmllint reports exactly this, verbatim: "The variety is
+			// absent." The rule is narrow by construction — naming
+			// xs:anySimpleType as a declaration's type stays legal,
+			// since that use creates no new simple type definition and
+			// so trips no clause. Probed both ways before implementing.
+			//
+			// We model anySimpleType as VarietyAtomic internally so
+			// that the base chain of the primitives works, so the
+			// absent variety has to be detected by identity here
+			// rather than by reading st.Variety.
+			//
+			// Pinned by msData/simpleType stZ005, stZ006, stZ010,
+			// stZ011 and stZ012.
+			if st == p.schema.anySimpleType() {
+				p.errs = append(p.errs, errorAt(el, "st-props-correct.1",
+					"xs:anySimpleType is the simple ur-type and has no "+
+						"variety; it may not be the base of a restriction"))
+				return
+			}
 			t.Base = st
 			// The variety and primitive are inherited from the base:
 			// restricting a list yields a list, not an atomic type.
@@ -105,6 +140,12 @@ func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 				return
 			}
 			t.ItemType = st
+			// A list itemType that names no definition is
+			// deliberately deferred, not reported here: saxonData
+			// Missing/missing006 declares <xs:list itemType="absent"/>
+			// and expects the schema to load, the error surfacing
+			// only where the list type is actually used. Making this
+			// a hard src-resolve error costs that test.
 		}, func(ref string) { t.unresolved = ref })
 	case inline != nil:
 		t.ItemType = p.readSimpleType(inline)
@@ -143,8 +184,16 @@ func (p *parser) readSimpleUnion(el *xdm.Node, t *SimpleType) {
 			p.fixups = append(p.fixups, func() error {
 				bt, ok := p.schema.Types[name]
 				if !ok {
-					// Reported where the union is used, not
-					// here; see SimpleType.unresolved.
+					// §3.14.6 / src-resolve: a member type
+					// that names no definition cannot be
+					// deferred — the union cannot be built
+					// without it. Only a namespace an
+					// <xs:import> named but could not fetch
+					// keeps the old deferred reading.
+					if !p.absentNamespace(name.URI) {
+						return errorAt(el, "src-resolve",
+							"union member %q names no type definition", ref)
+					}
 					t.unresolved = ref
 					return nil
 				}
@@ -500,6 +549,19 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 			}
 			switch b := bt.(type) {
 			case *SimpleType:
+				// §3.4.2 / src-ct.1: only a simpleContent
+				// *extension* may name a simple type as its base.
+				// A simpleContent restriction restricts a complex
+				// type that already has simple content, so a simple
+				// base has nothing to restrict. stZ009 pins this
+				// with <simpleContent><restriction
+				// base="xs:anySimpleType"/>.
+				if t.DerivationMethod != DerivationExtension {
+					p.errs = append(p.errs, errorAt(body, "src-ct.1",
+						"a simpleContent restriction base must be a "+
+							"complex type, but %q is a simple type", base))
+					return
+				}
 				// Extending a simple type gives a complex type whose
 				// content is that simple type.
 				t.SimpleContent = b
