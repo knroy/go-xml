@@ -6,9 +6,9 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
-### XSLT 2.0 conformance: 98.83% to 99.52%
+### XSLT 2.0 conformance: 98.83% to 99.54%
 
-6,023 of 6,052 in scope, up from 5,982 of 6,053. 42 tests fixed across two
+6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two
 rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
 XSD 1.0, QT3 and RELAX NG are unchanged.
 
@@ -29,6 +29,11 @@ Two further wrong answers, both in the parser:
   space.
 - Whitespace in element-only content declared by a schema was not treated as
   ignorable, the schema-side counterpart to the DTD fix in the first round.
+- `fn:idref` split its argument on whitespace. `fn:id` does, because its
+  argument is a sequence of IDREFS values and an IDREFS value is a
+  whitespace-separated list; `fn:idref` takes `xs:string` and matches it
+  whole, so `idref('a c')` looks for the single name "a c" — not a valid
+  `xs:IDREF`, and so matching nothing.
 
 `xsl:variable` bindings in a sequence constructor are now skipped when the
 name is never referenced later, which XSLT 2.0 section 5.2 permits: a
@@ -85,7 +90,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.52% — 6,023 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.54% — 6,024 of 6,052 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

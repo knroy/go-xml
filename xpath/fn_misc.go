@@ -166,10 +166,20 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 		root = n.Root()
 	}
 
-	// The argument is a whitespace-separated list of names.
+	// fn:id splits each argument on whitespace: its argument is defined as a
+	// sequence of IDREFS values, and an IDREFS value is a whitespace-separated
+	// list. fn:idref is not — its argument is a sequence of xs:string, matched
+	// whole. So idref('a c') looks for the single name "a c", which is not a
+	// valid xs:IDREF and therefore matches nothing, where id('a c') looks for
+	// "a" and "c". Splitting both made idref find the union of the tokens.
 	want := map[string]bool{}
 	for _, it := range xdm.Atomize(args[0]) {
-		for _, f := range strings.Fields(it.(*xdm.Atomic).String()) {
+		v := it.(*xdm.Atomic).String()
+		if !wantID {
+			want[v] = true
+			continue
+		}
+		for _, f := range strings.Fields(v) {
 			want[f] = true
 		}
 	}

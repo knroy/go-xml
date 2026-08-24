@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.80% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.52% — 6,023 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.54% — 6,024 of 6,052 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 99.52%, and the newest — so it is a
+The weakest of the measured numbers, at 99.54%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -98,7 +98,6 @@ by that measure:
 | `analyze-string` | 43/45 | variable-width backreferences |
 | `strip-space` | 23/24 | simple-type whitespace preservation in `xsl:copy` |
 | `format-number` | 61/62 | a suite defect, not an engine gap |
-| `id` | 41/42 | one remaining edge case |
 | `import-schema` | 190/191 | static content-model checking against a declared `as` |
 | `sequence` | 86/87 | catalog metadata separates it from a passing twin |
 | `use-when` | 79/80 | unprefixed type names in the default element namespace |
