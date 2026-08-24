@@ -894,7 +894,16 @@ func resolveAgainst(base, ref string) string {
 	if err != nil {
 		return ref
 	}
-	return b.ResolveReference(r).String()
+	// EscapedPath rather than String: ResolveReference re-encodes characters
+	// that are already legal in a path, and a system identifier is written as
+	// a URI reference, not as text to be escaped. A DTD naming
+	// "images\epub\pic.gif" came back with the backslashes as %5C, which the
+	// stylesheet that splits the path on them could no longer see.
+	resolved := b.ResolveReference(r)
+	if resolved.RawPath != "" {
+		resolved.Path, resolved.RawPath = resolved.RawPath, ""
+	}
+	return resolved.String()
 }
 
 // isLexicalQName reports whether s has the form of a QName: an NCName, or two

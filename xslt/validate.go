@@ -54,6 +54,17 @@ type validationSpec struct {
 	// typeName is the [xsl:]type attribute, which names a type to assess
 	// against instead of using the element's declaration.
 	typeName *xdm.QName
+	// constructsElement records that the instruction builds a NEW element
+	// rather than copying one wholesale. Section 19.2 makes validation=
+	// "preserve" mean two different things depending on that: xsl:copy-of
+	// copies nodes and "all the nodes that are copied will retain their type
+	// annotations unchanged", but xsl:element, a literal result element and
+	// xsl:copy over an element all give the new element the annotation
+	// xs:anyType — for xsl:copy explicitly "because this instruction does not
+	// copy the content of the element, it would be wrong to assume that the
+	// type is unchanged". The distinction is not visible from the node handed
+	// to assess, so it is recorded when the instruction is compiled.
+	constructsElement bool
 }
 
 // compileValidation reads the validation and type attributes of an
@@ -136,7 +147,32 @@ func compileValidation(n *xdm.Node, attrPrefix string) (validationSpec, error) {
 		return spec, err
 	}
 	spec.mode = mode
+	spec.constructsElement = constructsElement(n)
 	return spec, nil
+}
+
+// constructsElement reports whether an instruction builds a new element node,
+// as opposed to copying existing nodes wholesale.
+//
+// Only three constructs do: xsl:element, xsl:copy (when the context node is an
+// element — which assess re-checks, since the same compiled spec serves a
+// context node of any kind), and a literal result element. xsl:copy-of and
+// xsl:document copy or wrap, and validation="preserve" leaves their
+// annotations alone.
+func constructsElement(n *xdm.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Name.URI != xdm.NSXSL {
+		// A literal result element: anything not in the XSLT namespace that
+		// reached compileValidation is one.
+		return true
+	}
+	switch n.Name.Local {
+	case "element", "copy":
+		return true
+	}
+	return false
 }
 
 // moduleDefaultValidation returns the default-validation attribute of the
@@ -162,7 +198,15 @@ func moduleDefaultValidation(n *xdm.Node) string {
 func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 	if spec.typeName == nil && spec.mode == validatePreserve {
 		// preserve keeps whatever the source carried, which the copy already
-		// has: there is nothing to assess and nothing to remove.
+		// has: there is nothing to assess and nothing to remove — except on
+		// an instruction that CONSTRUCTS an element, where §19.2 requires the
+		// new element itself to be annotated xs:anyType while its contained
+		// nodes keep whatever they carried. Leaving it unannotated made
+		// "instance of element(*, xs:anyType)" indistinguishable from
+		// xs:untyped, which is the whole distinction import-schema-076 draws.
+		if spec.constructsElement && n != nil && n.Kind == xdm.KindElement {
+			n.SetTypeAnnotation("anyType")
+		}
 		return nil
 	}
 	if spec.typeName == nil && spec.mode == validateStrip {

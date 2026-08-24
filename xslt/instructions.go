@@ -130,16 +130,37 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// destinations that keep a bare sequence — a variable
 				// declared as="document-node()*", a function body — must see
 				// the wrapper itself.
-				c := deepCopy(v)
-				for _, ch := range c.Children {
-					if err := i.validation.assess(rt, ch); err != nil {
-						return err
-					}
+				c := copyDocumentNode(v)
+				// The document node itself is assessed, not its children one
+				// at a time. Section 11.9.2 validates the copy, and the copy
+				// of a document node is a document node -- which is what
+				// brings the DOCUMENT-LEVEL constraints into play. Assessing
+				// each child instead reported the ID/IDREF failures with the
+				// element codes XTTE1510/XTTE1515, where XTTE1555 is the code
+				// for "document-level constraints are not satisfied".
+				if err := i.validation.assess(rt, c); err != nil {
+					return err
 				}
 				out.appendNode(c)
 				continue
 			}
 			if v.Kind == xdm.KindAttribute {
+				// XTTE0950, second sentence: copying an attribute with
+				// namespace-sensitive content under validation="preserve" is
+				// a type error "unless the parent element is also copied".
+				// An attribute selected by xsl:copy-of arrives on its own --
+				// its parent, if it has one, is not what this instruction is
+				// copying -- so the exemption never applies on this path.
+				// The prefix in the copied QName would keep pointing at a
+				// binding the new parent element need not declare.
+				if i.validation.mode == validatePreserve &&
+					isNamespaceSensitiveType(v.TypeAnnotation) {
+					return fmt.Errorf(
+						"XTTE0950: xsl:copy-of with validation=\"preserve\" "+
+							"cannot copy attribute %s on its own, because its "+
+							"content is namespace-sensitive",
+						v.Name.Lexical())
+				}
 				// Assessed on a copy, never on v. Validation strips type
 				// annotations in place, and the default mode is "strip", so
 				// assessing the source attribute erased the annotation from
@@ -172,6 +193,18 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 					return err
 				}
 				continue
+			}
+			// XTTE0950: copying a node with namespace-sensitive content
+			// under copy-namespaces="no" and validation="preserve". The two
+			// together ask for the QName's prefix to be kept and its
+			// declaration to be thrown away, which leaves a value whose
+			// validity depended on a binding that is no longer there.
+			if i.noNamespaces && i.validation.mode == validatePreserve &&
+				hasNamespaceSensitiveContent(v) {
+				return fmt.Errorf(
+					"XTTE0950: xsl:copy-of with copy-namespaces=\"no\" and "+
+						"validation=\"preserve\" cannot copy %s, whose "+
+						"content is namespace-sensitive", describeNode(v))
 			}
 			c := deepCopy(v)
 			if out.open == nil {
@@ -236,6 +269,72 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 		c.AppendChild(deepCopy(ch))
 	}
 	return c
+}
+
+// isNamespaceSensitiveType reports whether a type annotation names a type
+// whose values carry a namespace prefix that must stay bound.
+//
+// XTTE0950 defines it as "its typed value contains an item of type xs:QName or
+// xs:NOTATION or a type derived therefrom". The annotation this data model
+// records is the type's LOCAL NAME with no namespace URI (see xdm.Node's
+// TypeAnnotation), so the check is by local name. That is exact for the two
+// built-ins, which is what the suite exercises; a user-defined restriction of
+// xs:QName carries its own local name and is not recognised here. Recognising
+// it needs the annotation to name a schema component, which is a change to the
+// data model rather than to this instruction.
+func isNamespaceSensitiveType(ann string) bool {
+	return ann == "QName" || ann == "NOTATION"
+}
+
+// hasNamespaceSensitiveContent reports whether a node's typed value, or that
+// of anything it contains, is namespace-sensitive.
+//
+// The whole subtree is walked because the copy takes the whole subtree with
+// it: a QName-valued attribute three elements down loses its binding exactly
+// as one on the copied element itself would.
+func hasNamespaceSensitiveContent(n *xdm.Node) bool {
+	if n == nil {
+		return false
+	}
+	if isNamespaceSensitiveType(n.TypeAnnotation) {
+		return true
+	}
+	for _, a := range n.Attrs {
+		if isNamespaceSensitiveType(a.TypeAnnotation) {
+			return true
+		}
+	}
+	for _, c := range n.Children {
+		if hasNamespaceSensitiveContent(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// copyDocumentNode deep-copies a document node onto a tree of its own.
+//
+// deepCopy alone produces a parentless node with no tree behind it, and two
+// document properties live on the tree rather than on the node: the DOCTYPE
+// text, from which fn:unparsed-entity-uri and fn:unparsed-entity-public-id
+// read their declarations, and the tree identity that fn:generate-id and
+// node comparison need. Section 11.9.1 says the copy of a document node is a
+// document node; a document node with no unparsed-entity table is not the
+// same document node, so the DOCTYPE travels with it. The base URI does too,
+// for the same reason the xsl:copy branch carries it: a relative reference in
+// the copy resolves against the document it came from.
+func copyDocumentNode(n *xdm.Node) *xdm.Node {
+	tree := xdm.NewTree()
+	tree.Root.BaseURI = n.BaseURI
+	if src := n.Tree(); src != nil {
+		tree.DocType = src.DocType
+	}
+	tree.Root.TypeAnnotation = n.TypeAnnotation
+	for _, ch := range n.Children {
+		tree.Root.AppendChild(deepCopy(ch))
+	}
+	tree.Finalize()
+	return tree.Root
 }
 
 // inheritNamespaces gives a detached copy the bindings it used to inherit.

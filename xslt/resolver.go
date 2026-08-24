@@ -1,7 +1,9 @@
 package xslt
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -30,6 +32,18 @@ type FileResolver struct {
 	// external one — the XXE entry point. A caller whose inputs are trusted,
 	// a conformance suite among them, can turn it on.
 	AllowDOCTYPE bool
+
+	// ExternalEntities permits the documents this resolver parses to read
+	// external entities and an external DTD subset, using this same resolver
+	// — so they are confined to Roots on exactly the terms everything else
+	// is, with the same scheme rejection and the same symlink handling.
+	//
+	// It is separate from AllowDOCTYPE and off by default. AllowDOCTYPE
+	// admits declarations that cost nothing outside the document; this
+	// admits reads of other files, which is the XXE surface proper. A caller
+	// that wants DTD-declared entities does not thereby want file reads, and
+	// making one imply the other would silently widen every existing caller.
+	ExternalEntities bool
 
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
@@ -184,10 +198,14 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	// *relative* URI reference and resolving against it drops everything
 	// before the last separator. resolvePath strips the scheme back off, so
 	// the filesystem sees the same path either way.
-	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
+	opts := xdm.ParseOptions{
 		BaseURI:      fileURIOf(path),
 		AllowDOCTYPE: r.AllowDOCTYPE,
-	})
+	}
+	if r.ExternalEntities {
+		opts.ExternalEntities = r
+	}
+	tree, err := xdm.ParseString(string(data), opts)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
@@ -222,4 +240,39 @@ func fileURIOf(path string) string {
 		path = abs
 	}
 	return "file://" + filepath.ToSlash(path)
+}
+
+// ResolveEntity implements xdm.EntityResolver, so that a document this
+// resolver parses may read external entities — but only from inside Roots.
+//
+// Every constraint the rest of this type enforces applies here unchanged,
+// because the path goes through the same resolvePath: a non-file scheme is
+// rejected before the filesystem is touched, symlinks are resolved before the
+// containment check, and a path outside every root is refused. There is
+// nothing entity-specific about the confinement, which is the point — an
+// external entity is a file read like any other, and it gets the same gate
+// rather than a second one written separately and drifting.
+//
+// The base is the URI of the resource that made the reference, which for an
+// entity declared in an external DTD subset is that subset rather than the
+// document. Resolving against it is XML 1.0 section 4.4.3, and it is why a
+// modular DTD in a subdirectory finds its siblings.
+//
+// The returned URI is the file: URI of what was actually read, since that is
+// what anything inside the fetched text resolves against.
+func (r *FileResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCloser, string, error) {
+	path, err := r.resolvePath(systemID, base)
+	if err != nil {
+		return nil, "", err
+	}
+	// Read fully rather than handing back an open file: the caller charges
+	// the bytes against its expansion budget, and a resolver that streams
+	// would leave a descriptor open for the length of a parse that may fail.
+	// xdm bounds what it reads regardless, so this cannot be made to read an
+	// unbounded file by the document.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return io.NopCloser(bytes.NewReader(data)), fileURIOf(path), nil
 }

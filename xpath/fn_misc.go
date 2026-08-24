@@ -1549,3 +1549,55 @@ func pictureUsesNames(pic string) bool {
 	}
 	return false
 }
+
+// RegisterHarnessFuncs adds the XPath 3.0 functions that the W3C conformance
+// harness needs in order to SET UP a test, as distinct from the functions a
+// stylesheet under test may call.
+//
+// It exists for the same reason ParseExtended does, and observes the same
+// boundary. Several XSLT test-set environments describe their initial context
+// with an XPath 3.0 expression even when the stylesheet they then run is an
+// XSLT 2.0 one — id-043's environment is
+//
+//	<source select="parse-xml('&lt;root/>')" role="."/>
+//
+// while id-043.xsl itself declares version="2.0". The setup expression is the
+// harness's own XPath, not the test subject's, so it is written in the 3.0
+// language by design.
+//
+// These functions are deliberately NOT in Builtins(). An XPath 2.0 processor
+// is required to report XPST0017 for fn:parse-xml, and a stylesheet compiled
+// against the builtin library still does, which is what the suite asserts
+// elsewhere. Registering into a chained Library keeps the two populations
+// separate in the same way RegisterXSLTFuncs does for the XSLT-only functions.
+func RegisterHarnessFuncs(l *Library) {
+	// fn:parse-xml builds a document node from a string of XML. The result is
+	// a document, not the element: the spec returns document-node(), and the
+	// callers that matter (an environment's initial context item) navigate
+	// from the root.
+	l.registerFn("parse-xml", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// The parameter is xs:string?, so an empty sequence is the empty
+		// sequence rather than a parse of "".
+		if len(args) > 0 && len(args[0]) == 0 {
+			return xdm.Empty, nil
+		}
+		s, err := argStringRequired(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		// The base URI of the constructed document is the static base URI of
+		// the call, per the spec. With none available the document simply has
+		// no base URI, which is what document-uri() then reports as empty.
+		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
+			AllowDOCTYPE: true,
+			BaseURI:      ctx.StaticBaseURI,
+		})
+		if perr != nil {
+			// FODC0006 is the code the spec gives for a string that is not a
+			// well-formed document, rather than a generic failure.
+			return nil, xdm.Errorf("FODC0006",
+				"fn:parse-xml: argument is not a well-formed XML document: %v", perr)
+		}
+		return xdm.One(tree.Root), nil
+	})
+}

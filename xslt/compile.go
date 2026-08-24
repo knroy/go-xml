@@ -1151,6 +1151,25 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	// XTSE0770: two functions may not share a name and arity at the same
 	// import precedence. A higher precedence legitimately overrides a lower
 	// one, so only a tie is an error.
+	// A named simple type in an imported schema brings its own constructor
+	// function of the same expanded name and arity 1 into the static context
+	// (XPath 2.0 section 3.1.5 / XSLT 2.0 section 3.14). A stylesheet function
+	// that collides with one is the same clash XTSE0770 describes — two
+	// functions of the same name, arity and import precedence — and the suite
+	// says as much: type-functions-0503 expects XTSE0770 with the note "the
+	// error isn't explicit in the XSLT spec, but this is the closest it gets".
+	//
+	// Restricted to arity 1 because that is the only arity a constructor
+	// function has, and to *simple* types because complex types have no
+	// constructor. The reserved-namespace check above already keeps a
+	// stylesheet function out of the XSD namespace, so this can only ever
+	// fire on a user-declared type in a namespace the stylesheet imported.
+	if len(params) == 1 && c.sheet.schema != nil && c.sheet.schema.HasSimpleType(qn) {
+		return fmt.Errorf(
+			"XTSE0770: xsl:function %s conflicts with the constructor "+
+				"function of the imported schema type of the same name",
+			qn.Lexical())
+	}
 	key := fmt.Sprintf("%s#%d", qn.Clark(), len(params))
 	if c.funcPrecedence == nil {
 		c.funcPrecedence = map[string]int{}

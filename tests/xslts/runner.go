@@ -53,6 +53,27 @@ type Summary struct {
 type SetStats struct{ Passed, Failed, Skipped int }
 
 // Run executes every test set in the catalog.
+// suiteEntityResolver permits the suite's documents to read external
+// entities, confined to the suite directory.
+//
+// The suite is trusted input and several of its tests are ABOUT external
+// entities — an external DTD subset supplying declarations, an external
+// parameter entity, a fragment factored into its own file. Nothing outside
+// r.Root is reachable: FileResolver rejects a non-file scheme before touching
+// the filesystem and resolves symlinks before the containment check, and this
+// is the same confinement every other suite read already goes through.
+//
+// Production callers get none of this. ExternalEntities is off by default on
+// FileResolver and on xdm.ParseOptions alike, and neither is implied by
+// AllowDOCTYPE, so enabling it here changes nothing for anyone else.
+func (r *Runner) entityResolver() *xslt.FileResolver {
+	return &xslt.FileResolver{
+		Roots:            []string{r.Root},
+		AllowDOCTYPE:     true,
+		ExternalEntities: true,
+	}
+}
+
 func (r *Runner) Run() (*Summary, error) {
 	// Every base URI in a run derives from the root, and fn:base-uri and
 	// fn:resolve-uri require an absolute one: a relative root made the whole
@@ -269,7 +290,8 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// written on in preference to the module's. A bare path here and a URI
 	// there left the two disagreeing, and the element's bare path won.
 	sheetDoc, err := xdm.ParseString(string(stripBOM(sheetSrc)),
-		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(sheetPath)})
+		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(sheetPath),
+			ExternalEntities: r.entityResolver()})
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +309,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// confining each set to itself refuses those as if the engine could
 		// not read them. The suite is trusted input; the root is what keeps
 		// the run from reaching outside it.
-		Resolver: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
+		Resolver: r.entityResolver(),
 		// A file: URI rather than a bare path. fn:static-base-uri and
 		// fn:resolve-uri are defined over URIs, and an absolute filesystem
 		// path is still a *relative* URI reference because it has no scheme
@@ -416,7 +438,8 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 				return nil, err
 			}
 			tree, err := xdm.ParseString(string(stripBOM(data)),
-				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
+				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+					ExternalEntities: r.entityResolver()})
 			if err != nil {
 				return nil, err
 			}
@@ -453,7 +476,8 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 			return nil, err
 		}
 		tree, err := xdm.ParseString(string(stripBOM(data)),
-			xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p)})
+			xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+				ExternalEntities: r.entityResolver()})
 		if err != nil {
 			return nil, err
 		}
@@ -464,7 +488,11 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 			return nil, err
 		}
 	}
-	ctx := xpath.NewContext(doc, xpath.Builtins())
+	// A source's @select is the harness's own setup expression, not the
+	// stylesheet's, so it is evaluated against the harness library: several
+	// environments build their initial context with parse-xml() even when the
+	// stylesheet under test is XSLT 2.0. See xpath.RegisterHarnessFuncs.
+	ctx := xpath.NewContext(doc, harnessLibrary())
 	seq, err := xpath.Eval(s.Select, ctx, noNS{})
 	if err != nil {
 		return nil, fmt.Errorf("source @select %q: %w", s.Select, err)
@@ -761,4 +789,14 @@ func schemaTargetNamespace(data []byte) string {
 		}
 	}
 	return ""
+}
+
+// harnessLibrary is the function library the harness evaluates its OWN
+// expressions with -- environment @select setup expressions and the like.
+// It is the XPath 2.0 builtins plus the few XPath 3.0 functions the W3C test
+// catalogue writes its setup in. A stylesheet under test never sees it.
+func harnessLibrary() *xpath.Library {
+	lib := xpath.NewLibrary(xpath.Builtins())
+	xpath.RegisterHarnessFuncs(lib)
+	return lib
 }

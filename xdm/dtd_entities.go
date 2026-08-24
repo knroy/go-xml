@@ -57,6 +57,35 @@ type entityTable struct {
 	// total is the expanded size of everything resolved so far, so that a
 	// bomb divided among many entities cannot slip under the per-entity cap.
 	total int
+	// resolver, when non-nil, permits external entities to be read. It is
+	// nil by default and is NOT implied by AllowDOCTYPE — see dtd_external.go
+	// for why those two are separate gates.
+	resolver EntityResolver
+	// externalDecl records what each external entity names and the base its
+	// system identifier resolves against, so that a declaration read from an
+	// external subset resolves relative to that subset.
+	externalDecl map[string]externalEntityDecl
+	// externalText memoises fetched replacement text, and externalBase the
+	// URI it came from. The memo bounds fetches as well as cost: without it
+	// a reference in a loop would be a fetch in a loop.
+	externalText map[string]string
+	externalBase map[string]string
+	// fetching marks the external entities currently being read, so a cycle
+	// through them is an error rather than an unbounded chain of fetches.
+	fetching map[string]bool
+	// fetches counts external resources read, bounded by maxExternalFetches.
+	fetches int
+	// externalDepth is the current nesting of external subset inclusion.
+	externalDepth int
+	// subsetText is the declaration text this table was read from. It is
+	// retained so that an external subset's attribute defaults and declared
+	// types can be read from the merged text after parameter entities have
+	// been substituted — the point at which they first exist.
+	subsetText string
+	// docBase is the URI external system identifiers in the internal subset
+	// resolve against.
+	docBase string
+
 	// reparsed says the expansion feeds a second *parse* rather than the
 	// decoder's substitution map.
 	//
@@ -77,11 +106,31 @@ type entityTable struct {
 // are expanded inside the DTD itself rather than in content, and reading one
 // would mean interpreting the subset as a grammar rather than scanning it.
 func parseInternalEntities(subset string) *entityTable {
-	t := &entityTable{
-		raw:      map[string]string{},
-		expanded: map[string]string{},
-		external: map[string]bool{},
+	return parseEntityDecls(subset, "")
+}
+
+// parseEntityDecls reads entity declarations, recording base as the URI that
+// external system identifiers in them resolve against. Declarations read from
+// an external subset carry that subset's URI, per XML section 4.4.3.
+func parseEntityDecls(subset, base string) *entityTable {
+	t := newEntityTable(base)
+	t.subsetText = subset
+	return t.parseDecls(subset, base)
+}
+
+// newEntityTable returns an empty table whose external system identifiers
+// resolve against base.
+func newEntityTable(base string) *entityTable {
+	return &entityTable{
+		raw:          map[string]string{},
+		expanded:     map[string]string{},
+		external:     map[string]bool{},
+		externalBase: map[string]string{},
+		docBase:      base,
 	}
+}
+
+func (t *entityTable) parseDecls(subset, base string) *entityTable {
 	rest := subset
 	for len(t.raw)+len(t.external) < maxEntityCount {
 		i := strings.Index(rest, "<!ENTITY")
@@ -118,6 +167,20 @@ func parseInternalEntities(subset string) *entityTable {
 		// caller the difference between a typo and a blocked fetch.
 		if fields[1] == "SYSTEM" || fields[1] == "PUBLIC" {
 			t.external[name] = true
+			// The system identifier is recorded whether or not a resolver
+			// was supplied. With none it is never used and the reference is
+			// refused exactly as before; with one it is what gets fetched.
+			// Recording it unconditionally keeps the two paths reading the
+			// same declaration rather than parsing it twice differently.
+			if d, ok := externalDeclOf(fields, base); ok {
+				if t.externalDecl == nil {
+					t.externalDecl = map[string]externalEntityDecl{}
+				}
+				// First declaration wins, as for internal entities.
+				if _, dup := t.externalDecl[name]; !dup {
+					t.externalDecl[name] = d
+				}
+			}
 			// An unparsed entity is an external one with an NDATA notation,
 			// and unlike a parsed external entity it is never fetched: the
 			// data model records its system identifier and notation so that
@@ -199,9 +262,27 @@ func (t *entityTable) resolve(name string) (string, error) {
 		return s, nil
 	}
 	if t.external[name] {
-		return "", fmt.Errorf(
-			"entity %q is declared SYSTEM or PUBLIC; external entities are "+
-				"never resolved", name)
+		// With no resolver this is refused, exactly as before. With one the
+		// text is fetched and then expanded on the same terms as internal
+		// replacement text — the fetched bytes are already charged to the
+		// budget by fetchExternal, before this expansion runs.
+		if t.resolver == nil {
+			return "", fmt.Errorf(
+				"entity %q is declared SYSTEM or PUBLIC; external entities are "+
+					"never resolved", name)
+		}
+		text, err := t.resolveExternalText(name)
+		if err != nil {
+			return "", err
+		}
+		t.expanded[name] = ""
+		out, err := t.expand(text, 0, map[string]bool{name: true})
+		if err != nil {
+			delete(t.expanded, name)
+			return "", err
+		}
+		t.expanded[name] = out
+		return out, nil
 	}
 	raw, ok := t.raw[name]
 	if !ok {
@@ -295,9 +376,28 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			return "", fmt.Errorf("entity %q refers to itself", name)
 		}
 		if t.external[name] {
-			return "", fmt.Errorf(
-				"entity %q is declared SYSTEM or PUBLIC; external entities are "+
-					"never resolved", name)
+			if t.resolver == nil {
+				return "", fmt.Errorf(
+					"entity %q is declared SYSTEM or PUBLIC; external entities are "+
+						"never resolved", name)
+			}
+			text, err := t.resolveExternalText(name)
+			if err != nil {
+				return "", err
+			}
+			seen[name] = true
+			sub, err := t.expand(text, depth+1, seen)
+			delete(seen, name)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(sub)
+			if sb.Len() > maxEntityBytes {
+				return "", fmt.Errorf(
+					"entity expansion exceeds %d bytes", maxEntityBytes)
+			}
+			i += j + 1
+			continue
 		}
 		raw, ok := t.raw[name]
 		if !ok {
@@ -407,8 +507,20 @@ func (t *entityTable) hasMarkup() bool {
 	}
 	// Nesting needs no separate check: markup reaches an entity only from a
 	// declaration that contains it, and the loop above sees every
-	// declaration. What it cannot see is an *external* entity's text, which
-	// is never resolved at all.
+	// declaration. What it cannot see is an *external* entity's text.
+	//
+	// When externals are refused that does not matter, since the text is
+	// never read. When a resolver permits them it matters entirely: the text
+	// is unknown until it is fetched, and an external entity is used
+	// overwhelmingly to factor out a FRAGMENT — copy-13.xml's ent21.xml is a
+	// whole element. So a declared external entity forces the rewrite path,
+	// which is the only path that parses replacement text as markup.
+	// Fetching here to look would charge the budget for entities the
+	// document may never reference, which is the same map-order hazard the
+	// deferred reset above exists to avoid.
+	if t.resolver != nil && len(t.externalDecl) > 0 {
+		return true
+	}
 	return false
 }
 
@@ -518,6 +630,17 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		}
 		rep, err := t.resolve(name)
 		if err != nil {
+			// A REFUSED FETCH is reported here, not deferred. The document
+			// fails either way — the reference is left as written and the
+			// decoder rejects it — but the two errors say very different
+			// things: "invalid character entity" reads as a malformed
+			// document, while a refusal names the resource and the reason it
+			// was denied. When the reason is a containment or scheme check,
+			// that difference is the difference between a mystery and an
+			// audit trail.
+			if t.external[name] {
+				return "", err
+			}
 			// An entity that cannot be expanded is left as written, so the
 			// decoder reports the reference. Its error names the entity and
 			// the position, which is more use than one from here.
@@ -674,10 +797,21 @@ func unparsedEntityOf(fields []string) *unparsedEntity {
 // carried on every tree, since a document with unparsed entities is rare and
 // the lookup happens at most once per call.
 func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string, ok bool) {
-	if t == nil || t.DocType == "" {
+	if t == nil {
 		return "", "", "", false
 	}
-	tbl := parseInternalEntities(t.DocType)
+	// The external subset is consulted as well as the directive, and after
+	// it, so that the internal subset still wins where both declare a name —
+	// XML section 4.2. parseInternalEntities keeps the first declaration of
+	// each name, so concatenating in this order gives that rule for free.
+	subset := t.DocType
+	if t.externalSubset != "" {
+		subset += "\n" + t.externalSubset
+	}
+	if subset == "" {
+		return "", "", "", false
+	}
+	tbl := parseInternalEntities(subset)
 	if tbl == nil {
 		return "", "", "", false
 	}

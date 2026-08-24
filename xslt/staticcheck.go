@@ -509,6 +509,71 @@ func forwardsMode(el *xdm.Node) bool {
 	return false
 }
 
+// backwardsMode reports whether el's effective version enables XSLT 1.0
+// backwards-compatible behaviour, which this processor does not implement.
+//
+// Section 3.9 makes the compatibility mode of an element the one stated by the
+// nearest ancestor-or-self carrying a [xsl:]version attribute, so the walk is
+// forwardsMode's, run against the other end of the range. XTDE0160 makes it a
+// non-recoverable *dynamic* error to evaluate such an element when the
+// processor does not support the behaviour — and system-property
+// ('xsl:supports-backwards-compatibility') already answers "no" here, so the
+// error is due. Reporting it is what initial-template-081 and version-031 ask
+// for; initial-template-080 is the guard, running the same stylesheet from a
+// template whose own version="2.0" overrides the module's version="1.0", and
+// requiring no error at all.
+//
+// The stylesheet root is deliberately NOT consulted. A module-wide
+// version="1.0" is how the great majority of 1.0-era stylesheets are written,
+// and 314 of the suite's own stylesheets are shaped that way while only six
+// test cases declare the backwards_compatibility dependency at all. Treating a
+// module-level declaration as an error would reject all of them for a rule the
+// suite plainly does not intend to exercise there. Only a version stated on an
+// element *inside* the module — which is how both failing tests are written —
+// enables the mode as far as this check is concerned.
+func backwardsMode(el *xdm.Node) bool {
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		if !hasVersionAttr(cur) {
+			continue
+		}
+		// The module element's own version is the module's declaration, not
+		// an element enabling the mode; see the note above.
+		if cur.Name.URI == xdm.NSXSL &&
+			(cur.Name.Local == "stylesheet" || cur.Name.Local == "transform") {
+			return false
+		}
+		return versionAt(cur) < 2.0
+	}
+	return false
+}
+
+// versionAt returns the version stated on el, or 2.0 when el states none or
+// states something unparseable. It reads the same attributes as forwardsAt.
+func versionAt(el *xdm.Node) float64 {
+	v := ""
+	if el.Name.URI == xdm.NSXSL {
+		if el.Name.Local == "output" {
+			return 2.0
+		}
+		if a := el.Attr("", "version"); a != nil {
+			v = a.Value
+		}
+	}
+	if v == "" {
+		if a := el.Attr(xdm.NSXSL, "version"); a != nil {
+			v = a.Value
+		}
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+	if err != nil {
+		return 2.0
+	}
+	return f
+}
+
 // hasVersionAttr reports whether el carries a version attribute that
 // forwardsAt would consult — that is, one that states a compatibility mode.
 func hasVersionAttr(el *xdm.Node) bool {

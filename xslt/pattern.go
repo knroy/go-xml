@@ -237,8 +237,42 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 }
 
 // convertStep reinterprets a path step as a pattern step.
+// checkPITarget rejects a processing-instruction() test whose target is not an
+// NCName.
+//
+// XPath 2.0's PITest production is
+//
+//	"processing-instruction" "(" (NCName | StringLiteral)? ")"
+//
+// and Namespaces in XML section 6 says a PI target is an NCName, never a
+// QName: a colon in a PI target is not merely unmatched, it is not a name at
+// all. The XPath parser stores whatever token it read, so a target written
+// with a colon parses and then silently matches nothing. In a pattern that is
+// XTSE0340 — CompilePattern attaches the code to every error from here — and
+// error-0340c is exactly that shape.
+//
+// Only the colon is rejected, not every non-NCName character: the target may
+// also be written as a StringLiteral, and the AST does not record which form
+// was used. A colon is invalid in both forms, so this stays inside what both
+// productions already forbid.
+func checkPITarget(t xpath.NodeTest) error {
+	kt, ok := t.(*xpath.KindTest)
+	if !ok || kt.Kind != xdm.KindPI || !kt.HasName || kt.Name == nil {
+		return nil
+	}
+	if strings.Contains(kt.Name.Local, ":") || kt.Name.URI != "" {
+		return fmt.Errorf(
+			"processing-instruction(%s): a PI target is an NCName and may not contain a colon",
+			kt.Name.Local)
+	}
+	return nil
+}
+
 func convertStep(s *xpath.Step) (patternStep, error) {
 	ps := patternStep{nodeTest: s.Test, preds: s.Predicates, explicitAxis: s.Explicit}
+	if err := checkPITarget(s.Test); err != nil {
+		return ps, err
+	}
 	switch s.Axis {
 	case xpath.AxisChild:
 	case xpath.AxisAttribute:

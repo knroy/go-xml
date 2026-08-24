@@ -126,14 +126,45 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// reuses one parsed document across several stylesheets with different
 	// strip-space declarations.
 	if source != nil && len(s.strip) > 0 {
-		source = s.stripWhitespace(source)
+		// Stripping applies to the whole tree the initial context node belongs
+		// to, not to the node itself. When the caller starts the transform at
+		// an inner node -- the suite does this with <source select="..."/> --
+		// stripping only that subtree left the node's ancestors unstripped,
+		// and passing a text node made stripWhitespace walk a node with no
+		// children and produce an empty document.
+		//
+		// The node is then looked up again in the stripped copy. If whitespace
+		// stripping deleted it, there is no initial context item at all, and
+		// every expression that needs one raises XPDY0002 -- which is exactly
+		// what section 4.4 means by stripping happening before the transform
+		// begins rather than as it runs.
+		root := source.Root()
+		stripped, found := s.stripWhitespaceFrom(root, source)
+		if source == root {
+			source = stripped
+		} else {
+			source = found
+		}
 	}
 
 	// Type annotations are stripped from the same source trees whitespace
 	// stripping applies to — section 3.5 says so — and after it, so that the
 	// two passes compose rather than one undoing the other.
-	if source != nil && s.stripTypeAnnotations {
+	//
+	// Restricted to a document node for the same reason whitespace stripping
+	// now works from the root: stripTypeAnnotationsFrom copies the children of
+	// what it is handed, so handing it an inner node discarded everything
+	// above and beside it.
+	if source != nil && source.Kind == xdm.KindDocument && s.stripTypeAnnotations {
 		source = s.stripTypeAnnotationsFrom(source)
+	}
+
+	// Documents loaded by fn:doc and fn:document are source documents too, so
+	// the same whitespace declarations apply to them. The wrapper is per
+	// transform because its cache holds the stripped copies, which must not
+	// outlive the declarations that produced them.
+	if len(s.strip) > 0 && opts.Documents != nil {
+		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
 
 	rt, err := newRuntime(s, ctx, source, opts)
@@ -276,15 +307,82 @@ func registerCurrentOutputURI(l *xpath.Library) {
 // wildcard, so the decision is made per element by scanning both lists rather
 // than precomputing a set.
 func (s *Stylesheet) stripWhitespace(root *xdm.Node) *xdm.Node {
+	stripped, _ := s.stripWhitespaceFrom(root, nil)
+	return stripped
+}
+
+// stripWhitespaceFrom strips root and reports where want ended up in the copy.
+//
+// The second return is nil when want was itself a whitespace-only text node
+// that stripping removed, which is the one case the caller must distinguish:
+// an initial context node that no longer exists is not an error to raise here
+// but an absent focus, and absence is what XPDY0002 reports at the point of
+// use.
+func (s *Stylesheet) stripWhitespaceFrom(root, want *xdm.Node) (*xdm.Node, *xdm.Node) {
+	var found *xdm.Node
 	tree := xdm.NewTree()
 	tree.Root.BaseURI = root.BaseURI
+	// The DOCTYPE text is a property of the tree, not of the root node, and
+	// it is where the unparsed-entity declarations live. Building a fresh
+	// tree without it made fn:unparsed-entity-uri answer "" for every
+	// document a stylesheet with xsl:strip-space was applied to — a
+	// whitespace declaration silently deleting an unrelated part of the data
+	// model.
+	if src := root.Tree(); src != nil {
+		tree.DocType = src.DocType
+	}
+	if want == root {
+		found = tree.Root
+	}
 	for _, ch := range root.Children {
-		if c := s.stripCopy(ch, false); c != nil {
+		if c := s.stripCopy(ch, false, want, &found); c != nil {
 			tree.Root.AppendChild(c)
 		}
 	}
 	tree.Finalize()
-	return tree.Root
+	return tree.Root, found
+}
+
+// stripSpaceResolver applies the stylesheet's xsl:strip-space and
+// xsl:preserve-space declarations to documents loaded by fn:doc and
+// fn:document.
+//
+// Section 4.4 scopes whitespace stripping to "all source documents", not to
+// the principal one: a document retrieved by fn:doc is a source document and
+// is stripped by the same declarations. Transform stripped only the principal
+// source, so a stylesheet declaring xsl:strip-space saw stripped whitespace in
+// its input and unstripped whitespace in everything doc() returned.
+//
+// The stripped trees are cached by URI because fn:doc must be stable: two
+// calls with the same argument return the same node, and stripping afresh each
+// time would return a different tree with different node identities.
+type stripSpaceResolver struct {
+	sheet *Stylesheet
+	inner xpath.DocumentResolver
+	// done caches by the tree the inner resolver returned rather than by the
+	// URI string, so that two URIs the inner resolver maps to one document
+	// still map to one stripped document here.
+	done map[*xdm.Tree]*xdm.Tree
+}
+
+func (r *stripSpaceResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+	t, err := r.inner.ResolveDocument(uri, base)
+	if err != nil || t == nil || t.Root == nil {
+		return t, err
+	}
+	if c, ok := r.done[t]; ok {
+		return c, nil
+	}
+	root := r.sheet.stripWhitespace(t.Root)
+	out := root.Tree()
+	if out == nil {
+		return t, nil
+	}
+	if r.done == nil {
+		r.done = map[*xdm.Tree]*xdm.Tree{}
+	}
+	r.done[t] = out
+	return out, nil
 }
 
 // stripCopy copies n, dropping whitespace-only text where stripping applies.
@@ -292,7 +390,15 @@ func (s *Stylesheet) stripWhitespace(root *xdm.Node) *xdm.Node {
 // preserving carries xml:space="preserve" down the subtree, and *only* that:
 // whether an element's own whitespace is stripped is decided from the
 // strip-space and preserve-space declarations matching its name.
-func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
+func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
+	c := s.stripCopyNode(n, preserving, want, found)
+	if c != nil && n == want {
+		*found = c
+	}
+	return c
+}
+
+func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
 	switch n.Kind {
 	case xdm.KindText:
 		// Whitespace-only text is dropped unless xml:space preserves it or
@@ -312,7 +418,11 @@ func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
 		for _, a := range n.Attrs {
-			c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value})
+			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+			c.AddAttr(ac)
+			if a == want {
+				*found = ac
+			}
 		}
 
 		// Section 4.4 decides stripping per element, from the strip-space and
@@ -331,7 +441,7 @@ func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool) *xdm.Node {
 		}
 
 		for _, ch := range n.Children {
-			if cc := s.stripCopy(ch, childPreserving); cc != nil {
+			if cc := s.stripCopy(ch, childPreserving, want, found); cc != nil {
 				c.AppendChild(cc)
 			}
 		}

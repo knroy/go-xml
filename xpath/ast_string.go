@@ -48,15 +48,25 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		return false
 	}
 	if t.Content != nil {
-		// document-node(element(invoice)): the document matches only if its
-		// element child does. A document has exactly one, so the first one
-		// found settles it.
+		// document-node(element(invoice)): the document matches only if it
+		// has EXACTLY ONE element child and that child matches. A parsed
+		// document has exactly one, but a temporary tree built by two
+		// xsl:copy-of instructions has two, and taking the first one found
+		// made document-node(schema-element(address)) answer true for a
+		// document the type cannot describe at all.
+		var only *xdm.Node
 		for _, c := range n.Children {
 			if c.Kind == xdm.KindElement {
-				return t.Content.Matches(c, c.Kind)
+				if only != nil {
+					return false
+				}
+				only = c
 			}
 		}
-		return false
+		if only == nil {
+			return false
+		}
+		return t.Content.Matches(only, only.Kind)
 	}
 	if t.HasName && t.Name != nil {
 		if n.Kind == xdm.KindPI {
@@ -129,6 +139,16 @@ func (t *KindTest) substitutes(name xdm.QName) bool {
 // exact distinction the test exists to draw.
 func nodeTypeMatches(n *xdm.Node, want string) bool {
 	_, w := xdm.SplitQName(want)
+	// xs:anyAtomicType is the root of the ATOMIC hierarchy, not of the type
+	// hierarchy: an element's type is xs:untyped or a complex type, and
+	// neither is an atomic type, so element(*, xs:anyAtomicType) is false for
+	// every element. An attribute's is xs:untypedAtomic or a simple type, and
+	// those are atomic. Treating anyAtomicType like anyType made
+	// "$e instance of element(*, xs:anyAtomicType)" true, which is the exact
+	// distinction type-0203 is written to draw.
+	if w == "anyAtomicType" && n.Kind == xdm.KindElement {
+		return false
+	}
 	if n.TypeAnnotation == "" {
 		switch w {
 		case "anyType", "anySimpleType", "anyAtomicType":

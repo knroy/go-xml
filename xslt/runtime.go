@@ -673,6 +673,18 @@ func (b *outputBuilder) toTree() *xdm.Node {
 				// says the copy of a document node is a document node), so
 				// this is the point where a variable's implicit document
 				// node absorbs it.
+				// The absorbed document node's own tree properties come
+				// with it when the destination has none of its own. The
+				// DOCTYPE is what fn:unparsed-entity-uri reads, and it lives
+				// on the tree rather than on the node, so absorbing only the
+				// children left a variable declared as="document-node()" with
+				// the right children and an empty entity table.
+				if src := n.Tree(); src != nil && tree.DocType == "" {
+					tree.DocType = src.DocType
+				}
+				if tree.Root.BaseURI == "" {
+					tree.Root.BaseURI = n.BaseURI
+				}
 				for _, ch := range n.Children {
 					tree.Root.AppendChild(deepCopy(ch))
 				}

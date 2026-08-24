@@ -773,6 +773,18 @@ func (s *serializer) mapChars(text string) string {
 // delimiter around the value where it can. Only where both quote characters
 // appear is there no choice, and then the double quote is escaped.
 func (s *serializer) attrValue(a *xdm.Node, owner *xdm.Node) string {
+	// XSLT 1.0 section 16.2, carried into the serialization specification's
+	// html output method: "The html output method should output boolean
+	// attributes (that is attributes with only a single possible value that
+	// is equal to the name of the attribute) in minimized form." CHECKED on
+	// an INPUT is written as the bare name, not as CHECKED="CHECKED".
+	//
+	// The html method only. XHTML is XML, where an attribute without a value
+	// is not well formed, and the XHTML compatibility guidelines say so
+	// explicitly.
+	if s.html && !s.xhtml && isBooleanAttribute(owner.Name.Local, a) {
+		return ""
+	}
 	if s.html && s.escapeURIs() && isURIAttribute(owner.Name.Local, a) {
 		// A character map does not reach a URI-valued attribute that is being
 		// percent-escaped. The two rewrites contradict each other — the map
@@ -887,6 +899,61 @@ var uriAttributes = map[string]map[string]bool{
 	"q":          {"cite": true},
 	"script":     {"src": true, "for": true},
 	"*":          {},
+}
+
+// booleanAttributes are the attributes HTML 4.01 declares with the single
+// permitted value equal to their own name, keyed by element name. These are
+// the ones the html output method writes in minimized form.
+//
+// Keyed by element for the same reason uriAttributes is: "selected" is a
+// boolean on <option> and an ordinary attribute anywhere the HTML DTD does
+// not declare it, and minimizing it elsewhere would delete a value the
+// stylesheet put there. The list is the complete set from the HTML 4.01 DTD.
+var booleanAttributes = map[string]map[string]bool{
+	"area":     {"nohref": true},
+	"button":   {"disabled": true},
+	"dir":      {"compact": true},
+	"dl":       {"compact": true},
+	"frame":    {"noresize": true},
+	"hr":       {"noshade": true},
+	"img":      {"ismap": true},
+	"input":    {"checked": true, "disabled": true, "ismap": true, "readonly": true},
+	"menu":     {"compact": true},
+	"object":   {"declare": true},
+	"ol":       {"compact": true},
+	"optgroup": {"disabled": true},
+	"option":   {"disabled": true, "selected": true},
+	"script":   {"defer": true},
+	"select":   {"disabled": true, "multiple": true},
+	"td":       {"nowrap": true},
+	"textarea": {"disabled": true, "readonly": true},
+	"th":       {"nowrap": true},
+	"ul":       {"compact": true},
+}
+
+// isBooleanAttribute reports whether an attribute is one the html output
+// method writes as a bare name.
+//
+// The value must equal the attribute's own name, ignoring case: that is what
+// "only a single possible value that is equal to the name" means, and an
+// author who wrote checked="false" said something the minimized form cannot
+// express. Writing the bare name for it would turn a value the stylesheet
+// chose into its opposite, so such an attribute is serialised in full.
+//
+// A namespaced attribute is never one of these -- the HTML DTD declares no
+// namespaces -- which is the same guard isURIAttribute applies.
+func isBooleanAttribute(element string, a *xdm.Node) bool {
+	if a.Name.URI != "" {
+		return false
+	}
+	attrs, ok := booleanAttributes[strings.ToLower(element)]
+	if !ok {
+		return false
+	}
+	if !attrs[strings.ToLower(a.Name.Local)] {
+		return false
+	}
+	return strings.EqualFold(a.Value, a.Name.Local)
 }
 
 // isURIAttribute reports whether an attribute holds a URI, and so is subject

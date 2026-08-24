@@ -188,6 +188,18 @@ type Tree struct {
 	// nothing. The dtd package parses it; this package applies only the two
 	// declarations whose absence is visible in the data model.
 	DocType string
+	// externalSubset is the text of the external DTD subset, and of any
+	// parameter-entity module it pulled in, when one was read.
+	//
+	// It is separate from DocType because DocType is the declaration AS
+	// WRITTEN — that is what a caller re-serialising the document needs —
+	// while the declarations that govern the document may live in a file the
+	// directive merely names. fn:unparsed-entity-uri is the visible case: a
+	// document whose NDATA entities are declared externally reports none of
+	// them if only the directive is consulted.
+	//
+	// Empty unless ParseOptions.ExternalEntities permitted the read.
+	externalSubset string
 	// src is the document text, retained only when the caller asks for
 	// positions. It is what makes Position able to count lines.
 	src string

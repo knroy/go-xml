@@ -40,6 +40,26 @@ type ParseOptions struct {
 	// that genuinely need DTD-declared entities opt in explicitly.
 	AllowDOCTYPE bool
 
+	// ExternalEntities permits external entities — those declared SYSTEM or
+	// PUBLIC, and an external DTD subset — to be read, by supplying the
+	// resolver that reads them.
+	//
+	// It is nil by default, and nil means every external entity is refused
+	// exactly as before. It is deliberately SEPARATE from AllowDOCTYPE and
+	// is not implied by it: AllowDOCTYPE admits a DOCTYPE and its internal
+	// declarations, which cost nothing outside the document, while this
+	// admits reads of other resources — the XXE surface proper. A caller
+	// that wants entity declarations does not thereby want file reads.
+	//
+	// xdm has no filesystem and no network, so it can only read what a
+	// resolver hands it. Confinement — permitted schemes, permitted
+	// directories, symlink resolution — is entirely the resolver's, and
+	// xslt.FileResolver implements it. Expansion remains bounded by this
+	// package: fetched bytes are charged to the document's shared budget
+	// before they are expanded, and the number and nesting of fetches are
+	// capped. See xdm/dtd_external.go.
+	ExternalEntities EntityResolver
+
 	// TrackPositions records where each element starts, so that a validator
 	// can report the line a failure occurred on. It retains the source text
 	// for the life of the tree, which measures at about 10% more memory on a
@@ -313,8 +333,57 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// Only internal entities are expanded. One declared SYSTEM or
 				// PUBLIC is recorded as refused, so referencing it is an
 				// error rather than a fetch — this does not open XXE.
-				if ents := parseInternalEntities(d); ents != nil &&
-					!opts.entitiesExpanded {
+				subset := d
+				var ents *entityTable
+				// Everything that reads outside the document happens only
+				// when a resolver was supplied. With none, this whole block
+				// is skipped and the subset is read exactly as before.
+				if opts.ExternalEntities != nil && !opts.entitiesExpanded {
+					ents = newEntityTable(opts.BaseURI)
+					ents.resolver = opts.ExternalEntities
+					// A parameter entity in the INTERNAL subset is expanded
+					// first, since it is how a document pulls a module of
+					// declarations in: "<!ENTITY % ext SYSTEM 'e.ent'>%ext;"
+					// declares nothing by itself, and the declarations only
+					// exist once that reference is substituted.
+					expandedSubset, err := ents.expandParameterEntities(d, opts.BaseURI, 0)
+					if err != nil {
+						return nil, fmt.Errorf("parse XML: %w", err)
+					}
+					subset = expandedSubset
+					ents.parseDecls(subset, opts.BaseURI)
+					ents.subsetText = subset
+					if sys, pub, ok := externalSubsetOf(d); ok {
+						if err := ents.loadExternalSubset(sys, pub, opts.BaseURI); err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
+					}
+					// Retained so fn:unparsed-entity-uri can see declarations
+					// that live outside the directive. The subset a document
+					// is governed by is not always the text it was written
+					// with.
+					tree.externalSubset = ents.subsetText
+					if len(ents.raw) == 0 && len(ents.external) == 0 {
+						ents = nil
+					}
+					// Substituting a parameter entity can bring in attribute
+					// defaults and declared types that were not in the
+					// directive as written, so those are re-read from the
+					// expanded text rather than the original.
+					if subset != d || ents != nil {
+						text := subset
+						if ents != nil {
+							text = ents.subsetText
+						}
+						defs, types := parseAttList(text)
+						attDefaults = defs
+						attTypes = types
+					}
+				} else {
+					ents = parseEntityDecls(d, opts.BaseURI)
+				}
+				if ents != nil && !opts.entitiesExpanded {
+					ents.resolver = opts.ExternalEntities
 					// An entity whose replacement text holds markup cannot go
 					// through dec.Entity at all: encoding/xml substitutes that
 					// map's values as character data and never re-scans them,

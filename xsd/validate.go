@@ -403,6 +403,17 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 					"an element with xsi:nil=\"true\" may not have a "+
 						"fixed value constraint")
 			}
+			// A nilled element is still ASSESSED: §3.3.4 gives it
+			// [validity] = valid and [type definition] = the declared type.
+			// Its content is not checked — that is what nilling means — but
+			// the annotation is exactly as real as on any other valid
+			// element, and returning without writing it left the node
+			// indistinguishable from one that was never validated. fn:nilled
+			// is defined over the PSVI and uses a non-empty annotation as its
+			// evidence that validation happened at all, so a nilled element
+			// answered FALSE to nilled() — the one question it exists to
+			// answer true.
+			v.annotate(el, typ)
 			return nil
 		}
 	}
@@ -500,19 +511,7 @@ func (v *validator) validateAgainstType(el *xdm.Node, typ Type, decl *ElementDec
 		tables = v.validateComplexType(el, t, decl)
 	}
 
-	if v.opts.Annotate {
-		if n := typ.TypeName(); n.Local != "" {
-			el.SetTypeAnnotation(n.Local)
-		} else if a := annotationName(typ); a != "" {
-			// An anonymous simple type still annotates the node: the data
-			// model records the nearest named type it derives from, which is
-			// what "instance of element(*, xs:string)" asks about. Leaving
-			// the node unannotated made every such test answer false, and
-			// made the node atomise as untypedAtomic after a successful
-			// validation.
-			el.SetTypeAnnotation(a)
-		}
-	}
+	v.annotate(el, typ)
 	return tables
 }
 
@@ -1694,4 +1693,64 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 		}
 	}
 	return 0, false
+}
+
+// annotate writes the element's type annotation, the part of the PSVI the
+// XPath and XSLT layers read back.
+//
+// Three cases, in order of how much of the type's identity survives into the
+// data model:
+//   - a NAMED type annotates with its own name;
+//   - an anonymous SIMPLE type annotates with the nearest named type it
+//     derives from, which is what "instance of element(*, xs:string)" asks
+//     about — leaving it unannotated made every such test answer false and
+//     made the node atomise as untypedAtomic after a successful validation;
+//   - an anonymous COMPLEX type annotates with the nearest named base,
+//     ordinarily xs:anyType. There is no name to record, but the data model
+//     still has to record that the element WAS validated: the XPath side
+//     reads an empty annotation as "never validated", which is what made
+//     schema-element(E) reject a node the stylesheet had just validated
+//     strict whenever E's declaration used an inline complex type.
+func (v *validator) annotate(el *xdm.Node, typ Type) {
+	if !v.opts.Annotate || typ == nil {
+		return
+	}
+	if n := typ.TypeName(); n.Local != "" {
+		el.SetTypeAnnotation(n.Local)
+		return
+	}
+	if a := annotationName(typ); a != "" {
+		el.SetTypeAnnotation(a)
+		return
+	}
+	if a := anonComplexAnnotation(typ); a != "" {
+		el.SetTypeAnnotation(a)
+	}
+}
+
+// anonComplexAnnotation returns the annotation name for an anonymous complex
+// type: the nearest named type in its base chain.
+//
+// A declaration with an inline <xs:complexType> has no type name, so
+// TypeName().Local is empty and annotationName (which handles simple types
+// only) returns "". The node then carried no annotation at all, and every
+// consumer that reads an empty annotation as "this node was never validated"
+// answered wrong — schema-element(E) most visibly, since E's declaration
+// having an inline type is the ordinary case.
+func anonComplexAnnotation(t Type) string {
+	ct, ok := t.(*ComplexType)
+	if !ok || ct == nil {
+		return ""
+	}
+	for cur := Type(ct); cur != nil; {
+		if n := cur.TypeName(); n.Local != "" {
+			return n.Local
+		}
+		base := cur.BaseType()
+		if base == nil || base == cur {
+			break
+		}
+		cur = base
+	}
+	return "anyType"
 }
