@@ -543,6 +543,14 @@ func (p *btParser) parseBackref() (btNode, error) {
 	if p.closed[n] {
 		return &btBackref{group: n, fold: p.fold}, nil
 	}
+	// A group that has been opened but not yet closed cannot be renumbered by
+	// the greedy split: erratum FO.E24 makes "\\10" inside the tenth group a
+	// malformed pattern, not "\\1" followed by "0". Splitting is only right
+	// when the full number names no group at all.
+	if n <= p.groups {
+		return nil, p.errf(
+			"backreference \\%d names a group that is not yet closed", n)
+	}
 	g, lit := splitGreedyRefClosed(n, p.closed)
 	if g < 1 {
 		return nil, p.errf(

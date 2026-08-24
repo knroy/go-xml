@@ -588,6 +588,12 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 	sb.WriteString(src[:start])
 
 	var count, written int
+	// inTag and attrQuote track whether the scanner is inside a start-tag and,
+	// within one, inside a quoted attribute value. That context changes what a
+	// substitution may write, not merely where it happens: see the escaping
+	// below.
+	var inTag bool
+	var attrQuote byte
 	for i := start; i < len(src); {
 		// CDATA sections, comments and processing instructions are regions
 		// where XML does *not* recognise an entity reference: inside them
@@ -605,6 +611,30 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		}
 		c := src[i]
 		if c != '&' {
+			// The tag/attribute state is advanced on the document's OWN
+			// bytes only. Replacement text is never inspected for it: a
+			// quote inside an entity is data by XML section 4.4.5, so
+			// letting it change the state is precisely the bug this tracking
+			// exists to prevent.
+			switch {
+			case attrQuote != 0:
+				if c == attrQuote {
+					attrQuote = 0
+				}
+			case inTag:
+				switch c {
+				case '"', '\'':
+					attrQuote = c
+				case '>':
+					inTag = false
+				}
+			case c == '<':
+				// A "<" that opens a comment, CDATA section or PI never
+				// reaches here — unscannedRegion consumed it above. An end
+				// tag has no attributes, but tracking it as a tag costs
+				// nothing and keeps the state machine total.
+				inTag = true
+			}
 			sb.WriteByte(c)
 			i++
 			written++
@@ -653,6 +683,21 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 			i += j + 1
 			written += j + 1
 			continue
+		}
+		// XML section 4.4.5, "Included in Literal": a reference inside an
+		// attribute value has its replacement text included as if it were
+		// literal characters, so a quote in that text is data and does NOT
+		// end the attribute. The rewrite splices text into the source, where
+		// a bare quote would end it — DocBook's entities.ent declares
+		// <!ENTITY primary 'normalize-space(concat(primary/@sortas, " ",
+		// primary))'> and every stylesheet that uses it inside a double-
+		// quoted attribute would otherwise become malformed. Escaping the
+		// three characters that are markup in an attribute value restores the
+		// literal reading; the decoder turns them back on the second parse.
+		// "<" is escaped too rather than left to corrupt the tag, matching
+		// the well-formedness constraint that forbids it there.
+		if attrQuote != 0 {
+			rep = escapeAttrLiteral(rep)
 		}
 		count++
 		if count > maxEntityCount {
@@ -841,4 +886,34 @@ func (t *Tree) UnparsedEntity(name string) (systemID, publicID, notation string,
 		return "", "", "", false
 	}
 	return u.systemID, u.publicID, u.notation, true
+}
+
+// escapeAttrLiteral escapes the characters that would be markup inside an
+// attribute value, so that replacement text spliced there is read as literal
+// characters — XML section 4.4.5, "Included in Literal".
+//
+// Only three are escaped. "&" is deliberately not: on the rewrite path expand
+// leaves "&amp;" as written for the second parse to decode (see the
+// t.reparsed branch there), so escaping "&" here would turn it into "&amp;amp;"
+// and change what the document says. That leaves a decoded "&#38;" as a bare
+// "&", which is the same reading the content path already gives it.
+func escapeAttrLiteral(s string) string {
+	if !strings.ContainsAny(s, `"'<`) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			sb.WriteString("&#34;")
+		case '\'':
+			sb.WriteString("&#39;")
+		case '<':
+			sb.WriteString("&#60;")
+		default:
+			sb.WriteByte(s[i])
+		}
+	}
+	return sb.String()
 }

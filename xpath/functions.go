@@ -214,3 +214,48 @@ func contextNodeArg(ctx *Context) (*xdm.Node, error) {
 	}
 	return n, err
 }
+
+// --- EXSLT ------------------------------------------------------------------
+
+// NSEXSLTCommon is the namespace of the EXSLT "common" module.
+//
+// EXSLT is a community extension library from the XSLT 1.0 era, not a W3C
+// specification. It is named here rather than in xdm because nothing in the
+// data model depends on it.
+const NSEXSLTCommon = "http://exslt.org/common"
+
+// RegisterEXSLTFuncs adds the EXSLT common-module functions this processor
+// implements to l.
+//
+// Like RegisterXSLTFuncs and RegisterHarnessFuncs, these are deliberately NOT
+// in Builtins(): EXSLT is an extension, and an XPath processor is required to
+// report XPST0017 for a function it does not have. Registering into a chained
+// Library keeps the populations separate, and — because function-available
+// answers from the same library — it also makes function-available('exsl:
+// node-set') report true exactly when the function is really callable.
+//
+// Only node-set is provided. Every other EXSLT function is surface area that
+// would then have to be supported, so they are added when something actually
+// calls them, not speculatively.
+func RegisterEXSLTFuncs(l *Library) {
+	// exsl:node-set converts a result tree fragment to a node-set.
+	//
+	// In XSLT 1.0 an RTF was a distinct type that could not be navigated
+	// until it was converted, which is the entire reason this function
+	// exists. XSLT 2.0 removed the type: section J.1.2 of the XSLT 2.0
+	// specification records that "the result tree fragment data type has been
+	// eliminated", and an xsl:variable with content now binds a document node
+	// that is already navigable. So on this processor the conversion is the
+	// identity on the argument sequence, and $rtf/* works with or without it.
+	//
+	// The argument is passed through unchanged rather than being wrapped or
+	// atomised: wrapping a document node in a second document node would
+	// change the node identity that generate-id() and union operators compare.
+	l.register(NSEXSLTCommon, "node-set", 1,
+		func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			if len(args) == 0 {
+				return xdm.Empty, nil
+			}
+			return args[0], nil
+		})
+}

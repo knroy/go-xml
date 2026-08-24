@@ -443,3 +443,93 @@ func TestMarkupDetectionIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// XML 1.0 section 4.4.5, "Included in Literal": when an entity reference
+// appears inside an attribute value, its replacement text is included as
+// though it were literal characters, so a quote in that text is DATA and does
+// not end the attribute.
+//
+// The rewrite path splices replacement text straight into the source, where a
+// bare quote would end the attribute and the rest of the tag would be read as
+// garbage. DocBook is the real case: its common/entities.ent declares
+//
+//	<!ENTITY primary 'normalize-space(concat(primary/@sortas, " ", primary))'>
+//
+// and fo/autoidx.xsl uses &primary; inside a double-quoted attribute. Before
+// this was handled the file failed to parse with "expected attribute name in
+// element" — which is what a stray quote looks like from the decoder.
+//
+// The rewrite path is what needs testing, so every case here declares one
+// entity holding markup to select it.
+func TestQuotesInReplacementTextDoNotEndAnAttribute(t *testing.T) {
+	const markup = `<!ENTITY frag "<b/>">`
+	cases := []struct{ name, decls, doc, want string }{
+		{
+			name:  "double quote in a double-quoted attribute",
+			decls: `<!ENTITY q 'concat(a, " ", b)'>`,
+			doc:   `<r v="&q;"/>`,
+			want:  `concat(a, " ", b)`,
+		},
+		{
+			name:  "single quote in a single-quoted attribute",
+			decls: `<!ENTITY q "it's">`,
+			doc:   `<r v='&q;'/>`,
+			want:  `it's`,
+		},
+		{
+			name:  "both quote kinds, either delimiter",
+			decls: `<!ENTITY q "a'b&#34;c">`,
+			doc:   `<r v="&q;"/>`,
+			want:  `a'b"c`,
+		},
+		{
+			name:  "the attribute after the reference is still an attribute",
+			decls: `<!ENTITY q 'x " y'>`,
+			doc:   `<r v="&q;" w="kept"/>`,
+			want:  `x " y`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "<!DOCTYPE r [" + markup + c.decls + "]>" + c.doc
+			tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+			if err != nil {
+				t.Fatalf("%s: %v", src, err)
+			}
+			el := tree.Root.ChildElements()[0]
+			if got := el.AttrValue("v"); got != c.want {
+				t.Errorf("v = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A quote inside replacement text must not change the scanner's idea of where
+// an attribute ends either — the state machine advances on the document's own
+// bytes only. Without that, an entity holding a lone quote would leave the
+// scanner "inside" an attribute for the rest of the document and every later
+// substitution would be escaped wrongly.
+func TestReplacementQuotesDoNotDesynchroniseTheScanner(t *testing.T) {
+	src := `<!DOCTYPE r [<!ENTITY frag "<b/>"><!ENTITY q '"'><!ENTITY t "plain">]>` +
+		`<r v="&q;"><c>&t;</c>&frag;</r>`
+	tree, err := ParseString(src, ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	r := tree.Root.ChildElements()[0]
+	if got := r.AttrValue("v"); got != `"` {
+		t.Errorf(`v = %q, want '"'`, got)
+	}
+	kids := r.ChildElements()
+	if len(kids) != 2 {
+		t.Fatalf("got %d child elements, want 2 (c and b)", len(kids))
+	}
+	// Text content after the quote-bearing attribute is still content, not
+	// an escaped attribute value.
+	if got := kids[0].StringValue(); got != "plain" {
+		t.Errorf("c = %q, want %q", got, "plain")
+	}
+	if kids[1].Name.Local != "b" {
+		t.Errorf("second child is %q, want b", kids[1].Name.Local)
+	}
+}

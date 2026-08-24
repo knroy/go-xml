@@ -187,6 +187,13 @@ func TestBacktrackForwardReferenceIsRefused(t *testing.T) {
 		`^(a\1?){4}$`,
 		`\1\d(ab)`,
 		`((\3|b)\2(a)x)+`,
+		// The same rule for a MULTI-digit reference, which reaches the greedy
+		// split rather than the closed-group test. "\10" inside the tenth
+		// group named a group that was open, and splitting it into "\1" plus
+		// a literal "0" turned a malformed pattern into a quiet false.
+		`(a)(b)(c)(d)(e)(f)(g)(h)(i)(j\10)`,
+		`(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k\11)`,
+		`(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)((m)(n)(o)(p)(q)\13)`,
 	}
 	withBacktracking(t, func() {
 		for _, p := range patterns {

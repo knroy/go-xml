@@ -69,7 +69,7 @@ Requires Go 1.26 or later.
 | | |
 |---|---|
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,182 of 15,183 in scope) |
-| **XSLT 2.0** | 99.61% of the W3C XSLT suite filtered to 2.0 (6,135 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 2.0** | 99.63% of the W3C XSLT suite filtered to 2.0 (6,136 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.81% of the W3C xsdtests *instance* tests (24,955 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.81% instance (26,158 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -96,7 +96,7 @@ true here:
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
 3. **XSLT is the weakest of the measured numbers, by a long way.** It sits at
-   99.61% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
+   99.63% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
    else here. Two things follow from that. The figure is young — the suite was
    only wired up recently, and the first runs were dominated by harness bugs
    rather than engine ones, so it should be read as a floor. And it is not
@@ -1193,7 +1193,7 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
 XSLT suite: 14601 cases, 6159 in scope, 8442 skipped
-in-scope: 6135 passed, 24 failed (99.61%)
+in-scope: 6136 passed, 23 failed (99.63%)
 ```
 
 The filter decides what the number means, so the run prints its own exclusions:
@@ -1383,11 +1383,11 @@ include.
 ## Where this is going
 
 The conformance tail is no longer the interesting work. QT3 is down to a single
-failure, and it passes with `xpath.SetBacktrackingRegex(true)`. Of the 24 XSLT
+failure, and it passes with `xpath.SetBacktrackingRegex(true)`. Of the 23 XSLT
 failures, 9 are the same story — they pass with that switch on — 7 are cases
 where the suite disagrees with the specification or where matching it would
 cost XSD tests, and 5 need XSLT 3.0 features, the network, or byte-identical
-reproduction of another processor's indentation. That leaves 3 genuinely open,
+reproduction of another processor's indentation. That leaves 2 genuinely open,
 each catalogued in [docs/known-gaps.md](docs/known-gaps.md). Three larger
 things are open, in rough order of how much they would change:
 

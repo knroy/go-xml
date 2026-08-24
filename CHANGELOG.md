@@ -6,6 +6,47 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Entity replacement text inside an attribute value is included literally
+
+XML 1.0 section 4.4.5, "Included in Literal": a reference inside an attribute
+value has its replacement text included *as literal characters*, so a quote in
+that text is data and does not end the attribute. The substitution path that
+rewrites entity references into the source spliced the text in raw, so an
+entity whose text contained a quote produced a malformed document.
+
+DocBook is the case that found it — `entities.ent` declares
+
+    <!ENTITY primary 'normalize-space(concat(primary/@sortas, " ", primary))'>
+
+and every stylesheet using `&primary;` inside a double-quoted attribute failed
+to parse. The fix tracks start-tag and attribute-quote state while scanning,
+advancing it on the document's own bytes only: a quote arriving from
+replacement text is data, and letting it change the state is precisely the bug.
+Inside an attribute value the three characters that would be markup there are
+written as character references. `&` is deliberately not among them, because
+the rewrite path leaves it for the second parse to decode.
+
+### EXSLT `node-set`
+
+`{http://exslt.org/common}node-set` is available to stylesheets. XSLT 2.0
+eliminated the result-tree-fragment type (section J.1.2), so on this processor
+the conversion is the identity on its argument, and it passes the sequence
+through rather than wrapping it — wrapping would change the node identity that
+`generate-id()` and the union operators compare.
+
+It is registered into the library a running stylesheet sees, not into
+`xpath.Builtins()`. A plain XPath caller still gets XPST0017 for it, which is
+what a processor is required to report for a function it does not have.
+
+### Fixed: a multi-digit backreference to an unclosed group was renumbered
+
+In the backtracking matcher, `\10` written inside the tenth group was split
+into `\1` followed by a literal `0` rather than being rejected. Erratum FO.E24
+makes a backreference to a group that has not yet closed a malformed pattern,
+so this turned a required FORX0002 into a quiet non-match. The greedy split is
+now attempted only when the number names no group at all. Single-digit
+references were already correct; the bug needed two digits to reach the split.
+
 ### Backtracking regular expressions, off by default
 
 `xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command
@@ -174,7 +215,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.61% — 6,135 of 6,159 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

@@ -77,6 +77,16 @@ var runtimeFuncNames = map[string]bool{
 
 // registerRuntimeFuncs adds the functions that need transform state.
 func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
+	// The EXSLT extension functions ride along here. They need no transform
+	// state, but this is the library a running stylesheet actually sees, and
+	// binding them per transform rather than in xpath.Builtins keeps them out
+	// of the reach of every plain XPath caller — the same separation
+	// RegisterXSLTFuncs draws for the XSLT-only functions.
+	//
+	// The name is in the EXSLT namespace, so this does not touch
+	// runtimeFuncNames, which is keyed on locals in the fn namespace only.
+	xpath.RegisterEXSLTFuncs(l)
+
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
