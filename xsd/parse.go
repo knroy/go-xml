@@ -409,6 +409,12 @@ func (p *parser) finish() error {
 	// check is looking for does not exist in the component graph yet.
 	p.checkGroupCycles()
 
+	// Circular base type definitions, once every base reference has been
+	// bound. Same ordering reason as the two cycle checks above: before the
+	// fixups drain, {base type definition} is nil everywhere.
+	p.checkTypeBaseCycles()
+	p.checkUnionMemberCycles()
+
 	// The Part 2 facet constraints run last, once every base reference has
 	// been bound: they compare a facet against the base's primitive and
 	// against the facets the base itself set, neither of which is known

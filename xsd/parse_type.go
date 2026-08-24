@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -783,6 +784,34 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			p.spliceExtension(t, map[*ComplexType]bool{})
 			return nil
 		})
+
+		// §3.4.6 cos-ct-extends.1.4.1: when the derived {content type}
+		// is a particle (clause 1.4.2 in the 1.0 numbering: "one of the
+		// following is true ... 1.4.2.1 The {content type} of the {base
+		// type definition} must be empty"), the base's {content type}
+		// must be empty or itself a particle. A complexContent
+		// extension of a type whose content is *simple* has no way to
+		// combine the two: the spec's clause 1.4.2.2.1 asks both
+		// content types to be particles, and a simple content type is
+		// not one.
+		//
+		// Checked on the source form rather than on t.Content, because
+		// the splice above rewrites t.Content from the base and would
+		// have already turned the derived type's ContentElementOnly
+		// into ContentSimple by the time this could look.
+		if ownParticle := own; ownParticle != nil {
+			body := body
+			p.postFixups = append(p.postFixups, func() error {
+				bt, ok := t.Base.(*ComplexType)
+				if !ok || bt.Content != ContentSimple {
+					return nil
+				}
+				return errorAt(body, "cos-ct-extends.1.4.1",
+					"a complexContent extension may not add a content "+
+						"model to base type %q, whose content is simple",
+					base)
+			})
+		}
 	}
 }
 
@@ -1737,4 +1766,167 @@ func topLevelType(el *xdm.Node) bool {
 		return true
 	}
 	return false
+}
+
+// checkTypeBaseCycles enforces ct-props-correct.3 (§3.4.6) and the matching
+// clause for simple types, st-props-correct.2 (§3.14.6): "Circular definitions
+// are disallowed, except for the ur-type definition. That is, it must be
+// possible to reach the ur-type definition by repeatedly following the {base
+// type definition}."
+//
+// Nothing diagnosed this before. The consumers that walk a base chain each
+// carry their own private guard — spliceExtension takes a seen set,
+// derivationMethodsTo caps itself at 64 steps — added one at a time as a
+// circular schema hung or blew the stack somewhere new. Those guards keep the
+// walk terminating; none of them makes the schema invalid, so a type that is
+// its own base loaded clean and simply behaved as though the extension were
+// not there. addB101 is the minimal case: a complexType named sAddress whose
+// complexContent extension names sAddress as its base.
+//
+// Runs after the fixups have drained, because {base type definition} is filled
+// in by a fixup and before that point every base is nil.
+func (p *parser) checkTypeBaseCycles() {
+	// Only named global types are roots: an anonymous type has no name to
+	// be referred to by, so it cannot be anyone's base and cannot close a
+	// cycle that does not already pass through a named type.
+	//
+	// The maps are walked through a sorted name list rather than directly.
+	// A schema with two circular types would otherwise report them in a
+	// different order on each run, and the suite compares the first error.
+	names := make([]xdm.QName, 0, len(p.schema.Types))
+	for name := range p.schema.Types {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
+
+	for _, name := range names {
+		t := p.schema.Types[name]
+		if t == nil {
+			continue
+		}
+		// "except for the ur-type definition": xs:anyType is its own
+		// {base type definition}, and xs:anySimpleType's chain ends at
+		// it, so both satisfy "reachable from itself" trivially. The
+		// exception is not a courtesy — it is what terminates every
+		// other chain, and the first version of this check omitted it
+		// and rejected 11,044 of 14,405 schemas with
+		// `type "anyType" is circular`.
+		if baseOf(t) == t {
+			continue
+		}
+		// Walk the base chain looking for a return to t. The chain is
+		// finite in a well-formed schema — it ends at xs:anyType, whose
+		// base is itself — so the step cap only bounds the ill-formed
+		// case where the cycle does not pass through t.
+		cur := baseOf(t)
+		for steps := 0; cur != nil && steps < 4096; steps++ {
+			if cur == t {
+				p.errs = append(p.errs, &ParseError{
+					Code: "ct-props-correct.3",
+					Message: fmt.Sprintf(
+						"type %q is circular: it is reachable from "+
+							"itself by following base type definitions",
+						name.Local),
+				})
+				break
+			}
+			next := baseOf(cur)
+			if next == cur {
+				// xs:anyType and xs:anySimpleType are their own
+				// base; that is the chain's terminator, not a
+				// cycle.
+				break
+			}
+			cur = next
+		}
+	}
+}
+
+// baseOf returns a type's {base type definition}, or nil when it has none.
+func baseOf(t Type) Type {
+	switch v := t.(type) {
+	case *ComplexType:
+		return v.Base
+	case *SimpleType:
+		return v.Base
+	}
+	return nil
+}
+
+// checkUnionMemberCycles enforces the union half of st-props-correct.2
+// (§3.14.6): "Circular definitions are disallowed ... it must be possible to
+// reach a built-in primitive datatype or the simple ur-type definition by
+// repeatedly following the {base type definition}" — which for a union means
+// its transitive {member type definitions} must not contain the union itself.
+//
+// The base-chain walk in checkTypeBaseCycles does not see this: a union's
+// members are not its base, so two unions naming each other as members have
+// entirely acyclic base chains (both derive from xs:anySimpleType) while the
+// membership graph is a two-cycle. simple017 is exactly that pair — chap
+// unions dt, and dt unions chap.
+//
+// Runs beside checkTypeBaseCycles, after the fixups have drained, because
+// MemberTypes is filled in by a fixup.
+func (p *parser) checkUnionMemberCycles() {
+	// Sorted for the same reason as checkTypeBaseCycles: two circular
+	// unions must be reported in the same order on every run.
+	names := make([]xdm.QName, 0, len(p.schema.Types))
+	for name := range p.schema.Types {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
+
+	for _, name := range names {
+		st, ok := p.schema.Types[name].(*SimpleType)
+		if !ok || st == nil || len(st.MemberTypes) == 0 {
+			continue
+		}
+		// Breadth-first over the membership graph. `seen` is a visited
+		// set rather than a descent path: unlike cycleFrom above, a
+		// member legitimately reached twice is not interesting here,
+		// because the only question asked is whether st is reachable
+		// from st, and any route back to it will be found from
+		// whichever visit came first.
+		seen := map[*SimpleType]bool{}
+		queue := append([]*SimpleType(nil), st.MemberTypes...)
+		for len(queue) > 0 {
+			m := queue[0]
+			queue = queue[1:]
+			if m == nil {
+				continue
+			}
+			if m == st {
+				p.errs = append(p.errs, &ParseError{
+					Code: "st-props-correct.2",
+					Message: fmt.Sprintf(
+						"union type %q is circular: it is a member "+
+							"of itself, directly or through "+
+							"another union", name.Local),
+				})
+				break
+			}
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			queue = append(queue, m.MemberTypes...)
+			// A member may be a *restriction* of a union rather
+			// than a union itself, and the members it inherits are
+			// reached only through its base. simple015 is that
+			// shape: dt restricts an inline union.
+			if b, ok := m.Base.(*SimpleType); ok && b != m {
+				queue = append(queue, b)
+			}
+		}
+	}
 }

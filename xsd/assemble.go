@@ -596,6 +596,21 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 					"a schema may not import its own namespace %q", ns))
 				continue
 			}
+			// §4.2.6.2 src-import.1.2: "If the namespace [attribute]
+			// is absent, then the *actual value* of the
+			// targetNamespace [attribute] of the <schema> ancestor
+			// must be present." An import with no namespace= imports
+			// the absent namespace, and a schema that is itself in
+			// the absent namespace would be importing its own — the
+			// same self-import that clause 1.1 bans, just spelled
+			// with two omitted attributes instead of two written
+			// ones. addB008 and addB035 both pin this.
+			if el.Attr("", "namespace") == nil && !doc.hasTargetNS {
+				a.p.errs = append(a.p.errs, errorAt(el, "src-import.1.2",
+					"an import with no namespace attribute requires the "+
+						"enclosing schema to have a targetNamespace"))
+				continue
+			}
 			a.queueRef(el, doc, ns, el.AttrValue("schemaLocation"), false, false)
 		}
 	}

@@ -174,6 +174,7 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 	}
 
 	p.checkSubstitutionGroupDerivation(el, d)
+	p.checkSubstitutionGroupCircular(el, d)
 
 	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
@@ -1636,4 +1637,60 @@ func (p *parser) rejectDirectNotation(el *xdm.Node, t Type) {
 			"xs:NOTATION may not be used directly as the type of a "+
 				"declaration; derive from it with an enumeration facet"))
 	}
+}
+
+// checkSubstitutionGroupCircular enforces e-props-correct.6 (§3.3.6): "Circular
+// substitution groups are disallowed. That is, it must not be possible to
+// return to an element declaration by repeatedly following the {substitution
+// group affiliation} property."
+//
+// linkSubstitutionGroups already survives a cycle — it walks with an explicit
+// seen set precisely because the spec bans cycles rather than making them
+// unrepresentable — so nothing downstream ever noticed. addB180 (test111869)
+// declares e1 substituting for e2 and e2 for e1 and expects a rejection.
+//
+// Runs as a post-fixup because the affiliation is filled in by a fixup, so the
+// heads are not known during the parse.
+func (p *parser) checkSubstitutionGroupCircular(el *xdm.Node, d *ElementDecl) {
+	p.postFixups = append(p.postFixups, func() error {
+		// Breadth-first over the affiliation graph starting at d. The
+		// spec's wording is "return to" this declaration, so only a
+		// cycle through d itself is reported here; a cycle elsewhere is
+		// reported when that declaration's own check runs.
+		seen := map[*ElementDecl]bool{}
+		queue := substitutionHeads(d)
+		for len(queue) > 0 {
+			h := queue[0]
+			queue = queue[1:]
+			if h == nil {
+				continue
+			}
+			if h == d {
+				return errorAt(el, "e-props-correct.6",
+					"element %q is in a circular substitution group",
+					d.Name.Local)
+			}
+			if seen[h] {
+				continue
+			}
+			seen[h] = true
+			queue = append(queue, substitutionHeads(h)...)
+		}
+		return nil
+	})
+}
+
+// substitutionHeads returns every {substitution group affiliation} of d.
+//
+// SubstitutionGroup is the first of SubstitutionGroups kept as its own field,
+// so reading both would double-count; SubstitutionGroups is authoritative
+// whenever it is non-empty.
+func substitutionHeads(d *ElementDecl) []*ElementDecl {
+	if len(d.SubstitutionGroups) > 0 {
+		return d.SubstitutionGroups
+	}
+	if d.SubstitutionGroup != nil {
+		return []*ElementDecl{d.SubstitutionGroup}
+	}
+	return nil
 }

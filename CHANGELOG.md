@@ -6,6 +6,43 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### Circularity, and the exception that terminates every chain
+
+Schema validity reaches 99.51% on XSD 1.0 and 99.11% on 1.1 — both at the
+ceiling this project's own analysis predicted, with the remainder dominated by
+tests the W3C's metadata disputes.
+
+Four kinds of circularity were undetected, each because the structure that
+would have revealed it is acyclic:
+
+* A union whose transitive `{member type definitions}` contain the union
+  itself (`st-props-correct.2`). The base-chain walk cannot see this: two
+  unions naming each other have entirely acyclic base chains.
+* A complex type reachable from its own `{base type definition}`
+  (`ct-props-correct.3`).
+* A circular substitution group (`e-props-correct.6`). The linker already
+  survived cycles with a seen-set, so nothing downstream ever noticed one.
+* `src-import.1.2` — an `<xs:import>` with no `namespace` requires the
+  importing schema to have a `targetNamespace`.
+
+The base-type rule needs the specification's "except for the ur-type
+definition" exception, and it is not a courtesy: `xs:anyType` is its own base,
+so the exception is what terminates every other chain. Omitting it rejected
+**11,044 of 14,405 schemas**. That number is now recorded beside the check.
+
+One test moves from passing to failing: `ste110`, "test circular union",
+expects a schema where two unions name each other to be *valid*. Its W3C status
+is `queried` under bug 4957, and it contradicts `st-props-correct.2` outright.
+
+Also `cos-ct-extends.1.4.1`, checked on the source form rather than the
+resolved content type because the extension splice rewrites the latter from the
+base before any later pass could look; and the open-content half of
+`cos-ct-restricts`, where a restriction declaring `{open content}` requires a
+base that declares one and may not `interleave` where the base only appends.
+Both open-content halves are conditioned on the derived particle admitting
+something other than the empty sequence — with an empty model there is nothing
+to interleave among, and `interleave` and `suffix` denote the same language.
+
 ### The harness claimed two mutually exclusive processor configurations
 
 XSD 1.1 schema validity reaches 99.00%, and 10 of the 22 tests gained were
@@ -433,8 +470,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.47% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.00% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.51% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.11% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -476,7 +513,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.47% (1.0) and 99.00% (1.1). Instance validation —
+* XSD schema-validity, at 99.51% (1.0) and 99.11% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

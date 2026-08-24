@@ -24,8 +24,8 @@ kind — they break working documents — so they are listed first throughout.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.47% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.00% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.51% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.11% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -41,15 +41,15 @@ comparable to a suite percentage, and neither should be quoted as one.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| schema false reject | 6 | 12 |
-| schema false accept | 71 | 142 |
+| schema false reject | 7 | 13 |
+| schema false accept | 63 | 123 |
 | instance false reject | 4 | 3 |
 | instance false accept | 27 | 25 |
 
-Of those, the W3C itself flags 48 cases in 1.0 and 50 in 1.1 as `queried` or
+Of those, the W3C itself flags 49 cases in 1.0 and 51 in 1.1 as `queried` or
 tied to an open bug — its own suite disputes, not necessarily defects here.
-Counted by scanning each test's `<current status=...>`. That leaves 60
-addressable in 1.0 and 132 in 1.1. See *What 100% would take* below for why
+Counted by scanning each test's `<current status=...>`. That leaves 52
+addressable in 1.0 and 113 in 1.1. See *What 100% would take* below for why
 this sets the reachable ceiling below 100%.
 
 ### RELAX NG
@@ -809,8 +809,8 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
 | XSD 1.0 instance | **99.88%** | ~99.9% | at the target; 4 false rejects remain, all recorded as hard |
 | XSD 1.1 instance | **99.89%** | ~99.9% | same |
-| XSD 1.0 schema | **99.47%** | **~99.6%** | 71 addressable false accepts, one at a time |
-| XSD 1.1 schema | **99.00%** | **~99.6%** | 142 addressable false accepts, one at a time |
+| XSD 1.0 schema | **99.51%** | **~99.6%** | 63 addressable false accepts, one at a time |
+| XSD 1.1 schema | **99.11%** | **~99.6%** | 123 addressable false accepts, one at a time |
 
 The two schema rows previously read `~99.9%`, which contradicted the ceiling
 derived under *What 100% would take* above and could not be reached: it would

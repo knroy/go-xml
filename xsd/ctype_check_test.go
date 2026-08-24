@@ -288,3 +288,89 @@ func TestAttributeWildcardRestriction(t *testing.T) {
 		})
 	}
 }
+
+// The open-content clause of cos-ct-restricts: a restriction that declares
+// {open content} needs a base that declares one too, and may not interleave
+// where the base only suffixes.
+//
+// Both halves are conditioned on the derived particle admitting more than the
+// empty sequence, which is what separates the four cases here. open016 and
+// open019 are the rejections; open020/open021 (interleave over a suffix base)
+// and open022 (no base open content at all) have empty derived models, where
+// the two modes denote the same language and the base's own particle already
+// admits what the wildcard would. Both pairs loaded clean before this rule.
+//
+// The sub-clause numbering under cos-ct-restricts is deliberately not asserted
+// here; see the note in checkOpenContentRestriction.
+func TestOpenContentRestrictionMode(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"open016: derived opens what a closed base rejects", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="B"><xs:sequence>
+		   <xs:element name="a" maxOccurs="unbounded"/>
+		   <xs:element name="b" minOccurs="0"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="R"><xs:complexContent><xs:restriction base="B">
+		   <xs:openContent mode="suffix">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence><xs:element name="a"/></xs:sequence>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`, false},
+
+		{"open019: interleave may not restrict suffix over a non-empty model", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="B">
+		   <xs:openContent mode="suffix">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence><xs:element name="a" maxOccurs="unbounded"/>
+		    <xs:element name="b" minOccurs="0"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="R"><xs:complexContent><xs:restriction base="B">
+		   <xs:openContent mode="interleave">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence><xs:element name="a"/></xs:sequence>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`, false},
+
+		{"open020: an empty derived model makes the two modes the same", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="B">
+		   <xs:openContent mode="suffix">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence><xs:element name="a" minOccurs="0" maxOccurs="unbounded"/>
+		    <xs:element name="b" minOccurs="0"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="R"><xs:complexContent><xs:restriction base="B">
+		   <xs:openContent mode="interleave">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`, true},
+
+		{"open022: a closed base whose particle carries the wildcard", `
+		 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:complexType name="B"><xs:sequence>
+		   <xs:any namespace="http://open.com/" processContents="lax"
+		    minOccurs="0" maxOccurs="unbounded"/></xs:sequence></xs:complexType>
+		  <xs:complexType name="R"><xs:complexContent><xs:restriction base="B">
+		   <xs:openContent mode="interleave">
+		    <xs:any namespace="http://open.com/" processContents="lax"/>
+		   </xs:openContent>
+		   <xs:sequence/>
+		  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := loadVer(t, c.doc, Version11)
+			if c.ok && err != nil {
+				t.Errorf("the schema must load: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("the schema loaded; cos-ct-restricts must reject it")
+			}
+		})
+	}
+}

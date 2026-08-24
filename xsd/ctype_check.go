@@ -397,19 +397,21 @@ func (p *parser) checkAttributeWildcardRestriction(t *ComplexType) {
 // Three things this deliberately does NOT check, each because a valid schema
 // in the suite disproves the obvious rule:
 //
-//   - "the base is closed, so any open content is a widening" is wrong.
-//     open022 restricts a base whose {open content} is absent but whose
-//     particle carries an equivalent explicit wildcard, and is valid. What
-//     the base admits is a property of the whole content model, not of the
-//     {open content} property alone, so the comparison needs the particle —
-//     which is the language-inclusion problem of §3.4.6.4, not a property
-//     comparison.
+//   - "the base is closed, so any open content is a widening" is wrong as an
+//     unconditional rule. open022 restricts a base whose {open content} is
+//     absent but whose particle carries an equivalent explicit wildcard, and
+//     is valid. What the base admits is a property of the whole content
+//     model, not of the {open content} property alone. The clause is
+//     enforced below under the same empty-particle guard as the mode rule,
+//     which is what open022 satisfies; deciding it in general would need the
+//     language-inclusion of §3.4.6.4 rather than a property comparison.
 //
 //   - "interleave cannot restrict suffix" is wrong as stated. It holds only
 //     when there is something to interleave among: open020 and open021
 //     restrict a suffix base by an interleaved derived type whose own
 //     particle is empty, and with an empty model the two modes denote the
-//     same language. Both are valid.
+//     same language. Both are valid. The clause is enforced below, guarded
+//     on the derived particle admitting more than the empty sequence.
 //
 //   - The extension mirror does not exist in the form it appears to. A type
 //     extending a base that declared open content and declaring none of its
@@ -429,9 +431,57 @@ func (p *parser) checkOpenContentRestriction(t *ComplexType) {
 		return
 	}
 	derived, inherited := t.OpenContent, base.OpenContent
-	if derived == nil || derived.Mode == OpenNone ||
-		inherited == nil || inherited.Mode == OpenNone ||
-		derived.Wildcard == nil || inherited.Wildcard == nil {
+	if derived == nil || derived.Mode == OpenNone || derived.Wildcard == nil {
+		return
+	}
+
+	// The open-content clause of cos-ct-restricts splits on the *derived*
+	// type's {open content}. Where it is absent nothing is asked; where it
+	// is present, the base must have one too, and the base's mode must
+	// permit the derived one — interleave permits either, suffix permits
+	// only suffix.
+	//
+	// NOTE ON THE CITATION: the sub-clause numbering under cos-ct-restricts
+	// is NOT verified. I reconstructed "3.2.1/3.2.2/3.2.3" from memory and
+	// then failed three times to retrieve §3.4.6 from w3.org (the page-to-
+	// markdown conversion truncates the REC before Chapter 3). Rather than
+	// stamp a guessed number into an error message that a schema author
+	// would reasonably trust, these report the bare "cos-ct-restricts.2"
+	// the surrounding checks already use. The *behaviour* below is pinned by
+	// open016/open019 (rejected) against open020/open021/open022 (accepted);
+	// only the clause number is open. Anyone with the spec to hand should
+	// confirm the numbering and tighten these four citations.
+	//
+	// Both halves are conditioned on the derived particle admitting
+	// something other than the empty sequence. With an empty model the
+	// question the clauses ask does not arise: there is nothing for the
+	// wildcard to be interleaved among, so interleave and suffix denote the
+	// same language, and a base whose particle carries an equivalent
+	// wildcard already admits exactly what the derived {open content} does.
+	// open020 and open021 are the first shape (suffix base, interleave
+	// derived, empty derived model) and open022 the second (no base {open
+	// content} at all, but a base particle of any/lax over the same
+	// namespace). All three are valid, and a rule stated without this guard
+	// rejects them.
+	if !particleMatchesOnlyEmpty(t.Particle, 0) {
+		if inherited == nil || inherited.Mode == OpenNone ||
+			inherited.Wildcard == nil {
+			p.errs = append(p.errs, errorAt(nil, "cos-ct-restricts.2",
+				"complex type %q declares open content but its base %q has "+
+					"none, so the open content admits children the base "+
+					"rejects", t.Name, base.Name))
+			return
+		}
+		if inherited.Mode == OpenSuffix && derived.Mode != OpenSuffix {
+			p.errs = append(p.errs, errorAt(nil, "cos-ct-restricts.2",
+				"complex type %q interleaves its open content among a "+
+					"content model its base %q opens only as a suffix",
+				t.Name, base.Name))
+		}
+	}
+
+	if inherited == nil || inherited.Mode == OpenNone ||
+		inherited.Wildcard == nil {
 		return
 	}
 	if !wildcardSubset(derived.Wildcard, inherited.Wildcard) {
