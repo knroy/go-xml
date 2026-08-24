@@ -77,6 +77,11 @@ type Context struct {
 	// CollectionResolver.
 	Collections CollectionResolver
 
+	// Texts resolves fn:unparsed-text URIs. Nil disables it, and setting
+	// Docs does not set this: reading a file as raw text is a wider grant
+	// than reading it as a parsed document. See TextResolver.
+	Texts TextResolver
+
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
 	Depth int
@@ -152,6 +157,20 @@ type CollectionResolver interface {
 	// The result is a sequence rather than a []*xdm.Tree because a collection
 	// is permitted to contain items that are not document nodes.
 	ResolveCollection(uri, base string) (xdm.Sequence, error)
+}
+
+// TextResolver reads a resource as text for fn:unparsed-text.
+//
+// It is deliberately separate from DocumentResolver rather than reusing it.
+// fn:doc parses what it reads as XML, so a resolver granting it hands out
+// well-formed documents; fn:unparsed-text hands the stylesheet the raw bytes
+// of any file the resolver will open, which is a strictly larger disclosure
+// and a different decision for the caller to make. Nil disables the function,
+// which is the default and the safe one.
+type TextResolver interface {
+	// ResolveText returns the text of uri, resolved against base, decoded
+	// using encoding when one is named and as UTF-8 when it is empty.
+	ResolveText(uri, base, encoding string) (string, error)
 }
 
 // FunctionLibrary resolves and calls functions.

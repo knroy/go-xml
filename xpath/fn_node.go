@@ -233,10 +233,18 @@ func registerNodeFuncs(l *Library) {
 		// The node itself has to be the document: walking to its root gave an
 		// element the URI of the document containing it, which is fn:base-uri's
 		// answer rather than this one.
-		if n.Kind != xdm.KindDocument || n.BaseURI == "" {
+		// DocumentURI, not BaseURI. They are separate accessors in the XDM
+		// and the difference is exactly what this function is about: a
+		// temporary tree built by xsl:variable inherits the *stylesheet's*
+		// base URI, so reading BaseURI here reported a URI for a document
+		// that was never retrieved from one, and "doc(document-uri($d)) is
+		// $d" -- the identity F&O guarantees -- was false for it. Only a
+		// document actually loaded by URI has a document URI, which is what
+		// ParseOptions.DocumentURI records and what leaving it empty means.
+		if n.Kind != xdm.KindDocument || n.DocumentURI == "" {
 			return xdm.Empty, nil
 		}
-		return xdm.One(xdm.NewAnyURI(n.BaseURI)), nil
+		return xdm.One(xdm.NewAnyURI(n.DocumentURI)), nil
 	})
 
 	l.registerFn("base-uri", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {

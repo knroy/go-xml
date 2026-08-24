@@ -29,6 +29,12 @@ type TransformOptions struct {
 	// a collection URI happens to name.
 	Collections xpath.CollectionResolver
 
+	// Texts resolves fn:unparsed-text. Nil disables it, which is the
+	// default, and setting Documents does not set this: fn:doc hands back a
+	// parsed XML document, while fn:unparsed-text hands back the raw bytes
+	// of whatever the resolver will open. See xpath.TextResolver.
+	Texts xpath.TextResolver
+
 	// MaxDepth bounds template recursion. Zero means DefaultMaxDepth; a
 	// negative value means no limit.
 	//
@@ -247,6 +253,30 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		initialMode := opts.InitialMode
 		if initialMode == "#default" || initialMode == "#unnamed" {
 			initialMode = ""
+		}
+		// XTDE0045: "it is a non-recoverable dynamic error if the invocation
+		// of the stylesheet specifies an initial mode (other than the default
+		// mode) that does not match the expanded-QName in the mode attribute
+		// of any template". mode="#all" makes a template apply in every mode
+		// but does not NAME one, so it cannot satisfy the invocation: per
+		// W3C bugzilla 3690 an initial mode matched only by "#all" is still
+		// this error. Only tokens that are real names count as declaring.
+		if initialMode != "" {
+			// The caller's name is lexical, so a prefix in it is resolved
+			// against the stylesheet's declarations before comparison, the
+			// same way InitialTemplate is above.
+			want := initialMode
+			if prefix, local, found := strings.Cut(initialMode, ":"); found {
+				if uri, ok := s.prefixes[prefix]; ok {
+					want = xdm.QName{URI: uri, Local: local}.Clark()
+				}
+			}
+			if !s.declaresMode(want) {
+				return nil, fmt.Errorf(
+					"XTDE0045: the invocation specifies initial mode %q, "+
+						"which no template declares", opts.InitialMode)
+			}
+			initialMode = want
 		}
 		if err := applyToNode(rt, source, initialMode, nil, nil, out); err != nil {
 			return nil, err
@@ -601,4 +631,22 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 		return &xdm.Node{Kind: xdm.KindPI, Name: n.Name, Value: n.Value}
 	}
 	return nil
+}
+
+// SerializeAsXML renders a result with the xml output method, ignoring the
+// stylesheet's own xsl:output.
+//
+// It exists for a caller making a *tree* assertion about a result — the W3C
+// conformance harness is the one in this repository. The stylesheet's method
+// is part of what serialisation means, not part of what the tree is: the html
+// method injects a content-type meta into <head> and writes void elements
+// unclosed, so a result asserted as a tree would be compared against markup
+// the stylesheet never produced, and would not parse back as XML at all.
+//
+// Indentation and the other settings are deliberately left at their defaults
+// rather than inherited, for the same reason.
+func SerializeAsXML(r *Result) string {
+	var sb strings.Builder
+	_ = serialize(&sb, r.Nodes, OutputSettings{Method: "xml"}, r.charMap)
+	return sb.String()
 }

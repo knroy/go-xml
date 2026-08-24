@@ -86,11 +86,37 @@ func registerMiscFuncs(l *Library) {
 // adding them here is what makes both true.
 func RegisterXSLTFuncs(l *Library) {
 	l.registerFn("unparsed-text", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return nil, fmt.Errorf(
-			"FOUT1170: unparsed-text() is disabled (it reads arbitrary files)")
+		s, enc, err := unparsedTextArgs(args)
+		if err != nil {
+			return nil, err
+		}
+		// No resolver means the function is off, which is the default. The
+		// message names the reason rather than the URI: a stylesheet that
+		// gets this back has not been granted file reads at all, and saying
+		// "cannot retrieve x" would suggest the file was the problem.
+		if ctx.Texts == nil {
+			return nil, fmt.Errorf(
+				"FOUT1170: unparsed-text() is disabled (it reads arbitrary files)")
+		}
+		text, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc)
+		if err != nil {
+			return nil, fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
+		}
+		return xdm.One(xdm.NewString(text)), nil
 	})
-	l.registerFn("unparsed-text-available", []int{1, 2}, func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-		return boolSeq(false), nil
+	l.registerFn("unparsed-text-available", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// Defined as "true if a call on unparsed-text with the same
+		// arguments would succeed", so it is answered by attempting the read
+		// rather than by inspecting the URI. With no resolver it is false,
+		// which is what the refusal tests expect.
+		s, enc, err := unparsedTextArgs(args)
+		if err != nil || ctx.Texts == nil {
+			return boolSeq(false), nil
+		}
+		if _, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc); err != nil {
+			return boolSeq(false), nil
+		}
+		return boolSeq(true), nil
 	})
 
 	// fn:document is XSLT's own document loader, and differs from fn:doc in
@@ -99,6 +125,22 @@ func RegisterXSLTFuncs(l *Library) {
 	l.registerFn("document", []int{1, 2}, fnDocument)
 
 	registerFormatDateTime(l)
+}
+
+// unparsedTextArgs pulls the href and the optional encoding out of a call on
+// fn:unparsed-text or fn:unparsed-text-available.
+func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
+	href, err = argStringRequired(args, 0)
+	if err != nil {
+		return "", "", err
+	}
+	if len(args) > 1 && len(args[1]) > 0 {
+		encoding, err = argStringRequired(args, 1)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return href, encoding, nil
 }
 
 // lookupByID implements fn:id and fn:idref.

@@ -1464,8 +1464,17 @@ func compareSortValues(a, b sortValue) int {
 		// clause describes; the durations are the pair that exposed it, and
 		// reporting XTDE1030 for them lost two tests that sort perfectly
 		// well. Only a pair of genuinely unrelated types is the error.
+		//
+		// xs:duration is the exception to that exception: two values of that
+		// one type are still not orderable, because F&O 2.0 defines "lt" for
+		// yearMonthDuration and dayTimeDuration but never for xs:duration —
+		// its months and its seconds have no fixed ratio, so P1M against P30D
+		// has no answer. Naming the type rather than dropping the a != b test
+		// altogether is what keeps the two tests that a blanket same-type
+		// refusal previously cost.
 		if !isUntyped(a.atom) && !isUntyped(b.atom) &&
-			a.atom.Type != b.atom.Type {
+			(a.atom.Type != b.atom.Type ||
+				a.atom.Type == xdm.TypeDuration) {
 			return sortIncomparable
 		}
 	}
@@ -1598,16 +1607,24 @@ func compareAtoms(a, b *xdm.Atomic, implicitTZ int) (int, bool) {
 	case a.Type == b.Type && a.DateTimeVal() != nil && b.DateTimeVal() != nil:
 		return xdm.CompareDT(a.DateTimeVal(), b.DateTimeVal(), implicitTZ), true
 
-	case a.Type == b.Type && a.DurationVal() != nil && b.DurationVal() != nil:
+	case a.Type == b.Type && a.Type != xdm.TypeDuration &&
+		a.DurationVal() != nil && b.DurationVal() != nil:
 		// Durations were not handled at all, so xsl:sort over
 		// xs:yearMonthDuration fell through to a string comparison and put
 		// P11M before P1M.
 		//
-		// Only two durations of the same type are ordered here. The general
-		// case is not totally ordered — xs:duration compares months and
-		// seconds independently, and P1M against P30D has no answer — so
-		// leaving the mixed case to the caller is what keeps this from
-		// inventing one.
+		// Only xs:yearMonthDuration against xs:yearMonthDuration, and
+		// xs:dayTimeDuration against xs:dayTimeDuration, are ordered here:
+		// those are the only two duration orderings F&O 2.0 defines
+		// (op:yearMonthDuration-less-than, op:dayTimeDuration-less-than).
+		//
+		// Bare xs:duration is excluded even though both sides have the SAME
+		// type, which is the case the a.Type == b.Type test alone gets wrong.
+		// xs:duration carries a months component and a seconds component with
+		// no fixed ratio between them, so P1M against P30D has no answer and
+		// "lt" on the pair raises XPTY0004 — making it the XTDE1030 pair, not
+		// an ordering to invent. The mixed yearMonth/dayTime case is excluded
+		// by a.Type == b.Type for the same reason.
 		ad, bd := a.DurationVal(), b.DurationVal()
 		if am, bm := ad.SignedMonths(), bd.SignedMonths(); am != bm {
 			if am < bm {

@@ -937,6 +937,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Ctx = ctx
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
+	xctx.Texts = opts.Texts
 	xctx.ImplicitTimezone = opts.ImplicitTimezone
 	// The static base URI of every expression in the stylesheet. Without it
 	// a relative reference in fn:doc or fn:resolve-uri has nothing to

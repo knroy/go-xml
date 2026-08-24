@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -44,6 +45,19 @@ type FileResolver struct {
 	// that wants DTD-declared entities does not thereby want file reads, and
 	// making one imply the other would silently widen every existing caller.
 	ExternalEntities bool
+
+	// UnparsedText permits fn:unparsed-text to read files through this
+	// resolver, confined to Roots on the same terms as everything else.
+	//
+	// It is separate from every other flag here and off by default, because
+	// it is the widest of them. ResolveDocument hands the stylesheet a
+	// parsed XML document, so a file that is not well-formed XML discloses
+	// nothing; unparsed-text hands back the raw bytes of any file inside
+	// Roots, so a root containing one XML data file and one private key
+	// leaks the key. A caller who wants fn:doc does not thereby want that,
+	// and folding the two together would silently widen every existing
+	// caller of NewFileResolver.
+	UnparsedText bool
 
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
@@ -199,7 +213,14 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 	// before the last separator. resolvePath strips the scheme back off, so
 	// the filesystem sees the same path either way.
 	opts := xdm.ParseOptions{
-		BaseURI:      fileURIOf(path),
+		BaseURI: fileURIOf(path),
+		// This document *was* retrieved by URI, so it has a dm:document-uri
+		// as well as a base URI, and fn:document-uri must report it. The two
+		// carry the same string here only because the retrieval succeeded
+		// from that URI; a temporary tree gets a base URI from its
+		// stylesheet and no document URI at all, which is the distinction
+		// fn:document-uri exists to make.
+		DocumentURI:  fileURIOf(path),
 		AllowDOCTYPE: r.AllowDOCTYPE,
 	}
 	if r.ExternalEntities {
@@ -275,4 +296,83 @@ func (r *FileResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCl
 		return nil, "", err
 	}
 	return io.NopCloser(bytes.NewReader(data)), fileURIOf(path), nil
+}
+
+// ResolveText implements xpath.TextResolver for fn:unparsed-text.
+//
+// The path goes through the same resolvePath as every other read this type
+// performs, so the confinement is one implementation rather than two: a
+// non-file scheme is rejected before the filesystem is touched, symlinks are
+// resolved before the containment check, and a path outside every root is
+// refused. UnparsedText only decides *whether* to ask; it does not relax
+// where the answer may come from.
+//
+// The encoding argument is honoured only for the encodings this package can
+// decode without pulling in a converter. XSLT 2.0 section 16.2 requires an
+// error for an encoding that is not supported, and reporting one is better
+// than silently returning mojibake -- a stylesheet that reads a Shift-JIS
+// file and gets bytes reinterpreted as UTF-8 produces wrong output with no
+// indication anything went wrong.
+func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
+	if !r.UnparsedText {
+		return "", fmt.Errorf("unparsed-text() is not enabled on this resolver")
+	}
+	path, err := r.resolvePath(uri, base)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "", "utf-8", "utf8", "us-ascii", "ascii":
+		// US-ASCII is a subset of UTF-8, so the same decode is correct for
+		// it, and a byte above 0x7F is caught by the validity check below
+		// either way.
+	default:
+		return "", fmt.Errorf("FOUT1190: encoding %q is not supported", encoding)
+	}
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	// A BOM is an encoding signature rather than a character of the content,
+	// so leaving it in makes string-length() one too large and makes a
+	// comparison against the file's first line fail for a reason nothing in
+	// the stylesheet can see.
+	//
+	// F&O requires FOUT1190 when the resource cannot be decoded, and XSLT 2.0
+	// 16.2 requires FOUT1170 when it contains characters not permitted in
+	// XML. Returning a Go string holding invalid UTF-8 would push the failure
+	// downstream into the serialiser, where it reads as a bug in this engine
+	// rather than as a property of the input.
+	if !utf8.ValidString(text) {
+		return "", fmt.Errorf("FOUT1190: %s is not valid UTF-8", path)
+	}
+	for _, c := range text {
+		if !isXMLChar(c) {
+			return "", fmt.Errorf(
+				"FOUT1170: %s contains U+%04X, which is not a legal XML character",
+				path, c)
+		}
+	}
+	return text, nil
+}
+
+// isXMLChar reports whether c is in the XML 1.0 Char production.
+//
+// The check belongs here rather than being left to the serialiser because
+// fn:unparsed-text can put the text into a *string*, where a control
+// character is not an error until something tries to serialise it -- and by
+// then the stylesheet has already computed with it.
+func isXMLChar(c rune) bool {
+	switch {
+	case c == 0x9, c == 0xA, c == 0xD:
+		return true
+	case c >= 0x20 && c <= 0xD7FF:
+		return true
+	case c >= 0xE000 && c <= 0xFFFD:
+		return true
+	case c >= 0x10000 && c <= 0x10FFFF:
+		return true
+	}
+	return false
 }

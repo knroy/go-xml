@@ -162,7 +162,16 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 			for _, it := range args[0] {
 				switch v := it.(type) {
 				case *xdm.Node:
-					b := v.BaseURI
+					// The base URI in force *at* the node, not the field.
+					// Only an element carrying xml:base has one of its own,
+					// so document(@file) -- the ordinary spelling, and an
+					// attribute -- read back empty and fell through to the
+					// stylesheet's own directory, resolving every relative
+					// reference taken from a source document against the
+					// wrong place entirely. fn:document in
+					// xpath/fn_document.go has always walked; this arity-1
+					// shadow did not, and the two disagreed.
+					b := inScopeBaseURI(v)
 					if b == "" {
 						b = ctx.StaticBaseURI
 					}
@@ -215,6 +224,19 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 						out = append(out, rt.sheet.source)
 					}
 					continue
+				}
+				// A fragment identifier that is not legal for an XML media
+				// type is XTRE1160, and it is decidable from the URI string
+				// alone -- so it is diagnosed before the resource is
+				// fetched, which is the only way to reach the right answer
+				// for a URI this engine will not retrieve at all.
+				// fn:document in xpath/fn_document.go does the same; this
+				// arity-1 shadow reported the refusal to fetch instead, so
+				// the URI never got as far as the check.
+				if !xpath.FragmentIsValidXMLName(uri) {
+					return nil, fmt.Errorf(
+						"XTRE1160: %q has a fragment identifier that is "+
+							"not valid for an XML media type", uri)
 				}
 				if ctx.Docs == nil {
 					return nil, fmt.Errorf(
@@ -1023,4 +1045,20 @@ var builtinNonAtomicTypes = map[string]bool{
 	"ENTITIES": true,
 	"IDREFS":   true,
 	"NMTOKENS": true,
+}
+
+// inScopeBaseURI returns the base URI in force at a node.
+//
+// Only an element carrying xml:base has a base URI of its own; every other
+// node -- an attribute above all, which is how a stylesheet usually names a
+// document -- takes the one in force at its parent. This mirrors
+// inheritedBaseURI in xpath/fn_node.go, which is unexported; duplicating four
+// lines is preferable to widening that package's API for one caller.
+func inScopeBaseURI(n *xdm.Node) string {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.BaseURI != "" {
+			return cur.BaseURI
+		}
+	}
+	return ""
 }

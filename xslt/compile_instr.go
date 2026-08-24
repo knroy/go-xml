@@ -681,7 +681,13 @@ func (c *compiler) compileSort(n *xdm.Node) (*sortKey, error) {
 		if a.isLit {
 			coll, err := newCollator(a.literal)
 			if err != nil {
-				return nil, err
+				// A literal @lang is not an attribute value template, so a
+				// bad value here is the static error XTSE0020 ("an attribute
+				// ... contains a value that is not one of the permitted
+				// values for that attribute"), not the dynamic XTDE0030 that
+				// the AVT branch below reports. The two codes differ only in
+				// whether the value was written or computed.
+				return nil, fmt.Errorf("XTSE0020: %w", err)
 			}
 			s.coll = coll
 		} else {

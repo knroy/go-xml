@@ -436,9 +436,32 @@ func (p *Parser) parseComparison() (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &BinaryOp{Op: op, Left: left, Right: right}, nil
+		// The namespace bindings in scope *here* are the ones an
+		// untypedAtomic-to-xs:QName conversion must use. choose-0106 puts the
+		// same comparison under three different xmlns declarations and
+		// expects three different answers, which is only possible if each
+		// operator keeps its own bindings.
+		return &BinaryOp{Op: op, Left: left, Right: right,
+			ResolveQName: p.qnameResolver()}, nil
 	}
 	return left, nil
+}
+
+// qnameResolver captures the parser's prefix bindings for later use at
+// evaluation time. It returns nil when there is no resolver, so that a node
+// built without a static context is indistinguishable from one built before
+// this existed.
+func (p *Parser) qnameResolver() func(string) (string, bool) {
+	if p.ns == nil {
+		return nil
+	}
+	ns := p.ns
+	return func(prefix string) (string, bool) {
+		if prefix == "" {
+			return "", true
+		}
+		return ns.ResolvePrefix(prefix)
+	}
 }
 
 func (p *Parser) parseRange() (Expr, error) {

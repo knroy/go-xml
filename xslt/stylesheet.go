@@ -768,3 +768,22 @@ func defaultCollationAt(el *xdm.Node) string {
 	}
 	return ""
 }
+
+// declaresMode reports whether any template names mode as an explicit mode.
+//
+// It backs XTDE0045, whose wording is that the initial mode must "match the
+// expanded-QName in the mode attribute of any template". The pseudo-tokens
+// "#all" and "#default" are deliberately not names: a template with
+// mode="#all" applies in the mode but does not declare it, which is the
+// resolution recorded in W3C bugzilla 3690 and what initial-mode-002 asserts.
+// Mode names in Template.Mode are already Clark-form, so mode must be too.
+func (s *Stylesheet) declaresMode(mode string) bool {
+	for _, t := range s.templates {
+		for _, m := range t.Mode {
+			if m == mode {
+				return true
+			}
+		}
+	}
+	return false
+}

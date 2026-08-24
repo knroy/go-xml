@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -170,6 +171,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	}
 
 	dec := xml.NewDecoder(r)
+	dec.CharsetReader = charsetReader
 	// Leave Strict on: a validator must not silently accept malformed input.
 	dec.Strict = true
 	// Entity is left nil so that only the five entities XML predefines —
@@ -181,9 +183,17 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// difference between what this validator accepts and what the document's
 	// next consumer will.
 	//
-	// CharsetReader is likewise left nil, which makes a document declaring
-	// any encoding other than UTF-8 an error rather than routing it through
-	// a converter this package does not control.
+	// CharsetReader accepts only the encodings that need no converter at
+	// all. US-ASCII is a strict subset of UTF-8, so its bytes are already
+	// valid UTF-8 and the reader is returned unchanged after checking that
+	// they really are seven-bit. ISO-8859-1 maps each byte to the code point
+	// of the same value by definition, which is one conversion this package
+	// can perform exactly and without a table.
+	//
+	// Everything else stays an error. Routing an arbitrary encoding through
+	// a converter this package does not control would make what the
+	// validator accepts depend on a decoder the caller cannot see.
+	// (see charsetReader below)
 
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
@@ -684,4 +694,41 @@ func lexicalName(n xml.Name) string {
 		return n.Local
 	}
 	return n.Space + ":" + n.Local
+}
+
+// charsetReader decodes the encodings this package can handle exactly.
+//
+// It is deliberately not a general converter. US-ASCII bytes are already
+// valid UTF-8, so the reader is handed back once it is known to be
+// seven-bit; ISO-8859-1 maps byte to code point by definition. Any other
+// encoding is refused, because accepting it would mean this validator's
+// answer depended on a decoder the caller never chose.
+func charsetReader(charset string, input io.Reader) (io.Reader, error) {
+	switch strings.ToLower(charset) {
+	case "us-ascii", "ascii", "iso-646", "us_ascii":
+		b, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		for i, c := range b {
+			if c > 0x7f {
+				return nil, fmt.Errorf(
+					"declared encoding %s but byte %d at offset %d is not ASCII",
+					charset, c, i)
+			}
+		}
+		return bytes.NewReader(b), nil
+	case "iso-8859-1", "latin1", "iso8859-1", "iso_8859-1":
+		b, err := io.ReadAll(input)
+		if err != nil {
+			return nil, err
+		}
+		var out bytes.Buffer
+		out.Grow(len(b))
+		for _, c := range b {
+			out.WriteRune(rune(c))
+		}
+		return bytes.NewReader(out.Bytes()), nil
+	}
+	return nil, fmt.Errorf("unsupported encoding %q", charset)
 }

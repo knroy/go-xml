@@ -405,7 +405,25 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 // expected values with the whitespace that suited the author, and a textual
 // match would report a difference in indentation as a conformance failure.
 func compareXML(res *xslt.Result, want string, normalizeSpace bool) (bool, string) {
-	return compareXMLText(res.String(), want, normalizeSpace)
+	return compareXMLText(xmlMethodString(res), want, normalizeSpace)
+}
+
+// xmlMethodString serialises a result as XML regardless of what the
+// stylesheet's xsl:output asked for.
+//
+// assert-xml is a TREE assertion — the catalog writes <assert-xml file="..."/>,
+// not assert-serialization — so the stylesheet's output method has no business
+// in it. Serialising with the stylesheet's settings let the html method inject
+// a content-type meta into <head> that the stylesheet never wrote, and the
+// expected files, produced by a driver that serialises the tree as XML, do not
+// carry it. The same reasoning is already written out at the wasRedirected
+// branch above; it was only ever applied to the redirected path.
+//
+// It also keeps the comparison well-formed. The html method writes <meta>
+// unclosed, which the XML parser on the "got" side cannot read, so the
+// structural comparison silently degraded to a text one.
+func xmlMethodString(res *xslt.Result) string {
+	return xslt.SerializeAsXML(res)
 }
 
 // compareXMLText compares already-serialised result text against the expected

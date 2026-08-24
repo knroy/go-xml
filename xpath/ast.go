@@ -39,6 +39,16 @@ type ContextItem struct{}
 type BinaryOp struct {
 	Op          string
 	Left, Right Expr
+	// ResolveQName binds a prefix in the static context of this operator, for
+	// the one conversion that needs it. A general comparison casts an
+	// untypedAtomic operand to the *other* operand's type, and when that type
+	// is xs:QName the lexical form carries a prefix whose namespace lives in
+	// the static context -- which the runtime Context deliberately does not
+	// carry, since namespaces are a static property. Capturing the resolver
+	// on the node is what makes the binding available where the cast happens.
+	// Nil for every operator other than a comparison, and for a comparison
+	// parsed without a namespace resolver.
+	ResolveQName func(prefix string) (string, bool)
 }
 
 // UnaryOp is prefix + or -.

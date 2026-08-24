@@ -187,6 +187,12 @@ func (r *Runner) loadDocURI(file, uri string) (*xdm.Node, error) {
 	}
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{
 		BaseURI: base,
+		// This document was retrieved by URI, so it has a dm:document-uri as
+		// well as a base URI and fn:document-uri must report it. They are
+		// separate accessors in the XDM: a tree built by a query has a base
+		// URI and no document URI, which is the distinction fn:document-uri
+		// exists to make.
+		DocumentURI: base,
 		// The suite's documents legitimately carry DOCTYPEs, and they are
 		// files shipped with the suite rather than untrusted input.
 		AllowDOCTYPE: true,

@@ -291,6 +291,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// there left the two disagreeing, and the element's bare path won.
 	sheetDoc, err := xdm.ParseString(string(stripBOM(sheetSrc)),
 		xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(sheetPath),
+			// The stylesheet was itself retrieved from a URI, so the tree
+			// document('') hands back has a dm:document-uri. Leaving it
+			// empty made document-uri(document('')) empty for a document
+			// that plainly has one.
+			DocumentURI:      fileURI(sheetPath),
 			ExternalEntities: r.entityResolver()})
 	if err != nil {
 		return nil, err
@@ -328,12 +333,25 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		return nil, err
 	}
 
+	docs := &xslt.FileResolver{
+		Roots:        []string{r.Root},
+		AllowDOCTYPE: true,
+		UnparsedText: true,
+	}
 	opts := xslt.TransformOptions{
 		// The suite's documents legitimately carry DOCTYPE declarations,
 		// which the resolver refuses by default because following one is
 		// the XXE entry point. The suite is trusted input read from a
 		// checkout, so it is enabled here and nowhere else.
-		Documents: &xslt.FileResolver{Roots: []string{r.Root}, AllowDOCTYPE: true},
+		Documents: docs,
+		// fn:unparsed-text is off by default because it hands a stylesheet
+		// the raw bytes of any file the resolver will open. The suite is
+		// trusted input read from a checkout and several tests exercise the
+		// function directly, so it is granted here -- through the SAME
+		// FileResolver, so the read is confined to r.Root on exactly the
+		// terms every other suite read is, with no second gate written
+		// separately. Production callers get UnparsedText=false.
+		Texts: docs,
 	}
 	// A collection is declared by the environment, not discovered on the
 	// filesystem, so only a test whose environment names one gets a resolver.
@@ -364,6 +382,14 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			opts.Params[p.Name] = v
 		}
 	}
+
+	// call-template-1002 is a legitimately 1001-deep tail recursion, and
+	// DefaultMaxDepth is 1000. The default is a DoS guard for callers running
+	// untrusted stylesheets and is right for them; the suite is trusted
+	// input, and refusing one of its tests measures the guard rather than the
+	// engine. Raised only here, and only far enough that a runaway still
+	// terminates rather than exhausting the stack.
+	opts.MaxDepth = 5000
 
 	timeout := r.Timeout
 	if timeout == 0 {
@@ -439,6 +465,11 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, error) 
 			}
 			tree, err := xdm.ParseString(string(stripBOM(data)),
 				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+					// Retrieved by URI, so it has a dm:document-uri as well
+					// as a base URI and fn:document-uri must report it. A
+					// tree a stylesheet builds gets neither, which is the
+					// distinction that function exists to make.
+					DocumentURI:      fileURI(p),
 					ExternalEntities: r.entityResolver()})
 			if err != nil {
 				return nil, err
@@ -477,6 +508,7 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 		}
 		tree, err := xdm.ParseString(string(stripBOM(data)),
 			xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+				DocumentURI:      fileURI(p),
 				ExternalEntities: r.entityResolver()})
 		if err != nil {
 			return nil, err

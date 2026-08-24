@@ -212,7 +212,8 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 			// untypedAtomic operands are cast per the general-comparison
 			// rules, which differ from value comparison: against a numeric
 			// operand they become doubles, not strings.
-			ok, err := compareValues(ctx, li.(*xdm.Atomic), ri.(*xdm.Atomic), valueOp, true)
+			ok, err := compareValuesNS(ctx, li.(*xdm.Atomic), ri.(*xdm.Atomic),
+				valueOp, true, e.ResolveQName)
 			if err != nil {
 				return nil, err
 			}
@@ -231,7 +232,15 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 // untypedAtomic is cast to the *other* operand's type (double if that is
 // numeric), while in a value comparison it is treated as a string.
 func compareValues(ctx *Context, a, b *xdm.Atomic, op string, general bool) (bool, error) {
-	a, b, err := harmonize(a, b, general)
+	return compareValuesNS(ctx, a, b, op, general, nil)
+}
+
+// compareValuesNS is compareValues with the static prefix bindings of the
+// operator that asked, which only the untypedAtomic-to-xs:QName conversion
+// uses. Keeping it a separate entry point leaves every other caller unchanged.
+func compareValuesNS(ctx *Context, a, b *xdm.Atomic, op string, general bool,
+	resolve func(string) (string, bool)) (bool, error) {
+	a, b, err := harmonize(a, b, general, resolve)
 	if err != nil {
 		return false, err
 	}
@@ -269,17 +278,18 @@ func compareValues(ctx *Context, a, b *xdm.Atomic, op string, general bool) (boo
 }
 
 // harmonize converts a pair of operands to a comparable pair of types.
-func harmonize(a, b *xdm.Atomic, general bool) (*xdm.Atomic, *xdm.Atomic, error) {
+func harmonize(a, b *xdm.Atomic, general bool,
+	resolve func(string) (string, bool)) (*xdm.Atomic, *xdm.Atomic, error) {
 	au, bu := a.Type == xdm.TypeUntypedAtomic, b.Type == xdm.TypeUntypedAtomic
 	switch {
 	case au && bu:
 		// Two untyped operands compare as strings.
 		return xdm.NewString(a.Str()), xdm.NewString(b.Str()), nil
 	case au:
-		conv, err := castUntypedFor(a, b.Type, general)
+		conv, err := castUntypedFor(a, b.Type, general, resolve)
 		return conv, b, err
 	case bu:
-		conv, err := castUntypedFor(b, a.Type, general)
+		conv, err := castUntypedFor(b, a.Type, general, resolve)
 		return a, conv, err
 	}
 	return a, b, nil
@@ -287,7 +297,30 @@ func harmonize(a, b *xdm.Atomic, general bool) (*xdm.Atomic, *xdm.Atomic, error)
 
 // castUntypedFor converts an untypedAtomic operand for comparison against
 // target.
-func castUntypedFor(u *xdm.Atomic, target xdm.TypeCode, general bool) (*xdm.Atomic, error) {
+func castUntypedFor(u *xdm.Atomic, target xdm.TypeCode, general bool,
+	resolve func(string) (string, bool)) (*xdm.Atomic, error) {
+	if general && target == xdm.TypeQName && resolve != nil {
+		// XPath 2.0 3.5.2: in a general comparison an untypedAtomic operand is
+		// cast to the primitive base type of the other operand, and "if a cast
+		// operation called for by these rules is not successful, a dynamic
+		// error is raised [err:FORG0001]". So the conversion is attempted here
+		// rather than refused as it is by castPermitted, which answers the
+		// different question of whether "cast as xs:QName" is a legal *cast
+		// expression* -- there the operand has no static context to draw a
+		// namespace from, while here the operator itself supplies one.
+		q, err := parseLexicalQName(u.Str())
+		if err != nil {
+			return nil, err
+		}
+		uri, found := resolve(q.Prefix)
+		if !found {
+			return nil, xdm.ErrCast(
+				"cannot cast %q to xs:QName: prefix %q is not bound",
+				u.Str(), q.Prefix)
+		}
+		q.URI = uri
+		return xdm.NewQNameValue(q), nil
+	}
 	if general && target.IsNumeric() {
 		// General comparison against a number: cast to double. A value that
 		// does not look like a number is an error, not a false result.

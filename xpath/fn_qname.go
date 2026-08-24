@@ -120,10 +120,15 @@ func registerQNameFuncs(l *Library) {
 		if q.Prefix == "" {
 			return nil, false
 		}
-		return xdm.NewString(q.Prefix), true
+		return xdm.NewString(q.Prefix).WithDerived("NCName"), true
 	})
 	qnamePart("local-name-from-QName", func(q xdm.QName) (xdm.Item, bool) {
-		return xdm.NewString(q.Local), true
+		// The signature is xs:NCName?, not xs:string?. Both halves of a QName
+		// are NCNames by construction, so the annotation records a fact that
+		// is already true rather than asserting a new one -- but without it
+		// "local-name-from-QName(...) instance of xs:NCName" answered false,
+		// because an xs:string is not an instance of a type derived from it.
+		return xdm.NewString(q.Local).WithDerived("NCName"), true
 	})
 	qnamePart("namespace-uri-from-QName", func(q xdm.QName) (xdm.Item, bool) {
 		return xdm.NewAnyURI(q.URI), true
