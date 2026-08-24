@@ -35,7 +35,7 @@ With it on, nine XSLT tests and the last QT3 failure pass — XSLT 2.0 at 99.69%
 and QT3 at 15,183 of 15,183. The headline figures below report the default
 configuration.
 
-### XSLT 2.0 conformance: 98.83% to 99.54%
+### XSLT 2.0 conformance: 98.83% to 99.55%
 
 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two
 rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
@@ -58,6 +58,11 @@ Two further wrong answers, both in the parser:
   space.
 - Whitespace in element-only content declared by a schema was not treated as
   ignorable, the schema-side counterpart to the DTD fix in the first round.
+- Whitespace-only text was stripped from an element whose type is a simple
+  type, or a complex type with simple content, when `xsl:strip-space` named it.
+  Section 4.4 exempts such an element whatever the declarations say: the text
+  is its entire typed value, and stripping it leaves an annotation describing a
+  value the node no longer holds.
 - `fn:idref` split its argument on whitespace. `fn:id` does, because its
   argument is a sequence of IDREFS values and an IDREFS value is a
   whitespace-separated list; `fn:idref` takes `xs:string` and matches it
@@ -119,7 +124,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.54% — 6,024 of 6,052 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.55% — 6,025 of 6,052 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

@@ -435,8 +435,17 @@ func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node,
 		// its parent element is outside the strip-space list. The parent is
 		// what the declarations are matched against, which is why the test
 		// happens here rather than being decided by the parent and passed in.
+		// A parent whose type is a simple type, or a complex type with
+		// simple content, preserves its whitespace whatever the
+		// declarations say: section 4.4 exempts it, because the text is
+		// that element's entire typed value and stripping it would leave
+		// an annotation describing a value the node no longer holds.
+		// The exemption is read off the annotation the schema wrote, so
+		// an unvalidated document is unaffected and this stays inside the
+		// existing gate on there being a strip-space declaration at all.
 		if !preserving && xdm.IsXMLWhitespace(n.Value) &&
-			n.Parent != nil && s.stripsElement(n.Parent.Name) {
+			n.Parent != nil && s.stripsElement(n.Parent.Name) &&
+			!xdm.HasSimpleTypeAnnotation(n.Parent.TypeAnnotation) {
 			return nil
 		}
 		return &xdm.Node{Kind: xdm.KindText, Value: n.Value}

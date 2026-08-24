@@ -1154,3 +1154,73 @@ func (n *Node) SetTypeAnnotation(annotation string) {
 		n.IsIDREFS = n.IsIDREFS || isRefs
 	}
 }
+
+// HasSimpleTypeAnnotation reports whether an annotation names a simple type,
+// or a complex type with simple content.
+//
+// XSLT 2.0 section 4.4 preserves whitespace-only text in such an element
+// *regardless* of xsl:strip-space: that text is the element's entire typed
+// value, which the schema validated, and stripping it would leave a node whose
+// annotation describes a value it no longer holds. An element with
+// element-only or mixed content has no such value and is stripped normally.
+//
+// The registration table is the oracle rather than a list of names, because
+// the annotation on such an element is the built-in its content type erases
+// to — "string" for both an element of type xs:string and one whose anonymous
+// complex type extends xs:string, which is exactly the pair section 4.4 groups
+// together. A complex type with element-only content registers no derivation
+// to a built-in, so it answers false, which is the distinction being drawn.
+func HasSimpleTypeAnnotation(annotation string) bool {
+	if annotation == "" {
+		return false
+	}
+	// A list type is a simple type: its typed value is a sequence of atomics,
+	// so the same reasoning applies even though it is the item type that the
+	// registry records.
+	if ListItemOf(annotation) != "" {
+		return true
+	}
+	// Bounded like every other derivation walk here, so that a schema whose
+	// derivations somehow formed a cycle cannot spin.
+	for i := 0; i < 32 && annotation != ""; i++ {
+		if isBuiltinSimpleTypeName(annotation) {
+			return true
+		}
+		next := DerivedBase(annotation)
+		if next == annotation {
+			return false
+		}
+		annotation = next
+	}
+	return false
+}
+
+// isBuiltinSimpleTypeName reports whether a name is one of the built-in simple
+// types this package can build a typed value for.
+//
+// It asks atomicForAnnotation wherever a lexical form the type accepts exists,
+// because that function is the single place the set is defined and a second
+// list would drift from it. The types named directly are those whose lexical
+// space excludes the empty string: their absence from that answer would be a
+// property of the probe value rather than of the type.
+func isBuiltinSimpleTypeName(name string) bool {
+	switch name {
+	case "QName", "NOTATION", "anySimpleType", "anyAtomicType", "untypedAtomic":
+		return true
+	}
+	if atomicForAnnotation(name, "") != nil {
+		return true
+	}
+	switch name {
+	case "boolean", "decimal", "float", "double", "integer",
+		"nonPositiveInteger", "negativeInteger", "long", "int", "short", "byte",
+		"nonNegativeInteger", "unsignedLong", "unsignedInt", "unsignedShort",
+		"unsignedByte", "positiveInteger":
+		return atomicForAnnotation(name, "1") != nil
+	case "date", "dateTime", "time", "duration", "dayTimeDuration",
+		"yearMonthDuration", "gYear", "gYearMonth", "gMonth", "gMonthDay", "gDay",
+		"hexBinary", "base64Binary", "anyURI":
+		return true
+	}
+	return false
+}

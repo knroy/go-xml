@@ -69,7 +69,7 @@ Requires Go 1.26 or later.
 | | |
 |---|---|
 | **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
-| **XSLT 2.0** | 99.54% of the W3C XSLT suite filtered to 2.0 (6,024 of 6,052 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 2.0** | 99.55% of the W3C XSLT suite filtered to 2.0 (6,025 of 6,052 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,955 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.81% instance (26,158 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -96,7 +96,7 @@ true here:
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
 3. **XSLT is the weakest of the measured numbers, by a long way.** It sits at
-   99.54% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
+   99.55% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
    else here. Two things follow from that. The figure is young — the suite was
    only wired up recently, and the first runs were dominated by harness bugs
    rather than engine ones, so it should be read as a floor. And it is not
@@ -1193,7 +1193,7 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
 XSLT suite: 14601 cases, 6052 in scope, 8549 skipped
-in-scope: 6024 passed, 28 failed (99.54%)
+in-scope: 6025 passed, 27 failed (99.55%)
 ```
 
 The filter decides what the number means, so the run prints its own exclusions:
