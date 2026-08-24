@@ -28,7 +28,7 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.56% — 6,132 of 6,159 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.61% — 6,135 of 6,159 in scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -71,7 +71,7 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT 2.0
 
-The weakest of the measured numbers, at 99.56%, and the newest — so it is a
+The weakest of the measured numbers, at 99.61%, and the newest — so it is a
 floor rather than a settled figure. Two things about how it is obtained matter
 before the failures are read.
 
@@ -104,15 +104,18 @@ by that measure:
 | `use-when` | 79/80 | unprefixed type names in the default element namespace |
 | `variable` | 102/103 | XSLT 3.0 text value templates |
 
-**Not all 27 are open problems, and the table above does not say so on its own.**
+**Not all 24 are open problems, and the table above does not say so on its own.**
 Nine of them — the `regex` and `analyze-string` rows — pass with
 `xpath.SetBacktrackingRegex(true)`; the engine for them is written, tested and
 shipped, and the failures are a consequence of a deliberate default rather than
 of missing work. Six more are cases where this engine is right and the suite is
 not, or where matching the suite would cost XSD tests, which is a trade this
 project does not make. Six need XSLT 3.0 features, the network, or
-byte-identical reproduction of another processor's indentation. That leaves six
-genuinely open, and they are the ones worth reading this file for.
+byte-identical reproduction of another processor's indentation. That leaves
+three genuinely open, and they are the ones worth reading this file for:
+`docbook-001` needs the EXSLT `node-set` extension, `docbook-002` needs an
+entity resolver for a parameter entity in a DTD subset, and `import-schema-137`
+needs whole-program static type checking.
 
 Six of the remaining failures are errors the suite expects that the engine
 does not raise. That is the same shape as the XSD schema-validity gap: the

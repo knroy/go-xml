@@ -100,13 +100,7 @@ func elementIncluded(el *xdm.Node) (bool, error) {
 	// element namespace comes from xpath-default-namespace if present. Both
 	// are properties of where the attribute is written, which is why the
 	// resolver is built from el rather than from the module.
-	def := ""
-	if a := el.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
-		def = a.Value
-	} else if a := el.Attr("", "xpath-default-namespace"); a != nil &&
-		el.Name.URI == xdm.NSXSL {
-		def = a.Value
-	}
+	def := xpathDefaultNamespace(el)
 	ns := &nsResolver{
 		bindings:  el.InScopeNamespaces(),
 		defaultNS: def,
@@ -180,4 +174,28 @@ func useWhenFuncs(bindings map[string]string) *xpath.Library {
 	// those available "in the absence of any xsl:import-schema".
 	registerStaticFuncs(l, fnRes, typeRes, nil)
 	return l
+}
+
+// xpathDefaultNamespace finds the [xsl:]xpath-default-namespace in force on el.
+//
+// The attribute is inherited: 5.2 makes it apply to "the element on which it
+// appears and all its descendants", so an expression written on a template
+// takes the value declared on xsl:stylesheet when the template declares none.
+// Reading only el's own attributes made the two cases indistinguishable --
+// use-when-0118 declares it on the module element and use-when-0125 on a
+// sibling template, and both looked like "not declared" -- so the same answer
+// came back for a name that is in the XSD namespace and one that is in no
+// namespace at all.
+func xpathDefaultNamespace(el *xdm.Node) string {
+	for n := el; n != nil && n.Kind == xdm.KindElement; n = n.Parent {
+		if a := n.Attr(xdm.NSXSL, "xpath-default-namespace"); a != nil {
+			return a.Value
+		}
+		if n.Name.URI == xdm.NSXSL {
+			if a := n.Attr("", "xpath-default-namespace"); a != nil {
+				return a.Value
+			}
+		}
+	}
+	return ""
 }

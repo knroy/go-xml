@@ -78,6 +78,11 @@ type TestSet struct {
 	// Dir is the test-set file's directory, relative to the suite root.
 	// Stylesheet and source paths are relative to it rather than to the root.
 	Dir string `xml:"-"`
+
+	// Path is the test-set file itself. An inline <source><content> is a part
+	// of this file, so this -- not a synthesised name in Dir -- is the base
+	// URI the XML spec gives the element the content becomes.
+	Path string `xml:"-"`
 }
 
 // Environment supplies the source documents, parameters and settings a test

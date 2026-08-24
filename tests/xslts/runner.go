@@ -156,6 +156,7 @@ func (r *Runner) loadSet(ref TestSetRef) (*TestSet, error) {
 	// Stylesheet and source paths are relative to the test-set file rather
 	// than to the suite root, so the directory travels with the parsed set.
 	set.Dir = filepath.Dir(path)
+	set.Path = path
 	if set.Name == "" {
 		set.Name = ref.Name
 	}
@@ -535,7 +536,13 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 				// fn:resolve-uri are defined over URIs, and a bare
 				// filesystem path has no scheme, so it is not an
 				// absolute URI however absolute the path is.
-				BaseURI: fileURI(filepath.Join(set.Dir, "inline.xml")),
+				// An inline source is a part of the test-set file, so the
+				// XML base URI it inherits is that file's own -- which is
+				// what backwards-041 asserts with
+				// ends-with(base-uri(//item), '_backwards-test-set.xml').
+				// A synthesised "inline.xml" beside it resolves relative
+				// fn:doc names identically, but answers base-uri() wrongly.
+				BaseURI: fileURI(set.Path),
 				// An inline source may declare an external entity of its
 				// own — copy-1401 writes <!ENTITY extEnt SYSTEM "ent22.xml">
 				// in its <content> — and without a resolver the reference is
@@ -591,7 +598,7 @@ func (r *Runner) selectedSource(set *TestSet, env *Environment, s Source) (*xdm.
 	case s.Content != "":
 		tree, err := xdm.ParseString(s.Content, xdm.ParseOptions{
 			AllowDOCTYPE:     true,
-			BaseURI:          fileURI(filepath.Join(set.Dir, "inline.xml")),
+			BaseURI:          fileURI(set.Path),
 			ExternalEntities: r.entityResolver(),
 		})
 		if err != nil {

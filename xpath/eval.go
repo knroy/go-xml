@@ -515,9 +515,22 @@ func (e *UnaryOp) Eval(ctx *Context) (xdm.Sequence, error) {
 	if !ok {
 		return nil, xdm.ErrType("unary %s applied to a non-atomic value", e.Op)
 	}
-	n, err := toNumeric(a)
-	if err != nil {
-		return nil, err
+	// B.1 rule 2: under XPath 1.0 compatibility the operand of an arithmetic
+	// operator is converted with fn:number, which makes it xs:double. Unary
+	// minus is where that is observable beyond error-vs-value: 1.0 had one
+	// numeric type, so "-0" is the double -0.0 and keeps its sign, where 2.0
+	// makes it the integer 0 and xs:integer has no signed zero. Casting that
+	// integer onward gives "0" for string(xs:float(-0)), which 1.0 spells
+	// "-0". Only the unary form is rewritten here; the binary operators reach
+	// the same rule through compatNumber in operators.go.
+	var n *xdm.Atomic
+	if ctx.Compat {
+		n = compatNumber(a)
+	} else {
+		n, err = toNumeric(a)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if e.Op == "+" {
 		return xdm.One(n), nil

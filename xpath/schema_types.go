@@ -202,7 +202,13 @@ func (xsOnlyResolver) ResolvePrefix(p string) (string, bool) {
 	}
 	return "", false
 }
-func (xsOnlyResolver) DefaultElementNamespace() string  { return "" }
+
+// The names BuiltinAtomicTypeCode is asked about arrive as bare local parts --
+// the caller holds a type it already knows to be in the XSD namespace and has
+// dropped the prefix. Reporting XSD here says so, which is what lets
+// atomicTypeByName apply the default-namespace rule to unprefixed names
+// without refusing those lookups.
+func (xsOnlyResolver) DefaultElementNamespace() string  { return xdm.NSXS }
 func (xsOnlyResolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 
 // schemaTypeOf asks the resolver about a type name the built-in table did not

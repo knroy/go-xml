@@ -62,7 +62,15 @@ moved from 99.60% to 99.56%, because the admitted set is harder than the corpus
 average. The number below is the honest one, and it is not comparable to
 earlier figures measured over the smaller scope.
 
-### XSLT 2.0 conformance: 98.83% to 99.56% over a scope that grew
+Two further fixes in backwards-compatible mode. Unary minus now converts its
+operand with `fn:number` as B.1 rule 2 requires, so `-0` under 1.0 keeps its
+sign — in 2.0 it is unary minus on an integer, which has no signed zero, and
+`0` stays the right answer there. And an unprefixed atomic type name is
+resolved in the default element namespace, which is inherited rather than read
+from the element alone; `use-when` on a template whose sibling declares
+`xpath-default-namespace` does not see that declaration.
+
+### XSLT 2.0 conformance: 98.83% to 99.61% over a scope that grew
 
 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two
 rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209);
@@ -166,7 +174,7 @@ libxml2.
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.56% — 6,132 of 6,159 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.61% — 6,135 of 6,159 in scope |
 
 DTD has no percentage because no public conformance suite exists for it.
 

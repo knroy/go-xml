@@ -908,6 +908,19 @@ func atomicTypeByName(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
 		if !ok || uri != xdm.NSXS {
 			return 0, false
 		}
+	} else if ns != nil && ns.DefaultElementNamespace() != xdm.NSXS {
+		// An unprefixed AtomicType is not in no namespace: it takes the
+		// default element/type namespace, so "string" names xs:string only
+		// where that namespace is the XSD one. Accepting it unconditionally
+		// let "'abc' instance of string" compile in a context binding no such
+		// name, where XPST0051 is required.
+		//
+		// Returning false does not by itself reject the name. The caller
+		// falls through to schemaTypeOf, which looks the same name up in
+		// whatever namespace *is* in force -- so an imported schema type
+		// written unprefixed still resolves, and only a name that denotes
+		// nothing anywhere reaches the XPST0051 at the end.
+		return 0, false
 	}
 	switch local {
 	case "string":

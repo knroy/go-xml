@@ -241,13 +241,52 @@ func optimizeCompat(e Expr) Expr {
 		return nil
 	}
 	e = optimizeWith(e, optimizeCompat)
-	if b, ok := e.(*BinaryOp); ok && compatSensitiveOp(b.Op) {
+	// The check is on the whole subtree, not just the node in hand. Folding
+	// happens bottom-up, so "string(-0)" reaches this as a FuncCall whose
+	// argument is still a UnaryOp; folding the call evaluates that unary in a
+	// context that is not in compatibility mode and bakes in the 2.0 answer,
+	// exactly as folding the operator directly would.
+	if containsCompatSensitive(e) {
 		return e
 	}
 	if lit, ok := foldConstant(e); ok {
 		return lit
 	}
 	return e
+}
+
+// containsCompatSensitive reports whether e contains an operator whose meaning
+// B.1 redefines, anywhere in its subtree.
+//
+// Unary + and - count alongside the binary operators: B.1 rule 2 converts an
+// arithmetic operand with fn:number, which makes it xs:double. That is
+// observable in the value and not only in which expressions raise, because
+// xs:double has a signed zero and xs:integer does not -- "-0" is the double
+// -0.0 under 1.0 and the integer 0 under 2.0, so string(xs:float(-0)) is "-0"
+// there and "0" here.
+func containsCompatSensitive(e Expr) bool {
+	switch v := e.(type) {
+	case *UnaryOp:
+		return true
+	case *BinaryOp:
+		if compatSensitiveOp(v.Op) {
+			return true
+		}
+		return containsCompatSensitive(v.Left) || containsCompatSensitive(v.Right)
+	case *FuncCall:
+		for _, a := range v.Args {
+			if containsCompatSensitive(a) {
+				return true
+			}
+		}
+	case *SequenceExpr:
+		for _, it := range v.Items {
+			if containsCompatSensitive(it) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // compatSensitiveOp reports whether B.1 redefines the operator, and therefore
