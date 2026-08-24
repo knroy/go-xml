@@ -375,9 +375,13 @@ comparison would answer confidently and wrongly: `(a*)` against `"aa"` does
 match, by the split `"a"` + `"a"`, but the greedy assignment leaves nothing for
 the backreference.
 
-There is no option to relax this. An engine that answers correctly or says it
-cannot is safe to point at untrusted patterns; one that guesses is not safe at
-any setting, and `fn:matches` takes its pattern from the stylesheet. See
+The default refuses rather than guesses: an engine that answers correctly or
+says it cannot is safe to point at untrusted patterns, and one that guesses is
+not safe at any setting. `xpath.SetBacktrackingRegex(true)` decides the general
+case with a backtracking matcher, bounded by a step budget whose exhaustion is
+an error rather than a silent "no match". It is off by default — `fn:matches`
+takes its pattern from the stylesheet, and `matches($s, $node/@pattern)` takes
+one from document data. See
 [security.md](security.md#regular-expressions-cannot-backtrack-catastrophically).
 
 The XML Schema pattern facet has no backreference at all — Appendix F's grammar

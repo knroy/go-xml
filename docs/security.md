@@ -327,21 +327,36 @@ n=24 to n=40. Go also *rejects* repeat counts over 1000, so `{1,1000000}` cannot
 be used to force an expansion; the XSD pattern translator allocates nothing on
 nested quantifiers or 200-deep groups.
 
-**Backreferences do not change this.** XPath 2.0 has them and RE2 does not, and
-the usual way to bridge that is a backtracking engine — which is exactly the
-denial-of-service vector RE2 exists to remove. This engine does not add one. A
-backreference is resolved only when every group it names has a *fixed* width,
-where RE2's single submatch assignment is the only assignment and one
-comparison decides the answer; the whole match stays linear in the input.
-Measured on `([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs.
+**Backreferences do not change this, by default.** XPath 2.0 has them and RE2
+does not, and the usual way to bridge that is a backtracking engine — which is
+exactly the denial-of-service vector RE2 exists to remove. The default engine
+does not use one. A backreference is resolved only when every group it names,
+*and the text between the group and the reference*, has a fixed width, where
+RE2's single submatch assignment is the only assignment and one comparison
+decides the answer; the whole match stays linear in the input. Measured on
+`([a-z])\1*`: 4,000 characters in 53 µs, 64,000 in 567 µs.
 
-A backreference to a variable-width group — `(a*)\1` — is refused with
-`FORX0002` rather than answered, because deciding it needs alternatives RE2
-cannot enumerate. There is deliberately **no option to relax this**: an engine
-that answers correctly or says it cannot is safe to expose to untrusted
-patterns, and one that guesses is not safe at any setting. Since `fn:matches`
-takes its pattern from the stylesheet, and a stylesheet may be caller-supplied,
-that distinction is a security property rather than a conformance preference.
+Outside that subset — `(a*)\1` — the default refuses with `FORX0002` rather
+than answering, because deciding it needs alternatives RE2 cannot enumerate. An
+engine that answers correctly or says it cannot is safe to expose to untrusted
+patterns; one that guesses is not safe at any setting.
+
+**A backtracking matcher is available, and is off by default.**
+`xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command
+line, decides the general case. Leave it off for untrusted input. The reason is
+the one above: `fn:matches` takes its pattern from the stylesheet, a stylesheet
+may be caller-supplied, and `matches($s, $node/@pattern)` takes one from
+*document data* — so enabling it globally lets a document being validated
+choose how long the validation takes.
+
+Even enabled it is bounded. Every match attempt is counted against a step
+budget, and exhausting the budget raises `FORX0002` rather than returning a
+silent "no match" — a budget that guessed would do it precisely on the inputs
+where the answer was hardest to get. Measured from both ends: the hardest
+honest pattern in either conformance suite answers in 525 steps, while
+`(a*)*\1b` against sixty `a`s exhausts the whole budget in about 200 ms. So the
+worst case is a fifth of a second of wasted work, not a hang — but it is still
+work an attacker can ask for, which is why the default stands.
 
 ### Internal entities expand; external ones never do
 

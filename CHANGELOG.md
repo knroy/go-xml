@@ -119,8 +119,8 @@ libxml2.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
-| XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
+| XSD 1.0 | W3C xsdtests | 99.81% instance · 98.60% schema-validity |
 | XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |

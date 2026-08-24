@@ -68,9 +68,9 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.99% of the W3C QT3 suite (15,180 of 15,181 in scope) |
+| **XPath 2.0** | 99.99% of the W3C QT3 suite (15,182 of 15,183 in scope) |
 | **XSLT 2.0** | 99.55% of the W3C XSLT suite filtered to 2.0 (6,025 of 6,052 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSD 1.0** | 99.80% of the W3C xsdtests *instance* tests (24,955 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
+| **XSD 1.0** | 99.81% of the W3C xsdtests *instance* tests (24,955 of 25,003); **98.60%** of its *schema-validity* tests (14,204 of 14,405) |
 | **XSD 1.1** | 99.81% instance (26,158 of 26,209); **97.96%** schema-validity (15,051 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
@@ -718,7 +718,7 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**1 of 15,181 in-scope cases fails (0.01%).**
+**1 of 15,183 in-scope cases fails (0.01%).**
 
 `fn-matches-51`:
 `fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
@@ -995,7 +995,7 @@ had let something through.
 | **Unit tests** (671) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
-| **W3C QT3 suite** | systematic conformance across 15,181 cases | XSLT (it is an XPath suite) |
+| **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 25,003 instance and 14,405 schema-validity tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 

@@ -23,9 +23,9 @@ kind — they break working documents — so they are listed first throughout.
 
 | | Suite | Result |
 |---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,180 of 15,181 in scope |
-| XSD 1.0 | W3C xsdtests | 99.80% instance · 98.60% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.80% instance · 97.96% schema-validity |
+| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
+| XSD 1.0 | W3C xsdtests | 99.81% instance · 98.60% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.81% instance · 97.96% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.55% — 6,025 of 6,052 in scope |
@@ -790,8 +790,8 @@ greedy content-model matcher, two reverted attempts recorded above), and
 | | now | reachable | what stands in the way |
 |---|---|---|---|
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
-| XSD 1.0 instance | 99.80% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
-| XSD 1.1 instance | 99.80% | ~99.9% | same |
+| XSD 1.0 instance | 99.81% | ~99.9% | 3 diagnoses; 2 of the 5 are disputed |
+| XSD 1.1 instance | 99.81% | ~99.9% | same |
 | XSD 1.0 schema | 98.60% | ~99.9% | 174 constraints, one at a time |
 | XSD 1.1 schema | 97.96% | ~99.9% | 285 constraints, one at a time |
 

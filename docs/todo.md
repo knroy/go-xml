@@ -7,9 +7,11 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,953 / 25,003 (99.80%) |
-| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,155 / 26,209 (99.79%) |
-| XPath 2.0 | 99.99% — 15,180 of 15,181 in scope (1 failing) |
+| XSD 1.0 | 14,204 / 14,405 (98.60%) | 24,955 / 25,003 (99.81%) |
+| XSD 1.1 | 15,051 / 15,365 (97.96%) | 26,158 / 26,209 (99.81%) |
+| XPath 2.0 | 99.99% — 15,182 of 15,183 in scope (1 failing) |
+| XSLT 2.0 | 99.55% — 6,025 of 6,052 in scope (27 failing) |
+| RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 671, clean under `-race` |
 
@@ -157,14 +159,21 @@ the truth is *true* (`"a"` + `"a"`).
 
 When every named group has a *fixed* width there is nothing to enumerate, the
 greedy assignment is the only assignment, and capture-and-compare is exact. It
-runs in RE2's linear time — measured, 64,000 characters in 567 µs — so **no
-backtracking engine was added and the linear-time guarantee is intact**.
+runs in RE2's linear time — measured, 64,000 characters in 567 µs — so **the
+default path adds no backtracking engine and the linear-time guarantee is
+intact**.
 
-The split is therefore by what can be decided, not by what a caller asked for,
-which is why there is no option to turn this on: an engine that answers
-correctly or says it cannot is safe on always; one that guesses is not safe at
-any setting. A variable-width group, or a backreference that is not last, still
-raises `FORX0002`. `fn-matches-51` is both.
+The split is by what can be decided, not by what a caller asked for: an engine
+that answers correctly or says it cannot is safe on always; one that guesses is
+not safe at any setting. Outside the decidable subset the default raises
+`FORX0002`.
+
+The general case *is* implemented, behind `xpath.SetBacktrackingRegex(true)`
+(`-backtracking-regex` on the command line) and off by default, because it has
+no linear-time guarantee and patterns can come from document data. A step
+budget bounds every match and exhausting it is an error, never a silent "no
+match". With it enabled the nine XSLT `regex`/`analyze-string` failures and
+`fn-matches-51` all pass — XSLT 2.0 99.69% and QT3 15,183 of 15,183.
 
 An earlier version of this file argued the whole thing was not worth doing,
 having reasoned about capture-and-compare in general and missed that the
@@ -216,11 +225,13 @@ refused include.
 
 Recorded so they are not proposed again as oversights:
 
-* **Backreferences to a variable-width group** — resolving one means
-  enumerating submatch assignments RE2 does not offer, so it needs a
-  backtracking engine and gives up the linear-time guarantee. The fixed-width
-  case is *not* in this list: it has one possible assignment, so comparison is
-  exact, and it is implemented. See 2.3.
+* **Backreferences to a variable-width group, *by default*** — resolving one
+  means enumerating submatch assignments RE2 does not offer, so it needs a
+  backtracking engine and gives up the linear-time guarantee. That engine now
+  exists behind `xpath.SetBacktrackingRegex(true)`; what remains a non-goal is
+  turning it on by default, since patterns can come from document data. The
+  fixed-width case is *not* in this list: it has one possible assignment, so
+  comparison is exact, and it is on always. See 2.3.
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.
