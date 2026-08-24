@@ -746,6 +746,17 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	// XSD 1.1 notNamespace: the complement of a namespace list, which 1.0
 	// could only express for a single namespace with ##other.
 	if not := el.AttrValue("notNamespace"); not != "" {
+		// §3.10.2: namespace and notNamespace are alternative spellings
+		// of the same {namespace constraint} property, and the schema
+		// for schemas marks them mutually exclusive. Present together
+		// there is no answer to which one wins, so the schema is in
+		// error rather than one silently shadowing the other. Pins
+		// wild007 (on xs:anyAttribute) and wild008 (on xs:any).
+		if el.Attr("", "namespace") != nil {
+			p.errs = append(p.errs, errorAt(el, "",
+				"namespace and notNamespace may not both be present on <xs:%s>",
+				el.Name.Local))
+		}
 		w.Kind = NSNot
 		for _, word := range splitFields(not) {
 			switch word {
@@ -871,6 +882,28 @@ func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
 				p.errs = append(p.errs, err)
 				continue
 			}
+			// §3.10.3 (Wildcard Schema Component, "Constraints on
+			// XML Representations of Wildcards"): every QName in
+			// notQName must have a namespace the {namespace
+			// constraint} already allows. Excluding a name the
+			// wildcard could never have matched is not a narrowing
+			// but a contradiction, and the spec makes it an error
+			// rather than a no-op. Pins wild031 (##other vs an
+			// unqualified name), wild032 (##local vs xml:), wild033
+			// (notNamespace="##targetNamespace" in a no-namespace
+			// schema vs an unqualified name), and wild034/wild035
+			// (notNamespace excluding exactly the namespace the
+			// notQName entry names).
+			//
+			// This is checked against the namespace constraint
+			// only. ##defined and ##definedSibling name no
+			// namespace and so are unconstrained by it.
+			if !w.Allows(name.URI) {
+				p.errs = append(p.errs, errorAt(el, "",
+					"notQName=%q names %q, whose namespace the wildcard does not allow",
+					raw, word))
+				continue
+			}
 			w.DisallowedNames = append(w.DisallowedNames, name)
 		}
 	}
@@ -885,8 +918,18 @@ func (p *parser) readDisallowedNames(el *xdm.Node, w *Wildcard) {
 // {X}a and {X}b — the names the author was looking at when they wrote it.
 func (p *parser) resolveNotQName(el *xdm.Node, value string) (xdm.QName, error) {
 	prefix, local := "", value
+	hadColon := false
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		prefix, local = value[:i], value[i+1:]
+		hadColon = true
+	}
+	// A colon with nothing before it is not a QName: xs:QName's lexical
+	// space requires a non-empty NCName on each side of the colon, and an
+	// empty prefix is not the same as no prefix. Without this, ":stylesheet"
+	// falls through as the unprefixed name "stylesheet". Pins wild039.
+	if hadColon && prefix == "" {
+		return xdm.QName{}, errorAt(el, "src-resolve",
+			"notQName=%q is not a valid QName", value)
 	}
 	if local == "" || strings.ContainsRune(local, ':') {
 		return xdm.QName{}, errorAt(el, "src-resolve",

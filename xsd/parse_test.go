@@ -1761,3 +1761,85 @@ func TestExtensionChainFlattensCompletely(t *testing.T) {
 		}
 	}
 }
+
+// TestWildcardNamespaceAndNotNamespaceExclusive pins §3.10.2: namespace and
+// notNamespace are two spellings of one property and may not both appear.
+//
+// The rule is not version-gated. notNamespace is an XSD 1.1 attribute, but
+// under 1.0 it is an unknown attribute in the XSD namespace rather than a
+// licence to ignore the conflict, and the suite's 1.0 runs expect the schema
+// rejected (s3_10_1si01, s3_10_6si01).
+func TestWildcardNamespaceAndNotNamespaceExclusive(t *testing.T) {
+	for _, tc := range []struct{ name, decl string }{
+		{"any", `<xs:sequence><xs:any namespace="##any" ` +
+			`notNamespace="##targetNamespace" processContents="skip"/></xs:sequence>`},
+		{"anyAttribute", `<xs:sequence/><xs:anyAttribute namespace="##other" ` +
+			`notNamespace="##targetNamespace" processContents="skip"/>`},
+	} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+		  <xs:element name="e"><xs:complexType>` + tc.decl +
+			`</xs:complexType></xs:element></xs:schema>`
+		for _, v := range []Version{Version10, Version11} {
+			if err := loadVersion(t, src, v); err == nil {
+				t.Errorf("%s under %v: namespace with notNamespace was accepted",
+					tc.name, v)
+			}
+		}
+	}
+}
+
+// TestNotQNameNamespaceMustBeAllowed pins §3.10.3: every QName in notQName
+// must lie in a namespace the {namespace constraint} already admits.
+// Excluding a name the wildcard could never match is an error, not a no-op.
+func TestNotQNameNamespaceMustBeAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		name, decl string
+		wantErr    bool
+	}{
+		// wild031: ##other in a no-namespace schema excludes the absent
+		// namespace, so an unprefixed notQName names something outside.
+		{"other vs unqualified",
+			`<xs:any namespace="##other" notQName="memory" processContents="lax"/>`, true},
+		// wild032: ##local admits only the absent namespace.
+		{"local vs xml namespace",
+			`<xs:any namespace="##local" notQName="xml:space" processContents="lax"/>`, true},
+		// wild034: notNamespace excludes exactly what notQName names.
+		{"notNamespace excludes the named namespace",
+			`<xs:any notNamespace="http://www.w3.org/XML/1998/namespace" ` +
+				`notQName="xml:space" processContents="lax"/>`, true},
+		// The useful, valid form: the namespace is admitted and one
+		// name within it is carved out.
+		{"allowed namespace carved out",
+			`<xs:any namespace="http://www.w3.org/XML/1998/namespace" ` +
+				`notQName="xml:space" processContents="lax"/>`, false},
+		// ##defined names no namespace, so it is unconstrained.
+		{"##defined is unconstrained",
+			`<xs:any namespace="##other" notQName="##defined" processContents="lax"/>`, false},
+	} {
+		src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		    xmlns:xml="http://www.w3.org/XML/1998/namespace">
+		  <xs:element name="e"><xs:complexType><xs:sequence>` + tc.decl +
+			`</xs:sequence></xs:complexType></xs:element></xs:schema>`
+		err := loadVersion(t, src, Version11)
+		if tc.wantErr && err == nil {
+			t.Errorf("%s: notQName outside the namespace constraint was accepted", tc.name)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("%s: valid notQName was rejected: %v", tc.name, err)
+		}
+	}
+}
+
+// TestNotQNameRejectsEmptyPrefix pins wild039: ":stylesheet" carries a colon
+// with an empty NCName before it, which xs:QName's lexical space does not
+// admit. Treating it as the unprefixed name "stylesheet" silently accepts a
+// schema the spec rejects.
+func TestNotQNameRejectsEmptyPrefix(t *testing.T) {
+	src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="e"><xs:complexType><xs:sequence>
+	    <xs:any namespace="##any" notQName=":stylesheet" processContents="lax"/>
+	  </xs:sequence></xs:complexType></xs:element></xs:schema>`
+	if err := loadVersion(t, src, Version11); err == nil {
+		t.Error(`notQName=":stylesheet" was accepted; an empty prefix is not a QName`)
+	}
+}

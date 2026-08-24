@@ -6,6 +6,27 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### XSD 1.1 wildcard attributes
+
+Schema validity reaches 99.47% on XSD 1.0 and 98.85% on 1.1.
+
+`namespace` and `notNamespace` on a wildcard are mutually exclusive — they are
+two spellings of one `{namespace constraint}` property, and letting
+`notNamespace` quietly win discarded what the schema author wrote. The check is
+deliberately not version-gated: under XSD 1.0 `notNamespace` is an unrecognised
+attribute in the XSD namespace, which is not a licence to ignore the conflict,
+and that is what earns the two XSD 1.0 gains.
+
+Every QName in `notQName` must lie in a namespace the wildcard's own constraint
+admits (section 3.10.3). Excluding a name the wildcard could never match is a
+contradiction rather than a narrowing. `##defined` and `##definedSibling` name
+no namespace and stay unconstrained.
+
+And `":stylesheet"` is not a QName. The resolver split it into an empty prefix
+and a local name, then took the *no-prefix* path and accepted it as an
+unqualified name; `xs:QName` requires a non-empty NCName on both sides of the
+colon.
+
 ### Restricting xs:anySimpleType, and a contravariant wildcard rule
 
 Schema validity reaches 99.45% on XSD 1.0 and 98.78% on 1.1.
@@ -372,8 +393,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.45% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.78% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.47% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 98.85% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -415,7 +436,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.45% (1.0) and 98.78% (1.1). Instance validation —
+* XSD schema-validity, at 99.47% (1.0) and 98.85% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.
