@@ -70,6 +70,39 @@ func TestUPADetectsOptionalPrefix(t *testing.T) {
 	}
 }
 
+// TestUPAOnAnonymousInlineType is the shape every test above missed.
+//
+// All of them declare a *named* <xs:complexType>, and the constraint walk
+// visited only the schema's named types — so Unique Particle Attribution and
+// Element Declarations Consistent never ran against a complex type declared
+// inline in an element, which is the ordinary spelling. A schema with no named
+// types at all was checked against nothing, and a textbook violation loaded
+// clean. That is a validator failing open, not a missing conformance point.
+//
+// The named form is asserted alongside it so a future change cannot fix one
+// spelling by breaking the other.
+func TestUPAOnAnonymousInlineType(t *testing.T) {
+	const body = `
+	    <xs:sequence>
+	      <xs:element name="a" minOccurs="0"/>
+	      <xs:element name="a"/>
+	    </xs:sequence>`
+
+	anon := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="doc"><xs:complexType>` + body + `</xs:complexType></xs:element>
+	</xs:schema>`
+	if err := checkSchema(t, anon, CheckOptions{}); err == nil {
+		t.Error("a UPA violation in an anonymous inline type must be rejected")
+	}
+
+	named := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:complexType name="t">` + body + `</xs:complexType>
+	</xs:schema>`
+	if err := checkSchema(t, named, CheckOptions{}); err == nil {
+		t.Error("a UPA violation in a named type must be rejected")
+	}
+}
+
 // TestUPAElementAgainstWildcard covers the case XSD 1.1 later relaxed: in 1.0
 // an element competing with a wildcard that admits it is a violation, and 1.1
 // instead prefers the element. A 1.0 validator must not silently adopt the 1.1

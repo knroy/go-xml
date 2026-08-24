@@ -24,8 +24,8 @@ kind — they break working documents — so they are listed first throughout.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.51% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.11% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.56% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.18% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -45,10 +45,10 @@ about the expected result. Only the `accepted` column is work outstanding:
 | | 1.0 total | 1.0 addressable | 1.1 total | 1.1 addressable |
 |---|---:|---:|---:|---:|
 | schema false reject | 7 | **6** | 13 | **11** |
-| schema false accept | 63 | **42** | 123 | **100** |
+| schema false accept | 57 | **36** | 113 | **90** |
 | instance false reject | 4 | **2** | 3 | **1** |
 | instance false accept | 27 | **2** | 25 | **1** |
-| **total** | **101** | **52** | **164** | **113** |
+| **total** | **95** | **46** | **154** | **103** |
 
 The 49 disputed cases in 1.0 and 51 in 1.1 are `queried` or tied to an open
 bug — the suite disagreeing with itself, not necessarily defects here. Counted
@@ -776,12 +776,23 @@ reasoning is under *Regular expression backreferences* above.
 **Closing the last one would cost the linear-time guarantee**, which is a worse
 trade than the case is worth.
 
-### XSD schema-validity: 42 (1.0) and 100 (1.1) that are ours
+### XSD schema-validity: 36 (1.0) and 90 (1.1) that are ours
 
-All false *accepts* — invalid schemas that load. After five rounds of rule
-work the clusters are: 1.0 `MS-Particles` (9), `MS-Additional` (7),
-`MS-Wildcards` (4); 1.1 `Simple` (12), `MS-Particles` (11), `Zone` (6),
-`Override` (5), `Open` (5).
+All false *accepts* — invalid schemas that load.
+
+Four of them were not a missing rule at all. `checkContentModelConstraints`
+walked only the schema's *named* types, so Unique Particle Attribution and
+Element Declarations Consistent never ran against a complex type declared
+inline in an element — the ordinary spelling. A schema with no named types was
+checked against nothing, and `(a?, a)` loaded clean. **That is a validator
+failing open, not a conformance point**, and it is the second time this exact
+shape has been found here: the particle-restriction constraint had the same
+gap. When adding a schema-component constraint, check that the walk reaching it
+visits anonymous types too.
+
+What remains clusters in 1.0 `MS-Particles`, `MS-Additional` and
+`MS-Wildcards`; in 1.1 `Simple`, `MS-Particles`, `Zone`, `Override` and
+`Open`.
 
 Each is an unwritten Schema Component Constraint. There is no single change
 here: it is one rule at a time, and **every rule added is a chance to reject a
@@ -841,6 +852,33 @@ XPath was *raising* rather than answering, and a type alternative whose test
 raises is silently skipped, so a crash was indistinguishable from a false
 test.
 
+### Suite cases that should be read as disputed
+
+These carry status `accepted`, so the addressable counts above include them,
+but each is questionable on the suite's own evidence:
+
+* **Four `notQName` tests are 1.1-only in substance but run under 1.0.**
+  `s3_10_1ii08s`/`ii09s` are the only un-versioned groups in `wildcard.testSet`
+  using `notQName`, while seven sibling groups carry `version="1.1"`. The
+  `s3_10_6` pair is worse: `v01`/`v02` *do* carry `version="1.1"`, but the
+  tests that fail are `ii01`/`ii02`, different un-versioned groups reusing
+  those names. Our version logic implements the suite's own token rules
+  correctly; the data is what is wrong.
+* **`simple093` contradicts `particlesZ007`.** The first declares
+  `<xs:union memberTypes="xs:QName xs:NOTATION"/>` invalid; the second contains
+  `<xsd:union memberTypes="xsd:NOTATION"/>` and is valid. Enforcing the rule
+  trades one for the other, and loses `particlesZ007` outright under 1.0 where
+  `simple093` is not even run. The list form is enforced; the union form is
+  deliberately not.
+* **`particlesK006` under 1.1.** L(R) ⊆ L(B) holds, so it is a valid
+  restriction under §3.4.6.4, yet it is marked invalid with no version
+  qualifier. It is the guard that constrains any fix for `mgO029`.
+* **`particlesZ001` under 1.0** is expected valid with no version attribute
+  while its own annotation calls the 1.0 rule "ambiguous" and tags it as
+  intensional restriction, a 1.1 feature.
+* **`simple004`/`005`** are self-flagged as depending on the resolution of spec
+  bug 2074, and `simple006`'s own note says "one could argue for valid".
+
 ### Honest summary
 
 | | now | reachable | what stands in the way |
@@ -848,8 +886,8 @@ test.
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
 | XSD 1.0 instance | **99.88%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
 | XSD 1.1 instance | **99.89%** | ~99.9% | same |
-| XSD 1.0 schema | **99.51%** | **~99.6%** | 42 addressable false accepts, one at a time |
-| XSD 1.1 schema | **99.11%** | **~99.6%** | 100 addressable false accepts, one at a time |
+| XSD 1.0 schema | **99.56%** | **~99.6%** | 36 addressable false accepts, one at a time |
+| XSD 1.1 schema | **99.18%** | **~99.6%** | 90 addressable false accepts, one at a time |
 
 The two schema rows once read `~99.9%`, which contradicted the ceiling derived
 under *What 100% would take* above and could not be reached. The reachable
@@ -863,7 +901,7 @@ that work started:
 | `accepted` — addressable | 197 | 311 |
 | `queried` or bug-tied — the ceiling | 52 | 54 |
 
-and today 101 and 164, of which 52 and 113 are addressable. Eighteen of the
+and today 95 and 154, of which 46 and 103 are addressable. Eighteen of the
 1.0 disputes are bug 4113 alone. Reaching 99.99% would have meant fixing 200
 of the original 201 1.0 schema disagreements and 313 of the 314 in 1.1 —
 arithmetically impossible without "fixing" tests the W3C itself questions.

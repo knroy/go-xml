@@ -88,19 +88,73 @@ func (s *Schema) CheckConstraints(opts CheckOptions) error {
 // cost is paid once per load rather than once per document.
 func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	var errs []error
-	for name, t := range s.Types {
-		ct, ok := t.(*ComplexType)
+
+	// The content models to check are those of every named type *and* of
+	// every anonymous type declared inline in an element declaration.
+	//
+	// Walking only s.Types missed the inline case entirely: a schema whose
+	// only complex type is anonymous — <xs:element name="foo"> with the
+	// complexType nested inside it, which is the ordinary spelling for a
+	// one-off model — had UPA and Element Declarations Consistent checked
+	// against nothing at all. The suite's wildI009, wildI010, wildI013 and
+	// wildI014 are exactly that shape: two competing wildcards inside an
+	// inline complexType, expected invalid and silently accepted.
+	//
+	// Anonymous types are keyed by the element that owns them so the error
+	// can name a place the author recognises, and the element names are
+	// sorted for the same reason the error list below is: a map walk that
+	// decides which of two faults is reported makes the loader's answer
+	// depend on hash order.
+	type modelSite struct {
+		particle *Particle
+		where    string
+	}
+	sites := make([]modelSite, 0, len(s.Types)+len(s.Elements))
+
+	typeNames := make([]xdm.QName, 0, len(s.Types))
+	for name := range s.Types {
+		typeNames = append(typeNames, name)
+	}
+	sortQNames(typeNames)
+	for _, name := range typeNames {
+		ct, ok := s.Types[name].(*ComplexType)
 		if !ok || ct.Particle == nil {
-			continue
-		}
-		m, err := compileContentModel(ct.Particle)
-		if err != nil {
 			continue
 		}
 		where := name.Local
 		if where == "" {
 			where = "an anonymous type"
 		}
+		sites = append(sites, modelSite{ct.Particle, where})
+	}
+
+	elemNames := make([]xdm.QName, 0, len(s.Elements))
+	for name := range s.Elements {
+		elemNames = append(elemNames, name)
+	}
+	sortQNames(elemNames)
+	for _, name := range elemNames {
+		ct, ok := s.Elements[name].Type.(*ComplexType)
+		if !ok || ct.Particle == nil {
+			continue
+		}
+		// A named type reached through an element is already in the
+		// list above; only the inline anonymous ones are new.
+		if ct.Name.Local != "" || ct.Name.URI != "" {
+			continue
+		}
+		sites = append(sites, modelSite{
+			ct.Particle,
+			"the type of element " + name.Local,
+		})
+	}
+
+	for _, site := range sites {
+		m, err := compileContentModel(site.particle)
+		if err != nil {
+			continue
+		}
+		where := site.where
 		if err := checkUPA(m, where, opts); err != nil {
 			errs = append(errs, err)
 		}
@@ -128,6 +182,18 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	}
 	sort.Strings(msgs)
 	return &SchemaErrors{Errors: sortedErrors(msgs)}
+}
+
+// sortQNames orders names so that a walk driven by them is reproducible.
+// Which of two faulty content models is reported must not depend on map
+// iteration order.
+func sortQNames(names []xdm.QName) {
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].URI != names[j].URI {
+			return names[i].URI < names[j].URI
+		}
+		return names[i].Local < names[j].Local
+	})
 }
 
 func sortedErrors(msgs []string) []error {

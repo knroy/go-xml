@@ -6,6 +6,25 @@ break the API — see *Stability* below.
 
 ## Unreleased
 
+### A constraint that never ran against the ordinary spelling
+
+Unique Particle Attribution and Element Declarations Consistent were checked
+only against a schema's *named* complex types. A type declared inline in an
+element — the ordinary spelling — was never checked, so a schema with no named
+types at all was checked against nothing and `(a?, a)` loaded clean.
+
+This is a validator failing open rather than a missing conformance point, and
+it is the second time the same shape has been found here: Particle Valid
+(Restriction) had the identical gap earlier in this cycle. The lesson is
+recorded in `docs/known-gaps.md` — when adding a schema component constraint,
+verify the walk that reaches it visits anonymous types too. `xsd/upa_test.go`
+now asserts both spellings, since every existing test used the named one.
+
+Schema validity reaches **99.56%** on XSD 1.0 and **99.18%** on 1.1, both above
+the ceiling this project's own analysis predicted. Also fixed: NOTATION as a
+list item type, and `xs:anyAtomicType` as a restriction base, list item type or
+union member.
+
 ### Circularity, and the exception that terminates every chain
 
 Schema validity reaches 99.51% on XSD 1.0 and 99.11% on 1.1 — both at the
@@ -470,8 +489,8 @@ libxml2.
 | | Suite | Result |
 |---|---|---|
 | XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.51% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.11% schema-validity |
+| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.56% schema-validity |
+| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.18% schema-validity |
 | RELAX NG | James Clark's spectest | 100.00% — 965 of 965 |
 | DTD | *no public suite* | content models, defaults, `ID`/`IDREF` |
 | XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
@@ -513,7 +532,7 @@ Every measured failure is listed in [docs/known-gaps.md](docs/known-gaps.md),
 including fix attempts that were reverted for costing more than they gained.
 The largest are:
 
-* XSD schema-validity, at 99.51% (1.0) and 99.11% (1.1). Instance validation —
+* XSD schema-validity, at 99.56% (1.0) and 99.18% (1.1). Instance validation —
   what most callers do — is above 99.7% in both. A substantial share of the
   remaining disagreements are cases the W3C's own suite marks as disputed.
 * RELAX NG's compact syntax is not implemented; only the XML syntax is.

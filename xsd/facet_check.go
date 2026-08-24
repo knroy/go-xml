@@ -20,6 +20,7 @@ func (p *parser) checkFacetConstraints() {
 		p.checkTypeFacets(site.typ, site.el)
 		p.checkSimpleTypeFinal(site.typ, site.el)
 		p.checkNotationEnumerated(site.typ, site.el)
+		p.checkSpecialBase(site.typ, site.el)
 		p.checkListOfAtomic(site.typ, site.el)
 	}
 }
@@ -61,6 +62,69 @@ func (p *parser) checkNotationEnumerated(t *SimpleType, el *xdm.Node) {
 			return
 		}
 		p.checkNotationValues(t, el)
+	case VarietyList:
+		// xs:NOTATION as the item type of a list (simple092). The
+		// enumeration requirement is on the type as *used*, so naming
+		// xs:NOTATION itself here leaves a list whose items are
+		// unconstrained notations, which §3.2.19 forbids just as it
+		// forbids the bare restriction above.
+		if isBuiltinNotation(t.ItemType) {
+			p.errs = append(p.errs, errorAt(el, "enumeration-required-notation",
+				"xs:NOTATION may not be the item type of a list; "+
+					"use a type derived from it by enumeration"))
+		}
+		// The union case (simple093) is NOT enforced. The suite
+		// contradicts itself on it: simple093 declares
+		// <xs:union memberTypes="xs:QName xs:NOTATION"/> invalid, while
+		// msData particlesZ007 declares a schema containing
+		// <xsd:union memberTypes="xsd:NOTATION"/> valid. Both carry
+		// status="accepted". Enforcing the rule trades simple093 for
+		// particlesZ007 in 1.1 and loses particlesZ007 outright in 1.0,
+		// where simple093 is not even run. Left unenforced pending a
+		// suite resolution.
+	}
+}
+
+// isAnyAtomicType reports whether t is xs:anyAtomicType itself.
+func isAnyAtomicType(t *SimpleType) bool {
+	return t != nil && t.builtin && t.Name == xsName("anyAtomicType")
+}
+
+// checkSpecialBase enforces Part 2 §3.4.1's rule that xs:anyAtomicType is a
+// "special" type which may not be used in a schema as the base of a
+// restriction, the item type of a list, or a member type of a union.
+//
+// It exists only so that the 19 primitives have a common ancestor and so that
+// xsi:type can select any atomic type; it is not a type a schema author may
+// derive from. The list and union cases follow from the resolution of spec bug
+// 11103, which the suite records on simple052 and simple053; simple051 is the
+// restriction case.
+//
+// The rule is 1.1-only because xs:anyAtomicType does not exist in XSD 1.0 —
+// a 1.0 schema naming it fails earlier, as an unresolvable type reference.
+func (p *parser) checkSpecialBase(t *SimpleType, el *xdm.Node) {
+	if t == nil || p.schema.Version < Version11 {
+		return
+	}
+	switch t.Variety {
+	case VarietyAtomic:
+		if base, ok := t.Base.(*SimpleType); ok && isAnyAtomicType(base) {
+			p.errs = append(p.errs, errorAt(el, "st-props-correct",
+				"xs:anyAtomicType may not be the base type of a restriction"))
+		}
+	case VarietyList:
+		if isAnyAtomicType(t.ItemType) {
+			p.errs = append(p.errs, errorAt(el, "st-props-correct",
+				"xs:anyAtomicType may not be the item type of a list"))
+		}
+	case VarietyUnion:
+		for _, m := range t.MemberTypes {
+			if isAnyAtomicType(m) {
+				p.errs = append(p.errs, errorAt(el, "st-props-correct",
+					"xs:anyAtomicType may not be a member type of a union"))
+				break
+			}
+		}
 	}
 }
 
