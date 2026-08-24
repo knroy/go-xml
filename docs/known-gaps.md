@@ -39,18 +39,21 @@ comparable to a suite percentage, and neither should be quoted as one.
 
 ### Failure counts
 
-| | XSD 1.0 | XSD 1.1 |
-|---|---|---|
-| schema false reject | 7 | 13 |
-| schema false accept | 63 | 123 |
-| instance false reject | 4 | 3 |
-| instance false accept | 27 | 25 |
+Split by direction, and by whether the W3C's own metadata records a dispute
+about the expected result. Only the `accepted` column is work outstanding:
 
-Of those, the W3C itself flags 49 cases in 1.0 and 51 in 1.1 as `queried` or
-tied to an open bug — its own suite disputes, not necessarily defects here.
-Counted by scanning each test's `<current status=...>`. That leaves 52
-addressable in 1.0 and 113 in 1.1. See *What 100% would take* below for why
-this sets the reachable ceiling below 100%.
+| | 1.0 total | 1.0 addressable | 1.1 total | 1.1 addressable |
+|---|---:|---:|---:|---:|
+| schema false reject | 7 | **6** | 13 | **11** |
+| schema false accept | 63 | **42** | 123 | **100** |
+| instance false reject | 4 | **2** | 3 | **1** |
+| instance false accept | 27 | **2** | 25 | **1** |
+| **total** | **101** | **52** | **164** | **113** |
+
+The 49 disputed cases in 1.0 and 51 in 1.1 are `queried` or tied to an open
+bug — the suite disagreeing with itself, not necessarily defects here. Counted
+by scanning each test's `<current status=...>`. See *What 100% would take*
+below for why this sets the reachable ceiling below 100%.
 
 ### RELAX NG
 
@@ -427,7 +430,8 @@ Three conditions, and the third was learned the hard way:
   `ctF007` became a false reject for exactly one case gained.
 
 1.1 schema agreement 15,048 → 15,051 across these two entries, with 1.0 and
-both instance figures unchanged.
+both instance figures unchanged. (A figure from the run that measured it, not a
+current total — later rounds moved the baseline well past it.)
 
 ### A nested all group is flattened before budgeting (fixed)
 
@@ -491,6 +495,8 @@ repetition the base allows looks like something the restriction dropped.
 Measured: `particlesZ001` and `particlesZ023`/`Z024` start loading, but schema
 agreement falls 14,204 → 14,194 on 1.0 and 15,045 → 15,038 on 1.1 — about
 eleven invalid schemas newly accepted for each valid one recovered. Reverted.
+(Those totals are the baseline of the run that measured them, not the current
+figures. What matters is the ratio, which is why they are left as recorded.)
 
 The reason is that the wrapper's range is doing two jobs. For the mapping in
 clause 2 it should repeat; for the *effective total range* check it should not,
@@ -770,24 +776,35 @@ reasoning is under *Regular expression backreferences* above.
 **Closing the last one would cost the linear-time guarantee**, which is a worse
 trade than the case is worth.
 
-### XSD schema-validity: 174 (1.0) and 285 (1.1) that are ours
+### XSD schema-validity: 42 (1.0) and 100 (1.1) that are ours
 
-All false *accepts* — invalid schemas that load. They cluster in
-`MS-Particles` (46), `MS-Schema` (44), `MS-SimpleType` (21), `MS-ComplexType`
-(18), and for 1.1 also `Wild` (17), `Simple` (16) and `CTA` (16).
+All false *accepts* — invalid schemas that load. After five rounds of rule
+work the clusters are: 1.0 `MS-Particles` (9), `MS-Additional` (7),
+`MS-Wildcards` (4); 1.1 `Simple` (12), `MS-Particles` (11), `Zone` (6),
+`Override` (5), `Open` (5).
 
 Each is an unwritten Schema Component Constraint. There is no single change
-here: it is one rule at a time, indefinitely, and **every rule added is a
-chance to reject a schema real systems depend on**. The conformance suite
-cannot catch that — it scores agreement with W3C labels, so an over-strict rule
-shows up only if the suite happens to contain a valid schema exercising it.
-`tests/check.sh` re-loads the corpora for exactly this reason.
+here: it is one rule at a time, and **every rule added is a chance to reject a
+schema real systems depend on**. That is not hypothetical — the rounds that
+produced these figures caught, and reverted before shipping, a
+`cos-list-of-atomic` reading that rejected the test suite's *own catalog
+schema* and 91 instance tests with it, a base-type circularity check that
+rejected 11,044 of 14,405 schemas by omitting the ur-type exception, and a
+wildcard rule that rejected sixteen valid schemas by treating a
+validation-time constraint as a schema-time one.
 
-### XSD schema-validity: 21 false rejects, one subsystem
+The conformance suite cannot be relied on to catch that on its own: it scores
+agreement with W3C labels, so an over-strict rule shows up only where the
+suite happens to contain a valid schema exercising it. `tests/check.sh`
+re-loads the production corpora for exactly this reason, and the W3C's own
+`schema-for-xslt30.xsd` — reached through the XSLT suite in nine seconds —
+proved the sharper guard of the two.
 
-The ones that matter, because a false reject breaks a working caller. **Every
-one is Particle Valid (Restriction)** apart from `iri-001`, which needs a
-DOCTYPE and is refused by design.
+### XSD schema-validity: 6 (1.0) and 11 (1.1) addressable false rejects
+
+The ones that matter, because a false reject breaks a working caller. Most are
+Particle Valid (Restriction); `iri-001` needs a DOCTYPE and is refused by
+design.
 
 One attempt is recorded above as reverted: carrying the element's occurrence
 range onto `recurseAsIfGroup`'s wrapper fixes `particlesZ001`, `Z023` and
@@ -795,29 +812,50 @@ range onto `recurseAsIfGroup`'s wrapper fixes `particlesZ001`, `Z023` and
 serves two jobs that want opposite answers. A correct fix separates them, which
 is a change to `effectiveTotalRange`'s contract.
 
-### XSD instance: 5 false rejects
+Three of the 1.1 entries — `particlesHb008`, `particlesHb011` and
+`particlesZ028` — need XSD 1.1's §3.4.6.4 intensional restriction: genuine
+language inclusion in *both* directions rather than the structural table.
+`particlesHb008` restricts `choice{e1, sequence{e2,e3,e4}}` by a reordered
+`choice{e1, sequence{e2, choice{e3,e4}}}` that no table can relate. That is an
+automaton subsumption engine, not a rule, and two rounds declined it
+deliberately rather than ship a partial one.
 
-`idc006.nogen` (keyref across a subtree boundary), `gMonth002_2061` and
-`gMonth004_2063` (the old `--MM--` form, W3C bug 6901), `particlesZ040` (the
-greedy content-model matcher, two reverted attempts recorded above), and
-`cta0022`.
+### XSD instance: 2 addressable false rejects
+
+`attP031.i` and `particlesZ040.i`, in both versions.
+
+`particlesZ040` is the greedy content-model matcher, with two reverted attempts
+recorded above. `attP031` is a suite self-contradiction rather than a defect
+here: it declares `use="prohibited"` with a `fixed` value and expects the
+instance supplying that value to be *valid*, while `attF001` — structurally
+identical but without `fixed` — expects invalid, and both carry status
+`accepted`. §3.4.2 gives `{attribute uses}` only the declarations whose `use`
+is absent, `optional` or `required`, so a prohibited use creates no attribute
+use at all. Making `attP031` pass means treating `fixed` as the discriminator,
+which no clause supports.
+
+Two further instance false rejects are disputed rather than addressable:
+`gMonth002_2061` and `gMonth004_2063` test the old `--MM--` form under W3C bug
+6901. `cta0022` was in this list and is now fixed — its type alternative's
+XPath was *raising* rather than answering, and a type alternative whose test
+raises is silently skipped, so a crash was indistinguishable from a false
+test.
 
 ### Honest summary
 
 | | now | reachable | what stands in the way |
 |---|---|---|---|
 | XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
-| XSD 1.0 instance | **99.88%** | ~99.9% | at the target; 4 false rejects remain, all recorded as hard |
+| XSD 1.0 instance | **99.88%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
 | XSD 1.1 instance | **99.89%** | ~99.9% | same |
-| XSD 1.0 schema | **99.51%** | **~99.6%** | 63 addressable false accepts, one at a time |
-| XSD 1.1 schema | **99.11%** | **~99.6%** | 123 addressable false accepts, one at a time |
+| XSD 1.0 schema | **99.51%** | **~99.6%** | 42 addressable false accepts, one at a time |
+| XSD 1.1 schema | **99.11%** | **~99.6%** | 100 addressable false accepts, one at a time |
 
-The two schema rows previously read `~99.9%`, which contradicted the ceiling
-derived under *What 100% would take* above and could not be reached: it would
-mean fixing 200 of the 201 1.0 schema disagreements and 313 of the 314 in 1.1,
-while 52 and 54 of them respectively are disputed by the W3C's own metadata.
-The figures here are the addressable counts, measured from a live run by
-splitting each disagreement on the `<current status=...>` the suite records:
+The two schema rows once read `~99.9%`, which contradicted the ceiling derived
+under *What 100% would take* above and could not be reached. The reachable
+figure is set by how many disagreements the W3C's own metadata disputes, found
+by splitting each one on the `<current status=...>` the suite records. When
+that work started:
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
@@ -825,7 +863,10 @@ splitting each disagreement on the `<current status=...>` the suite records:
 | `accepted` — addressable | 197 | 311 |
 | `queried` or bug-tied — the ceiling | 52 | 54 |
 
-Eighteen of the 1.0 disputes are bug 4113 alone.
+and today 101 and 164, of which 52 and 113 are addressable. Eighteen of the
+1.0 disputes are bug 4113 alone. Reaching 99.99% would have meant fixing 200
+of the original 201 1.0 schema disagreements and 313 of the 314 in 1.1 —
+arithmetically impossible without "fixing" tests the W3C itself questions.
 
 Nothing here is blocked on a missing idea. XPath's last case is a deliberate
 refusal, the XSD false accepts are volume rather than difficulty, and the false
