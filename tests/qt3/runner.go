@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -317,6 +319,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 		out.Schemas = append(out.Schemas, e.Schemas...)
 		out.Collations = append(out.Collations, e.Collations...)
 		out.StaticBaseURI = append(out.StaticBaseURI, e.StaticBaseURI...)
+		out.Resources = append(out.Resources, e.Resources...)
 	}
 	for _, ref := range tc.Environments {
 		if ref.Ref == "" {
@@ -417,6 +420,9 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// construct 3.0 adds is accepted in the 3.0 run and refused in the 2.0
 	// one. Both are conformance: the 2.0 run asserts the refusals.
 	ctx.Version = xpathVersion(r.Target)
+	// fn:unparsed-text reads the suite's own fixtures; see suiteTextResolver
+	// for why this is scoped to the checkout.
+	ctx.Texts = newSuiteTextResolver(r.Root, ts.Dir, env)
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
 	for _, b := range env.StaticBaseURI {
@@ -951,6 +957,136 @@ func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, erro
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+// suiteTextResolver reads fn:unparsed-text resources out of the suite.
+//
+// The cases name their fixtures by the URI they would have on the W3C site,
+// http://www.w3.org/fots/..., and the same files sit in the checkout under the
+// matching path. Mapping one to the other is what lets the family run at all;
+// without a resolver every case failed on "unparsed-text() is disabled", which
+// is the engine correctly refusing to read arbitrary files rather than a
+// conformance gap.
+//
+// Only URIs under the suite's own prefix resolve, and the joined path is
+// checked to be inside the checkout: a case is data, and a fixture URI that
+// climbed out with ".." would otherwise read any file the process can.
+type suiteTextResolver struct {
+	root string
+	// byURI maps a URI the environment declared to the file in the checkout
+	// that holds it. It is the catalog's own <resource> mapping, which is how
+	// the suite intends these to be found; the prefix rule below is the
+	// fallback for a case whose environment declares nothing.
+	byURI map[string]string
+}
+
+const fotsPrefix = "http://www.w3.org/fots/"
+
+// newSuiteTextResolver builds the resolver for one environment.
+func newSuiteTextResolver(root, dir string, env Environment) suiteTextResolver {
+	byURI := map[string]string{}
+	for _, res := range env.Resources {
+		if res.URI != "" && res.File != "" {
+			// A resource path is relative to the test-set file, not to the
+			// suite root — the same rule Source paths follow, and for the same
+			// reason: fn/unparsed-text.xml names "unparsed-text/x.txt".
+			byURI[res.URI] = filepath.Join(dir, res.File)
+		}
+	}
+	return suiteTextResolver{root: root, byURI: byURI}
+}
+
+func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, error) {
+	// A relative reference is resolved against the static base URI first, so
+	// that "text-plain-utf-8.txt" under a base of http://www.w3.org/fots/
+	// unparsed-text/ becomes the URI the environment declared.
+	full := uri
+	if !strings.Contains(uri, "://") && base != "" {
+		full = resolveAgainst(base, uri)
+	}
+	if file, ok := t.byURI[full]; ok {
+		return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
+	}
+
+	ref := full
+	if !strings.HasPrefix(ref, fotsPrefix) {
+		return "", fmt.Errorf("unparsed-text: %q is outside the suite", uri)
+	}
+	// Nothing else resolves. A relative reference with no static base URI is
+	// FOUT1170 by the spec, and several cases assert exactly that — searching
+	// the checkout for a file with a matching name would turn those into
+	// passes that mean the opposite of conformance.
+	return "", fmt.Errorf("unparsed-text: no resource for %q", uri)
+}
+
+// read loads one file, refusing any path that escapes the checkout.
+//
+// A case is data, and a fixture URI that climbed out with ".." would otherwise
+// let the suite read any file the process can.
+func (t suiteTextResolver) read(path, uri, encoding string) (string, error) {
+	clean := filepath.Clean(path)
+	if rel, err := filepath.Rel(t.root, clean); err != nil ||
+		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("unparsed-text: %q escapes the suite", uri)
+	}
+	data, err := os.ReadFile(clean)
+	if err != nil {
+		return "", err
+	}
+	return decodeUnparsedText(data, encoding)
+}
+
+// decodeUnparsedText applies the encoding the call asked for, defaulting to
+// the byte-order mark and then to UTF-8.
+func decodeUnparsedText(data []byte, encoding string) (string, error) {
+	switch {
+	case len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF:
+		data = data[3:]
+	case len(data) >= 2 && data[0] == 0xFE && data[1] == 0xFF:
+		return decodeUTF16(data[2:], true), nil
+	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xFE:
+		return decodeUTF16(data[2:], false), nil
+	}
+	switch strings.ToLower(encoding) {
+	case "", "utf-8":
+		s := string(data)
+		if !utf8.ValidString(s) {
+			return "", fmt.Errorf("FOUT1190: not valid UTF-8")
+		}
+		return s, nil
+	case "iso-8859-1", "latin1", "latin-1":
+		var sb strings.Builder
+		for _, b := range data {
+			sb.WriteRune(rune(b))
+		}
+		return sb.String(), nil
+	case "utf-16", "utf-16be":
+		return decodeUTF16(data, true), nil
+	case "utf-16le":
+		return decodeUTF16(data, false), nil
+	}
+	return "", fmt.Errorf("FOUT1190: unsupported encoding %q", encoding)
+}
+
+// decodeUTF16 decodes 16-bit code units of the given endianness.
+func decodeUTF16(data []byte, bigEndian bool) string {
+	units := make([]uint16, 0, len(data)/2)
+	for i := 0; i+1 < len(data); i += 2 {
+		if bigEndian {
+			units = append(units, uint16(data[i])<<8|uint16(data[i+1]))
+		} else {
+			units = append(units, uint16(data[i+1])<<8|uint16(data[i]))
+		}
+	}
+	return string(utf16.Decode(units))
+}
+
+// resolveAgainst resolves a relative reference against a base URI or path.
+func resolveAgainst(base, ref string) string {
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		return base[:i+1] + ref
+	}
+	return ref
 }
 
 // envDocs resolves fn:doc against the documents an environment names by URI.

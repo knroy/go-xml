@@ -80,6 +80,18 @@ type Environment struct {
 	StaticBaseURI []StaticBaseURI `xml:"static-base-uri"`
 	// Collections are the document sets fn:collection returns.
 	Collections []Collection `xml:"collection"`
+	// Resources are the non-XML files fn:unparsed-text reads, mapping the URI
+	// a case names to the file in the checkout that holds it.
+	Resources []Resource `xml:"resource"`
+}
+
+// Resource is one <resource> declaration: a file in the checkout published
+// under the URI a test case uses to reach it.
+type Resource struct {
+	File      string `xml:"file,attr"`
+	URI       string `xml:"uri,attr"`
+	MediaType string `xml:"media-type,attr"`
+	Encoding  string `xml:"encoding,attr"`
 }
 
 type StaticBaseURI struct {
