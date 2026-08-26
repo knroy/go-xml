@@ -23,6 +23,12 @@ func registerSerialize(l *Library) {
 			return nil, err
 		}
 		var sb strings.Builder
+		// omit-xml-declaration defaults to yes here, since a serialised
+		// fragment is more often embedded than written as a document. Asking
+		// for it back produces the declaration the XML output method defines.
+		if !opts.omitXMLDecl && opts.method == "xml" {
+			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+		}
 		for _, it := range seqArg(args, 0) {
 			if err := serializeItem(&sb, it, opts); err != nil {
 				return nil, err
@@ -68,9 +74,12 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 				"XPTY0004: the serialization parameters must be an " +
 					"output:serialization-parameters element")
 		}
+		// A wrapper with the wrong local name is not the element the
+		// parameter is declared to be either, so it is the same type error
+		// rather than a malformed-document one.
 		if n.Name.Local != "serialization-parameters" {
-			return opts, fmt.Errorf(
-				"SEPM0017: %q is not a serialization-parameters element", n.Name.Local)
+			return opts, xdm.ErrType(
+				"XPTY0004: %q is not a serialization-parameters element", n.Name.Local)
 		}
 		// An attribute on the wrapper is not a parameter either.
 		for _, a := range n.Attrs {
@@ -94,6 +103,14 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 			}
 			seen[key] = true
 			if p.Name.URI != nsSerialization {
+				// A child in *no* namespace is not an extension parameter —
+				// an extension has to name its own namespace — so it is a
+				// malformed parameter document.
+				if p.Name.URI == "" {
+					return opts, fmt.Errorf(
+						"SEPM0017: serialization parameter %q is in no namespace",
+						p.Name.Local)
+				}
 				continue
 			}
 
@@ -126,7 +143,8 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 				"doctype-public", "doctype-system", "cdata-section-elements",
 				"normalization-form", "undeclare-prefixes",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
-				"allow-duplicate-names", "json-node-output-method":
+				"allow-duplicate-names", "json-node-output-method",
+				"suppress-indentation":
 				// Recognised and accepted; this serialiser does not vary its
 				// output for them.
 			default:
