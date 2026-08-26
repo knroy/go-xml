@@ -494,7 +494,14 @@ func registerFormatDateTime(l *Library) {
 // additions for a bare XPath expression, which must not see them under 2.0.
 func registerFormatDateTimeSince(l *Library, since Version) {
 	format := func(name string) {
-		l.registerFnSince(since, name, []int{2, 3, 4, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// Two arities only: the picture-only form and the full
+		// (value, picture, language, calendar, place) form. There is no
+		// three- or four-argument signature, so format-date(d, p, "") is
+		// XPST0017 rather than a call with a defaulted calendar.
+		l.registerFnSince(since, name, []int{2, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			if err := checkFormatDateArgs(args); err != nil {
+				return nil, err
+			}
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
@@ -525,6 +532,65 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 	format("format-dateTime")
 	format("format-date")
 	format("format-time")
+}
+
+// checkFormatDateArgs validates the language, calendar and place arguments of
+// the five-argument form.
+//
+// The calendar is a lexical QName — "AD", "ISO", or an implementation's own
+// name — so a value that is not one is FOFD1340. The place is a string, and a
+// non-string there is a type error rather than a picture error.
+func checkFormatDateArgs(args []xdm.Sequence) error {
+	if len(args) < 5 {
+		return nil
+	}
+	// The place argument is declared xs:string?, so anything else is
+	// XPTY0004 — and it is checked before the picture, since an argument
+	// that does not typecheck is an error whatever the picture says.
+	if len(args[4]) > 0 {
+		atoms := xdm.Atomize(args[4])
+		if len(atoms) > 0 {
+			a, ok := atoms[0].(*xdm.Atomic)
+			if !ok || (a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic &&
+				a.Type != xdm.TypeAnyURI) {
+				return xdm.ErrType("XPTY0004: the place argument must be an xs:string")
+			}
+		}
+	}
+	if len(args[3]) > 0 {
+		cal, err := argString(args, 3)
+		if err != nil {
+			return err
+		}
+		if cal != "" && !isCalendarName(cal) {
+			return fmt.Errorf("FOFD1340: %q is not a valid calendar name", cal)
+		}
+	}
+	return nil
+}
+
+// isCalendarName reports whether s is lexically a calendar name.
+//
+// The grammar is an EQName: a QName, or a braced URI literal followed by an
+// NCName. What it must not be is an arbitrary string — ":w" has an empty
+// prefix and "Q{}1" a local part starting with a digit, and both are
+// FOFD1340.
+func isCalendarName(s string) bool {
+	if rest, ok := strings.CutPrefix(s, "Q{"); ok {
+		end := strings.IndexByte(rest, '}')
+		if end < 0 {
+			return false
+		}
+		return isNCName(rest[end+1:])
+	}
+	prefix, local := xdm.SplitQName(s)
+	if prefix != "" && !isNCName(prefix) {
+		return false
+	}
+	if strings.Contains(s, ":") && prefix == "" {
+		return false
+	}
+	return isNCName(local)
 }
 
 // formatDateTimePicture renders a date/time through a picture string.
