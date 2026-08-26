@@ -22,7 +22,15 @@ func registerMisc30Funcs(l *Library) {
 		Name:  xdm.QName{URI: xdm.NSXS, Local: "error"},
 		Arity: 1,
 		Since: XPath30,
-		Call: func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			// Like every other constructor, an empty argument gives the empty
+			// sequence rather than raising: "xs:error(())" is the empty
+			// sequence, which is why it is castable as xs:error? and not as
+			// xs:error. Only a non-empty argument reaches the error, since
+			// the type has no instances to produce.
+			if len(args) > 0 && len(args[0]) == 0 {
+				return xdm.Empty(), nil
+			}
 			return nil, fmt.Errorf(
 				"FORG0001: xs:error has no instances, so every call raises this error")
 		},

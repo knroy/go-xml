@@ -144,7 +144,13 @@ func argAnyAtomicString(args []xdm.Sequence, i int) (string, error) {
 	if i >= len(args) {
 		return "", nil
 	}
-	atoms := xdm.Atomize(args[i])
+	// Checked, because a function item cannot be atomized: fn:concat takes
+	// xs:anyAtomicType, and a function item is not one. Atomize drops it
+	// silently, which made concat(f#1, "x") answer "x".
+	atoms, err := xdm.AtomizeChecked(args[i])
+	if err != nil {
+		return "", err
+	}
 	if len(atoms) == 0 {
 		return "", nil
 	}
