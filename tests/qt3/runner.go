@@ -1134,7 +1134,11 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 	// that "text-plain-utf-8.txt" under a base of http://www.w3.org/fots/
 	// unparsed-text/ becomes the URI the environment declared.
 	full := uri
-	if !strings.Contains(uri, "://") && base != "" {
+	if uri == "" {
+		// An empty reference resolves to the base URI itself, which is what
+		// makes unparsed-text("") read the resource the base names.
+		full = base
+	} else if !strings.Contains(uri, "://") && base != "" {
 		full = resolveAgainst(base, uri)
 	}
 	// A declared <resource> is matched only by its full URI. A relative
@@ -1203,6 +1207,12 @@ func decodeUnparsedText(data []byte, encoding string) (string, error) {
 	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xFE:
 		return decodeUTF16(data[2:], false), nil
 	}
+	// An encoding name is an EncName: a letter followed by letters, digits,
+	// and the three punctuation characters. "123" is not one, and naming a
+	// bad encoding is FOUT1190 rather than a failure to retrieve.
+	if encoding != "" && !isEncName(encoding) {
+		return "", fmt.Errorf("FOUT1190: %q is not a valid encoding name", encoding)
+	}
 	switch strings.ToLower(encoding) {
 	case "", "utf-8":
 		s := string(data)
@@ -1222,6 +1232,25 @@ func decodeUnparsedText(data []byte, encoding string) (string, error) {
 		return decodeUTF16(data, false), nil
 	}
 	return "", fmt.Errorf("FOUT1190: unsupported encoding %q", encoding)
+}
+
+// isEncName reports whether s matches the EncName production of XML 1.0:
+// [A-Za-z] ([A-Za-z0-9._] | '-')*.
+func isEncName(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+			continue
+		case i == 0:
+			return false
+		case c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // decodeUTF16 decodes 16-bit code units of the given endianness.
