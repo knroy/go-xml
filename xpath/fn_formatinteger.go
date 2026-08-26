@@ -210,6 +210,11 @@ func formatDigitPattern(n int64, token string, ordinal bool) (string, error) {
 type groupSpec struct {
 	fromRight int
 	sep       rune
+	// width is the pattern's total digit count, the same on every entry. A
+	// repeating interval is only implied when the digits leading the first
+	// separator fit within that interval, which needs the whole width to
+	// judge.
+	width int
 }
 
 // parseDigitPattern validates a decimal-digit-pattern and extracts its digit
@@ -264,7 +269,7 @@ func parseDigitPattern(token string) (zero rune, mandatory int, groups []groupSp
 				return 0, 0, nil, fmt.Errorf(
 					"FODF1310: adjacent grouping separators in %q", token)
 			}
-			groups = append(groups, groupSpec{fromRight: total - digitsSoFar, sep: r})
+			groups = append(groups, groupSpec{fromRight: total - digitsSoFar, sep: r, width: total})
 			lastWasSep = true
 		default:
 			return 0, 0, nil, fmt.Errorf(
@@ -336,16 +341,32 @@ func regularInterval(groups []groupSpec) int {
 			return 0
 		}
 	}
-	// One separator is regular by definition: "#,##0" repeats every 3.
+	// One separator is regular only when nothing wider than its interval
+	// leads it: "#,##0" repeats every 3, but "[Y#.0]" places a single
+	// separator one from the right in a two-digit pattern and must not
+	// repeat it, or 2016 becomes "2.0.1.6".
 	if len(groups) == 1 {
+		if groups[0].width > 2*groups[0].fromRight {
+			return 0
+		}
 		return groups[0].fromRight
 	}
-	// Several are regular only if evenly spaced by their own first interval.
+	// Several are regular only if evenly spaced by their own first interval
+	// *and* the pattern's leading group is no wider than that interval. In
+	// "000,00,00" the separators are two apart but three digits lead them, so
+	// the grouping is irregular and applies only where written: 123456789 is
+	// "12345,67,89", not the "1,23,45,67,89" a repeat every two would give.
 	step := groups[len(groups)-1].fromRight
 	for i, g := range groups {
 		if g.fromRight != step*(len(groups)-i) {
 			return 0
 		}
+	}
+	// The leading group must fit the interval too. In "000,00,00" the
+	// separators are two apart but three digits lead them, so the pattern is
+	// irregular and its separators apply only where written.
+	if groups[0].width > step*(len(groups)+1) {
+		return 0
 	}
 	return step
 }

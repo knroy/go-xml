@@ -1016,6 +1016,13 @@ func effectiveMaxWidth(pres, width string) int {
 	if width != "" {
 		return maxWidth(width)
 	}
+	// A grouped pattern states a width too: "[Y#.0]" is two digits with a
+	// separator between them, so 2016 shows as "1.6". digitFamilyOf admits
+	// only bare digits, so the pattern is measured through the digit-pattern
+	// grammar before falling back to it.
+	if _, mandatory, groups, err := parseDigitPattern(pres); err == nil && len(groups) > 0 {
+		return mandatory + countOptionalDigits(pres)
+	}
 	zero, ok := digitFamilyOf(pres)
 	if !ok {
 		return 0
@@ -1200,17 +1207,41 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string) (string, error) {
 		min, max = 0, 0
 	}
 	if width != "" {
+		wmin, wmax := minWidth(width), maxWidth(width)
 		// A width modifier whose minimum exceeds its maximum describes no
 		// width at all, whether or not the picture also states one.
-		if wmin, wmax := minWidth(width), maxWidth(width); wmax > 0 && wmin > wmax {
+		if wmax > 0 && wmin > wmax {
 			return "", fmt.Errorf(
 				"FOFD1340: the width modifier %q has a minimum above its maximum", width)
-		} else if !fp.stated {
-			// The width modifier applies only when the presentation modifier
-			// did not state a digit pattern of its own. W3C bug 29788 settled
-			// that the pattern wins where both are given, so "[f111,2-2]" on
-			// .123 is "123" rather than the "12" the width alone would cut.
+		}
+		if !fp.stated {
 			min, max = wmin, wmax
+		} else {
+			// Where the picture states a pattern *and* a width is given, the
+			// two combine rather than one replacing the other: the wider
+			// minimum and the tighter maximum. "[f1###,3-3]" on .1 is the
+			// pattern's one mandatory digit widened to the modifier's three,
+			// so "100".
+			if wmin > min {
+				min = wmin
+			}
+			// The width modifier's maximum governs outright, so it can widen
+			// an optional-digit pattern as well as narrow it: "[f0#,3-3]" on
+			// .189 shows all three digits even though the pattern alone
+			// allows two.
+			if wmax > 0 {
+				max = wmax
+			}
+			// The pattern's mandatory digits are not negotiable, though: a
+			// maximum below them would drop a digit the picture required.
+			// W3C bug 29788 settled that the pattern wins there, so
+			// "[f111,2-2]" on .123 is "123" and not "12".
+			if max > 0 && max < fp.mandatory {
+				max = fp.mandatory
+			}
+			if min < fp.mandatory {
+				min = fp.mandatory
+			}
 		}
 	}
 
@@ -2197,4 +2228,15 @@ func parseXMLFragment(s, base string) (*xdm.Node, error) {
 		c.Parent = root
 	}
 	return root, nil
+}
+
+// countOptionalDigits counts the optional-digit signs in a digit pattern.
+func countOptionalDigits(pres string) int {
+	n := 0
+	for _, r := range pres {
+		if r == '#' {
+			n++
+		}
+	}
+	return n
 }
