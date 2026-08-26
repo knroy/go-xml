@@ -429,8 +429,18 @@ func significantChildren(n *xdm.Node) []*xdm.Node {
 // emitted literally, so a stylesheet does not silently produce a date with a
 // marker still in it.
 func registerFormatDateTime(l *Library) {
+	registerFormatDateTimeSince(l, XPath20)
+}
+
+// registerFormatDateTimeSince is registerFormatDateTime with a version.
+//
+// XSLT 2.0 defines fn:format-dateTime and its siblings, and XPath 3.0 promotes
+// them into the core function library. So they are registered twice: once
+// unversioned for a stylesheet, which has had them since 2.0, and once as 3.0
+// additions for a bare XPath expression, which must not see them under 2.0.
+func registerFormatDateTimeSince(l *Library, since Version) {
 	format := func(name string) {
-		l.registerFn(name, []int{2, 3, 4, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		l.registerFnSince(since, name, []int{2, 3, 4, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil

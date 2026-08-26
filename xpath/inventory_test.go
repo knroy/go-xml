@@ -108,17 +108,23 @@ func TestFunctionInventory(t *testing.T) {
 			missing = append(missing, "xs:"+local+"/1")
 		}
 	}
-	// The XSLT-only functions must be absent here and present once
-	// RegisterXSLTFuncs has run. A plain XPath 2.0 processor is required to
-	// report XPST0017 for them, and a stylesheet needs them to work, so the
-	// split is checked in both directions rather than assumed.
+	// The XSLT-only functions must be invisible to a 2.0 expression and
+	// present once RegisterXSLTFuncs has run. A plain XPath 2.0 processor is
+	// required to report XPST0017 for them, and a stylesheet needs them to
+	// work, so the split is checked in both directions rather than assumed.
+	//
+	// The check is a version-aware lookup rather than a bare one because some
+	// of these — the format-dateTime family — are also XPath 3.0 functions,
+	// and so are registered in the builtin library marked Since XPath30. What
+	// must stay true is that a *2.0* expression cannot reach them.
+	ctx20 := NewContext(nil, Builtins())
 	xsltLib := NewLibrary(Builtins())
 	RegisterXSLTFuncs(xsltLib)
 	for _, spec := range xsltOnlyFunctions {
 		local, arity := splitArity(t, spec)
 		qn := xdm.QName{URI: xdm.NSFN, Local: local}
-		if _, ok := lib.Lookup(qn, arity); ok {
-			t.Errorf("fn:%s is in the XPath library; it is an XSLT function", spec)
+		if _, ok := lookupFor(ctx20, qn, arity); ok {
+			t.Errorf("fn:%s is visible to XPath 2.0; it is an XSLT function", spec)
 		}
 		if _, ok := xsltLib.Lookup(qn, arity); !ok {
 			missing = append(missing, "fn:"+spec+" (XSLT)")
