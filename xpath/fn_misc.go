@@ -614,11 +614,58 @@ func checkFormatDateArgs(args []xdm.Sequence) error {
 		if err != nil {
 			return err
 		}
-		if cal != "" && !isCalendarName(cal) {
-			return fmt.Errorf("FOFD1340: %q is not a valid calendar name", cal)
+		if cal != "" {
+			if !isCalendarName(cal) {
+				return fmt.Errorf("FOFD1340: %q is not a valid calendar name", cal)
+			}
+			// A well-formed name still has to name a calendar this
+			// implementation has. The spec makes the supported set
+			// implementation-defined but requires an unsupported one to be
+			// reported rather than silently treated as the default, so
+			// "ZODIAC" is FOFD1340 even though it is a legal NCName.
+			//
+			// A calendar in *some* namespace is an implementation's own
+			// extension and is left alone: only a name in no namespace is one
+			// this implementation is expected to know. "Q{}ISO" is the braced
+			// spelling of exactly that, so it is normalised before the check
+			// rather than mistaken for an extension.
+			if name, inNoNamespace := calendarInNoNamespace(cal); inNoNamespace &&
+				!supportedCalendar(name) {
+				return fmt.Errorf(
+					"FOFD1340: the calendar %q is not supported", cal)
+			}
 		}
 	}
 	return nil
+}
+
+// calendarInNoNamespace returns a calendar name's local part and whether it
+// names no namespace, which is the case this implementation is expected to
+// recognise. "ISO" and "Q{}ISO" are the same calendar written two ways.
+func calendarInNoNamespace(s string) (string, bool) {
+	if rest, ok := strings.CutPrefix(s, "Q{"); ok {
+		end := strings.IndexByte(rest, '}')
+		if end < 0 {
+			return "", false
+		}
+		return rest[end+1:], rest[:end] == ""
+	}
+	return s, !strings.Contains(s, ":")
+}
+
+// supportedCalendar reports whether this implementation can format dates in
+// the named calendar.
+//
+// Only the two Gregorian spellings. Everything else in the specification's
+// list — the Hebrew, Islamic, Japanese and other calendars — would need its
+// own date arithmetic, and claiming one without implementing it would produce
+// Gregorian dates under another calendar's name.
+func supportedCalendar(s string) bool {
+	switch s {
+	case "AD", "ISO", "OS", "":
+		return true
+	}
+	return false
 }
 
 // isCalendarName reports whether s is lexically a calendar name.
@@ -1141,12 +1188,39 @@ func weekOfYear(dt *xdm.DateTime) int {
 // weekOfMonth is the week within the month, numbered on the same basis as the
 // week of the year: the week containing the month's first Thursday is week 1.
 func weekOfMonth(dt *xdm.DateTime) int {
+	// The week is identified by its Thursday, as it is for the week of the
+	// year, but the *month* is the date's own rather than the Thursday's:
+	// 2006-01-30 falls in a week whose Thursday is in February and is still
+	// the fifth week of January.
 	iso := (weekdayIndex(dt) + 6) % 7
-	days := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
-	first := daysFromCivilLocal(dt.Year, dt.Month, 1)
-	firstISO := int64((weekdayIndex(&xdm.DateTime{Year: dt.Year, Month: dt.Month, Day: 1}) + 6) % 7)
-	firstThu := first - firstISO + 3
-	return int((days-firstThu)/7) + 1
+	thu := daysFromCivilLocal(dt.Year, dt.Month, dt.Day) - int64(iso) + 3
+
+	// Week 1 is the one containing the month's first Thursday.
+	if w := int((thu-firstThursdayOf(dt.Year, dt.Month))/7) + 1; w >= 1 {
+		return w
+	}
+	// Earlier than this month's week 1, so the day belongs to the last week
+	// of the month before: 2006-01-01 is the fifth week of December 2005, not
+	// a zeroth week of January.
+	y, m := dt.Year, dt.Month-1
+	if m < 1 {
+		y, m = y-1, 12
+	}
+	return int((thu-firstThursdayOf(y, m))/7) + 1
+}
+
+// firstThursdayOf is the day count of the first Thursday of a month, which is
+// the day week 1 is numbered from.
+func firstThursdayOf(year, month int) int64 {
+	first := daysFromCivilLocal(year, month, 1)
+	iso := int64((weekdayIndex(&xdm.DateTime{Year: year, Month: month, Day: 1}) + 6) % 7)
+	thu := first - iso + 3
+	// When the 1st falls after Thursday, that week's Thursday is in the month
+	// before, so this month's first is a week later.
+	if thu < first {
+		thu += 7
+	}
+	return thu
 }
 
 // isDigitPattern reports whether pres is a decimal-digit-pattern: a run of
