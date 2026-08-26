@@ -435,7 +435,12 @@ func (l *Lexer) lexQName() (string, error) {
 		if end < 0 {
 			return "", fmt.Errorf("XPST0003: unterminated braced URI literal at offset %d", l.pos)
 		}
-		uri := strings.TrimSpace(l.src[l.pos : l.pos+end])
+		// Whitespace inside a braced URI literal is normalised, not preserved:
+		// the content is an xs:anyURI, whose whitespace facet is "collapse".
+		// So Q{urn:foo bar}x and Q{urn:foo   bar}x name the same variable,
+		// which is what eqname-024 asserts by binding one and reading the
+		// other.
+		uri := strings.Join(strings.Fields(l.src[l.pos:l.pos+end]), " ")
 		l.pos += end + 1
 		local, err := l.lexNCName()
 		if err != nil {

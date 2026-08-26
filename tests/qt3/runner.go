@@ -69,6 +69,8 @@ func (r resolver) ResolvePrefix(p string) (string, bool) {
 		return xdm.NSXML, true
 	case "err":
 		return xdm.NSErr, true
+	case "math":
+		return xdm.NSMath, true
 	}
 	return "", false
 }
