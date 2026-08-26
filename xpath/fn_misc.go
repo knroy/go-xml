@@ -727,7 +727,11 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		if y < 0 {
 			y = -y
 		}
-		if max := effectiveMaxWidth(pres, width); max > 0 && max < 18 && isDigitPattern(pres) {
+		// The truncation applies to any numeric presentation, not only a
+		// pattern of bare digits: "[Y#0,2-5]" is still a decimal pattern, and
+		// requiring isDigitPattern left its optional-digit form untruncated.
+		if max := effectiveMaxWidth(pres, width); max > 0 && max < 18 &&
+			!isNamePresentation(pres) && containsDigit(pres) {
 			mod := int64(1)
 			for i := 0; i < max; i++ {
 				mod *= 10
@@ -1300,6 +1304,11 @@ func daysFromCivilLocal(y, m, d int) int64 {
 // for the minutes to be spelled out unconditionally.
 func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional bool) string {
 	if !dt.HasTZ {
+		// "[ZZ]" asks for the military letter, and J is the one that names
+		// the absence of a timezone. Every other picture renders nothing.
+		if comp == 'Z' && pres == "Z" {
+			return "J"
+		}
 		return ""
 	}
 	off := dt.TZOffset
