@@ -1119,9 +1119,21 @@ func inDigitFamily(s string, zero rune) string {
 func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
 	// A leading-zero format token fixes the width outright; a width modifier
 	// overrides it. Without either, the value's own digits stand.
+	// The digit family and the literal separators come from the picture, the
+	// same way they do for the timezone component: "[f0'0'0]" writes an
+	// apostrophe between each digit, and a picture of Thai digits produces
+	// Thai digits.
+	zero := fracDigitFamily(pres)
 	min, max := 0, 0
-	if isDigitPattern(pres) {
-		min, max = len([]rune(pres)), len([]rune(pres))
+	digits := fracDigitCount(pres)
+	if digits > 0 {
+		min, max = digits, digits
+		// A single "1" is the component's *default* presentation rather than
+		// a request for one digit, exactly as it is for the timezone hours:
+		// "[f]" and "[f1]" show the digits the value actually has.
+		if digits == 1 && (pres == "1" || pres == "") {
+			min, max = 0, 0
+		}
 	}
 	if width != "" {
 		min, max = minWidth(width), maxWidth(width)
@@ -1162,7 +1174,70 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
 	if s == "" {
 		s = "0"
 	}
-	return s
+	return applyFracPicture(translateDigits(s, zero), pres, zero)
+}
+
+// fracDigitCount counts the digits of a fractional-seconds picture, ignoring
+// any literal text between them.
+func fracDigitCount(pres string) int {
+	n := 0
+	for _, r := range pres {
+		if unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n
+}
+
+// fracDigitFamily returns the zero of the digit family the picture is written
+// in, defaulting to ASCII.
+func fracDigitFamily(pres string) rune {
+	for _, r := range pres {
+		if unicode.IsDigit(r) {
+			return r - rune(digitValueOf(r))
+		}
+	}
+	return '0'
+}
+
+// applyFracPicture interleaves the literal text a picture writes between its
+// digits, so "[f0'0'0]" on .135 gives "1'3'5".
+//
+// A picture with no literal text is returned unchanged, which is the common
+// case and the one that must stay free of surprises.
+func applyFracPicture(s, pres string, zero rune) string {
+	runes := []rune(pres)
+	hasLiteral := false
+	for _, r := range runes {
+		if !unicode.IsDigit(r) {
+			hasLiteral = true
+			break
+		}
+	}
+	if !hasLiteral {
+		return s
+	}
+	var sb strings.Builder
+	digits := []rune(s)
+	i := 0
+	for _, r := range runes {
+		if unicode.IsDigit(r) {
+			if i < len(digits) {
+				sb.WriteRune(digits[i])
+				i++
+			}
+			continue
+		}
+		// Literal text is written only while digits remain to separate.
+		if i < len(digits) {
+			sb.WriteRune(r)
+		}
+	}
+	// Any digits the picture had no place for still follow.
+	for ; i < len(digits); i++ {
+		sb.WriteRune(digits[i])
+	}
+	return sb.String()
 }
 
 var weekdayNames = []string{"Sunday", "Monday", "Tuesday", "Wednesday",
