@@ -289,6 +289,11 @@ type InlineParam struct {
 	Type *SequenceType
 }
 
+// ArgumentPlaceholder is the "?" of a partial function application,
+// production [61]. It is never evaluated: a call whose argument list holds one
+// yields a new function item rather than a result.
+type ArgumentPlaceholder struct{}
+
 // DynamicCall is "$f(1, 2)": a call on the function item an expression
 // produces, rather than on a statically named function.
 //

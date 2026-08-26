@@ -155,7 +155,7 @@ func (p *Parser) parseArgumentList() ([]Expr, error) {
 	var args []Expr
 	if !p.peekIs(TokOp, ")") {
 		for {
-			a, err := p.parseExprSingle()
+			a, err := p.parseArgument()
 			if err != nil {
 				return nil, err
 			}
@@ -169,6 +169,24 @@ func (p *Parser) parseArgumentList() ([]Expr, error) {
 		return nil, err
 	}
 	return args, nil
+}
+
+// parseArgument parses production [60]: an ExprSingle or the "?" placeholder.
+//
+// The placeholder is only a placeholder in an argument list; "?" elsewhere is
+// an occurrence indicator, which is why this is a separate production rather
+// than a case inside parseExprSingle.
+func (p *Parser) parseArgument() (Expr, error) {
+	if p.version.atLeast30() && p.cur().Kind == TokOp && p.cur().Val == "?" {
+		// Only when it stands alone as the whole argument: "?" followed by
+		// anything else is not a placeholder.
+		if next := p.pos + 1; next < len(p.toks) && p.toks[next].Kind == TokOp &&
+			(p.toks[next].Val == "," || p.toks[next].Val == ")") {
+			p.pos++
+			return &ArgumentPlaceholder{}, nil
+		}
+	}
+	return p.parseExprSingle()
 }
 
 // tryParseAxisStep parses an axis step if one is present, reporting ok=false
@@ -721,7 +739,7 @@ func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 	}
 	if !p.peekIs(TokOp, ")") {
 		for {
-			a, err := p.parseExprSingle()
+			a, err := p.parseArgument()
 			if err != nil {
 				return nil, err
 			}
@@ -733,6 +751,11 @@ func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 	}
 	if err := p.expectOp(")"); err != nil {
 		return nil, err
+	}
+	// A partial application is a function item, not a call, so the
+	// constructor folds below must not claim it.
+	if hasPlaceholder(args) {
+		return &FuncCall{Name: name, Args: args}, nil
 	}
 	if q, ok, err := p.foldQNameConstructor(name, args); err != nil {
 		return nil, err

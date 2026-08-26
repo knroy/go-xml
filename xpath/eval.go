@@ -465,6 +465,16 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx.Funcs == nil {
 		return nil, fmt.Errorf("XPST0017: no function library available for %s", e.Name.Clark())
 	}
+	// A "?" in the argument list makes this a partial application: the result
+	// is a function item of the remaining arity, not a call.
+	if hasPlaceholder(e.Args) {
+		fn, ok := lookupFor(ctx, e.Name, len(e.Args))
+		if !ok {
+			return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
+				e.Name.Clark(), len(e.Args))
+		}
+		return partialApply(e.Name, fn.Arity, fn.Call, e.Args, ctx)
+	}
 	fn, ok := lookupFor(ctx, e.Name, len(e.Args))
 	if !ok {
 		// XSLT 18.1, and B.1 rule 6: under XPath 1.0 compatibility a call to

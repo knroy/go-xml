@@ -137,6 +137,70 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 	return v, nil
 }
 
+// Eval implements Expr. A placeholder is never evaluated on its own: the call
+// that contains it detects it first and builds a partial application instead.
+func (e *ArgumentPlaceholder) Eval(_ *Context) (xdm.Sequence, error) {
+	return nil, fmt.Errorf(
+		"XPST0003: an argument placeholder may only appear in an argument list")
+}
+
+// partialApply builds the function item a partially applied call produces.
+//
+// "concat('a', ?)" is a function of one argument that concatenates 'a' with
+// whatever it is given. The supplied arguments are evaluated once, where the
+// partial application is written, and the placeholders become the parameters
+// of the new function in the order they appear.
+func partialApply(name xdm.QName, arity int,
+	call func(*Context, []xdm.Sequence) (xdm.Sequence, error),
+	args []Expr, ctx *Context) (xdm.Sequence, error) {
+	fixed := make([]xdm.Sequence, len(args))
+	var holes []int
+	for i, a := range args {
+		if _, ok := a.(*ArgumentPlaceholder); ok {
+			holes = append(holes, i)
+			continue
+		}
+		v, err := a.Eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fixed[i] = v
+	}
+	captured := ctx
+	item := &xdm.FunctionItem{
+		Name:  name,
+		Arity: len(holes),
+		Invoke: func(callCtx any, supplied []xdm.Sequence) (xdm.Sequence, error) {
+			if len(supplied) != len(holes) {
+				return nil, fmt.Errorf(
+					"XPTY0004: partially applied %s takes %d argument(s), got %d",
+					name.Clark(), len(holes), len(supplied))
+			}
+			full := make([]xdm.Sequence, len(fixed))
+			copy(full, fixed)
+			for i, h := range holes {
+				full[h] = supplied[i]
+			}
+			c := captured
+			if cc, ok := callCtx.(invokeContext); ok && cc != nil {
+				c = cc
+			}
+			return call(c, full)
+		},
+	}
+	return xdm.One(item), nil
+}
+
+// hasPlaceholder reports whether an argument list contains a "?".
+func hasPlaceholder(args []Expr) bool {
+	for _, a := range args {
+		if _, ok := a.(*ArgumentPlaceholder); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Eval implements Expr: it calls the function item the target produces.
 func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	target, err := e.Target.Eval(ctx)
@@ -146,6 +210,13 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	fn, err := singleFunctionItem(target)
 	if err != nil {
 		return nil, err
+	}
+	// A placeholder makes this a partial application rather than a call.
+	if hasPlaceholder(e.Args) {
+		return partialApply(fn.Name, fn.Arity,
+			func(c *Context, a []xdm.Sequence) (xdm.Sequence, error) {
+				return fn.Invoke(c, a)
+			}, e.Args, ctx)
 	}
 	args := make([]xdm.Sequence, 0, len(e.Args))
 	for _, a := range e.Args {

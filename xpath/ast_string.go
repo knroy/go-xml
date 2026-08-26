@@ -412,6 +412,8 @@ func (e *InlineFunctionExpr) String() string {
 	return out + " { " + e.Body.String() + " }"
 }
 
+func (e *ArgumentPlaceholder) String() string { return "?" }
+
 func (e *DynamicCall) String() string {
 	var as []string
 	for _, a := range e.Args {
