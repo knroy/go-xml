@@ -69,12 +69,17 @@ func registerStringFuncs(l *Library) {
 		return strSeq(sb.String()), nil
 	})
 
-	l.registerFn("string-join", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	stringJoin := func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The separator is declared xs:string, not xs:string?, so an empty
-		// sequence is a type error rather than an empty separator.
-		sep, err := argStringRequired(args, 1)
-		if err != nil {
-			return nil, err
+		// sequence is a type error rather than an empty separator. The
+		// one-argument form of 3.0 has no separator at all, which is the
+		// empty string rather than a missing argument.
+		sep := ""
+		if len(args) > 1 {
+			var err error
+			if sep, err = argStringRequired(args, 1); err != nil {
+				return nil, err
+			}
 		}
 		// The sequence is declared xs:string*, so calling String() on each
 		// item accepted far too much: string-join(1 to 5, "") gave "12345"
@@ -91,7 +96,10 @@ func registerStringFuncs(l *Library) {
 			parts = append(parts, v)
 		}
 		return strSeq(strings.Join(parts, sep)), nil
-	})
+	}
+	l.registerFn("string-join", []int{2}, stringJoin)
+	// The one-argument form joins with no separator, and is 3.0 only.
+	l.registerFnSince(XPath30, "string-join", []int{1}, stringJoin)
 
 	l.registerFn("string-length", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argOrContextString(ctx, args, 0)
