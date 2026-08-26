@@ -1069,6 +1069,14 @@ func expandFormatName(lex string, ns resolver) string {
 	if lex == "" {
 		return ""
 	}
+	// A braced URI literal names the namespace directly, with no prefix to
+	// resolve: Q{http://a.ns/}test.
+	if rest, ok := strings.CutPrefix(lex, "Q{"); ok {
+		if end := strings.IndexByte(rest, '}'); end >= 0 {
+			return xdm.QName{URI: rest[:end], Local: rest[end+1:]}.Clark()
+		}
+		return lex
+	}
 	prefix, local := xdm.SplitQName(lex)
 	if prefix == "" {
 		return local

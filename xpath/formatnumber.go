@@ -562,9 +562,14 @@ func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat
 	}
 
 	// "A sub-picture must not contain a grouping-separator-sign adjacent to a
-	// decimal-separator-sign."
+	// decimal-separator-sign", nor two adjacent to each other: "#,,###" has a
+	// separator with nothing between it and the next, which groups nothing.
 	for i := 0; i+1 < len(runes); i++ {
 		a, b := runes[i], runes[i+1]
+		if a == df.GroupingSeparator && b == df.GroupingSeparator {
+			return fmt.Errorf(
+				"XTDE1310: picture %q has two adjacent grouping separators", pic)
+		}
 		if (a == df.GroupingSeparator && b == df.DecimalSeparator) ||
 			(a == df.DecimalSeparator && b == df.GroupingSeparator) {
 			return fmt.Errorf(
@@ -628,7 +633,11 @@ func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat
 // registers its own three-argument version over this one, which is why this is
 // marked Since XPath30 and that one is not.
 func registerFormatNumber(l *Library) {
-	l.registerFnSince(XPath30, "format-number", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	// Both arities. The three-argument form names a decimal format, and a
+	// bare XPath expression has none declared — so only the absent name
+	// resolves, and any other is FODF1280 rather than XPST0017. A host that
+	// does have named formats registers its own over this one.
+	l.registerFnSince(XPath30, "format-number", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		num, err := FormatNumberArg(args, 0)
 		if err != nil {
 			return nil, err
@@ -636,6 +645,16 @@ func registerFormatNumber(l *Library) {
 		pic, err := FormatNumberString(args, 1)
 		if err != nil {
 			return nil, err
+		}
+		if len(args) > 2 && len(args[2]) > 0 {
+			name, err := FormatNumberString(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(name) != "" {
+				return nil, fmt.Errorf(
+					"FODF1280: no decimal format named %q is declared", name)
+			}
 		}
 		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), XPath30)
 		if err != nil {
