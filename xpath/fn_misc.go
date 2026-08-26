@@ -639,8 +639,14 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 	if err := checkWidthModifier(width); err != nil {
 		return "", err
 	}
-	if err := checkPresentationModifier(pres); err != nil {
-		return "", err
+	// The fractional-seconds component pads on the right rather than the
+	// left, so its digit pattern reads the other way round: "[f99#]" is two
+	// mandatory digits then an optional one, which the integer grammar would
+	// reject as an optional sign following a mandatory one. It is exempt.
+	if comp != 'f' {
+		if err := checkPresentationModifier(pres); err != nil {
+			return "", err
+		}
 	}
 
 	num := func(n int64) (string, error) {
@@ -1058,15 +1064,23 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
 	frac := new(big.Rat).Sub(dt.Second,
 		new(big.Rat).SetInt(new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom())))
 
-	// Rounding happens at the maximum width, because that is the width the
-	// output is allowed to occupy: [f,2-2] on .456 is "46", not "45".
+	// The fraction is *truncated* at the maximum width, not rounded: the
+	// digits of a fractional second are the digits the value has, and the
+	// component shows as many of them as the width allows. [f,2-2] on .456 is
+	// "45", which the suite asserts in six places — rounding it to "46" would
+	// report a time that did not occur.
 	places := max
 	if places <= 0 {
 		// No maximum: render enough places to hold the value exactly, since a
 		// fraction stored as a rational always terminates in decimal here.
 		places = 9
 	}
-	s := frac.FloatString(places)
+	// One extra place, then drop it: FloatString rounds, so the truncation is
+	// done by asking for more than is wanted and cutting.
+	s := frac.FloatString(places + 1)
+	if i := strings.IndexByte(s, '.'); i >= 0 && len(s)-i-1 > places {
+		s = s[:len(s)-1]
+	}
 	if i := strings.IndexByte(s, '.'); i >= 0 {
 		s = s[i+1:]
 	} else {
