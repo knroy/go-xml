@@ -1863,19 +1863,10 @@ func spellDateNumber(n int64, pres string, ordinal bool) string {
 		s = titleCaseWords(s)
 	}
 	if ordinal {
-		// The ordinal forms run their words together: "twentyfirst", and
-		// "OneThousandNineHundredandNinetieth" with the conjunction left
-		// lower case. That is the convention the conformance suite fixes for
-		// English, and the specification leaves the choice to the processor.
+		// An ordinal keeps its word boundaries, the same as a cardinal:
+		// format-integer(100, 'w;o') is "one hundredth". Only the hyphen of a
+		// compound ten goes, so "twenty-first" is written "twentyfirst".
 		s = strings.ReplaceAll(s, "-", "")
-		if pres == "W" {
-			s = strings.ReplaceAll(s, " ", "")
-		} else if pres == "Ww" {
-			s = strings.ReplaceAll(s, "And", "and")
-			s = strings.ReplaceAll(s, " ", "")
-		} else {
-			s = strings.ReplaceAll(s, " ", "")
-		}
 	} else {
 		// Cardinals keep their word boundaries; the hyphen of a compound ten
 		// becomes a space in the run-together cases only.
@@ -1933,12 +1924,11 @@ func spellCardinal(n int64) string {
 		if g == 0 {
 			continue
 		}
-		// The conjunction goes before the final group when that group is
-		// below a hundred and something precedes it: "two thousand and one",
-		// but "two thousand one hundred".
-		if i == 0 && len(parts) > 0 && g < 100 {
-			parts = append(parts, "and")
-		}
+		// No conjunction: "two thousand one", not "two thousand and one".
+		// Both are ordinary English, and the specification leaves the choice
+		// to the processor, but the conformance suite spells its expected
+		// values without one — format-date-en132 and its two siblings strip
+		// the word boundaries and still expect no "and" between the groups.
 		parts = append(parts, spellDateUnder1000(g)+dateScaleWords[i])
 	}
 	return strings.Join(parts, " ")
