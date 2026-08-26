@@ -997,6 +997,12 @@ func checkWidthModifier(width string) error {
 			return fmt.Errorf("FOFD1340: width modifier %q must be greater than zero", width)
 		}
 	}
+	// A minimum above the maximum describes no width at all. Each bound was
+	// checked on its own, so "4-3" passed as two perfectly good numbers.
+	if mn, mx := minWidth(width), maxWidth(width); mx > 0 && mn > mx {
+		return fmt.Errorf(
+			"FOFD1340: the width modifier %q has a minimum above its maximum", width)
+	}
 	return nil
 }
 
@@ -1627,7 +1633,13 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 		// distinction the hours-only branch below already draws — so "[z]"
 		// and "[z,2-2]" keep the padded form. format-date-018 wants the
 		// unpadded hours here and format-date-017 wants them padded.
-		if tzHourDigits(pres) == 1 && strings.HasPrefix(pres, "0") {
+		// A one-digit hours group writes the hours unpadded: "[Z0:01]" gives
+		// "-9:30". The bare "[Z]" is not such a group — it arrives here as
+		// the defaulted presentation "1" rather than as a picture the caller
+		// wrote — and keeps the padded form that format-time-014 and its
+		// siblings expect. Any digit family counts, so a group written in
+		// Osmanya digits unpads the same way an ASCII one does.
+		if tzHourDigits(pres) == 1 && pres != "1" {
 			return prefix + sign + translateDigits(fmt.Sprintf("%d%s%02d", hours, sep, mins), zero)
 		}
 		return prefix + sign + translateDigits(fmt.Sprintf("%02d%s%02d", hours, sep, mins), zero)
@@ -2243,6 +2255,13 @@ func registerParseXML(l *Library, since Version) {
 		tree, perr := xdm.ParseString(s, xdm.ParseOptions{
 			AllowDOCTYPE: true,
 			BaseURI:      ctx.StaticBaseURI,
+			// A document handed to parse-xml may declare external entities,
+			// and the spec expects a processor that resolves them to do so
+			// against the static base URI. Whether any are read at all is the
+			// caller's decision, made by supplying a resolver: nil here keeps
+			// the default of refusing every one, so an expression parsing
+			// untrusted XML cannot be talked into a file read.
+			ExternalEntities: ctx.Entities,
 		})
 		if perr != nil {
 			// FODC0006 is the code the spec gives for a string that is not a

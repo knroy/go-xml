@@ -3,6 +3,7 @@ package qt3
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/big"
 	"net/url"
 	"os"
@@ -426,6 +427,11 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// fn:unparsed-text reads the suite's own fixtures; see suiteTextResolver
 	// for why this is scoped to the checkout.
 	ctx.Texts = newSuiteTextResolver(r.Root, ts.Dir, env)
+	// A document handed to fn:parse-xml may declare an external entity, and a
+	// few cases assert that its content appears in the result. The engine
+	// refuses every external entity unless a resolver says otherwise; here the
+	// suite is the one input where reading its own fixtures is the point.
+	ctx.Entities = suiteEntityResolver{text: ctx.Texts.(suiteTextResolver)}
 	// A case may declare its own decimal format for fn:format-number. The
 	// builtin library's two-argument form uses the standard symbols, so a
 	// declared format is installed by overriding that entry in a library
@@ -852,6 +858,16 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 	if normalizeXML(g) == normalizeXML(w) {
 		return true, ""
 	}
+	// Attribute order is not part of an XML document, so a last comparison
+	// sorts the attributes of every tag. fn-doc/fn-doc-37 is the case that
+	// needs it: the expected element declares xmlns:xs before xmlns:atomic,
+	// and the two namespaces are lifted out of the source document in the
+	// order the node holds them, which is the other one. Nothing about the
+	// two documents differs, so reporting a failure was the harness comparing
+	// serialisations where it meant to compare infosets.
+	if sortTagAttrs(normalizeXML(g)) == sortTagAttrs(normalizeXML(w)) {
+		return true, ""
+	}
 	if len(g) > 120 {
 		g = g[:120] + "..."
 	}
@@ -1187,6 +1203,23 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 		}
 	}
 
+	// The default static base URI is a file: URI naming the test-set's own
+	// directory, so a case that says unparsed-text("../docs/atomic.xml")
+	// resolves to a file: URI rather than staying relative, and never reached
+	// the relative branch below. That looked like the engine refusing to read
+	// outside the suite, but the file it names is squarely inside the
+	// checkout — parse-xml-001 and parse-xml-fragment-001 failed on a harness
+	// gap rather than a conformance one. The read() guard still decides: a
+	// reference that climbed out of the checkout is refused there, so a case
+	// cannot reach the rest of the filesystem by spelling its fixture as a
+	// file: URI.
+	if strings.HasPrefix(full, "file://") {
+		cand := filepath.FromSlash(strings.TrimPrefix(full, "file://"))
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			return t.read(cand, uri, encoding)
+		}
+	}
+
 	// A relative reference resolves only when the environment actually
 	// supplied a static base URI. Several cases declare none and assert
 	// FOUT1170 for exactly that, so resolving one against the test-set
@@ -1215,13 +1248,71 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 	return "", fmt.Errorf("unparsed-text: no resource for %q", uri)
 }
 
+// suiteEntityResolver lets a document handed to fn:parse-xml read the external
+// entities the suite ships beside the test set.
+//
+// A handful of cases — fn-parse-xml/parse-xml-010 is the one that matters —
+// declare <!ENTITY foo SYSTEM 'parse-xml/foo.entity'> inside the string they
+// parse and assert that the entity's content appears in the result. Refusing
+// external entities is the right default and the engine keeps it: this
+// resolver exists because the suite's own fixtures are the one input where
+// reading them is the thing being measured.
+//
+// The confinement is the same one suiteTextResolver.read applies, and
+// deliberately the same code: an external entity is a file read like any
+// other, and giving it a second gate written separately is how the two drift
+// apart. A system identifier that climbs out of the checkout with ".." is
+// refused rather than followed.
+type suiteEntityResolver struct {
+	text suiteTextResolver
+}
+
+func (e suiteEntityResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCloser, string, error) {
+	// The base is the URI of the resource that made the reference, which for
+	// parse-xml is the static base URI: a file: URI naming the test-set's own
+	// directory. Anything else — a fots: URI, an http: one — names a resource
+	// this resolver has no business fetching.
+	if !strings.HasPrefix(base, "file://") {
+		return nil, "", fmt.Errorf("external entity %q: base %q is not a file URI", systemID, base)
+	}
+	if strings.Contains(systemID, "://") {
+		return nil, "", fmt.Errorf("external entity %q is not relative to the suite", systemID)
+	}
+	full := resolveAgainst(base, systemID)
+	path := filepath.FromSlash(strings.TrimPrefix(full, "file://"))
+	// read() applies the containment check and returns the decoded text; the
+	// entity's own encoding declaration is not consulted, which is fine for
+	// the suite's fixtures because they are all UTF-8.
+	s, err := e.text.read(path, systemID, "")
+	if err != nil {
+		return nil, "", err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return io.NopCloser(strings.NewReader(s)), "file://" + filepath.ToSlash(abs), nil
+}
+
 // read loads one file, refusing any path that escapes the checkout.
 //
 // A case is data, and a fixture URI that climbed out with ".." would otherwise
 // let the suite read any file the process can.
 func (t suiteTextResolver) read(path, uri, encoding string) (string, error) {
-	clean := filepath.Clean(path)
-	if rel, err := filepath.Rel(t.root, clean); err != nil ||
+	// Both sides are made absolute before they are compared. filepath.Rel
+	// reports an error rather than a relation when one path is absolute and
+	// the other is not, and the suite root can be given either way on the
+	// command line, so comparing them as-is would refuse a perfectly
+	// in-checkout file whenever the two spellings happened to disagree.
+	clean, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("unparsed-text: %q: %w", uri, err)
+	}
+	root, err := filepath.Abs(t.root)
+	if err != nil {
+		return "", fmt.Errorf("unparsed-text: %q: %w", uri, err)
+	}
+	if rel, err := filepath.Rel(root, clean); err != nil ||
 		rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("unparsed-text: %q escapes the suite", uri)
 	}
@@ -1336,6 +1427,20 @@ func envDocs(r *Runner, env Environment) *envDocResolver {
 		// given, and the resolver had never heard of it.
 		byURI[filepath.Join(r.Root, src.File)] = src.File
 	}
+	// A collection's members are documents too, and collection-009 walks from
+	// fn:collection through document-uri() back through fn:doc expecting to
+	// land on the same nodes. Registering only the <source> children of the
+	// environment left those unreachable, so the round trip raised "no
+	// document" — a gap in what the harness declared rather than the engine
+	// losing track of a document's URI.
+	for _, coll := range env.Collections {
+		for _, src := range coll.Sources {
+			if src.URI != "" {
+				byURI[src.URI] = src.File
+			}
+			byURI[filepath.Join(r.Root, src.File)] = src.File
+		}
+	}
 	if len(byURI) == 0 {
 		return nil
 	}
@@ -1364,6 +1469,80 @@ func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 // It folds "<a/>" and "<a></a>" together, and drops the optional space before
 // "/>". Both appear in hand-written assert-xml values, and neither is a
 // difference in the document.
+// sortTagAttrs rewrites every start tag with its attributes in sorted order,
+// so that two serialisations differing only in attribute order compare equal.
+//
+// It is deliberately the last comparison xmlMatches tries rather than the
+// first: it is a text rewrite over something that may not be a well-formed
+// tag, and running it ahead of the exact comparison would let a genuinely
+// different document slip through on a lucky reordering. Anything it cannot
+// parse confidently is left exactly as it found it.
+func sortTagAttrs(s string) string {
+	var sb strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '<' || strings.HasPrefix(s[i:], "</") || strings.HasPrefix(s[i:], "<?") ||
+			strings.HasPrefix(s[i:], "<!") {
+			sb.WriteByte(s[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i:], '>')
+		if end < 0 {
+			sb.WriteString(s[i:])
+			break
+		}
+		inner := s[i+1 : i+end]
+		i += end + 1
+		// A name followed by nothing has no attributes to sort.
+		j := strings.IndexAny(inner, " \t\n\r")
+		if j < 0 {
+			sb.WriteString("<" + inner + ">")
+			continue
+		}
+		attrs, ok := splitAttrs(inner[j+1:])
+		if !ok {
+			sb.WriteString("<" + inner + ">")
+			continue
+		}
+		sort.Strings(attrs)
+		sb.WriteString("<" + inner[:j])
+		for _, a := range attrs {
+			sb.WriteString(" " + a)
+		}
+		sb.WriteString(">")
+	}
+	return sb.String()
+}
+
+// splitAttrs breaks the attribute part of a start tag into whole name="value"
+// pairs, reporting false for anything it does not recognise. Splitting on
+// whitespace alone would cut a value that contains a space in half, which
+// would then sort as two fragments and compare unequal to itself.
+func splitAttrs(s string) ([]string, bool) {
+	var out []string
+	for {
+		s = strings.TrimLeft(s, " \t\n\r")
+		if s == "" {
+			return out, true
+		}
+		eq := strings.IndexByte(s, '=')
+		if eq < 0 || eq+1 >= len(s) {
+			return nil, false
+		}
+		q := s[eq+1]
+		if q != '"' && q != '\'' {
+			return nil, false
+		}
+		close := strings.IndexByte(s[eq+2:], q)
+		if close < 0 {
+			return nil, false
+		}
+		end := eq + 2 + close + 1
+		out = append(out, s[:end])
+		s = s[end:]
+	}
+}
+
 func normalizeXML(s string) string {
 	s = strings.ReplaceAll(s, " />", "/>")
 	// Rewrite every empty-element tag to the long form, so the two spellings

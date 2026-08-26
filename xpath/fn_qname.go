@@ -433,10 +433,23 @@ func denormalizeURI(u *url.URL, base, rel string) string {
 			out = written + out[len(u.Scheme):]
 		}
 	}
-	// A space is the escape that shows up in practice; it is legal in the
-	// lexical space of xs:anyURI and the suite asserts it survives.
-	if strings.Contains(base, " ") || strings.Contains(rel, " ") {
-		out = strings.ReplaceAll(out, "%20", " ")
+	// A character the caller wrote literally is put back literally. url.String
+	// escapes a space as %20 and every non-ASCII rune as its UTF-8 bytes, so
+	// resolving "ç.html" against "http://www.example.com/à.html" came back as
+	// "http://www.example.com/%C3%A7.html" — a correct *encoding* of the right
+	// answer, but not equal to it, and fn:resolve-uri is defined to return the
+	// reference resolved rather than escaped. Only characters that actually
+	// appeared unescaped in the inputs are restored: a reference that already
+	// wrote "%C3%A0" means those six characters, and turning them into "à"
+	// would be the opposite error.
+	for _, r := range base + rel {
+		if r != ' ' && r < 0x80 {
+			continue
+		}
+		lit := string(r)
+		if esc := escapeNonURI(lit, false); esc != lit {
+			out = strings.ReplaceAll(out, esc, lit)
+		}
 	}
 	return out
 }

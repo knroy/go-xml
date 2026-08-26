@@ -69,7 +69,18 @@ func registerHOFuncs(l *Library) {
 		if !ok {
 			return xdm.Empty(), nil
 		}
-		return xdm.One(functionItemFor(name, n, fn.Call)), nil
+		item := functionItemFor(name, n, fn.Call)
+		// F&O 16.4.3 makes fn:function-lookup behave like a named function
+		// reference in this respect: a context-dependent function it returns
+		// carries the context of the fn:function-lookup call, not of whatever
+		// expression eventually applies it. That is the whole point of
+		// fn-function-lookup-018 and -022, where the returned fn:base-uri#0
+		// and fn:document-uri#0 are deliberately applied under a *different*
+		// focus and must still report the one they were looked up under.
+		if ctx.Item != nil {
+			item.Invoke = withRetainedFocus(ctx, item.Invoke)
+		}
+		return xdm.One(item), nil
 	})
 
 	// fn:for-each($seq as item()*, $f as function(item()) as item()*) as item()*

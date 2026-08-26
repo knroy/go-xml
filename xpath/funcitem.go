@@ -42,7 +42,37 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 	item := functionItemFor(e.Name, e.Arity, fn.Call)
 	item.Signature = fn.Signature
+	// A named function reference to a context-dependent function retains the
+	// focus in force where the reference was *written*, not where the item is
+	// eventually called (3.1.6: the function item's dynamic context is the one
+	// at the point of the reference). fn-lang-31/32 pin this exactly:
+	// "/langs/para[4]!fn:lang#1" is applied to /langs/para[1], and the answer
+	// must be about para[4]'s xml:lang, not para[1]'s. Passing the caller's
+	// context straight through made it about para[1] and inverted both.
+	//
+	// Only a reference written *with* a focus retains one. Where there is
+	// none there is nothing to retain, and falling through to the caller's
+	// context is what keeps a bare "fn:name#0" usable in the places that
+	// supply a focus at call time.
+	if ctx.Item != nil {
+		item.Invoke = withRetainedFocus(ctx, item.Invoke)
+	}
 	return xdm.One(item), nil
+}
+
+// withRetainedFocus wraps an invoke closure so the call runs under the focus
+// captured at reference time, while still taking the caller's cancellation and
+// resource counters — those are per-evaluation, not per-closure.
+func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequence, error)) func(any, []xdm.Sequence) (xdm.Sequence, error) {
+	captured := *ref
+	return func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
+		sub := captured
+		if c, ok := callCtx.(invokeContext); ok && c != nil {
+			sub.Ctx = c.Ctx
+			sub.items = c.items
+		}
+		return inner(&sub, args)
+	}
 }
 
 // functionItemFor wraps a library function as a function item.
@@ -172,7 +202,69 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 			return conv, nil
 		}
 	}
+	// Function coercion, the last clause of 3.1.5: a function item supplied
+	// where a typed function test is declared is not rejected for having a
+	// narrower signature — it is wrapped, so that the arguments are converted
+	// to what it actually accepts and its result to what the test promises.
+	// for-each-011 depends on this: fn:upper-case#1 declares (xs:string?) as
+	// xs:string, which is not a subtype of "function(item()) as item()", yet
+	// passing it there is legal and must work.
+	if st.IsFunctionTest && st.HasFunctionArity && len(v) == 1 {
+		if fn, ok := v[0].(*xdm.FunctionItem); ok && fn.Arity == st.FunctionArity {
+			return xdm.One(coerceFunctionItem(fn, st)), nil
+		}
+	}
 	return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
+}
+
+// coerceFunctionItem wraps fn so that it presents the signature st declares.
+//
+// The wrapper's own signature is the declared one, so a further coercion or an
+// instance-of test sees what the parameter promised rather than what the
+// original function happened to declare. Conversion of the actual values is
+// deferred to call time, where the arguments exist; the wrapper itself is
+// built without knowing them.
+func coerceFunctionItem(fn *xdm.FunctionItem, st SequenceType) *xdm.FunctionItem {
+	sig := make([]string, 0, st.FunctionArity+1)
+	if st.FunctionReturn != nil {
+		sig = append(sig, st.FunctionReturn.String())
+	} else {
+		sig = append(sig, "item()*")
+	}
+	for _, p := range st.FunctionParams {
+		sig = append(sig, p.String())
+	}
+	params := st.FunctionParams
+	ret := st.FunctionReturn
+	inner := fn.Invoke
+	return &xdm.FunctionItem{
+		Name:      fn.Name,
+		Arity:     fn.Arity,
+		Signature: sig,
+		Invoke: func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			// The declared parameter types are applied on the way in and the
+			// declared return type on the way out. The wrapped function then
+			// applies its own, which is what makes a chain of coercions
+			// compose rather than the outermost one deciding everything.
+			for i := range args {
+				if i < len(params) {
+					conv, err := convertForParam(args[i], params[i])
+					if err != nil {
+						return nil, err
+					}
+					args[i] = conv
+				}
+			}
+			out, err := inner(callCtx, args)
+			if err != nil {
+				return nil, err
+			}
+			if ret != nil {
+				return convertForParam(out, *ret)
+			}
+			return out, nil
+		},
+	}
 }
 
 // Eval implements Expr. A placeholder is never evaluated on its own: the call

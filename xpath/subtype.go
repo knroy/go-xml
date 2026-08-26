@@ -150,11 +150,28 @@ var atomicAncestors = map[string][]string{
 	"xs:float":            {"xs:numeric", "xs:anyAtomicType"},
 	"xs:decimal":          {"xs:numeric", "xs:anyAtomicType"},
 	"xs:integer":          {"xs:decimal", "xs:numeric", "xs:anyAtomicType"},
-	"xs:untypedAtomic":    {"xs:anyAtomicType"},
-	"xs:date":             {"xs:anyAtomicType"},
-	"xs:time":             {"xs:anyAtomicType"},
-	"xs:dateTime":         {"xs:anyAtomicType"},
-	"xs:numeric":          {"xs:anyAtomicType"},
+	// The integer family. A typed function test written against one of these
+	// is not exotic — inline-fn-033 asserts that a function taking xs:integer
+	// is an instance of "function(xs:long, xs:long) as xs:integer+", which is
+	// contravariance over exactly this chain. With the derived names absent
+	// each subsumed only itself and the assertion failed.
+	"xs:long":               {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:int":                {"xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:short":              {"xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:byte":               {"xs:short", "xs:int", "xs:long", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:nonPositiveInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:negativeInteger":    {"xs:nonPositiveInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:nonNegativeInteger": {"xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:positiveInteger":    {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:unsignedLong":       {"xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:unsignedInt":        {"xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:unsignedShort":      {"xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:unsignedByte":       {"xs:unsignedShort", "xs:unsignedInt", "xs:unsignedLong", "xs:nonNegativeInteger", "xs:integer", "xs:decimal", "xs:numeric", "xs:anyAtomicType"},
+	"xs:untypedAtomic":      {"xs:anyAtomicType"},
+	"xs:date":               {"xs:anyAtomicType"},
+	"xs:time":               {"xs:anyAtomicType"},
+	"xs:dateTime":           {"xs:anyAtomicType"},
+	"xs:numeric":            {"xs:anyAtomicType"},
 }
 
 // atomicSubsumes reports whether super is sub or one of its ancestors.

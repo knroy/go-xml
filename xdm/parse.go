@@ -597,6 +597,18 @@ func buildElement(t xml.StartElement, parent *Node, offset int32) *Node {
 			if a.Name.Space == "xml" && a.Name.Local == "base" {
 				el.BaseURI = resolveBase(el.BaseURI, a.Value)
 			}
+			// xml:id is of type xs:ID whatever the document says, so its
+			// value is whitespace-normalised at parse time — the xml:id
+			// Recommendation section 4 requires a processor to do this even
+			// with no DTD or schema in sight. Leaving it raw meant an
+			// attribute written across several indented lines kept the
+			// indentation in its value: it still matched fn:id, which trims
+			// before comparing, but serialising the element reproduced the
+			// newlines and tabs, so the node was not the one the data model
+			// says the document has.
+			if a.Name.Space == "xml" && a.Name.Local == "id" {
+				attr.Value = strings.Join(strings.Fields(a.Value), " ")
+			}
 			el.AddAttr(attr)
 		}
 	}

@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -355,10 +356,18 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 		kt.Kind = xdm.KindComment
 	case "namespace-node":
 		kt.Kind = xdm.KindNamespace
-		// namespace-node() takes no argument. With one it is not a kind test
-		// at all but a call to a function by that name, and no such function
-		// exists: XPST0017 rather than the generic syntax error.
+		// namespace-node() takes no argument, and the two versions disagree
+		// about what an argument means. In 3.0 the name is reserved by the
+		// grammar, so "namespace-node(1)" cannot be a function call at all and
+		// is simply malformed — XPST0003, which is what
+		// function-call-reserved-function-names-037 accepts. In 2.0 there is
+		// no namespace-node kind test to be malformed, so the same text reads
+		// as a call to a function nobody declared, and -034 asserts XPST0017.
 		if !p.peekIs(TokOp, ")") {
+			if p.version.atLeast30() {
+				return nil, p.errorf(
+					"XPST0003: namespace-node() takes no arguments")
+			}
 			return nil, p.errorf(
 				"XPST0017: namespace-node() takes no arguments")
 		}
@@ -623,9 +632,19 @@ func (p *Parser) parseNamedFunctionRef() (Expr, error) {
 	if arityTok.Kind != TokNumber || arityTok.numType != numInteger {
 		return nil, p.errorf("expected an integer arity after '#'")
 	}
-	arity := int(arityTok.Num)
-	if arity < 0 {
-		return nil, p.errorf("a function arity cannot be negative")
+	// The arity is a bare integer literal with no bound in the grammar, so
+	// nothing stops it being larger than any function could have — or than an
+	// int can hold. fn-function-arity-017 writes fn:concat#2^128 and accepts
+	// either the exact value or FOAR0002; parsing it through the token's
+	// float64 quietly saturated to maxint and reported *that* as the arity,
+	// which is neither. Re-reading the literal exactly is what catches it.
+	arity64, err := strconv.ParseInt(arityTok.Val, 10, 64)
+	if err != nil {
+		return nil, p.errorf("FOAR0002: the arity %s is out of range", arityTok.Val)
+	}
+	arity := int(arity64)
+	if arity < 0 || int64(arity) != arity64 {
+		return nil, p.errorf("FOAR0002: the arity %s is out of range", arityTok.Val)
 	}
 	p.pos++
 	name, err := p.resolveFunctionName(nameTok.Val)
@@ -988,6 +1007,31 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		}
 		st.Empty = true
 		return st, nil
+	}
+
+	// ParenthesizedItemType, production [96]: "( ItemType )". The parentheses
+	// are there for readability where a function test's own "as" would
+	// otherwise be ambiguous about where the signature ends — the one place it
+	// really matters is a nested function type in parameter position, as in
+	// for-each-011's "$ff as (function(item()) as item())". Without this the
+	// parser reported XPST0003 at the opening paren.
+	//
+	// Only an ItemType may appear inside, so an occurrence indicator or
+	// empty-sequence() there is a grammar error; the indicator belongs outside
+	// the parentheses, and is picked up by finishOccurrence below.
+	if t.Kind == TokOp && t.Val == "(" {
+		p.pos++
+		inner, err := p.parseSequenceType()
+		if err != nil {
+			return st, err
+		}
+		if inner.Empty || inner.Occurrence != "" {
+			return st, p.errorf("XPST0003: parenthesized item type may not carry an occurrence indicator")
+		}
+		if err := p.expectOp(")"); err != nil {
+			return st, err
+		}
+		return p.finishOccurrence(inner)
 	}
 
 	// A function test, productions [90]-[92]: "function(*)" matches any

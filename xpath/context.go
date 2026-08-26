@@ -92,6 +92,18 @@ type Context struct {
 	// than reading it as a parsed document. See TextResolver.
 	Texts TextResolver
 
+	// Entities resolves the external entities and external DTD subset that a
+	// document handed to fn:parse-xml declares. Nil refuses every one of
+	// them, which is the safe default and the one nearly every caller wants:
+	// parse-xml is handed a string that came from somewhere, and honouring
+	// <!ENTITY e SYSTEM "..."> inside it is XXE by definition. Setting Docs
+	// or Texts does not set this — those grant reads of URIs the expression
+	// itself named, while this grants reads of URIs the *parsed data* names,
+	// which is a different and wider trust decision.
+	//
+	// Confinement is entirely the resolver's; see xdm.EntityResolver.
+	Entities xdm.EntityResolver
+
 	// Compat is XPath 1.0 compatibility mode, which XSLT 3.8 puts in force for
 	// expressions written on an element whose effective [xsl:]version is below
 	// 2.0. Under it the coercion rules of XPath 2.0 appendix B.1 apply: a

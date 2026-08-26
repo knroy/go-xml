@@ -193,9 +193,12 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	}
 
 	// xs:error has no instances, so a cast to it always fails and a castable
-	// test is always false — except for the empty sequence under "?", which
-	// the general rules below already handle.
-	if e.Type.IsErrorType && !(len(v) == 0 && e.Type.Occurrence == "?") {
+	// test is always false — except where the operand is empty, which the
+	// general rules below settle first. "() cast as xs:error?" is empty, and
+	// "xs:error(()) cast as xs:error" is XPTY0004: a cardinality mismatch is
+	// decided before the target type gets a say, so answering FORG0001 there
+	// (xs-error-040) reported the wrong reason for the wrong stage.
+	if e.Type.IsErrorType && len(v) != 0 {
 		if e.Castable {
 			return xdm.One(xdm.NewBoolean(false)), nil
 		}

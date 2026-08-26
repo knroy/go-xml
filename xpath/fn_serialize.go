@@ -35,17 +35,25 @@ func registerSerialize(l *Library) {
 			}
 			sb.WriteString("?>\n")
 		}
-		// The item separator goes between items and nowhere else. Without one
-		// the default applies, which for the XML method is a single space
-		// between two adjacent atomic values and nothing between nodes —
-		// serializeItem's own spacing.
+		// An explicit item-separator goes between every pair of items and
+		// replaces the default. Without one, sequence normalization (step 4
+		// of the Serialization spec) applies instead: adjacent atomic values
+		// are joined by a single space, and nothing is inserted around nodes.
+		// We used to write the items back to back, so serialize((1, true()))
+		// came out as "1true" rather than "1 true".
+		prevAtomic := false
 		for i, it := range seqArg(args, 0) {
-			if opts.hasItemSep && i > 0 {
+			_, atomic := it.(*xdm.Atomic)
+			switch {
+			case opts.hasItemSep && i > 0:
 				sb.WriteString(opts.itemSeparator)
+			case !opts.hasItemSep && atomic && prevAtomic:
+				sb.WriteString(" ")
 			}
 			if err := serializeItem(&sb, it, opts); err != nil {
 				return nil, err
 			}
+			prevAtomic = atomic
 		}
 		out := sb.String()
 		if len(opts.charMap) > 0 {

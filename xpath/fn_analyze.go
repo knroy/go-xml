@@ -3,6 +3,7 @@ package xpath
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -43,7 +44,7 @@ func registerAnalyzeString(l *Library) {
 		if re.MatchString("") {
 			return nil, fmt.Errorf("FORX0003: pattern matches the empty string")
 		}
-		return xdm.One(analyzeString(in, re)), nil
+		return xdm.One(analyzeString(in, re, groupParents(pattern, flags))), nil
 	})
 
 	l.registerFnSince(XPath30, "generate-id", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -92,8 +93,72 @@ func GenerateID(it xdm.Item) string {
 	return "N" + strconv.Itoa(n.Order())
 }
 
+// groupParents maps each capturing group number to the number of the
+// capturing group that lexically encloses it, or 0 for a group at top level.
+//
+// The nesting cannot be recovered from the match offsets alone, which is what
+// analyzeString tried at first. "(b)(x?)" and "(b(x?))" both match "banana"
+// with group 1 at [0,1) and an empty group 2 at [1,1): by offsets the second
+// group sits inside the first in either case, but in the first pattern it is a
+// sibling. analyzeString-017 and -017a are the pair that pin the distinction,
+// and only the pattern text can tell them apart.
+//
+// The scan is lexical because that is all it needs to be: a capturing group is
+// an unescaped "(" outside a character class that is not followed by "?".
+func groupParents(pattern, flags string) []int {
+	// The "q" flag makes the whole pattern a literal, so there are no groups
+	// to nest.
+	if strings.ContainsRune(flags, 'q') {
+		return nil
+	}
+	inClass := false
+	var stack []int // capturing group numbers currently open
+	n := 0
+	parents := []int{0} // index 0 is unused; groups are numbered from 1
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; c {
+		case '\\':
+			i++ // whatever follows is escaped, including "(" and "]"
+		case '[':
+			inClass = true
+		case ']':
+			inClass = false
+		case '(':
+			if inClass {
+				continue
+			}
+			if i+1 < len(pattern) && pattern[i+1] == '?' {
+				// A non-capturing group or an assertion. It still nests, but
+				// it has no number, so it contributes nothing to the parent
+				// chain and is simply skipped — the groups inside it take
+				// their parent from the nearest capturing ancestor.
+				stack = append(stack, 0)
+				continue
+			}
+			n++
+			parent := 0
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j] != 0 {
+					parent = stack[j]
+					break
+				}
+			}
+			parents = append(parents, parent)
+			stack = append(stack, n)
+		case ')':
+			if inClass {
+				continue
+			}
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	return parents
+}
+
 // analyzeString builds the fn:analyze-string-result tree.
-func analyzeString(in string, re Regexp) *xdm.Node {
+func analyzeString(in string, re Regexp, parents []int) *xdm.Node {
 	// The result element and its descendants are in the fn: namespace, and
 	// the root carries the declaration that binds it. Without the namespace
 	// node the tree serialises with no binding at all, so a comparison
@@ -128,7 +193,7 @@ func analyzeString(in string, re Regexp) *xdm.Node {
 
 		match := &xdm.Node{Kind: xdm.KindElement,
 			Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"}}
-		buildMatch(match, in, m, appendChild, text)
+		buildMatch(match, in, m, parents, appendChild, text)
 		appendChild(result, match)
 		last = m[1]
 	}
@@ -151,7 +216,7 @@ type groupSpan struct{ start, end, nr int }
 // group that did not participate in the match contributes nothing. Text of the
 // match that falls outside every group is emitted directly on fn:match, which
 // is why this walks the match span rather than concatenating the groups.
-func buildMatch(match *xdm.Node, in string, m []int,
+func buildMatch(match *xdm.Node, in string, m []int, parents []int,
 	appendChild func(parent, child *xdm.Node), text func(string) *xdm.Node) {
 	var groups []groupSpan
 	for g := 1; g*2+1 < len(m); g++ {
@@ -191,7 +256,7 @@ func buildMatch(match *xdm.Node, in string, m []int,
 		emitted[best] = true
 		// Nested groups sit inside this one, so recurse over the sub-slice of
 		// groups this one contains.
-		fillNested(el, in, g.start, g.end, groups, emitted, appendChild, text)
+		fillNested(el, in, g.start, g.end, g.nr, groups, parents, emitted, appendChild, text)
 		appendChild(match, el)
 		pos = g.end
 	}
@@ -200,15 +265,39 @@ func buildMatch(match *xdm.Node, in string, m []int,
 	}
 }
 
+// enclosedBy reports whether group nr is lexically inside group outer.
+//
+// A pattern whose parent map could not be built — one compiled by a route that
+// does not supply it — falls back to trusting the offsets, which is what the
+// whole of analyze-string did before and is right for every pattern without an
+// empty group butting up against a group boundary.
+func enclosedBy(nr, outer int, parents []int) bool {
+	if outer == 0 || nr >= len(parents) {
+		return true
+	}
+	for p := parents[nr]; p != 0; p = parents[p] {
+		if p == outer {
+			return true
+		}
+	}
+	return false
+}
+
 // fillNested fills a group element with the groups nested inside it.
-func fillNested(el *xdm.Node, in string, start, end int,
-	groups []groupSpan, emitted []bool,
+func fillNested(el *xdm.Node, in string, start, end, outer int,
+	groups []groupSpan, parents []int, emitted []bool,
 	appendChild func(parent, child *xdm.Node), text func(string) *xdm.Node) {
 	pos := start
 	for {
 		best := -1
 		for i, g := range groups {
 			if emitted[i] || g.start < pos || g.end > end {
+				continue
+			}
+			// Containment by offset is necessary but not sufficient: an empty
+			// group that happens to start where this one ends is a sibling
+			// unless the pattern actually wrote it inside. See groupParents.
+			if !enclosedBy(g.nr, outer, parents) {
 				continue
 			}
 			if best < 0 || g.start < groups[best].start ||
@@ -229,7 +318,7 @@ func fillNested(el *xdm.Node, in string, start, end int,
 		}
 		inner.Attrs[0].Parent = inner
 		emitted[best] = true
-		fillNested(inner, in, g.start, g.end, groups, emitted, appendChild, text)
+		fillNested(inner, in, g.start, g.end, g.nr, groups, parents, emitted, appendChild, text)
 		appendChild(el, inner)
 		pos = g.end
 	}

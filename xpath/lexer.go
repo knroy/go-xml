@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // TokenKind classifies a lexical token.
@@ -435,12 +437,30 @@ func (l *Lexer) lexQName() (string, error) {
 		if end < 0 {
 			return "", fmt.Errorf("XPST0003: unterminated braced URI literal at offset %d", l.pos)
 		}
+		raw := l.src[l.pos : l.pos+end]
+		// BracedURILiteral is "Q" "{" (Char - ("{" | "}"))* "}", so a second
+		// opening brace inside the literal ends the expression rather than
+		// being part of the URI. Without this, "Q{{http://...}pi()" lexed as
+		// a function named "{http://...}:pi" and failed as XPST0017 — an
+		// unknown function — where eqname-906 wants the syntax error.
+		if strings.ContainsRune(raw, '{') {
+			return "", fmt.Errorf("XPST0003: '{' is not allowed inside a braced URI literal at offset %d", l.pos)
+		}
 		// Whitespace inside a braced URI literal is normalised, not preserved:
 		// the content is an xs:anyURI, whose whitespace facet is "collapse".
 		// So Q{urn:foo bar}x and Q{urn:foo   bar}x name the same variable,
 		// which is what eqname-024 asserts by binding one and reading the
 		// other.
-		uri := strings.Join(strings.Fields(l.src[l.pos:l.pos+end]), " ")
+		uri := strings.Join(strings.Fields(raw), " ")
+		// The xmlns namespace may never name a namespace, and a
+		// BracedURILiteral is one of the places that names one directly. The
+		// XML namespace is *not* excluded here — Q{http://www.w3.org/XML/1998/
+		// namespace}* is legal and eqname-201 uses it — so only this one URI
+		// is refused. Leading whitespace has already been collapsed away,
+		// which is why eqname-910 writes it with a space after the brace.
+		if uri == xdm.NSXMLNS {
+			return "", fmt.Errorf("XQST0070: the namespace URI %s may not be used in a braced URI literal", uri)
+		}
 		l.pos += end + 1
 		local, err := l.lexNCName()
 		if err != nil {
