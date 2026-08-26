@@ -1756,13 +1756,32 @@ func registerParseXML(l *Library, since Version) {
 // an element.
 func parseXMLFragment(s, base string) (*xdm.Node, error) {
 	body := s
-	if strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "<?xml") {
-		trimmed := strings.TrimLeft(body, " \t\r\n")
-		if end := strings.Index(trimmed, "?>"); end >= 0 {
-			body = trimmed[end+2:]
+	if strings.HasPrefix(body, "<?xml") {
+		end := strings.Index(body, "?>")
+		if end < 0 {
+			return nil, xdm.Errorf("FODC0006",
+				"fn:parse-xml-fragment: unterminated text declaration")
 		}
+		decl := body[:end]
+		// This is a text declaration, not an XML declaration: the two differ
+		// in that "encoding" is mandatory here and "standalone" is forbidden.
+		// A fragment carrying an XML declaration is therefore not a
+		// well-formed external entity.
+		if !strings.Contains(decl, "encoding") {
+			return nil, xdm.Errorf("FODC0006",
+				"fn:parse-xml-fragment: a text declaration must specify an encoding")
+		}
+		if strings.Contains(decl, "standalone") {
+			return nil, xdm.Errorf("FODC0006",
+				"fn:parse-xml-fragment: a text declaration may not specify standalone")
+		}
+		body = body[end+2:]
 	}
-	tree, err := xdm.ParseString("<\x01frag>"+body+"</\x01frag>", xdm.ParseOptions{
+	// The wrapper name must be a legal XML name — a control character is not,
+	// and made every fragment fail to parse. It is chosen to be one no
+	// fragment would use, and it never appears in the result: its children are
+	// lifted onto the document node below.
+	tree, err := xdm.ParseString("<parse-xml-fragment-wrapper>"+body+"</parse-xml-fragment-wrapper>", xdm.ParseOptions{
 		AllowDOCTYPE: true,
 		BaseURI:      base,
 	})

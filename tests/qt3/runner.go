@@ -1050,6 +1050,9 @@ type suiteTextResolver struct {
 	// the suite intends these to be found; the prefix rule below is the
 	// fallback for a case whose environment declares nothing.
 	byURI map[string]string
+	// dir is the test-set file's directory, which a relative reference in a
+	// case resolves against.
+	dir string
 }
 
 const fotsPrefix = "http://www.w3.org/fots/"
@@ -1065,7 +1068,7 @@ func newSuiteTextResolver(root, dir string, env Environment) suiteTextResolver {
 			byURI[res.URI] = filepath.Join(dir, res.File)
 		}
 	}
-	return suiteTextResolver{root: root, byURI: byURI}
+	return suiteTextResolver{root: root, byURI: byURI, dir: dir}
 }
 
 func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, error) {
@@ -1080,6 +1083,15 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 		return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
 	}
 
+	// A reference that resolved to a path inside the checkout is read from
+	// there. The read() guard below is what keeps that safe: a reference that
+	// climbs out with ".." is refused rather than followed.
+	if !strings.Contains(full, "://") && t.dir != "" {
+		cand := filepath.Join(t.root, t.dir, filepath.FromSlash(full))
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			return t.read(cand, uri, encoding)
+		}
+	}
 	ref := full
 	if !strings.HasPrefix(ref, fotsPrefix) {
 		return "", fmt.Errorf("unparsed-text: %q is outside the suite", uri)
