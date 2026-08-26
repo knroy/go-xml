@@ -60,7 +60,7 @@ func TestSchemaPatternAnchorsAreLiteral(t *testing.T) {
 // fn:matches keeps its anchors: the two flavours differ exactly here, and the
 // escaping must not reach the XPath side.
 func TestMatchesKeepsItsAnchors(t *testing.T) {
-	tr, err := translatePattern(`^abc$`, false)
+	tr, err := translatePattern(`^abc$`, false, XPath20)
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}

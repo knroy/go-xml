@@ -36,6 +36,16 @@ type Context struct {
 	// package knowing about them.
 	Funcs FunctionLibrary
 
+	// Version is the language version the expression was compiled under.
+	//
+	// It reaches the function library because a few functions differ between
+	// versions in ways the parser cannot settle: fn:matches and its siblings
+	// accept the "q" flag and the 3.0 regular expression constructs only
+	// under 3.0, and must raise the same errors as any other processor when
+	// asked to be 2.0. The zero value is XPath20, so a Context built by an
+	// existing caller behaves exactly as it did before.
+	Version Version
+
 	// StaticBaseURI is the base URI of the expression itself — the stylesheet
 	// or query it was written in — which is what fn:static-base-uri returns
 	// and what fn:resolve-uri resolves against by default.

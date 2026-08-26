@@ -605,7 +605,7 @@ func (p *btParser) compileCharAtom(src string) (btNode, error) {
 }
 
 func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
-	translated, err := translatePattern(src, dotAll)
+	translated, err := translatePattern(src, dotAll, XPath20)
 	if err != nil {
 		return nil, err
 	}
@@ -1142,7 +1142,7 @@ func mapOffsets(loc, byteAt []int) []int {
 // It is only ever reached when the switch is on *and* the fixed-width path has
 // already declined the pattern, so it never displaces an exact answer with a
 // slower one.
-func compileBacktrack(pattern, flags string) (*btRegexp, error) {
+func compileBacktrack(pattern, flags string, v Version) (*btRegexp, error) {
 	original := pattern
 	p := &btParser{}
 	for _, f := range flags {
@@ -1168,7 +1168,7 @@ func compileBacktrack(pattern, flags string) (*btRegexp, error) {
 	// for the same reason: a construct the language does not define must be
 	// refused rather than translated, and this engine is if anything more
 	// willing to accept Perl syntax than RE2 is.
-	if err := checkRegexGrammar(pattern); err != nil {
+	if err := checkRegexGrammar(pattern, v); err != nil {
 		return nil, err
 	}
 	p.src = pattern

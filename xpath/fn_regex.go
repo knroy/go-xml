@@ -17,7 +17,7 @@ import (
 // identifier is a fn:matches — so their fidelity matters more than their
 // breadth.
 func registerRegexFuncs(l *Library) {
-	l.registerFn("matches", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("matches", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -30,11 +30,11 @@ func registerRegexFuncs(l *Library) {
 		// but the fixed-width subset can be decided exactly by comparison.
 		// Anything outside that subset still raises FORX0002, so no answer is
 		// ever guessed. See regex_backref.go.
-		if br, err := compileArgBackref(args, 1, 2); err != nil {
+		if br, err := compileArgBackref(args, 1, 2, ctx.Version); err != nil {
 			// The fixed-width analysis declined. When the backtracking engine
 			// is enabled it gets the pattern next; when it is not, this is the
 			// FORX0002 it has always been.
-			bt, btErr := argBacktrack(args, 1, 2, err)
+			bt, btErr := argBacktrack(args, 1, 2, err, ctx.Version)
 			if btErr != nil {
 				return nil, btErr
 			}
@@ -46,14 +46,14 @@ func registerRegexFuncs(l *Library) {
 		} else if br != nil {
 			return boolSeq(br.MatchString(matchInput(s, flags))), nil
 		}
-		re, err := compileArgRegexp(args, 1, 2)
+		re, err := compileArgRegexp(args, 1, 2, ctx.Version)
 		if err != nil {
 			return nil, err
 		}
 		return boolSeq(re.MatchString(matchInput(s, flags))), nil
 	})
 
-	l.registerFn("replace", []int{3, 4}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("replace", []int{3, 4}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
@@ -62,16 +62,16 @@ func registerRegexFuncs(l *Library) {
 		// matches() uses: the fixed-width subset is decided by comparison,
 		// and the text the backreference consumed is part of what gets
 		// replaced. See regex_backref.go.
-		br, err := compileArgBackref(args, 1, 3)
+		br, err := compileArgBackref(args, 1, 3, ctx.Version)
 		var bt *btRegexp
 		if err != nil {
-			if bt, err = argBacktrack(args, 1, 3, err); err != nil {
+			if bt, err = argBacktrack(args, 1, 3, err, ctx.Version); err != nil {
 				return nil, err
 			}
 		}
 		var re *regexp.Regexp
 		if br == nil && bt == nil {
-			if re, err = compileArgRegexp(args, 1, 3); err != nil {
+			if re, err = compileArgRegexp(args, 1, 3, ctx.Version); err != nil {
 				return nil, err
 			}
 		}
@@ -122,17 +122,17 @@ func registerRegexFuncs(l *Library) {
 		return strSeq(re.ReplaceAllString(s, goRepl)), nil
 	})
 
-	l.registerFn("tokenize", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("tokenize", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {
 			return nil, err
 		}
-		re, err := compileArgRegexp(args, 1, 2)
+		re, err := compileArgRegexp(args, 1, 2, ctx.Version)
 		if err != nil {
 			// fn:tokenize has no fixed-width backreference path — splitting on
 			// a backreference pattern was never supported — so the backtracking
 			// engine is the only one that can take it.
-			bt, btErr := argBacktrack(args, 1, 2, err)
+			bt, btErr := argBacktrack(args, 1, 2, err, ctx.Version)
 			if btErr != nil {
 				return nil, btErr
 			}
@@ -157,7 +157,7 @@ func registerRegexFuncs(l *Library) {
 
 // compileArgRegexp compiles the pattern at index pat with optional flags at
 // index flags.
-func compileArgRegexp(args []xdm.Sequence, pat, flags int) (*regexp.Regexp, error) {
+func compileArgRegexp(args []xdm.Sequence, pat, flags int, v Version) (*regexp.Regexp, error) {
 	p, err := argStringRequired(args, pat)
 	if err != nil {
 		return nil, err
@@ -168,7 +168,7 @@ func compileArgRegexp(args []xdm.Sequence, pat, flags int) (*regexp.Regexp, erro
 			return nil, err
 		}
 	}
-	return compileXPathRegexp(p, f)
+	return compileXPathRegexp(p, f, v)
 }
 
 // regexCache memoises compiled patterns.
@@ -203,10 +203,10 @@ var regexCacheSize atomic.Int64
 // supports character-class subtraction. Those are translated here; a pattern
 // using a construct with no RE2 equivalent is rejected rather than silently
 // mis-compiled.
-func compileXPathRegexp(pattern, flags string) (*regexp.Regexp, error) {
-	key := flags + "\x00" + pattern
-	if v, ok := regexCache.Load(key); ok {
-		switch t := v.(type) {
+func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
+	key := v.String() + "\x00" + flags + "\x00" + pattern
+	if hit, ok := regexCache.Load(key); ok {
+		switch t := hit.(type) {
 		case *regexp.Regexp:
 			return t, nil
 		case error:
@@ -214,7 +214,7 @@ func compileXPathRegexp(pattern, flags string) (*regexp.Regexp, error) {
 		}
 	}
 
-	re, err := buildRegexp(pattern, flags)
+	re, err := buildRegexp(pattern, flags, v)
 	if err != nil {
 		storeRegex(key, err)
 		return nil, err
@@ -253,9 +253,11 @@ func argFlags(args []xdm.Sequence, i int) (string, error) {
 	return argStringRequired(args, i)
 }
 
-func buildRegexp(pattern, flags string) (*regexp.Regexp, error) {
+func buildRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	var goFlags []string
 	dotAll := false
+	// literal is the "q" flag: the pattern is a plain string, not a pattern.
+	literal := false
 	for _, f := range flags {
 		switch f {
 		case 'i':
@@ -275,20 +277,36 @@ func buildRegexp(pattern, flags string) (*regexp.Regexp, error) {
 			// it is applied by stripping unescaped whitespace here.
 			pattern = stripPatternWhitespace(pattern)
 		case 'q':
-			// The "q" flag, which makes the pattern a literal string, was
-			// introduced in XPath 3.0. This implementation targets 2.0, where
-			// it is simply not one of the flags, so it is refused rather than
-			// silently honoured — a 2.0 stylesheet using it is in error and
-			// the conformance suite checks that it is reported.
-			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
+			// The "q" flag makes every character in the pattern represent
+			// itself, and was introduced in XPath 3.0. Under 2.0 it is simply
+			// not one of the flags, so it is refused rather than silently
+			// honoured — a 2.0 stylesheet using it is in error, and reporting
+			// it is what keeps this engine's answer the same as every other
+			// conforming processor's.
+			if !v.atLeast30() {
+				return nil, fmt.Errorf(
+					"FORX0001: unknown regular expression flag %q", string(f))
+			}
+			literal = true
 		default:
 			return nil, fmt.Errorf("FORX0001: unknown regular expression flag %q", string(f))
 		}
 	}
 
-	translated, err := translatePattern(pattern, dotAll)
-	if err != nil {
-		return nil, err
+	// Under "q" the pattern is not parsed at all: every character stands for
+	// itself, so the grammar check and the escape translation are both
+	// bypassed and the whole string is quoted. This is why "q" combines with
+	// "i" but with nothing else that inspects structure — there is no
+	// structure left to inspect.
+	translated := ""
+	if literal {
+		translated = regexp.QuoteMeta(pattern)
+	} else {
+		var err error
+		translated, err = translatePattern(pattern, dotAll, v)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(goFlags) > 0 {
 		translated = "(?" + strings.Join(goFlags, "") + ")" + translated
@@ -372,12 +390,12 @@ func classUnicodeEscape(esc byte) (string, bool) {
 }
 
 // translatePattern rewrites the XPath-specific escapes into RE2 syntax.
-func translatePattern(p string, dotAll bool) (string, error) {
+func translatePattern(p string, dotAll bool, v Version) (string, error) {
 	// The grammar is checked before anything is rewritten. A construct this
 	// language does not define has to be refused rather than translated: RE2
 	// accepts most of Perl, so passing one through gives a different answer
 	// from a conforming processor instead of an error. See regex_grammar.go.
-	if err := checkRegexGrammar(p); err != nil {
+	if err := checkRegexGrammar(p, v); err != nil {
 		return "", err
 	}
 
@@ -769,11 +787,21 @@ func RegexpErr(re Regexp) error {
 // backtracking engine instead, but only when that engine is enabled; when it is
 // not, the pattern is refused exactly as before.
 func CompileRegexp(pattern, flags string) (Regexp, error) {
-	re, err := compileXPathRegexp(pattern, flags)
+	return CompileRegexpVersion(pattern, flags, XPath20)
+}
+
+// CompileRegexpVersion is CompileRegexp for a caller that knows which version
+// of the language the pattern was written in.
+//
+// CompileRegexp remains the 2.0 spelling so that an existing caller keeps the
+// behaviour it had; a 3.0 host passes XPath30 to admit non-capturing groups,
+// reluctant quantifiers and the "q" flag.
+func CompileRegexpVersion(pattern, flags string, v Version) (Regexp, error) {
+	re, err := compileXPathRegexp(pattern, flags, v)
 	if err == nil {
 		return re, nil
 	}
-	bt, btErr := compileBacktrackFallback(pattern, flags, err)
+	bt, btErr := compileBacktrackFallback(pattern, flags, err, v)
 	if btErr != nil {
 		return nil, btErr
 	}
@@ -792,14 +820,14 @@ func CompileRegexp(pattern, flags string) (Regexp, error) {
 //
 // When any condition fails it returns the original error, so the caller's
 // behaviour is byte-identical to what it was before this file existed.
-func compileBacktrackFallback(pattern, flags string, orig error) (*btRegexp, error) {
+func compileBacktrackFallback(pattern, flags string, orig error, v Version) (*btRegexp, error) {
 	if !backtrackingRegex.Load() || !hasBackref(pattern) {
 		return nil, orig
 	}
 	if !strings.Contains(orig.Error(), "backreference") {
 		return nil, orig
 	}
-	bt, err := compileBacktrackCached(pattern, flags)
+	bt, err := compileBacktrackCached(pattern, flags, v)
 	if err != nil {
 		return nil, err
 	}
@@ -816,8 +844,8 @@ func compileBacktrackFallback(pattern, flags string, orig error) (*btRegexp, err
 // compilations. It shares regexCache's storage and therefore its bound: the
 // reason that cache is bounded — a pattern read from document data is a pattern
 // an attacker chooses — applies here at least as strongly.
-func compileBacktrackCached(pattern, flags string) (*btRegexp, error) {
-	key := "bt\x00" + flags + "\x00" + pattern
+func compileBacktrackCached(pattern, flags string, ver Version) (*btRegexp, error) {
+	key := "bt\x00" + ver.String() + "\x00" + flags + "\x00" + pattern
 	if v, ok := regexCache.Load(key); ok {
 		switch t := v.(type) {
 		case *btRegexp:
@@ -828,7 +856,7 @@ func compileBacktrackCached(pattern, flags string) (*btRegexp, error) {
 			return nil, nil
 		}
 	}
-	bt, err := compileBacktrack(pattern, flags)
+	bt, err := compileBacktrack(pattern, flags, ver)
 	if err != nil {
 		storeRegex(key, err)
 		return nil, err
@@ -1224,7 +1252,7 @@ func TranslateSchemaRegexpVersion(pattern string, xsd11 bool) (string, error) {
 		// reading the same table it always did.
 		pattern = rewriteUnknownBlocks(pattern)
 	}
-	return translatePattern(escapeSchemaAnchors(pattern), false)
+	return translatePattern(escapeSchemaAnchors(pattern), false, XPath20)
 }
 
 // argBacktrack is the fn:matches / fn:replace / fn:tokenize entry to the
@@ -1233,7 +1261,7 @@ func TranslateSchemaRegexpVersion(pattern string, xsd11 bool) (string, error) {
 // orig is the error the ordinary path produced; it is returned unchanged
 // whenever the backtracking engine is disabled or does not apply, which is what
 // makes the default behaviour byte-identical to what it was before.
-func argBacktrack(args []xdm.Sequence, pat, flags int, orig error) (*btRegexp, error) {
+func argBacktrack(args []xdm.Sequence, pat, flags int, orig error, v Version) (*btRegexp, error) {
 	p, err := argStringRequired(args, pat)
 	if err != nil {
 		return nil, err
@@ -1244,7 +1272,7 @@ func argBacktrack(args []xdm.Sequence, pat, flags int, orig error) (*btRegexp, e
 			return nil, err
 		}
 	}
-	return compileBacktrackFallback(p, f, orig)
+	return compileBacktrackFallback(p, f, orig, v)
 }
 
 // tokenizeBacktrack is fn:tokenize's body once the pattern has been compiled by

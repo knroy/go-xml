@@ -8,10 +8,15 @@ import (
 	"testing"
 )
 
-// TestQT3 runs the W3C QT3 (FOTS) suite.
+// TestQT3 runs the W3C QT3 (FOTS) suite, once per language version.
 //
 // It skips unless GOXSLT_QT3 names a checkout, so the ordinary `go test ./...`
 // is unaffected. Set GOXSLT_QT3_VERBOSE=1 to list every failure.
+//
+// Both versions are run because they measure different things. The 2.0 figure
+// is a regression check: it is at 99.99% and must stay there while 3.0 is
+// implemented, since 3.0 work that changes 2.0 behaviour is a bug rather than
+// progress. The 3.0 figure is the one that moves.
 func TestQT3(t *testing.T) {
 	root := SuiteRoot()
 	if root == "" {
@@ -22,7 +27,14 @@ func TestQT3(t *testing.T) {
 		t.Fatalf("catalog: %v", err)
 	}
 
+	for _, target := range []TargetVersion{XPath20, XPath30} {
+		t.Run(target.String(), func(t *testing.T) { runSuite(t, root, cat, target) })
+	}
+}
+
+func runSuite(t *testing.T, root string, cat *Catalog, target TargetVersion) {
 	r := NewRunner(root, cat)
+	r.Target = target
 	var pass, fail, skip int
 	failsBySet := map[string]int{}
 	skipReasons := map[string]int{}

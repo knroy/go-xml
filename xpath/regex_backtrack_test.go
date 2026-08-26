@@ -66,7 +66,7 @@ func TestBacktrackingIsOffByDefault(t *testing.T) {
 // which one gave it.
 func TestFixedWidthPathIsNotRerouted(t *testing.T) {
 	withBacktracking(t, func() {
-		br, err := buildBackrefRegexp(`(a)(b)\1`, "")
+		br, err := buildBackrefRegexp(`(a)(b)\1`, "", XPath20)
 		if err != nil {
 			t.Fatalf("the fixed-width path refused a fixed-width pattern: %v", err)
 		}
@@ -105,7 +105,7 @@ func TestBacktrackMatches(t *testing.T) {
 	}
 	withBacktracking(t, func() {
 		for _, c := range cases {
-			bt, err := compileBacktrack(c.pat, "")
+			bt, err := compileBacktrack(c.pat, "", XPath20)
 			if err != nil {
 				t.Errorf("%q: compile: %v", c.pat, err)
 				continue
@@ -140,7 +140,7 @@ func TestBacktrackGreedyRefNumber(t *testing.T) {
 	}
 	withBacktracking(t, func() {
 		for _, c := range cases {
-			bt, err := compileBacktrack(c.pat, "")
+			bt, err := compileBacktrack(c.pat, "", XPath20)
 			if err != nil {
 				t.Errorf("%q: compile: %v", c.pat, err)
 				continue
@@ -156,7 +156,7 @@ func TestBacktrackGreedyRefNumber(t *testing.T) {
 // first quote the backreference can match, not run to the last.
 func TestBacktrackLazyQuantifier(t *testing.T) {
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(`(['"])(.*?)\1`, "")
+		bt, err := compileBacktrack(`(['"])(.*?)\1`, "", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +197,7 @@ func TestBacktrackForwardReferenceIsRefused(t *testing.T) {
 	}
 	withBacktracking(t, func() {
 		for _, p := range patterns {
-			bt, err := compileBacktrack(p, "")
+			bt, err := compileBacktrack(p, "", XPath20)
 			if err == nil {
 				t.Errorf("%q compiled to %v, want FORX0002", p, bt != nil)
 				continue
@@ -218,7 +218,7 @@ func TestBacktrackForwardReferenceIsRefused(t *testing.T) {
 // would be a claim about a pattern it never finished evaluating.
 func TestBacktrackBudgetTerminates(t *testing.T) {
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(`(a*)*\1b`, "")
+		bt, err := compileBacktrack(`(a*)*\1b`, "", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +269,7 @@ func TestBacktrackHonestPatternsAreCheap(t *testing.T) {
 		"went into violent convulsions. The quick brown fox jumped over the " +
 		"lazy dog and immediately went into violent convulsions."
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(pattern, "")
+		bt, err := compileBacktrack(pattern, "", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +290,7 @@ func TestBacktrackHonestPatternsAreCheap(t *testing.T) {
 // backrefRegexp never provided: every match with its group offsets, in bytes.
 func TestBacktrackFindAllSubmatchIndex(t *testing.T) {
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(`(ki|ke)\1`, "")
+		bt, err := compileBacktrack(`(ki|ke)\1`, "", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -313,7 +313,7 @@ func TestBacktrackFindAllSubmatchIndex(t *testing.T) {
 // callers, which index strings in bytes.
 func TestBacktrackOffsetsAreBytesNotRunes(t *testing.T) {
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(`(.)\1`, "")
+		bt, err := compileBacktrack(`(.)\1`, "", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -354,7 +354,7 @@ func TestBacktrackReusesCharacterClassSemantics(t *testing.T) {
 	}
 	withBacktracking(t, func() {
 		for _, c := range cases {
-			bt, err := compileBacktrack(c.pat, "")
+			bt, err := compileBacktrack(c.pat, "", XPath20)
 			if err != nil {
 				t.Errorf("%q: compile: %v", c.pat, err)
 				continue
@@ -424,7 +424,7 @@ func TestBacktrackEmptyStringReplaceIsAnError(t *testing.T) {
 // which RE2 folds, and the backreference comparison, which this engine folds.
 func TestBacktrackCaseInsensitive(t *testing.T) {
 	withBacktracking(t, func() {
-		bt, err := compileBacktrack(`(a.*?)\1`, "i")
+		bt, err := compileBacktrack(`(a.*?)\1`, "i", XPath20)
 		if err != nil {
 			t.Fatal(err)
 		}

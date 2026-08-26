@@ -598,7 +598,7 @@ func (b *backrefRegexp) anchoredStart() bool {
 // It returns nil, nil when the pattern has no backreference, so the caller
 // falls through to RE2 unchanged — the ordinary path is not affected by this
 // file existing.
-func compileArgBackref(args []xdm.Sequence, pat, flags int) (*backrefRegexp, error) {
+func compileArgBackref(args []xdm.Sequence, pat, flags int, v Version) (*backrefRegexp, error) {
 	p, err := argStringRequired(args, pat)
 	if err != nil {
 		return nil, err
@@ -612,7 +612,7 @@ func compileArgBackref(args []xdm.Sequence, pat, flags int) (*backrefRegexp, err
 			return nil, err
 		}
 	}
-	return buildBackrefRegexp(p, f)
+	return buildBackrefRegexp(p, f, v)
 }
 
 // buildBackrefRegexp is buildRegexp for a pattern containing backreferences.
@@ -621,7 +621,7 @@ func compileArgBackref(args []xdm.Sequence, pat, flags int) (*backrefRegexp, err
 // backreferences must come out *before* translatePattern sees the pattern —
 // that function's job is to reject what RE2 cannot express, and a backreference
 // is exactly that.
-func buildBackrefRegexp(pattern, flags string) (*backrefRegexp, error) {
+func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error) {
 	original := pattern
 	var goFlags []string
 	dotAll := false
@@ -651,7 +651,7 @@ func buildBackrefRegexp(pattern, flags string) (*backrefRegexp, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	translated, err := translatePattern(head, dotAll)
+	translated, err := translatePattern(head, dotAll, v)
 	if err != nil {
 		return nil, err
 	}

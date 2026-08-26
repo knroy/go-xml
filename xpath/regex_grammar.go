@@ -20,8 +20,15 @@ import (
 // exactly the one that would be silently misread.
 
 // checkRegexGrammar reports FORX0002 for a pattern using a construct the XML
-// Schema regular expression language does not define.
-func checkRegexGrammar(p string) error {
+// Schema regular expression language does not define, as extended by the
+// target version.
+//
+// XPath 3.0 adds two constructs to the grammar of F&O section 5.6.1: the
+// non-capturing group, which changes the atom production to
+// ( '(' '?:'? regExp ')' ), and the reluctant quantifier, which appends an
+// optional '?' to the quantifier production. Both are refused under 2.0, where
+// they are genuinely not in the language.
+func checkRegexGrammar(p string, v Version) error {
 	inClass := false
 	// classDepth tracks nesting inside a class, so that a subtraction's inner
 	// class does not read as the outer one closing.
@@ -131,7 +138,15 @@ func checkRegexGrammar(p string) error {
 			// group. Every "(?" construct — non-capturing groups, inline flag
 			// settings, named groups, lookaround, atomic groups — belongs to
 			// Perl and is absent from the grammar.
+			//
+			// XPath 3.0 admits exactly one of them: "(?:" for a non-capturing
+			// group. The rest stay refused at every version, so "(?i)" and
+			// "(?=" are still FORX0002 under 3.0.
 			if i+1 < len(p) && p[i+1] == '?' {
+				if v.atLeast30() && i+2 < len(p) && p[i+2] == ':' {
+					i += 2
+					break
+				}
 				return fmt.Errorf(
 					"FORX0002: invalid regular expression %q: %q is not in "+
 						"the XML Schema grammar (only capturing groups exist)",

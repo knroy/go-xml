@@ -31,7 +31,7 @@ func TestUnicodeBlockPatterns(t *testing.T) {
 		{`^[\p{IsBasicLatin}]+$`, "α", false},
 	}
 	for _, c := range cases {
-		tr, err := translatePattern(c.pat, false)
+		tr, err := translatePattern(c.pat, false, XPath20)
 		if err != nil {
 			t.Errorf("%q: translate: %v", c.pat, err)
 			continue
@@ -53,7 +53,7 @@ func TestUnicodeBlockPatterns(t *testing.T) {
 // the schema carrying it failed to load — a schema-level error a long way from
 // its cause.
 func TestUnknownUnicodeBlockIsRejected(t *testing.T) {
-	if _, err := translatePattern(`\p{IsNoSuchBlock}`, false); err == nil {
+	if _, err := translatePattern(`\p{IsNoSuchBlock}`, false, XPath20); err == nil {
 		t.Fatal("unknown block translated; want FORX0002")
 	}
 }
@@ -64,7 +64,7 @@ func TestUnknownUnicodeBlockIsRejected(t *testing.T) {
 // have been rewritten into RE2 bodies that cannot be read back.
 func TestSubtractionOverShorthandClasses(t *testing.T) {
 	const ncname = `^[\i-[:]][\c-[:]]*$`
-	tr, err := translatePattern(ncname, false)
+	tr, err := translatePattern(ncname, false, XPath20)
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestComplementedClassEscapes(t *testing.T) {
 		{`^[\P{IsBasicLatin}]$`, "é", true},
 		{`^[\P{IsBasicLatin}]$`, "a", false},
 	} {
-		tr, err := translatePattern(c.pat, false)
+		tr, err := translatePattern(c.pat, false, XPath20)
 		if err != nil {
 			t.Errorf("%q: %v", c.pat, err)
 			continue
@@ -137,7 +137,7 @@ func TestComplementedClassEscapes(t *testing.T) {
 // half, so \p{IsSpecials} matched a single character and rejected every
 // codepoint the block is actually about.
 func TestSpecialsIsTwoRanges(t *testing.T) {
-	tr, err := translatePattern(`^\p{IsSpecials}+$`, false)
+	tr, err := translatePattern(`^\p{IsSpecials}+$`, false, XPath20)
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestWordClassAgreesWithItself(t *testing.T) {
 		{' ', false, "Zs"},
 	} {
 		for _, pat := range []string{`^\w$`, `^[\w]$`} {
-			tr, err := translatePattern(pat, false)
+			tr, err := translatePattern(pat, false, XPath20)
 			if err != nil {
 				t.Errorf("%s: translate: %v", pat, err)
 				continue

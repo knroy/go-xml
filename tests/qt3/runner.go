@@ -80,6 +80,10 @@ func (r resolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 // Runner executes cases from a suite checkout.
 type Runner struct {
 	Root string
+	// Target is the language version the run is scoped to. The zero value is
+	// XPath20, so an existing caller that does not set it keeps the 2.0 run
+	// it had before.
+	Target TargetVersion
 	// envs holds the catalog-level environments, which test sets reference
 	// by name.
 	envs map[string]Environment
@@ -94,25 +98,37 @@ func NewRunner(root string, cat *Catalog) *Runner {
 	return r
 }
 
-// unsupportedSpec reports whether a dependency puts the case out of scope.
+// unsupportedSpec reports whether a dependency puts the case out of scope for
+// the target version.
 //
-// The suite is FOTS 3.1 and covers XQuery as well as XPath. This engine is an
-// XPath 2.0 processor, so anything requiring XQuery syntax or a 3.0+ feature
-// is skipped rather than counted as a failure: failing a test for a language
-// you do not claim to implement says nothing about conformance.
-func unsupportedSpec(deps []Dependency) string {
+// The suite is FOTS 3.1 and covers XQuery as well as XPath. This engine does
+// not implement XQuery at any version, and implements XPath up to the target,
+// so anything beyond that is skipped rather than counted as a failure: failing
+// a test for a language you do not claim to implement says nothing about
+// conformance.
+func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 	for _, d := range deps {
 		switch d.Type {
 		case "spec":
-			// A value is a space-separated list of alternatives; the case is
-			// in scope if any alternative includes XPath 2.0.
-			if !specIncludesXP20(d.Value) {
+			if !specInScope(d.Value, target) {
 				return "requires " + d.Value
 			}
 		case "feature":
+			// Higher-order functions are the defining feature of XPath 3.0
+			// rather than an optional extra, so they are out of scope only
+			// for a 2.0 run.
+			if d.Value == "higherOrderFunctions" {
+				if target >= XPath30 {
+					continue
+				}
+				if d.Satisfied != "false" {
+					return "needs feature " + d.Value
+				}
+				continue
+			}
 			switch d.Value {
 			case "schemaValidation", "schemaImport", "typedData",
-				"staticTyping", "moduleImport", "higherOrderFunctions",
+				"staticTyping", "moduleImport",
 				"namespace-axis", "infoset-dtd", "xpath-1.0-compatibility",
 				"fn-transform-XSLT", "fn-transform-XSLT30", "fn-format-integer-CLDR",
 				"non_empty_sequence_collection", "collection-stability",
@@ -147,13 +163,57 @@ func unsupportedSpec(deps []Dependency) string {
 	return ""
 }
 
-func specIncludesXP20(v string) bool {
+// TargetVersion selects the language version the run is scoped to.
+//
+// The suite is FOTS 3.1 and every case declares the versions it applies to, so
+// which cases are in scope is a property of the run rather than of the engine.
+// Scoping to 2.0 and to 3.0 are two measurements of the same suite, and both
+// are reported: the 2.0 figure must not move as 3.0 is implemented, which is
+// what makes it a regression check rather than just a headline.
+type TargetVersion int
+
+const (
+	// XPath20 scopes the run to cases that apply to XPath 2.0.
+	XPath20 TargetVersion = iota
+	// XPath30 scopes the run to cases that apply to XPath 2.0 or 3.0.
+	XPath30
+)
+
+func (v TargetVersion) String() string {
+	if v == XPath30 {
+		return "XPath 3.0"
+	}
+	return "XPath 2.0"
+}
+
+// xpathVersion maps the run's target onto the engine's language version.
+//
+// They are separate types because they answer different questions: the target
+// decides which cases are in scope, the engine's version decides how an
+// expression is compiled. They happen to correspond one-to-one today.
+func xpathVersion(v TargetVersion) xpath.Version {
+	if v >= XPath30 {
+		return xpath.XPath30
+	}
+	return xpath.XPath20
+}
+
+// specInScope reports whether a spec dependency admits the target version.
+//
+// A value is a space-separated list of alternatives and the case is in scope
+// if any alternative names a version at or below the target. "XP20+" means 2.0
+// and later, so it is in scope for both targets; "XP30" and "XP30+" are in
+// scope only for a 3.0 run. "XQ..." is XQuery, which this engine does not
+// implement at any version, and "XP31" is a later version than either target.
+func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
-		// "XP20+" means 2.0 and later; "XP20" means exactly 2.0. Both are in
-		// scope. "XQ..." is XQuery only, and "XP30"/"XP31" without a 2.0
-		// alternative are later versions.
-		if alt == "XP20" || alt == "XP20+" {
+		switch alt {
+		case "XP20", "XP20+":
 			return true
+		case "XP30", "XP30+":
+			if target >= XPath30 {
+				return true
+			}
 		}
 	}
 	return false
@@ -290,7 +350,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	}()
 
 	if why := unsupportedSpec(append(append([]Dependency{}, ts.Dependencies...),
-		tc.Dependencies...)); why != "" {
+		tc.Dependencies...), r.Target); why != "" {
 		rep.Outcome, rep.Reason = Skip, why
 		return rep
 	}
@@ -343,6 +403,10 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	defer cancel()
 
 	ctx := xpath.NewContext(ctxItem, xpath.Builtins())
+	// The case is evaluated as the version the run is scoped to, so that a
+	// construct 3.0 adds is accepted in the 3.0 run and refused in the 2.0
+	// one. Both are conformance: the 2.0 run asserts the refusals.
+	ctx.Version = xpathVersion(r.Target)
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
 	for _, b := range env.StaticBaseURI {

@@ -136,7 +136,7 @@ func TestBackrefRefusesVariableGap(t *testing.T) {
 		`(ki){2}ke.*\1`,
 		`(ki){2}ke.*\12`,
 	} {
-		if _, err := buildBackrefRegexp(p, ""); err == nil {
+		if _, err := buildBackrefRegexp(p, "", XPath20); err == nil {
 			t.Errorf("%s: expected FORX0002, got a usable matcher", p)
 		}
 	}
@@ -158,7 +158,7 @@ func TestBackrefStillAcceptsSound(t *testing.T) {
 		{`^([a-z])\1*$`, "abc", false},
 	}
 	for _, c := range cases {
-		br, err := buildBackrefRegexp(c.pattern, "")
+		br, err := buildBackrefRegexp(c.pattern, "", XPath20)
 		if err != nil {
 			t.Errorf("%s: refused: %v", c.pattern, err)
 			continue
