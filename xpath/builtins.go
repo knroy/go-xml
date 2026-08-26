@@ -29,6 +29,7 @@ func Builtins() FunctionLibrary {
 		registerPathFunc(l)
 		registerParseXML(l, XPath30)
 		registerAnalyzeString(l)
+		registerMisc30Funcs(l)
 		registerUnparsedText(l, XPath30)
 		registerFormatDateTimeSince(l, XPath30)
 		registerNodeFuncs(l)
