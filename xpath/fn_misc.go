@@ -786,7 +786,7 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		whole := new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom()).Int64()
 		return num(whole)
 	case 'f':
-		return fractionalSeconds(dt, pres, width), nil
+		return fractionalSeconds(dt, pres, width)
 	case 'P':
 		half := "am"
 		if dt.Hour >= 12 {
@@ -980,9 +980,11 @@ func effectiveMaxWidth(pres, width string) int {
 	if !ok {
 		return 0
 	}
-	// A single one-digit token such as "1" places no constraint at all; only
-	// a token that begins with the family's zero does.
-	if r := []rune(pres); len(r) > 0 && r[0] == zero {
+	// A single one-digit token places no constraint at all: the rule is about
+	// *leading* zeroes, and one character has nothing to lead. "[m0]" on
+	// minute 15 is "15", not the "5" a width of one would truncate it to,
+	// and the same holds for a token written in another digit family.
+	if r := []rune(pres); len(r) > 1 && r[0] == zero {
 		return len(r)
 	}
 	return 0
@@ -1139,27 +1141,37 @@ func inDigitFamily(s string, zero rune) string {
 // Padding for this component is by *appending* zeroes rather than prepending
 // them, because the digits are read left to right from the point: a minimum
 // width of 3 turns ".5" into "500", not "005".
-func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
-	// A leading-zero format token fixes the width outright; a width modifier
-	// overrides it. Without either, the value's own digits stand.
-	// The digit family and the literal separators come from the picture, the
-	// same way they do for the timezone component: "[f0'0'0]" writes an
-	// apostrophe between each digit, and a picture of Thai digits produces
-	// Thai digits.
-	zero := fracDigitFamily(pres)
-	min, max := 0, 0
-	digits := fracDigitCount(pres)
-	if digits > 0 {
-		min, max = digits, digits
-		// A single "1" is the component's *default* presentation rather than
-		// a request for one digit, exactly as it is for the timezone hours:
-		// "[f]" and "[f1]" show the digits the value actually has.
-		if digits == 1 && (pres == "1" || pres == "") {
-			min, max = 0, 0
-		}
+func fractionalSeconds(dt *xdm.DateTime, pres, width string) (string, error) {
+	// The presentation modifier is a digit pattern, mirrored: a fraction is
+	// read away from the point, so its optional digits trail the mandatory
+	// ones. "[f99#]" is two required places and a third if the value has it;
+	// "[f#99]" puts an optional digit where a required one must come first,
+	// which is FOFD1340 rather than a picture with a literal "#" in it.
+	fp, err := parseFracPattern(pres)
+	if err != nil {
+		return "", err
+	}
+	zero := fp.zero
+	min, max := fp.mandatory, fp.mandatory+fp.optional
+	// A single "1" is the component's *default* presentation rather than a
+	// request for one digit, exactly as it is for the timezone hours: "[f]"
+	// and "[f1]" show the digits the value actually has.
+	if fp.mandatory == 1 && fp.optional == 0 && (pres == "1" || pres == "") {
+		min, max = 0, 0
 	}
 	if width != "" {
-		min, max = minWidth(width), maxWidth(width)
+		// A width modifier whose minimum exceeds its maximum describes no
+		// width at all, whether or not the picture also states one.
+		if wmin, wmax := minWidth(width), maxWidth(width); wmax > 0 && wmin > wmax {
+			return "", fmt.Errorf(
+				"FOFD1340: the width modifier %q has a minimum above its maximum", width)
+		} else if !fp.stated {
+			// The width modifier applies only when the presentation modifier
+			// did not state a digit pattern of its own. W3C bug 29788 settled
+			// that the pattern wins where both are given, so "[f111,2-2]" on
+			// .123 is "123" rather than the "12" the width alone would cut.
+			min, max = wmin, wmax
+		}
 	}
 
 	frac := new(big.Rat).Sub(dt.Second,
@@ -1197,30 +1209,67 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string) string {
 	if s == "" {
 		s = "0"
 	}
-	return applyFracPicture(translateDigits(s, zero), pres, zero)
+	return applyFracPicture(translateDigits(s, zero), pres, zero), nil
 }
 
-// fracDigitCount counts the digits of a fractional-seconds picture, ignoring
-// any literal text between them.
-func fracDigitCount(pres string) int {
-	n := 0
-	for _, r := range pres {
-		if unicode.IsDigit(r) {
-			n++
-		}
-	}
-	return n
+// fracPattern is a parsed fractional-seconds digit pattern.
+type fracPattern struct {
+	zero      rune
+	mandatory int
+	optional  int
+	// stated records whether the picture wrote a digit pattern at all, which
+	// the defaulted counts below can no longer be read off.
+	stated bool
 }
 
-// fracDigitFamily returns the zero of the digit family the picture is written
-// in, defaulting to ASCII.
-func fracDigitFamily(pres string) rune {
+// parseFracPattern reads the presentation modifier of an [f] component.
+//
+// It is the integer digit pattern with the optional and mandatory digits the
+// other way round, because a fraction is written away from the decimal point:
+// the leading places are the ones that must be there, and "#" may only trail.
+// Anything that is neither a digit nor "#" is literal text the picture writes
+// between the digits, which applyFracPicture puts back.
+func parseFracPattern(pres string) (fracPattern, error) {
+	fp := fracPattern{zero: '0'}
+	if pres == "" {
+		fp.mandatory = 1
+		return fp, nil
+	}
+	// A presentation modifier that names a numbering sequence rather than a
+	// digit pattern ("[fI]", "[fw]") is not this component's business; leave
+	// it to the caller's existing handling by reporting no digits.
+	seenZero := false
 	for _, r := range pres {
-		if unicode.IsDigit(r) {
-			return r - rune(digitValueOf(r))
+		switch {
+		case r == '#':
+			fp.optional++
+		case unicode.IsDigit(r):
+			if fp.optional > 0 {
+				return fracPattern{}, fmt.Errorf(
+					"FOFD1340: a mandatory digit follows an optional one in %q", pres)
+			}
+			z := r - rune(digitValueOf(r))
+			if !seenZero {
+				fp.zero, seenZero = z, true
+			} else if z != fp.zero {
+				return fracPattern{}, fmt.Errorf(
+					"FOFD1340: mixed digit families in %q", pres)
+			}
+			fp.mandatory++
+		default:
+			// Literal separator text; applyFracPicture writes it back.
 		}
 	}
-	return '0'
+	// A bare "1" is the component's default presentation rather than a
+	// pattern the picture chose, which matters because a width modifier
+	// applies only where the picture stated no pattern of its own: "[f,4-4]"
+	// arrives here as "1" after defaulting, and its width must still be
+	// honoured.
+	fp.stated = (fp.mandatory > 0 || fp.optional > 0) && pres != "1"
+	if fp.mandatory == 0 && fp.optional == 0 {
+		fp.mandatory = 1
+	}
+	return fp, nil
 }
 
 // applyFracPicture interleaves the literal text a picture writes between its
@@ -1232,7 +1281,9 @@ func applyFracPicture(s, pres string, zero rune) string {
 	runes := []rune(pres)
 	hasLiteral := false
 	for _, r := range runes {
-		if !unicode.IsDigit(r) {
+		// "#" is an optional-digit sign, not literal text: the digits it
+		// stands for are already in s, so it must not be written through.
+		if !unicode.IsDigit(r) && r != '#' {
 			hasLiteral = true
 			break
 		}
@@ -1244,7 +1295,7 @@ func applyFracPicture(s, pres string, zero rune) string {
 	digits := []rune(s)
 	i := 0
 	for _, r := range runes {
-		if unicode.IsDigit(r) {
+		if unicode.IsDigit(r) || r == '#' {
 			if i < len(digits) {
 				sb.WriteRune(digits[i])
 				i++
