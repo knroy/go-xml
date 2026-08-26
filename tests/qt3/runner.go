@@ -694,6 +694,10 @@ func typeIs(got xdm.Sequence, want string) (bool, string) {
 	// "instance of" is the engine's own answer to this question, so the check
 	// is expressed in the language under test rather than reimplemented.
 	ctx := xpath.NewContext(nil, xpath.Builtins())
+	// The assertion is written in the 3.0 language whatever version the case
+	// itself runs under — an assert-type of "function(*)" has to parse — so
+	// the harness's own expression is always compiled as 3.0.
+	ctx.Version = xpath.XPath30
 	ctx = ctx.WithVar(xdm.QName{Local: "qt3v"}, got)
 	res, err := xpath.Eval("$qt3v instance of "+want, ctx, resolver{})
 	if err != nil {

@@ -131,10 +131,35 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 		}
 		v = atoms
 	}
-	if !st.Matches(v) {
-		return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
+	if st.Matches(v) {
+		return v, nil
 	}
-	return v, nil
+	// The function conversion rules of section 3.1.5 are wider than an
+	// instance-of test. Numeric promotion applies — an xs:integer argument
+	// satisfies an xs:double parameter, and xs:float promotes to xs:double —
+	// and xs:untypedAtomic is cast to the declared type. Both convert the
+	// value rather than merely accepting it, so they happen here and not in
+	// the type test.
+	if st.HasAtomicType {
+		conv := make(xdm.Sequence, 0, len(v))
+		for _, it := range v {
+			a, ok := it.(*xdm.Atomic)
+			if !ok {
+				return nil, xdm.ErrType(
+					"XPTY0004: value does not match the declared type %s", st.String())
+			}
+			c, err := CastAtomic(a, st.AtomicType)
+			if err != nil {
+				return nil, xdm.ErrType(
+					"XPTY0004: value does not match the declared type %s", st.String())
+			}
+			conv = append(conv, c)
+		}
+		if st.Matches(conv) {
+			return conv, nil
+		}
+	}
+	return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
 }
 
 // Eval implements Expr. A placeholder is never evaluated on its own: the call
