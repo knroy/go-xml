@@ -30,6 +30,7 @@ func Builtins() FunctionLibrary {
 		registerParseXML(l, XPath30)
 		registerAnalyzeString(l)
 		registerMisc30Funcs(l)
+		registerSerialize(l)
 		registerUnparsedText(l, XPath30)
 		registerFormatDateTimeSince(l, XPath30)
 		registerNodeFuncs(l)
