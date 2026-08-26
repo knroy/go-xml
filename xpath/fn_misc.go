@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -638,6 +639,9 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 	if err := checkWidthModifier(width); err != nil {
 		return "", err
 	}
+	if err := checkPresentationModifier(pres); err != nil {
+		return "", err
+	}
 
 	num := func(n int64) (string, error) {
 		return padNumber(n, pres, width, ordinal), nil
@@ -730,6 +734,35 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		return formatTZMarker(dt, comp, pres, width, traditional), nil
 	}
 	return "", fmt.Errorf("FOFD1340: unsupported picture component %q", string(comp))
+}
+
+// checkPresentationModifier rejects a malformed decimal-digit-pattern.
+//
+// A presentation modifier is either one of the named sequences — "N", "n",
+// "Nn", "a", "A", "i", "I", "w", "W", "Ww" — or a decimal-digit-pattern, and
+// the pattern has the same grammar fn:format-integer uses: optional-digit
+// signs precede mandatory ones, at least one mandatory sign is present, and a
+// grouping separator sits neither at an edge nor beside another. "[Y999#]" and
+// "[Y9,999,*]" are FOFD1340 rather than pictures to render.
+func checkPresentationModifier(pres string) error {
+	if pres == "" || isNamePresentation(pres) {
+		return nil
+	}
+	switch pres {
+	case "a", "A", "i", "I", "w", "W", "Ww":
+		return nil
+	}
+	// A modifier with no digit at all is not a digit pattern, and is left to
+	// the component to interpret or reject.
+	if !containsDigit(pres) {
+		return nil
+	}
+	if _, _, _, err := parseDigitPattern(pres); err != nil {
+		// parseDigitPattern reports the format-integer code; the date and time
+		// functions use their own for the same condition.
+		return errors.New(strings.Replace(err.Error(), "FODF1310", "FOFD1340", 1))
+	}
+	return nil
 }
 
 // defaultPresentation is the presentation modifier a component takes when the
