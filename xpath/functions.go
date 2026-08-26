@@ -104,7 +104,10 @@ func argString(args []xdm.Sequence, i int) (string, error) {
 	if i >= len(args) {
 		return "", nil
 	}
-	atoms := xdm.Atomize(args[i])
+	atoms, err := xdm.AtomizeChecked(args[i])
+	if err != nil {
+		return "", err
+	}
 	if len(atoms) == 0 {
 		return "", nil
 	}
@@ -163,7 +166,10 @@ func argAnyAtomicString(args []xdm.Sequence, i int) (string, error) {
 // argStringRequired is argString for parameters where an empty sequence is an
 // error rather than "".
 func argStringRequired(args []xdm.Sequence, i int) (string, error) {
-	atoms := xdm.Atomize(args[i])
+	atoms, err := xdm.AtomizeChecked(args[i])
+	if err != nil {
+		return "", err
+	}
 	it, err := atoms.Single()
 	if err != nil {
 		return "", err
@@ -176,7 +182,10 @@ func argNumber(args []xdm.Sequence, i int) (*xdm.Atomic, error) {
 	if i >= len(args) {
 		return nil, nil
 	}
-	atoms := xdm.Atomize(args[i])
+	atoms, err := xdm.AtomizeChecked(args[i])
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return nil, nil
 	}

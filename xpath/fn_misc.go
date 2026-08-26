@@ -349,13 +349,32 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 		return xOpaque && yOpaque && x == y, nil
 	}
 
+	// A function item has no defined equality, so comparing one is FOTY0015
+	// rather than an answer. Asserting *xdm.Atomic below panicked on it,
+	// which a stylesheet could reach from document data.
+	if _, ok := x.(*xdm.FunctionItem); ok {
+		return false, xdm.Errorf("FOTY0015",
+			"fn:deep-equal: a function item cannot be compared")
+	}
+	if _, ok := y.(*xdm.FunctionItem); ok {
+		return false, xdm.Errorf("FOTY0015",
+			"fn:deep-equal: a function item cannot be compared")
+	}
+
 	xn, xIsNode := x.(*xdm.Node)
 	yn, yIsNode := y.(*xdm.Node)
 	if xIsNode != yIsNode {
 		return false, nil
 	}
 	if !xIsNode {
-		xa, ya := x.(*xdm.Atomic), y.(*xdm.Atomic)
+		xa, xok := x.(*xdm.Atomic)
+		ya, yok := y.(*xdm.Atomic)
+		if !xok || !yok {
+			// Neither a node nor an atomic value nor anything handled above:
+			// compare by identity rather than asserting a type it does not
+			// have.
+			return x == y, nil
+		}
 		// NaN is deep-equal to NaN here, unlike under "eq". The spec makes
 		// this exception so that two identical sequences compare equal.
 		if xa.IsNaN() && ya.IsNaN() {
