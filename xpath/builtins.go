@@ -21,6 +21,7 @@ func Builtins() FunctionLibrary {
 		registerStringFuncs(l)
 		registerSeqFuncs(l)
 		registerNumericFuncs(l)
+		registerMathFuncs(l)
 		registerNodeFuncs(l)
 		registerRegexFuncs(l)
 		registerContextFuncs(l)

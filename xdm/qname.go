@@ -151,6 +151,7 @@ const (
 	NSXS     = "http://www.w3.org/2001/XMLSchema"
 	NSXSI    = "http://www.w3.org/2001/XMLSchema-instance"
 	NSFN     = "http://www.w3.org/2005/xpath-functions"
+	NSMath   = "http://www.w3.org/2005/xpath-functions/math"
 	NSErr    = "http://www.w3.org/2005/xqt-errors"
 	NSSVRL   = "http://purl.oclc.org/dsdl/svrl"
 	NSSchema = "http://purl.oclc.org/dsdl/schematron"
