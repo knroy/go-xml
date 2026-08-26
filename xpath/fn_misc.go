@@ -697,10 +697,30 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 
 	// A width modifier follows a comma, and everything before it is the one
 	// or two presentation modifiers.
+	//
+	// The split is on the *last* comma rather than the first, because a comma
+	// is also a perfectly ordinary grouping-separator inside a digit pattern:
+	// "[Y9,999,*]" is the pattern "9,999" with the width "*", not the pattern
+	// "9" with the width "999,*". Splitting on the first comma read the
+	// grouping separator as part of the width and rejected the picture. A
+	// trailing comma that does not introduce a valid width is left in the
+	// pattern, where the digit-pattern grammar judges it.
+	// Where more than one comma could be the split, the last one that yields a
+	// valid width wins; if none does, the last comma is still the split, so
+	// its malformed width is reported rather than quietly swallowed into the
+	// pattern. "[f1,0-3]" is FOFD1340, not the picture "1,0-3".
 	pres, width := rest, ""
-	if i := strings.IndexByte(rest, ','); i >= 0 {
-		width = rest[i+1:]
-		pres = rest[:i]
+	if last := strings.LastIndexByte(rest, ','); last >= 0 {
+		pres, width = rest[:last], rest[last+1:]
+		for i := last; i >= 0; i-- {
+			if rest[i] != ',' {
+				continue
+			}
+			if w := rest[i+1:]; checkWidthModifier(w) == nil {
+				pres, width = rest[:i], w
+				break
+			}
+		}
 	}
 	// The second presentation modifier, when present, is the last character
 	// and is either "t" (traditional numbering) or "o" (ordinal form).
@@ -937,6 +957,26 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 		return spellDateNumber(n, pres, ordinal)
 	case "a", "A":
 		return alphaNum(n, pres == "A")
+	}
+
+	// A digit pattern may carry grouping separators — "[Y9,999]" writes 2012
+	// as "2,012" — which digitFamilyOf rejects outright because it admits
+	// only bare digits. Where the picture is a grouped pattern, the
+	// format-integer grammar already knows how to read and apply it, so the
+	// component borrows it rather than growing a second implementation.
+	if zero, mandatory, groups, err := parseDigitPattern(pres); err == nil && len(groups) > 0 {
+		s := fmt.Sprintf("%0*d", mandatory, n)
+		if ordinal {
+			s += ordinalSuffixFor(n)
+		}
+		if min := minWidth(width); min > len([]rune(s)) {
+			s = strings.Repeat("0", min-len([]rune(s))) + s
+		}
+		if max := maxWidth(width); max > 0 && len([]rune(s)) > max {
+			r := []rune(s)
+			s = string(r[len(r)-max:])
+		}
+		return inDigitFamily(applyIntegerGrouping(s, groups), zero)
 	}
 
 	var s string
