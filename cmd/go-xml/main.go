@@ -68,8 +68,10 @@ func run() error {
 				"linear-time guarantee; bounded by a step budget, but enable it "+
 				"only for patterns you trust, since a pattern taken from "+
 				"document data can be made expensive on purpose")
-		timeout  = flag.Duration("timeout", 60*time.Second, "abort a transform after this long")
-		initial  = flag.String("initial-template", "", "start at this named template")
+		timeout = flag.Duration("timeout", 60*time.Second, "abort a transform after this long")
+		initial = flag.String("initial-template", "",
+			"start at this named template instead of applying templates to a "+
+				"source document; no input document is then needed")
 		mode     = flag.String("mode", "", "initial mode for apply-templates")
 		showMsgs = flag.Bool("messages", false, "print xsl:message output to stderr")
 		tzMin    = flag.Int("timezone", 0,
@@ -99,6 +101,7 @@ func run() error {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
 			"usage: go-xml -xsl STYLESHEET [flags] INPUT.xml [INPUT.xml ...]\n"+
+				"       go-xml -xsl STYLESHEET -initial-template NAME [flags]\n"+
 				"       go-xml validate -xsd SCHEMA.xsd [flags] INPUT.xml ...\n"+
 				"       go-xml validate -rng SCHEMA.rng [flags] INPUT.xml ...\n\n")
 		flag.PrintDefaults()
@@ -121,11 +124,25 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		return fmt.Errorf("-xsl is required")
 	}
 	inputs := flag.Args()
-	if len(inputs) == 0 {
-		return fmt.Errorf("no input documents given")
-	}
+	// A transform that starts at a named template needs no source document:
+	// there is no context node to apply templates to, and the stylesheet
+	// generates its own content. XSLT 2.0 section 2.3 makes the source
+	// optional in exactly that case. Requiring a document anyway forced the
+	// caller to invent one that would never be read.
+	//
+	// With no -initial-template and no input either, the stylesheet may still
+	// declare an xsl:initial-template, which Transform honours as the default
+	// entry point. Deciding that here would need the CLI to see inside the
+	// compiled stylesheet, so the empty batch is passed through and Transform
+	// reports it if there is no such template.
+	sourceless := len(inputs) == 0
 	if len(inputs) > 1 && *outPath != "" {
 		return fmt.Errorf("-o cannot be used with more than one input")
+	}
+	if sourceless && *mode != "" {
+		return fmt.Errorf(
+			"-mode selects the mode for apply-templates over a source document, " +
+				"so it needs an input document")
 	}
 
 	// The stylesheet's own directory is always readable, since a stylesheet
@@ -215,6 +232,11 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	// the first failure is right for a one-off, but a validator run over a
 	// directory should report every document rather than hide the rest behind
 	// the first bad one.
+	// A sourceless run is one transform with no input document, so the batch
+	// loop is given a single empty name rather than being special-cased.
+	if sourceless {
+		inputs = []string{""}
+	}
 	var failed int
 	for _, in := range inputs {
 		err := transformOne(sheet, in, *outPath, cfg)
@@ -222,9 +244,16 @@ Exit status: 0 if every input transformed, 1 otherwise.
 			continue
 		}
 		if !*keepGoing {
+			if in == "" {
+				return err
+			}
 			return fmt.Errorf("%s: %w", in, err)
 		}
-		fmt.Fprintf(os.Stderr, "go-xml: %s: %v\n", in, err)
+		if in == "" {
+			fmt.Fprintf(os.Stderr, "go-xml: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "go-xml: %s: %v\n", in, err)
+		}
 		failed++
 	}
 	if failed > 0 {
@@ -271,33 +300,40 @@ type transformCfg struct {
 }
 
 func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformCfg) error {
-	data, err := os.ReadFile(inPath)
-	if err != nil {
-		return err
-	}
-	abs, _ := filepath.Abs(inPath)
-	popts := xdm.ParseOptions{
-		BaseURI: abs,
-		// The document URI is what fn:document-uri returns, and it is a
-		// separate property from the base URI: a base URI is inherited and
-		// can be overridden by xml:base, while the document URI names where
-		// this document came from and nothing below it changes.
-		DocumentURI:    abs,
-		AllowDOCTYPE:   cfg.allowDoctype,
-		TrackPositions: cfg.trackPos,
-	}
-	if cfg.externalEnts {
-		popts.ExternalEntities = cfg.resolver
-	}
-	tree, err := xdm.ParseString(string(data), popts)
-	if err != nil {
-		return err
+	// An empty path is a transform with no source document, which is how a
+	// run that starts at a named template is expressed. Transform takes a nil
+	// source for exactly that case, so the parse is simply skipped.
+	var root *xdm.Node
+	if inPath != "" {
+		data, err := os.ReadFile(inPath)
+		if err != nil {
+			return err
+		}
+		abs, _ := filepath.Abs(inPath)
+		popts := xdm.ParseOptions{
+			BaseURI: abs,
+			// The document URI is what fn:document-uri returns, and it is a
+			// separate property from the base URI: a base URI is inherited
+			// and can be overridden by xml:base, while the document URI names
+			// where this document came from and nothing below it changes.
+			DocumentURI:    abs,
+			AllowDOCTYPE:   cfg.allowDoctype,
+			TrackPositions: cfg.trackPos,
+		}
+		if cfg.externalEnts {
+			popts.ExternalEntities = cfg.resolver
+		}
+		tree, err := xdm.ParseString(string(data), popts)
+		if err != nil {
+			return err
+		}
+		root = tree.Root
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
 	defer cancel()
 
-	res, err := sheet.Transform(ctx, tree.Root, xslt.TransformOptions{
+	res, err := sheet.Transform(ctx, root, xslt.TransformOptions{
 		Params:           cfg.params,
 		Documents:        cfg.resolver,
 		InitialTemplate:  cfg.initial,

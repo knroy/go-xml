@@ -256,6 +256,10 @@ CLI:
 go-xml -xsl transform.xsl input.xml
 go-xml -xsl rules.xsl -p year=2024 -allow-dir ./codelists invoice.xml
 
+# Start at a named template. A stylesheet that generates its own content
+# needs no source document, so none is given.
+go-xml -xsl generate.xsl -initial-template main
+
 # Validate a directory: report every failure rather than stopping at the first.
 go-xml -xsl rules.xsl -keep-going invoices/*.xml
 
@@ -277,7 +281,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-allow-dir` | open `xsl:include`/`doc()`/`document()` to further directories; the stylesheet's own directory is always readable |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-timeout` | bound the transform (default 60s) |
-| `-initial-template` | start at a named template instead of matching the root |
+| `-initial-template` | start at a named template instead of matching the root; no input document is then needed |
 | `-mode` | initial mode for `apply-templates` |
 | `-messages` | print `xsl:message` output to stderr |
 | `-now` | pin `fn:current-dateTime` (RFC 3339) |

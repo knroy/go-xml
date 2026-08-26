@@ -122,7 +122,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if source == nil && opts.InitialTemplate == "" {
 		if _, ok := s.named[defaultEntry]; !ok {
 			return nil, fmt.Errorf(
-				"Transform: source document is nil and no initial template was named")
+				"no source document and no entry point: pass a source document, " +
+					"name a template to start at, or declare a template named " +
+					"xsl:initial-template")
 		}
 		useDefaultEntry = true
 	}
