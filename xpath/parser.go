@@ -961,6 +961,13 @@ func checkCastTarget(st SequenceType) error {
 	// admits only an atomic type name, so a kind test there does not parse at
 	// all. XPST0080 is for a name that *is* a type but is not allowed as a
 	// target, which is the abstract-type case below.
+	// xs:error is a legal cast target and a legal castable target: it names a
+	// type, so the grammar is satisfied, and the cast then fails at run time
+	// with FORG0001 because the type has no instances. Refusing it statically
+	// reported a syntax error for an expression that is well-formed.
+	if st.IsErrorType {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)

@@ -193,6 +193,17 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, err
 	}
 
+	// xs:error has no instances, so a cast to it always fails and a castable
+	// test is always false — except for the empty sequence under "?", which
+	// the general rules below already handle.
+	if e.Type.IsErrorType && !(len(v) == 0 && e.Type.Occurrence == "?") {
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(false)), nil
+		}
+		return nil, xdm.Errorf("FORG0001",
+			"a value cannot be cast to xs:error, which has no instances")
+	}
+
 	atoms := xdm.Atomize(v)
 	switch len(atoms) {
 	case 0:
