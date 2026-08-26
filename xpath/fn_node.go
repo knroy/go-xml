@@ -70,10 +70,14 @@ func registerNumericFuncs(l *Library) {
 		return new(big.Rat).SetInt(q)
 	}))
 
-	// fn:round takes one argument in XPath 2.0. The precision argument is a 3.0
-	// addition, and accepting it here made round(1, 2) return 1 rather than
-	// reporting that no such function exists.
+	// fn:round takes one argument in XPath 2.0. The precision argument is a
+	// 3.0 addition, so the two-argument form is registered separately and
+	// marked: under 2.0 round(1, 2) must report that no such function exists
+	// rather than quietly returning 1.
 	l.registerFn("round", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		return roundWithPrecision(args, false)
+	})
+	l.registerFnSince(XPath30, "round", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return roundWithPrecision(args, false)
 	})
 	l.registerFn("round-half-to-even", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {

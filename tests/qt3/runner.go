@@ -208,7 +208,17 @@ func xpathVersion(v TargetVersion) xpath.Version {
 func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
 		switch alt {
-		case "XP20", "XP20+":
+		case "XP20":
+			// Exactly 2.0, with no "+". A handful of cases are written this
+			// way precisely because 3.0 changed the answer — "round(1, 2)" is
+			// XPST0017 under 2.0 and 1 under 3.0 — and the suite pairs them
+			// with an XP30 case asserting the other result. Running such a
+			// case under 3.0 would assert the 2.0 answer against a 3.0
+			// processor and guarantee a failure.
+			if target == XPath20 {
+				return true
+			}
+		case "XP20+":
 			return true
 		case "XP30", "XP30+":
 			if target >= XPath30 {

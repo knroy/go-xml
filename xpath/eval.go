@@ -169,7 +169,7 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr) (xdm.Sequence, er
 	// this one resolves them at evaluation, so the check is made here before
 	// the operand is judged.
 	if call, ok := step.(*FuncCall); ok && ctx.Funcs != nil {
-		if _, found := ctx.Funcs.Lookup(call.Name, len(call.Args)); !found {
+		if _, found := lookupFor(ctx, call.Name, len(call.Args)); !found {
 			return nil, fmt.Errorf(
 				"XPST0017: unknown function %s with %d argument(s)",
 				call.Name.Clark(), len(call.Args))
@@ -439,7 +439,7 @@ func (e *FuncCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx.Funcs == nil {
 		return nil, fmt.Errorf("XPST0017: no function library available for %s", e.Name.Clark())
 	}
-	fn, ok := ctx.Funcs.Lookup(e.Name, len(e.Args))
+	fn, ok := lookupFor(ctx, e.Name, len(e.Args))
 	if !ok {
 		// XSLT 18.1, and B.1 rule 6: under XPath 1.0 compatibility a call to
 		// an unknown function in a non-null namespace is not the static error

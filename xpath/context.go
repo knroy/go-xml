@@ -208,6 +208,19 @@ type Function struct {
 	// Call receives the already-evaluated arguments. Functions that need the
 	// context item (fn:string with no argument, fn:position) read it from ctx.
 	Call func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error)
+	// Since is the first language version in which this function exists. The
+	// zero value is XPath20, so every function that predates versioning is
+	// available everywhere, and a 3.0 addition is invisible to a 2.0
+	// expression rather than being quietly callable from one.
+	//
+	// The check belongs at lookup rather than in each function body: a 2.0
+	// expression calling fn:head must get "unknown function", the same static
+	// error every other processor raises, not a working answer or a distinct
+	// complaint from inside a function it should not have found.
+	//
+	// It applies only to the fn: namespace in practice. The math: functions
+	// are gated by their namespace instead — see registerMathFuncs.
+	Since Version
 }
 
 // NewContext returns a context with the given focus and library.

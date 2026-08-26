@@ -60,6 +60,24 @@ func (l *Library) registerFn(local string, arities []int,
 	}
 }
 
+// registerFnSince is registerFn for a function, or an arity of one, that only
+// exists from a given version onwards.
+//
+// Arity is part of the key, so this is what lets fn:round have a 2.0
+// one-argument form and a 3.0 two-argument form: they are separate entries,
+// and only the second is hidden from a 2.0 expression.
+func (l *Library) registerFnSince(since Version, local string, arities []int,
+	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) {
+	for _, a := range arities {
+		l.Add(Function{
+			Name:  xdm.QName{URI: xdm.NSFN, Local: local},
+			Arity: a,
+			Call:  call,
+			Since: since,
+		})
+	}
+}
+
 // --- Argument helpers -------------------------------------------------------
 //
 // These centralise the conversion rules the spec states per-signature. Doing
