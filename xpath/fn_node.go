@@ -230,7 +230,7 @@ func registerNodeFuncs(l *Library) {
 		return xdm.One(n.Root()), nil
 	})
 
-	l.registerFn("node-name", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnAlsoZeroArity(XPath30, "node-name", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
 			return xdm.Empty(), err
@@ -242,7 +242,7 @@ func registerNodeFuncs(l *Library) {
 		return xdm.Empty(), nil
 	})
 
-	l.registerFn("document-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnAlsoZeroArity(XPath30, "document-uri", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
 			return xdm.Empty(), err
@@ -295,7 +295,7 @@ func registerNodeFuncs(l *Library) {
 		return boolSeq(langMatches(n, want)), nil
 	})
 
-	l.registerFn("nilled", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnAlsoZeroArity(XPath30, "nilled", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		n, err := argNodeOrContext(ctx, args, 0)
 		if err != nil || n == nil {
 			return xdm.Empty(), err

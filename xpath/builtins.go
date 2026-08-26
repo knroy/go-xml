@@ -26,6 +26,7 @@ func Builtins() FunctionLibrary {
 		registerHOFuncs(l)
 		registerFormatNumber(l)
 		registerFormatInteger(l)
+		registerPathFunc(l)
 		registerUnparsedText(l, XPath30)
 		registerFormatDateTimeSince(l, XPath30)
 		registerNodeFuncs(l)

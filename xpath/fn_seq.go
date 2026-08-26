@@ -48,11 +48,24 @@ func registerSeqFuncs(l *Library) {
 		return boolSeq(false), nil
 	})
 
-	l.registerFn("data", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnAlsoZeroArity(XPath30, "data", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// The zero-argument form of 3.0 atomises the context item. Unlike the
+		// node-valued functions this cannot go through argNodeOrContext: the
+		// parameter is item()*, so the context item is taken as it is rather
+		// than required to be a node.
+		in := xdm.Sequence(nil)
+		if len(args) > 0 {
+			in = args[0]
+		} else {
+			if ctx.Item == nil {
+				return nil, fmt.Errorf("XPDY0002: no context item")
+			}
+			in = xdm.One(ctx.Item)
+		}
 		// Checked, because atomising a function item is FOTY0013 rather than
 		// something to skip over: fn:data is the one function whose whole job
 		// is atomisation, so it must be the one that reports it.
-		return xdm.AtomizeChecked(args[0])
+		return xdm.AtomizeChecked(in)
 	})
 
 	l.registerFn("position", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {

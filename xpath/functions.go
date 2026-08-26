@@ -60,6 +60,19 @@ func (l *Library) registerFn(local string, arities []int,
 	}
 }
 
+// registerFnAlsoZeroArity registers a one-argument function and additionally
+// its zero-argument form at the given version.
+//
+// XPath 3.0 adds a context-item form to several functions that had only the
+// explicit-argument one — fn:node-name, fn:nilled, fn:data, fn:path. The body
+// is identical, because the argument helpers already fall back to the context
+// item when the argument is absent; only the registration differs.
+func (l *Library) registerFnAlsoZeroArity(since Version, local string, arities []int,
+	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) {
+	l.registerFn(local, arities, call)
+	l.registerFnSince(since, local, []int{0}, call)
+}
+
 // registerFnSince is registerFn for a function, or an arity of one, that only
 // exists from a given version onwards.
 //
