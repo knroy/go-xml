@@ -433,6 +433,15 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	if lib := decimalFormatLibrary(env, ns); lib != nil {
 		ctx.Funcs = lib
 	}
+	// An expression always has a static base URI unless something says
+	// otherwise: the spec defaults it to the URI of the resource holding the
+	// expression, which here is the test-set file. Leaving it empty made
+	// base-uri() on a freshly parsed document return the empty sequence, so
+	// comparing it with static-base-uri() gave () rather than true. A case
+	// that wants no base URI says so with "#UNDEFINED" below.
+	if abs, err := filepath.Abs(filepath.Join(r.Root, filepath.FromSlash(ts.Dir))); err == nil {
+		ctx.StaticBaseURI = "file://" + filepath.ToSlash(abs) + "/"
+	}
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
 	for _, b := range env.StaticBaseURI {

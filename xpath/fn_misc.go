@@ -2176,6 +2176,9 @@ func registerParseXML(l *Library, since Version) {
 			return nil, xdm.Errorf("FODC0006",
 				"fn:parse-xml: argument is not a well-formed XML document: %v", perr)
 		}
+		if err := checkNamespaceWellFormed(tree.Root, "fn:parse-xml"); err != nil {
+			return nil, err
+		}
 		return xdm.One(tree.Root), nil
 	})
 
@@ -2198,6 +2201,9 @@ func registerParseXML(l *Library, since Version) {
 		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI)
 		if perr != nil {
 			return nil, perr
+		}
+		if err := checkNamespaceWellFormed(frag, "fn:parse-xml-fragment"); err != nil {
+			return nil, err
 		}
 		return xdm.One(frag), nil
 	})
@@ -2230,6 +2236,14 @@ func parseXMLFragment(s, base string) (*xdm.Node, error) {
 				"fn:parse-xml-fragment: a text declaration may not specify standalone")
 		}
 		body = body[end+2:]
+	}
+	// A fragment is an external general parsed entity, and such an entity may
+	// not carry a document type declaration: that belongs to the document
+	// that references it. Wrapping one in an element would in any case put it
+	// somewhere a DOCTYPE may not appear.
+	if strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "<!DOCTYPE") {
+		return nil, xdm.Errorf("FODC0006",
+			"fn:parse-xml-fragment: a fragment may not contain a document type declaration")
 	}
 	// The wrapper name must be a legal XML name — a control character is not,
 	// and made every fragment fail to parse. It is chosen to be one no
@@ -2293,4 +2307,35 @@ func hasErrorCode(err error) bool {
 		}
 	}
 	return true
+}
+
+// checkNamespaceWellFormed rejects a tree using a prefix nothing declares.
+//
+// The parser resolves an unbindable prefix to the empty URI rather than
+// failing, because it is also asked to read stylesheet fragments and re-parsed
+// entity expansions where the surrounding declarations are not in hand. A
+// document handed to fn:parse-xml has no such excuse: "<p:a/>" is
+// namespace-ill-formed, which the spec makes FODC0006.
+func checkNamespaceWellFormed(n *xdm.Node, fn string) error {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == xdm.KindElement {
+		if p := n.Name.Prefix; p != "" && n.Name.URI == "" {
+			return xdm.Errorf("FODC0006",
+				"%s: no namespace declaration is in scope for the prefix %q", fn, p)
+		}
+		for _, a := range n.Attrs {
+			if p := a.Name.Prefix; p != "" && a.Name.URI == "" {
+				return xdm.Errorf("FODC0006",
+					"%s: no namespace declaration is in scope for the prefix %q", fn, p)
+			}
+		}
+	}
+	for _, c := range n.Children {
+		if err := checkNamespaceWellFormed(c, fn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
