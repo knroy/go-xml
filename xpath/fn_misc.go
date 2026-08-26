@@ -85,39 +85,7 @@ func registerMiscFuncs(l *Library) {
 // evaluated against the XPath library alone. Keeping them out of Builtins and
 // adding them here is what makes both true.
 func RegisterXSLTFuncs(l *Library) {
-	l.registerFn("unparsed-text", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		s, enc, err := unparsedTextArgs(args)
-		if err != nil {
-			return nil, err
-		}
-		// No resolver means the function is off, which is the default. The
-		// message names the reason rather than the URI: a stylesheet that
-		// gets this back has not been granted file reads at all, and saying
-		// "cannot retrieve x" would suggest the file was the problem.
-		if ctx.Texts == nil {
-			return nil, fmt.Errorf(
-				"FOUT1170: unparsed-text() is disabled (it reads arbitrary files)")
-		}
-		text, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc)
-		if err != nil {
-			return nil, fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
-		}
-		return xdm.One(xdm.NewString(text)), nil
-	})
-	l.registerFn("unparsed-text-available", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		// Defined as "true if a call on unparsed-text with the same
-		// arguments would succeed", so it is answered by attempting the read
-		// rather than by inspecting the URI. With no resolver it is false,
-		// which is what the refusal tests expect.
-		s, enc, err := unparsedTextArgs(args)
-		if err != nil || ctx.Texts == nil {
-			return boolSeq(false), nil
-		}
-		if _, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc); err != nil {
-			return boolSeq(false), nil
-		}
-		return boolSeq(true), nil
-	})
+	registerUnparsedText(l, XPath20)
 
 	// fn:document is XSLT's own document loader, and differs from fn:doc in
 	// ways a stylesheet depends on: a sequence of URIs, a base-supplying
@@ -125,6 +93,91 @@ func RegisterXSLTFuncs(l *Library) {
 	l.registerFn("document", []int{1, 2}, fnDocument)
 
 	registerFormatDateTime(l)
+}
+
+// registerUnparsedText adds fn:unparsed-text and its siblings.
+//
+// XSLT 2.0 defines them and XPath 3.0 promotes them into the core function
+// library, so they are registered twice: unversioned for a stylesheet, and as
+// 3.0 additions for a bare XPath expression. See registerFormatDateTimeSince,
+// which has the same shape for the same reason.
+func registerUnparsedText(l *Library, since Version) {
+	l.registerFnSince(since, "unparsed-text", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		text, err := unparsedText(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(xdm.NewString(text)), nil
+	})
+
+	l.registerFnSince(since, "unparsed-text-available", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// Defined as "true if a call on unparsed-text with the same
+		// arguments would succeed", so it is answered by attempting the read
+		// rather than by inspecting the URI. With no resolver it is false,
+		// which is what the refusal tests expect.
+		if _, err := unparsedText(ctx, args); err != nil {
+			return boolSeq(false), nil
+		}
+		return boolSeq(true), nil
+	})
+
+	// fn:unparsed-text-lines is 3.0 only: XSLT 2.0 has no such function, so
+	// it is registered at the later of the two versions whichever way this is
+	// called.
+	lineVersion := since
+	if !lineVersion.atLeast30() {
+		lineVersion = XPath30
+	}
+	l.registerFnSince(lineVersion, "unparsed-text-lines", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		text, err := unparsedText(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return xdm.Sequence(splitTextLines(text)), nil
+	})
+}
+
+// unparsedText performs the read shared by the three functions.
+func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
+	s, enc, err := unparsedTextArgs(args)
+	if err != nil {
+		return "", err
+	}
+	// No resolver means the function is off, which is the default. The
+	// message names the reason rather than the URI: a stylesheet that gets
+	// this back has not been granted file reads at all, and saying "cannot
+	// retrieve x" would suggest the file was the problem.
+	if ctx.Texts == nil {
+		return "", fmt.Errorf(
+			"FOUT1170: unparsed-text() is disabled (it reads arbitrary files)")
+	}
+	text, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc)
+	if err != nil {
+		return "", fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
+	}
+	return text, nil
+}
+
+// splitTextLines splits on the line endings fn:unparsed-text-lines recognises.
+//
+// The spec defines the result as the sequence obtained by splitting on \n,
+// \r\n or \r, with a trailing line ending producing no final empty string —
+// "a\n" is one line, not two.
+func splitTextLines(text string) []xdm.Item {
+	if text == "" {
+		return nil
+	}
+	// Normalise the two-character ending first so the split is over single
+	// characters, then treat a lone \r as an ending too.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSuffix(text, "\n")
+	parts := strings.Split(text, "\n")
+	out := make([]xdm.Item, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, xdm.NewString(p))
+	}
+	return out
 }
 
 // unparsedTextArgs pulls the href and the optional encoding out of a call on
