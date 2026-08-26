@@ -1017,7 +1017,7 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		if decl.NaN != "" {
 			df.NaN = decl.NaN
 		}
-		formats[expandFormatName(decl.Name, ns)] = df
+		formats[expandDeclName(decl, ns)] = df
 	}
 
 	call := func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -1065,6 +1065,28 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		})
 	}
 	return lib
+}
+
+// expandDeclName expands a decimal-format declaration's own name.
+//
+// The prefix may be declared on the decimal-format element itself — the suite
+// writes <decimal-format xmlns:a="http://a.ns/" name="a:test"/> — so the
+// binding is recovered from that element's attributes before falling back to
+// the environment's prefixes.
+func expandDeclName(decl *DecimalFormatDecl, ns resolver) string {
+	if decl.Name == "" {
+		return ""
+	}
+	prefix, local := xdm.SplitQName(decl.Name)
+	if prefix == "" {
+		return local
+	}
+	for _, a := range decl.Attrs {
+		if a.Name.Space == "xmlns" && a.Name.Local == prefix {
+			return xdm.QName{URI: a.Value, Local: local}.Clark()
+		}
+	}
+	return expandFormatName(decl.Name, ns)
 }
 
 // expandFormatName resolves a lexical decimal-format name to its expanded
