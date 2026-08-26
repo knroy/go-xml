@@ -40,7 +40,9 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
 			e.Name.Clark(), e.Arity)
 	}
-	return xdm.One(functionItemFor(e.Name, e.Arity, fn.Call)), nil
+	item := functionItemFor(e.Name, e.Arity, fn.Call)
+	item.Signature = fn.Signature
+	return xdm.One(item), nil
 }
 
 // functionItemFor wraps a library function as a function item.

@@ -1111,12 +1111,10 @@ occurrence:
 // parseFunctionTest parses productions [90]-[92].
 //
 // "function(*)" is AnyFunctionTest and matches any function item.
-// "function(T, ...) as T" is TypedFunctionTest. The parameter and return types
-// are parsed and discarded: this engine records a function item's arity but
-// not its signature, so a typed test is matched as the any-function test plus
-// an arity check. Parsing them is still necessary — an expression that writes
-// one must not be a syntax error — and skipping them would leave the tokens
-// for the next production to trip over.
+// "function(T, ...) as T" is TypedFunctionTest. Its parameter and return types
+// are recorded, and matched against a function item that carries a signature
+// of its own; an item without one is judged on arity alone, which is what
+// every function item did before signatures existed.
 func (p *Parser) parseFunctionTest(st *SequenceType) error {
 	p.pos++ // "function"
 	if err := p.expectOp("("); err != nil {
@@ -1145,9 +1143,11 @@ func (p *Parser) parseFunctionTest(st *SequenceType) error {
 	arity := 0
 	if !p.peekIs(TokOp, ")") {
 		for {
-			if _, err := p.parseSequenceType(); err != nil {
+			pt, err := p.parseSequenceType()
+			if err != nil {
 				return err
 			}
+			st.FunctionParams = append(st.FunctionParams, pt)
 			arity++
 			if _, ok := p.acceptOp(","); !ok {
 				break
@@ -1161,9 +1161,11 @@ func (p *Parser) parseFunctionTest(st *SequenceType) error {
 		return p.errorf("expected 'as' after a typed function test")
 	}
 	p.pos++
-	if _, err := p.parseSequenceType(); err != nil {
+	ret, err := p.parseSequenceType()
+	if err != nil {
 		return err
 	}
+	st.FunctionReturn = &ret
 	st.FunctionArity, st.HasFunctionArity = arity, true
 	return nil
 }

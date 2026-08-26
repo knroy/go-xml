@@ -464,6 +464,14 @@ func (t SequenceType) String() string {
 	}
 	base := "item()"
 	switch {
+	case t.SchemaType != "":
+		base = t.SchemaType
+	case t.FacetName != "":
+		// A derived type is rendered as written. The type code alone is the
+		// primitive it derives from, so xs:NCName would otherwise print as
+		// xs:string — which a subtype comparison would then read as the wider
+		// type and wrongly accept.
+		base = "xs:" + t.FacetName
 	case t.HasAtomicType:
 		base = t.AtomicType.String()
 	case t.ItemType != nil:

@@ -221,6 +221,17 @@ type Function struct {
 	// It applies only to the fn: namespace in practice. The math: functions
 	// are gated by their namespace instead — see registerMathFuncs.
 	Since Version
+
+	// Signature is the declared return type followed by the parameter types,
+	// in source spelling. It is what a typed function test — "f#1 instance of
+	// function(element(A)) as xs:string" — is judged against.
+	//
+	// nil for a function whose signature has not been recorded, which is most
+	// of the library: such a function is matched on arity alone, the answer
+	// every function item gave before signatures existed. Annotating one is
+	// therefore a narrowing, and only ever makes a test that wrongly answered
+	// true answer false.
+	Signature []string
 }
 
 // NewContext returns a context with the given focus and library.

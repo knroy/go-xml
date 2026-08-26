@@ -43,6 +43,7 @@ func Builtins() FunctionLibrary {
 		registerURIFuncs(l)
 		registerMiscFuncs(l)
 		registerConstructors(l)
+		applyBuiltinSignatures(l)
 		builtinLibrary = l
 	})
 	return builtinLibrary

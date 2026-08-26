@@ -341,11 +341,18 @@ type SequenceType struct {
 	HasAtomicType bool
 	// IsFunctionTest marks a function(*) or function(...) as ... item type,
 	// which matches a function item. A typed test additionally fixes the
-	// arity; the parameter and return types are parsed but not recorded,
-	// since a function item carries its arity and not its signature.
+	// arity and, where the function item records a signature of its own, the
+	// parameter and return types it must be compatible with.
 	IsFunctionTest   bool
 	FunctionArity    int
 	HasFunctionArity bool
+	// FunctionParams and FunctionReturn are the typed test's declared
+	// parameter and return types. They are matched only against a function
+	// item that records its own signature; one that does not is judged on
+	// arity alone, which is what every function item did before signatures
+	// existed.
+	FunctionParams []SequenceType
+	FunctionReturn *SequenceType
 	// IsErrorType marks xs:error, the empty type. Nothing is an instance of
 	// it, so it matches only the empty sequence — and only then because the
 	// occurrence indicator permits it, never because an item conformed.

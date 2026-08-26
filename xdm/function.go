@@ -33,6 +33,17 @@ type FunctionItem struct {
 	// function items.
 	Arity int
 
+	// Signature is the function's declared parameter and return types, in
+	// source spelling ("xs:string", "item()*", "node()?"), with Signature[0]
+	// the return type and the rest the parameters in order.
+	//
+	// It is nil for a function whose signature was never recorded, which a
+	// typed function test then cannot judge: such an item matches on arity
+	// alone, as it did before signatures existed. Strings rather than a
+	// parsed type because the parsed form lives in the xpath package, which
+	// this one cannot import.
+	Signature []string
+
 	// Invoke calls the function with the given arguments.
 	//
 	// The context is passed as an any because the type that carries it lives

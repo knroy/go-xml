@@ -48,15 +48,14 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		return false
 	}
 	// A function test matches a function item and nothing else. A typed test
-	// additionally fixes the arity; its parameter and return types are not
-	// recorded, because a function item carries an arity and not a signature,
-	// so a typed test is the any-function test plus that check.
+	// additionally fixes the arity, and where the item records a signature,
+	// the parameter and return types it must be compatible with.
 	if t.IsFunctionTest {
 		fn, ok := it.(*xdm.FunctionItem)
 		if !ok {
 			return false
 		}
-		return !t.HasFunctionArity || fn.Arity == t.FunctionArity
+		return functionItemMatches(t, fn)
 	}
 	// Nothing else matches a function item: it is neither a node nor an
 	// atomic value, so every other item type excludes it.
