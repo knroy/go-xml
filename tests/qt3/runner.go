@@ -750,6 +750,11 @@ func seqStringValue(s xdm.Sequence) string {
 // result bound to $result — which is how the suite writes these.
 func assertExpression(got xdm.Sequence, expr string) (bool, string) {
 	ctx := xpath.NewContext(nil, xpath.Builtins())
+	// The assertion is the harness's own expression, not the case's, and it
+	// is written in the 3.0 language whatever version the case runs under —
+	// an <assert> of "exists(parse-xml($result)/e)" has to resolve. See
+	// typeIs, which compiles its own expression the same way.
+	ctx.Version = xpath.XPath30
 	ctx = ctx.WithVar(xdm.QName{Local: "result"}, got)
 	res, err := xpath.Eval(expr, ctx, resolver{})
 	if err != nil {

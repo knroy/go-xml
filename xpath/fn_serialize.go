@@ -26,15 +26,32 @@ func registerSerialize(l *Library) {
 		// omit-xml-declaration defaults to yes here, since a serialised
 		// fragment is more often embedded than written as a document. Asking
 		// for it back produces the declaration the XML output method defines.
-		if !opts.omitXMLDecl && opts.method == "xml" {
-			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+		// A standalone value can only be written in a declaration, so asking
+		// for one is also a request for the declaration itself.
+		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
+			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"`)
+			if opts.standalone != "" {
+				sb.WriteString(` standalone="` + opts.standalone + `"`)
+			}
+			sb.WriteString("?>\n")
 		}
-		for _, it := range seqArg(args, 0) {
+		// The item separator goes between items and nowhere else. Without one
+		// the default applies, which for the XML method is a single space
+		// between two adjacent atomic values and nothing between nodes —
+		// serializeItem's own spacing.
+		for i, it := range seqArg(args, 0) {
+			if opts.hasItemSep && i > 0 {
+				sb.WriteString(opts.itemSeparator)
+			}
 			if err := serializeItem(&sb, it, opts); err != nil {
 				return nil, err
 			}
 		}
-		return strSeq(sb.String()), nil
+		out := sb.String()
+		if len(opts.charMap) > 0 {
+			out = applyCharacterMap(out, opts.charMap)
+		}
+		return strSeq(out), nil
 	})
 }
 
@@ -46,6 +63,12 @@ type serializeOptions struct {
 	itemSeparator  string
 	hasItemSep     bool
 	suppressIndent bool
+	// standalone is the value of the standalone parameter, "" when it was not
+	// given. It appears in the XML declaration, so asking for it also forces
+	// the declaration to be written.
+	standalone string
+	// charMap maps a character to the string that replaces it on output.
+	charMap map[rune]string
 }
 
 // serializationParams reads the second argument, an element whose children
@@ -116,11 +139,12 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 
 			// use-character-maps carries child elements rather than a value.
 			if p.Name.Local == "use-character-maps" {
-				if err := checkCharacterMaps(p); err != nil {
+				m, err := readCharacterMaps(p)
+				if err != nil {
 					return opts, err
 				}
-				return opts, fmt.Errorf(
-					"SEPM0017: serialization parameter %q is not supported", p.Name.Local)
+				opts.charMap = m
+				continue
 			}
 
 			val, err := paramValue(p)
@@ -134,12 +158,31 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 				}
 				opts.method = val
 			case "omit-xml-declaration":
+				if err := checkYesNo(val, p.Name.Local); err != nil {
+					return opts, err
+				}
 				opts.omitXMLDecl = val == "yes"
+			case "standalone":
+				// The parameter's type is xs:boolean, whose lexical space
+				// permits surrounding whitespace, and the serialization spec
+				// adds "omit" for "write no standalone at all".
+				v := strings.TrimSpace(val)
+				if v == "omit" {
+					opts.standalone = ""
+					break
+				}
+				if err := checkYesNo(v, p.Name.Local); err != nil {
+					return opts, err
+				}
+				opts.standalone = v
 			case "indent":
+				if err := checkYesNo(val, p.Name.Local); err != nil {
+					return opts, err
+				}
 				opts.indent = val == "yes"
 			case "item-separator":
 				opts.itemSeparator, opts.hasItemSep = val, true
-			case "encoding", "version", "media-type", "standalone",
+			case "encoding", "version", "media-type",
 				"doctype-public", "doctype-system", "cdata-section-elements",
 				"normalization-form", "undeclare-prefixes",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
@@ -161,32 +204,82 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 	return opts, nil
 }
 
-// checkCharacterMaps validates a use-character-maps parameter.
+// readCharacterMaps reads a use-character-maps parameter.
 //
-// It carries output:character-map children rather than a value, and two of
-// them mapping the same character is SEPM0018 — a conflict the caller could
-// not have meant, and one that has to be reported before the parameter itself
-// is refused as unsupported.
-func checkCharacterMaps(p *xdm.Node) error {
-	seen := map[string]bool{}
+// It carries output:character-map children rather than a value, each naming a
+// character and the string to write in its place. Two of them mapping the same
+// character is SEPM0018 — a conflict the caller could not have meant.
+func readCharacterMaps(p *xdm.Node) (map[rune]string, error) {
+	out := map[rune]string{}
+	// The parameter carries its maps as children, so it has no attributes of
+	// its own: "use-character-maps value='yes'" is not this parameter written
+	// correctly, it is a malformed parameter document.
+	for _, a := range p.Attrs {
+		if a.Name.URI == "" {
+			return nil, fmt.Errorf(
+				"SEPM0017: unexpected attribute %q on use-character-maps", a.Name.Local)
+		}
+	}
 	for _, c := range p.Children {
-		if c.Kind != xdm.KindElement || c.Name.URI != nsSerialization ||
-			c.Name.Local != "character-map" {
+		if c.Kind != xdm.KindElement {
 			continue
 		}
-		ch := ""
+		// Only output:character-map may appear here. A child of another name
+		// — or in another namespace — is not a character map, and ignoring it
+		// would accept a document that says something this does not do.
+		if c.Name.URI != nsSerialization || c.Name.Local != "character-map" {
+			return nil, fmt.Errorf(
+				"SEPM0017: %q is not a character-map element", c.Name.Local)
+		}
+		ch, to := "", ""
+		haveChar, haveTo := false, false
 		for _, a := range c.Attrs {
-			if a.Name.URI == "" && a.Name.Local == "character" {
-				ch = a.Value
+			if a.Name.URI != "" {
+				continue
+			}
+			switch a.Name.Local {
+			case "character":
+				ch, haveChar = a.Value, true
+			case "map-string":
+				to, haveTo = a.Value, true
+			default:
+				return nil, fmt.Errorf(
+					"SEPM0017: unexpected attribute %q on character-map", a.Name.Local)
 			}
 		}
-		if seen[ch] {
-			return fmt.Errorf(
+		if !haveChar || !haveTo {
+			return nil, fmt.Errorf(
+				"SEPM0017: a character-map needs both character and map-string")
+		}
+		// The character attribute holds exactly one character; anything else
+		// does not name a character to map.
+		r := []rune(ch)
+		if len(r) != 1 {
+			return nil, fmt.Errorf(
+				"SEPM0017: a character-map must name exactly one character, got %q", ch)
+		}
+		if _, seen := out[r[0]]; seen {
+			return nil, fmt.Errorf(
 				"SEPM0018: character %q is mapped more than once", ch)
 		}
-		seen[ch] = true
+		out[r[0]] = to
 	}
-	return nil
+	return out, nil
+}
+
+// checkYesNo rejects a parameter value that is not the "yes" or "no" its type
+// allows.
+//
+// The value is a boolean, so a spelling outside its lexical space means the
+// parameter document is malformed rather than that the caller asked for
+// something unsupported.
+func checkYesNo(val, name string) error {
+	switch strings.TrimSpace(val) {
+	case "yes", "no", "true", "false", "1", "0":
+		return nil
+	}
+	return fmt.Errorf(
+		"SEPM0017: serialization parameter %q takes yes or no, got %q", name, val)
 }
 
 // nsSerialization is the namespace a serialization parameter document uses.
@@ -343,4 +436,22 @@ func escapeAttr(s string) string {
 		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;",
 		"\t", "&#x9;", "\n", "&#xA;", "\r", "&#xD;")
 	return r.Replace(s)
+}
+
+// applyCharacterMap replaces the mapped characters in the serialised output.
+//
+// It runs over the finished text rather than at each write, because a
+// character map applies to the output as a whole — including characters that
+// escaping would otherwise have turned into references — and doing it once
+// keeps the writers free of the concern.
+func applyCharacterMap(s string, m map[rune]string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if to, ok := m[r]; ok {
+			sb.WriteString(to)
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }
