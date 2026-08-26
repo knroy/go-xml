@@ -79,7 +79,8 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	item := &xdm.FunctionItem{
 		// No name: fn:function-name returns the empty sequence for an inline
 		// function, which is what the zero QName means here.
-		Arity: len(e.Params),
+		Arity:     len(e.Params),
+		Signature: inlineSignature(e),
 	}
 	item.Invoke = func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		if len(args) != len(e.Params) {
@@ -215,7 +216,9 @@ func partialApply(name xdm.QName, arity int,
 	}
 	captured := ctx
 	item := &xdm.FunctionItem{
-		Name:  name,
+		// No name. A partial application produces a *new* function, not the
+		// one it was written from: fn:function-name(fn:substring(?, 1)) is
+		// the empty sequence, the same answer an inline function gives.
 		Arity: len(holes),
 		Invoke: func(callCtx any, supplied []xdm.Sequence) (xdm.Sequence, error) {
 			if len(supplied) != len(holes) {
@@ -331,4 +334,27 @@ func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 			"XPTY0004: the target of a dynamic call is %s, not a function", seq[0].TypeName())
 	}
 	return fn, nil
+}
+
+// inlineSignature records an inline function's declared types, in the order
+// xdm.FunctionItem.Signature uses: the return type first, then the parameters.
+//
+// An omitted type is item()*, which is what the specification defaults both
+// the parameters and the result to.
+func inlineSignature(e *InlineFunctionExpr) []string {
+	const anyType = "item()*"
+	sig := make([]string, 0, len(e.Params)+1)
+	if e.Result != nil {
+		sig = append(sig, e.Result.String())
+	} else {
+		sig = append(sig, anyType)
+	}
+	for _, p := range e.Params {
+		if p.Type != nil {
+			sig = append(sig, p.Type.String())
+			continue
+		}
+		sig = append(sig, anyType)
+	}
+	return sig
 }

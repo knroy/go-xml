@@ -666,7 +666,11 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 			// unreferenceable, so the spec makes it a static error rather
 			// than letting one silently shadow the other.
 			for _, prior := range params {
-				if prior.Name == name {
+				// Compared by namespace and local name, not by the whole
+				// QName: two spellings of the same name are the same
+				// parameter, and a struct comparison would take
+				// $Q{u}foo and $p:foo bound to u for different ones.
+				if prior.Name.URI == name.URI && prior.Name.Local == name.Local {
 					return nil, xdm.Errorf("XQST0039",
 						"the parameter $%s is declared twice", name.Lexical())
 				}

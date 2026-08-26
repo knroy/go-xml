@@ -38,6 +38,20 @@ func TestQT3(t *testing.T) {
 	xpath.SetBacktrackingRegex(true)
 	defer xpath.SetBacktrackingRegex(false)
 
+	// The environment-variable cases are written as "the environment exposes
+	// nothing, or it exposes these": the suite documents the three variables
+	// a conforming run should provide, and the process environment satisfies
+	// neither branch, since it has variables but not those. Setting them is
+	// what puts the run on the second branch and actually exercises
+	// fn:environment-variable rather than the escape hatch.
+	for name, val := range map[string]string{
+		"QTTEST":      "42",
+		"QTTEST2":     "other",
+		"QTTESTEMPTY": "",
+	} {
+		t.Setenv(name, val)
+	}
+
 	for _, target := range []TargetVersion{XPath20, XPath30} {
 		t.Run(target.String(), func(t *testing.T) { runSuite(t, root, cat, target) })
 	}
