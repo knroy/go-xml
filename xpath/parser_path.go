@@ -616,7 +616,7 @@ func (p *Parser) parseNamedFunctionRef() (Expr, error) {
 	nameTok := p.cur()
 	// The reserved names are reserved here too: "item#0" is a syntax error
 	// rather than a reference to a function nobody declared.
-	if isReservedFunctionName(nameTok.Val) {
+	if p.reservedFor(nameTok.Val) {
 		return nil, p.errorf("%q is a reserved name and cannot be referenced",
 			nameTok.Val)
 	}
@@ -719,7 +719,7 @@ func (p *Parser) parseFunctionCallWith(first Expr) (Expr, error) {
 	// continues. Reaching here with one means the expression is malformed —
 	// "item()" in a value position is a syntax error, not a call to an unknown
 	// function — so it is XPST0003 rather than XPST0017.
-	if isReservedFunctionName(nameTok.Val) {
+	if p.reservedFor(nameTok.Val) {
 		return nil, p.errorf("%q is a reserved name and cannot be called",
 			nameTok.Val)
 	}
@@ -1318,12 +1318,34 @@ func isAbstractType(local string) bool {
 // type position, where the parser reaches them through parseSequenceType or
 // parseKindTest; seeing one where a function call is expected means the
 // expression is malformed.
+// isReservedFunctionName reports whether a name is reserved by the grammar at
+// every version.
 func isReservedFunctionName(name string) bool {
 	switch name {
 	case "attribute", "comment", "document-node", "element", "empty-sequence",
 		"if", "item", "node", "processing-instruction", "schema-attribute",
 		"schema-element", "text", "typeswitch", "namespace-node":
 		return true
+	}
+	return false
+}
+
+// reservedFor reports whether a name is reserved at the parser's version.
+//
+// "function" and "switch" join the list in 3.0, where they introduce an inline
+// function expression and a switch expression. Under 2.0 they are ordinary
+// names: "function()" there is a call to a function nobody declared, which is
+// XPST0017 rather than the XPST0003 a reserved name would give — and the suite
+// asserts both readings.
+func (p *Parser) reservedFor(name string) bool {
+	if isReservedFunctionName(name) {
+		return true
+	}
+	if p.version.atLeast30() {
+		switch name {
+		case "function", "switch":
+			return true
+		}
 	}
 	return false
 }
