@@ -1241,6 +1241,9 @@ func decodeUnparsedText(data []byte, encoding string) (string, error) {
 		if !utf8.ValidString(s) {
 			return "", fmt.Errorf("FOUT1190: not valid UTF-8")
 		}
+		if err := checkXMLChars(s); err != nil {
+			return "", err
+		}
 		return s, nil
 	case "iso-8859-1", "latin1", "latin-1":
 		var sb strings.Builder
@@ -1454,4 +1457,25 @@ func loadAssertFiles(r *Runner, ts *TestSet, a *Assertion) {
 	for i := range a.Children {
 		loadAssertFiles(r, ts, &a.Children[i])
 	}
+}
+
+// checkXMLChars rejects text holding a character XML does not permit.
+//
+// fn:unparsed-text returns a string, and a string in the data model may only
+// hold characters that are legal in XML: a NUL or a stray control character
+// has no representation there. Decoding one is FOUT1200 rather than a silent
+// pass, and the suite asserts that for a file of NUL bytes.
+func checkXMLChars(s string) error {
+	for _, r := range s {
+		switch {
+		case r == 0x9 || r == 0xA || r == 0xD:
+		case r >= 0x20 && r <= 0xD7FF:
+		case r >= 0xE000 && r <= 0xFFFD:
+		case r >= 0x10000 && r <= 0x10FFFF:
+		default:
+			return fmt.Errorf(
+				"FOUT1200: U+%04X is not a character XML permits", r)
+		}
+	}
+	return nil
 }

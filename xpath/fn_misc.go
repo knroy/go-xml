@@ -116,6 +116,27 @@ func registerUnparsedText(l *Library, since Version) {
 		// arguments would succeed", so it is answered by attempting the read
 		// rather than by inspecting the URI. With no resolver it is false,
 		// which is what the refusal tests expect.
+		//
+		// A type error is not one of the outcomes this reports on, though:
+		// the arguments are wrong whichever resource they name, so it is
+		// raised rather than reported as an unavailable resource. $href is
+		// the exception — this function alone declares it xs:string?, and an
+		// empty one is the "no such resource" answer, which is false.
+		if len(args) > 1 {
+			if _, err := argStringRequired(args, 1); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) > 0 {
+			if len(args[0]) == 0 {
+				return boolSeq(false), nil
+			}
+			// Non-empty but of the wrong type is still XPTY0004: only
+			// emptiness is the "no such resource" answer.
+			if _, err := argStringRequired(args, 0); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := unparsedText(ctx, args); err != nil {
 			return boolSeq(false), nil
 		}
@@ -154,6 +175,14 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 	}
 	text, err := ctx.Texts.ResolveText(s, ctx.StaticBaseURI, enc)
 	if err != nil {
+		// A resolver that already named an error code keeps it: a bad
+		// encoding name is FOUT1190 and undecodable content is FOUT1200,
+		// neither of which is a failure to retrieve the resource. Wrapping
+		// everything as FOUT1170 reported "cannot retrieve" for a file that
+		// had been read perfectly well.
+		if hasErrorCode(err) {
+			return "", err
+		}
 		return "", fmt.Errorf("FOUT1170: cannot retrieve %q: %w", s, err)
 	}
 	return text, nil
@@ -188,7 +217,11 @@ func unparsedTextArgs(args []xdm.Sequence) (href, encoding string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if len(args) > 1 && len(args[1]) > 0 {
+	if len(args) > 1 {
+		// $encoding is declared xs:string, not xs:string?, so an empty
+		// sequence is a type error rather than a request for the default.
+		// The default comes from *omitting* the argument, which is the
+		// one-argument form.
 		encoding, err = argStringRequired(args, 1)
 		if err != nil {
 			return "", "", err
@@ -2239,4 +2272,25 @@ func countOptionalDigits(pres string) int {
 		}
 	}
 	return n
+}
+
+// hasErrorCode reports whether an error's message already begins with an XPath
+// error code, which is how a resolver states one.
+func hasErrorCode(err error) bool {
+	msg := err.Error()
+	i := strings.IndexByte(msg, ':')
+	if i < 8 || i > 8 {
+		return false
+	}
+	code := msg[:i]
+	for j, r := range code {
+		if j < 4 {
+			if r < 'A' || r > 'Z' {
+				return false
+			}
+		} else if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
