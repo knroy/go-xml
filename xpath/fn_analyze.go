@@ -81,10 +81,20 @@ func GenerateID(it xdm.Item) string {
 
 // analyzeString builds the fn:analyze-string-result tree.
 func analyzeString(in string, re Regexp) *xdm.Node {
+	// The result element and its descendants are in the fn: namespace, and
+	// the root carries the declaration that binds it. Without the namespace
+	// node the tree serialises with no binding at all, so a comparison
+	// against the expected XML sees a different element.
 	result := &xdm.Node{
 		Kind: xdm.KindElement,
-		Name: xdm.QName{URI: xdm.NSFN, Local: "analyze-string-result"},
+		Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "analyze-string-result"},
 	}
+	result.Namespaces = []*xdm.Node{{
+		Kind:   xdm.KindNamespace,
+		Name:   xdm.QName{Local: "fn"},
+		Value:  xdm.NSFN,
+		Parent: result,
+	}}
 	appendChild := func(parent, child *xdm.Node) {
 		child.Parent = parent
 		parent.Children = append(parent.Children, child)
@@ -98,20 +108,20 @@ func analyzeString(in string, re Regexp) *xdm.Node {
 		// Everything between the previous match and this one is a non-match.
 		if m[0] > last {
 			nm := &xdm.Node{Kind: xdm.KindElement,
-				Name: xdm.QName{URI: xdm.NSFN, Local: "non-match"}}
+				Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}}
 			appendChild(nm, text(in[last:m[0]]))
 			appendChild(result, nm)
 		}
 
 		match := &xdm.Node{Kind: xdm.KindElement,
-			Name: xdm.QName{URI: xdm.NSFN, Local: "match"}}
+			Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "match"}}
 		buildMatch(match, in, m, appendChild, text)
 		appendChild(result, match)
 		last = m[1]
 	}
 	if last < len(in) {
 		nm := &xdm.Node{Kind: xdm.KindElement,
-			Name: xdm.QName{URI: xdm.NSFN, Local: "non-match"}}
+			Name: xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "non-match"}}
 		appendChild(nm, text(in[last:]))
 		appendChild(result, nm)
 	}
@@ -161,7 +171,7 @@ func buildMatch(match *xdm.Node, in string, m []int,
 			appendChild(match, text(in[pos:g.start]))
 		}
 		el := &xdm.Node{Kind: xdm.KindElement,
-			Name:  xdm.QName{URI: xdm.NSFN, Local: "group"},
+			Name:  xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"},
 			Attrs: []*xdm.Node{{Kind: xdm.KindAttribute, Name: xdm.QName{Local: "nr"}, Value: strconv.Itoa(g.nr)}},
 		}
 		el.Attrs[0].Parent = el
@@ -201,7 +211,7 @@ func fillNested(el *xdm.Node, in string, start, end int,
 			appendChild(el, text(in[pos:g.start]))
 		}
 		inner := &xdm.Node{Kind: xdm.KindElement,
-			Name:  xdm.QName{URI: xdm.NSFN, Local: "group"},
+			Name:  xdm.QName{Prefix: "fn", URI: xdm.NSFN, Local: "group"},
 			Attrs: []*xdm.Node{{Kind: xdm.KindAttribute, Name: xdm.QName{Local: "nr"}, Value: strconv.Itoa(g.nr)}},
 		}
 		inner.Attrs[0].Parent = inner

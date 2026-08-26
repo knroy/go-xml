@@ -60,6 +60,50 @@ var (
 // because XSLT 1.0-era habits expect the call form. Implementing them by
 // delegating to CastAtomic keeps one set of casting rules rather than two that
 // can drift.
+// registerListTypes adds the constructors for the built-in list types.
+//
+// A list type's value is a *sequence* of atomic values, one per
+// whitespace-separated token, not a single string that happens to contain
+// spaces: xs:NMTOKENS("a b c") is three items. That is why they cannot go in
+// the table above, which casts one item to one item.
+//
+// The item type is not carried in the result — this engine's type codes have
+// no list types — so each token becomes the atomic type the list is of, which
+// is what every operation on the result then sees.
+func registerListTypes(l *Library) {
+	lists := map[string]xdm.TypeCode{
+		"NMTOKENS": xdm.TypeString,
+		"IDREFS":   xdm.TypeString,
+		"ENTITIES": xdm.TypeString,
+	}
+	for name, code := range lists {
+		target := code
+		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms := xdm.Atomize(args[0])
+			if len(atoms) == 0 {
+				return xdm.Empty(), nil
+			}
+			it, err := atoms.Single()
+			if err != nil {
+				return nil, err
+			}
+			s, err := stringArgValue(it.(*xdm.Atomic), 0)
+			if err != nil {
+				return nil, err
+			}
+			out := xdm.Sequence{}
+			for _, tok := range strings.Fields(s) {
+				v, err := CastAtomic(xdm.NewString(tok), target)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			}
+			return out, nil
+		})
+	}
+}
+
 func registerConstructors(l *Library) {
 	types := map[string]xdm.TypeCode{
 		"string":            xdm.TypeString,
@@ -97,6 +141,7 @@ func registerConstructors(l *Library) {
 	// skip the facets, because those change the value itself.
 	registerStringSubtypes(l)
 	registerIntegerSubtypes(l)
+	registerListTypes(l)
 
 	for name, code := range types {
 		target := code
