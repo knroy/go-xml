@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -164,6 +165,13 @@ func (dt *DateTime) parseDatePart(s string) (string, error) {
 	}
 	y, err := strconv.Atoi(s[:i])
 	if err != nil {
+		// A year too large for an int is an overflow, not a malformed
+		// lexical form: the digits are well written and there are simply too
+		// many of them. FODT0001 is the code for a date value out of range,
+		// where FORG0001 would claim the string was not a date at all.
+		if errors.Is(err, strconv.ErrRange) {
+			return "", Errorf("FODT0001", "year %q is out of range", s[:i])
+		}
 		return "", ErrCast("invalid year: %v", err)
 	}
 	if y == 0 {

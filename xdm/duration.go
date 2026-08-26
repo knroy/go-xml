@@ -87,7 +87,7 @@ func ParseDuration(s string, t TypeCode) (*Duration, error) {
 	// well written. Arithmetic that overflows it is FODT0002, raised where
 	// the overflow happens.
 	if !months.IsInt64() || months.Int64() > math.MaxInt || months.Int64() < math.MinInt {
-		return nil, Errorf("FODT0001",
+		return nil, Errorf("FODT0002",
 			"duration %q overflows the month count", orig)
 	}
 	d.Months = int(months.Int64())
