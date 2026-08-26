@@ -59,7 +59,23 @@ func DefaultDecimalFormat() *DecimalFormat {
 	}
 }
 
+// FormatNumberArg is the lenient reading, in which a value that will not
+// convert becomes NaN. XSLT 1.0 backwards-compatibility mode requires it:
+// format-number('foo', '#') is the NaN symbol there, not an error.
+//
+// FormatNumberArgStrict is the XPath 3.0 reading, where the same value is
+// XPTY0004.
 func FormatNumberArg(args []xdm.Sequence, i int) (*xdm.Atomic, error) {
+	return formatNumberArg(args, i, false)
+}
+
+// FormatNumberArgStrict rejects a first argument that does not match the
+// declared xs:numeric? parameter.
+func FormatNumberArgStrict(args []xdm.Sequence, i int) (*xdm.Atomic, error) {
+	return formatNumberArg(args, i, true)
+}
+
+func formatNumberArg(args []xdm.Sequence, i int, strict bool) (*xdm.Atomic, error) {
 	atoms := xdm.Atomize(args[i])
 	if len(atoms) == 0 {
 		// An empty first argument formats as zero, per the spec's rule that
@@ -75,9 +91,22 @@ func FormatNumberArg(args []xdm.Sequence, i int) (*xdm.Atomic, error) {
 	if a.Type.IsNumeric() {
 		return a, nil
 	}
+	// A value that is not numeric and does not convert to one does not match
+	// the declared xs:numeric? parameter: that is a type error, not a request
+	// to format NaN. An xs:untypedAtomic is the exception — the function
+	// conversion rules do turn one into a double, and a bad lexical form
+	// there really is NaN.
 	conv, err := CastAtomic(a, xdm.TypeDouble)
 	if err != nil {
-		return xdm.NewDouble(math.NaN()), nil
+		// An xs:untypedAtomic really is NaN: the function conversion rules do
+		// turn one into a double, and a bad lexical form there is NaN rather
+		// than a type error. Anything else does not match the declared
+		// xs:numeric? parameter at all.
+		if !strict || a.Type == xdm.TypeUntypedAtomic {
+			return xdm.NewDouble(math.NaN()), nil
+		}
+		return nil, xdm.ErrType(
+			"format-number: expected a number, got %s", a.TypeName())
 	}
 	return conv, nil
 }
@@ -87,7 +116,19 @@ func FormatNumberString(args []xdm.Sequence, i int) (string, error) {
 	if len(atoms) == 0 {
 		return "", nil
 	}
-	return atoms[0].(*xdm.Atomic).String(), nil
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return "", xdm.ErrType("format-number: expected a string")
+	}
+	// The picture is declared xs:string. A number is not one, and the
+	// function conversion rules do not turn it into one, so writing
+	// format-number(931.45, 931.45) is a type error rather than a picture of
+	// "931.45".
+	if !isStringLike(a.Type) {
+		return "", xdm.ErrType(
+			"format-number: the picture must be a string, got %s", a.TypeName())
+	}
+	return a.String(), nil
 }
 
 // picture is a parsed format-number picture string.
@@ -175,12 +216,41 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 
 	// Scaling by percent or per-mille happens before rounding, so
 	// format-number(0.5, '#0%') is "50%" rather than "0%".
-	value := formatRatOf(num)
+	//
+	// The scaling is done in the value's own arithmetic first, because a
+	// double near its maximum overflows to infinity when multiplied — 1e308
+	// as a percentage is Infinity, not the 310-digit integer exact rational
+	// arithmetic would produce. Only a value that stays finite is carried on
+	// as a rational, where the extra precision is what rounding needs.
+	scale := 1.0
 	switch {
 	case p.percent:
-		value = new(big.Rat).Mul(value, big.NewRat(100, 1))
+		scale = 100
 	case p.perMille:
-		value = new(big.Rat).Mul(value, big.NewRat(1000, 1))
+		scale = 1000
+	}
+	if scale != 1 && (num.Type == xdm.TypeDouble || num.Type == xdm.TypeFloat) {
+		if scaled := f * scale; math.IsInf(scaled, 0) {
+			sign := ""
+			if scaled < 0 && !explicitNegative {
+				sign = string(df.MinusSign)
+			}
+			return sign + p.prefix + df.Infinity + p.suffix, nil
+		}
+	}
+	var value *big.Rat
+	if scale != 1 && (num.Type == xdm.TypeDouble || num.Type == xdm.TypeFloat) {
+		// The scaled value is what a double multiplication produces, not the
+		// exact product: format-number(x, '0.0…‰') has to agree with
+		// format-number(x * 1000, '0.0…'), and only doing the arithmetic the
+		// same way makes it. Rounding to the double first and converting
+		// afterwards is what gives the same digits.
+		value = formatRatOf(xdm.NewDouble(f * scale))
+	} else {
+		value = formatRatOf(num)
+		if scale != 1 {
+			value = new(big.Rat).Mul(value, new(big.Rat).SetInt64(int64(scale)))
+		}
 	}
 	if negative {
 		value = new(big.Rat).Abs(value)
@@ -353,6 +423,13 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 				regular = false
 				break
 			}
+		}
+		// The leading group must fit the interval too, or the separators are
+		// stated exhaustively after all: "###,##,00" places them two apart
+		// behind a three-digit group, so 123456789 is "12345,67,89" and not
+		// the "1,23,45,67,89" a repeat every two would give.
+		if regular && intDigitCount(intPart, df) > step*(n+1) {
+			regular = false
 		}
 		if regular {
 			p.grouping = step
@@ -710,7 +787,7 @@ func registerFormatNumber(l *Library) {
 	// resolves, and any other is FODF1280 rather than XPST0017. A host that
 	// does have named formats registers its own over this one.
 	l.registerFnSince(XPath30, "format-number", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		num, err := FormatNumberArg(args, 0)
+		num, err := FormatNumberArgStrict(args, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -734,4 +811,17 @@ func registerFormatNumber(l *Library) {
 		}
 		return strSeq(out), nil
 	})
+}
+
+// intDigitCount counts the digit positions in a sub-picture's integer part,
+// which is the picture's own width for deciding whether a grouping interval
+// repeats.
+func intDigitCount(intPart []rune, df *DecimalFormat) int {
+	n := 0
+	for _, r := range intPart {
+		if r == df.Digit || isDigitOfFamily(r, df.ZeroDigit) {
+			n++
+		}
+	}
+	return n
 }
