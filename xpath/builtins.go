@@ -24,6 +24,7 @@ func Builtins() FunctionLibrary {
 		registerMathFuncs(l)
 		registerSeq30Funcs(l)
 		registerHOFuncs(l)
+		registerFormatNumber(l)
 		registerFormatDateTimeSince(l, XPath30)
 		registerNodeFuncs(l)
 		registerRegexFuncs(l)
