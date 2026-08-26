@@ -47,17 +47,30 @@ func registerAnalyzeString(l *Library) {
 	})
 
 	l.registerFnSince(XPath30, "generate-id", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// The parameter is node()?, so anything that is not a node — an
+		// atomic value, a function item, or more than one item — does not
+		// match the signature and is XPTY0004.
 		if len(args) == 0 {
-			if ctx.Item == nil {
-				return nil, fmt.Errorf("XPDY0002: no context item")
+			n, err := contextNodeArg(ctx)
+			if err != nil {
+				return nil, err
 			}
-			return strSeq(GenerateID(ctx.Item)), nil
+			return strSeq(GenerateID(n)), nil
 		}
 		// An empty argument is the zero-length string rather than an error.
 		if len(args[0]) == 0 {
 			return strSeq(""), nil
 		}
-		return strSeq(GenerateID(args[0][0])), nil
+		it, err := args[0].Single()
+		if err != nil {
+			return nil, err
+		}
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			return nil, xdm.ErrType(
+				"fn:generate-id: expected a node, got %s", it.TypeName())
+		}
+		return strSeq(GenerateID(n)), nil
 	})
 }
 

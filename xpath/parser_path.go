@@ -202,21 +202,16 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 		// A bare "." is the context *item*, not the step "self::node()".
 		// The distinction matters because the context item may be an atomic
 		// value — inside xsl:analyze-string or a for-expression over strings —
-		// and a step would reject it as "not a node". Only when predicates
-		// follow does it become a step, since predicates imply node selection.
-		p.pos++
-		preds, err := p.parsePredicates()
-		if err != nil {
-			return nil, false, err
-		}
-		if len(preds) == 0 {
-			// Rewind and let parsePrimary produce a ContextItem.
-			p.pos = start
-			return nil, false, nil
-		}
-		step.Axis, step.Test = AxisSelf, &KindTest{Any: true}
-		step.Predicates = preds
-		return step, true, nil
+		// and a step would reject it as "not a node".
+		//
+		// Predicates do not change that. ".[...]" is a filter expression over
+		// the context item, which parsePostfix builds once parsePrimary has
+		// produced the ContextItem; treating it as a step here made "(1, 2) !
+		// .[.]" fail as an axis step applied to an integer. Filtering an
+		// atomic value is perfectly ordinary — that is what "(1, 2)[.]" is —
+		// and the two spellings must agree.
+		p.pos = start
+		return nil, false, nil
 
 	case p.peekIs(TokOp, ".."):
 		p.pos++

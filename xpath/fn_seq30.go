@@ -39,7 +39,10 @@ func registerSeq30Funcs(l *Library) {
 	l.registerFnSince(XPath30, "has-children", []int{0, 1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var n *xdm.Node
 		if len(args) == 0 {
-			node, err := ctx.ContextNode()
+			// contextNodeArg rather than ContextNode: this is a function
+			// argument defaulting to the context item, not an axis step, so a
+			// non-node focus is XPTY0004 and not XPTY0020.
+			node, err := contextNodeArg(ctx)
 			if err != nil {
 				return nil, err
 			}
