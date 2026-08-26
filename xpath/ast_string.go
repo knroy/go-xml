@@ -391,6 +391,14 @@ func (e *ForExpr) String() string {
 	return "for " + bindingsString(e.Bindings) + " return " + e.Return.String()
 }
 
+func (e *LetExpr) String() string {
+	var parts []string
+	for _, b := range e.Bindings {
+		parts = append(parts, "$"+b.Var.Lexical()+" := "+b.Seq.String())
+	}
+	return "let " + strings.Join(parts, ", ") + " return " + e.Return.String()
+}
+
 func bindingsString(bs []Binding) string {
 	var parts []string
 	for _, b := range bs {

@@ -360,6 +360,32 @@ func (e *ForExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	return evalFor(sub, e.Bindings, e.Return)
 }
 
+// Eval implements Expr.
+//
+// Each binding is evaluated in the scope of the ones before it and bound
+// whole, so the body runs exactly once however many items a binding holds.
+// That single evaluation is the difference from ForExpr, not the keyword.
+func (e *LetExpr) Eval(ctx *Context) (xdm.Sequence, error) {
+	sub, err := ctx.Descend()
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range e.Bindings {
+		if err := sub.Err(); err != nil {
+			return nil, err
+		}
+		v, err := b.Seq.Eval(sub)
+		if err != nil {
+			return nil, err
+		}
+		if err := sub.countItems(len(v)); err != nil {
+			return nil, err
+		}
+		sub = sub.WithVar(b.Var, v)
+	}
+	return e.Return.Eval(sub)
+}
+
 func evalFor(ctx *Context, bindings []Binding, body Expr) (xdm.Sequence, error) {
 	if len(bindings) == 0 {
 		return body.Eval(ctx)

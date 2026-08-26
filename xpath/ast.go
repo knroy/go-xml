@@ -251,10 +251,22 @@ type ForExpr struct {
 	Return   Expr
 }
 
-// Binding is one "$var in expr" clause of a for or quantified expression.
+// Binding is one "$var in expr" clause of a for or quantified expression, or
+// one "$var := expr" clause of a let expression.
 type Binding struct {
 	Var xdm.QName
 	Seq Expr
+}
+
+// LetExpr is "let $x := expr return expr", added in XPath 3.0.
+//
+// It is not a ForExpr with a different keyword. "for" iterates, binding its
+// variable to one item at a time and concatenating the results; "let" binds
+// the whole sequence once and evaluates its body once. "let $x := (1, 2)
+// return count($x)" is 2, where the corresponding "for" is (1, 1).
+type LetExpr struct {
+	Bindings []Binding
+	Return   Expr
 }
 
 // FuncCall is a function call. Resolution happens at evaluation time against

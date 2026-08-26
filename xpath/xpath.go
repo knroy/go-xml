@@ -31,6 +31,11 @@ type Compiled struct {
 	// ns is the namespace resolver src was parsed with, kept so that
 	// WithCompatMode can re-parse. See there for why re-parsing is necessary.
 	ns NamespaceResolver
+	// version is the language version src was parsed in. It is static for the
+	// same reason the base URI is — it is a property of where the expression
+	// was written — and it is applied to the context at evaluation so that
+	// the function library sees the same version the parser did.
+	version Version
 }
 
 // WithDefaultCollation returns a copy of c whose functions use coll when no
@@ -62,14 +67,24 @@ func (c *Compiled) WithStaticBaseURI(base string) *Compiled {
 
 // Compile parses src, resolving namespace prefixes with ns.
 func Compile(src string, ns NamespaceResolver) (*Compiled, error) {
-	e, err := Parse(src, ns)
+	return CompileVersion(src, ns, XPath20)
+}
+
+// CompileVersion is Compile for a given version of the language.
+//
+// Compile remains the 2.0 spelling so that an existing caller keeps the
+// behaviour it had; a 3.0 host calls this instead. The version is recorded on
+// the result, so evaluating it does not require the caller to set it on the
+// context as well.
+func CompileVersion(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
+	e, err := ParseVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}
 	// Optimisation happens once per compiled expression, and a compiled
 	// stylesheet is reused across every node and every document, so anything
 	// folded here is work removed from the inner loop rather than deferred.
-	return &Compiled{expr: optimize(e), src: src, ns: ns}, nil
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
 }
 
 // MustCompile is Compile, panicking on error. For tests and for expressions
@@ -102,11 +117,17 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	// fit in memory at once.
 	ctx.resetItems()
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
-		c.staticCollation != nil || c.compat != ctx.Compat {
+		c.staticCollation != nil || c.compat != ctx.Compat ||
+		c.version != ctx.Version {
 		sub := *ctx
 		if c.staticBase != "" {
 			sub.StaticBaseURI = c.staticBase
 		}
+		// The version the expression was compiled in is what its function
+		// calls resolve against, whatever the caller's context says: an
+		// expression that parsed as 3.0 must not then be evaluated against a
+		// 2.0 function library.
+		sub.Version = c.version
 		if c.staticCollation != nil {
 			sub.collation = c.staticCollation
 		}
@@ -152,7 +173,14 @@ func (c *Compiled) EvalBool(ctx *Context) (bool, error) {
 // Eval is a one-shot compile-and-evaluate, for callers that will not reuse the
 // expression.
 func Eval(src string, ctx *Context, ns NamespaceResolver) (xdm.Sequence, error) {
-	c, err := Compile(src, ns)
+	// The context's version decides how the expression is compiled as well as
+	// how it evaluates: a caller that set ctx.Version = XPath30 means the
+	// whole language, not just the function library.
+	v := XPath20
+	if ctx != nil {
+		v = ctx.Version
+	}
+	c, err := CompileVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}

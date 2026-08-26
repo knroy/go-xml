@@ -36,6 +36,9 @@ type Parser struct {
 	// depth counts nested expressions, so that a deeply nested one is a
 	// static error rather than a crash. See maxParseDepth.
 	depth int
+	// version is the language version being parsed. It gates the constructs
+	// 3.0 adds to the grammar, which a 2.0 processor must not accept.
+	version Version
 }
 
 // maxParseDepth bounds expression nesting.
@@ -59,7 +62,14 @@ const maxParseDepth = 1000
 
 // Parse compiles an XPath 2.0 expression.
 func Parse(src string, ns NamespaceResolver) (Expr, error) {
-	return parse(src, ns, false)
+	return parse(src, ns, false, XPath20)
+}
+
+// ParseVersion compiles an expression in the given version of the language.
+//
+// Parse remains the 2.0 spelling, so an existing caller is unaffected.
+func ParseVersion(src string, ns NamespaceResolver, v Version) (Expr, error) {
+	return parse(src, ns, false, v)
 }
 
 // ParseExtended compiles an expression in which the XPath 3.0 braced URI
@@ -74,10 +84,10 @@ func Parse(src string, ns NamespaceResolver) (Expr, error) {
 // The simple map operator "!" used to be gated here too. It is now accepted
 // unconditionally, along with "||" and "=>": see Lexer.extended.
 func ParseExtended(src string, ns NamespaceResolver) (Expr, error) {
-	return parse(src, ns, true)
+	return parse(src, ns, true, XPath20)
 }
 
-func parse(src string, ns NamespaceResolver, extended bool) (Expr, error) {
+func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
@@ -92,7 +102,7 @@ func parse(src string, ns NamespaceResolver, extended bool) (Expr, error) {
 	if len(lex.bracedURIs) > 0 {
 		ns = wrapBraced(ns, lex.bracedURIs)
 	}
-	p := &Parser{toks: toks, src: src, ns: ns}
+	p := &Parser{toks: toks, src: src, ns: ns, version: v}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -334,6 +344,14 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 		switch t.Val {
 		case "for":
 			return p.parseFor()
+		case "let":
+			// "let" is only the let expression under 3.0 and when followed by
+			// a variable; otherwise it is an element name, as in "let/x".
+			// XPath has no reserved words, so every keyword needs this test.
+			if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
+				p.toks[p.pos+1].Kind == TokVar {
+				return p.parseLet()
+			}
 		case "some", "every":
 			return p.parseQuantified()
 		case "if":
@@ -362,6 +380,59 @@ func (p *Parser) parseFor() (Expr, error) {
 		return nil, err
 	}
 	return &ForExpr{Bindings: bindings, Return: body}, nil
+}
+
+// parseLet parses "let $x := expr, $y := expr return expr".
+//
+// The bindings are sequential: a later one sees the variables bound by the
+// earlier ones, which is why evaluation nests the scopes rather than binding
+// them all into one.
+func (p *Parser) parseLet() (Expr, error) {
+	p.pos++ // "let"
+	bindings, err := p.parseLetBindings()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectKeyword("return"); err != nil {
+		return nil, err
+	}
+	body, err := p.parseExprSingle()
+	if err != nil {
+		return nil, err
+	}
+	return &LetExpr{Bindings: bindings, Return: body}, nil
+}
+
+// parseLetBindings parses "$v := expr" clauses separated by commas.
+//
+// Separate from parseBindings because the separator differs: "in" for a for
+// or quantified expression, ":=" here.
+func (p *Parser) parseLetBindings() ([]Binding, error) {
+	var out []Binding
+	for {
+		if p.cur().Kind != TokVar {
+			return nil, p.errorf("expected a variable")
+		}
+		name, err := p.resolveVarName(p.cur().Val)
+		if err != nil {
+			return nil, err
+		}
+		p.pos++
+		if p.cur().Kind != TokOp || p.cur().Val != ":=" {
+			return nil, p.errorf("expected ':=' after $%s", name.Local)
+		}
+		p.pos++
+		seq, err := p.parseExprSingle()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Binding{Var: name, Seq: seq})
+		if p.cur().Kind == TokOp && p.cur().Val == "," {
+			p.pos++
+			continue
+		}
+		return out, nil
+	}
 }
 
 func (p *Parser) parseQuantified() (Expr, error) {

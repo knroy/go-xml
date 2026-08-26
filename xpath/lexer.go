@@ -242,7 +242,11 @@ func (l *Lexer) next() (Token, error) {
 	// "!=" lexes as "!" followed by "=".
 	// "||" must be matched before the single-character "|" below, or the
 	// string concatenation operator lexes as two empty unions.
-	for _, op := range []string{"!=", "<=", ">=", "<<", ">>", "//", "::", "||", "=>"} {
+	// ":=" is the let expression's binding operator. It cannot collide with
+	// "::" — the second character differs — but it must be matched here
+	// rather than falling through to the single-character switch, which has
+	// no case for ":" at all.
+	for _, op := range []string{"!=", "<=", ">=", "<<", ">>", "//", "::", ":=", "||", "=>"} {
 		if strings.HasPrefix(l.src[l.pos:], op) {
 			l.pos += len(op)
 			l.prevOperand = false
@@ -439,9 +443,13 @@ func (l *Lexer) lexQName() (string, error) {
 		return "", err
 	}
 	// A single ':' means a QName; '::' is the axis separator and must not be
-	// consumed here.
+	// consumed here. Neither is ':=', the let expression's binding operator:
+	// "let $x:=1" writes the variable and the operator with no space between
+	// them, and consuming the colon would read the name as the prefix "x" of
+	// a QName whose local part is "=1".
 	if l.pos < len(l.src) && l.src[l.pos] == ':' &&
-		!strings.HasPrefix(l.src[l.pos:], "::") {
+		!strings.HasPrefix(l.src[l.pos:], "::") &&
+		!strings.HasPrefix(l.src[l.pos:], ":=") {
 		l.pos++
 		if l.pos < len(l.src) && l.src[l.pos] == '*' {
 			return first + ":", nil // caller consumes the '*'
