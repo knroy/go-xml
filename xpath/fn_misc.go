@@ -818,6 +818,14 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 			pres = pres[:len(pres)-1]
 		}
 	}
+	// Whitespace inside a digit pattern is not a grouping separator, it is
+	// nothing at all: the specification says a picture's whitespace is
+	// ignored, so "[Y#0 <newline>00            0]" is the six-position
+	// pattern "#00000". Leaving it in made every run of spaces a separator
+	// and the pattern's width wrong with it.
+	if containsDigit(pres) {
+		pres = strings.Join(strings.Fields(pres), "")
+	}
 	if pres == "" {
 		pres = defaultPresentation(comp)
 	}
@@ -849,8 +857,14 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		// The truncation applies to any numeric presentation, not only a
 		// pattern of bare digits: "[Y#0,2-5]" is still a decimal pattern, and
 		// requiring isDigitPattern left its optional-digit form untruncated.
+		// A numbering sequence counts as numeric here even though it writes no
+		// digits: "[Yi,3-3]" truncates the year to three decimal digits and
+		// then spells *that* in Roman numerals, so 1038 is "xxxviii" and not
+		// "mxxxviii". Requiring a digit in the picture skipped the truncation
+		// for every such sequence. A name presentation is still excluded —
+		// there is no year to truncate when the component is spelled out.
 		if max := effectiveMaxWidth(pres, width); max > 0 && max < 18 &&
-			!isNamePresentation(pres) && containsDigit(pres) {
+			!isNamePresentation(pres) && !isSpelledPresentation(pres) {
 			mod := int64(1)
 			for i := 0; i < max; i++ {
 				mod *= 10
@@ -1036,9 +1050,9 @@ func minWidth(width string) int {
 func padNumber(n int64, pres, width string, ordinal bool) string {
 	switch pres {
 	case "i":
-		return strings.ToLower(romanNum(n))
+		return padSequence(strings.ToLower(romanNum(n)), width)
 	case "I":
-		return romanNum(n)
+		return padSequence(romanNum(n), width)
 	case "w", "W", "Ww":
 		return spellDateNumber(n, pres, ordinal)
 	case "a", "A":
@@ -1072,9 +1086,9 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 	} else {
 		s = strconv.FormatInt(n, 10)
 	}
-	if ordinal {
-		s += ordinalSuffixFor(n)
-	}
+	// The width constrains the digits, not the ordinal suffix: "[Y0001o]" on
+	// 1990 is "1990th", and appending the suffix first made the maximum cut
+	// four characters off the end of that and leave "90th".
 	if min := minWidth(width); min > len([]rune(s)) {
 		// Decimal representations are padded with leading zeroes; the digits
 		// already there stay where they are.
@@ -1086,6 +1100,9 @@ func padNumber(n int64, pres, width string, ordinal bool) string {
 	}
 	if digits {
 		s = inDigitFamily(s, zero)
+	}
+	if ordinal {
+		s += ordinalSuffixFor(n)
 	}
 	return s
 }
@@ -1106,8 +1123,15 @@ func effectiveMaxWidth(pres, width string) int {
 	// separator between them, so 2016 shows as "1.6". digitFamilyOf admits
 	// only bare digits, so the pattern is measured through the digit-pattern
 	// grammar before falling back to it.
-	if _, mandatory, groups, err := parseDigitPattern(pres); err == nil && len(groups) > 0 {
-		return mandatory + countOptionalDigits(pres)
+	// Any digit pattern states a width, whether or not it carries separators:
+	// "#00000" is six positions, so year 654321 shows as "54321" — five
+	// mandatory digits with the sixth optional. digitFamilyOf admits only
+	// bare digits, so the pattern is measured through the digit-pattern
+	// grammar first and falls back to it.
+	if _, mandatory, groups, err := parseDigitPattern(pres); err == nil {
+		if optional := countOptionalDigits(pres); optional > 0 || len(groups) > 0 {
+			return mandatory + optional
+		}
 	}
 	zero, ok := digitFamilyOf(pres)
 	if !ok {
@@ -1642,6 +1666,17 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 		if tzHourDigits(pres) == 1 && pres != "1" {
 			return prefix + sign + translateDigits(fmt.Sprintf("%d%s%02d", hours, sep, mins), zero)
 		}
+		// A picture that merges the two fields states the width of the whole
+		// thing rather than of the hours: "[Z999]" is three positions, so
+		// -9:30 is "-930" and only -14:00 needs the fourth. Padding the hours
+		// to two first produced "-0930".
+		if sep == "" {
+			joined := fmt.Sprintf("%d%02d", hours, mins)
+			if min := tzHourDigits(pres); min > len(joined) {
+				joined = strings.Repeat("0", min-len(joined)) + joined
+			}
+			return prefix + sign + translateDigits(joined, zero)
+		}
 		return prefix + sign + translateDigits(fmt.Sprintf("%02d%s%02d", hours, sep, mins), zero)
 	}
 	hs := strconv.FormatInt(int64(hours), 10)
@@ -1731,6 +1766,13 @@ func tzPictureShape(pres string) (sep string, zero rune) {
 			return sep, zero
 		}
 	}
+	// An unbroken run of three or more digits asks for hours and minutes in
+	// one field, so nothing separates them: "[Z999]" gives "-1400" and
+	// "-930". One or two digits still describe the hours alone and keep the
+	// default ":" for the minutes that follow — "[Z99]" is "-14:00".
+	if start >= 0 && len(runes)-start >= 3 {
+		return "", zero
+	}
 	return sep, zero
 }
 
@@ -1816,6 +1858,17 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 
 // isNamePresentation reports whether a modifier asks for a name rather than a
 // number. "N", "n" and "Nn" are the three spellings.
+// isSpelledPresentation reports whether the component is written as words
+// rather than as a number: "w" is one thousand and thirty-eight, and there is
+// no digit position in it for a width to keep.
+func isSpelledPresentation(pres string) bool {
+	switch pres {
+	case "w", "W", "Ww":
+		return true
+	}
+	return false
+}
+
 func isNamePresentation(pres string) bool {
 	switch pres {
 	case "N", "n", "Nn":
@@ -2431,4 +2484,20 @@ func checkNamespaceWellFormed(n *xdm.Node, fn string) error {
 		}
 	}
 	return nil
+}
+
+// padSequence applies a width modifier's minimum to a value written in a
+// numbering sequence rather than in digits.
+//
+// The padding is on the right and with spaces: there is no leading zero to add
+// to a Roman numeral, and "[Yi,3-3]" on year 1004 is "iv " — the suite writes
+// that trailing space out in format-dateTime-006. A value already at or past
+// the minimum is returned unchanged; the maximum is not applied here, since
+// truncating a numeral would produce a different number rather than a shorter
+// rendering of the same one.
+func padSequence(s, width string) string {
+	if min := minWidth(width); min > len([]rune(s)) {
+		return s + strings.Repeat(" ", min-len([]rune(s)))
+	}
+	return s
 }
