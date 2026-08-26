@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -74,6 +75,12 @@ func parseGYear(s string, dt *DateTime) (string, error) {
 	}
 	y, err := strconv.Atoi(s[:i])
 	if err != nil {
+		// A year too large for an int is an overflow, not a malformed lexical
+		// form: the digits are well written and there are simply too many of
+		// them. See parseDatePart, which draws the same distinction.
+		if errors.Is(err, strconv.ErrRange) {
+			return "", Errorf("FODT0001", "year %q is out of range", s[:i])
+		}
 		return "", ErrCast("invalid xs:gYear: %v", err)
 	}
 	// Year 0000 is legal in XSD 1.1 — it denotes 1 BCE — where 1.0 excluded
@@ -89,6 +96,14 @@ func parseGYear(s string, dt *DateTime) (string, error) {
 func parseGYearMonth(s string, dt *DateTime) (string, error) {
 	rest, err := parseGYear(s, dt)
 	if err != nil {
+		// An out-of-range year is an overflow rather than a malformed form,
+		// so its code is kept — but only once the rest of the string is known
+		// to be well formed. "…-XX" is not a gYearMonth at all, and a value
+		// that is not of the type cannot overflow it: that case stays
+		// FORG0001 however large the year is.
+		if isOverflow(err) && monthSuffixWellFormed(yearSuffix(s)) {
+			return "", err
+		}
 		return "", ErrCast("invalid xs:gYearMonth: %v", err)
 	}
 	if len(rest) < 3 || rest[0] != '-' {
@@ -190,4 +205,36 @@ func IsGregorian(t TypeCode) bool {
 		return true
 	}
 	return false
+}
+
+// yearSuffix returns what follows the leading (optionally signed) run of
+// digits, which is where a Gregorian type's remaining fields begin.
+func yearSuffix(s string) string {
+	i := 0
+	if i < len(s) && (s[i] == '-' || s[i] == '+') {
+		i++
+	}
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[i:]
+}
+
+// monthSuffixWellFormed reports whether s is the "-MM" (with optional
+// timezone) that must follow the year of an xs:gYearMonth.
+func monthSuffixWellFormed(s string) bool {
+	if len(s) < 3 || s[0] != '-' {
+		return false
+	}
+	if s[1] < '0' || s[1] > '9' || s[2] < '0' || s[2] > '9' {
+		return false
+	}
+	m := int(s[1]-'0')*10 + int(s[2]-'0')
+	return m >= 1 && m <= 12
+}
+
+// isOverflow reports whether err is the out-of-range code rather than a
+// malformed-lexical-form one.
+func isOverflow(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "FODT0001")
 }

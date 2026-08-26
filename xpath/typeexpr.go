@@ -244,8 +244,14 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// casts to xs:QName whatever expression produced it, since it carries its
 	// own namespace binding and needs nothing from the static context.
 	// K-SeqExprCastable-18 is `QName("", "lname") castable as xs:QName`.
+	//
+	// XPath 3.0 lifts the restriction: section 19.1 makes the cast defined
+	// from any xs:string or xs:untypedAtomic, resolving the prefix against
+	// the statically known namespaces of the expression rather than of the
+	// literal. So the rule below applies to a 2.0 expression only.
 	srcIsQName := atoms[0].(*xdm.Atomic).Type == xdm.TypeQName
-	if e.Type.AtomicType == xdm.TypeQName && !srcIsQName && !isLiteralOperand(e.Operand) {
+	if !ctx.Version.atLeast30() &&
+		e.Type.AtomicType == xdm.TypeQName && !srcIsQName && !isLiteralOperand(e.Operand) {
 		if e.Castable {
 			return xdm.One(xdm.NewBoolean(false)), nil
 		}
@@ -253,7 +259,18 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			"cast: only a literal string is castable to xs:QName")
 	}
 
-	out, err := CastToDerived(atoms[0].(*xdm.Atomic), e.Type.AtomicType, e.Type.FacetName)
+	src := atoms[0].(*xdm.Atomic)
+	// XPath 3.0 admits xs:untypedAtomic as a source for a cast to xs:QName,
+	// where 2.0 forbade it outright. The value is a lexical form either way,
+	// so it is handed on as an xs:string: that keeps the one place that knows
+	// the version here, rather than threading it through the cast tables. A
+	// malformed name then fails as a bad lexical form (FORG0001) instead of
+	// as a conversion that does not exist (XPTY0004).
+	if ctx.Version.atLeast30() && e.Type.AtomicType == xdm.TypeQName &&
+		src.Type == xdm.TypeUntypedAtomic {
+		src = xdm.NewString(src.String())
+	}
+	out, err := CastToDerived(src, e.Type.AtomicType, e.Type.FacetName)
 	if err == nil && e.Type.SchemaValueValid != nil {
 		// The built-in cast succeeded, which settles the lexical form. The
 		// schema type's own facets — a range, a pattern, an enumeration —
@@ -263,7 +280,7 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// The *source* lexical form is checked rather than the cast result,
 		// because a facet such as a pattern constrains the lexical space and
 		// the cast may have canonicalised it away.
-		if verr := e.Type.SchemaValueValid(atoms[0].(*xdm.Atomic).String()); verr != nil {
+		if verr := e.Type.SchemaValueValid(src.String()); verr != nil {
 			err = verr
 			out = nil
 		}

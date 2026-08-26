@@ -96,13 +96,26 @@ func registerQNameFuncs(l *Library) {
 	})
 
 	qnamePart := func(name string, get func(xdm.QName) (xdm.Item, bool)) {
-		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		l.registerFn(name, []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
 			}
 			a, ok := atoms[0].(*xdm.Atomic)
 			if !ok || a.QName() == nil {
+				// An untypedAtomic argument gets its own code. A node
+				// atomizes to untypedAtomic, which the function conversion
+				// rules will not turn into an xs:QName — casting one would
+				// need the in-scope namespaces of the expression rather than
+				// of the node — so the spec marks that case XPTY0117 rather
+				// than the general type error.
+				// XPath 3.0 gives this case a code of its own; 2.0 has no
+				// such code and reports the general type error. The suite
+				// asserts both, in cases that differ only by version.
+				if ok && a.Type == xdm.TypeUntypedAtomic && ctx.Version.atLeast30() {
+					return nil, xdm.Errorf("XPTY0117",
+						"%s: an untyped node cannot be converted to an xs:QName", name)
+				}
 				return nil, xdm.ErrType("%s: expected an xs:QName", name)
 			}
 			v, present := get(*a.QName())
