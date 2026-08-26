@@ -67,7 +67,13 @@ func functionItemFor(name xdm.QName, arity int,
 // written is the one the body is evaluated in — not the one in scope wherever
 // the function is eventually called.
 func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
-	captured := ctx
+	// The focus is *not* captured. Section 3.1.7: an inline function's body
+	// has no context item, position or size, so "." inside one is XPDY0002
+	// even where the expression that wrote it had a focus. Variables are
+	// captured; the focus is deliberately dropped.
+	noFocus := *ctx
+	noFocus.Item, noFocus.Position, noFocus.Size = nil, 0, 0
+	captured := &noFocus
 	item := &xdm.FunctionItem{
 		// No name: fn:function-name returns the empty sequence for an inline
 		// function, which is what the zero QName means here.
