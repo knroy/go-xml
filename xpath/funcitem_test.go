@@ -191,8 +191,9 @@ func TestFunctionLookup(t *testing.T) {
 	if got := eval30(t, missing, nil); len(got) != 0 {
 		t.Errorf("function-lookup of an unknown name returned %d items, want 0", len(got))
 	}
-	// The wrong arity is equally absent.
-	const wrongArity = `function-lookup(QName("http://www.w3.org/2005/xpath-functions", "concat"), 99)`
+	// The wrong arity is equally absent. fn:concat is variadic and registered
+	// up to 100, so the arity chosen here has to be one no function has.
+	const wrongArity = `function-lookup(QName("http://www.w3.org/2005/xpath-functions", "substring"), 99)`
 	if got := eval30(t, wrongArity, nil); len(got) != 0 {
 		t.Errorf("function-lookup at a bad arity returned %d items, want 0", len(got))
 	}
