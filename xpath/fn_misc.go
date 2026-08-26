@@ -1686,11 +1686,20 @@ func pictureUsesNames(pic string) bool {
 // elsewhere. Registering into a chained Library keeps the two populations
 // separate in the same way RegisterXSLTFuncs does for the XSLT-only functions.
 func RegisterHarnessFuncs(l *Library) {
+	// fn:parse-xml and fn:parse-xml-fragment are XPath 3.0 functions, so the
+	// builtin library has them marked Since XPath30. The harness registers
+	// them unversioned because it writes its own assertions in the 3.0
+	// language while the subject may be 2.0.
+	registerParseXML(l, XPath20)
+}
+
+// registerParseXML adds fn:parse-xml and fn:parse-xml-fragment.
+func registerParseXML(l *Library, since Version) {
 	// fn:parse-xml builds a document node from a string of XML. The result is
 	// a document, not the element: the spec returns document-node(), and the
 	// callers that matter (an environment's initial context item) navigate
 	// from the root.
-	l.registerFn("parse-xml", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(since, "parse-xml", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The parameter is xs:string?, so an empty sequence is the empty
 		// sequence rather than a parse of "".
 		if len(args) > 0 && len(args[0]) == 0 {
@@ -1715,4 +1724,68 @@ func RegisterHarnessFuncs(l *Library) {
 		}
 		return xdm.One(tree.Root), nil
 	})
+
+	// fn:parse-xml-fragment parses an external general parsed entity: a
+	// sequence of top-level nodes rather than one document element. The
+	// result is still a document node, but its children may be several
+	// elements, or none.
+	//
+	// It is implemented by wrapping the fragment in a synthetic element and
+	// lifting that element's children out, which is what makes a fragment
+	// with two top-level elements parse at all.
+	l.registerFnSince(since, "parse-xml-fragment", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		if len(args) > 0 && len(args[0]) == 0 {
+			return xdm.Empty(), nil
+		}
+		s, err := argStringRequired(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		frag, perr := parseXMLFragment(s, ctx.StaticBaseURI)
+		if perr != nil {
+			return nil, perr
+		}
+		return xdm.One(frag), nil
+	})
+}
+
+// parseXMLFragment parses a string as an external general parsed entity.
+//
+// The declaration, if any, is an XML *text* declaration rather than an XML
+// declaration: it is stripped before wrapping, since it may not appear inside
+// an element.
+func parseXMLFragment(s, base string) (*xdm.Node, error) {
+	body := s
+	if strings.HasPrefix(strings.TrimLeft(body, " \t\r\n"), "<?xml") {
+		trimmed := strings.TrimLeft(body, " \t\r\n")
+		if end := strings.Index(trimmed, "?>"); end >= 0 {
+			body = trimmed[end+2:]
+		}
+	}
+	tree, err := xdm.ParseString("<\x01frag>"+body+"</\x01frag>", xdm.ParseOptions{
+		AllowDOCTYPE: true,
+		BaseURI:      base,
+	})
+	if err != nil {
+		return nil, xdm.Errorf("FODC0006",
+			"fn:parse-xml-fragment: argument is not a well-formed XML fragment: %v", err)
+	}
+	// Lift the wrapper's children onto the document node, so the result is a
+	// document whose children are the fragment's top-level nodes.
+	root := tree.Root
+	var wrapper *xdm.Node
+	for _, c := range root.Children {
+		if c.Kind == xdm.KindElement {
+			wrapper = c
+			break
+		}
+	}
+	if wrapper == nil {
+		return root, nil
+	}
+	root.Children = wrapper.Children
+	for _, c := range root.Children {
+		c.Parent = root
+	}
+	return root, nil
 }

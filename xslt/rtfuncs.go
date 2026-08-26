@@ -3,7 +3,6 @@ package xslt
 import (
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -543,11 +542,11 @@ var supportedInstructions = map[string]bool{
 // pointer-derived value it is reproducible across runs, which keeps output
 // diffable.
 func generateID(it xdm.Item) (xdm.Sequence, error) {
-	n, ok := it.(*xdm.Node)
-	if !ok {
-		return xdm.One(xdm.NewString("")), nil
-	}
-	return xdm.One(xdm.NewString("N" + strconv.Itoa(n.Order()))), nil
+	// Shared with the XPath 3.0 fn:generate-id rather than duplicated: two
+	// spellings of the same identity would let generate-id() answer
+	// differently for the same node depending on whether it was called from a
+	// stylesheet or from a bare expression.
+	return xdm.One(xdm.NewString(xpath.GenerateID(it))), nil
 }
 
 // fnKey implements fn:key.
