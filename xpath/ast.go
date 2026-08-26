@@ -334,6 +334,17 @@ type SequenceType struct {
 	// AtomicType names an atomic type when the item type is one.
 	AtomicType    xdm.TypeCode
 	HasAtomicType bool
+	// IsFunctionTest marks a function(*) or function(...) as ... item type,
+	// which matches a function item. A typed test additionally fixes the
+	// arity; the parameter and return types are parsed but not recorded,
+	// since a function item carries its arity and not its signature.
+	IsFunctionTest   bool
+	FunctionArity    int
+	HasFunctionArity bool
+	// IsErrorType marks xs:error, the empty type. Nothing is an instance of
+	// it, so it matches only the empty sequence — and only then because the
+	// occurrence indicator permits it, never because an item conformed.
+	IsErrorType bool
 	// FacetName is the derived type actually written, when it differs from
 	// AtomicType — "byte" for xs:byte, which is an xs:integer with a range.
 	// The code alone cannot express the bound, and dropping it made

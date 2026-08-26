@@ -959,6 +959,18 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		return st, nil
 	}
 
+	// A function test, productions [90]-[92]: "function(*)" matches any
+	// function item, and "function(T, ...) as T" a function of that signature.
+	// It is checked before the kind tests so that "function(" is never read as
+	// a call to a function named "function".
+	if p.version.atLeast30() && t.Kind == TokName && t.Val == "function" &&
+		p.pos+1 < len(p.toks) && p.toks[p.pos+1].Val == "(" {
+		if err := p.parseFunctionTest(&st); err != nil {
+			return st, err
+		}
+		return p.finishOccurrence(st)
+	}
+
 	if t.Kind == TokName && isKindTestName(t.Val) &&
 		p.pos+1 < len(p.toks) && p.toks[p.pos+1].Val == "(" {
 		if t.Val == "item" {
@@ -983,6 +995,13 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		}
 	} else if t.Kind == TokName {
 		p.pos++
+		// xs:error is the empty type: it has no instances, so nothing is an
+		// instance of it and every cast to it fails. It is not an atomic type
+		// code because there is no value it could ever hold.
+		if isErrorTypeName(t.Val, p.ns) {
+			st.IsErrorType = true
+			return p.finishOccurrence(st)
+		}
 		code, ok := atomicTypeByName(t.Val, p.ns)
 		if !ok {
 			// An unbound prefix and an unknown local name are different
@@ -1062,8 +1081,96 @@ occurrence:
 	return st, nil
 }
 
+// parseFunctionTest parses productions [90]-[92].
+//
+// "function(*)" is AnyFunctionTest and matches any function item.
+// "function(T, ...) as T" is TypedFunctionTest. The parameter and return types
+// are parsed and discarded: this engine records a function item's arity but
+// not its signature, so a typed test is matched as the any-function test plus
+// an arity check. Parsing them is still necessary — an expression that writes
+// one must not be a syntax error — and skipping them would leave the tokens
+// for the next production to trip over.
+func (p *Parser) parseFunctionTest(st *SequenceType) error {
+	p.pos++ // "function"
+	if err := p.expectOp("("); err != nil {
+		return err
+	}
+	st.IsFunctionTest = true
+
+	// AnyFunctionTest: the "*" arrives as a wildcard token, since no operand
+	// precedes it.
+	if p.cur().Kind == TokWildcard && p.cur().Val == "*" {
+		p.pos++
+		if err := p.expectOp(")"); err != nil {
+			return err
+		}
+		return nil
+	}
+	if p.cur().Kind == TokOp && p.cur().Val == "*" {
+		p.pos++
+		if err := p.expectOp(")"); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// TypedFunctionTest: zero or more parameter types, then a required "as".
+	arity := 0
+	if !p.peekIs(TokOp, ")") {
+		for {
+			if _, err := p.parseSequenceType(); err != nil {
+				return err
+			}
+			arity++
+			if _, ok := p.acceptOp(","); !ok {
+				break
+			}
+		}
+	}
+	if err := p.expectOp(")"); err != nil {
+		return err
+	}
+	if !p.peekKeyword("as") {
+		return p.errorf("expected 'as' after a typed function test")
+	}
+	p.pos++
+	if _, err := p.parseSequenceType(); err != nil {
+		return err
+	}
+	st.FunctionArity, st.HasFunctionArity = arity, true
+	return nil
+}
+
+// finishOccurrence applies a trailing occurrence indicator to a type that was
+// parsed by a path returning early, rather than falling through to the shared
+// label.
+func (p *Parser) finishOccurrence(st SequenceType) (SequenceType, error) {
+	if occ, ok := p.acceptOp("?", "*", "+"); ok {
+		st.Occurrence = occ
+		return st, nil
+	}
+	if p.cur().Kind == TokWildcard && p.cur().Val == "*" {
+		p.pos++
+		st.Occurrence = "*"
+	}
+	return st, nil
+}
+
 // atomicTypeByName maps a lexical type name to a TypeCode. Only the xs:
 // namespace is recognised; a prefix bound elsewhere is not a built-in type.
+// isErrorTypeName reports whether a lexical name is xs:error.
+func isErrorTypeName(lex string, ns NamespaceResolver) bool {
+	prefix, local := xdm.SplitQName(lex)
+	if local != "error" {
+		return false
+	}
+	if prefix == "" {
+		return ns != nil && ns.DefaultElementNamespace() == xdm.NSXS
+	}
+	uri, ok := ns.ResolvePrefix(prefix)
+	return ok && uri == xdm.NSXS
+}
+
 func atomicTypeByName(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
 	prefix, local := xdm.SplitQName(lex)
 	if prefix != "" {

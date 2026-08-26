@@ -16,20 +16,17 @@ func registerMisc30Funcs(l *Library) {
 	// every call is FORG0001; it exists to be *called*, as a way to raise that
 	// error from a place where only an expression is allowed.
 	//
-	// The one-argument form takes the value that failed, and the zero- and
-	// two-argument forms exist so that xs:error#0 and xs:error#2 are function
-	// items a test can take a reference to.
-	for _, arity := range []int{0, 1, 2} {
-		l.Add(Function{
-			Name:  xdm.QName{URI: xdm.NSXS, Local: "error"},
-			Arity: arity,
-			Since: XPath30,
-			Call: func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
-				return nil, fmt.Errorf(
-					"FORG0001: xs:error has no instances, so every call raises this error")
-			},
-		})
-	}
+	// Exactly one arity, like every other atomic-type constructor: xs:error()
+	// and xs:error((), ()) are XPST0017, and the suite asserts both.
+	l.Add(Function{
+		Name:  xdm.QName{URI: xdm.NSXS, Local: "error"},
+		Arity: 1,
+		Since: XPath30,
+		Call: func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+			return nil, fmt.Errorf(
+				"FORG0001: xs:error has no instances, so every call raises this error")
+		},
+	})
 
 	// fn:environment-variable($name) as xs:string?
 	//

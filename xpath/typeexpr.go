@@ -43,6 +43,27 @@ func (t SequenceType) Matches(seq xdm.Sequence) bool {
 func (t SequenceType) MatchesItem(it xdm.Item) bool { return t.matchesItem(it) }
 
 func (t SequenceType) matchesItem(it xdm.Item) bool {
+	// xs:error has no instances, so no item is one.
+	if t.IsErrorType {
+		return false
+	}
+	// A function test matches a function item and nothing else. A typed test
+	// additionally fixes the arity; its parameter and return types are not
+	// recorded, because a function item carries an arity and not a signature,
+	// so a typed test is the any-function test plus that check.
+	if t.IsFunctionTest {
+		fn, ok := it.(*xdm.FunctionItem)
+		if !ok {
+			return false
+		}
+		return !t.HasFunctionArity || fn.Arity == t.FunctionArity
+	}
+	// Nothing else matches a function item: it is neither a node nor an
+	// atomic value, so every other item type excludes it.
+	if _, isFn := it.(*xdm.FunctionItem); isFn {
+		return t.ItemType == nil && !t.HasAtomicType && t.SchemaType == ""
+	}
+
 	switch {
 	case t.SchemaType != "":
 		// A type from an imported schema. Like the built-in derived types,
