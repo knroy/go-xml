@@ -434,6 +434,13 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
 	for _, b := range env.StaticBaseURI {
+		// "#UNDEFINED" is the catalog's way of saying the static base URI is
+		// absent, not a URI of that spelling. Cases use it to assert what
+		// happens when a relative reference has nothing to resolve against.
+		if b.URI == "#UNDEFINED" {
+			ctx.StaticBaseURI = ""
+			continue
+		}
 		if b.URI != "" {
 			ctx.StaticBaseURI = b.URI
 		}
@@ -1116,14 +1123,28 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 	if !strings.Contains(uri, "://") && base != "" {
 		full = resolveAgainst(base, uri)
 	}
-	if file, ok := t.byURI[full]; ok {
-		return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
+	// A declared <resource> is matched only by its full URI. A relative
+	// reference that never resolved to one stays relative, and falls to the
+	// no-base check below: several cases declare resources but no static base
+	// URI, and assert FOUT1170 for exactly that.
+	if strings.Contains(full, "://") {
+		if file, ok := t.byURI[full]; ok {
+			return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
+		}
 	}
 
-	// A reference that resolved to a path inside the checkout is read from
-	// there. The read() guard below is what keeps that safe: a reference that
-	// climbs out with ".." is refused rather than followed.
-	if !strings.Contains(full, "://") && t.dir != "" {
+	// A relative reference resolves only when the environment actually
+	// supplied a static base URI. Several cases declare none and assert
+	// FOUT1170 for exactly that, so resolving one against the test-set
+	// directory anyway would turn a conformance requirement into a pass.
+	if !strings.Contains(full, "://") {
+		if base == "" {
+			return "", fmt.Errorf(
+				"unparsed-text: %q is relative and no base URI is in scope", uri)
+		}
+		// The base was a filesystem path inside the checkout rather than a
+		// fots: URI. The read() guard keeps that safe — a reference that
+		// climbs out with ".." is refused rather than followed.
 		cand := filepath.Join(t.root, t.dir, filepath.FromSlash(full))
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return t.read(cand, uri, encoding)
