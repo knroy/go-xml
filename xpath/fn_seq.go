@@ -49,7 +49,10 @@ func registerSeqFuncs(l *Library) {
 	})
 
 	l.registerFn("data", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		return xdm.Atomize(args[0]), nil
+		// Checked, because atomising a function item is FOTY0013 rather than
+		// something to skip over: fn:data is the one function whose whole job
+		// is atomisation, so it must be the one that reports it.
+		return xdm.AtomizeChecked(args[0])
 	})
 
 	l.registerFn("position", []int{0}, func(ctx *Context, _ []xdm.Sequence) (xdm.Sequence, error) {

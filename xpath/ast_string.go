@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"strconv"
 	"fmt"
 	"strings"
 
@@ -389,6 +390,34 @@ func (e *QuantifiedExpr) String() string {
 
 func (e *ForExpr) String() string {
 	return "for " + bindingsString(e.Bindings) + " return " + e.Return.String()
+}
+
+func (e *NamedFunctionRef) String() string {
+	return e.Name.Lexical() + "#" + strconv.Itoa(e.Arity)
+}
+
+func (e *InlineFunctionExpr) String() string {
+	var ps []string
+	for _, p := range e.Params {
+		s := "$" + p.Name.Lexical()
+		if p.Type != nil {
+			s += " as " + p.Type.String()
+		}
+		ps = append(ps, s)
+	}
+	out := "function(" + strings.Join(ps, ", ") + ")"
+	if e.Result != nil {
+		out += " as " + e.Result.String()
+	}
+	return out + " { " + e.Body.String() + " }"
+}
+
+func (e *DynamicCall) String() string {
+	var as []string
+	for _, a := range e.Args {
+		as = append(as, a.String())
+	}
+	return e.Target.String() + "(" + strings.Join(as, ", ") + ")"
 }
 
 func (e *LetExpr) String() string {

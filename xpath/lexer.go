@@ -255,7 +255,7 @@ func (l *Lexer) next() (Token, error) {
 	}
 
 	switch c {
-	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}':
+	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}', '#':
 		l.pos++
 		op := string(c)
 		// A closing bracket ends an operand. So does "?" when one precedes

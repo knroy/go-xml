@@ -152,7 +152,14 @@ func (e *BinaryOp) evalValueComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, ra := xdm.Atomize(l), xdm.Atomize(r)
+	la, err := xdm.AtomizeChecked(l)
+	if err != nil {
+		return nil, err
+	}
+	ra, err := xdm.AtomizeChecked(r)
+	if err != nil {
+		return nil, err
+	}
 	if len(la) == 0 || len(ra) == 0 {
 		return xdm.Empty(), nil
 	}
@@ -198,7 +205,14 @@ func (e *BinaryOp) evalGeneralComparison(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, ra := xdm.Atomize(l), xdm.Atomize(r)
+	la, err := xdm.AtomizeChecked(l)
+	if err != nil {
+		return nil, err
+	}
+	ra, err := xdm.AtomizeChecked(r)
+	if err != nil {
+		return nil, err
+	}
 
 	// B.1 rule 3: under XPath 1.0 compatibility the operands of a general
 	// comparison are converted by the 1.0 rules before being compared, which
@@ -593,7 +607,10 @@ func bigInteger(ctx *Context, e Expr) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms := xdm.Atomize(v)
+	atoms, err := xdm.AtomizeChecked(v)
+	if err != nil {
+		return nil, err
+	}
 	// B.1 rule 1 reaches "to" as well: its operands are declared xs:integer,
 	// so under XPath 1.0 compatibility a multi-item operand is reduced to its
 	// first item rather than raising XPTY0004. backwards-042 writes
@@ -632,7 +649,10 @@ func singleInteger(ctx *Context, e Expr) (*int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	atoms := xdm.Atomize(v)
+	atoms, err := xdm.AtomizeChecked(v)
+	if err != nil {
+		return nil, err
+	}
 	if len(atoms) == 0 {
 		return nil, nil
 	}
@@ -685,7 +705,14 @@ func (e *BinaryOp) evalArithmetic(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	la, ra := xdm.Atomize(l), xdm.Atomize(r)
+	la, err := xdm.AtomizeChecked(l)
+	if err != nil {
+		return nil, err
+	}
+	ra, err := xdm.AtomizeChecked(r)
+	if err != nil {
+		return nil, err
+	}
 
 	// B.1 rules 1 and 2: an arithmetic operator expects a numeric operand, so
 	// under XPath 1.0 compatibility a multi-item operand is reduced to its

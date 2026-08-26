@@ -1,0 +1,181 @@
+package xpath
+
+import (
+	"fmt"
+
+	"github.com/knroy/go-xml/xdm"
+)
+
+// This file implements the function-item half of XPath 3.0: a function is a
+// value, so it can be bound to a variable, passed to another function and
+// returned from one.
+//
+// The pieces are a named function reference (fn:concat#3), an inline function
+// expression (function($x) { $x + 1 }), and a dynamic call ($f(1)) that
+// invokes whatever function item an expression produced.
+//
+// The item itself lives in the xdm package, because it is a kind of XDM item
+// and sequences are defined there. What lives here is everything that needs an
+// evaluation context: xdm.FunctionItem carries an Invoke closure, and the
+// closures below are the ones installed into it.
+
+// invokeContext is the concrete type xdm.FunctionItem.Invoke is handed.
+//
+// The field is typed any there because xdm cannot import this package. Every
+// closure installed on a function item asserts this type back out, and nothing
+// outside this package ever calls Invoke, so the assertion cannot be reached
+// with anything else.
+type invokeContext = *Context
+
+// Eval implements Expr: it resolves the named function and yields it as a
+// value.
+//
+// Resolution is static in the sense that matters — the name and arity are
+// fixed by the expression — but it happens here rather than at parse time
+// because the function library lives on the context, exactly as it does for an
+// ordinary call.
+func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
+	fn, ok := lookupFor(ctx, e.Name, e.Arity)
+	if !ok {
+		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
+			e.Name.Clark(), e.Arity)
+	}
+	return xdm.One(functionItemFor(e.Name, e.Arity, fn.Call)), nil
+}
+
+// functionItemFor wraps a library function as a function item.
+func functionItemFor(name xdm.QName, arity int,
+	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) *xdm.FunctionItem {
+	return &xdm.FunctionItem{
+		Name:  name,
+		Arity: arity,
+		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			c, ok := ctx.(invokeContext)
+			if !ok {
+				return nil, fmt.Errorf("XPTY0004: function item invoked without an evaluation context")
+			}
+			return call(c, args)
+		},
+	}
+}
+
+// Eval implements Expr: it captures the inline function as a value.
+//
+// The captured context is what makes this a closure rather than a function
+// definition. "let $n := 2 return function($x) { $x * $n }" returns a function
+// that still knows $n, so the context in scope where the expression was
+// written is the one the body is evaluated in — not the one in scope wherever
+// the function is eventually called.
+func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
+	captured := ctx
+	item := &xdm.FunctionItem{
+		// No name: fn:function-name returns the empty sequence for an inline
+		// function, which is what the zero QName means here.
+		Arity: len(e.Params),
+	}
+	item.Invoke = func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
+		if len(args) != len(e.Params) {
+			return nil, fmt.Errorf("XPTY0004: inline function expects %d argument(s), got %d",
+				len(e.Params), len(args))
+		}
+		// The body runs in the captured scope, not the caller's. The caller's
+		// context supplies only the resource limits, which are per-evaluation
+		// rather than per-closure.
+		sub := captured
+		if c, ok := callCtx.(invokeContext); ok && c != nil {
+			s := *captured
+			s.Ctx = c.Ctx
+			s.items = c.items
+			sub = &s
+		}
+		for i, p := range e.Params {
+			v := args[i]
+			// A declared parameter type is checked on the way in, which is
+			// where a mismatch is XPTY0004 rather than something the body
+			// discovers as a stranger error later.
+			if p.Type != nil {
+				conv, err := convertForParam(v, *p.Type)
+				if err != nil {
+					return nil, err
+				}
+				v = conv
+			}
+			sub = sub.WithVar(p.Name, v)
+		}
+		out, err := e.Body.Eval(sub)
+		if err != nil {
+			return nil, err
+		}
+		if e.Result != nil {
+			return convertForParam(out, *e.Result)
+		}
+		return out, nil
+	}
+	return xdm.One(item), nil
+}
+
+// convertForParam applies a declared parameter or return type to a value.
+//
+// The function conversion rules of section 3.1.5 are wider than a bare
+// instance-of test: an untypedAtomic argument is cast to the declared type,
+// and a node is atomised when the declared type is atomic. Only the parts that
+// arise for a function item are applied here — the sequence type is checked,
+// and atomisation happens when the target is an atomic type.
+func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
+	// An atomic target atomises its argument first: "function($x as xs:string)"
+	// called with an element is given the element's string value.
+	if st.HasAtomicType {
+		atoms, err := xdm.AtomizeChecked(v)
+		if err != nil {
+			return nil, err
+		}
+		v = atoms
+	}
+	if !st.Matches(v) {
+		return nil, xdm.ErrType("XPTY0004: value does not match the declared type %s", st.String())
+	}
+	return v, nil
+}
+
+// Eval implements Expr: it calls the function item the target produces.
+func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
+	target, err := e.Target.Eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := singleFunctionItem(target)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]xdm.Sequence, 0, len(e.Args))
+	for _, a := range e.Args {
+		v, err := a.Eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, v)
+	}
+	if len(args) != fn.Arity {
+		return nil, fmt.Errorf("XPTY0004: %s takes %d argument(s), got %d",
+			fn.String(), fn.Arity, len(args))
+	}
+	return fn.Invoke(ctx, args)
+}
+
+// singleFunctionItem extracts the one function item a sequence must hold.
+//
+// Calling something that is not a function is XPTY0004, and so is calling a
+// sequence of them: the target of a dynamic call is a single item.
+func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
+	if len(seq) != 1 {
+		return nil, xdm.ErrType(
+			"XPTY0004: the target of a dynamic call must be a single function item, got %d items",
+			len(seq))
+	}
+	fn, ok := seq[0].(*xdm.FunctionItem)
+	if !ok {
+		return nil, xdm.ErrType(
+			"XPTY0004: the target of a dynamic call is %s, not a function", seq[0].TypeName())
+	}
+	return fn, nil
+}

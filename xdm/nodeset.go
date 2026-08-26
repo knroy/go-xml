@@ -132,11 +132,38 @@ func Atomize(seq Sequence) Sequence {
 			out = append(out, v.Atomize())
 		case *Opaque:
 			// Not atomisable; see above.
+		case *FunctionItem:
+			// Atomising a function item is FOTY0013. This function has no
+			// error return and 58 call sites, so rather than change all of
+			// them it drops the item, and the error is raised where a typed
+			// value is actually demanded — see Sequence.AtomizeChecked, which
+			// is what the argument helpers and fn:data use.
+			//
+			// Dropping rather than passing through is the safe half of the
+			// choice: a function item that survived here would be treated as
+			// an atomic value by whatever came next.
 		default:
 			out = append(out, it)
 		}
 	}
 	return out
+}
+
+// AtomizeChecked is Atomize for a caller that must report FOTY0013 rather than
+// silently discard a function item.
+//
+// XPath 3.0 makes atomising a function item an error, not a no-op: "data(f#1)"
+// and "string(f#1)" both fail, and a function item reaching an arithmetic or
+// comparison operator fails there too. Atomize cannot report it, so a caller
+// that is about to demand a typed value uses this instead.
+func AtomizeChecked(seq Sequence) (Sequence, error) {
+	for _, it := range seq {
+		if f, ok := it.(*FunctionItem); ok {
+			return nil, Errorf("FOTY0013",
+				"a function item (%s) cannot be atomized", f.String())
+		}
+	}
+	return Atomize(seq), nil
 }
 
 // IsXMLWhitespace reports whether s consists entirely of XML whitespace.

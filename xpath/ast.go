@@ -258,6 +258,48 @@ type Binding struct {
 	Seq Expr
 }
 
+// NamedFunctionRef is "fn:concat#3", added in XPath 3.0: a reference to a
+// named function of a given arity, as a value.
+//
+// The arity is part of the reference because it is part of a function's
+// identity — fn:concat#2 and fn:concat#3 are different functions — and because
+// the name alone would not say which of an overloaded set is meant.
+type NamedFunctionRef struct {
+	Name  xdm.QName
+	Arity int
+}
+
+// InlineFunctionExpr is "function($x as xs:integer) as xs:integer { $x + 1 }",
+// added in XPath 3.0: a function written where a value is expected.
+//
+// The body closes over the variables in scope where it is written, which is
+// what makes it more than a named function without a name.
+type InlineFunctionExpr struct {
+	Params []InlineParam
+	// Result is the declared return type, or nil if none was written.
+	Result *SequenceType
+	Body   Expr
+}
+
+// InlineParam is one parameter of an inline function.
+type InlineParam struct {
+	Name xdm.QName
+	// Type is the declared parameter type, or nil if none was written, in
+	// which case it is item()*.
+	Type *SequenceType
+}
+
+// DynamicCall is "$f(1, 2)": a call on the function item an expression
+// produces, rather than on a statically named function.
+//
+// It is the ArgumentList half of production [48], PostfixExpr ::= PrimaryExpr
+// (Predicate | ArgumentList)*, which is why it wraps an arbitrary expression
+// rather than a name.
+type DynamicCall struct {
+	Target Expr
+	Args   []Expr
+}
+
 // LetExpr is "let $x := expr return expr", added in XPath 3.0.
 //
 // It is not a ForExpr with a different keyword. "for" iterates, binding its

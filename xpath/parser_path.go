@@ -109,14 +109,66 @@ func (p *Parser) parseStepExpr() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	preds, err := p.parsePredicates()
-	if err != nil {
-		return nil, err
-	}
-	if len(preds) == 0 {
+	return p.parsePostfix(base)
+}
+
+// parsePostfix applies the postfix chain of production [48]:
+// PostfixExpr ::= PrimaryExpr (Predicate | ArgumentList)*.
+//
+// Predicates and argument lists interleave, so "$f[1](2)" and "$f(2)[1]" are
+// both legal and mean different things. They are therefore consumed in one
+// loop rather than as two passes; running predicates first would reorder them
+// against the calls.
+func (p *Parser) parsePostfix(base Expr) (Expr, error) {
+	for {
+		if p.peekIs(TokOp, "[") {
+			pred, err := p.parsePredicates()
+			if err != nil {
+				return nil, err
+			}
+			if len(pred) == 0 {
+				return base, nil
+			}
+			base = &FilterExpr{Base: base, Predicates: pred}
+			continue
+		}
+		// An argument list here is a dynamic call on whatever the base
+		// produced. Only 3.0 has them: under 2.0 a "(" after a complete
+		// primary expression is the syntax error it always was.
+		if p.version.atLeast30() && p.peekIs(TokOp, "(") {
+			args, err := p.parseArgumentList()
+			if err != nil {
+				return nil, err
+			}
+			base = &DynamicCall{Target: base, Args: args}
+			continue
+		}
 		return base, nil
 	}
-	return &FilterExpr{Base: base, Predicates: preds}, nil
+}
+
+// parseArgumentList parses "(" (ExprSingle ("," ExprSingle)*)? ")".
+func (p *Parser) parseArgumentList() ([]Expr, error) {
+	if err := p.expectOp("("); err != nil {
+		return nil, err
+	}
+	var args []Expr
+	if !p.peekIs(TokOp, ")") {
+		for {
+			a, err := p.parseExprSingle()
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, a)
+			if _, ok := p.acceptOp(","); !ok {
+				break
+			}
+		}
+	}
+	if err := p.expectOp(")"); err != nil {
+		return nil, err
+	}
+	return args, nil
 }
 
 // tryParseAxisStep parses an axis step if one is present, reporting ok=false
@@ -177,6 +229,13 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 		} else if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokOp &&
 			p.toks[p.pos+1].Val == "(" && !isKindTestName(p.cur().Val) {
 			return nil, false, nil // function call: let parsePrimary handle it
+		} else if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
+			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "#" {
+			// "name#3" is a named function reference, not a name test on an
+			// element called "name". Deferred to parsePrimary for the same
+			// reason a function call is: the name belongs to the construct
+			// that follows it, not to a step.
+			return nil, false, nil
 		}
 	}
 
@@ -488,6 +547,19 @@ func (p *Parser) parsePrimary() (Expr, error) {
 		}
 
 	case TokName:
+		// An inline function expression: "function" followed by "(". It is
+		// checked before the function-call form, which would otherwise treat
+		// "function(" as a call to a function named "function".
+		if p.version.atLeast30() && t.Val == "function" &&
+			p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokOp &&
+			p.toks[p.pos+1].Val == "(" {
+			return p.parseInlineFunction()
+		}
+		// A named function reference: name followed by "#" and an integer.
+		if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
+			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "#" {
+			return p.parseNamedFunctionRef()
+		}
 		// A function call: name followed by "(".
 		if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokOp &&
 			p.toks[p.pos+1].Val == "(" {
@@ -516,6 +588,97 @@ func numericLiteral(t Token) *xdm.Atomic {
 	default:
 		return xdm.NewDouble(t.Num)
 	}
+}
+
+// parseNamedFunctionRef parses "fn:concat#3", production [63].
+//
+// The arity is a literal integer, not an expression: a function reference is
+// resolved statically, and "concat#$n" is not in the grammar.
+func (p *Parser) parseNamedFunctionRef() (Expr, error) {
+	nameTok := p.cur()
+	// The reserved names are reserved here too: "item#0" is a syntax error
+	// rather than a reference to a function nobody declared.
+	if isReservedFunctionName(nameTok.Val) {
+		return nil, p.errorf("%q is a reserved name and cannot be referenced",
+			nameTok.Val)
+	}
+	p.pos++
+	if err := p.expectOp("#"); err != nil {
+		return nil, err
+	}
+	arityTok := p.cur()
+	if arityTok.Kind != TokNumber || arityTok.numType != numInteger {
+		return nil, p.errorf("expected an integer arity after '#'")
+	}
+	arity := int(arityTok.Num)
+	if arity < 0 {
+		return nil, p.errorf("a function arity cannot be negative")
+	}
+	p.pos++
+	name, err := p.resolveFunctionName(nameTok.Val)
+	if err != nil {
+		return nil, err
+	}
+	return &NamedFunctionRef{Name: name, Arity: arity}, nil
+}
+
+// parseInlineFunction parses "function($x as T, ...) as T { expr }",
+// production [64].
+func (p *Parser) parseInlineFunction() (Expr, error) {
+	p.pos++ // "function"
+	if err := p.expectOp("("); err != nil {
+		return nil, err
+	}
+	var params []InlineParam
+	if !p.peekIs(TokOp, ")") {
+		for {
+			if p.cur().Kind != TokVar {
+				return nil, p.errorf("expected a parameter name")
+			}
+			name, err := p.resolveVarName(p.cur().Val)
+			if err != nil {
+				return nil, err
+			}
+			p.pos++
+			var typ *SequenceType
+			if p.peekKeyword("as") {
+				p.pos++
+				st, err := p.parseSequenceType()
+				if err != nil {
+					return nil, err
+				}
+				typ = &st
+			}
+			params = append(params, InlineParam{Name: name, Type: typ})
+			if _, ok := p.acceptOp(","); !ok {
+				break
+			}
+		}
+	}
+	if err := p.expectOp(")"); err != nil {
+		return nil, err
+	}
+	var result *SequenceType
+	if p.peekKeyword("as") {
+		p.pos++
+		st, err := p.parseSequenceType()
+		if err != nil {
+			return nil, err
+		}
+		result = &st
+	}
+	// The body is an EnclosedExpr: braces, not parentheses.
+	if err := p.expectOp("{"); err != nil {
+		return nil, err
+	}
+	body, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectOp("}"); err != nil {
+		return nil, err
+	}
+	return &InlineFunctionExpr{Params: params, Result: result, Body: body}, nil
 }
 
 func (p *Parser) parseFunctionCall() (Expr, error) {
