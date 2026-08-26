@@ -81,6 +81,14 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
+		// Under the "q" flag the replacement is a literal string too, not
+		// only the pattern: "$1" replaces with the two characters rather than
+		// with a captured group, and "" is a single backslash rather than an
+		// escape. Quoting it here is what makes fn:replace(s, p, r, "q") a
+		// plain substring substitution.
+		if f, ferr := argFlags(args, 3); ferr == nil && strings.ContainsRune(f, 'q') {
+			repl = quoteReplacement(repl)
+		}
 		if bt != nil {
 			empty := bt.MatchString("")
 			if e := bt.Err(); e != nil {
@@ -153,6 +161,23 @@ func registerRegexFuncs(l *Library) {
 		}
 		return out, nil
 	})
+}
+
+// quoteReplacement escapes a replacement string so that every character
+// stands for itself, which is what the "q" flag asks for.
+//
+// Only "$" and "\\" carry meaning in a replacement, and each is escaped by
+// doubling the backslash form the translation step expects.
+func quoteReplacement(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		switch r {
+		case '$', '\\':
+			sb.WriteByte('\\')
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }
 
 // compileArgRegexp compiles the pattern at index pat with optional flags at
