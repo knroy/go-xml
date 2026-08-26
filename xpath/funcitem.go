@@ -188,6 +188,16 @@ func (e *ArgumentPlaceholder) Eval(_ *Context) (xdm.Sequence, error) {
 func partialApply(name xdm.QName, arity int,
 	call func(*Context, []xdm.Sequence) (xdm.Sequence, error),
 	args []Expr, ctx *Context) (xdm.Sequence, error) {
+	// A partial application still supplies one argument position per
+	// parameter — the placeholders mark which of them stay open, they do not
+	// excuse the count. "concat#4('one', ?, 'three')" names three positions
+	// for a function of four, which is a type error rather than a function of
+	// arity one.
+	if len(args) != arity {
+		return nil, xdm.Errorf("XPTY0004",
+			"%s takes %d argument(s), but %d were supplied",
+			name.Clark(), arity, len(args))
+	}
 	fixed := make([]xdm.Sequence, len(args))
 	var holes []int
 	for i, a := range args {

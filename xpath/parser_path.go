@@ -667,6 +667,15 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 				}
 				typ = &st
 			}
+			// Two parameters of the same name would make the second
+			// unreferenceable, so the spec makes it a static error rather
+			// than letting one silently shadow the other.
+			for _, prior := range params {
+				if prior.Name == name {
+					return nil, xdm.Errorf("XQST0039",
+						"the parameter $%s is declared twice", name.Lexical())
+				}
+			}
 			params = append(params, InlineParam{Name: name, Type: typ})
 			if _, ok := p.acceptOp(","); !ok {
 				break

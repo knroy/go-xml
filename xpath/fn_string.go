@@ -37,6 +37,11 @@ func registerStringFuncs(l *Library) {
 			return strSeq(v.StringValue()), nil
 		case *xdm.Atomic:
 			return strSeq(v.String()), nil
+		case *xdm.FunctionItem:
+			// A function item has no string value at all, which the spec
+			// gives its own code: FOTY0014, not the generic type error.
+			return nil, xdm.Errorf("FOTY0014",
+				"fn:string is not defined on a function item")
 		default:
 			// An Opaque carries engine-internal state and has no string
 			// value. A stylesheet that names the internal namespace can
