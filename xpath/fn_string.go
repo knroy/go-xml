@@ -457,4 +457,7 @@ func isXMLChar(c int64) bool {
 // The function is variadic in the spec, so any bound is arbitrary; this one is
 // far past what a stylesheet writes by hand and keeps the library a fixed
 // size. An expression needing more can nest calls.
-const concatMaxArity = 64
+//
+// 64 was too low: the suite takes fn:concat#99 to check that a reference to a
+// variadic function resolves at an arity nobody would write by hand.
+const concatMaxArity = 100

@@ -26,7 +26,15 @@ func registerHOFuncs(l *Library) {
 		if fn.IsAnonymous() {
 			return xdm.Empty(), nil
 		}
-		return xdm.One(xdm.NewQNameValue(fn.Name)), nil
+		// The returned QName carries a prefix, which fn:function-name's
+		// examples show: function-name(fn:substring#2) is the QName whose
+		// lexical form is "fn:substring". A name with no prefix would print
+		// as the bare local part.
+		name := fn.Name
+		if name.Prefix == "" && name.URI == xdm.NSFN {
+			name.Prefix = "fn"
+		}
+		return xdm.One(xdm.NewQNameValue(name)), nil
 	})
 
 	// fn:function-arity($func as function(*)) as xs:integer
