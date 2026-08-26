@@ -1,8 +1,8 @@
 package xpath
 
 import (
-	"strconv"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"

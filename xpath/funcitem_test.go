@@ -154,26 +154,26 @@ func TestFoldArgumentOrderAndDirection(t *testing.T) {
 	// Left fold, string concatenation: (((""+a)+b)+c) = "abc".
 	if got, want := str30(t,
 		`fold-left(("a","b","c"), "", function($acc, $x) { concat($acc, $x) })`,
-		), []string{"abc"}; !equalStrings(got, want) {
+	), []string{"abc"}; !equalStrings(got, want) {
 		t.Errorf("fold-left concat = %v, want %v", got, want)
 	}
 	// Right fold, same operation: (a+(b+(c+""))) = "abc", but the item is the
 	// first parameter and the accumulator the second.
 	if got, want := str30(t,
 		`fold-right(("a","b","c"), "", function($x, $acc) { concat($x, $acc) })`,
-		), []string{"abc"}; !equalStrings(got, want) {
+	), []string{"abc"}; !equalStrings(got, want) {
 		t.Errorf("fold-right concat = %v, want %v", got, want)
 	}
 	// Subtraction shows the direction: left is ((10-1)-2)-3 = 4.
 	if got, want := str30(t,
 		`fold-left((1,2,3), 10, function($acc, $x) { $acc - $x })`,
-		), []string{"4"}; !equalStrings(got, want) {
+	), []string{"4"}; !equalStrings(got, want) {
 		t.Errorf("fold-left subtract = %v, want %v", got, want)
 	}
 	// Right is 1-(2-(3-10)) = 1-(2-(-7)) = 1-9 = -8.
 	if got, want := str30(t,
 		`fold-right((1,2,3), 10, function($x, $acc) { $x - $acc })`,
-		), []string{"-8"}; !equalStrings(got, want) {
+	), []string{"-8"}; !equalStrings(got, want) {
 		t.Errorf("fold-right subtract = %v, want %v", got, want)
 	}
 }
