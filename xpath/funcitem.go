@@ -148,6 +148,10 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 				return nil, xdm.ErrType(
 					"XPTY0004: value does not match the declared type %s", st.String())
 			}
+			if !convertibleToParam(a.Type, st.AtomicType) {
+				return nil, xdm.ErrType(
+					"XPTY0004: value does not match the declared type %s", st.String())
+			}
 			c, err := CastAtomic(a, st.AtomicType)
 			if err != nil {
 				return nil, xdm.ErrType(
@@ -222,6 +226,41 @@ func hasPlaceholder(args []Expr) bool {
 		if _, ok := a.(*ArgumentPlaceholder); ok {
 			return true
 		}
+	}
+	return false
+}
+
+// convertibleToParam reports whether the function conversion rules turn a
+// value of type from into one of type to.
+//
+// They are narrow, and deliberately so: only numeric *promotion* — which
+// widens and never loses information — and the casting of xs:untypedAtomic.
+// A general cast would let an xs:decimal satisfy an xs:integer parameter by
+// truncating, which is XPTY0004: "$add(3, 4.2)" on a function declared over
+// integers is an error, not a call with 4.
+func convertibleToParam(from, to xdm.TypeCode) bool {
+	if from == to || from == xdm.TypeUntypedAtomic {
+		return true
+	}
+	switch to {
+	case xdm.TypeDouble:
+		// Every other numeric type promotes to double.
+		switch from {
+		case xdm.TypeFloat, xdm.TypeDecimal, xdm.TypeInteger:
+			return true
+		}
+	case xdm.TypeFloat:
+		switch from {
+		case xdm.TypeDecimal, xdm.TypeInteger:
+			return true
+		}
+	case xdm.TypeDecimal:
+		// An integer is a decimal by derivation, not by promotion, but the
+		// effect is the same and it loses nothing.
+		return from == xdm.TypeInteger
+	case xdm.TypeString:
+		// xs:anyURI promotes to xs:string.
+		return from == xdm.TypeAnyURI
 	}
 	return false
 }
