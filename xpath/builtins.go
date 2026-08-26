@@ -143,6 +143,35 @@ func registerConstructors(l *Library) {
 	registerIntegerSubtypes(l)
 	registerListTypes(l)
 
+	// xs:QName is not in the table above because a direct call is folded in
+	// the parser, where the in-scope namespace bindings are: that is what
+	// lets xs:QName("p:local") resolve the prefix. A named function
+	// reference — "xs:QName#1" — has no such call site to fold, so the
+	// function has to exist as an ordinary entry too.
+	//
+	// It is 3.0-only. Under 2.0 the cast is defined from a literal string
+	// alone, and there is no literal here to take the bindings from.
+	l.Add(Function{
+		Name:  xdm.QName{URI: xdm.NSXS, Local: "QName"},
+		Arity: 1,
+		Since: XPath30,
+		Call: func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			atoms := xdm.Atomize(args[0])
+			if len(atoms) == 0 {
+				return xdm.Empty(), nil
+			}
+			it, err := atoms.Single()
+			if err != nil {
+				return nil, err
+			}
+			out, err := CastAtomic(it.(*xdm.Atomic), xdm.TypeQName)
+			if err != nil {
+				return nil, err
+			}
+			return xdm.One(out), nil
+		},
+	})
+
 	for name, code := range types {
 		target := code
 		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {

@@ -45,10 +45,39 @@ func (v Version) atLeast30() bool { return v >= XPath30 }
 // xsl:function declarations neither knows nor needs to know about versions.
 func lookupFor(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 	fn, ok := ctx.Funcs.Lookup(name, arity)
-	if !ok || fn.Since > ctx.Version {
+	if !ok {
+		// fn:concat is the one genuinely variadic function in the library.
+		// Lookup is keyed by (name, arity), so it is registered at each of a
+		// fixed range of arities — but the spec puts no bound on it, and
+		// "concat#123456" is a legal reference the suite makes. Rather than
+		// registering a hundred thousand entries, an arity past the
+		// registered range is answered by synthesising the entry.
+		if syn, made := synthesizeVariadic(ctx, name, arity); made {
+			return syn, true
+		}
+		return Function{}, false
+	}
+	if fn.Since > ctx.Version {
 		return Function{}, false
 	}
 	return fn, true
+}
+
+// synthesizeVariadic builds the entry for a variadic function at an arity that
+// was not pre-registered.
+func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool) {
+	if name.URI != xdm.NSFN || name.Local != "concat" || arity < 2 {
+		return Function{}, false
+	}
+	// The registered entries carry the real implementation; borrowing one
+	// keeps a single definition of what fn:concat does. Its own arity is
+	// irrelevant, since the call passes whatever arguments it was given.
+	base, ok := ctx.Funcs.Lookup(name, 2)
+	if !ok || base.Since > ctx.Version {
+		return Function{}, false
+	}
+	base.Arity = arity
+	return base, true
 }
 
 // String implements fmt.Stringer.
