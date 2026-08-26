@@ -428,7 +428,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// builtin library's two-argument form uses the standard symbols, so a
 	// declared format is installed by overriding that entry in a library
 	// chained to the builtins.
-	if lib := decimalFormatLibrary(env); lib != nil {
+	if lib := decimalFormatLibrary(env, ns); lib != nil {
 		ctx.Funcs = lib
 	}
 	// The environment may declare the base URI of the expression itself,
@@ -974,61 +974,98 @@ func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, erro
 // format-number's third argument, which resolves a name through the static
 // context — something a bare XPath expression has no way to carry, and which
 // no case in this suite uses.
-func decimalFormatLibrary(env Environment) xpath.FunctionLibrary {
-	var decl *DecimalFormatDecl
-	for i := range env.DecimalFormats {
-		if env.DecimalFormats[i].Name == "" {
-			decl = &env.DecimalFormats[i]
-			break
-		}
-	}
-	if decl == nil {
+func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
+	if len(env.DecimalFormats) == 0 {
 		return nil
 	}
-	df := xpath.DefaultDecimalFormat()
-	setRune := func(dst *rune, s string) {
-		for _, r := range s {
-			*dst = r
-			return
+	// Every declared format, keyed by its expanded name; the unnamed one is
+	// keyed by the empty string and is what the two-argument form uses.
+	formats := map[string]*xpath.DecimalFormat{}
+	for i := range env.DecimalFormats {
+		decl := &env.DecimalFormats[i]
+		df := xpath.DefaultDecimalFormat()
+		setRune := func(dst *rune, s string) {
+			for _, r := range s {
+				*dst = r
+				return
+			}
 		}
+		setRune(&df.DecimalSeparator, decl.DecimalSeparator)
+		setRune(&df.GroupingSeparator, decl.GroupingSeparator)
+		setRune(&df.Percent, decl.Percent)
+		setRune(&df.PerMille, decl.PerMille)
+		setRune(&df.ZeroDigit, decl.ZeroDigit)
+		setRune(&df.Digit, decl.Digit)
+		setRune(&df.PatternSeparator, decl.PatternSeparator)
+		setRune(&df.MinusSign, decl.MinusSign)
+		if decl.Infinity != "" {
+			df.Infinity = decl.Infinity
+		}
+		if decl.NaN != "" {
+			df.NaN = decl.NaN
+		}
+		formats[expandFormatName(decl.Name, ns)] = df
 	}
-	setRune(&df.DecimalSeparator, decl.DecimalSeparator)
-	setRune(&df.GroupingSeparator, decl.GroupingSeparator)
-	setRune(&df.Percent, decl.Percent)
-	setRune(&df.PerMille, decl.PerMille)
-	setRune(&df.ZeroDigit, decl.ZeroDigit)
-	setRune(&df.Digit, decl.Digit)
-	setRune(&df.PatternSeparator, decl.PatternSeparator)
-	setRune(&df.MinusSign, decl.MinusSign)
-	if decl.Infinity != "" {
-		df.Infinity = decl.Infinity
-	}
-	if decl.NaN != "" {
-		df.NaN = decl.NaN
+
+	call := func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		num, err := xpath.FormatNumberArg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		pic, err := xpath.FormatNumberString(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		key := ""
+		if len(args) > 2 {
+			lex, err := xpath.FormatNumberString(args, 2)
+			if err != nil {
+				return nil, err
+			}
+			// The name is a lexical QName resolved in the static context. A
+			// leading or trailing space is not part of it, and one case
+			// writes " b:test " to check that.
+			key = expandFormatName(strings.TrimSpace(lex), ns)
+		}
+		df, ok := formats[key]
+		if !ok {
+			if key == "" {
+				df = xpath.DefaultDecimalFormat()
+			} else {
+				return nil, fmt.Errorf("FODF1280: no decimal format named %q", key)
+			}
+		}
+		out, err := xpath.FormatNumberVersion(num, pic, df, xpath.XPath30)
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(xdm.NewString(out)), nil
 	}
 
 	lib := xpath.NewLibrary(xpath.Builtins())
-	lib.Add(xpath.Function{
-		Name:  xdm.QName{URI: xdm.NSFN, Local: "format-number"},
-		Arity: 2,
-		Since: xpath.XPath30,
-		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			num, err := xpath.FormatNumberArg(args, 0)
-			if err != nil {
-				return nil, err
-			}
-			pic, err := xpath.FormatNumberString(args, 1)
-			if err != nil {
-				return nil, err
-			}
-			out, err := xpath.FormatNumberVersion(num, pic, df, xpath.XPath30)
-			if err != nil {
-				return nil, err
-			}
-			return xdm.One(xdm.NewString(out)), nil
-		},
-	})
+	for _, arity := range []int{2, 3} {
+		lib.Add(xpath.Function{
+			Name:  xdm.QName{URI: xdm.NSFN, Local: "format-number"},
+			Arity: arity,
+			Since: xpath.XPath30,
+			Call:  call,
+		})
+	}
 	return lib
+}
+
+// expandFormatName resolves a lexical decimal-format name to its expanded
+// form, so that a prefix declared by the environment matches the declaration.
+func expandFormatName(lex string, ns resolver) string {
+	if lex == "" {
+		return ""
+	}
+	prefix, local := xdm.SplitQName(lex)
+	if prefix == "" {
+		return local
+	}
+	uri, _ := ns.ResolvePrefix(prefix)
+	return xdm.QName{URI: uri, Local: local}.Clark()
 }
 
 // suiteTextResolver reads fn:unparsed-text resources out of the suite.

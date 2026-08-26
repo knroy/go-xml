@@ -190,6 +190,20 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 	}
 	fracStr := trimFraction(fracPart, p.minFrac, df)
 
+	// Section 16.4.5: the formatted number always has at least one digit. A
+	// picture of optional digits only leaves both parts empty for a value of
+	// zero, which would render as nothing at all. The digit goes into
+	// whichever part the picture actually has: a picture with a decimal
+	// separator puts it after the separator, so format-number(0, '#.#') is
+	// ".0" and format-number(0, '###') is "0".
+	if intStr == "" && fracStr == "" {
+		if p.maxFrac > 0 {
+			fracStr = string(df.ZeroDigit)
+		} else {
+			intStr = string(df.ZeroDigit)
+		}
+	}
+
 	var sb strings.Builder
 	// Section 16.4.3: with only one sub-picture, "the prefix for the negative
 	// sub-picture is set by concatenating the minus-sign character and the
@@ -263,8 +277,8 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	// after is the suffix.
 	start, end := -1, -1
 	for i, r := range runes {
-		if r == df.Digit || r == df.ZeroDigit || r == df.GroupingSeparator ||
-			r == df.DecimalSeparator {
+		if r == df.Digit || isDigitOfFamily(r, df.ZeroDigit) ||
+			r == df.GroupingSeparator || r == df.DecimalSeparator {
 			if start < 0 {
 				start = i
 			}
@@ -338,7 +352,12 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	}
 
 	for _, r := range intPart {
-		if r == df.ZeroDigit {
+		// Every member of the digit family counts, not just the zero-digit
+		// itself: "001", "000" and "999" all specify three mandatory digits,
+		// since the digits within a picture are interchangeable and only
+		// their count carries meaning. Counting only the zero-digit made
+		// format-number(42, '001') pad to two places and answer "421".
+		if isDigitOfFamily(r, df.ZeroDigit) {
 			p.minInt++
 		}
 	}
@@ -353,11 +372,11 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	if len(fracPart) > 0 {
 		p.maxFrac = 0
 		for _, r := range fracPart {
-			switch r {
-			case df.ZeroDigit:
+			switch {
+			case isDigitOfFamily(r, df.ZeroDigit):
 				p.minFrac++
 				p.maxFrac++
-			case df.Digit:
+			case r == df.Digit:
 				p.maxFrac++
 			}
 		}
@@ -399,6 +418,22 @@ func splitRat(r *big.Rat, n int) (string, string) {
 	s = strings.TrimPrefix(s, "-")
 	intPart, fracPart, _ := strings.Cut(s, ".")
 	return intPart, fracPart
+}
+
+// isDigitOfFamily reports whether r is one of the ten digits of the family
+// whose zero is zero.
+func isDigitOfFamily(r, zero rune) bool {
+	return r >= zero && r < zero+10
+}
+
+// containsFamilyDigit reports whether s holds any digit of the family.
+func containsFamilyDigit(s string, zero rune) bool {
+	for _, r := range s {
+		if isDigitOfFamily(r, zero) {
+			return true
+		}
+	}
+	return false
 }
 
 // padInt left-pads the integer digits to the minimum width, translating into
@@ -486,7 +521,7 @@ func applyGrouping(s string, n int, positions []int, sep rune) string {
 // everything else in the sub-picture is passive.
 func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat) error {
 	active := func(r rune) bool {
-		return r == df.Digit || r == df.ZeroDigit ||
+		return r == df.Digit || isDigitOfFamily(r, df.ZeroDigit) ||
 			r == df.GroupingSeparator || r == df.DecimalSeparator
 	}
 
@@ -494,7 +529,7 @@ func checkSubPicture(pic string, runes []rune, start, end int, df *DecimalFormat
 	// The grouping and decimal separators are active characters too, so a
 	// sub-picture like "fred.ginger" gets past the digit-region scan without
 	// carrying a single place to put a digit in.
-	if !strings.ContainsRune(pic, df.Digit) && !strings.ContainsRune(pic, df.ZeroDigit) {
+	if !strings.ContainsRune(pic, df.Digit) && !containsFamilyDigit(pic, df.ZeroDigit) {
 		return fmt.Errorf(
 			"XTDE1310: picture %q contains no digit-sign or zero-digit-sign", pic)
 	}
