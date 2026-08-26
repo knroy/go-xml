@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xpath"
 )
 
 // TestQT3 runs the W3C QT3 (FOTS) suite, once per language version.
@@ -26,6 +28,15 @@ func TestQT3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalog: %v", err)
 	}
+
+	// The suite's patterns are trusted input, so the backtracking matcher is
+	// enabled for the run. It is off by default because a pattern can come
+	// from document data and the matcher has no linear-time guarantee; a
+	// conformance run is exactly the case where that does not apply, and
+	// leaving it off failed the backreference cases for a reason that is a
+	// deployment choice rather than a conformance gap.
+	xpath.SetBacktrackingRegex(true)
+	defer xpath.SetBacktrackingRegex(false)
 
 	for _, target := range []TargetVersion{XPath20, XPath30} {
 		t.Run(target.String(), func(t *testing.T) { runSuite(t, root, cat, target) })
