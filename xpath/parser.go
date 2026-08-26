@@ -95,6 +95,7 @@ func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, er
 	if extended {
 		lex = newExtendedLexer(src)
 	}
+	lex.version = v
 	toks, err := lex.Tokens()
 	if err != nil {
 		return nil, fmt.Errorf("%w in %q", err, src)

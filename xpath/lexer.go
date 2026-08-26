@@ -64,10 +64,12 @@ type Lexer struct {
 	// could not, `*` is a wildcard and `div` is a name test.
 	prevOperand bool
 
-	// extended enables the braced URI literal Q{uri}local, which the XSLT
-	// test suite uses in its own assertion expressions. It is off by default,
-	// so an XSLT 2.0 stylesheet still gets XPST0003 for one. Only
-	// ParseExtended turns it on.
+	// extended enables the braced URI literal Q{uri}local for a caller that
+	// is not otherwise running 3.0 — the XSLT test suite, which writes its
+	// assertion expressions in the 3.0 language even for 2.0 stylesheets. It
+	// is off by default, so an XSLT 2.0 stylesheet still gets XPST0003 for
+	// one. ParseExtended turns it on; so does parsing as XPath 3.0, where the
+	// literal is production [94] of the grammar rather than an extension.
 	//
 	// The simple map operator "!" was gated here too, on the reasoning that a
 	// 2.0 processor must reject it "and several tests in the suite assert
@@ -76,6 +78,10 @@ type Lexer struct {
 	// it are marked XSLT20+, so the version they run under admits 3.0
 	// syntax, and refusing it only failed them.
 	extended bool
+
+	// version is the language version being lexed. XPath 3.0 admits the
+	// braced URI literal as part of the grammar proper.
+	version Version
 
 	// bracedURIs collects the URIs seen in braced URI literals, in the order
 	// they were lexed. A literal is rewritten to a synthetic prefix naming
@@ -423,7 +429,7 @@ func (l *Lexer) lexQName() (string, error) {
 	// A braced URI literal, Q{uri}local. Recognised only in extended mode;
 	// otherwise "Q" is an ordinary name and the "{" that follows is the
 	// syntax error XPath 2.0 says it is.
-	if l.extended && strings.HasPrefix(l.src[l.pos:], "Q{") {
+	if (l.extended || l.version.atLeast30()) && strings.HasPrefix(l.src[l.pos:], "Q{") {
 		l.pos += 2
 		end := strings.IndexByte(l.src[l.pos:], '}')
 		if end < 0 {
