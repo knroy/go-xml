@@ -1166,6 +1166,21 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 	if comp == 'z' {
 		prefix = "GMT"
 	}
+	// "[ZZ]" asks for the military timezone letter: A..I and K..M for the
+	// eastern offsets, N..Y for the western, Z for UTC, and J for no
+	// timezone. J is unreachable here, since an absent timezone returned
+	// above. An offset that is not a whole number of hours has no letter, so
+	// it falls through to the numeric form.
+	if comp == 'Z' && pres == "Z" {
+		if letter, ok := militaryTZ(off); ok {
+			return letter
+		}
+	}
+	// The separator between hours and minutes is whatever the picture writes
+	// between its two digit groups, and the digits themselves come from the
+	// picture's family: "[Z00~00]" separates with "~", and "[Z\u0660\u0660:\u0660\u0660]"
+	// writes Arabic-Indic digits.
+	sep, zero := tzPictureShape(pres)
 	// The specification permits, but does not require, writing UTC as "Z"
 	// under "[Z]". The conformance suite settles the choice: the plain
 	// picture spells "+00:00", and only the traditional modifier "[Z...t]"
@@ -1214,10 +1229,10 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 		// distinction the hours-only branch below already draws — so "[z]"
 		// and "[z,2-2]" keep the padded form. format-date-018 wants the
 		// unpadded hours here and format-date-017 wants them padded.
-		if digits == 1 && pres == "0" {
-			return fmt.Sprintf("%s%s%d:%02d", prefix, sign, hours, mins)
+		if tzHourDigits(pres) == 1 && strings.HasPrefix(pres, "0") {
+			return prefix + sign + translateDigits(fmt.Sprintf("%d%s%02d", hours, sep, mins), zero)
 		}
-		return fmt.Sprintf("%s%s%02d:%02d", prefix, sign, hours, mins)
+		return prefix + sign + translateDigits(fmt.Sprintf("%02d%s%02d", hours, sep, mins), zero)
 	}
 	hs := strconv.FormatInt(int64(hours), 10)
 	// The minimum width applies to what is actually being written. In the
@@ -1228,7 +1243,85 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 	if digits == 2 || minWidth(width) >= 2 {
 		hs = fmt.Sprintf("%02d", hours)
 	}
-	return prefix + sign + hs
+	return prefix + sign + translateDigits(hs, zero)
+}
+
+// tzHourDigits counts the digits of the hours group of a timezone picture,
+// which is the run before the separator: "[Z0:01]" asks for one, so the hours
+// are written unpadded.
+//
+// The caller pairs this with a check that the group actually starts with the
+// zero-digit. A picture with no digits at all — the bare "[Z]" — takes the
+// component's default presentation and keeps the padded form; counting its
+// zero digits as "one" made every default picture unpad its hours.
+func tzHourDigits(pres string) int {
+	n := 0
+	for _, r := range pres {
+		if unicode.IsDigit(r) {
+			n++
+			continue
+		}
+		if n > 0 {
+			return n
+		}
+	}
+	return n
+}
+
+// militaryTZ returns the single-letter military designation of a whole-hour
+// offset, as "[ZZ]" asks for.
+//
+// The eastern offsets take A..I then K..M — J is skipped, and names the
+// absence of a timezone — and the western take N..Y. UTC is Z.
+func militaryTZ(off int) (string, bool) {
+	if off%60 != 0 {
+		return "", false
+	}
+	h := off / 60
+	switch {
+	case h == 0:
+		return "Z", true
+	case h >= 1 && h <= 9:
+		return string(rune('A' + h - 1)), true
+	case h >= 10 && h <= 12:
+		// K is 10: 'A'+9 is 'J', which is skipped.
+		return string(rune('A' + h)), true
+	case h <= -1 && h >= -12:
+		return string(rune('N' - h - 1)), true
+	}
+	return "", false
+}
+
+// tzPictureShape reads the separator and digit family a timezone picture asks
+// for.
+//
+// A picture of two digit groups separates them with whatever stands between:
+// "[Z00~00]" wants "~" where the default is ":". The family is that of the
+// first digit, so a picture written in Arabic-Indic digits produces them.
+func tzPictureShape(pres string) (sep string, zero rune) {
+	sep, zero = ":", '0'
+	runes := []rune(pres)
+	start := -1
+	for i, r := range runes {
+		if unicode.IsDigit(r) {
+			if start < 0 {
+				start = i
+				zero = r - rune(digitValueOf(r))
+			}
+			continue
+		}
+		// The first non-digit after a run of digits is the separator, when
+		// more digits follow it.
+		if start >= 0 {
+			for _, later := range runes[i:] {
+				if unicode.IsDigit(later) {
+					return string(r), zero
+				}
+			}
+			return sep, zero
+		}
+	}
+	return sep, zero
 }
 
 func romanNum(n int64) string {
