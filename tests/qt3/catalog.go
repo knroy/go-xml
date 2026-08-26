@@ -83,6 +83,26 @@ type Environment struct {
 	// Resources are the non-XML files fn:unparsed-text reads, mapping the URI
 	// a case names to the file in the checkout that holds it.
 	Resources []Resource `xml:"resource"`
+	// DecimalFormats are the decimal formats fn:format-number reads. Only the
+	// unnamed (default) one is used by these cases.
+	DecimalFormats []DecimalFormatDecl `xml:"decimal-format"`
+}
+
+// DecimalFormatDecl is one <decimal-format> declaration. Every attribute is
+// optional and defaults to the standard symbol, so each is a pointer-free
+// string tested for emptiness rather than a value with its own default.
+type DecimalFormatDecl struct {
+	Name              string `xml:"name,attr"`
+	DecimalSeparator  string `xml:"decimal-separator,attr"`
+	GroupingSeparator string `xml:"grouping-separator,attr"`
+	Percent           string `xml:"percent,attr"`
+	PerMille          string `xml:"per-mille,attr"`
+	ZeroDigit         string `xml:"zero-digit,attr"`
+	Digit             string `xml:"digit,attr"`
+	PatternSeparator  string `xml:"pattern-separator,attr"`
+	MinusSign         string `xml:"minus-sign,attr"`
+	Infinity          string `xml:"infinity,attr"`
+	NaN               string `xml:"NaN,attr"`
 }
 
 // Resource is one <resource> declaration: a file in the checkout published

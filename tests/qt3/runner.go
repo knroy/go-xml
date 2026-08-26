@@ -320,6 +320,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 		out.Collations = append(out.Collations, e.Collations...)
 		out.StaticBaseURI = append(out.StaticBaseURI, e.StaticBaseURI...)
 		out.Resources = append(out.Resources, e.Resources...)
+		out.DecimalFormats = append(out.DecimalFormats, e.DecimalFormats...)
 	}
 	for _, ref := range tc.Environments {
 		if ref.Ref == "" {
@@ -423,6 +424,13 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// fn:unparsed-text reads the suite's own fixtures; see suiteTextResolver
 	// for why this is scoped to the checkout.
 	ctx.Texts = newSuiteTextResolver(r.Root, ts.Dir, env)
+	// A case may declare its own decimal format for fn:format-number. The
+	// builtin library's two-argument form uses the standard symbols, so a
+	// declared format is installed by overriding that entry in a library
+	// chained to the builtins.
+	if lib := decimalFormatLibrary(env); lib != nil {
+		ctx.Funcs = lib
+	}
 	// The environment may declare the base URI of the expression itself,
 	// which is distinct from the base URI of any document it is applied to.
 	for _, b := range env.StaticBaseURI {
@@ -957,6 +965,70 @@ func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, erro
 		out = append(out, doc)
 	}
 	return out, nil
+}
+
+// decimalFormatLibrary returns a function library whose fn:format-number uses
+// the decimal format the environment declared, or nil when it declared none.
+//
+// Only the unnamed format is honoured. A named one is reached by
+// format-number's third argument, which resolves a name through the static
+// context — something a bare XPath expression has no way to carry, and which
+// no case in this suite uses.
+func decimalFormatLibrary(env Environment) xpath.FunctionLibrary {
+	var decl *DecimalFormatDecl
+	for i := range env.DecimalFormats {
+		if env.DecimalFormats[i].Name == "" {
+			decl = &env.DecimalFormats[i]
+			break
+		}
+	}
+	if decl == nil {
+		return nil
+	}
+	df := xpath.DefaultDecimalFormat()
+	setRune := func(dst *rune, s string) {
+		for _, r := range s {
+			*dst = r
+			return
+		}
+	}
+	setRune(&df.DecimalSeparator, decl.DecimalSeparator)
+	setRune(&df.GroupingSeparator, decl.GroupingSeparator)
+	setRune(&df.Percent, decl.Percent)
+	setRune(&df.PerMille, decl.PerMille)
+	setRune(&df.ZeroDigit, decl.ZeroDigit)
+	setRune(&df.Digit, decl.Digit)
+	setRune(&df.PatternSeparator, decl.PatternSeparator)
+	setRune(&df.MinusSign, decl.MinusSign)
+	if decl.Infinity != "" {
+		df.Infinity = decl.Infinity
+	}
+	if decl.NaN != "" {
+		df.NaN = decl.NaN
+	}
+
+	lib := xpath.NewLibrary(xpath.Builtins())
+	lib.Add(xpath.Function{
+		Name:  xdm.QName{URI: xdm.NSFN, Local: "format-number"},
+		Arity: 2,
+		Since: xpath.XPath30,
+		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			num, err := xpath.FormatNumberArg(args, 0)
+			if err != nil {
+				return nil, err
+			}
+			pic, err := xpath.FormatNumberString(args, 1)
+			if err != nil {
+				return nil, err
+			}
+			out, err := xpath.FormatNumberVersion(num, pic, df, xpath.XPath30)
+			if err != nil {
+				return nil, err
+			}
+			return xdm.One(xdm.NewString(out)), nil
+		},
+	})
+	return lib
 }
 
 // suiteTextResolver reads fn:unparsed-text resources out of the suite.

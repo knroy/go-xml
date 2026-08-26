@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -115,6 +116,25 @@ type picture struct {
 // and a picture may carry two sub-pictures separated by ';' where the second
 // is used for negative numbers instead of prefixing a minus sign.
 func FormatNumber(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error) {
+	return FormatNumberVersion(num, pic, df, XPath20)
+}
+
+// FormatNumberVersion is FormatNumber for a caller that knows the language
+// version, which decides the error code for a malformed picture.
+//
+// XSLT 2.0 raises XTDE1310 and XPath 3.0 raises FODF1310 for the same
+// condition — the picture's syntax — so the code is a property of the caller
+// rather than of the check. Every message is written with the XSLT code and
+// rewritten here, since the two differ only in that prefix.
+func FormatNumberVersion(num *xdm.Atomic, pic string, df *DecimalFormat, v Version) (string, error) {
+	out, err := formatNumberImpl(num, pic, df)
+	if err != nil && v.atLeast30() {
+		return "", errors.New(strings.Replace(err.Error(), "XTDE1310", "FODF1310", 1))
+	}
+	return out, err
+}
+
+func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error) {
 	if num.IsNaN() {
 		return df.NaN, nil
 	}
@@ -582,7 +602,7 @@ func registerFormatNumber(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		out, err := FormatNumber(num, pic, DefaultDecimalFormat())
+		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), XPath30)
 		if err != nil {
 			return nil, err
 		}
