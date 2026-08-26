@@ -105,6 +105,11 @@ type picture struct {
 	// picture. 0 means the positions are irregular and are used as they are.
 	grouping          int
 	percent, perMille bool
+	// fracGroupPositions are the digit offsets from the *left* of the
+	// fractional part at which a separator is inserted. The fraction groups
+	// outward from the decimal point, the opposite direction from the integer
+	// part, so its positions cannot share that field.
+	fracGroupPositions []int
 }
 
 // formatNumber2 implements fn:format-number.
@@ -189,6 +194,9 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 		intStr = applyGrouping(intStr, p.grouping, p.groupPositions, df.GroupingSeparator)
 	}
 	fracStr := trimFraction(fracPart, p.minFrac, df)
+	if len(p.fracGroupPositions) > 0 {
+		fracStr = applyFracGrouping(fracStr, p.fracGroupPositions, df.GroupingSeparator)
+	}
 
 	// Section 16.4.5: the formatted number always has at least one digit. A
 	// picture of optional digits only leaves both parts empty for a value of
@@ -370,6 +378,18 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 		p.minInt = 1
 	}
 	if len(fracPart) > 0 {
+		// A separator in the fractional part groups outward from the decimal
+		// point: "#.##,##,##" separates after two digits and after four.
+		digitsBefore := 0
+		for _, r := range fracPart {
+			if r == df.GroupingSeparator {
+				if digitsBefore > 0 {
+					p.fracGroupPositions = append(p.fracGroupPositions, digitsBefore)
+				}
+				continue
+			}
+			digitsBefore++
+		}
 		p.maxFrac = 0
 		for _, r := range fracPart {
 			switch {
@@ -476,6 +496,58 @@ func translateDigits(s string, zero rune) string {
 		sb.WriteRune(r)
 	}
 	return sb.String()
+}
+
+// applyFracGrouping inserts separators into the fractional digits at the
+// offsets a picture asked for, counted from the decimal point.
+//
+// A regular pattern repeats outward: "#.##,##,##" groups every two digits
+// however long the fraction is. An irregular one applies only where written.
+func applyFracGrouping(s string, positions []int, sep rune) string {
+	if s == "" || len(positions) == 0 {
+		return s
+	}
+	step := 0
+	if regular := fracRegularInterval(positions); regular > 0 {
+		step = regular
+	}
+	runes := []rune(s)
+	var sb strings.Builder
+	for i, r := range runes {
+		if i > 0 {
+			if step > 0 {
+				if i%step == 0 {
+					sb.WriteRune(sep)
+				}
+			} else {
+				for _, p := range positions {
+					if p == i {
+						sb.WriteRune(sep)
+					}
+				}
+			}
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// fracRegularInterval returns the repeating interval fractional grouping
+// positions imply, or 0 when they are irregular.
+func fracRegularInterval(positions []int) int {
+	if len(positions) == 0 {
+		return 0
+	}
+	step := positions[0]
+	if step <= 0 {
+		return 0
+	}
+	for i, p := range positions {
+		if p != step*(i+1) {
+			return 0
+		}
+	}
+	return step
 }
 
 // applyGrouping inserts the grouping separator every n digits from the right.
