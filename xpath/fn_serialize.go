@@ -59,9 +59,16 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 		if !ok || n.Kind != xdm.KindElement {
 			continue
 		}
-		// The wrapper must be output:serialization-parameters. Anything else
-		// is not a parameter document at all.
-		if n.Name.URI != nsSerialization || n.Name.Local != "serialization-parameters" {
+		// A wrapper in the wrong namespace is not a serialization-parameters
+		// element at all, so the argument does not match the declared type:
+		// XPTY0004. A wrapper in the right namespace with the wrong local
+		// name is a malformed parameter document: SEPM0017.
+		if n.Name.URI != nsSerialization {
+			return opts, xdm.ErrType(
+				"XPTY0004: the serialization parameters must be an " +
+					"output:serialization-parameters element")
+		}
+		if n.Name.Local != "serialization-parameters" {
 			return opts, fmt.Errorf(
 				"SEPM0017: %q is not a serialization-parameters element", n.Name.Local)
 		}
@@ -77,16 +84,27 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 			if p.Kind != xdm.KindElement {
 				continue
 			}
-			if p.Name.URI != nsSerialization {
-				return opts, fmt.Errorf(
-					"SEPM0017: %q is not in the serialization namespace", p.Name.Local)
-			}
-			// A parameter given twice is SEPM0019.
-			if seen[p.Name.Local] {
+			// A parameter in another namespace is an implementation-defined
+			// extension. It is ignored rather than refused — the spec allows
+			// them — but it may still not be repeated.
+			key := p.Name.Clark()
+			if seen[key] {
 				return opts, fmt.Errorf(
 					"SEPM0019: serialization parameter %q appears more than once", p.Name.Local)
 			}
-			seen[p.Name.Local] = true
+			seen[key] = true
+			if p.Name.URI != nsSerialization {
+				continue
+			}
+
+			// use-character-maps carries child elements rather than a value.
+			if p.Name.Local == "use-character-maps" {
+				if err := checkCharacterMaps(p); err != nil {
+					return opts, err
+				}
+				return opts, fmt.Errorf(
+					"SEPM0017: serialization parameter %q is not supported", p.Name.Local)
+			}
 
 			val, err := paramValue(p)
 			if err != nil {
@@ -123,6 +141,34 @@ func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+// checkCharacterMaps validates a use-character-maps parameter.
+//
+// It carries output:character-map children rather than a value, and two of
+// them mapping the same character is SEPM0018 — a conflict the caller could
+// not have meant, and one that has to be reported before the parameter itself
+// is refused as unsupported.
+func checkCharacterMaps(p *xdm.Node) error {
+	seen := map[string]bool{}
+	for _, c := range p.Children {
+		if c.Kind != xdm.KindElement || c.Name.URI != nsSerialization ||
+			c.Name.Local != "character-map" {
+			continue
+		}
+		ch := ""
+		for _, a := range c.Attrs {
+			if a.Name.URI == "" && a.Name.Local == "character" {
+				ch = a.Value
+			}
+		}
+		if seen[ch] {
+			return fmt.Errorf(
+				"SEPM0018: character %q is mapped more than once", ch)
+		}
+		seen[ch] = true
+	}
+	return nil
 }
 
 // nsSerialization is the namespace a serialization parameter document uses.
