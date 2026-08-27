@@ -37,12 +37,16 @@ var supportedFeatures = map[string]bool{
 	"backwards_compatibility": true,
 	// xsl:evaluate compiles and runs an XPath expression built at run time.
 	"dynamic_evaluation": true,
+	// Function items, inline functions and the fn: higher-order library are
+	// implemented: XPath 3.0 passes the QT3 suite at 100%. The feature was
+	// listed unsupported long after it stopped being so, which excluded two
+	// hundred cases that pass.
+	"higher_order_functions": true,
 }
 
 // unsupportedFeatures are the ones this engine does not implement, listed so
 // that the reason is recorded rather than inferred from absence.
 var unsupportedFeatures = map[string]string{
-	"higher_order_functions":                "XPath 3.0",
 	"streaming":                             "XSLT 3.0",
 	"streaming-fallback":                    "XSLT 3.0",
 	"XPath_3.1":                             "XPath 3.1",
