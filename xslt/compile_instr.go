@@ -1055,12 +1055,25 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 	if err != nil {
 		return nil, err
 	}
-	return &copyInstr{
+	instr := &copyInstr{
 		attrSets:     sets,
 		noNamespaces: n.AttrValue("copy-namespaces") == "no",
 		body:         body,
 		validation:   spec,
-	}, nil
+	}
+	// XSLT 3.0 added select: "the selected item is the item selected by
+	// evaluating the expression in the select attribute if present, or the
+	// context item otherwise". It is the difference between copying what the
+	// template is processing and copying something the instruction names,
+	// and it is what makes xsl:copy usable inside xsl:where-populated.
+	if v := n.AttrValue("select"); v != "" {
+		sel, err := compileExpr(v, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:copy/@select: %w", err)
+		}
+		instr.sel = sel
+	}
+	return instr, nil
 }
 
 func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {

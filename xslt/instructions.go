@@ -450,6 +450,9 @@ func copyNamespacesTo(sub *outputBuilder, src *xdm.Node) {
 
 // copyInstr implements xsl:copy, a shallow copy of the context node.
 type copyInstr struct {
+	// sel is the XSLT 3.0 select attribute, naming the item to copy. Nil
+	// means the context item, which is what 2.0 always copied.
+	sel      *xpath.Compiled
 	attrSets []xdm.QName
 	// noNamespaces records copy-namespaces="no", which copies the element
 	// without its namespace nodes. The default is to copy them all.
@@ -459,9 +462,50 @@ type copyInstr struct {
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
-	node, ok := rt.ctx.Item.(*xdm.Node)
+	item := rt.ctx.Item
+	if i.sel != nil {
+		seq, err := i.sel.Eval(rt.ctx)
+		if err != nil {
+			return err
+		}
+		// "If the select expression returns an empty sequence, the xsl:copy
+		// instruction returns an empty sequence, and the contained sequence
+		// constructor is not evaluated."
+		if len(seq) == 0 {
+			return nil
+		}
+		if len(seq) > 1 {
+			return fmt.Errorf(
+				"XTTE3180: xsl:copy/@select selected %d items, and xsl:copy "+
+					"copies a single item", len(seq))
+		}
+		item = seq[0]
+		// The body of a document or element copy is evaluated "with the
+		// selected item as the singleton focus" when select is present, so
+		// the focus moves before anything below reads it.
+		rt = rt.withCurrent(item, 1, 1)
+	}
+	node, ok := item.(*xdm.Node)
 	if !ok {
-		return fmt.Errorf("XTTE0945: xsl:copy requires a node as the context item")
+		// "When the selected item is an atomic value or function item, the
+		// xsl:copy instruction returns this value. The sequence constructor
+		// is not evaluated." With no select there is no selected item to be
+		// anything but a node, so the absent context item is still XTTE0945.
+		if i.sel == nil {
+			return fmt.Errorf(
+				"XTTE0945: xsl:copy requires a node as the context item")
+		}
+		v, isAtomic := item.(*xdm.Atomic)
+		if !isAtomic {
+			// A function item. The result tree has no representation for
+			// one, and every other instruction that could receive one says
+			// so rather than dropping it silently.
+			return fmt.Errorf(
+				"XTDE0450: xsl:copy cannot copy a function item into a "+
+					"result tree")
+		}
+		out.appendValue(v)
+		return nil
 	}
 
 	switch node.Kind {
@@ -550,6 +594,11 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 	case xdm.KindPI:
 		out.appendNode(&xdm.Node{Kind: xdm.KindPI, Name: node.Name, Value: node.Value})
 		return nil
+
+	case xdm.KindNamespace:
+		// A namespace node joins the element's bindings rather than its
+		// children, exactly as it does for xsl:copy-of.
+		return out.addNamespaceNode(node.Name.Local, node.Value)
 	}
 	return nil
 }
