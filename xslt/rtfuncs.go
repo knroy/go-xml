@@ -277,7 +277,23 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				// itself. It is how a stylesheet carrying its own lookup
 				// tables as literal data reads them, and it needs no
 				// resolver because nothing is fetched.
-				if strings.TrimSpace(uri) == "" && rt.sheet.source != nil {
+				// The zero-length URI resolves against the base URI in force
+				// where the call is written, and then names whatever document
+				// is at the result. Where nothing has moved that base, the
+				// answer is the containing stylesheet module, which is
+				// returned directly because nothing needs fetching -- that is
+				// how a stylesheet carrying its own lookup tables as literal
+				// data reads them.
+				//
+				// 16.1's note is explicit that this holds only "unless XML
+				// entities or xml:base are used": an xml:base on the template
+				// resolves the empty reference to a *different* URI, naming a
+				// different resource. base-uri-050 writes document('') under
+				// three nested xml:base attributes and requires three
+				// different answers, so the shortcut is taken only when the
+				// base still agrees with the module's own.
+				if strings.TrimSpace(uri) == "" && rt.sheet.source != nil &&
+					sameResource(r.base, rt.sheet.source.BaseURI) {
 					if !seen[rt.sheet.source] {
 						seen[rt.sheet.source] = true
 						out = append(out, rt.sheet.source)
