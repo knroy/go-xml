@@ -242,7 +242,7 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// required to be empty, and xsl:stylesheet has XTSE0120 of its
 			// own for a text node child.
 			switch {
-			case el.Name.Local == "stylesheet" || el.Name.Local == "transform":
+			case isStylesheetRootName(el.Name.Local):
 				return fmt.Errorf(
 					"an xsl:%s element must not have text node children (XTSE0120)",
 					el.Name.Local)
@@ -379,6 +379,15 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 			return nil
 		}
 	}
+	// XSLT 3.0 admits true/false/1/0 wherever 2.0 admits only yes/no, so a
+	// 3.0 module's spelling is normalised before the value is refused.
+	if alias, ok := boolAliases[v]; ok && allowsBoolAliases(el) {
+		for _, want := range ad.values {
+			if alias == want {
+				return nil
+			}
+		}
+	}
 	return fmt.Errorf(
 		"attribute %s=%q on xsl:%s is not one of %s (XTSE0020)",
 		a.Name.Local, a.Value, el.Name.Local, strings.Join(ad.values, ", "))
@@ -493,7 +502,7 @@ func isExtensionInstruction(el *xdm.Node) bool {
 func isTopLevel(el *xdm.Node) bool {
 	p := el.Parent
 	return p != nil && p.Kind == xdm.KindElement && p.Name.URI == xdm.NSXSL &&
-		(p.Name.Local == "stylesheet" || p.Name.Local == "transform")
+		isStylesheetRootName(p.Name.Local)
 }
 
 // forwardsMode reports whether forwards-compatible behaviour is in force at

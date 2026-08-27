@@ -183,7 +183,7 @@ func moduleDefaultValidation(n *xdm.Node) string {
 			continue
 		}
 		switch a.Name.Local {
-		case "stylesheet", "transform":
+		case "stylesheet", "transform", "package":
 			return a.AttrValue("default-validation")
 		}
 	}

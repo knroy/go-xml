@@ -274,6 +274,14 @@ var xsltElements = map[string]elementDef{
 	// The XSLT 3.0 conditional content instructions, section 8.4. Both
 	// xsl:on-empty and xsl:on-non-empty share xsl:sequence's summary;
 	// xsl:where-populated has no attributes at all.
+	// The map constructor instructions of section 14. xsl:map takes no
+	// attributes; on xsl:map-entry the key is required and select is the
+	// alternative to a sequence constructor.
+	"map": {attrs: map[string]attrDef{}},
+	"map-entry": {attrs: map[string]attrDef{
+		"key":    {required: true},
+		"select": {},
+	}},
 	"on-empty": {attrs: map[string]attrDef{
 		"select": {},
 	}},
@@ -503,6 +511,8 @@ var contentModels = map[string]contentModel{
 	"next-iteration":         {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
 	"break":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-completion":          {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"map":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"map-entry":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -564,6 +574,8 @@ var xsltInstructions = map[string]bool{
 	"element":                true,
 	"evaluate":               true,
 	"iterate":                true,
+	"map":                    true,
+	"map-entry":              true,
 	"on-empty":               true,
 	"on-non-empty":           true,
 	"where-populated":        true,

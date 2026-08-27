@@ -454,6 +454,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return c.compileBreak(n, ns)
 	case "next-iteration":
 		return c.compileNextIteration(n, ns)
+	case "map", "map-entry":
+		return c.compileMap(n, ns)
 	case "on-empty", "on-non-empty", "where-populated":
 		return c.compileOnEmpty(n, ns)
 	case "sequence":

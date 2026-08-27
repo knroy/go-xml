@@ -48,8 +48,12 @@ var namedDeclarations = map[string]bool{
 
 // checkStaticErrors applies the tree-decidable static rules to a module.
 func checkStaticErrors(root *xdm.Node) error {
-	if isXSL(root, "stylesheet") || isXSL(root, "transform") {
+	if root.Kind == xdm.KindElement && root.Name.URI == xdm.NSXSL &&
+		isStylesheetRootName(root.Name.Local) {
 		if err := checkStylesheetElement(root); err != nil {
+			return err
+		}
+		if err := checkDeclaredModes(root); err != nil {
 			return err
 		}
 	}
@@ -279,7 +283,7 @@ func checkElementStatic(el *xdm.Node) error {
 		// parent is the xsl:stylesheet element.
 		p := el.Parent
 		if p == nil || p.Name.URI != xdm.NSXSL ||
-			(p.Name.Local != "stylesheet" && p.Name.Local != "transform") {
+			!isStylesheetRootName(p.Name.Local) {
 			code := "XTSE0170"
 			if local == "import" {
 				code = "XTSE0190"

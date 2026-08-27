@@ -35,6 +35,8 @@ var supportedFeatures = map[string]bool{
 	// appendix B.1 coercion rules are in force for expressions written inside
 	// a version="1.0" scope. See compatModeAt in the xslt package.
 	"backwards_compatibility": true,
+	// xsl:evaluate compiles and runs an XPath expression built at run time.
+	"dynamic_evaluation": true,
 }
 
 // unsupportedFeatures are the ones this engine does not implement, listed so
@@ -44,7 +46,6 @@ var unsupportedFeatures = map[string]string{
 	"streaming":                             "XSLT 3.0",
 	"streaming-fallback":                    "XSLT 3.0",
 	"XPath_3.1":                             "XPath 3.1",
-	"dynamic_evaluation":                    "not implemented; xsl:evaluate is XSLT 3.0",
 	"disabling_output_escaping":             "not implemented; the serializer escapes always",
 	"XML_1.1":                               "the parser implements XML 1.0",
 	"XSD_1.1":                               "available, but the suite's tests assume 1.1 defaults",
