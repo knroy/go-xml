@@ -22,6 +22,13 @@ import (
 type dynamicQName struct {
 	arg Expr
 	ns  NamespaceResolver
+	// lexType and derived are set when this stands for the constructor of an
+	// imported type whose value space is the QName one -- a subtype of
+	// xs:NOTATION or of xs:QName. The facets the schema author wrote still
+	// apply, and the result has to carry the derived type's annotation so
+	// that "instance of" against that very type answers true.
+	lexType string
+	derived string
 }
 
 func (e *dynamicQName) String() string { return "xs:QName(" + e.arg.String() + ")" }
@@ -46,7 +53,7 @@ func (e *dynamicQName) Eval(ctx *Context) (xdm.Sequence, error) {
 	// is the QName one -- carries its own namespace binding and needs nothing
 	// from the static context.
 	if a.Type == xdm.TypeQName {
-		return xdm.One(a), nil
+		return xdm.One(e.annotate(a)), nil
 	}
 	switch a.Type {
 	case xdm.TypeString, xdm.TypeUntypedAtomic, xdm.TypeAnyURI:
@@ -54,11 +61,31 @@ func (e *dynamicQName) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, xdm.ErrType(
 			"xs:QName() takes a string, got %s", a.Type)
 	}
-	q, err := resolveLexicalQName(strings.TrimSpace(a.String()), e.ns)
+	lex := strings.TrimSpace(a.String())
+	q, err := resolveLexicalQName(lex, e.ns)
 	if err != nil {
 		return nil, err
 	}
-	return xdm.One(xdm.NewQNameValue(q)), nil
+	// The schema's own facets -- the enumeration of notations, above all --
+	// are checked against the expanded name rather than the lexical form, so
+	// that two prefixes for one namespace agree and one prefix for two
+	// namespaces does not.
+	if e.lexType != "" {
+		clark := "{" + q.URI + "}" + q.Local
+		if known, verr := schemaValueValid(e.lexType, e.ns, clark); known && verr != nil {
+			return nil, xdm.Errorf("FORG0001", "%v", verr)
+		}
+	}
+	return xdm.One(e.annotate(xdm.NewQNameValue(q))), nil
+}
+
+// annotate stamps the derived type's annotation onto a constructed value, so
+// that the result of foo:nota(...) is an instance of foo:nota.
+func (e *dynamicQName) annotate(a *xdm.Atomic) *xdm.Atomic {
+	if e.derived == "" {
+		return a
+	}
+	return a.WithDerived(e.derived)
 }
 
 // resolveLexicalQName turns "prefix:local" into a QName using ns.

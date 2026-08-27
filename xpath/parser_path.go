@@ -919,6 +919,20 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 			q.Val = q.Val.WithDerived(annotationKeyOf(lex, p.ns))
 			return q, true
 		}
+		// XPath 3.0 admits a computed string here for the same reason it does
+		// for xs:QName(): the prefix resolves against the statically known
+		// namespaces of the expression rather than of a literal. The facets
+		// still have to be checked, but only once the value exists, so both
+		// the resolver and the type's name are carried to run time.
+		// notation-0001..0004 cast a computed string to a NOTATION subtype.
+		if p.version.atLeast30() {
+			return &dynamicQName{
+				arg:     args[0],
+				ns:      p.ns,
+				lexType: lex,
+				derived: annotationKeyOf(lex, p.ns),
+			}, true
+		}
 		return nil, false
 	}
 	return &CastExpr{
