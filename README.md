@@ -71,8 +71,8 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
 | **XPath 3.1** | 99.98% of the W3C QT3 suite (21,782 of 21,786 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XSLT 2.0** | 99.55% of the W3C XSLT suite filtered to 2.0 (6,132 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 92.79% of the W3C XSLT suite filtered to 3.0 (7,693 of 8,291 in scope). Streaming is not implemented, and its 2,677 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
+| **XSLT 2.0** | 99.61% of the W3C XSLT suite filtered to 2.0 (6,136 of 6,160 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 98.56% of the W3C XSLT suite filtered to 3.0 (8,499 of 8,623 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.56%** of its *schema-validity* tests (14,341 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,177 of 26,205); **99.18%** schema-validity (15,239 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -84,7 +84,7 @@ Requires Go 1.26 or later.
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Schema-validity is the weakest of the measured numbers**, at 99.56% (1.0)
+1. **Schema-validity is the weakest of the XSD numbers**, at 99.56% (1.0)
    and 99.18% (1.1) — a schema invalid in one of the remaining ways is
    accepted rather than reported. Instance validation, which is what most
    callers actually do, is above 99.7% in both versions. The remaining
@@ -98,17 +98,22 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the weakest of the measured numbers, by a long way.** It sits
-   at 92.79% against 99%+ for everything else here, and the figure is young.
-   XSLT 2.0 is a different matter at 99.55%, and the corpus differential
-   against Saxon remains the stronger evidence for real stylesheets.
+3. **XSLT 3.0 is the weakest of the measured numbers**, at 98.56%, and the
+   figure is the youngest here. It is no longer far below the others — it,
+   schema-validity (99.18%) and XSLT 2.0 (99.61%) sit within about a point of
+   each other — but it is still the one to check against your own stylesheets
+   first. Package composition is where the remaining failures concentrate:
+   `xsl:use-package`, `xsl:override` and `xsl:accept` account for about a
+   third of them, and a stylesheet that does not use packages is unlikely to
+   meet any of it. The corpus differential against Saxon remains the stronger
+   evidence for real stylesheets than either percentage.
 
    Neither XSLT number is directly comparable to the XPath and XSD ones. There
    is no maintained XSLT 2.0 suite, so both are the XSLT 3.0 suite filtered by
    each test's declared version dependency — a different kind of measurement
    from running a suite written for the version under test.
 
-   **Streaming is not implemented**, and its 2,677 cases are out of scope
+   **Streaming is not implemented**, and its 2,716 cases are out of scope
    rather than counted as failures. That is the single largest gap, and it is
    architectural rather than a matter of filling in instructions: streaming
    wants a pull parser and a streamability static analysis, not another
@@ -1211,8 +1216,8 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 ```
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
-XSLT suite: 14601 cases, 6159 in scope, 8442 skipped
-in-scope: 6132 passed, 27 failed (99.55%)
+XSLT suite: 14601 cases, 6160 in scope, 8441 skipped
+in-scope: 6136 passed, 24 failed (99.61%)
 ```
 
 `TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every
@@ -1220,9 +1225,10 @@ change, because the question a change has to answer is not "how much 3.0 works"
 but "how much 3.0 works without costing 2.0".
 
 The filter decides what the number means, so each run prints its own
-exclusions: at the 2.0 target 5,681 cases need XSLT 3.0 and 1,580 depend on a
-Unicode version; at the 3.0 target 2,677 need streaming. A dependency the runner does not model excludes the test rather
-than being ignored — running a test under conditions it did not ask for reports
+exclusions: at the 2.0 target 6,115 cases need XSLT 3.0, 1,580 depend on a
+Unicode version and 347 need packages; at the 3.0 target 2,716 need streaming,
+1,580 depend on a Unicode version and 1,098 are XSLT 2.0 only. A dependency the
+runner does not model excludes the test rather than being ignored — running a test under conditions it did not ask for reports
 the mismatch as a failure of the engine.
 
 `GOXSLT_XSLTS_VERBOSE=1` lists every failure rather than counting them.

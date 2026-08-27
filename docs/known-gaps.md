@@ -28,8 +28,8 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.89% instance · 99.18% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.55% — 6,132 of 6,159 in scope |
-| XSLT 3.0 | W3C xslt30-test, filtered | 92.79% — 7,693 of 8,291 in scope; streaming out of scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.61% — 6,136 of 6,160 in scope |
+| XSLT 3.0 | W3C xslt30-test, filtered | 98.56% — 8,499 of 8,623 in scope; streaming out of scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -75,9 +75,15 @@ Two limits remain, neither measured by the suite:
 
 ### XSLT
 
-XSLT 2.0 is at 99.55% and XSLT 3.0 at 92.79%. The 3.0 figure is the weakest
-number measured here and the newest, so read it as a floor rather than a
-settled figure.
+XSLT 2.0 is at 99.61% and XSLT 3.0 at 98.56%. The 3.0 figure is the lowest
+measured here and the newest, so read it as a floor rather than a settled
+figure — though the spread between it, schema-validity (99.18%) and XSLT 2.0
+is now about a point rather than the six it was.
+
+The remaining 3.0 failures are not spread evenly. Package composition holds
+about a third of them: `xsl:use-package`, `xsl:override` and `xsl:accept`
+between them account for some forty cases, and a stylesheet that declares no
+packages meets none of that.
 
 There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
 2007 behind a click-through licence, with no repository. Both numbers come
@@ -87,11 +93,13 @@ version under test. The same catalog is run twice, once per target, because
 the question a change has to answer is not "how much 3.0 works" but "how much
 3.0 works without costing 2.0".
 
-At the 2.0 target 6,159 of 14,601 cases are in scope, the largest exclusions
-being those needing XSLT 3.0 and 1,580 depending on a Unicode version. At the
-3.0 target 8,291 are in scope.
+At the 2.0 target 6,160 of 14,601 cases are in scope, the largest exclusions
+being 6,115 needing XSLT 3.0, 1,580 depending on a Unicode version and 347
+needing packages. At the 3.0 target 8,623 are in scope, the largest exclusions
+being 2,716 needing streaming, 1,580 depending on a Unicode version and 1,098
+written for XSLT 2.0 only.
 
-**Streaming is not implemented and is the largest single gap**: 2,677 cases
+**Streaming is not implemented and is the largest single gap**: 2,716 cases
 depend on it and are out of scope rather than failing. It is architectural
 rather than a matter of filling in instructions — a streaming processor wants
 a pull parser and a streamability static analysis — and `xsl:stream` and
@@ -106,39 +114,40 @@ what shows where the work is. A set failing nearly everything is an
 unimplemented feature; one failing a handful is edge cases. The largest gaps
 by that measure:
 
-| set | passing | what is missing |
+| set | failing | what is missing |
 |---|---|---|
-| `docbook` | 1/2 | the remaining one needs the EXSLT `document` extension *element*; its stylesheet terminates itself when no chunking element is available |
-| `unparsed-text` | 1/2 | one case needs the network, which is refused |
-| `collection` | 5/6 | one case needs XSLT 3.0 packages |
-| `regex` | 42/49 | variable-width backreferences, off by default |
-| `analyze-string` | 43/45 | the same |
-| `regex-syntax-xslt20` | 981/987 | three suite defects, three that would cost XSD tests |
-| `xpath-compat` | 17/18 | `string(xs:float(-0))` serialisation |
-| `backwards` | 45/46 | one harness base-URI case for inline sources |
-| `validation` | 42/43 | Saxon-specific `indent="yes"` layout |
-| `format-number` | 67/68 | a suite defect, not an engine gap |
-| `import-schema` | 190/191 | static content-model checking against a declared `as` |
-| `sequence` | 87/88 | catalog metadata separates it from a passing twin |
-| `use-when` | 79/80 | unprefixed type names in the default element namespace |
-| `variable` | 102/103 | XSLT 3.0 text value templates |
+| `regex` | 7 | variable-width backreferences, off by default |
+| `regex-syntax-xslt20` | 6 | three suite defects, three that would cost XSD tests |
+| `analyze-string` | 2 | variable-width backreferences again |
+| `docbook` | 1 | needs the EXSLT `document` extension *element*; the stylesheet terminates itself when no chunking element is available |
+| `unparsed-text` | 1 | needs the network, which is refused |
+| `collection` | 1 | needs XSLT 3.0 packages, which a 2.0 run will not compile |
+| `validation` | 1 | Saxon-specific `indent="yes"` layout |
+| `format-number` | 1 | a suite defect, not an engine gap |
+| `import-schema` | 1 | nested strict validation attributes the error to the inner element, where the suite wants the outer one |
+| `sequence` | 1 | catalog metadata separates it from a passing twin |
+| `result-document` | 1 | `fn:current-output-uri` is XSLT 3.0 only, so the 2.0 run reports XPST0017 before reaching the error the case wants |
+| `function` | 1 | `fn:function-available` swept across the whole F+O list, where a handful of 3.0 functions must read as absent |
 
 **Not all 24 are open problems, and the table above does not say so on its own.**
 Nine of them — the `regex` and `analyze-string` rows — pass with
 `xpath.SetBacktrackingRegex(true)`; the engine for them is written, tested and
 shipped, and the failures are a consequence of a deliberate default rather than
-of missing work. Six more are cases where this engine is right and the suite is
-not, or where matching the suite would cost XSD tests, which is a trade this
-project does not make. Six need XSLT 3.0 features, the network, or
+of missing work. Eight more are cases where this engine is right and the suite
+is not, or where matching the suite would cost XSD tests, which is a trade this
+project does not make. Five need XSLT 3.0 features, the network, or
 byte-identical reproduction of another processor's indentation. That leaves
 two genuinely open, and they are the ones worth reading this file for:
 `docbook-001` now compiles and runs — the EXSLT `node-set` function is
 implemented — but its stylesheet terminates itself with `xsl:message` because
 it also wants the EXSLT `document` *extension element*, which this processor
-does not have; and `import-schema-137` needs whole-program static type
-checking.
+does not have; and `import-schema-137` needs a nested strict validation to
+attribute its failure to the outermost validation root, where this reports the
+inner element that actually failed (XTTE1512 for a `z:familyname` with no
+top-level declaration, where the suite wants the enclosing `z:person`'s
+XTTE1510).
 
-Six of the remaining failures are errors the suite expects that the engine
+Several of the remaining failures are errors the suite expects that the engine
 does not raise. That is the same shape as the XSD schema-validity gap: the
 engine accepts a stylesheet the specification says to reject. It is the
 lower-risk direction — a wrong stylesheet runs rather than being reported —
