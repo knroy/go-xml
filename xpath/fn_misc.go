@@ -49,8 +49,21 @@ func registerMiscFuncs(l *Library) {
 		if len(da) == 0 || len(ta) == 0 {
 			return xdm.Empty(), nil
 		}
-		d := da[0].(*xdm.Atomic).DateTimeVal()
-		t := ta[0].(*xdm.Atomic).DateTimeVal()
+		// The parameters are declared xs:date? and xs:time?, so the function
+		// conversion rules cast an xs:untypedAtomic argument to that type
+		// rather than refusing it. Reading DateTimeVal directly skipped the
+		// cast, which made dateTime(@date, time) over an unvalidated document
+		// — the ordinary way to build a timestamp from separate fields —
+		// XPTY0004 instead of a dateTime.
+		dv, err := dateTimeArg(da[0].(*xdm.Atomic), xdm.TypeDate)
+		if err != nil {
+			return nil, err
+		}
+		tv, err := dateTimeArg(ta[0].(*xdm.Atomic), xdm.TypeTime)
+		if err != nil {
+			return nil, err
+		}
+		d, t := dv, tv
 		if d == nil || t == nil {
 			return nil, xdm.ErrType("dateTime(): expected an xs:date and an xs:time")
 		}
@@ -74,6 +87,26 @@ func registerMiscFuncs(l *Library) {
 
 	l.registerFn("collection", []int{0, 1}, fnCollection)
 
+}
+
+// dateTimeArg applies the function conversion rules to one argument of
+// fn:dateTime, whose parameters are declared xs:date? and xs:time?.
+//
+// Only xs:untypedAtomic is converted. A value that already has a date or time
+// type is taken as it is, and anything else is a type error rather than
+// something to coerce: casting an xs:string here would make
+// dateTime("2009-08-20", "12:00:00") legal, which the signature does not
+// allow.
+func dateTimeArg(a *xdm.Atomic, want xdm.TypeCode) (*xdm.DateTime, error) {
+	if a.Type == xdm.TypeUntypedAtomic {
+		conv, err := CastAtomic(a, want)
+		if err != nil {
+			return nil, xdm.ErrType(
+				"dateTime(): %q is not a valid %s", a.String(), want.String())
+		}
+		return conv.DateTimeVal(), nil
+	}
+	return a.DateTimeVal(), nil
 }
 
 // RegisterXSLTFuncs adds the functions that XSLT 2.0 defines but XPath 2.0 does
