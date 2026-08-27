@@ -789,6 +789,13 @@ var xsltDeclarations = map[string]bool{
 	"strip-space":     true,
 	"template":        true,
 	"variable":        true,
+	// xsl:use-package and xsl:expose are declarations in the sense that
+	// matters here: they are top-level elements this version understands, so
+	// forwards-compatible processing must not ignore them the way it ignores
+	// an element from a later version. Leaving them out had the static phase
+	// prune every xsl:use-package before composition could read it.
+	"use-package": true,
+	"expose":      true,
 }
 
 // qnameAttrDef records that an attribute's value is a QName, or a
