@@ -86,6 +86,13 @@ type mergeSource struct {
 type mergeEntry struct {
 	item xdm.Item
 	keys []sortValue
+	// atoms is the key vector before makeSortValue reduced it, one entry per
+	// merge key component and nil where the key was empty or not a single
+	// atomic value. XTTE2230 is asked of the values as the "le" operator
+	// would see them, and makeSortValue deliberately drops an
+	// xs:untypedAtomic — the type the error is most often about — because an
+	// xsl:sort promotes it to text rather than refusing it.
+	atoms []*xdm.Atomic
 	// src, anchor and pos are the tie-break, in the major-to-minor order
 	// section 15.6.1 gives for the current merge group: the merge source's
 	// position in the stylesheet, then the anchor item's position, then the
@@ -465,6 +472,10 @@ func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		entries = append(entries, got...)
 	}
 
+	if err := checkMergeKeysComparable(entries, len(i.sources)); err != nil {
+		return err
+	}
+
 	// Ordering the union by key and breaking ties by (source, anchor,
 	// position) is the merge. The sort is stable, so entries whose whole key
 	// vector compares equal keep exactly the order the tie-break gives them.
@@ -560,6 +571,80 @@ func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		sub = sub.withVar(currentMergeSourcesVar, nameSeq)
 		if err := execSequence(i.action, sub, out); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkMergeKeysComparable is XTTE2230: a merge key value from one input
+// sequence that cannot be compared with "le" against the corresponding key
+// from another.
+//
+// The sort machinery cannot answer this on its own. For an xsl:sort an
+// xs:untypedAtomic key is promoted to the other operand's type and ordered as
+// text when that fails, which is right there and wrong here: "le" over an
+// untyped value promotes it by *casting*, and a date string against an
+// xs:dateTime does not cast. So the untyped keys of each source are tested
+// against the typed keys of the others, which is the pairing the error is
+// written about — within one source the keys are all computed the same way
+// and the type check the sort already makes covers them.
+func checkMergeKeysComparable(entries []mergeEntry, nsrc int) error {
+	if nsrc < 2 {
+		return nil
+	}
+	// One representative typed value and one representative untyped value per
+	// (source, key position) is enough: every item of one input sequence has
+	// its key computed by the same expression, so a second sample of the same
+	// source adds nothing the first did not say.
+	type sample struct{ typed, untyped *xdm.Atomic }
+	byKey := map[int]map[int]*sample{}
+	for _, e := range entries {
+		for k, a := range e.atoms {
+			if a == nil {
+				continue
+			}
+			m := byKey[k]
+			if m == nil {
+				m = map[int]*sample{}
+				byKey[k] = m
+			}
+			sm := m[e.src]
+			if sm == nil {
+				sm = &sample{}
+				m[e.src] = sm
+			}
+			if isUntyped(a) {
+				if sm.untyped == nil {
+					sm.untyped = a
+				}
+			} else if sm.typed == nil {
+				sm.typed = a
+			}
+		}
+	}
+	for _, m := range byKey {
+		for src, sm := range m {
+			if sm.untyped == nil {
+				continue
+			}
+			for other, om := range m {
+				if other == src || om.typed == nil {
+					continue
+				}
+				// "le" casts the untyped operand to the typed one's type. A
+				// cast that fails is the error; a numeric target is the
+				// exception the operator makes, casting to xs:double.
+				target := om.typed.Type
+				if target.IsNumeric() {
+					target = xdm.TypeDouble
+				}
+				if _, err := xpath.CastAtomic(sm.untyped, target); err != nil {
+					return fmt.Errorf(
+						"XTTE2230: the merge key %q of one input sequence "+
+							"cannot be compared with the %s key of another",
+						sm.untyped.String(), om.typed.TypeName())
+				}
+			}
 		}
 	}
 	return nil
@@ -662,10 +747,16 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 			// xsl:sort key, which sees the position in the unsorted sequence.
 			kctx := rt.withCurrent(it, 1, 1)
 			kv := make([]sortValue, len(keys))
+			ka := make([]*xdm.Atomic, len(keys))
 			for k, sk := range keys {
 				v, err := sk.evalKey(kctx)
 				if err != nil {
 					return nil, err
+				}
+				if at := xdm.Atomize(v); len(at) == 1 {
+					if a, ok := at[0].(*xdm.Atomic); ok {
+						ka[k] = a
+					}
 				}
 				sv, err := makeSortValue(v, sk, colls[k],
 					rt.ctx.ImplicitTimezone, rt.sheet.output.Version10Implicit)
@@ -677,7 +768,8 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 				}
 				kv[k] = sv
 			}
-			entries[p] = mergeEntry{item: it, keys: kv, src: idx, anchor: a, pos: p}
+			entries[p] = mergeEntry{item: it, keys: kv, atoms: ka,
+				src: idx, anchor: a, pos: p}
 		}
 		if s.sortBeforeMerge {
 			// The input was not promised to be sorted, so sort it. Doing it

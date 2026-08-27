@@ -114,8 +114,14 @@ var xsltElements = map[string]elementDef{
 		"on-multiple-match":         {values: []string{"use-last", "fail"}},
 		"warning-on-no-match":       {values: []string{"yes", "no"}},
 		"warning-on-multiple-match": {values: []string{"yes", "no"}},
-		"typed":                     {},
-		"visibility":                {},
+		// XSLT 3.0 section 6.6: @typed says whether the mode expects typed
+		// input. "lax" and "strict" join the booleans, so the vocabulary is
+		// not the plain yes/no one.
+		"typed": {values: []string{"yes", "no", "true", "false", "1", "0", "lax", "strict", "unspecified"}},
+		// A mode declaration's visibility is drawn from the package
+		// vocabulary minus "abstract": a mode has no signature to leave
+		// unimplemented.
+		"visibility": {values: []string{"public", "private", "final", "hidden"}},
 	}},
 	"include": {attrs: map[string]attrDef{
 		"href": {required: true},
@@ -255,6 +261,7 @@ var xsltElements = map[string]elementDef{
 		"select": {},
 	}},
 	"copy": {attrs: map[string]attrDef{
+		"select":             {since30: true},
 		"copy-namespaces":    {values: []string{"yes", "no"}},
 		"inherit-namespaces": {values: []string{"yes", "no"}},
 		"use-attribute-sets": {},
@@ -317,10 +324,13 @@ var xsltElements = map[string]elementDef{
 	// than being told xsl:merge is an element it may use.
 	"merge": {since30: true, attrs: map[string]attrDef{}},
 	"merge-source": {since30: true, attrs: map[string]attrDef{
-		"name":             {},
-		"for-each-item":    {},
-		"for-each-source":  {},
-		"select":           {},
+		"name":            {},
+		"for-each-item":   {},
+		"for-each-source": {},
+		// The summary types select without a "?", so it is required: with no
+		// anchor there is nothing else an xsl:merge-source could select, and
+		// merge-032b writes one without it and requires XTSE0010.
+		"select":           {required: true},
 		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
 		"use-accumulators": {},
 		"sort-before-merge": {
