@@ -139,7 +139,11 @@ type copyOfInstr struct {
 	sel *xpath.Compiled
 	// noNamespaces records copy-namespaces="no".
 	noNamespaces bool
-	validation   validationSpec
+	// copyAccumulators records copy-accumulators="yes", which carries the
+	// accumulator values of the copied nodes onto the copies. See
+	// noteCopiedAccumulators in accumulator.go.
+	copyAccumulators bool
+	validation       validationSpec
 	// baseURI is the base URI of the xsl:copy-of instruction itself. Section
 	// 11.9.2 resolves a copied element's relative xml:base against it while
 	// the copy is still parentless; once the copy is attached to a parent,
@@ -242,6 +246,9 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 						"content is namespace-sensitive", describeNode(v))
 			}
 			c := deepCopy(v)
+			if i.copyAccumulators {
+				rt.noteCopiedAccumulators(v, c)
+			}
 			if out.open == nil {
 				// A parentless copy keeps its own xml:base, resolved against
 				// the instruction's base URI rather than against the document

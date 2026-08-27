@@ -45,6 +45,12 @@ type runtime struct {
 	// walking everything before it, so the walk is done once per pair.
 	accumValues   map[accumCacheKey]*accumulatorValues
 	accumBuilding map[accumCacheKey]bool
+	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
+	// the node it was copied from, which is the only thing that can say what
+	// an accumulator's value at the copy should be. It is a map on the
+	// runtime rather than a field on the node so that copying leaves the
+	// tree itself untouched.
+	accumOrigin map[*xdm.Node]*xdm.Node
 
 	// treeAccums records, per document root, which accumulators 18.2.2 makes
 	// applicable to that tree. Only a document read by an
@@ -1047,6 +1053,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
 		accumBuilding: map[accumCacheKey]bool{},
+		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
 		tunnel:      map[string]xdm.Sequence{},
 		messages:    new([]string),

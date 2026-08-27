@@ -58,6 +58,13 @@ type attrDef struct {
 	// xsl:sequence/@select is the case: 3.0 lets a sequence constructor
 	// stand in for it, while 2.0 still requires the attribute.
 	optional30 bool
+	// processor30 is since30 for an attribute whose availability follows the
+	// processor rather than the module. XSLT 3.0's new serialisation
+	// attributes are the case: result-document-0302 writes build-tree in a
+	// version="2.0" module and is scoped XSLT30+, exactly as message-0009
+	// writes terminate="true" there -- what decides is whether the processor
+	// implements 3.0, not what the module's @version happens to say.
+	processor30 bool
 }
 
 // xsltElements is the grammar, keyed by local name.
@@ -271,8 +278,12 @@ var xsltElements = map[string]elementDef{
 	"copy-of": {attrs: map[string]attrDef{
 		"select":          {required: true},
 		"copy-namespaces": {values: []string{"yes", "no"}},
-		"type":            {},
-		"validation":      {},
+		// XSLT 3.0 section 18.3: the copy carries the accumulator values of
+		// the node it was copied from, which nothing else can supply — the
+		// copy's own tree is all the document the rules would see.
+		"copy-accumulators": {values: []string{"yes", "no"}},
+		"type":              {},
+		"validation":        {},
 	}},
 	// xsl:evaluate is an XSLT 3.0 instruction, listed here for the same reason
 	// xsl:mode is: rejecting it under XTSE0010 is the wrong error at the wrong
@@ -466,28 +477,36 @@ var xsltElements = map[string]elementDef{
 		"type":             {},
 	}},
 	"result-document": {attrs: map[string]attrDef{
-		"html-version":           {avt: true},
-		"suppress-indentation":   {avt: true},
-		"format":                 {avt: true},
-		"href":                   {avt: true},
-		"validation":             {values: []string{"strict", "lax", "preserve", "strip"}},
-		"type":                   {},
-		"method":                 {avt: true},
-		"byte-order-mark":        {values: []string{"yes", "no"}, avt: true},
-		"cdata-section-elements": {avt: true},
-		"doctype-public":         {avt: true},
-		"doctype-system":         {avt: true},
-		"encoding":               {avt: true},
-		"escape-uri-attributes":  {values: []string{"yes", "no"}, avt: true},
-		"include-content-type":   {values: []string{"yes", "no"}, avt: true},
-		"indent":                 {values: []string{"yes", "no"}, avt: true},
-		"media-type":             {avt: true},
-		"normalization-form":     {avt: true},
-		"omit-xml-declaration":   {values: []string{"yes", "no"}, avt: true},
-		"standalone":             {values: []string{"yes", "no", "omit"}, avt: true},
-		"undeclare-prefixes":     {values: []string{"yes", "no"}, avt: true},
-		"use-character-maps":     {},
-		"output-version":         {avt: true},
+		// build-tree says whether the raw result is normalised into a final
+		// result tree or serialised as the sequence it is; see 2.3.6. XSLT
+		// 3.0 added it, along with the two JSON serialisation parameters.
+		"build-tree":              {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"allow-duplicate-names":   {processor30: true, avt: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"json-node-output-method": {processor30: true, avt: true},
+		"parameter-document":      {processor30: true, avt: true},
+		"item-separator":          {avt: true},
+		"html-version":            {avt: true},
+		"suppress-indentation":    {avt: true},
+		"format":                  {avt: true},
+		"href":                    {avt: true},
+		"validation":              {values: []string{"strict", "lax", "preserve", "strip"}},
+		"type":                    {},
+		"method":                  {avt: true},
+		"byte-order-mark":         {values: []string{"yes", "no"}, avt: true},
+		"cdata-section-elements":  {avt: true},
+		"doctype-public":          {avt: true},
+		"doctype-system":          {avt: true},
+		"encoding":                {avt: true},
+		"escape-uri-attributes":   {values: []string{"yes", "no"}, avt: true},
+		"include-content-type":    {values: []string{"yes", "no"}, avt: true},
+		"indent":                  {values: []string{"yes", "no"}, avt: true},
+		"media-type":              {avt: true},
+		"normalization-form":      {avt: true},
+		"omit-xml-declaration":    {values: []string{"yes", "no"}, avt: true},
+		"standalone":              {values: []string{"yes", "no", "omit"}, avt: true},
+		"undeclare-prefixes":      {values: []string{"yes", "no"}, avt: true},
+		"use-character-maps":      {},
+		"output-version":          {avt: true},
 	}},
 	"output": {attrs: map[string]attrDef{
 		"name":   {},

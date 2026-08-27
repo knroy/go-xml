@@ -451,6 +451,10 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return nil, fmt.Errorf(
 			"XTDE3400: %s(%q) has no context node", fname, lex)
 	}
+	// A node produced by a copy-accumulators="yes" copy answers with the
+	// value its original had, not with what the rules would compute over the
+	// copy's own tree.
+	node = rt.accumulatorOrigin(node)
 	// 18.2.2 narrows the applicable set for a document read with an explicit
 	// use-accumulators list — an xsl:merge-source is where this engine can
 	// say so — and XTDE3362 is reading one the list leaves out. The check is
@@ -473,4 +477,50 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return vals.after[node], nil
 	}
 	return vals.before[node], nil
+}
+
+// noteCopiedAccumulators records that copy was made from orig, so that an
+// accumulator asked about the copy answers with the original's value.
+//
+// Section 18.3: xsl:copy-of and xsl:copy with copy-accumulators="yes" produce
+// a copy "with the same accumulator values as the original". The copy is in a
+// tree of its own, where the accumulator rules would compute something else
+// entirely — usually the initial value, since the copy's subtree is all the
+// document there is. Nothing but the correspondence to the original can
+// supply the right answer, so it is recorded here and consulted before the
+// walk.
+//
+// The correspondence is recorded for the whole subtree at once: a copy is deep
+// and the copies of the descendants have to answer as their originals did too.
+func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
+	if rt.accumOrigin == nil {
+		return
+	}
+	var pair func(a, b *xdm.Node)
+	pair = func(a, b *xdm.Node) {
+		if a == nil || b == nil {
+			return
+		}
+		rt.accumOrigin[b] = a
+		for i := range b.Children {
+			if i < len(a.Children) {
+				pair(a.Children[i], b.Children[i])
+			}
+		}
+	}
+	pair(orig, copy)
+}
+
+// accumulatorOrigin follows a node back to the node it was copied from, or
+// returns it unchanged. The chain is followed to its end so that a copy of a
+// copy still answers with the original's value.
+func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
+	for i := 0; i < 64; i++ {
+		orig, ok := rt.accumOrigin[n]
+		if !ok {
+			return n
+		}
+		n = orig
+	}
+	return n
 }

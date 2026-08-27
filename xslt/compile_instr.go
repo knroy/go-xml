@@ -441,10 +441,11 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 			return nil, err
 		}
 		return &copyOfInstr{
-			sel:          sel,
-			noNamespaces: n.AttrValue("copy-namespaces") == "no",
-			validation:   spec,
-			baseURI:      n.BaseURI,
+			sel:              sel,
+			noNamespaces:     n.AttrValue("copy-namespaces") == "no",
+			copyAccumulators: yesAttr(n, "copy-accumulators"),
+			validation:       spec,
+			baseURI:          n.BaseURI,
 		}, nil
 	case "evaluate":
 		return c.compileEvaluate(n, ns)
