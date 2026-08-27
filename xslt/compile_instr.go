@@ -1726,6 +1726,12 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		carried[p.Name.Clark()] = v
 	}
+	// The declarations, by name, so that a value xsl:next-iteration supplies
+	// can be converted to the type the matching xsl:param asked for.
+	declared := make(map[string]*Variable, len(i.params))
+	for _, p := range i.params {
+		declared[p.Name.Clark()] = p
+	}
 
 	broke := false
 	for idx, it := range seq {
@@ -1742,7 +1748,24 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if nx, ok := err.(nextIterationSignal); ok {
 				// Only the parameters xsl:next-iteration named change; the
 				// rest "unchanged from the previous iteration".
+				//
+				// The value is converted to the declared type of the matching
+				// xsl:param, not carried as supplied. §10.1.1's function
+				// conversion rules apply to a parameter however it is
+				// supplied, and xsl:with-param is where a value most often
+				// arrives needing them: iterate-042 builds an element and
+				// binds it to a parameter declared as="xs:string", which the
+				// rules atomise.
 				for k, v := range nx.params {
+					if p := declared[k]; p != nil {
+						conv, err := p.asType.convertAs(v,
+							"parameter $"+p.Name.Lexical()+" of xsl:iterate",
+							"XTTE0590")
+						if err != nil {
+							return err
+						}
+						v = conv
+					}
 					carried[k] = v
 				}
 				continue
