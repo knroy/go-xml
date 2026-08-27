@@ -1032,7 +1032,13 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	// "yes" turned indent="true" into indent="no" and wrote
 	// standalone="true" straight into the XML declaration, which is not a
 	// value the declaration may carry at all.
+	// The whitespace is collapsed first. These attributes are declared with
+	// XSD types derived from xs:NMTOKEN, whose whitespace facet is
+	// "collapse", so standalone=" false " is the boolean false and not an
+	// unrecognised string -- and an attribute value template makes the
+	// spelling a run-time value that no static check has trimmed.
 	yes := func(v string) bool {
+		v = strings.TrimSpace(v)
 		if alias, ok := boolAliases[v]; ok {
 			v = alias
 		}
@@ -1071,6 +1077,7 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 		// normalised to the absent state rather than written out literally.
 		// The declaration itself admits only "yes" and "no", so a 3.0
 		// module's true/false/1/0 is normalised to one of those.
+		v = strings.TrimSpace(v)
 		switch {
 		case v == "omit":
 			v = ""
