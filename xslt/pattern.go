@@ -210,6 +210,16 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 	if r, ok := ns.(*nsResolver); ok {
 		v = r.xpathVersion
 	}
+	// A predicate holds an arbitrary XPath expression, and which expressions
+	// exist is the PROCESSOR's question rather than the module's -- the same
+	// reasoning that governs which functions are in the library. number-1904
+	// writes "foo[let $n := number(@bar) return . = $n*$n]" in a version="2.0"
+	// module scoped XSLT30+. The pattern GRAMMAR is a separate matter and
+	// stays with the module: patternsAllow30 still refuses "/(a|b)" there,
+	// which is what version-023 requires.
+	if processorAtLeast30() && !v.AtLeast31() {
+		v = xpath.XPath31
+	}
 	expr, err := xpath.ParseVersion(src, ns, v)
 	if err != nil {
 		return nil, err

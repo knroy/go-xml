@@ -379,18 +379,21 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	// comparison against the file's first line fail for a reason nothing in
 	// the stylesheet can see.
 	//
-	// F&O requires FOUT1190 when the resource cannot be decoded, and XSLT 2.0
-	// 16.2 requires FOUT1170 when it contains characters not permitted in
-	// XML. Returning a Go string holding invalid UTF-8 would push the failure
-	// downstream into the serialiser, where it reads as a bug in this engine
-	// rather than as a property of the input.
+	// F&O requires FOUT1190 when the resource cannot be decoded, and W3C bug
+	// 29302 settled that a character not permitted in XML is the same error:
+	// the draft's FOUT1170 did not survive, and no case in the suite expects
+	// it. unparsed-text-lines-006 asks for FOUT1190 on a file holding a NUL,
+	// and -004 catches errors="*:FOUT1190" for the same file. Returning a Go
+	// string holding invalid UTF-8 would push the failure downstream into the
+	// serialiser, where it reads as a bug in this engine rather than as a
+	// property of the input.
 	if !utf8.ValidString(text) {
 		return "", fmt.Errorf("FOUT1190: %s is not valid UTF-8", path)
 	}
 	for _, c := range text {
 		if !isXMLChar(c) {
 			return "", fmt.Errorf(
-				"FOUT1170: %s contains U+%04X, which is not a legal XML character",
+				"FOUT1190: %s contains U+%04X, which is not a legal XML character",
 				path, c)
 		}
 	}
