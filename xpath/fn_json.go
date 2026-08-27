@@ -1001,33 +1001,31 @@ func (b *jsonXMLBuilder) attach(el *xdm.Node) error {
 
 func (b *jsonXMLBuilder) startMap() error {
 	el := jsonElement("map")
+	// The key of the map *itself* is consumed here, before its children
+	// overwrite the pending slot with their own keys, and before the map's
+	// own duplicate-tracking frame is pushed: attach() records the key in the
+	// frame of the *containing* map, and pushing first pointed it at the
+	// frame belonging to the map being opened. That is what let
+	// json-to-xml-duplicates-001 keep all four entries of
+	// {"one":{...},"two":{...},"one":{...},"two":{...}} under duplicates=
+	// "use-first" — the duplicate "one" and "two" keys were being recorded in
+	// the nested maps' own empty frames, so they never collided, while the
+	// duplicate scalar "a" keys inside each nested map were caught normally.
+	if err := b.attach(el); err != nil {
+		return err
+	}
 	b.stack = append(b.stack, el)
 	b.seen = append(b.seen, map[string]int{})
-	// The key of the map *itself* is consumed here, before its children
-	// overwrite the pending slot with their own keys.
-	return b.deferAttach(el)
+	return nil
 }
 
 func (b *jsonXMLBuilder) startArray() error {
 	el := jsonElement("array")
+	if err := b.attach(el); err != nil {
+		return err
+	}
 	b.stack = append(b.stack, el)
-	return b.deferAttach(el)
-}
-
-// deferAttach records where a container belongs at the moment it opens.
-//
-// A container has to be attached on open rather than on close, because the
-// pending key belongs to it and would otherwise be overwritten by the keys of
-// its own entries. Attaching early is safe: the tree is not read until the
-// whole parse succeeds.
-func (b *jsonXMLBuilder) deferAttach(el *xdm.Node) error {
-	// The element being opened is on the stack already, so the parent is the
-	// one below it.
-	saved := b.stack
-	b.stack = b.stack[:len(b.stack)-1]
-	err := b.attach(el)
-	b.stack = saved
-	return err
+	return nil
 }
 
 func (b *jsonXMLBuilder) key(k string) error {
