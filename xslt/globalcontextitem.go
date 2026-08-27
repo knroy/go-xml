@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -42,6 +43,16 @@ func (c *compiler) compileGlobalContextItem(el *xdm.Node) error {
 	// not enforced, which is what a non-streaming processor may do: section
 	// 19 makes streamability a property a processor may decline to analyse.
 	if prev := c.sheet.globalContextItem; prev != nil {
+		// Two declarations in ONE module are an error however they read:
+		// section 3.10 allows a module at most one, so a second is a fault
+		// even when it says exactly what the first did. Across modules the
+		// question is consistency instead, since each module may legitimately
+		// restate the package's expectation.
+		if sameModule(prev.el, el) {
+			return fmt.Errorf(
+				"XTSE3087: a module may contain at most one " +
+					"xsl:global-context-item declaration")
+		}
 		if !sameContextItemDecl(prev.decl, d) {
 			return fmt.Errorf(
 				"XTSE3087: the package contains inconsistent " +
@@ -62,14 +73,40 @@ func sameContextItemDecl(a, b *contextItemDecl) bool {
 	if a.use != b.use {
 		return false
 	}
-	as, bs := "", ""
-	if a.as != nil {
-		as = a.as.source()
+	return normalizeTypeSource(a.as) == normalizeTypeSource(b.as)
+}
+
+// normalizeTypeSource renders a declared type for comparison.
+//
+// Whitespace inside an item type carries no meaning, so
+// "document-node(element(doc))" and "document-node( element( doc ))" are the
+// same declaration -- which glob-cxt-item-008 writes in two modules of one
+// package precisely to check. Comparing the raw source called them
+// inconsistent and rejected a legal stylesheet.
+//
+// Only whitespace is removed. Two genuinely different spellings of one type
+// stay different, which is the conservative direction: reporting a
+// difference that is only lexical is a bug, and treating two distinct types
+// as equal would hide one.
+func normalizeTypeSource(t *sequenceType) string {
+	if t == nil {
+		return ""
 	}
-	if b.as != nil {
-		bs = b.as.source()
+	var b strings.Builder
+	for _, r := range t.source() {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			continue
+		}
+		b.WriteRune(r)
 	}
-	return as == bs
+	return b.String()
+}
+
+// sameModule reports whether two elements belong to the same stylesheet
+// module, which is what decides whether a repeated declaration is a
+// duplicate or a restatement.
+func sameModule(a, b *xdm.Node) bool {
+	return a != nil && b != nil && a.BaseURI == b.BaseURI
 }
 
 // checkGlobalContextItem applies the declaration to the item a transform was

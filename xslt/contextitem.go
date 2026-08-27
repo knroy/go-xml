@@ -76,12 +76,20 @@ func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
 	}
 	as := strings.TrimSpace(el.AttrValue("as"))
 	if as != "" {
-		// XTSE3088: a type cannot be required of an item declared absent,
-		// because there is no item to have one.
+		// A type cannot be required of an item declared absent, because
+		// there is no item to have one. The two elements state the same rule
+		// under different codes -- XTSE3088 for xsl:context-item, XTSE3089
+		// for xsl:global-context-item -- so the code is read off the element
+		// rather than fixed, and a caller matching on one gets the one the
+		// specification assigns to what it wrote.
 		if d.use == "absent" {
+			code := "XTSE3088"
+			if el.Name.Local == "global-context-item" {
+				code = "XTSE3089"
+			}
 			return nil, fmt.Errorf(
-				"XTSE3088: xsl:context-item may not have an as attribute " +
-					"when use=\"absent\"")
+				"%s: xsl:%s may not have an as attribute when use=\"absent\"",
+				code, el.Name.Local)
 		}
 		// The attribute is typed ItemType, not SequenceType: an occurrence
 		// indicator would be saying how many context items there are, and
