@@ -37,11 +37,14 @@ func registerStringFuncs(l *Library) {
 			return strSeq(v.StringValue()), nil
 		case *xdm.Atomic:
 			return strSeq(v.String()), nil
-		case *xdm.FunctionItem:
-			// A function item has no string value at all, which the spec
-			// gives its own code: FOTY0014, not the generic type error.
+		case *xdm.FunctionItem, *xdm.MapItem, *xdm.ArrayItem:
+			// Maps and arrays are function items in the 3.1 data model, so
+			// they inherit "has no string value" and with it FOTY0014. They
+			// used to fall through to the default branch and report the
+			// generic XPTY0004, which is the code for a *wrong* type rather
+			// than for a type that simply has no string value.
 			return nil, xdm.Errorf("FOTY0014",
-				"fn:string is not defined on a function item")
+				"fn:string is not defined on %s", it.TypeName())
 		default:
 			// An Opaque carries engine-internal state and has no string
 			// value. A stylesheet that names the internal namespace can

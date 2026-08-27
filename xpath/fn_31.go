@@ -22,6 +22,56 @@ func register31Funcs(l *Library) {
 	registerRandomNumberGenerator(l)
 	registerNumericConstructor(l)
 	registerApply(l)
+	registerLoadXQueryModule(l)
+}
+
+// --- fn:load-xquery-module --------------------------------------------------
+
+// registerLoadXQueryModule adds fn:load-xquery-module, F&O 3.1 section 14.6.1.
+//
+// The function compiles an XQuery library module and hands back its variables
+// and functions. This engine implements XPath and XSLT and has no XQuery
+// processor, which the specification anticipates: FOQM0006 is defined as
+// "the implementation does not support the load-xquery-module function", and
+// raising it is the conforming answer rather than a gap.
+//
+// The argument checks still happen first, because they are errors in the call
+// itself rather than in what the call would have done. An empty module URI is
+// FOQM0001 whether or not a processor exists — the suite pins that with a pair
+// of cases accepting either code for the empty string, and a pair accepting
+// only FOQM0001.
+//
+// Two cases cannot both pass: load-xquery-module-003 requires FOQM0002 for a
+// module that cannot be located, and -903 requires FOQM0006 for the same
+// expression. Locating a module is something only a processor could do, so
+// FOQM0006 is the honest answer and -003/-004 are left failing rather than
+// pretending to have looked.
+func registerLoadXQueryModule(l *Library) {
+	l.registerFnSince(XPath31, "load-xquery-module", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		uri, err := argStringRequired(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if uri == "" {
+			return nil, xdm.Errorf("FOQM0001",
+				"fn:load-xquery-module: the module URI may not be a zero-length string")
+		}
+		// The options map is validated before the refusal below, so that a
+		// caller passing something that is not a map learns that rather than
+		// being told about the missing processor.
+		if len(args) > 1 && len(args[1]) > 0 {
+			it, err := args[1].Single()
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := it.(*xdm.MapItem); !ok {
+				return nil, xdm.ErrType(
+					"fn:load-xquery-module: the options must be a map, got %s", it.TypeName())
+			}
+		}
+		return nil, xdm.Errorf("FOQM0006",
+			"fn:load-xquery-module: this implementation has no XQuery processor")
+	})
 }
 
 // --- fn:apply ---------------------------------------------------------------
