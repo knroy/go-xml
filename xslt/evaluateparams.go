@@ -56,8 +56,29 @@ func (i *evaluateInstr) bindWithParams(rt, sub *runtime) (*runtime, error) {
 // elements and types — which is the one case where a default namespace
 // reaches the target expression at all.
 func (i *evaluateInstr) resolverFor(rt *runtime) (*nsResolver, error) {
+	// 10.4.1: the in-scope schema definitions are the ones xsl:import-schema
+	// brought in only when @schema-aware is yes; otherwise the target
+	// expression sees the built-in types alone, so a name from an imported
+	// schema must fail to resolve there.
+	schema := i.ns.schema
+	if i.schemaAware != nil {
+		v, err := i.schemaAware.eval(rt)
+		if err != nil {
+			return nil, err
+		}
+		if !stylesheetYes(v) {
+			schema = nil
+		}
+	} else {
+		schema = nil
+	}
 	if i.nsContext == nil {
-		return i.ns, nil
+		if schema == i.ns.schema {
+			return i.ns, nil
+		}
+		sub := *i.ns
+		sub.schema = schema
+		return &sub, nil
 	}
 	seq, err := i.nsContext.Eval(rt.ctx)
 	if err != nil {
@@ -74,6 +95,7 @@ func (i *evaluateInstr) resolverFor(rt *runtime) (*nsResolver, error) {
 	}
 	bindings := node.InScopeNamespaces()
 	sub := *i.ns
+	sub.schema = schema
 	sub.bindings = bindings
 	// InScopeNamespaces keys the default declaration by the empty prefix, and
 	// the resolver keeps it in its own field instead.

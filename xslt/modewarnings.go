@@ -8,13 +8,14 @@ import (
 	"github.com/knroy/go-xml/xpath"
 )
 
-// modeWarningValue reads one of the boolean xsl:mode attributes.
+// stylesheetYes reads a boolean written in a stylesheet attribute.
 //
-// Section 3.4 spells a stylesheet boolean five ways: "yes"/"true"/"1" and
+// Section 3.4 spells such a boolean five ways: "yes"/"true"/"1" and
 // "no"/"false"/"0", with surrounding whitespace stripped. The element table
-// only lists yes and no, so mode-0804 — which writes "true" and "1" — needs
-// the full set here.
-func modeWarningValue(v string) bool {
+// lists only yes and no for the xsl:mode attributes, so mode-0804 — which
+// writes "true" and "1" — needs the full set here; xsl:evaluate/@schema-aware
+// is declared a boolean outright and needs it for the same reason.
+func stylesheetYes(v string) bool {
 	switch strings.TrimSpace(v) {
 	case "yes", "true", "1":
 		return true

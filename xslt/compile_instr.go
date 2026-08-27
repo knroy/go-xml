@@ -1415,6 +1415,10 @@ type evaluateInstr struct {
 	// nsContext is @namespace-context, whose single node supplies the
 	// statically known namespaces of the target expression. See resolverFor.
 	nsContext *xpath.Compiled
+	// schemaAware is @schema-aware, an AVT. Only when its effective value is
+	// yes do the schemas xsl:import-schema brought in reach the target
+	// expression; otherwise it sees the built-in types alone.
+	schemaAware *avt
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1496,6 +1500,13 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 			return nil, fmt.Errorf("in xsl:evaluate/@namespace-context: %w", err)
 		}
 		instr.nsContext = nc
+	}
+	if a := n.Attr("", "schema-aware"); a != nil {
+		sa, err := compileAVT(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@schema-aware: %w", err)
+		}
+		instr.schemaAware = sa
 	}
 	if a := n.Attr("", "base-uri"); a != nil {
 		b, err := compileAVT(a.Value, ns)
