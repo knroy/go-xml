@@ -183,10 +183,21 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		tree.Finalize()
 		return a
 	case xdm.KindNamespace:
-		ns := copyItem(n).(*xdm.Node)
-		parent.AddNamespace(ns.Name.Local, ns.Value)
+		// The spine copy already carries its element's namespace nodes, so
+		// the one asked for is found rather than added again -- adding it
+		// would leave the element with two declarations of one prefix.
+		// Either way the node returned must be the one attached to the tree:
+		// returning the detached copy left the snapshot of a namespace node
+		// with no parent, which is what snapshot-0101f asks about.
+		for _, ns := range parent.Namespaces {
+			if ns.Name.Local == n.Name.Local {
+				tree.Finalize()
+				return ns
+			}
+		}
+		parent.AddNamespace(n.Name.Local, n.Value)
 		tree.Finalize()
-		return ns
+		return parent.Namespaces[len(parent.Namespaces)-1]
 	default:
 		bottom = copyItem(n).(*xdm.Node)
 	}
