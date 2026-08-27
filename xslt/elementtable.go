@@ -232,15 +232,20 @@ var xsltElements = map[string]elementDef{
 		// arguments may share one result. Neither changes what this
 		// processor does -- it evaluates every call -- but refusing them
 		// rejected a legal 3.0 stylesheet outright.
+		//
+		// processor30 rather than since30: both say what the *processor* may
+		// do with a call, not what the module's grammar contains, and
+		// function-1032 writes new-each-time in a version="2.0" module scoped
+		// XSLT30+ -- exactly as message-0009 writes terminate="true" there.
 		"override-extension-function": {
-			since30: true,
-			values:  []string{"yes", "no", "true", "false", "1", "0"},
+			processor30: true,
+			values:      []string{"yes", "no", "true", "false", "1", "0"},
 		},
 		// "maybe" is the third value, and the default: it leaves the
 		// processor free to reuse a result or not.
 		"new-each-time": {
-			since30: true,
-			values:  []string{"yes", "no", "true", "false", "1", "0", "maybe"},
+			processor30: true,
+			values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
 		},
 	}},
 	"namespace-alias": {attrs: map[string]attrDef{
