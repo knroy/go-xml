@@ -695,3 +695,98 @@ func (p *Pattern) canMatchNamespaceNode() bool {
 	}
 	return false
 }
+
+// isPredicatePatternForm reports whether src is written as a
+// PredicatePattern: a "." carrying only predicates.
+func isPredicatePatternForm(src string) bool {
+	rest := strings.TrimSpace(src)
+	if !strings.HasPrefix(rest, ".") {
+		return false
+	}
+	rest = strings.TrimSpace(rest[1:])
+	return rest == "" || strings.HasPrefix(rest, "[")
+}
+
+// checkPredicatePatternPlacement reports XTSE0340 for a PredicatePattern
+// written anywhere but as the whole pattern.
+//
+// The XSLT 3.0 grammar is
+//
+//	Pattern30        ::= PredicatePattern | UnionExprP
+//	PredicatePattern ::= "." PredicateList
+//
+// so the form is an alternative of the *pattern*, not of the union beneath
+// it. It therefore cannot be a union operand and cannot be parenthesised:
+// there is no production that reaches PredicatePattern from inside either.
+// Both spellings parse readily -- "." is a legal expression and predicates
+// are legal on it -- so nothing but the grammar rules them out, and
+// match-060, match-129 and match-239 each ask for the error.
+//
+// alts is the pattern already split on the union operators. A single
+// alternative that is not the whole source is one that was parenthesised.
+func checkPredicatePatternPlacement(src string, alts []string) error {
+	for _, alt := range alts {
+		if !isPredicatePatternForm(alt) {
+			continue
+		}
+		if len(alts) > 1 {
+			return fmt.Errorf(
+				"XTSE0340: pattern %q: a predicate pattern \".[...]\" is a "+
+					"whole pattern and may not be a union operand", src)
+		}
+		if strings.TrimSpace(alt) != strings.TrimSpace(src) {
+			return fmt.Errorf(
+				"XTSE0340: pattern %q: a predicate pattern \".[...]\" may "+
+					"not be parenthesised", src)
+		}
+	}
+	// A parenthesised one does not look like the form at all until the wrap
+	// is taken off, so it is tested separately rather than by widening
+	// isPredicatePatternForm -- which every other caller wants to stay
+	// literal about what was written.
+	if len(alts) == 1 {
+		if inner, ok := unwrapParens(alts[0]); ok && isPredicatePatternForm(inner) {
+			return fmt.Errorf(
+				"XTSE0340: pattern %q: a predicate pattern \".[...]\" may "+
+					"not be parenthesised", src)
+		}
+	}
+	return nil
+}
+
+// unwrapParens removes one balanced pair of parentheses wrapping the whole of
+// src, reporting whether there was one.
+func unwrapParens(src string) (string, bool) {
+	t := strings.TrimSpace(src)
+	if len(t) < 2 || t[0] != '(' || t[len(t)-1] != ')' {
+		return src, false
+	}
+	// The first "(" must be closed by the last ")" for the pair to wrap the
+	// whole expression: "(a)|(b)" opens and closes twice and is not wrapped.
+	depth := 0
+	quote := byte(0)
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i != len(t)-1 {
+				return src, false
+			}
+		}
+	}
+	if depth != 0 {
+		return src, false
+	}
+	return t[1 : len(t)-1], true
+}

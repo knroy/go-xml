@@ -100,6 +100,14 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 	if processorAtLeast30() {
 		alts = splitPatternAlts(src)
 	}
+	// Where a PredicatePattern may stand is a grammar rule, not a matching
+	// one, so it is settled before any alternative is compiled; see
+	// checkPredicatePatternPlacement.
+	if patternsAllow30(ns) {
+		if err := checkPredicatePatternPlacement(src, alts); err != nil {
+			return nil, err
+		}
+	}
 	for _, alt := range alts {
 		alt = strings.TrimSpace(alt)
 		if alt == "" {
