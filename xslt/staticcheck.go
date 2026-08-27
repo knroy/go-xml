@@ -73,7 +73,16 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 	// one: XTSE0010 outside forwards-compatible mode, ignored within it.
 	// Recognising it because this engine also implements 3.0 would accept a
 	// stylesheet every other conforming 2.0 processor rejects.
-	if known && def.since30 && !xpathVersionAt(el).AtLeast31() {
+	// xsl:package is exempt: it is the package declaration itself, and the
+	// @version it carries describes the contents it introduces rather than
+	// the element. A 3.0 package routinely declares version="2.0", so reading
+	// that version back to decide whether xsl:package is recognised would
+	// reject the package on the strength of its own body's version. Whether a
+	// package is allowed at all is the processor's cap to decide, and
+	// compileRoot has already applied it before reaching here.
+	if known && def.since30 && !xpathVersionAt(el).AtLeast31() &&
+		!(el.Name.Local == "package" && el.Parent != nil &&
+			el.Parent.Kind == xdm.KindDocument) {
 		known = false
 	}
 	if !known {
