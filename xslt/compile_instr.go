@@ -1547,6 +1547,19 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:evaluate/@schema-aware: %w", err)
 		}
+		// A value written out literally, with nothing to substitute, is known
+		// now -- so a bad one is the static XTSE0020 rather than the dynamic
+		// XTDE0030 an AVT gets. evaluate-038 writes schema-aware="TRUE" and
+		// requires the static code; evaluate-014 writes "{$path}" and
+		// requires the dynamic one. The two differ only in whether the value
+		// could have been known before the transform ran.
+		if sa.isLit {
+			if _, ok := xsltBoolean(sa.literal); !ok {
+				return nil, xdm.Errorf("XTSE0020",
+					"the schema-aware attribute of xsl:evaluate is %q, "+
+						"which is not a boolean", sa.literal)
+			}
+		}
 		instr.schemaAware = sa
 	}
 	if a := n.Attr("", "base-uri"); a != nil {
@@ -1617,10 +1630,20 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	sub := rt
 	for _, p := range i.params {
-		v, err := evalVariable(p, rt)
+		v, err := evalVariableRaw(p, rt)
 		if err != nil {
 			return fmt.Errorf("evaluating parameter $%s of xsl:evaluate: %w",
 				p.Name.Lexical(), err)
+		}
+		// XTTE0590 rather than the XTTE0570 evalVariable applies. These are
+		// xsl:with-param children, and 10.4's rule for one whose value does
+		// not match its declared type is the general xsl:param code, which
+		// is what evaluate-018d asks for -- it declares $p2 as xs:integer
+		// over a select that yields 'banana' and accepts XPTY0004 or
+		// XTTE0590, not the variable-binding code.
+		v, err = p.asType.convertAs(v, "$"+p.Name.Lexical(), "XTTE0590")
+		if err != nil {
+			return err
 		}
 		sub = sub.withVar(p.Name, v)
 	}
@@ -1673,7 +1696,15 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	if i.as != nil {
-		seq, err = i.as.convertAs(seq, "result of xsl:evaluate", "XTTE0505")
+		// XPTY0004, the code the function conversion rules raise. 10.4's @as
+		// says the result "is converted to the required type using the
+		// function conversion rules", and a failure of those rules is an
+		// ordinary XPath type error rather than an XSLT-specific one.
+		// evaluate-023 accepts XPTY0004 or XTTE0780 and the spec carries an
+		// editor's note against the second -- "I can't see any justification
+		// for XTTE0780: that is specific to xsl:function" -- which leaves
+		// only the first.
+		seq, err = i.as.convertAs(seq, "result of xsl:evaluate", "XPTY0004")
 		if err != nil {
 			return err
 		}
@@ -1684,6 +1715,17 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 			out.appendNode(v)
 		case *xdm.Atomic:
 			out.appendValue(v)
+		default:
+			// A function item, a map or an array. The result of xsl:evaluate
+			// is whatever the target expression produced, exactly as
+			// xsl:sequence returns whatever its select produced, so all three
+			// reach here and dropping them silently is not an option:
+			// evaluate-051 evaluates "function($x){$x + $y}" into a variable
+			// declared as function(*), and the empty sequence a dropped
+			// function item left behind was XTTE0570 against that type.
+			if err := appendOpaqueItem(out, it); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

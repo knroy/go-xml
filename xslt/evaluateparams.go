@@ -66,7 +66,20 @@ func (i *evaluateInstr) resolverFor(rt *runtime) (*nsResolver, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !stylesheetYes(v) {
+		// The attribute is an AVT yielding xs:boolean, so a value that is
+		// none of the type's lexical forms is an error rather than a
+		// falsehood. XTDE0030 is the dynamic half of the pair: this is the
+		// value an AVT produced at run time, which nothing could have
+		// checked earlier. evaluate-014 writes schema-aware="{$path}" over a
+		// $path of "2+2" and expects exactly this. The static half, for a
+		// value written out literally, is XTSE0020 in compileEvaluate.
+		aware, ok := xsltBoolean(v)
+		if !ok {
+			return nil, xdm.Errorf("XTDE0030",
+				"the schema-aware attribute of xsl:evaluate evaluated to %q, "+
+					"which is not a boolean", v)
+		}
+		if !aware {
 			schema = nil
 		}
 	} else {

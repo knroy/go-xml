@@ -48,6 +48,25 @@ func messageTerminate(v string, xslt30 bool) (terminate bool, ok bool) {
 	return false, false
 }
 
+// xsltBoolean reads an attribute declared as yielding xs:boolean, reporting
+// false for a value that is none of the type's lexical forms.
+//
+// XSLT writes such an attribute with a wider lexical space than XML Schema
+// gives xs:boolean: "yes" and "no" are XSLT's own spellings and are always
+// accepted, alongside the type's "true"/"false" and "1"/"0". Anything else is
+// an error, and refusing it is the whole point -- evaluate-038 writes
+// schema-aware="TRUE" and requires the uppercase spelling to be rejected
+// rather than quietly read as false.
+func xsltBoolean(v string) (b bool, ok bool) {
+	switch strings.TrimSpace(v) {
+	case "yes", "true", "1":
+		return true, true
+	case "no", "false", "0":
+		return false, true
+	}
+	return false, false
+}
+
 // terminateError builds the error a terminating xsl:message raises.
 //
 // XTMM9000 is the code unless @error-code named another. The message text
