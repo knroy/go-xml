@@ -745,6 +745,13 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
 	}
+	// §5.8.3: an element in a namespace must carry a namespace node for it.
+	// exclude-result-prefixes is what makes this reachable -- it drops the
+	// very declaration the element's own name depends on, and validation-1705
+	// then cannot resolve the prefix in an xsi:type value against the tree.
+	// The serialiser wrote the declaration anyway, so nothing about the
+	// output changed; only the namespace axis was short.
+	fixupNamespaces(sub.open)
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
 	return i.validation.assess(rt, sub.open)
