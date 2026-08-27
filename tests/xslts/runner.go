@@ -514,6 +514,29 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
+		// <initial-mode> carries <param> children the same way
+		// <initial-template> does: section 2.3.3 gives an apply-templates
+		// invocation its own tunnel and non-tunnel parameter sets.
+		for _, p := range tc.Test.InitialMode.Params {
+			v, err := xpath.Eval(p.Select,
+				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})
+			if err != nil {
+				return nil, fmt.Errorf("initial-mode parameter %s: %w",
+					p.Name, err)
+			}
+			key := xdm.QName{URI: p.URI, Local: p.Local()}.Clark()
+			if p.Tunnel == "yes" || p.Tunnel == "true" {
+				if opts.InitialModeTunnelParams == nil {
+					opts.InitialModeTunnelParams = map[string]xdm.Sequence{}
+				}
+				opts.InitialModeTunnelParams[key] = v
+				continue
+			}
+			if opts.InitialModeParams == nil {
+				opts.InitialModeParams = map[string]xdm.Sequence{}
+			}
+			opts.InitialModeParams[key] = v
+		}
 		if sel := tc.Test.InitialMode.Select; sel != "" {
 			v, err := xpath.Eval(sel,
 				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})

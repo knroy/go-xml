@@ -1563,9 +1563,17 @@ func makeSortValue(seq xdm.Sequence, s *sortKey, coll xpath.Collation, implicitT
 	// values are cast to xs:string, which is what the string path already
 	// does, and treating them as typed would sort unparsed text numerically.
 	if s.dataType == "" && len(atoms) == 1 {
-		if a, ok := atoms[0].(*xdm.Atomic); ok && a.Type != xdm.TypeUntypedAtomic {
+		if a, ok := atoms[0].(*xdm.Atomic); ok {
 			v.atom = a
 			v.cmpAtom = a
+			// xs:untypedAtomic orders as a string -- 13.1.2 casts it to one,
+			// which is what the string path already does -- but it is still
+			// kept in cmpAtom, because the comparability question below is
+			// asked of every pair and "lt" does raise for an untyped value
+			// against a date or a duration. sort-080 is that pair.
+			if a.Type == xdm.TypeUntypedAtomic {
+				v.atom = nil
+			}
 			// A string-valued key still goes through the collation rules
 			// below, so only the non-string types take the typed path for
 			// ordering. cmpAtom keeps the value regardless, because the
@@ -1734,6 +1742,9 @@ func compareSortValues(a, b sortValue) int {
 		// has no answer. Naming the type rather than dropping the a != b test
 		// altogether is what keeps the two tests that a blanket same-type
 		// refusal previously cost.
+		if untypedSortPairErrs(a.atom, b.atom) {
+			return sortIncomparable
+		}
 		if !isUntyped(a.atom) && !isUntyped(b.atom) &&
 			(a.atom.Type != b.atom.Type ||
 				a.atom.Type == xdm.TypeDuration) {
@@ -1752,8 +1763,9 @@ func compareSortValues(a, b sortValue) int {
 	// are orderable in principle, so a refusal there would be a gap in the
 	// comparison rather than this error.
 	if a.cmpAtom != nil && b.cmpAtom != nil && a.atom == nil != (b.atom == nil) &&
-		!isUntyped(a.cmpAtom) && !isUntyped(b.cmpAtom) &&
-		!comparableSortTypes(a.cmpAtom.Type, b.cmpAtom.Type) {
+		(untypedSortPairErrs(a.cmpAtom, b.cmpAtom) ||
+			(!isUntyped(a.cmpAtom) && !isUntyped(b.cmpAtom) &&
+				!comparableSortTypes(a.cmpAtom.Type, b.cmpAtom.Type))) {
 		return sortIncomparable
 	}
 

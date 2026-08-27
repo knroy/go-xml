@@ -243,8 +243,8 @@ type PackageRef struct {
 }
 
 type NamedThing struct {
-	// Params are the arguments of this one invocation, which
-	// <initial-template> may carry and <initial-mode> may not.
+	// Params are the arguments of this one invocation. Both
+	// <initial-template> and <initial-mode> may carry them.
 	Params []Param `xml:"param"`
 
 	// Name is the lexical QName exactly as the catalog wrote it.
@@ -311,16 +311,20 @@ func resolveInitialTemplateNames(data []byte, set *TestSet) error {
 		return err
 	}
 	for i := range set.Cases {
-		nt := set.Cases[i].Test.InitialTemplate
-		if nt == nil {
-			continue
-		}
-		if uri, ok := found[set.Cases[i].Name]; ok {
-			nt.URI = uri
-		}
-		for j := range nt.Params {
-			if uri, ok := paramNS[set.Cases[i].Name+" "+nt.Params[j].Name]; ok {
-				nt.Params[j].URI = uri
+		for _, nt := range []*NamedThing{
+			set.Cases[i].Test.InitialTemplate,
+			set.Cases[i].Test.InitialMode,
+		} {
+			if nt == nil {
+				continue
+			}
+			if uri, ok := found[set.Cases[i].Name]; ok && nt.URI == "" {
+				nt.URI = uri
+			}
+			for j := range nt.Params {
+				if uri, ok := paramNS[set.Cases[i].Name+" "+nt.Params[j].Name]; ok {
+					nt.Params[j].URI = uri
+				}
 			}
 		}
 	}
@@ -337,13 +341,15 @@ func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string
 	}
 	out := map[string]string{}
 	// paramNS maps "<case-name> <lexical param name>" to the namespace its
-	// prefix is bound to, for the <param> children of an <initial-template>.
+	// prefix is bound to, for the <param> children of an <initial-template>
+	// or an <initial-mode>. Both entry points take their own parameter sets,
+	// and the two cannot appear on one case, so one map serves for both.
 	paramNS := map[string]string{}
 	// scopes[i] holds the declarations made by the element at depth i; a
 	// lookup walks it from the top down so that an inner binding wins.
 	var scopes []map[string]string
 	caseName := ""
-	inInitialTemplate := false
+	inInvocation := false
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
@@ -372,15 +378,17 @@ func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string
 						out[caseName] = uri
 					}
 				}
-				inInitialTemplate = true
+				inInvocation = true
+			case "initial-mode":
+				inInvocation = true
 			case "param":
-				// A <param> inside <initial-template> may name a prefixed
-				// parameter, and the prefix is bound on the param element
-				// itself: initial-template-002 writes
-				// xmlns:my="http://my.net/" name="my:b" there.
+				// A <param> inside an invocation element may name a
+				// prefixed parameter, and the prefix is bound on the param
+				// element itself: initial-template-002 and initial-mode-004
+				// both write xmlns:my="http://my.net/" name="my:b" there.
 				name := attrValue(t, "name")
 				if prefix, _, hasPrefix := strings.Cut(name, ":"); hasPrefix &&
-					caseName != "" && inInitialTemplate {
+					caseName != "" && inInvocation {
 					if uri := lookupPrefix(scopes, prefix); uri != "" {
 						paramNS[caseName+" "+name] = uri
 					}
@@ -393,8 +401,8 @@ func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string
 			switch t.Name.Local {
 			case "test-case":
 				caseName = ""
-			case "initial-template":
-				inInitialTemplate = false
+			case "initial-template", "initial-mode":
+				inInvocation = false
 			}
 		}
 	}

@@ -90,6 +90,18 @@ type TransformOptions struct {
 	InitialTemplateParams       map[string]xdm.Sequence
 	InitialTemplateTunnelParams map[string]xdm.Sequence
 
+	// InitialModeParams and InitialModeTunnelParams are the same thing for an
+	// apply-templates invocation: section 2.3.3 gives that entry point "two
+	// sets of (QName, value) pairs, one set for tunnel parameters and one for
+	// non-tunnel parameters", with "the same [effect] as when a template is
+	// invoked using xsl:apply-templates with an xsl:with-param child".
+	//
+	// They are kept apart from the initial-template pair rather than shared
+	// with it because the two entry points are mutually exclusive (XTDE0047)
+	// but the names would still mislead a caller reading the API.
+	InitialModeParams       map[string]xdm.Sequence
+	InitialModeTunnelParams map[string]xdm.Sequence
+
 	// Now fixes the value fn:current-dateTime returns. Leave it zero to use
 	// the wall clock; set it to make a transform reproducible, which is what
 	// a golden-file test needs.
@@ -380,7 +392,8 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			initialMode = want
 		}
 		if err := applyInitialSelection(rt, source, opts.InitialMatchSelection,
-			initialMode, out); err != nil {
+			initialMode, opts.InitialModeParams, opts.InitialModeTunnelParams,
+			out); err != nil {
 			return nil, err
 		}
 	}
@@ -773,17 +786,18 @@ func SerializeAsXML(r *Result) string {
 // position and size of each item have to be set the way xsl:apply-templates
 // sets them, since a template rule reached this way may call fn:position().
 func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
-	mode string, out *outputBuilder) error {
+	mode string, params, tunnels map[string]xdm.Sequence,
+	out *outputBuilder) error {
 
 	if sel == nil {
-		return applyToNode(rt, source, mode, nil, nil, out)
+		return applyToNode(rt, source, mode, params, tunnels, out)
 	}
 	size := len(sel)
 	for idx, it := range sel {
 		node, ok := it.(*xdm.Node)
 		if !ok {
 			sub := rt.withCurrent(it, idx+1, size)
-			if err := applyToAtomic(sub, it, mode, nil, nil, out); err != nil {
+			if err := applyToAtomic(sub, it, mode, params, tunnels, out); err != nil {
 				return err
 			}
 			continue
@@ -792,7 +806,7 @@ func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
 			return err
 		}
 		sub := rt.withCurrent(node, idx+1, size)
-		if err := applyToNode(sub, node, mode, nil, nil, out); err != nil {
+		if err := applyToNode(sub, node, mode, params, tunnels, out); err != nil {
 			return err
 		}
 	}

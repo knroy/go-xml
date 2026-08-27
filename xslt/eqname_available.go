@@ -105,3 +105,28 @@ func checkIterateOrder(el *xdm.Node, model string) error {
 	}
 	return nil
 }
+
+// untypedSortPairErrs reports whether the XPath "lt" operator raises for a
+// pair in which at least one side is xs:untypedAtomic.
+//
+// XSLT 3.0 13.1.2 makes XTDE1030 exactly the question of whether "lt" errors,
+// and F&O 3.0 B.2 answers it: an untypedAtomic operand of a value comparison
+// is cast to xs:double when the other operand is numeric and to xs:string
+// otherwise. So untyped against a string, a URI or a number is ordinary, and
+// untyped against anything else becomes a string compared with a date, a
+// duration or a boolean, which "lt" refuses. sort-080 sorts three untyped
+// attributes together with an xs:date and requires the refusal.
+func untypedSortPairErrs(a, b *xdm.Atomic) bool {
+	if a.Type != xdm.TypeUntypedAtomic && b.Type != xdm.TypeUntypedAtomic {
+		return false
+	}
+	other := a
+	if a.Type == xdm.TypeUntypedAtomic {
+		other = b
+	}
+	switch other.Type {
+	case xdm.TypeUntypedAtomic, xdm.TypeString, xdm.TypeAnyURI:
+		return false
+	}
+	return !other.Type.IsNumeric()
+}
