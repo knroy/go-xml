@@ -150,6 +150,9 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if !ad.required {
 			continue
 		}
+		if ad.optional30 && xpathVersionAt(el).AtLeast31() {
+			continue
+		}
 		if el.Attr("", name) == nil {
 			return fmt.Errorf(
 				"xsl:%s requires a %s attribute (XTSE0010)",
@@ -407,7 +410,16 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	}
 	// XSLT 3.0 admits true/false/1/0 wherever 2.0 admits only yes/no, so a
 	// 3.0 module's spelling is normalised before the value is refused.
-	if alias, ok := boolAliases[v]; ok && allowsBoolAliases(el) {
+	//
+	// xsl:message/@terminate is the exception: message-0009 spells it "true"
+	// on a version="2.0" module and is scoped XSLT30+, so there the spelling
+	// follows the processor rather than the module -- as @error-code beside
+	// it does.
+	allow := allowsBoolAliases(el)
+	if isXSL(el, "message") && a.Name.Local == "terminate" {
+		allow = allow || processorAtLeast30()
+	}
+	if alias, ok := boolAliases[v]; ok && allow {
 		for _, want := range ad.values {
 			if alias == want {
 				return nil

@@ -892,13 +892,13 @@ func lastSegment(s string) string {
 }
 
 func resultString(res *xslt.Result) string {
-	var sb strings.Builder
-	for _, it := range res.Nodes {
-		if n, ok := it.(*xdm.Node); ok {
-			sb.WriteString(n.StringValue())
-		}
-	}
-	return sb.String()
+	// The string value of the result *sequence*, which is what the suite's
+	// own driver computes: it builds a document from the result and asks for
+	// its string value. Walking res.Nodes and keeping only the nodes drops
+	// every atomic value the stylesheet returned -- an xsl:sequence at the
+	// top of a template routinely returns one -- and reported the empty
+	// string for a transform that had produced the asserted text.
+	return res.Tree().StringValue()
 }
 
 // stripDecl removes an XML declaration and any leading whitespace.

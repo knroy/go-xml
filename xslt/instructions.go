@@ -104,9 +104,21 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // sequenceInstr implements xsl:sequence, which adds items to the result
 // without converting them to text.
-type sequenceInstr struct{ sel *xpath.Compiled }
+// sequenceInstr implements xsl:sequence. Exactly one of sel and body is set;
+// with neither, the instruction yields the empty sequence.
+type sequenceInstr struct {
+	sel *xpath.Compiled
+	// body is the XSLT 3.0 content form. Its items are written straight to
+	// out rather than into a sub-builder: xsl:sequence returns the items the
+	// constructor produced, where a content-valued xsl:variable would wrap
+	// them in a document node.
+	body []Instruction
+}
 
 func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
+	if i.sel == nil {
+		return execSequence(i.body, rt, out)
+	}
 	seq, err := i.sel.Eval(rt.ctx)
 	if err != nil {
 		return err
