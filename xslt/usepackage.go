@@ -1500,6 +1500,24 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// allocates the number and runs every check the module deserves.
 	c.usedPackageDepth++
 	defer func() { c.usedPackageDepth-- }()
+	// A used package brings its own in-scope schema components, so the
+	// xsl:import-schema pre-pass runs again for it. 2.5.3 makes the set
+	// package-scoped in as many words: "The schema components that may be
+	// referenced by name in a package are referred to as the in-scope schema
+	// components. The set of in-scope schema components may vary between one
+	// package and another."
+	//
+	// The latch exists to stop the pre-pass repeating for every xsl:include
+	// and xsl:import, where re-running it from a module that sees less than
+	// the first one did would lose components. A package is the other case:
+	// it is a separate stylesheet level with a schema of its own, and
+	// leaving the latch set meant its xsl:import-schema was never processed
+	// at all. override-base-v-002 declares a union type u1 in an inline
+	// schema and types a public variable as="u1"; compiling it without its
+	// own schema failed as XPST0051 for a type the package plainly declares.
+	savedHoisted := c.schemaHoisted
+	c.schemaHoisted = false
+	defer func() { c.schemaHoisted = savedHoisted }()
 	return c.compileDocument(u.doc, 0)
 }
 
