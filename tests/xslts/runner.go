@@ -308,6 +308,18 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		}
 	}
 	if len(sheets) == 0 {
+		// A package test names its principal module as <package> rather than
+		// <stylesheet>: an xsl:package IS the stylesheet when it is the one
+		// being run, and the element says which of the two roles the file
+		// plays rather than what kind of module it is.
+		for _, pk := range tc.Test.Packages {
+			if pk.Role == "principal" {
+				sheets = append(sheets,
+					StylesheetRef{File: pk.File, Role: "principal"})
+			}
+		}
+	}
+	if len(sheets) == 0 {
 		return nil, fmt.Errorf("the test names no stylesheet")
 	}
 	// The principal stylesheet is the one with no role, or the first.
