@@ -57,6 +57,12 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		return err
 	}
 
+	// Sequence normalisation, step 1: a run of adjacent atomic values becomes
+	// one text node with a single space between each. Deferred to here, after
+	// the default method has been chosen and the settings checked, because
+	// neither decision is meant to change with the form the values take.
+	seq = joinAdjacentAtomics(seq)
+
 	if opts.Method == "text" {
 		// A byte order mark precedes everything the method writes, text
 		// included: it is what tells a reader how to decode the bytes, and

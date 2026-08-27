@@ -574,7 +574,13 @@ func (r *Result) Tree() *xdm.Node {
 	// result's own URI can be put on it. Without this base-uri(/) answered
 	// "" even when every element below it had a base URI.
 	tree.Root.BaseURI = r.BaseURI
-	for _, it := range r.Nodes {
+	// Sequence normalisation runs here for the same reason the serialiser
+	// runs it: a run of adjacent atomic values is one text node with a single
+	// space between each, and a caller navigating the result must see the
+	// same document the serialiser would have written. Appending each value
+	// as its own text node lost the separators and broke the XDM invariant
+	// that no two text nodes are adjacent.
+	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
 		switch v := it.(type) {
 		case *xdm.Node:
 			tree.Root.AppendChild(v)
