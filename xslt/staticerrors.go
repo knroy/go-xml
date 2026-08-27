@@ -117,6 +117,15 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 				return err
 			}
 		}
+		// Section 8.4's placement rules for the xsl:iterate family run even
+		// in forwards-compatible mode. That mode excuses only constructs the
+		// processor does not understand (section 3.9), and a version="3.0"
+		// stylesheet puts every element of this family squarely inside what
+		// a 3.0 processor understands -- so the errors are reportable, and
+		// the suite reports them. See iterate_static.go.
+		if err := checkIterateStatic(n); err != nil {
+			return err
+		}
 	}
 	for _, c := range n.Children {
 		if err := walkStaticErrors(c, forwards); err != nil {
@@ -165,7 +174,6 @@ func checkElementStatic(el *xdm.Node) error {
 	if err := checkDefaultCollation(el); err != nil {
 		return err
 	}
-
 	// XTSE0080: a declared name may not be in a reserved namespace.
 	if namedDeclarations[local] {
 		if a := el.Attr("", "name"); a != nil {
