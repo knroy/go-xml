@@ -728,6 +728,26 @@ func atomicEqual(a, b *xdm.Atomic) bool {
 		}
 		return new(big.Rat).Set(a.Rat()).Cmp(b.Rat()) == 0
 	}
+	// Everything else is compared with the engine's own "eq", which is what
+	// assert-eq means. Comparing lexical forms instead made two spellings of
+	// one value unequal: xs:dateTime("2014-08-20T14:36:01-05:00") and
+	// "...T19:36:01Z" are the same instant and "eq" says so, but their
+	// strings differ, so parse-ietf-date-56 was scored on the spelling its
+	// implementation happened to produce rather than on the value.
+	ctx := assertContext()
+	ctx = ctx.WithVar(xdm.QName{Local: "qt3a"}, xdm.One(a))
+	ctx = ctx.WithVar(xdm.QName{Local: "qt3b"}, xdm.One(b))
+	res, err := xpath.Eval("$qt3a eq $qt3b", ctx, resolver{})
+	if err != nil {
+		// Types "eq" does not relate — a QName against a string, say — are
+		// unequal rather than an error in the comparison itself.
+		return a.String() == b.String()
+	}
+	if len(res) == 1 {
+		if v, ok := res[0].(*xdm.Atomic); ok {
+			return v.Bool()
+		}
+	}
 	return a.String() == b.String()
 }
 

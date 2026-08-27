@@ -721,7 +721,14 @@ func (p *ietfScanner) ietfNamedZone(d *ietfDate) error {
 	}
 	d.tzMinutes = off
 	d.haveTZ = true
-	d.tzNormalized = true
+	// The offset is kept as the zone names it rather than folded into UTC.
+	// The fn-parse-ietf-date set compares with "eq", which cannot tell
+	// 19:36:01Z from 14:36:01-05:00 — they are the same instant — so it does
+	// not pin this either way. The specification's own examples do:
+	// fo-test-fn-parse-ietf-date-003 asserts deep-eq against
+	// "2013-06-06T11:54:45-05:00", and deep-eq compares the timezone.
+	// A named zone denotes a local time with a known offset, not an instant
+	// stripped of it.
 	// A comment is allowed only after a numeric offset, so "19:36(EST)" is an
 	// error even though "19:36 -05:00(EST)" is fine.
 	return nil
