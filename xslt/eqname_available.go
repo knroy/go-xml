@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -269,4 +270,45 @@ func checkAtomizable(seq xdm.Sequence) error {
 		}
 	}
 	return nil
+}
+
+// findAtomicTemplateInImportTree is findTemplateInImportTree for an atomic
+// context item.
+//
+// XSLT 3.0 dispatches atomic values through the ".[E]" patterns, so a rule
+// matching one may delegate with xsl:apply-imports exactly as a node's rule
+// does; apply-imports-001 applies templates to (1 to 5) and has each rule
+// call xsl:apply-imports. The precedence interval is the same one the node
+// search uses -- strictly below the current rule's precedence, and not below
+// the bottom of its import tree.
+func (s *Stylesheet) findAtomicTemplateInImportTree(item xdm.Item, mode string,
+	ctx *xpath.Context, low, p int) (*Template, int) {
+
+	for i := 0; i < len(s.templates); i++ {
+		t := s.templates[i]
+		if t.importPrecedence >= p {
+			continue
+		}
+		if t.importPrecedence < low {
+			break
+		}
+		if t.Match == nil || !t.matchesMode(mode) {
+			continue
+		}
+		if ok, err := t.Match.matchesAtomicItem(item, ctx); err == nil && ok {
+			return t, i + 1
+		}
+	}
+	return nil, len(s.templates)
+}
+
+// isUnwindSignal reports whether err is one of the sentinels an instruction
+// uses to unwind the stack rather than to report a failure.
+//
+// They carry no error code, which is what keeps xsl:catch from matching them,
+// but they are not errors either: the output produced before one was raised is
+// part of the result and must not be rolled back with it.
+func isUnwindSignal(err error) bool {
+	var b breakSignal
+	return errors.As(err, &b)
 }

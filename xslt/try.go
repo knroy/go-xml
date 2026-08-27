@@ -226,6 +226,14 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 
 	if !catchable(err) {
+		// An unwinding signal is not a failure of the body, so the body's
+		// output stands rather than being rolled back. xsl:break inside an
+		// xsl:try inside an xsl:iterate is the case iterate-035 writes: the
+		// <pos> element the try had already produced is part of the result,
+		// and only the loop stops.
+		if isUnwindSignal(err) {
+			appendSequence(sub.sequence(), out)
+		}
 		return err
 	}
 	cl, ok := i.selectCatch(errorQName(err))

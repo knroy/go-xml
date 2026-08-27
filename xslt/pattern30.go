@@ -609,8 +609,18 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 	if tunnels == nil {
 		tunnels = rt.sel.tunnels
 	}
-	t, next := rt.sheet.findAtomicTemplateFrom(
-		item, rt.sel.mode, rt.ctx, rt.sel.next)
+	var t *Template
+	var next int
+	if i.applyImports {
+		// xsl:apply-imports resumes in the import tree of the rule that
+		// matched, not at the next rule in declaration order.
+		t, next = rt.sheet.findAtomicTemplateInImportTree(
+			item, rt.sel.mode, rt.ctx,
+			rt.sel.template.lowPrecedence, rt.sel.template.importPrecedence)
+	} else {
+		t, next = rt.sheet.findAtomicTemplateFrom(
+			item, rt.sel.mode, rt.ctx, rt.sel.next)
+	}
 	if t == nil {
 		if a, ok := item.(*xdm.Atomic); ok {
 			out.appendValue(a)
