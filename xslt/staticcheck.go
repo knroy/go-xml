@@ -86,7 +86,12 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		known = false
 	}
 	if !known {
-		if forwards {
+		// Section 3.9's leniency belongs to a version the PROCESSOR does not
+		// implement. forwards is measured against 2.0 for every other
+		// caller, so a 3.0 processor was ignoring an unknown xsl: element in
+		// a version="3.0" module where XTSE0010 is due -- version-033 writes
+		// xsl:non-existent-element with two xsl:fallback children.
+		if forwards && effectiveForwards(el) {
 			// Section 3.9: where forwards-compatible behaviour is enabled, an
 			// XSLT element this version does not define is ignored rather
 			// than rejected — a top-level one outright, and one in a sequence
