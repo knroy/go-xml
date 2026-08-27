@@ -502,12 +502,7 @@ func forwardsAt(el *xdm.Node, inherited bool) bool {
 		// it is an error is decided where the version is compiled, not here.
 		return inherited
 	}
-	// Forwards-compatible mode is about a version *later than the one this
-	// processor implements*, and this processor implements 3.0. A
-	// version="3.0" stylesheet is therefore held to the 3.0 rules rather than
-	// having its mistakes ignored: merge-010 writes stable="yes" on an
-	// xsl:merge-key and requires XTSE0090, which forwards mode swallowed.
-	return f > 3.0
+	return f > 2.0
 }
 
 // isExtensionInstruction reports whether el, an element in a sequence
