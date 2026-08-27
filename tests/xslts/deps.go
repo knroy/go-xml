@@ -234,6 +234,23 @@ var xslt30Constructs = []struct {
 		regexp.MustCompile(`method\s*=\s*["'](adaptive|json)["']`),
 		"adaptive/json output method (XSLT 3.0)",
 	},
+	{
+		// fn:current-output-uri is an XSLT 3.0 function -- the name does not
+		// occur anywhere in the XSLT 2.0 Recommendation -- so a 2.0 processor
+		// must raise XPST0017 for it, which is what this engine does once the
+		// function library is held at the module's own version.
+		//
+		// result-document-1006 is the only case affected: it is declared
+		// XSLT20+ and its stylesheet is written version="2.0", but it opens
+		// by binding a variable to current-output-uri() before it can reach
+		// the nested xsl:result-document whose XTRE1495 the test is about.
+		// Every other stylesheet in the suite that names the function is
+		// written version="3.0" and is already out of scope through a correct
+		// <spec>. Counting the XPST0017 as a failure measured the catalog
+		// rather than the engine.
+		regexp.MustCompile(`\bcurrent-output-uri\s*\(`),
+		"fn:current-output-uri (XSLT 3.0)",
+	},
 }
 
 // xslt30OnlyConstruct reports why a case's stylesheets put it outside XSLT
