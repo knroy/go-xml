@@ -35,8 +35,14 @@ var systemProperties = map[string]string{
 	// around: it wants a pull parser and a streamability static analysis.
 	// Saying no here is what lets a stylesheet take its fallback path.
 	"supports-streaming": "no",
-	// xsl:evaluate.
-	"supports-dynamic-evaluation":     "no",
+	// xsl:evaluate, which this processor implements. §18.2 ties the answer to
+	// element-available('xsl:evaluate'): the feature is "statically disabled"
+	// only if BOTH report the absence, and that one already reported true.
+	// Saying no here while xsl:evaluate went on evaluating left a stylesheet
+	// unable to find out what it could actually do -- system-property-014
+	// asks the property in a use-when and then runs the instruction, and got
+	// a document that had taken the fallback path from a feature that works.
+	"supports-dynamic-evaluation":     "yes",
 	"supports-higher-order-functions": "yes",
 	"xpath-version":                   "3.1",
 	"xsd-version":                     "1.1",
