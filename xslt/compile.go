@@ -42,6 +42,11 @@ type compiler struct {
 	// imported afterwards.
 	patternFuncs []patternFuncRef
 
+	// varFuncs collects every function named in a variable's select
+	// expression, for XPST0017, and is checked at the same point and for the
+	// same reason as patternFuncs. See varfuncs.go.
+	varFuncs []varFuncRef
+
 	// inputTypeAnnotations is the value the modules so far have agreed on,
 	// for XTSE0265. Empty means no module has stated one.
 	inputTypeAnnotations string
@@ -857,6 +862,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 			return nil, fmt.Errorf("in %s/@select: %w", el.Name.Lexical(), err)
 		}
 		v.Select = comp
+		c.noteVariableFuncs(comp, el.Name.Lexical()+" $"+qn.Lexical())
 		if len(el.ChildElements()) > 0 {
 			return nil, fmt.Errorf("%s has both a select attribute and content",
 				el.Name.Lexical())

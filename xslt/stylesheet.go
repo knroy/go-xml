@@ -430,6 +430,11 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkPatternFuncs(); err != nil {
 		return nil, err
 	}
+	// A variable's select expression is resolved here for the same reason,
+	// and because nothing else ever resolves one that no expression uses.
+	if err := c.checkVariableFuncs(); err != nil {
+		return nil, err
+	}
 	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
 	// conflict with each other and still be harmless, because the importing
 	// module overrides both.
