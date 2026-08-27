@@ -317,7 +317,16 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					return nil, fmt.Errorf(
 						"FODC0002: document() is disabled (no resolver configured)")
 				}
-				tree, err := ctx.Docs.ResolveDocument(uri, r.base)
+				// Through the context-aware method where the resolver
+				// offers one. 4.4 scopes whitespace stripping to the package
+				// the CALL is written in, so which declarations apply is a
+				// property of this expression and only the context carries
+				// it. This arity-1 shadow of fn:document called the plain
+				// method and so answered every call with the top-level
+				// package's stripping; document-2401 overrides a template
+				// whose body calls document() and needs the two halves
+				// stripped differently.
+				tree, err := resolveDocumentIn(ctx, uri, r.base)
 				if err != nil {
 					return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
 				}
@@ -1530,4 +1539,18 @@ func compatKeyValue(a *xdm.Atomic) *xdm.Atomic {
 		return a
 	}
 	return xdm.NewUntypedAtomic(a.String())
+}
+
+// resolveDocumentIn loads a document through xpath.ContextDocumentResolver
+// where the resolver offers it, and through the plain interface otherwise.
+//
+// It mirrors the unexported helper xpath uses for fn:doc and fn:document. The
+// XSLT-specific arity-1 fn:document is registered here rather than there, so
+// it has to make the same choice itself or lose the package identity the
+// context carries. See stripSpaceResolver.ResolveDocumentIn.
+func resolveDocumentIn(ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
+	if cr, ok := ctx.Docs.(xpath.ContextDocumentResolver); ok {
+		return cr.ResolveDocumentIn(ctx, uri, base)
+	}
+	return ctx.Docs.ResolveDocument(uri, base)
 }

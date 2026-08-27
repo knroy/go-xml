@@ -520,6 +520,11 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	defer func() { compileSchema = nil }()
 	compilePackage = 0
 	defer func() { compilePackage = 0 }()
+	// The record of which package wrote each overriding declaration is
+	// package state on the same terms, and is cleared at both ends so that
+	// one compilation cannot answer a question about another's nodes.
+	overridingDecls = nil
+	defer func() { overridingDecls = nil }()
 	// The XPath version override is package state on the same terms and under
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
@@ -796,7 +801,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		collation: defaultCollationAt(el),
 		compat:    compatModeAt(el),
 		schema:    compileSchema,
-		pkg:       compilePackage,
+		pkg:       overridingPackage(el, compilePackage),
 
 		xpathVersion: xpathVersionAt(el),
 		xsltVersion:  declaredXSLTVersion(el),

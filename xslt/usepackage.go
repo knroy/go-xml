@@ -1489,6 +1489,27 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// no value, which fails as XTTE0570 the moment anything
 				// evaluates it. accept-040 and its neighbours override
 				// exactly such a component.
+				// The overriding declaration is the USING package's, and
+				// stays so wherever it is put. Substituting it into the used
+				// package's tree is how the composition makes it stand in
+				// for the component it replaces, but that is a mechanism of
+				// this implementation and not a change of authorship: 3.5.4
+				// says the overriding declaration is a component of the
+				// package containing the xsl:override.
+				//
+				// It matters for every static property 3.5.5 makes
+				// package-local. document-2401 overrides a template whose
+				// body calls document(), where the two packages declare
+				// different xsl:strip-space; compiled in the used package's
+				// tree it took the used package's stripping for both calls
+				// and answered 0 where the overriding half wanted 0 and the
+				// original half 4.
+				//
+				// The node is recorded rather than the identity pushed,
+				// because compilation of this subtree happens later, inside
+				// compileDocument, with compilePackage set to the used
+				// package. See overridingPackage.
+				noteOverridingDecl(ov, compilePackage)
 				kept = append(kept, rewriteOverride(ov, ch))
 				if !isAbstractDecl(ch) {
 					kept = append(kept, ch)
@@ -1998,4 +2019,47 @@ func (c *compiler) snapshotPackageLocalDecls() func() {
 			}
 		}
 	}
+}
+
+// overridingDecls maps an overriding declaration's element to the package that
+// wrote it.
+//
+// An xsl:override child is substituted into the USED package's tree so that it
+// stands in for the component it replaces, but it remains a component of the
+// package that contains the xsl:override -- 3.5.4 is explicit about that. Every
+// static property 3.5.5 makes package-local therefore has to be answered from
+// the using package for this subtree, even though the subtree is compiled while
+// compilePackage names the used one.
+//
+// It is keyed by node because there is nowhere else to put the answer: the
+// nodes are the same trees the parser produced, and the compilation that reads
+// them runs later. Guarded by compileMu along with compilePackage itself.
+var overridingDecls map[*xdm.Node]int
+
+// noteOverridingDecl records that an overriding declaration belongs to pkg.
+func noteOverridingDecl(ov *xdm.Node, pkg int) {
+	if overridingDecls == nil {
+		overridingDecls = map[*xdm.Node]int{}
+	}
+	overridingDecls[ov] = pkg
+}
+
+// overridingPackage answers the package an element belongs to, which is the
+// package that wrote the nearest enclosing overriding declaration if there is
+// one and the package being compiled otherwise.
+//
+// The walk is up the ancestors because the record is kept on the declaration
+// and the question is asked of every expression inside it. An override nested
+// inside another -- a package that uses a package that overrides -- answers
+// with the innermost, which is the one that wrote the expression.
+func overridingPackage(el *xdm.Node, current int) int {
+	if len(overridingDecls) == 0 {
+		return current
+	}
+	for n := el; n != nil; n = n.Parent {
+		if pkg, ok := overridingDecls[n]; ok {
+			return pkg
+		}
+	}
+	return current
 }
