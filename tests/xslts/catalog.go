@@ -132,6 +132,20 @@ type Param struct {
 	Select string `xml:"select,attr"`
 	As     string `xml:"as,attr"`
 	Static string `xml:"static,attr"`
+	Tunnel string `xml:"tunnel,attr"`
+	// URI is the namespace Name's prefix is bound to by the catalog's own
+	// declarations, filled in by resolveInitialTemplateNames the same way a
+	// NamedThing's is. encoding/xml never resolves a QName held in an
+	// attribute value.
+	URI string `xml:"-"`
+}
+
+// Local returns Name without its prefix.
+func (p Param) Local() string {
+	if i := strings.IndexByte(p.Name, ':'); i >= 0 {
+		return p.Name[i+1:]
+	}
+	return p.Name
 }
 
 // Collection is a named set of documents fn:collection returns.
@@ -213,6 +227,10 @@ type PackageRef struct {
 }
 
 type NamedThing struct {
+	// Params are the arguments of this one invocation, which
+	// <initial-template> may carry and <initial-mode> may not.
+	Params []Param `xml:"param"`
+
 	// Name is the lexical QName exactly as the catalog wrote it.
 	Name string `xml:"name,attr"`
 	// URI is the namespace the catalog's own declarations bind Name's prefix
@@ -267,7 +285,7 @@ type Result struct {
 // and does declare my:temp there, so the misresolved lookup finds a template
 // the catalog never named and the transform wrongly succeeds.
 func resolveInitialTemplateNames(data []byte, set *TestSet) error {
-	found, err := scanInitialTemplateNames(data)
+	found, paramNS, err := scanInitialTemplateNames(data)
 	if err != nil {
 		return err
 	}
@@ -279,6 +297,11 @@ func resolveInitialTemplateNames(data []byte, set *TestSet) error {
 		if uri, ok := found[set.Cases[i].Name]; ok {
 			nt.URI = uri
 		}
+		for j := range nt.Params {
+			if uri, ok := paramNS[set.Cases[i].Name+" "+nt.Params[j].Name]; ok {
+				nt.Params[j].URI = uri
+			}
+		}
 	}
 	return nil
 }
@@ -286,23 +309,27 @@ func resolveInitialTemplateNames(data []byte, set *TestSet) error {
 // scanInitialTemplateNames maps test-case name -> resolved namespace URI of
 // the prefix on that case's <initial-template name="..."> QName. A case whose
 // name has no prefix, or whose prefix is unbound, is absent from the map.
-func scanInitialTemplateNames(data []byte) (map[string]string, error) {
+func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string, error) {
 	dec := xml.NewDecoder(strings.NewReader(string(stripBOM(data))))
 	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
 		return input, nil
 	}
 	out := map[string]string{}
+	// paramNS maps "<case-name> <lexical param name>" to the namespace its
+	// prefix is bound to, for the <param> children of an <initial-template>.
+	paramNS := map[string]string{}
 	// scopes[i] holds the declarations made by the element at depth i; a
 	// lookup walks it from the top down so that an inner binding wins.
 	var scopes []map[string]string
 	caseName := ""
+	inInitialTemplate := false
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
@@ -324,17 +351,33 @@ func scanInitialTemplateNames(data []byte) (map[string]string, error) {
 						out[caseName] = uri
 					}
 				}
+				inInitialTemplate = true
+			case "param":
+				// A <param> inside <initial-template> may name a prefixed
+				// parameter, and the prefix is bound on the param element
+				// itself: initial-template-002 writes
+				// xmlns:my="http://my.net/" name="my:b" there.
+				name := attrValue(t, "name")
+				if prefix, _, hasPrefix := strings.Cut(name, ":"); hasPrefix &&
+					caseName != "" && inInitialTemplate {
+					if uri := lookupPrefix(scopes, prefix); uri != "" {
+						paramNS[caseName+" "+name] = uri
+					}
+				}
 			}
 		case xml.EndElement:
 			if len(scopes) > 0 {
 				scopes = scopes[:len(scopes)-1]
 			}
-			if t.Name.Local == "test-case" {
+			switch t.Name.Local {
+			case "test-case":
 				caseName = ""
+			case "initial-template":
+				inInitialTemplate = false
 			}
 		}
 	}
-	return out, nil
+	return out, paramNS, nil
 }
 
 // resolveResultNamespaces fills in Result.NS for every test-case, with the

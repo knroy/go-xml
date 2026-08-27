@@ -64,6 +64,19 @@ type TransformOptions struct {
 	// happens to spell another namespace with the same prefix.
 	InitialTemplateURI string
 
+	// InitialTemplateParams are the values supplied for the initial
+	// template's non-tunnel parameters, keyed by the parameter name in Clark
+	// notation. InitialTemplateTunnelParams are its tunnel parameters, which
+	// pass through to whatever the template calls in turn.
+	//
+	// They are separate from Params, which binds the stylesheet's global
+	// parameters. Section 2.3.2 makes those two different acts of priming: a
+	// global parameter belongs to the stylesheet and is set once, while these
+	// are the arguments of one call, and a template parameter and a global
+	// parameter may share a name without either standing for the other.
+	InitialTemplateParams       map[string]xdm.Sequence
+	InitialTemplateTunnelParams map[string]xdm.Sequence
+
 	// Now fixes the value fn:current-dateTime returns. Leave it zero to use
 	// the wall clock; set it to make a transform reproducible, which is what
 	// a golden-file test needs.
@@ -132,6 +145,17 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// source-free stylesheet run at all.
 	defaultEntry := xdm.QName{URI: xdm.NSXSL, Local: "initial-template"}.Clark()
 	useDefaultEntry := false
+	// XTDE0044: naming an initial mode is asking for an apply-templates, and
+	// an apply-templates needs something to select from. The initial match
+	// selection defaults to the global context item, which this engine takes
+	// from the source document, so no source means no selection at all. The
+	// name is not consulted: #default and #unnamed specify a mode just as a
+	// QName does, and error-0044a/aa/ac use all three.
+	if source == nil && opts.InitialMode != "" && opts.InitialTemplate == "" {
+		return nil, fmt.Errorf(
+			"XTDE0044: the invocation specifies initial mode %q but supplies "+
+				"no initial match selection", opts.InitialMode)
+	}
 	if source == nil && opts.InitialTemplate == "" {
 		if _, ok := s.named[defaultEntry]; !ok {
 			return nil, fmt.Errorf(
@@ -222,7 +246,9 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 						"declares required parameter $%s", p.Name.Lexical())
 			}
 		}
-		if err := runTemplate(rt, t, nil, nil, out); err != nil {
+		if err := runTemplate(rt, t,
+			opts.InitialTemplateParams, opts.InitialTemplateTunnelParams,
+			out); err != nil {
 			return nil, err
 		}
 	} else if opts.InitialTemplate != "" {
@@ -257,14 +283,53 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		}
 		// XTDE0060: the initial template may not declare a required
 		// parameter, because a transform started at it supplies none.
+		// XSLT 2.0 has no way to supply a parameter to the initial template:
+		// section 2.3 of that version admits an initial template name and
+		// nothing else, so a required parameter is always unsatisfied there.
+		// A 2.0 processor handed values for one must go on reporting the
+		// error, which is what initial-template-002a and -003a check.
+		supplyable := s.maxVersion == 0 || s.maxVersion >= 3.0
 		for _, p := range t.Params {
-			if p.Required && !p.Tunnel {
+			if !p.Required {
+				continue
+			}
+			if !supplyable {
+				if p.Tunnel {
+					continue
+				}
 				return nil, fmt.Errorf(
 					"XTDE0060: the initial template %q declares required "+
 						"parameter $%s", opts.InitialTemplate, p.Name.Lexical())
 			}
+			// A required parameter the caller supplied is satisfied. The
+			// error is for one left unset, not for the declaration itself.
+			supplied := opts.InitialTemplateParams
+			if p.Tunnel {
+				supplied = opts.InitialTemplateTunnelParams
+			}
+			if _, ok := supplied[p.Name.Clark()]; ok {
+				continue
+			}
+			if p.Tunnel {
+				continue
+			}
+			// The code is the processor's version to choose, not the
+			// module's: it names the same condition under two spellings.
+			// XSLT 2.0 called this XTDE0060; XSLT 3.0 dropped that code and
+			// folded the case into XTDE0700, "the initial named template ...
+			// defines a template parameter that specifies required='yes' and
+			// no value is supplied for that parameter".
+			code := "XTDE0060"
+			if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+				code = "XTDE0700"
+			}
+			return nil, fmt.Errorf(
+				"%s: the initial template %q declares required "+
+					"parameter $%s", code, opts.InitialTemplate, p.Name.Lexical())
 		}
-		if err := runTemplate(rt, t, nil, nil, out); err != nil {
+		if err := runTemplate(rt, t,
+			opts.InitialTemplateParams, opts.InitialTemplateTunnelParams,
+			out); err != nil {
 			return nil, err
 		}
 	} else {
