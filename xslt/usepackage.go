@@ -586,6 +586,19 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	// package is the top-level package: nobody uses it, so nothing can
 	// resolve an abstract component it accepts. See the XTSE3080 check below.
 	topLevel := c.sheet.source != nil && firstElement(c.sheet.source) == root
+	// XTSE3008: a module reached by xsl:import may not use a package. An
+	// imported module is a separate stylesheet, so its manifest would belong
+	// to no package at all; an included one is part of the including module
+	// and shares its package, which is why xsl:include is explicitly allowed.
+	if c.importDepth > 0 {
+		for _, el := range root.ChildElements() {
+			if isXSL(el, "use-package") {
+				return fmt.Errorf(
+					"XTSE3008: xsl:use-package may not appear in a module " +
+						"reached by xsl:import")
+			}
+		}
+	}
 	var uses []*usePackageDecl
 	for _, el := range root.ChildElements() {
 		if !isXSL(el, "use-package") {
@@ -805,6 +818,28 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			}
 			overridden[key] = oc.el
 		}
+		// A template rule inside the override adds a rule to the mode it
+		// names, and adding one is overriding the mode: 3.5.4 lets that
+		// happen only where the mode is public or abstract in the used
+		// package. override-m-002 writes a rule in a final mode and
+		// override-m-003 in a private one; both are XTSE3060.
+		for _, decl := range ov.ChildElements() {
+			if !isXSL(decl, "template") || decl.AttrValue("name") != "" {
+				continue
+			}
+			for _, m := range overriddenModes(decl) {
+				target, ok := byName[m.String()]
+				if !ok {
+					continue
+				}
+				if target.vis != visPublic && target.vis != visAbstract {
+					return nil, fmt.Errorf(
+						"XTSE3060: a template rule in xsl:override names "+
+							"%s, whose visibility in package %s is %q, not "+
+							"public or abstract", m, u.name, target.vis)
+				}
+			}
+		}
 	}
 	vis := map[string]visibility{}
 	assigned := map[string]bool{}
@@ -892,6 +927,31 @@ func checkOverrideChildren(ov *xdm.Node) error {
 	return nil
 }
 
+// overriddenModes returns the symbolic names of the modes a template rule
+// inside an xsl:override contributes to.
+//
+// A rule may name several modes at once, and the two pseudo-names are not
+// components: "#all" is not a mode, and "#default" resolves against the
+// using package rather than the used one.
+func overriddenModes(decl *xdm.Node) []symbolicName {
+	var out []symbolicName
+	for _, tok := range strings.Fields(decl.AttrValue("mode")) {
+		switch tok {
+		case "#all", "#default", "#current":
+			continue
+		case "#unnamed":
+			out = append(out, symbolicName{kind: kindMode, arity: -1})
+			continue
+		}
+		qn, err := resolveQNameAttr(decl, tok)
+		if err != nil {
+			continue
+		}
+		out = append(out, symbolicName{kind: kindMode, name: qn, arity: -1})
+	}
+	return out
+}
+
 // checkOverrideSignature compares an overriding declaration with the one it
 // overrides, XTSE3070.
 //
@@ -963,6 +1023,13 @@ func leadingParams(el *xdm.Node) []*xdm.Node {
 // checkTemplateParams compares the parameters of an overriding template with
 // those of the template it overrides, XTSE3070.
 func checkTemplateParams(overriding, original *xdm.Node) error {
+	// Only the REQUIRED parameters have to correspond. An optional one is
+	// part of the body's own business rather than of the signature a caller
+	// was compiled against: dropping one costs a caller nothing, since it
+	// need not have supplied it, and adding one costs nothing either, since
+	// it has a default. Both directions appear in the suite -- override-t-001
+	// drops the original's optional tunnel $extra, and override-t-011 adds an
+	// optional $extra of its own -- and both are declared successful.
 	orig := map[string]*xdm.Node{}
 	for _, p := range leadingParams(original) {
 		orig[p.AttrValue("name")] = p
@@ -973,9 +1040,12 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 		seen[name] = true
 		o, ok := orig[name]
 		if !ok {
+			if !stylesheetYes(p.AttrValue("required")) {
+				continue
+			}
 			return fmt.Errorf(
-				"XTSE3070: the overriding template %s declares a parameter "+
-					"$%s that the one it overrides does not",
+				"XTSE3070: the overriding template %s requires a parameter "+
+					"$%s that the one it overrides does not declare",
 				overriding.AttrValue("name"), name)
 		}
 		if a, b := p.AttrValue("as"), o.AttrValue("as"); a != b {
@@ -984,19 +1054,13 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 					"and the one it overrides declares as=%q",
 				overriding.AttrValue("name"), name, a, b)
 		}
-		if a, b := p.AttrValue("required"), o.AttrValue("required"); a != b {
-			return fmt.Errorf(
-				"XTSE3070: the overriding template %s declares $%s "+
-					"required=%q and the one it overrides declares %q",
-				overriding.AttrValue("name"), name, a, b)
-		}
 	}
-	for name := range orig {
-		if !seen[name] {
+	for name, o := range orig {
+		if !seen[name] && stylesheetYes(o.AttrValue("required")) {
 			return fmt.Errorf(
 				"XTSE3070: the overriding template %s does not declare the "+
-					"parameter $%s that the one it overrides declares",
-				overriding.AttrValue("name"), name)
+					"required parameter $%s that the one it overrides "+
+					"declares", overriding.AttrValue("name"), name)
 		}
 	}
 	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); a != b {
@@ -1018,6 +1082,16 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
+		if comp.sym.kind == kindMode {
+			// A mode declaration is never pruned. It is a component, but
+			// what it holds is the mode's properties, and the template rules
+			// that travel with the mode need them whatever the manifest said
+			// about who may name the mode from outside. Deleting a private
+			// unnamed mode left its own package's rules in a mode nothing
+			// declared, which under declared-modes="yes" is XTSE3085.
+			keep[comp.el] = true
+			continue
+		}
 		v := u.acceptedVis[comp.sym.String()]
 		// A hidden component is not merely unexported. The note under 3.6.3.1
 		// singles it out: visibility "primarily affects how the component can
