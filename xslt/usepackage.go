@@ -1350,6 +1350,8 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// precedence than the using package, so that the using package's own
 	// declarations win. It is compiled through compileDocument, which
 	// allocates the number and runs every check the module deserves.
+	c.usedPackageDepth++
+	defer func() { c.usedPackageDepth-- }()
 	return c.compileDocument(u.doc, 0)
 }
 

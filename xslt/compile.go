@@ -30,6 +30,13 @@ type compiler struct {
 	// imported module is a separate stylesheet whose manifest would belong
 	// to nobody. A depth rather than a flag, since imports nest.
 	importDepth int
+	// usedPackageDepth counts how many used packages the compiler is inside.
+	//
+	// A used package's declarations rank below the using package's whatever
+	// numeric precedence they were allocated: precedence rises with each
+	// module compiled, and a used package compiles last, so the number alone
+	// says the opposite of what section 3.5 requires.
+	usedPackageDepth int
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
@@ -1917,8 +1924,22 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 	if nm := el.Attr("", "on-no-match"); nm != nil {
 		if c.sheet.modeNoMatch == nil {
 			c.sheet.modeNoMatch = map[string]string{}
+			c.sheet.modeNoMatchPrec = map[string]int{}
 		}
-		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+		// Higher import precedence wins, and an equal one is the later
+		// declaration in the same module, which the spec's conflict rule
+		// also gives to the last. See modeNoMatchPrec.
+		// A declaration inside a used package never displaces one from the
+		// using package. Within either, the ordinary rule applies: higher
+		// import precedence wins, and an equal one is the later declaration.
+		rank := precedence
+		if c.usedPackageDepth > 0 {
+			rank = -1 - c.usedPackageDepth
+		}
+		if prev, seen := c.sheet.modeNoMatchPrec[name]; !seen || rank >= prev {
+			c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+			c.sheet.modeNoMatchPrec[name] = rank
+		}
 	}
 	if a := el.Attr("", "typed"); a != nil {
 		if c.sheet.modeTyped == nil {

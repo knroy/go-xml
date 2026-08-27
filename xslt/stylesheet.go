@@ -99,6 +99,16 @@ type Stylesheet struct {
 	// without giving @on-no-match records nothing and the default still
 	// stands.
 	modeNoMatch map[string]string
+	// modeNoMatchPrec records the import precedence of the declaration that
+	// set each modeNoMatch entry, so a later-compiled module of lower
+	// precedence cannot overwrite a higher one.
+	//
+	// A used package compiles after the package that uses it and below it in
+	// precedence, so last-writer-wins gave the used package's xsl:mode the
+	// final say over the using package's. package-019 declares
+	// on-no-match="text-only-copy" and used a package declaring "fail",
+	// which is how the transform came to fail with XTDE0555.
+	modeNoMatchPrec map[string]int
 
 	// modeWarnMultiple and modeWarnNoMatch hold the two boolean xsl:mode
 	// warning attributes by Clark mode name, stored exactly as modeNoMatch is
