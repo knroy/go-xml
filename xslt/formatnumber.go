@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strconv"
 	"fmt"
 	"sort"
 
@@ -160,7 +161,17 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 		}
 	}
 
-	c.sheet.decimalFormats[name] = df
+	// Filed under the package as well as the name. 3.5.5: "An
+	// xsl:decimal-format declaration within a package applies only to calls
+	// on format-number appearing within that package", and "the unnamed
+	// decimal format ... is also local to a package". Two packages may
+	// therefore declare one format name -- or each declare the unnamed one --
+	// with different symbols, and neither may see the other's.
+	//
+	// The conflict, precedence and symbol checks stay keyed by name alone:
+	// each asks about the declarations of a single package, which is the only
+	// place two declarations of a name legitimately compete.
+	c.sheet.decimalFormats[decimalFormatKey(compilePackage, name)] = df
 	if c.statedDecimalFormat == nil {
 		c.statedDecimalFormat = map[string]map[string]bool{}
 	}
@@ -255,7 +266,11 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 			}
 			dfName = xdm.QName{URI: uri, Local: local}.Clark()
 		}
-		df, ok := s.decimalFormats[dfName]
+		// 3.5.5 scopes a decimal format to the package the CALL appears in:
+		// "An xsl:decimal-format declaration within a package applies only to
+		// calls on format-number appearing within that package". The context
+		// carries the package the expression was compiled in.
+		df, ok := s.decimalFormatFor(packageOf(ctx), dfName)
 		if !ok {
 			if dfName != "" {
 				// As with the picture error, 2.0 raises an XSLT code for the
@@ -374,4 +389,28 @@ func (c *compiler) checkDecimalFormatSymbols() error {
 		}
 	}
 	return nil
+}
+
+// decimalFormatKey qualifies a decimal format's Clark name with its package.
+//
+// The top-level package's names are left unqualified so that every stylesheet
+// using no package at all -- which is nearly all of them -- keys the table
+// exactly as before. See accumKey, which does the same for the same reason.
+func decimalFormatKey(pkg int, name string) string {
+	if pkg == 0 {
+		return name
+	}
+	return strconv.Itoa(pkg) + " " + name
+}
+
+// decimalFormatFor returns the decimal format of one name in scope for a call
+// written in pkg, and reports whether the package declares it.
+//
+// A package that declares nothing under the name has no format of that name,
+// rather than inheriting another package's: that is what makes the scoping
+// real, and what use-package-104 asks for when it names a format only the
+// package it uses declares.
+func (s *Stylesheet) decimalFormatFor(pkg int, name string) (*DecimalFormat, bool) {
+	df, ok := s.decimalFormats[decimalFormatKey(pkg, name)]
+	return df, ok
 }

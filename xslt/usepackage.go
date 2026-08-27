@@ -1964,37 +1964,41 @@ func isXMLSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
-// snapshotPackageLocalDecls records the package-local declaration tables as
-// they stand, and answers a function restoring them.
+// snapshotPackageLocalDecls notes which character maps a used package
+// contributes, so that the top-level package cannot name one.
 //
-// Section 3.5.5 makes decimal formats and character maps local to the package
-// that declares them. Keys are scoped the other way, by filing each
-// declaration under its package and resolving a call against the package it
-// is written in; see keyDefsFor. That is the better mechanism -- it keeps
-// BOTH packages' declarations rather than removing one -- and is what
-// override-misc-004 needs, where each package's own template must reach its
-// own key of the same name. This composition compiles a used package into
-// the using package's Stylesheet, so the only way to keep the scopes apart is
-// to put the tables back the way the using package left them once the used
-// package has compiled. See the call site in compileUsedPackage for why a
-// snapshot taken there captures exactly the using package's own state.
+// Section 3.5.5 makes character maps local to the package that declares them,
+// along with keys, accumulators and decimal formats. Those three are scoped
+// by FILING each declaration under its package and resolving a reference
+// against the package it is written in -- see keyDefsFor, accumulatorFor and
+// decimalFormatFor -- which is the better mechanism, because it keeps both
+// packages' declarations rather than removing one.
 //
-// Only the three tables the conformance suite pins are touched. The section
-// names namespace aliases, output definitions and accumulators too; those are
-// left alone deliberately, because nothing yet distinguishes a case that
-// needs the scoping from one that relies on the inheritance, and narrowing a
-// scope with no test to hold it is how a regression gets in.
+// A character map cannot be scoped that way. It is consulted at serialisation
+// time by name, from whatever xsl:output or xsl:result-document named it,
+// with no expression and so no context to carry a package. Its entries
+// therefore stay in the flat table -- use-package-108 calls the used
+// package's own template, which writes an xsl:result-document over that
+// package's character map -- and only the NAME is scoped: the names a used
+// package contributed are recorded here, and the one check that speaks for
+// the top-level package refuses them. That is what use-package-106 asks for,
+// naming a "cm" only the used package declares.
+//
+// A snapshot taken at this point captures exactly the using package's own
+// state, because compileUsePackages runs before the using module's own
+// declarations are compiled: everything the table gains across the call came
+// from the used package.
+//
+// Namespace aliases and output definitions are named by the same section and
+// left alone, because nothing yet distinguishes a case that needs the scoping
+// from one that relies on the inheritance, and narrowing a scope with no test
+// to hold it is how a regression gets in.
 func (c *compiler) snapshotPackageLocalDecls() func() {
-	formats := make(map[string]*DecimalFormat, len(c.sheet.decimalFormats))
-	for k, v := range c.sheet.decimalFormats {
-		formats[k] = v
-	}
 	maps := make(map[string]map[rune]string, len(c.sheet.characterMaps))
 	for k := range c.sheet.characterMaps {
 		maps[k] = nil
 	}
 	return func() {
-		c.sheet.decimalFormats = formats
 		// Character maps are the one table whose entries must stay. A
 		// character map is consulted at serialisation time, by name, from
 		// whatever xsl:output or xsl:result-document named it -- including
