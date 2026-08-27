@@ -625,7 +625,15 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	node, ok := rt.ctx.Item.(*xdm.Node)
 	if !ok {
-		return fmt.Errorf("%s requires a node as the context item", name)
+		// XSLT 3.0 dispatches atomic values too, through the ".[E]" patterns,
+		// so a rule matching one may delegate exactly as a node's rule does.
+		// xsl:apply-imports keeps the node-only restriction: it is defined
+		// over the import tree of the matched node's rule, and the atomic
+		// scan does not track precedence intervals.
+		if i.applyImports {
+			return fmt.Errorf("%s requires a node as the context item", name)
+		}
+		return i.nextMatchAtomic(rt, out, name)
 	}
 
 	var (

@@ -415,31 +415,33 @@ func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, er
 func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
 
-	t := rt.sheet.findAtomicTemplate(item, mode, rt.ctx)
+	t, next := rt.sheet.findAtomicTemplateFrom(item, mode, rt.ctx, 0)
 	if t == nil {
 		if a, ok := item.(*xdm.Atomic); ok {
 			out.appendValue(a)
 		}
 		return nil
 	}
-	// next is the whole list, so xsl:next-match from such a rule finds
-	// nothing further and falls to the built-in rule, which is right: the
-	// selection scan below stops at the first match.
-	sub := rt.withSelection(t, len(rt.sheet.templates), mode, params, tunnels)
+	// The resume index is the position after the winner, so xsl:next-match
+	// from such a rule continues down the list exactly as it does for a node.
+	sub := rt.withSelection(t, next, mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
 }
 
-// findAtomicTemplate picks the highest-priority rule in mode whose pattern
-// matches an atomic value.
+// findAtomicTemplateFrom picks the highest-priority rule in mode whose
+// pattern matches an atomic value, resuming the scan at index start.
 //
 // The scan is separate from findTemplateFrom because that one is built around
 // a node — it consults the node's kind and name to narrow the candidates — and
 // an atomic value answers none of those questions. The templates are already
 // sorted by precedence and priority, so the first match wins.
-func (s *Stylesheet) findAtomicTemplate(item xdm.Item, mode string,
-	ctx *xpath.Context) *Template {
+// It returns the match and the index after it, which is what xsl:next-match
+// needs to resume the scan over the rules the winner beat.
+func (s *Stylesheet) findAtomicTemplateFrom(item xdm.Item, mode string,
+	ctx *xpath.Context, start int) (*Template, int) {
 
-	for _, t := range s.templates {
+	for i := start; i < len(s.templates); i++ {
+		t := s.templates[i]
 		if t.Match == nil || !t.matchesMode(mode) {
 			continue
 		}
@@ -447,9 +449,9 @@ func (s *Stylesheet) findAtomicTemplate(item xdm.Item, mode string,
 		if err != nil || !ok {
 			continue
 		}
-		return t
+		return t, i + 1
 	}
-	return nil
+	return nil, len(s.templates)
 }
 
 // expandGroupedSteps rewrites a parenthesised alternation used as a step into
@@ -546,4 +548,37 @@ func patternMatchesItem(pat *Pattern, it xdm.Item, ctx *xpath.Context) (bool, er
 		return pat.Matches(n, ctx)
 	}
 	return pat.matchesAtomicItem(it, ctx)
+}
+
+// nextMatchAtomic is xsl:next-match where the item being processed is an
+// atomic value rather than a node.
+//
+// It resumes the atomic scan after the rule that won, and falls to section
+// 6.7.1's built-in rule — copy the value to the result — when nothing further
+// matches, which is what applyToAtomic does for the first dispatch.
+func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
+	name string) error {
+
+	item := rt.ctx.Item
+	params, tunnels, err := evalParams(rt, i.params)
+	if err != nil {
+		return err
+	}
+	if tunnels == nil {
+		tunnels = rt.sel.tunnels
+	}
+	t, next := rt.sheet.findAtomicTemplateFrom(
+		item, rt.sel.mode, rt.ctx, rt.sel.next)
+	if t == nil {
+		if a, ok := item.(*xdm.Atomic); ok {
+			out.appendValue(a)
+		}
+		return nil
+	}
+	if err := rt.descend(); err != nil {
+		return err
+	}
+	defer rt.ascend()
+	sub := rt.withSelection(t, next, rt.sel.mode, params, tunnels)
+	return runTemplate(sub, t, params, tunnels, out)
 }
