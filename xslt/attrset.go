@@ -236,13 +236,17 @@ func isLexicalAnyURI(s string) bool {
 				return false
 			}
 			i += 2
-		case ' ', '\t', '\n', '\r', '<', '>', '{', '}', '|', '\\', '^', '`':
+		case ' ', '\t', '\n', '\r', '<', '>', '{', '}', '\\', '^', '`':
 			// The characters RFC 2396 excludes outright, either as delimiters
-			// or as unwise. A double quote is not among them here: the suite
-			// builds namespace URIs containing one and requires them to be
-			// accepted, and RFC 2396 lists it only as "unwise" rather than
-			// excluded from the lexical space. A space in particular is what a stylesheet
-			// produces when it concatenates two URIs by mistake.
+			// or as unwise. Two of the "unwise" ones are not among them: a
+			// double quote and a vertical bar. The suite builds namespace
+			// URIs containing each and requires both to be accepted --
+			// seqtor-038b and -038e assert xmlns:foo="||" -- and RFC 2396
+			// lists them only as unwise rather than excluded from the lexical
+			// space. Whitespace stays excluded, and seqtor-038c shows why:
+			// with a space between the bars the same test allows XTDE0905,
+			// because a space is what a stylesheet produces when it
+			// concatenates two URIs by mistake.
 			return false
 		}
 	}
