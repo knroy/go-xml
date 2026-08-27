@@ -164,3 +164,88 @@ func funcParamCode(s *Stylesheet) string {
 	}
 	return "XTTE0790"
 }
+
+// reservedNamespaces30 are the namespaces XSLT 3.0 adds to the reserved list
+// section 3.2 gives, on top of the ones XSLT 2.0 already reserved.
+//
+// The map and array function namespaces did not exist in 2.0, and the error
+// namespace was not reserved by it, so a 2.0 module naming one of them is not
+// making the mistake XTSE0080 describes; the gate is the MODULE's version,
+// since XTSE0080 is decided from the stylesheet text alone.
+var reservedNamespaces30 = map[string]bool{
+	xdm.NSMap:   true,
+	xdm.NSArray: true,
+	xdm.NSErr:   true,
+}
+
+// isReservedNamespace reports whether uri is one a stylesheet may not use in
+// the name of an object it declares, for a declaration written on el.
+func isReservedNamespace(el *xdm.Node, uri string) bool {
+	if reservedNamespaces[uri] {
+		return true
+	}
+	return reservedNamespaces30[uri] && moduleAtLeast30(el)
+}
+
+// checkExtensionPrefixes applies XTSE0085 and XTSE0800: an extension
+// namespace may not be a reserved one.
+//
+// The two codes name the same mistake at two moments. XTSE0085 is the
+// designation itself -- [xsl:]extension-element-prefixes naming a prefix bound
+// to a reserved namespace -- and XTSE0800 is an element written in such a
+// namespace and thereby claimed as an extension instruction. Where the
+// stylesheet went on to write the element, the specific code is the one due,
+// so the scan for it comes first: extension-functions-0105 designates the
+// schema namespace AND writes <xs:special> in it, and expects XTSE0800, while
+// math-3702 only designates it and expects XTSE0085.
+func checkExtensionPrefixes(el *xdm.Node) error {
+	// XTSE0085 is an XSLT 3.0 code: 2.0 said nothing against designating a
+	// reserved namespace as an extension namespace, and function-1023 is a
+	// version="2.0" module that writes extension-element-prefixes="xs" and
+	// expects to reach XPST0017 at run time. So the gate is the MODULE's
+	// version, the error being decided from the stylesheet text alone.
+	if !moduleAtLeast30(el) {
+		return nil
+	}
+	for _, uri := range []string{"", xdm.NSXSL} {
+		if uri == "" && el.Name.URI != xdm.NSXSL {
+			continue
+		}
+		a := el.Attr(uri, "extension-element-prefixes")
+		if a == nil {
+			continue
+		}
+		for _, p := range strings.Fields(a.Value) {
+			if p == "#default" {
+				p = ""
+			}
+			ns, ok := el.LookupPrefix(p)
+			if !ok || !isReservedNamespace(el, ns) {
+				continue
+			}
+			if name := firstElementIn(el, ns); name != "" {
+				return fmt.Errorf(
+					"XTSE0800: %s is an extension instruction in the "+
+						"reserved namespace %q", name, ns)
+			}
+			return fmt.Errorf(
+				"XTSE0085: extension-element-prefixes names %q, which is "+
+					"bound to the reserved namespace %q", p, ns)
+		}
+	}
+	return nil
+}
+
+// firstElementIn returns the lexical name of the first descendant of el in the
+// namespace uri, or "" if there is none.
+func firstElementIn(el *xdm.Node, uri string) string {
+	for _, ch := range el.ChildElements() {
+		if ch.Name.URI == uri {
+			return ch.Name.Lexical()
+		}
+		if n := firstElementIn(ch, uri); n != "" {
+			return n
+		}
+	}
+	return ""
+}

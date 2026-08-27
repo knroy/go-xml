@@ -44,6 +44,8 @@ var namedDeclarations = map[string]bool{
 	"template": true, "attribute-set": true, "key": true,
 	"decimal-format": true, "variable": true, "param": true,
 	"function": true, "output": true,
+	// XSLT 3.0 3.2 extends the list with the three declarations it adds.
+	"mode": true, "accumulator": true, "character-map": true,
 }
 
 // checkStaticErrors applies the tree-decidable static rules to a module.
@@ -63,13 +65,6 @@ func checkStaticErrors(root *xdm.Node) error {
 		// a library is rejected in the principal package too.
 		if err := checkExposeDeclarations(root); err != nil {
 			return err
-		}
-		for _, ch := range root.ChildElements() {
-			if isXSL(ch, "mode") {
-				if err := checkModeName(ch); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return walkStaticErrors(root, false)
@@ -139,7 +134,15 @@ func checkStylesheetElement(root *xdm.Node) error {
 func walkStaticErrors(n *xdm.Node, forwards bool) error {
 	if n.Kind == xdm.KindElement {
 		forwards = forwardsAt(n, forwards)
-		if !forwards {
+		// Section 3.9 excuses only what the PROCESSOR does not understand: a
+		// stylesheet is in forwards-compatible mode when its effective
+		// version is "greater than the version of XSLT implemented by the
+		// processor". forwardsAt answers the 2.0 question, which every other
+		// caller wants, so the per-element rules ask the processor's question
+		// separately -- otherwise a 3.0 processor skipped this whole pass for
+		// every version="3.0" stylesheet, and XTSE0080 and XTSE0085 went
+		// unreported for the modules most likely to earn them.
+		if !forwards || !effectiveForwards(n) {
 			if err := checkElementStatic(n); err != nil {
 				return err
 			}
@@ -238,6 +241,9 @@ func checkElementStatic(el *xdm.Node) error {
 		if err := checkPrefixListAttrs(el); err != nil {
 			return err
 		}
+		if err := checkExtensionPrefixes(el); err != nil {
+			return err
+		}
 		return checkDefaultCollation(el)
 	}
 
@@ -254,6 +260,9 @@ func checkElementStatic(el *xdm.Node) error {
 	if err := checkPrefixListAttrs(el); err != nil {
 		return err
 	}
+	if err := checkExtensionPrefixes(el); err != nil {
+		return err
+	}
 	if err := checkDefaultCollation(el); err != nil {
 		return err
 	}
@@ -265,7 +274,7 @@ func checkElementStatic(el *xdm.Node) error {
 			// template to start at, so the specification reserves the name
 			// *for* stylesheets rather than against them.
 			if qn, err := resolveQNameAttr(el, a.Value); err == nil &&
-				reservedNamespaces[qn.URI] &&
+				isReservedNamespace(el, qn.URI) &&
 				!(qn.URI == xdm.NSXSL && qn.Local == "initial-template") {
 				return fmt.Errorf(
 					"XTSE0080: xsl:%s/@name=%q is in a reserved namespace",
@@ -325,6 +334,15 @@ func checkElementStatic(el *xdm.Node) error {
 			if !strings.Contains(m, ":") {
 				switch m {
 				case "xml", "html", "xhtml", "text":
+				// XSLT 3.0 adds two serialization methods to the closed set:
+				// "json" writes a JSON document and "adaptive" writes any
+				// sequence, both defined in the 3.1 serialization spec.
+				case "json", "adaptive":
+					if !moduleAtLeast30(el) {
+						return fmt.Errorf(
+							"XTSE1570: xsl:output/@method=%q is an XSLT 3.0 "+
+								"serialization method", a.Value)
+					}
 				default:
 					return fmt.Errorf(
 						"XTSE1570: xsl:output/@method=%q is not xml, html, "+
@@ -415,7 +433,13 @@ func checkElementStatic(el *xdm.Node) error {
 			return fmt.Errorf(
 				"XTSE0870: xsl:value-of has a select attribute, so it must " +
 					"be empty")
-		case !hasSelect && !hasRealContent(el):
+		case !hasSelect && !hasRealContent(el) && !processorAtLeast30():
+			// XSLT 3.0 dropped this half of the rule: xsl:value-of with
+			// neither a select nor content produces a zero-length text node.
+			// The gate is the PROCESSOR's version: select-7502a and -7502b
+			// are one version="2.0" stylesheet the suite runs twice, scoped
+			// XSLT20 expecting the error and XSLT30+ expecting the empty
+			// instruction to work.
 			return fmt.Errorf(
 				"XTSE0870: xsl:value-of has empty content, so it requires a " +
 					"select attribute")
@@ -497,8 +521,12 @@ func checkElementStatic(el *xdm.Node) error {
 	case "function":
 		// XTSE0740: a stylesheet function's name must have a prefix, so that
 		// it cannot collide with one in the default function namespace.
+		//
+		// Q{uri}local names the namespace directly and so satisfies the rule
+		// without a prefix; the requirement is that the name be IN a
+		// namespace, which is what having a prefix was shorthand for.
 		if a := el.Attr("", "name"); a != nil &&
-			!strings.Contains(a.Value, ":") {
+			!strings.Contains(a.Value, ":") && !isEQName(strings.TrimSpace(a.Value)) {
 			return fmt.Errorf(
 				"XTSE0740: xsl:function/@name=%q must have a prefix", a.Value)
 		}
