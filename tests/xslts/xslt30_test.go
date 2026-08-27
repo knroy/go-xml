@@ -77,4 +77,24 @@ func TestXSLT30Suite(t *testing.T) {
 			t.Logf("  %-40s %5d pass %5d fail", r.name, r.pass, r.fail)
 		}
 	}
+
+	if os.Getenv("GOXSLT_XSLTS_VERBOSE") != "" {
+		only := os.Getenv("GOXSLT_XSLTS_ONLYSET")
+		for _, f := range sum.Failures {
+			if only != "" && f.Set != only {
+				continue
+			}
+			t.Logf("  FAIL %s/%s: %s", f.Set, f.Name, f.Why)
+		}
+	}
+
+	if os.Getenv("GOXSLT_XSLTS_VERBOSE") != "" {
+		only := os.Getenv("GOXSLT_XSLTS_SET")
+		for _, f := range sum.Failures {
+			if only != "" && f.Set != only {
+				continue
+			}
+			t.Logf("  FAIL %s/%s: %s", f.Set, f.Name, f.Why)
+		}
+	}
 }

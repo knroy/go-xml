@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // Options configure schema assembly.
@@ -32,6 +33,20 @@ type Options struct {
 	// accident — 1.1 changes which schemas are legal, not only which
 	// documents are.
 	Version Version
+
+	// XPathVersion selects the version of XPath the 1.1 assertions and
+	// conditional type alternatives in this schema are written in.
+	//
+	// The zero value is XPath 2.0, which is what the specification requires:
+	// XSD 1.1 defines assertions against a subset of XPath 2.0, so a schema
+	// using a 3.0 construct is not portable and must not quietly work here.
+	//
+	// Raising it is for a host that controls its own schemas and wants the
+	// later function library in an assertion — fn:parse-json or a map, say —
+	// accepting that the schema is then this engine's rather than every
+	// engine's. It does not affect anything but assertions and alternatives:
+	// nothing else in a schema is XPath.
+	XPathVersion xpath.Version
 
 	// ParseOptions are passed to the XML parser for each schema document.
 	// The zero value refuses a DOCTYPE, which is the right default: a
@@ -76,6 +91,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 
 	s := NewSchema()
 	s.Version = opts.Version
+	s.xpathVersion = opts.XPathVersion
 	a := &assembler{
 		schema: s,
 		opts:   opts,
@@ -276,6 +292,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 
 	s := NewSchema()
 	s.Version = opts.Version
+	s.xpathVersion = opts.XPathVersion
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
 		schema: s,

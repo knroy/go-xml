@@ -75,7 +75,8 @@ func (p *parser) readAssert(el *xdm.Node) *Assertion {
 	// is ever in.
 	def, _ := p.xpathDefaultNamespace(el)
 
-	compiled, err := xpath.Compile(test, assertResolver{el: el, defaultNS: def})
+	compiled, err := xpath.CompileVersion(test,
+		assertResolver{el: el, defaultNS: def}, p.xpathVersion())
 	if err != nil {
 		p.errs = append(p.errs, errorAt(el, "src-assert",
 			"assertion test %q: %v", test, err))
@@ -128,8 +129,8 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 		// As for an assertion: the attribute may be inherited and takes
 		// keywords besides a URI.
 		def, _ := p.xpathDefaultNamespace(el)
-		compiled, err := xpath.Compile(alt.Source,
-			assertResolver{el: el, defaultNS: def})
+		compiled, err := xpath.CompileVersion(alt.Source,
+			assertResolver{el: el, defaultNS: def}, p.xpathVersion())
 		if err != nil {
 			p.errs = append(p.errs, errorAt(el, "src-type-alternative",
 				"alternative test %q: %v", alt.Source, err))
@@ -703,4 +704,16 @@ func unionMemberTypesOf(t *SimpleType) []*SimpleType {
 		}
 	}
 	return nil
+}
+
+// xpathVersion is the version assertions and alternatives compile in.
+//
+// A method rather than a field read so that a parser with no schema yet --
+// which happens while errors are being collected from a document that failed
+// to assemble -- answers the default rather than panicking.
+func (p *parser) xpathVersion() xpath.Version {
+	if p.schema == nil {
+		return xpath.XPath20
+	}
+	return p.schema.xpathVersion
 }

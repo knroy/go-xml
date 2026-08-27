@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // A schemaDoc is one schema document being read.
@@ -208,6 +209,10 @@ type Schema struct {
 	// because a schema that uses them is not made valid by pretending they
 	// are absent.
 	Version Version
+
+	// xpathVersion is the version of XPath the assertions and type
+	// alternatives in this schema are compiled in, from Options.
+	xpathVersion xpath.Version
 
 	// sourcePaths records the documents this schema was loaded from, so
 	// that WithInstanceLocations can assemble them again alongside the ones
