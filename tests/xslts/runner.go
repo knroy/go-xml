@@ -245,6 +245,14 @@ func wantsSerializationError(a Assertion) bool {
 	if a.Kind == "assert-serialization-error" {
 		return true
 	}
+	// A serialization error may also be asserted as an ordinary <error> with
+	// a serialization code -- output-0710 wants SENR0001 that way, and there
+	// is no other spelling of "the transform succeeds but the result cannot
+	// be written". The SE prefix is the serialization spec's own; no other
+	// error family in the suite uses it.
+	if a.Kind == "error" && strings.HasPrefix(a.Code, "SE") {
+		return true
+	}
 	for _, c := range a.Children {
 		if wantsSerializationError(c) {
 			return true
@@ -345,7 +353,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			continue
 		}
 		v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
-			noNS{})
+			catalogNS{})
 		if err != nil {
 			return nil, fmt.Errorf("static parameter %s: %w", p.Name, err)
 		}
@@ -463,6 +471,30 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// to spell a different namespace with the same prefix, and
 		// resolving twice picked a template the catalog never named.
 		opts.InitialTemplateURI = tc.Test.InitialTemplate.URI
+		// <initial-template> may carry its own <param> children, which are
+		// the arguments of that one call rather than the stylesheet's global
+		// parameters. A tunnel="yes" one passes through to whatever the
+		// template calls in turn.
+		for _, p := range tc.Test.InitialTemplate.Params {
+			v, err := xpath.Eval(p.Select,
+				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})
+			if err != nil {
+				return nil, fmt.Errorf("initial-template parameter %s: %w",
+					p.Name, err)
+			}
+			key := xdm.QName{URI: p.URI, Local: p.Local()}.Clark()
+			if p.Tunnel == "yes" || p.Tunnel == "true" {
+				if opts.InitialTemplateTunnelParams == nil {
+					opts.InitialTemplateTunnelParams = map[string]xdm.Sequence{}
+				}
+				opts.InitialTemplateTunnelParams[key] = v
+				continue
+			}
+			if opts.InitialTemplateParams == nil {
+				opts.InitialTemplateParams = map[string]xdm.Sequence{}
+			}
+			opts.InitialTemplateParams[key] = v
+		}
 	}
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
@@ -475,7 +507,7 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			continue
 		}
 		v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
-			noNS{})
+			catalogNS{})
 		if err != nil {
 			return nil, fmt.Errorf("parameter %s: %w", p.Name, err)
 		}
@@ -509,6 +541,28 @@ type noNS struct{}
 func (noNS) ResolvePrefix(string) (string, bool) { return "", false }
 func (noNS) DefaultElementNamespace() string     { return "" }
 func (noNS) DefaultFunctionNamespace() string    { return xdm.NSFN }
+
+// catalogNS resolves the prefixes a catalog's <param>/@select may use.
+//
+// encoding/xml discards the namespace declarations written on the catalog
+// element itself, so the bindings cannot be recovered from the parsed
+// structure. The suite declares xs and fn on the elements that need them and
+// uses no others in a parameter's select expression, so binding those two is
+// enough -- and binding them is what lets static-009a write
+// xs:untypedAtomic(23) as a parameter value at all.
+type catalogNS struct{}
+
+func (catalogNS) ResolvePrefix(p string) (string, bool) {
+	switch p {
+	case "xs":
+		return xdm.NSXS, true
+	case "fn":
+		return xdm.NSFN, true
+	}
+	return "", false
+}
+func (catalogNS) DefaultElementNamespace() string  { return "" }
+func (catalogNS) DefaultFunctionNamespace() string { return xdm.NSFN }
 
 // preloadSources validates the environment's non-principal sources and hands
 // the resulting trees to the document resolver.

@@ -141,7 +141,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		}
 	}
 	switch {
-	case s.html && opts.DocTypeSystem == "" && opts.DocTypePublic == "":
+	case s.html && opts.DocTypeSystem == "" && (opts.DocTypePublic == "" || s.html5):
 		// HTML5 asks for a bare doctype; earlier HTML versions get one only
 		// when the stylesheet names a public or system identifier.
 		//
@@ -247,12 +247,30 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 	// instead a fixed string: it is "<!DOCTYPE HTML>" whatever the document
 	// element is called, so a fragment rooted at <input> still gets it, and
 	// naming the element there produced "<!DOCTYPE INPUT>".
-	if s.html5 && s.opts.DocTypeSystem == "" && s.opts.DocTypePublic == "" {
+	// A public identifier alone cannot be written -- the XML grammar puts the
+	// system literal after PUBLIC and makes it required -- but under HTML5 it
+	// does not suppress the declaration either: the ruling on bug 20264 is
+	// that the bare form is still output, which output-0229 asserts.
+	if s.html5 && s.opts.DocTypeSystem == "" {
 		if s.xhtml {
-			s.writeString("<!DOCTYPE " + s.elementName(n) + ">\n")
-		} else {
-			s.writeString("<!DOCTYPE HTML>\n")
+			// The declaration is written only for a document element that
+			// really is html in the XHTML namespace, and it names the
+			// element's LOCAL name -- <HtMl> takes "<!DOCTYPE HtMl>",
+			// because an XHTML document is XML and the DOCTYPE name must
+			// match the element. The prefix is not part of that match,
+			// which is why it is not the serialised element name: <h:html>
+			// took "<!DOCTYPE h:html>" and matched nothing.
+			//
+			// Four tests pin the three halves of this apart: output-0209
+			// and -0210 the casing, -0211 the prefix, -0213 an element
+			// that is not html, and -0214 an html that is not XHTML's.
+			if n.Kind == xdm.KindElement && n.Name.URI == nsXHTML &&
+				strings.EqualFold(n.Name.Local, "html") {
+				s.writeString("<!DOCTYPE " + n.Name.Local + ">\n")
+			}
+			return
 		}
+		s.writeString("<!DOCTYPE HTML>\n")
 		return
 	}
 	s.writeString("<!DOCTYPE " + s.elementName(n))
@@ -1257,6 +1275,23 @@ func checkOutputSettings(opts OutputSettings, seq xdm.Sequence) error {
 	method := strings.ToLower(opts.Method)
 	if method == "" {
 		method = "xml"
+	}
+
+	// Sequence normalisation, step 1 (Serialization 3.1, 2): an item that is
+	// a function -- which a map and an array both are in the data model --
+	// has no serialised form under the xml, html, xhtml and text methods,
+	// and the error is raised in place of writing something plausible. The
+	// json and adaptive methods do not normalise the sequence and so are not
+	// subject to it. output-0710 through -0712 are one map sequence sent to
+	// each of xml, html and the method chosen from the result.
+	for _, it := range seq {
+		switch it.(type) {
+		case *xdm.MapItem, *xdm.ArrayItem, *xdm.FunctionItem:
+			return fmt.Errorf(
+				"SENR0001: an item in the sequence to serialize is %s, "+
+					"which the %s output method cannot serialize",
+				it.TypeName(), method)
+		}
 	}
 
 	// An encoding this serialiser cannot produce. Everything is written as

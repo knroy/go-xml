@@ -1288,8 +1288,11 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	}
 	if qn.URI == "" {
 		// The spec requires a namespace, to keep user functions from
-		// colliding with future builtins.
-		return fmt.Errorf("xsl:function name %q must be in a namespace", name)
+		// colliding with future builtins. The EQName spelling Q{}local names
+		// no namespace just as an unprefixed name does, so it is this error
+		// and not a lexical one.
+		return fmt.Errorf(
+			"XTSE0740: xsl:function name %q must be in a namespace", name)
 	}
 
 	var params []*Variable
