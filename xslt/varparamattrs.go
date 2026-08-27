@@ -51,7 +51,12 @@ func checkVarParamAttrs(el *xdm.Node) error {
 	}
 	global := el.Parent != nil && el.Parent.Kind == xdm.KindElement &&
 		el.Parent.Name.URI == xdm.NSXSL &&
-		isStylesheetRootName(el.Parent.Name.Local)
+		(isStylesheetRootName(el.Parent.Name.Local) ||
+			// A declaration inside xsl:override stands in for a top-level
+			// declaration of the used package, so it carries the same
+			// attributes -- visibility above all, since 3.5.4 requires the
+			// override to restate the component's visibility.
+			el.Parent.Name.Local == "override")
 
 	for _, a := range el.Attrs {
 		if a.Name.URI != "" {

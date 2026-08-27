@@ -41,9 +41,9 @@ func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node
 	}
 	if p.tc != nil {
 		for _, pk := range p.tc.Test.Packages {
-			if pk.URI == "" {
-				// The principal package is addressed by file, not by name,
-				// and is the stylesheet under test rather than a library.
+			if pk.Role == "principal" {
+				// The principal package is the stylesheet under test, not a
+				// library another module may use.
 				continue
 			}
 			declared = append(declared, EnvPackage{
@@ -62,6 +62,13 @@ func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node
 	var bestFile string
 	var bestVer []int
 	for _, pk := range declared {
+		if pk.URI == "" {
+			// A <package> that states only a file leaves its identity to the
+			// module: an xsl:package carries its own name and version, and
+			// the suite relies on that for most secondary packages.
+			uri, ver := packageIdentity(filepath.Join(p.set.Dir, pk.File))
+			pk.URI, pk.Version = uri, ver
+		}
 		if pk.URI != name {
 			continue
 		}
@@ -184,4 +191,34 @@ func compareVersionParts(a, b []int) int {
 		}
 	}
 	return 0
+}
+
+// packageIdentity reads the name and version an xsl:package declares.
+//
+// A <package> element in the catalog may name only a file. The package's
+// identity then lives in the module itself, which is where a real processor
+// would read it from too.
+func packageIdentity(path string) (string, string) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	doc, err := xdm.ParseString(string(stripBOM(src)), xdm.ParseOptions{
+		AllowDOCTYPE: true,
+		BaseURI:      fileURI(path),
+	})
+	if err != nil {
+		return "", ""
+	}
+	for _, el := range doc.Root.ChildElements() {
+		if el.Name.Local != "package" {
+			continue
+		}
+		ver := el.AttrValue("package-version")
+		if ver == "" {
+			ver = "1.0"
+		}
+		return el.AttrValue("name"), ver
+	}
+	return "", ""
 }
