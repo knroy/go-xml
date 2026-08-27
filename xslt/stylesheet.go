@@ -397,6 +397,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// A global variable overridden by a higher-precedence declaration is not
 	// evaluated at all, so the overridden bindings are dropped before the
 	// stylesheet is handed back.
+	if err := c.checkAccumulatorConflicts(); err != nil {
+		return nil, err
+	}
 	c.pruneOverriddenGlobals()
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one

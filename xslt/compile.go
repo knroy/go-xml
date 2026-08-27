@@ -52,6 +52,12 @@ type compiler struct {
 	// accumPrecedence records the import precedence each accumulator name was
 	// declared at, so that XTSE3350 fires only on a tie. See accumulator.go.
 	accumPrecedence map[string]int
+	// accumTies records every precedence each accumulator name was declared
+	// at, and accumNames its lexical form for the diagnostic. XTSE3350 is
+	// judged over these once every module has been compiled; see
+	// checkAccumulatorConflicts.
+	accumTies  map[string][]int
+	accumNames map[string]xdm.QName
 	// modePrecedence records the import precedence each mode was declared at,
 	// so that XTSE0545 fires only on a tie.
 	modePrecedence map[string]int

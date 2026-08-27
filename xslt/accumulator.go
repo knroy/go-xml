@@ -119,17 +119,22 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 	if c.sheet.accumulators == nil {
 		c.sheet.accumulators = map[string]*accumulatorDef{}
 		c.accumPrecedence = map[string]int{}
+		c.accumNames = map[string]xdm.QName{}
 	}
 	key := def.name.Clark()
-	if prev, ok := c.accumPrecedence[key]; ok {
-		if prev == precedence {
-			return fmt.Errorf(
-				"XTSE3350: two xsl:accumulator declarations are named %s at "+
-					"the same import precedence", qn.Lexical())
-		}
-		if prev > precedence {
-			return nil
-		}
+	// A tie is not reported here. An importing module's declaration masks the
+	// imported one entirely, and the imported module may perfectly well
+	// contain a tie among the declarations the importer overrides — which is
+	// what accumulator-027 relies on. The tie is therefore judged over the
+	// declarations that are still *visible* once every module has been
+	// compiled; see checkAccumulatorConflicts.
+	if c.accumTies == nil {
+		c.accumTies = map[string][]int{}
+	}
+	c.accumTies[key] = append(c.accumTies[key], precedence)
+	c.accumNames[key] = qn
+	if prev, ok := c.accumPrecedence[key]; ok && prev > precedence {
+		return nil
 	}
 	c.declOrder++
 	def.declOrder = c.declOrder
@@ -417,20 +422,28 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return nil, fmt.Errorf(
 			"XTDE3400: %s() was called with no accumulator name", fname)
 	}
-	lex := atoms[0].(*xdm.Atomic).String()
-	if !isLexicalQName(lex) {
+	lex := strings.TrimSpace(atoms[0].(*xdm.Atomic).String())
+	uri, local := "", ""
+	switch {
+	case isEQName(lex):
+		// The URIQualifiedName form carries its own namespace, so no prefix
+		// need be in scope for it — which is the point of writing one.
+		end := strings.IndexByte(lex, '}')
+		uri, local = lex[2:end], lex[end+1:]
+	case isLexicalQName(lex):
+		var prefix string
+		prefix, local = xdm.SplitQName(lex)
+		if prefix != "" {
+			bound := false
+			if uri, bound = rt.sheet.prefixes[prefix]; !bound {
+				return nil, fmt.Errorf(
+					"XTDE3400: %s(%q): no namespace declaration is in scope "+
+						"for the prefix %q", fname, lex, prefix)
+			}
+		}
+	default:
 		return nil, fmt.Errorf(
 			"XTDE3400: %s(%q): the name is not a valid QName", fname, lex)
-	}
-	prefix, local := xdm.SplitQName(lex)
-	uri := ""
-	if prefix != "" {
-		bound := false
-		if uri, bound = rt.sheet.prefixes[prefix]; !bound {
-			return nil, fmt.Errorf(
-				"XTDE3400: %s(%q): no namespace declaration is in scope for "+
-					"the prefix %q", fname, lex, prefix)
-		}
 	}
 	name := xdm.QName{URI: uri, Local: local}.Clark()
 	def, ok := rt.sheet.accumulators[name]
@@ -523,4 +536,34 @@ func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
 		n = orig
 	}
 	return n
+}
+
+// checkAccumulatorConflicts reports XTSE3350 for a name declared twice at the
+// precedence that wins.
+//
+// The rule is about the accumulators a package can see, and an importing
+// module's declaration masks the imported one entirely — so a tie among
+// declarations that are all overridden is invisible and not an error.
+// Judging it as each declaration was compiled reported exactly that
+// invisible tie, because the module holding it had been compiled before the
+// module that overrides it.
+func (c *compiler) checkAccumulatorConflicts() error {
+	for key, precs := range c.accumTies {
+		best := precs[0]
+		n := 0
+		for _, p := range precs {
+			if p > best {
+				best, n = p, 0
+			}
+			if p == best {
+				n++
+			}
+		}
+		if n > 1 {
+			return fmt.Errorf(
+				"XTSE3350: two xsl:accumulator declarations are named %s at "+
+					"the same import precedence", c.accumNames[key].Lexical())
+		}
+	}
+	return nil
 }
