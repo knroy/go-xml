@@ -1655,19 +1655,20 @@ func registerJSONFuncs(l *Library) {
 				return nil, err
 			}
 			if m != nil {
-				v, _, err := m.Get(xdm.NewString("indent"))
+				v, present, err := m.Get(xdm.NewString("indent"))
 				if err != nil {
 					return nil, err
 				}
-				if v != nil {
-					// The entry exists; its type is checked even when the
-					// value is the empty sequence, which xml-to-json-059
-					// expects to be XPTY0004 rather than "unset".
-					if _, present, _ := m.Get(xdm.NewString("indent")); present {
-						indent, err = jsonOptionBool(v, "indent")
-						if err != nil {
-							return nil, err
-						}
+				// Whether the entry EXISTS is what decides, not whether it
+				// holds anything: map{'indent': ()} has written the option
+				// and written it wrongly, so its type is checked and the
+				// empty sequence fails it. Guarding on the value being
+				// non-nil skipped exactly that case and let the option pass
+				// as unset, which is what xml-to-json-C102 catches.
+				if present {
+					indent, err = jsonOptionBool(v, "indent")
+					if err != nil {
+						return nil, err
 					}
 				}
 			}
