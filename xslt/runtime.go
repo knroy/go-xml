@@ -1090,6 +1090,18 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	if root != nil {
 		item = root
 	}
+	// xsl:global-context-item use="absent" declares that the transformation
+	// reads no global context item, so the globals are evaluated without one
+	// however the transform was invoked. 3.10 leaves it open whether
+	// supplying an item anyway is itself an error, and this takes the option
+	// of not making it one -- but ignoring the DECLARATION is a different
+	// thing from ignoring the item, and doing both left the declaration
+	// meaning nothing. glob-cxt-item-003 declares use="absent" over a global
+	// selecting /doc and requires that global to fail; it accepts XPDY0002,
+	// which is what a global with no focus raises on its own.
+	if g := s.globalContextItem; g != nil && g.decl.use == "absent" {
+		item = nil
+	}
 	xctx := xpath.NewContext(item, s.funcs)
 	// The regular-expression dialect follows the processor, not the module.
 	// A pattern is a string read by fn:matches at the point of call rather
@@ -1111,6 +1123,15 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
+	// fn:json-to-xml with validate=true needs the schema layer to type the
+	// tree it builds, and reaches it through this hook rather than by
+	// importing xsd from xpath, which the dependency direction forbids. It is
+	// installed unconditionally: whether the processor *can* validate is a
+	// property of the processor, and this one always can — F&O 3.1 §17.5.3
+	// reserves FOJS0004 for a processor that cannot. Whether the stylesheet
+	// may then write "instance of element(j:map, j:mapType)" is the separate
+	// question xsl:import-schema answers.
+	xctx.Validator = jsonTreeValidator{}
 	xctx.ImplicitTimezone = opts.ImplicitTimezone
 	// The static base URI of every expression in the stylesheet. Without it
 	// a relative reference in fn:doc or fn:resolve-uri has nothing to

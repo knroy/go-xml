@@ -137,6 +137,12 @@ type Context struct {
 	// Confinement is entirely the resolver's; see xdm.EntityResolver.
 	Entities xdm.EntityResolver
 
+	// Validator validates a tree fn:json-to-xml has just built, when the
+	// call asked for validate=true. Nil means the processor cannot do it,
+	// which is FOJS0004 rather than a silent untyped result; see
+	// TreeValidator.
+	Validator TreeValidator
+
 	// Compat is XPath 1.0 compatibility mode, which XSLT 3.8 puts in force for
 	// expressions written on an element whose effective [xsl:]version is below
 	// 2.0. Under it the coercion rules of XPath 2.0 appendix B.1 apply: a

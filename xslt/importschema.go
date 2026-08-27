@@ -56,6 +56,22 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		if c.sheet.schema == nil {
 			c.sheet.schema = xsd.NewSchema()
 		}
+		// One namespace is not merely "expected to be available": the
+		// specification writes the schema out. F&O 3.1 §C.2 gives the schema
+		// for the XML representation of JSON, and §17.5.3 makes it the schema
+		// fn:json-to-xml validates against, so a stylesheet importing
+		// http://www.w3.org/2005/xpath-functions with no location is asking
+		// for components this processor has rather than for none at all.
+		// json-to-xml-typed-001 to -007 write exactly that import and then
+		// assert "instance of element(j:map, j:mapType)", which was false for
+		// want of the type name.
+		if ns == xdm.NSFN {
+			json, err := xsd.SchemaForJSON()
+			if err != nil {
+				return err
+			}
+			mergeSchema(c.sheet.schema, json)
+		}
 		return nil
 	}
 

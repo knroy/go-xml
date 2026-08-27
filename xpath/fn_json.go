@@ -57,10 +57,14 @@ type jsonOptions struct {
 	escapeSet  bool
 	duplicates string
 	fallback   *xdm.FunctionItem
-	// validate is accepted and ignored: this processor is not schema-aware,
-	// and the specification makes validation optional. The flag is still read
-	// so that its interaction with duplicates="retain" — an error even for a
-	// processor that would not validate — is reported.
+	// validate asks for a typed result. F&O 3.1 §17.5.3: true "indicates
+	// that the resulting XDM instance must be typed; that is, the element
+	// and attribute nodes must carry the type annotations that result from
+	// validation against the schema given at C.2". Only fn:json-to-xml
+	// builds a tree to annotate, so only it acts on this; for fn:parse-json
+	// and fn:json-doc the flag is still read, because its interaction with
+	// duplicates="retain" — an error even where nothing would be validated —
+	// is reported either way.
 	validate bool
 }
 
@@ -1105,7 +1109,34 @@ func jsonToXML(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error
 	setBaseURI(b.root, ctx.StaticBaseURI)
 	tree := &xdm.Tree{Root: doc}
 	tree.Finalize()
+	if opts.validate {
+		if err := validateJSONTree(ctx, doc); err != nil {
+			return nil, err
+		}
+	}
 	return xdm.One(doc), nil
+}
+
+// validateJSONTree types the constructed tree, as validate=true asks.
+//
+// The schema is the one at F&O 3.1 §C.2 and the assessment belongs to the
+// schema layer, which this package cannot reach — xsd imports xpath, not the
+// other way round — so it goes out through the TreeValidator hook the host
+// installs. json-to-xml-typed-001 to -007 are what require it: each asks
+// whether the result is, say, "element(j:map, j:mapType)", which is false for
+// an unannotated tree however correctly shaped.
+//
+// Without a validator the answer is an error rather than an untyped tree.
+// F&O 3.1 §17.5.3: "An error is raised [err:FOJS0004] if the value of the
+// validate option is true and the processor does not support schema
+// validation or typed data."
+func validateJSONTree(ctx *Context, doc *xdm.Node) error {
+	if ctx == nil || ctx.Validator == nil {
+		return xdm.Errorf("FOJS0004",
+			"validate=true was requested but this processor cannot validate: "+
+				"no schema for the XML representation of JSON is available")
+	}
+	return ctx.Validator.ValidateJSONTree(doc)
 }
 
 // setBaseURI propagates the base URI down the constructed tree, since
