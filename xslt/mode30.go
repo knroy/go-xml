@@ -70,7 +70,7 @@ func checkDeclaredModes(root *xdm.Node) error {
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		for _, ch := range n.ChildElements() {
-			if isXSL(ch, "template") {
+			if isXSL(ch, "template") || isXSL(ch, "apply-templates") {
 				for _, m := range templateModeNames(ch) {
 					if !declared[m] {
 						name := m
@@ -78,7 +78,7 @@ func checkDeclaredModes(root *xdm.Node) error {
 							name = "#unnamed"
 						}
 						return fmt.Errorf(
-							"XTSE3085: mode %s is used by a template but no "+
+							"XTSE3085: mode %s is used but no "+
 								"xsl:mode declaration introduces it, and the "+
 								"package sets declared-modes=\"yes\"", name)
 					}
@@ -130,26 +130,42 @@ func templateModeNames(el *xdm.Node) []string {
 	// Only a template *rule* is in a mode. Section 6.1: "an xsl:template
 	// element that has no match attribute must have no mode attribute", so a
 	// named template belongs to no mode at all and cannot be a reference to
-	// the unnamed one.
+	// the unnamed one. xsl:apply-templates has no @match and is exempt: it
+	// uses a mode rather than belonging to one.
 	//
 	// Reading a named template as using the unnamed mode made every package
 	// whose only template is xsl:initial-template a static error, which is
 	// most of the package-version set: those stylesheets declare no mode,
 	// use no mode, and were still told the unnamed mode was undeclared.
-	if el.Attr("", "match") == nil {
+	if el.Attr("", "match") == nil && !isXSL(el, "apply-templates") {
 		return nil
 	}
 	a := el.Attr("", "mode")
 	if a == nil {
-		return []string{""}
+		// An absent @mode names the default mode, which [xsl:]default-mode
+		// may have moved off the unnamed one.
+		dm, err := defaultModeAt(el)
+		if err != nil {
+			return nil
+		}
+		return []string{dm}
 	}
 	var out []string
 	for _, tok := range strings.Fields(a.Value) {
 		switch tok {
-		case "#all":
+		case "#all", "#current":
+			// Neither is a name: "#all" covers every mode there is, and
+			// "#current" names whatever mode the enclosing rule was selected
+			// in, which is by construction already in use.
 			return nil
-		case "#default", "#unnamed":
+		case "#unnamed":
 			out = append(out, "")
+		case "#default":
+			dm, err := defaultModeAt(el)
+			if err != nil {
+				return nil
+			}
+			out = append(out, dm)
 		default:
 			qn, err := resolveQNameAttr(el, tok)
 			if err != nil {
