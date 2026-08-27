@@ -59,7 +59,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		seq = v
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		seq = sub.sequence()
@@ -866,7 +866,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		value = constructedText(seq, sep)
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		value = constructedText(sub.sequence(), sep)
@@ -949,7 +949,7 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		text = constructedText(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		text = constructedText(sub.sequence(), " ")
@@ -1011,7 +1011,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 		text = constructedText(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		text = constructedText(sub.sequence(), " ")
@@ -1141,7 +1141,7 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		value, text = seq, stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			if !i.xslt30 {
 				return err
 			}

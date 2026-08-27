@@ -935,10 +935,9 @@ func (rt *runtime) clearCurrentRule() *runtime {
 
 // temporaryOutput returns a runtime in temporary output state.
 //
-// Section 19.1 lists exactly which instructions switch it on: "xsl:variable,
-// xsl:param, xsl:with-param, xsl:attribute, xsl:comment,
-// xsl:processing-instruction, xsl:namespace, xsl:value-of, xsl:function,
-// xsl:key, xsl:sort, and xsl:message always evaluate the instructions in
+// XSLT 3.0 section 19.1 lists which instructions switch it on: "xsl:variable,
+// xsl:param, xsl:with-param, xsl:function, xsl:key, xsl:sort,
+// xsl:accumulator-rule, and xsl:merge-key always evaluate the instructions in
 // their contained sequence constructor in temporary output state." Each of
 // those calls this before executing its body, so that an xsl:result-document
 // anywhere beneath is XTDE1480 however deep the call chain.
@@ -950,6 +949,23 @@ func (rt *runtime) temporaryOutput() *runtime {
 	sub := *rt
 	sub.temporary = true
 	return &sub
+}
+
+// temporaryOutputBefore30 is temporaryOutput for the six instructions XSLT
+// 2.0 put in that list and XSLT 3.0 took out again: xsl:attribute,
+// xsl:comment, xsl:processing-instruction, xsl:namespace, xsl:value-of and
+// xsl:message.
+//
+// All six build a string rather than a tree, so there was never a final
+// result tree for a nested xsl:result-document to be written to -- which is
+// what XTDE1480 is about. 3.0 decided the restriction bought nothing, since
+// the nested instruction's own output goes to its own destination, and
+// result-document-1130 is the stylesheet that walks all of them.
+func (rt *runtime) temporaryOutputBefore30() *runtime {
+	if rt.sheet != nil && (rt.sheet.maxVersion == 0 || rt.sheet.maxVersion >= 3.0) {
+		return rt
+	}
+	return rt.temporaryOutput()
 }
 
 // stringJoin renders a sequence as a separated string, which is what

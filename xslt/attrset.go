@@ -160,7 +160,7 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 		uri = stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		uri = constructedText(sub.sequence(), " ")
@@ -301,7 +301,7 @@ func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 		seq = v
 	} else {
 		sub := newOutputBuilder()
-		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
+		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
 		seq = sub.sequence()
