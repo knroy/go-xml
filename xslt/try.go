@@ -145,6 +145,9 @@ func (c *compiler) compileTry(n *xdm.Node, ns xpath.NamespaceResolver) (Instruct
 // compileCatch builds one xsl:catch clause.
 func (c *compiler) compileCatch(n *xdm.Node, nsScope *xdm.Node) (catchClause, error) {
 	var cl catchClause
+	if err := checkCatchSelect(n); err != nil {
+		return cl, err
+	}
 	tests, err := parseErrorNameTests(n)
 	if err != nil {
 		return cl, err

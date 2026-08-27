@@ -54,6 +54,14 @@ type compiler struct {
 	// keyCollations records the effective collation of each xsl:key name, for
 	// XTSE1220.
 	keyCollations map[string]string
+	// keyComposites is the same for @composite, which XTSE1222 requires every
+	// declaration of one key name to agree on.
+	keyComposites map[string]bool
+	// stripDecls and preserveDecls are the NameTests of every xsl:strip-space
+	// and xsl:preserve-space with the precedence XTSE0270 compares. The
+	// conflict is between two declarations that may be in different modules
+	// and compiled in either order, so it is settled once at the end.
+	stripDecls, preserveDecls []spaceDecl
 	// accumPrecedence records the import precedence each accumulator name was
 	// declared at, so that XTSE3350 fires only on a tie. See accumulator.go.
 	accumPrecedence map[string]int
@@ -495,7 +503,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "function":
 		return c.compileFunction(el, precedence)
 	case "strip-space", "preserve-space":
-		return c.compileSpaceControl(el)
+		return c.compileSpaceControl(el, precedence)
 	case "include":
 		// An included module's declarations behave as if written in the
 		// including module, so they share its precedence. compileDocument
@@ -1213,6 +1221,9 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 		c.keyCollations = map[string]string{}
 	}
 	c.keyCollations[qn.Clark()] = keyColl
+	if err := c.checkKeyComposite(el, qn); err != nil {
+		return err
+	}
 
 	k := &keyDef{match: pat, collation: keyColl}
 	hasBody := len(el.ChildElements()) > 0
@@ -1336,7 +1347,7 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	return nil
 }
 
-func (c *compiler) compileSpaceControl(el *xdm.Node) error {
+func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 	elems := el.AttrValue("elements")
 	for _, n := range strings.Fields(elems) {
 		var qn xdm.QName
@@ -1369,9 +1380,15 @@ func (c *compiler) compileSpaceControl(el *xdm.Node) error {
 				qn.URI = xpathDefaultNamespaceAt(el)
 			}
 		}
+		// The precedence is kept alongside for XTSE0270, which only counts a
+		// name appearing in both lists as a conflict when the two
+		// declarations have the same import precedence.
+		d := spaceDecl{name: qn, precedence: precedence}
 		if el.Name.Local == "strip-space" {
+			c.stripDecls = append(c.stripDecls, d)
 			c.sheet.strip = append(c.sheet.strip, qn)
 		} else {
+			c.preserveDecls = append(c.preserveDecls, d)
 			c.sheet.preserve = append(c.sheet.preserve, qn)
 		}
 	}

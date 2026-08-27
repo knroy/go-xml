@@ -28,12 +28,9 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 	location := el.AttrValue("schema-location")
 
 	// An inline <xs:schema> child is an alternative to schema-location.
-	var inline *xdm.Node
-	for _, child := range el.ChildElements() {
-		if child.IsElement(xsd.NSSchema, "schema") {
-			inline = child
-			break
-		}
+	inline := inlineSchemaOf(el)
+	if err := checkImportSchemaInline(el, inline); err != nil {
+		return err
 	}
 
 	if location == "" && inline == nil {
