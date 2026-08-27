@@ -2192,11 +2192,20 @@ func spellCardinal(n int64) string {
 		if g == 0 {
 			continue
 		}
-		// No conjunction: "two thousand one", not "two thousand and one".
-		// Both are ordinary English, and the specification leaves the choice
-		// to the processor, but the conformance suite spells its expected
-		// values without one — format-date-en132 and its two siblings strip
-		// the word boundaries and still expect no "and" between the groups.
+		// The British conjunction goes before the LAST group as well as
+		// inside it, but only when that group is itself below one hundred
+		// and something precedes it: "two thousand and one", and equally
+		// "one thousand nine hundred and ninety" -- while "one thousand one
+		// hundred five" takes none, because the final group carries its own
+		// "and" between its hundreds and its remainder.
+		//
+		// Handling only the within-group case spelled 2001 as "two thousand
+		// one"; format-date-en-020 through -022 and -026 and -028 are the
+		// five that walk 1990 to 2020 and so cross from one shape to the
+		// other.
+		if i == 0 && g < 100 && len(parts) > 0 {
+			parts = append(parts, "and")
+		}
 		parts = append(parts, spellDateUnder1000(g)+dateScaleWords[i])
 	}
 	return strings.Join(parts, " ")
