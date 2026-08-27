@@ -94,7 +94,13 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		return nil, err
 	}
 	p := &Pattern{src: src}
-	for _, alt := range splitTopLevel(src, '|') {
+	// The "union" keyword joins pattern alternatives exactly as "|" does, and
+	// is spelled out only in a 3.0 pattern. See splitPatternAlts.
+	alts := splitTopLevel(src, '|')
+	if processorAtLeast30() {
+		alts = splitPatternAlts(src)
+	}
+	for _, alt := range alts {
 		alt = strings.TrimSpace(alt)
 		if alt == "" {
 			continue
@@ -103,7 +109,11 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		// and the union it expands to is an ordinary step pattern — which
 		// matches by walking up from the candidate and so needs no anchor.
 		// See expandGroupedSteps.
-		if parts := expandGroupedSteps(alt); parts != nil && patternsAllow30(ns) {
+		// The gate is the *processor's* version, not the module's: match-081
+		// and match-081a run the one version="2.0" stylesheet at the two
+		// targets and demand XTSE0340 from the first and a working pattern
+		// from the second, which only the cap can distinguish.
+		if parts := expandGroupedSteps(alt); parts != nil && processorAtLeast30() {
 			ok := true
 			var built []*patternAlt
 			for _, part := range parts {
