@@ -1541,8 +1541,14 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// statically written expression gets it.
 	comp, err := xpath.CompileVersion(src, ns, ns.xpathVersion)
 	if err != nil {
-		return fmt.Errorf("XTDE3160: the target expression of xsl:evaluate "+
-			"is not a valid XPath expression: %w", err)
+		// An xdm.Error, not a wrap: ErrorCode reports the innermost code it
+		// can find, so wrapping would leave the failure carrying the target
+		// expression's own static code. That code is what xsl:try consults,
+		// and a static one is not recoverable -- so evaluate-033, which
+		// catches this very failure, saw it escape the catch it was written
+		// for.
+		return xdm.Errorf("XTDE3160", "the target expression of xsl:evaluate "+
+			"is not a valid XPath expression: %s", err)
 	}
 	// 10.4.1: the static base URI is the effective value of @base-uri when
 	// present, and the base URI of the xsl:evaluate element otherwise.
@@ -1617,8 +1623,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// function names when it evaluates them. It is still the static error
 		// 10.4.1 describes, so it carries 10.4's code.
 		if strings.Contains(err.Error(), "XPST0017") {
-			return fmt.Errorf("XTDE3160: the target expression of "+
-				"xsl:evaluate is not valid in its static context: %w", err)
+			// Flattened rather than wrapped, for the reason above.
+			return xdm.Errorf("XTDE3160", "the target expression of "+
+				"xsl:evaluate is not valid in its static context: %s", err)
 		}
 		return err
 	}
