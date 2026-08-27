@@ -105,8 +105,8 @@ type Stylesheet struct {
 	modeFailMultiple map[string]bool
 	// modeTyped is @typed, which XTTE3100 and XTTE3110 make an assertion
 	// about the type annotation of every node the mode is applied to.
-	modeTyped map[string]string
-	modeWarnNoMatch  map[string]bool
+	modeTyped       map[string]string
+	modeWarnNoMatch map[string]bool
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before
 	// resolves ties by. See accumulator.go.
@@ -489,6 +489,13 @@ type CompileOptions struct {
 	// disables xsl:include: following a location means fetching whatever
 	// the stylesheet names. An inline <xs:schema> child needs no resolver.
 	SchemaResolver xsd.Resolver
+
+	// PackageResolver loads the packages named by xsl:use-package. Nil
+	// disables package composition, for the same reason a nil Resolver
+	// disables xsl:include: resolving a package name means fetching whatever
+	// the stylesheet asks for, and a host running an untrusted stylesheet
+	// should decide what that can reach.
+	PackageResolver PackageResolver
 
 	// XPathVersion pins the version of XPath every expression in the
 	// stylesheet is compiled in, overriding what the stylesheet declares.

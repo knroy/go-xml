@@ -98,6 +98,10 @@ type Environment struct {
 	// without it the engine refuses, correctly, because a collection URI it
 	// was never told about is not a document set it can invent.
 	Collections []Collection `xml:"collection"`
+	// Packages are the library packages xsl:use-package may name. A package
+	// is addressed by name and version rather than by location, so the
+	// environment states all three and the resolver matches on the first two.
+	Packages []EnvPackage `xml:"package"`
 	// Stylesheets declared here are shared by every case referencing the
 	// environment. A test-set built that way states no stylesheet on its
 	// cases at all, so a runner reading only the case-level ones finds none
@@ -219,6 +223,14 @@ type StylesheetRef struct {
 	File    string `xml:"file,attr"`
 	Role    string `xml:"role,attr"`
 	Content string `xml:",innerxml"`
+}
+
+// EnvPackage is a <package> declared in an environment.
+type EnvPackage struct {
+	File    string `xml:"file,attr"`
+	Role    string `xml:"role,attr"`
+	URI     string `xml:"uri,attr"`
+	Version string `xml:"package-version,attr"`
 }
 
 type PackageRef struct {

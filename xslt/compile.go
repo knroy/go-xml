@@ -277,11 +277,10 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	// include whose href it could not resolve, say — is pruned here so that
 	// no tree ever reaches the grammar checks unpruned.
 	// XTSE3440 and XTSE3460 are read off the tree before the static phase,
-	// which prunes xsl:use-package: this engine does not implement packages,
-	// so the declaration is treated as one forwards-compatible processing
-	// ignores, and by the time the grammar checks run its content is gone.
-	// The two rules are purely structural, so reading them here costs nothing
-	// and asks nothing of the package machinery.
+	// because both are purely structural: they ask about the shape of an
+	// xsl:override's template rules rather than about anything composition
+	// computes, so reading them here costs nothing and needs no package to
+	// have been resolved.
 	if err := checkOverrideTemplates(root); err != nil {
 		return err
 	}
@@ -370,6 +369,16 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		}
 	}
 	compileSchema = c.sheet.schema
+
+	// Package composition runs before this module's own declarations are
+	// compiled, so that a component accepted from a used package is in scope
+	// for every reference regardless of where the xsl:use-package sits:
+	// section 3.5 puts no ordering constraint on the manifest beyond
+	// xsl:import coming first.
+	if err := c.compileUsePackages(root, precedence); err != nil {
+		return err
+	}
+
 	// XTSE1520 and XTSE1530 need the in-scope schema components, which only
 	// exist once xsl:import-schema has been hoisted, so the type attributes
 	// are checked here rather than with the rest of the static rules.

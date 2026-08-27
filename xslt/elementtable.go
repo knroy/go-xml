@@ -94,6 +94,27 @@ var xsltElements = map[string]elementDef{
 		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
 		"use-package":                {},
 	}},
+	// The package-composition elements, XSLT 3.0 section 3.5. All carry
+	// since30: an earlier stylesheet using one must be told it is not an
+	// XSLT element, which is what every conforming 2.0 processor says.
+	"use-package": {since30: true, attrs: map[string]attrDef{
+		"name":            {required: true},
+		"package-version": {},
+	}},
+	"expose": {since30: true, attrs: map[string]attrDef{
+		"component":  {required: true},
+		"names":      {required: true},
+		"visibility": {required: true, values: []string{
+			"public", "private", "final", "abstract", "hidden"}},
+	}},
+	"accept": {since30: true, attrs: map[string]attrDef{
+		"component":  {required: true},
+		"names":      {required: true},
+		"visibility": {required: true, values: []string{
+			"public", "private", "final", "abstract", "hidden"}},
+	}},
+	"override": {since30: true, attrs: map[string]attrDef{}},
+	"original": {since30: true, attrs: map[string]attrDef{}},
 	"transform": {attrs: map[string]attrDef{
 		"id":                         {},
 		"extension-element-prefixes": {},
@@ -680,7 +701,12 @@ var contentModels = map[string]contentModel{
 	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
-	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true, "use-package": true, "expose": true}, model: "(xsl:import*, xsl:use-package*, xsl:expose*, other-declarations)"},
+	"use-package":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accept": true, "override": true}, model: "(xsl:accept | xsl:override)*"},
+	"expose":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"accept":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"override":               {seqCtor: false, decls: true, pcdata: false, kids: nil, model: "declarations"},
+	"original":               {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
 	"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"context-item":           {seqCtor: false, pcdata: false, kids: nil, model: ""},

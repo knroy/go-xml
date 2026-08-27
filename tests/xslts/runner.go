@@ -378,6 +378,10 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		// at the test-set directory: the tests are trusted input, and
 		// confining them there is what keeps that true.
 		SchemaResolver: envSchemaResolver{set: set, env: r.environment(set, tc)},
+		// xsl:use-package names a package rather than locating one, so the
+		// resolver matches on the name and version the environment declares.
+		PackageResolver: envPackageResolver{
+			set: set, env: r.environment(set, tc), entities: r.entityResolver()},
 		// The suite's stylesheets include one another by relative path, and
 		// a resolver rooted at the test-set directory is what makes that
 		// work without opening the filesystem generally.

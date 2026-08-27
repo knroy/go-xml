@@ -114,8 +114,10 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 	if tc.Test.PostureAndSweep != nil {
 		return false, "streamability (XSLT 3.0)"
 	}
-	// So is a package test: xsl:package is 3.0.
-	if len(tc.Test.Packages) > 0 {
+	// A package test is XSLT 3.0 by construction, so it is out of scope at
+	// the 2.0 target however its own metadata reads. At the 3.0 target it is
+	// exactly what is under test.
+	if target == XSLT20 && len(tc.Test.Packages) > 0 {
 		return false, "xsl:package (XSLT 3.0)"
 	}
 	if tc.Test.InitialFunction != nil {
