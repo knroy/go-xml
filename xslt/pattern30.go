@@ -76,9 +76,12 @@ func compileGeneralPattern(src string, ns xpath.NamespaceResolver) (*generalPatt
 			if err != nil {
 				return nil, err
 			}
-			// Section 6.4 gives a PredicatePattern the priority of a pattern
-			// with predicates, which is 0.5.
-			prio := 0.5
+			// Section 6.4, on default priority: "if the pattern is a
+			// PredicatePattern then its priority is 1 (one)". Not the 0.5 a
+			// pattern with predicates ordinarily scores -- match-131 sorts
+			// one against explicit priorities of 0.999999 and 1.0000001 and
+			// requires it to fall between them, which only 1 does.
+			prio := 1.0
 			if rest == "" {
 				// "." alone constrains nothing, so it scores as a bare kind
 				// test would.
