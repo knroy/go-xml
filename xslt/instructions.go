@@ -129,6 +129,12 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 			out.appendNode(v)
 		case *xdm.Atomic:
 			out.appendValue(v)
+		default:
+			// A function item, a map or an array. xsl:sequence returns
+			// whatever its select produced, so all three reach here.
+			if err := appendOpaqueItem(out, it); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
