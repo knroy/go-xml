@@ -1,0 +1,504 @@
+package xslt
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
+)
+
+// Static variables, static parameters and shadow attributes, sections 9.5,
+// 9.7 and 3.13.2.
+//
+// These three are one feature seen from three sides. A static expression is
+// "an XPath expression whose value must be computed during static analysis of
+// the stylesheet", and there are exactly three places one may be written: a
+// use-when attribute, the select of an xsl:variable or xsl:param carrying
+// static="yes", and a shadow attribute. All three are evaluated in the same
+// context, before anything else in the stylesheet has been looked at, and the
+// only thing that context carries over from the stylesheet is the values of
+// the static variables declared before it in stylesheet tree order.
+//
+// That ordering is the reason this is a pass of its own rather than something
+// compileTopLevel could do as it goes. Stylesheet tree order is "the order
+// that results when all xsl:import and xsl:include declarations are replaced
+// by the declarations in the imported or included stylesheet module" — an
+// inlining of the module graph in document order. Compilation walks that graph
+// in a quite different order, because import precedence is a post-order
+// numbering of the import tree, so a static variable declared in a module and
+// used in the module that included it would be evaluated in the wrong order.
+//
+// The pass runs once, from Compile, over the whole module graph, and does
+// three things at each element in tree order:
+//
+//  1. expands the element's shadow attributes, so that everything downstream
+//     — including this pass itself — sees ordinary attributes;
+//  2. evaluates use-when and prunes the element if it is false;
+//  3. records the value, if the element is a static variable declaration.
+//
+// Conditional inclusion has to be part of the same walk rather than a pass
+// before or after it: a use-when may name a static variable declared above it,
+// and a static variable may sit inside a module that a false use-when excludes.
+
+// staticPhase is the state of one run of the pass.
+type staticPhase struct {
+	c *compiler
+	// vars holds the static variables declared so far, in tree order. The
+	// spec says the most recent declaration in tree order wins, so a repeated
+	// name overwrites the value in place rather than appending.
+	vars []staticVar
+	// seen guards the module graph against include cycles. The cycle itself
+	// is reported by compileInclude with the right error code; this pass only
+	// has to avoid recursing forever before it gets there.
+	seen map[string]bool
+	// done records the module trees this pass has already walked, so that
+	// compileModule does not run conditional inclusion over them a second
+	// time. The trees are shared: a resolver hands back the same nodes for
+	// the same URI, and pruning a tree twice would be harmless but
+	// re-evaluating its use-when expressions would not, since the second
+	// evaluation would see static variables the first could not.
+	done map[*xdm.Node]bool
+}
+
+// runStaticPhase performs conditional element inclusion and static variable
+// evaluation over the whole module graph, starting at the principal module.
+func (c *compiler) runStaticPhase(doc *xdm.Node) error {
+	p := &staticPhase{
+		c:    c,
+		seen: map[string]bool{},
+		done: map[*xdm.Node]bool{},
+	}
+	if err := p.module(doc); err != nil {
+		return err
+	}
+	c.staticVars = p.vars
+	c.staticDone = p.done
+	return nil
+}
+
+// staticVar is one evaluated static variable or parameter declaration.
+type staticVar struct {
+	name xdm.QName
+	val  xdm.Sequence
+}
+
+// module walks one stylesheet module.
+func (p *staticPhase) module(doc *xdm.Node) error {
+	if p.done[doc] {
+		return nil
+	}
+	p.done[doc] = true
+	root := firstElement(doc)
+	if root == nil {
+		return nil
+	}
+	// xsl:stylesheet is treated specially: excluding it excludes its children
+	// but not the element itself, so that one condition at the top of a module
+	// can govern every declaration in it.
+	if isXSL(root, "stylesheet") || isXSL(root, "transform") {
+		if err := p.expandShadow(root); err != nil {
+			return err
+		}
+		keep, err := p.included(root)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			root.Children = nil
+			return nil
+		}
+		return p.children(root, true)
+	}
+	// A simplified stylesheet: the document element is a literal result
+	// element, so there are no declarations, only a template body.
+	return p.children(root, false)
+}
+
+// children walks n's element children, pruning the excluded ones.
+//
+// topLevel says whether the children are top-level declarations, which is
+// where a static variable declaration and an xsl:include or xsl:import may
+// appear. Everything below that is walked only for its shadow attributes and
+// its use-when.
+func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
+	var kept []*xdm.Node
+	for _, ch := range n.Children {
+		if ch.Kind != xdm.KindElement {
+			kept = append(kept, ch)
+			continue
+		}
+		if err := p.expandShadow(ch); err != nil {
+			return err
+		}
+		keep, err := p.included(ch)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			continue
+		}
+		if topLevel {
+			if err := p.topLevel(ch); err != nil {
+				return err
+			}
+		}
+		if err := p.children(ch, false); err != nil {
+			return err
+		}
+		kept = append(kept, ch)
+	}
+	n.Children = kept
+	return nil
+}
+
+// topLevel handles the two kinds of top-level declaration this pass cares
+// about: a static variable, whose value it computes, and a module reference,
+// whose target it walks in place.
+func (p *staticPhase) topLevel(el *xdm.Node) error {
+	if el.Name.URI != xdm.NSXSL {
+		return nil
+	}
+	switch el.Name.Local {
+	case "variable", "param":
+		if !isStaticDecl(el) {
+			return nil
+		}
+		return p.declare(el)
+	case "include", "import":
+		return p.includeModule(el)
+	}
+	return nil
+}
+
+// declare evaluates one static variable or parameter declaration.
+func (p *staticPhase) declare(el *xdm.Node) error {
+	name := el.AttrValue("name")
+	if name == "" {
+		return fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+	}
+	qn, err := resolveQNameAttr(el, name)
+	if err != nil {
+		return err
+	}
+	key := qn.Clark()
+
+	// A static declaration takes its value from the calling processor when
+	// one was supplied, whatever the select attribute says. Only a parameter
+	// may be set that way; XTSE0020 covers a variable that tries.
+	supplied, fromCaller := p.c.opts.StaticParams[key]
+
+	// 3.13.2 forbids content on a static declaration outright: the value has
+	// to come from an expression, since there is no result tree to build one
+	// in at static analysis time.
+	if len(el.ChildElements()) > 0 {
+		return fmt.Errorf(
+			"XTSE0620: %s has static=\"yes\" and a sequence constructor; "+
+				"a static variable's value must come from its select attribute",
+			el.Name.Lexical())
+	}
+
+	sel := el.AttrValue("select")
+	var val xdm.Sequence
+	switch {
+	case fromCaller && el.Name.Local == "param":
+		val = supplied
+	case sel != "":
+		val, err = p.eval(el, sel)
+		if err != nil {
+			return err
+		}
+	case el.Attr("", "as") != nil:
+		// A declaration with an "as" and no select and no supplied value is
+		// implicitly required: the empty sequence is its only candidate
+		// default, and the conversion below rejects it whenever the declared
+		// type excludes it.
+		val = nil
+	default:
+		// 9.5: a static parameter with neither select nor as defaults to a
+		// zero-length string rather than to the empty sequence, which is why
+		// static-008 can ask for upper-case($p) and get "".
+		val = xdm.Sequence{xdm.NewString("")}
+	}
+
+	if as := el.AttrValue("as"); as != "" {
+		t, terr := compileSequenceType(as, newNSResolver(el, ""))
+		if terr != nil {
+			return fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), terr)
+		}
+		conv, cerr := t.convertAs(val,
+			"static "+strings.TrimPrefix(el.Name.Local, "xsl:")+" $"+qn.Lexical(),
+			"XTSE0590")
+		if cerr != nil {
+			if len(val) == 0 && !fromCaller && sel == "" {
+				return fmt.Errorf(
+					"XTDE0700: no value was supplied for the static parameter $%s, "+
+						"and the empty sequence is not a valid instance of %s",
+					qn.Lexical(), as)
+			}
+			return cerr
+		}
+		val = conv
+	}
+
+	for i := range p.vars {
+		if p.vars[i].name.Clark() == key {
+			p.vars[i].val = val
+			return nil
+		}
+	}
+	p.vars = append(p.vars, staticVar{name: qn, val: val})
+	return nil
+}
+
+// includeModule walks the module an xsl:include or xsl:import names, in place,
+// so that its declarations appear in stylesheet tree order.
+//
+// A failure to resolve is not reported here. The compiler reaches the same
+// element later and reports XTSE0165 with the context the caller expects; a
+// second, differently worded report from a pass that exists only to order
+// declarations would be the one the caller saw.
+func (p *staticPhase) includeModule(el *xdm.Node) error {
+	href := el.AttrValue("href")
+	if href == "" || p.c.opts.Resolver == nil {
+		return nil
+	}
+	base := el.BaseURI
+	if base == "" {
+		base = p.c.opts.BaseURI
+	}
+	fragment := ""
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		fragment, href = href[i+1:], href[:i]
+	}
+	doc, resolved, err := p.c.opts.Resolver.ResolveModule(href, base)
+	if err != nil {
+		return nil
+	}
+	if p.seen[resolved] {
+		return nil
+	}
+	p.seen[resolved] = true
+	defer delete(p.seen, resolved)
+	if fragment != "" {
+		if sub := embeddedModule(doc, fragment); sub != nil {
+			doc = sub
+		}
+	}
+	return p.module(doc)
+}
+
+// isStaticDecl reports whether a declaration carries static="yes".
+//
+// The attribute is a boolean in the XSLT sense, so "true" is a synonym. It is
+// only meaningful on a top-level declaration; XTSE0020 for one written on a
+// local variable is checked with the rest of the static errors.
+func isStaticDecl(el *xdm.Node) bool {
+	switch strings.TrimSpace(el.AttrValue("static")) {
+	case "yes", "true", "1":
+		return true
+	}
+	return false
+}
+
+// expandShadow replaces the shadow attributes of an XSLT element with the
+// attributes they stand for.
+//
+// A shadow attribute is one whose no-namespace name begins with an underscore,
+// written on an element in the XSLT namespace. Its value is a value template
+// whose expressions are static expressions, and the result becomes the value
+// of the attribute of the same name without the underscore. The mechanism
+// does not nest: a name beginning with two underscores names an attribute
+// beginning with one, not a second round of preprocessing.
+//
+// It applies to XSLT elements alone. On a literal result element an underscore
+// is an ordinary first character of an ordinary attribute name, which the
+// result tree carries through unchanged.
+func (p *staticPhase) expandShadow(el *xdm.Node) error {
+	if el.Name.URI != xdm.NSXSL {
+		return nil
+	}
+	// The overwhelmingly common case is an element with no shadow attribute
+	// at all, and this runs for every element of every module.
+	any := false
+	for _, a := range el.Attrs {
+		if a.Name.URI == "" && strings.HasPrefix(a.Name.Local, "_") {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return nil
+	}
+
+	shadowed := map[string]string{}
+	var kept []*xdm.Node
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" || !strings.HasPrefix(a.Name.Local, "_") {
+			kept = append(kept, a)
+			continue
+		}
+		v, err := p.valueTemplate(el, a.Value)
+		if err != nil {
+			return fmt.Errorf("in %s/@%s: %w",
+				el.Name.Lexical(), a.Name.Local, err)
+		}
+		shadowed[strings.TrimPrefix(a.Name.Local, "_")] = v
+	}
+	// "If a shadow attribute is present, then any attribute node with name N
+	// is ignored" — including for the purpose of reporting an error in its
+	// value, which is why the target is removed rather than left in place for
+	// the grammar check to object to.
+	el.Attrs = el.Attrs[:0]
+	for _, a := range kept {
+		if a.Name.URI == "" {
+			if _, shadowedOut := shadowed[a.Name.Local]; shadowedOut {
+				continue
+			}
+		}
+		el.Attrs = append(el.Attrs, a)
+	}
+	for name, v := range shadowed {
+		el.Attrs = append(el.Attrs, &xdm.Node{
+			Kind:   xdm.KindAttribute,
+			Name:   xdm.QName{Local: name},
+			Value:  v,
+			Parent: el,
+		})
+	}
+	return nil
+}
+
+// valueTemplate evaluates a value template whose expressions are static.
+//
+// It is compileAVT's grammar — doubled braces escape, expressions between
+// single braces — but evaluated here and now rather than compiled for later,
+// because a static expression has no runtime to be evaluated in.
+func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
+	if !strings.ContainsAny(src, "{}") {
+		return src, nil
+	}
+	var sb strings.Builder
+	for i := 0; i < len(src); {
+		switch src[i] {
+		case '{':
+			if i+1 < len(src) && src[i+1] == '{' {
+				sb.WriteByte('{')
+				i += 2
+				continue
+			}
+			end, err := findAVTClose(src, i+1)
+			if err != nil {
+				return "", err
+			}
+			v, err := p.eval(el, src[i+1:end])
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(constructedText(v, " "))
+			i = end + 1
+		case '}':
+			if i+1 < len(src) && src[i+1] == '}' {
+				sb.WriteByte('}')
+				i += 2
+				continue
+			}
+			return "", fmt.Errorf(
+				"XTSE0370: unescaped '}' in attribute value template %q", src)
+		default:
+			sb.WriteByte(src[i])
+			i++
+		}
+	}
+	return sb.String(), nil
+}
+
+// eval evaluates one static expression written on el.
+//
+// The static context is the one 9.7 tabulates: the in-scope namespaces of the
+// containing element, no context item, no schema, the restricted function
+// library, and the static variables declared before el in tree order — which
+// is exactly the set this pass has accumulated by the time it reaches el.
+func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
+	ns := &nsResolver{
+		bindings:  el.InScopeNamespaces(),
+		defaultNS: xpathDefaultNamespace(el),
+	}
+	compiled, err := xpath.CompileVersion(src, ns, xpathVersionAt(el))
+	if err != nil {
+		return nil, err
+	}
+	ctx := xpath.NewContext(nil, useWhenFuncs(ns.bindings))
+	ctx.StaticBaseURI = el.BaseURI
+	for _, sv := range p.vars {
+		ctx = ctx.WithVar(sv.name, sv.val)
+	}
+	return compiled.Eval(ctx)
+}
+
+// included evaluates el's use-when, if it has one.
+func (p *staticPhase) included(el *xdm.Node) (bool, error) {
+	var expr string
+	if el.Name.URI == xdm.NSXSL {
+		if a := el.Attr("", "use-when"); a != nil {
+			expr = a.Value
+		}
+	}
+	if expr == "" {
+		if a := el.Attr(xdm.NSXSL, "use-when"); a != nil {
+			expr = a.Value
+		}
+	}
+	if expr == "" {
+		return true, nil
+	}
+	v, err := p.eval(el, expr)
+	if err != nil {
+		// An error in the use-when expression itself is reported: it is the
+		// one error the exclusion rule does not suppress.
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+	}
+	b, err := xpath.EffectiveBooleanValue(v)
+	if err != nil {
+		return false, fmt.Errorf("in %s/@use-when: %w", el.Name.Lexical(), err)
+	}
+	return b, nil
+}
+
+// staticGlobal builds the global binding for a static declaration.
+//
+// A static variable is visible to ordinary expressions in the stylesheet as
+// well as to static ones — static-001 writes {$static-param} in a template —
+// so it becomes a global like any other. What makes it different is that its
+// value is already known: it was computed in tree order by the static phase,
+// and nothing at run time may change it, which is why a static xsl:param
+// ignores Transform's Params.
+func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
+	name := el.AttrValue("name")
+	if name == "" {
+		return nil, fmt.Errorf("%s requires a name attribute", el.Name.Lexical())
+	}
+	qn, err := resolveQNameAttr(el, name)
+	if err != nil {
+		return nil, err
+	}
+	v := &Variable{
+		Name:     qn,
+		IsParam:  el.Name.Local == "param",
+		isStatic: true,
+		baseURI:  el.BaseURI,
+	}
+	key := qn.Clark()
+	for _, sv := range c.staticVars {
+		if sv.name.Clark() == key {
+			v.staticValue = sv.val
+			return v, nil
+		}
+	}
+	// The static phase visits exactly the declarations that survive
+	// conditional inclusion, and compilation sees the same tree, so a name
+	// missing here means the two walks disagreed rather than that the
+	// stylesheet is at fault.
+	return nil, fmt.Errorf("static %s $%s was not evaluated by the static phase",
+		el.Name.Local, qn.Lexical())
+}

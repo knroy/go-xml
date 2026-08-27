@@ -334,7 +334,37 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A <param static="yes"> is supplied to the *compiler*, not to the
+	// transform: a static parameter is bound before static analysis begins,
+	// which is the whole point of it, so by the time Transform runs its
+	// value has already been used to decide which parts of the stylesheet
+	// exist.
+	var staticParams map[string]xdm.Sequence
+	for _, p := range tc.Test.Params {
+		if p.Static != "yes" && p.Static != "true" {
+			continue
+		}
+		v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
+			noNS{})
+		if err != nil {
+			return nil, fmt.Errorf("static parameter %s: %w", p.Name, err)
+		}
+		if staticParams == nil {
+			staticParams = map[string]xdm.Sequence{}
+		}
+		staticParams[p.Name] = v
+	}
+
+	// A 2.0 run must behave as an XSLT 2.0 processor, which means refusing
+	// the constructs 3.0 added — xsl:package above all, whose own @version
+	// says nothing about whether it is one.
+	maxVersion := 2.0
+	if r.Target == XSLT30 {
+		maxVersion = 0
+	}
 	ss, err := xslt.Compile(sheetDoc.Root, xslt.CompileOptions{
+		MaxVersion:   maxVersion,
+		StaticParams: staticParams,
 		// The suite's stylesheets import schemas by relative path, and call
 		// document() on the test-set's own files. Both resolvers are rooted
 		// at the test-set directory: the tests are trusted input, and
@@ -427,16 +457,22 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
 	}
-	if len(tc.Test.Params) > 0 {
-		opts.Params = map[string]xdm.Sequence{}
-		for _, p := range tc.Test.Params {
-			v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
-				noNS{})
-			if err != nil {
-				return nil, fmt.Errorf("parameter %s: %w", p.Name, err)
-			}
-			opts.Params[p.Name] = v
+	for _, p := range tc.Test.Params {
+		// The static ones went to the compiler; supplying them again here
+		// would be supplying a value for a parameter that is no longer a
+		// parameter.
+		if p.Static == "yes" || p.Static == "true" {
+			continue
 		}
+		v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
+			noNS{})
+		if err != nil {
+			return nil, fmt.Errorf("parameter %s: %w", p.Name, err)
+		}
+		if opts.Params == nil {
+			opts.Params = map[string]xdm.Sequence{}
+		}
+		opts.Params[p.Name] = v
 	}
 
 	// call-template-1002 is a legitimately 1001-deep tail recursion, and

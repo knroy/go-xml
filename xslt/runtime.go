@@ -39,6 +39,13 @@ type runtime struct {
 	// of an xsl:key declaration contains a call to the key function".
 	keyBuilding map[keyCacheKey]bool
 
+	// accumValues caches each accumulator's value at every node of a tree,
+	// and accumBuilding guards the circular case. Both mirror keyIndex and
+	// keyBuilding, and for the same reason: computing one value means
+	// walking everything before it, so the walk is done once per pair.
+	accumValues   map[accumCacheKey]*accumulatorValues
+	accumBuilding map[accumCacheKey]bool
+
 	// depth bounds apply-templates recursion, which the spec does not bound
 	// and which a stylesheet with a cycle would otherwise run forever.
 	depth int
@@ -1010,6 +1017,9 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		maxDepth:    maxDepth,
 		keyIndex:    map[keyCacheKey]map[string]xdm.Sequence{},
 		keyBuilding: map[keyCacheKey]bool{},
+
+		accumValues:   map[accumCacheKey]*accumulatorValues{},
+		accumBuilding: map[accumCacheKey]bool{},
 		tunnel:      map[string]xdm.Sequence{},
 		messages:    new([]string),
 		secondary:   new([]SecondaryResult),
@@ -1114,6 +1124,15 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		state[key] = active
 		defer func() { state[key] = done }()
 
+		// A static declaration was bound before static analysis began. Its
+		// value cannot depend on anything the run supplies, and a static
+		// xsl:param has already had its one chance to be set — through
+		// CompileOptions.StaticParams, which is where the caller supplies a
+		// value that has to be in hand before the stylesheet is analysed.
+		if g.isStatic {
+			rt.ctx = rt.ctx.WithVar(g.Name, g.staticValue)
+			return nil
+		}
 		if supplied, ok := opts.Params[key]; ok {
 			rt.ctx = rt.ctx.WithVar(g.Name, supplied)
 			return nil

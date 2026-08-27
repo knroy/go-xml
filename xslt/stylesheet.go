@@ -87,6 +87,14 @@ type Stylesheet struct {
 	// without giving @on-no-match records nothing and the default still
 	// stands.
 	modeNoMatch map[string]string
+	// accumulators holds xsl:accumulator declarations by Clark name, and
+	// accumOrder keeps the declaration order that fn:accumulator-before
+	// resolves ties by. See accumulator.go.
+	accumulators map[string]*accumulatorDef
+	accumOrder   []string
+	// modeAccums holds xsl:mode/@use-accumulators by Clark mode name, which
+	// says which accumulators may be read while that mode is current.
+	modeAccums map[string]*modeAccumulators
 	// source is the stylesheet's own document, which document("") returns.
 	//
 	// Section 16.1 defines the zero-length URI as naming the document
@@ -170,6 +178,13 @@ type Variable struct {
 	// baseURI is the base URI in force at the declaration, which the
 	// temporary tree a content-valued variable builds takes as its own.
 	baseURI string
+	// isStatic marks a declaration carrying static="yes", whose value was
+	// computed before compilation began and is held in staticValue. A static
+	// parameter is not a runtime parameter: it was already bound when the
+	// caller could still have supplied one, so Transform's Params must not
+	// override it.
+	isStatic    bool
+	staticValue xdm.Sequence
 }
 
 // keyDef is a compiled xsl:key.
@@ -390,8 +405,12 @@ type CompileOptions struct {
 	Resolver ModuleResolver
 	// BaseURI of the stylesheet, for resolving relative include paths.
 	BaseURI string
-	// StaticParams supplies values for top-level xsl:param at compile time.
-	StaticParams map[string]string
+	// StaticParams supplies values for static stylesheet parameters — a
+	// top-level xsl:param carrying static="yes" — keyed by the parameter's
+	// {uri}local name. A static parameter is bound before static analysis
+	// begins, so its value has to come from the caller rather than from
+	// Transform's runtime Params.
+	StaticParams map[string]xdm.Sequence
 
 	// SchemaResolver loads the schemas named by xsl:import-schema. Nil
 	// disables loading by location, for the same reason a nil Resolver
@@ -413,6 +432,20 @@ type CompileOptions struct {
 	// deliberate departure from conformance in both directions, which is why
 	// nothing sets it implicitly.
 	XPathVersion *xpath.Version
+
+	// MaxVersion caps the XSLT version whose constructs the compiler will
+	// accept, whatever the stylesheet's own @version says.
+	//
+	// It exists for the constructs a later version *adds* to the language
+	// rather than changes in it. xsl:package is the case that forces it: a
+	// package written to XSLT 3.0 routinely carries version="2.0", because
+	// the version attribute states the XSLT version of the *expressions*, not
+	// of the packaging — so the attribute cannot tell an XSLT 2.0 processor,
+	// for which xsl:package is XTSE0010, apart from a 3.0 one for which it is
+	// the module element. Only the host knows which it is running as.
+	//
+	// Zero, the default, imposes no cap and accepts everything implemented.
+	MaxVersion float64
 }
 
 // ModuleResolver loads an included or imported stylesheet module.

@@ -49,6 +49,9 @@ type compiler struct {
 	// keyCollations records the effective collation of each xsl:key name, for
 	// XTSE1220.
 	keyCollations map[string]string
+	// accumPrecedence records the import precedence each accumulator name was
+	// declared at, so that XTSE3350 fires only on a tie. See accumulator.go.
+	accumPrecedence map[string]int
 
 	// statedDecimalFormat records, per format name, which attributes an
 	// xsl:decimal-format declaration actually named. XTSE1290 compares
@@ -79,6 +82,14 @@ type compiler struct {
 	// calls records every xsl:call-template, so that XTSE0680 can be checked
 	// once every template is known.
 	calls []*callTemplateInstr
+	// staticVars holds the value of every static variable and parameter in
+	// the stylesheet, in tree order, as computed by the static phase; see
+	// static.go. staticDone records the module trees that phase already
+	// walked, so that compileModule does not repeat conditional inclusion
+	// over one and evaluate its use-when expressions a second time.
+	staticVars []staticVar
+	staticDone map[*xdm.Node]bool
+
 	// nextPrecedence allocates import precedence numbers. See compileModule:
 	// precedence is a total order over the import tree rather than a depth,
 	// so every module gets its own number in post-order.
@@ -236,9 +247,26 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 
 	// Conditional element inclusion runs before anything else looks at the
 	// tree. An excluded element must produce no error at all, so it has to be
-	// gone before compilation can object to it.
-	if err := applyUseWhen(doc); err != nil {
-		return err
+	// gone before compilation can object to it. The static phase does it, for
+	// the whole module graph at once, because a use-when may name a static
+	// variable declared in another module and the two have to be evaluated in
+	// one traversal; see static.go. A module it has not reached — a nested
+	// include whose href it could not resolve, say — is pruned here so that
+	// no tree ever reaches the grammar checks unpruned.
+	if !c.staticDone[doc] {
+		if err := c.runStaticPhase(doc); err != nil {
+			return err
+		}
+	}
+
+	// XSLT 3.0 added xsl:package. A host running as an XSLT 2.0 processor has
+	// to refuse it, and the stylesheet's own @version cannot say which it is —
+	// a 3.0 package routinely declares version="2.0" — so the cap decides.
+	// It is checked before the grammar rules, because those know xsl:package
+	// and would report a rule *inside* it rather than the element itself.
+	if isXSL(root, "package") && c.opts.MaxVersion != 0 && c.opts.MaxVersion < 3.0 {
+		return fmt.Errorf(
+			"xsl:package is not an XSLT %g element (XTSE0010)", c.opts.MaxVersion)
 	}
 
 	// The grammar checks run after conditional inclusion and before anything
@@ -255,7 +283,7 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 
 	// A literal result element as the root is the abbreviated form: the whole
 	// document is the body of a single template matching "/".
-	if !isXSL(root, "stylesheet") && !isXSL(root, "transform") {
+	if root.Name.URI != xdm.NSXSL || !isStylesheetRootName(root.Name.Local) {
 		// XTSE0150 names this exact condition: "a literal result element that
 		// is used as the outermost element of a simplified stylesheet module
 		// must have an xsl:version attribute". The unprefixed spelling does
@@ -409,20 +437,27 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	case "template":
 		return c.compileTemplate(el, precedence)
 	case "variable", "param":
+		// A static declaration was evaluated by the static phase, before
+		// anything else in the stylesheet was looked at. Its select
+		// expression is a static expression and does not compile in the
+		// ordinary static context — it may name another static variable,
+		// which is not a global — so the value the pass computed is taken
+		// here rather than the expression recompiled.
+		if isStaticDecl(el) {
+			v, err := c.staticGlobal(el)
+			if err != nil {
+				return err
+			}
+			v.precedence = precedence
+			c.sheet.globals = append(c.sheet.globals, v)
+			return nil
+		}
 		v, err := c.compileVariable(el)
 		if err != nil {
 			return err
 		}
 		if el.Name.Local == "param" {
 			v.IsParam = true
-			if s, ok := c.opts.StaticParams[v.Name.Clark()]; ok {
-				lit := "'" + strings.ReplaceAll(s, "'", "''") + "'"
-				comp, err := compileExpr(lit, newNSResolver(el, ""))
-				if err != nil {
-					return err
-				}
-				v.Select, v.Body = comp, nil
-			}
 		}
 		// XTSE0630: two bindings of a global variable may not share a name
 		// at the same import precedence. A higher precedence legitimately
@@ -467,6 +502,8 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		return c.compileCharacterMap(el, precedence)
 	case "import-schema":
 		return c.compileImportSchema(el)
+	case "accumulator":
+		return c.compileAccumulator(el, precedence)
 	case "mode":
 		// @streamable requests a streaming evaluation, and a processor is
 		// always free to answer that request by building the tree, which is
@@ -757,8 +794,8 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	}
 	v := &Variable{
 		Name:     qn,
-		Required: el.AttrValue("required") == "yes",
-		Tunnel:   el.AttrValue("tunnel") == "yes",
+		Required: yesAttr(el, "required"),
+		Tunnel:   yesAttr(el, "tunnel"),
 		baseURI:  el.BaseURI,
 	}
 	if as := el.AttrValue("as"); as != "" {
@@ -1647,5 +1684,5 @@ func (c *compiler) compileMode(el *xdm.Node) error {
 		}
 		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
 	}
-	return nil
+	return c.compileModeAccumulators(el, name)
 }
