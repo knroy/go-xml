@@ -94,6 +94,26 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		if alt == "" {
 			continue
 		}
+		// A parenthesised alternation used as a step distributes over "/",
+		// and the union it expands to is an ordinary step pattern — which
+		// matches by walking up from the candidate and so needs no anchor.
+		// See expandGroupedSteps.
+		if parts := expandGroupedSteps(alt); parts != nil && patternsAllow30(ns) {
+			ok := true
+			var built []*patternAlt
+			for _, part := range parts {
+				sub, err := compilePatternAlt(part, ns)
+				if err != nil {
+					ok = false
+					break
+				}
+				built = append(built, sub)
+			}
+			if ok {
+				p.alts = append(p.alts, built...)
+				continue
+			}
+		}
 		a, err := compilePatternAlt(alt, ns)
 		if err != nil {
 			// XSLT 3.0 widened the grammar past what the step walk can

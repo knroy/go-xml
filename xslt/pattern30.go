@@ -451,3 +451,70 @@ func (s *Stylesheet) findAtomicTemplate(item xdm.Item, mode string,
 	}
 	return nil
 }
+
+// expandGroupedSteps rewrites a parenthesised alternation used as a step into
+// the union of the paths it stands for: "x/(a|b)/text()" becomes
+// "x/a/text() | x/b/text()".
+//
+// The rewrite is exact — "/" distributes over "|" — and it is worth making
+// because the result is an ordinary step pattern. That matters for more than
+// speed: a step pattern is matched by walking up from the candidate, which
+// needs no anchor, and a pattern whose first step names the root of a
+// parentless temporary tree has no anchor to find. It also restores the
+// per-alternative default priorities, which the equivalent-expression form
+// flattens to 0.5.
+//
+// It returns nil when src holds no such group, or when a group holds anything
+// but a top-level alternation — "(a except b)" is not a union and does not
+// distribute.
+func expandGroupedSteps(src string) []string {
+	open := -1
+	depth := 0
+	quote := byte(0)
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			if depth == 0 {
+				open = i
+			}
+			depth++
+		case ')':
+			depth--
+			if depth != 0 || open < 0 {
+				continue
+			}
+			// A group qualifies only where a step may stand: at the very
+			// front, or straight after a "/".
+			if open > 0 && src[open-1] != '/' {
+				open = -1
+				continue
+			}
+			inner := src[open+1 : i]
+			parts := splitTopLevel(inner, '|')
+			if len(parts) < 2 {
+				open = -1
+				continue
+			}
+			before, after := src[:open], src[i+1:]
+			out := make([]string, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					return nil
+				}
+				out = append(out, before+p+after)
+			}
+			return out
+		}
+	}
+	return nil
+}
