@@ -671,7 +671,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		// "or if the list contains an invalid token": a mode name is a QName,
 		// and the two hash tokens are the only other things permitted.
 		for _, tok := range modes {
-			if tok == "#all" || tok == "#default" {
+			if tok == "#all" || tok == "#default" || tok == "#unnamed" {
 				continue
 			}
 			if !isLexicalQName(tok) {
@@ -685,7 +685,24 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		// interchangeably must dispatch to the same rules. The pseudo-modes
 		// are left as written because they are not names at all.
 		for i, tok := range modes {
-			if tok == "#all" || tok == "#default" {
+			if tok == "#all" {
+				continue
+			}
+			// "#unnamed" always names the unnamed mode; "#default" names
+			// whatever [xsl:]default-mode puts in scope here, which is the
+			// unnamed mode when none is. Both are resolved now rather than
+			// left as tokens, because the mode a rule belongs to is a static
+			// property of where the rule was written.
+			if tok == "#unnamed" {
+				modes[i] = ""
+				continue
+			}
+			if tok == "#default" {
+				dm, err := defaultModeAt(el)
+				if err != nil {
+					return err
+				}
+				modes[i] = dm
 				continue
 			}
 			qn, err := resolveQNameAttr(el, tok)
@@ -695,6 +712,15 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 			modes[i] = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
 		}
 		t.Mode = modes
+	} else if dm, err := defaultModeAt(el); err != nil {
+		return err
+	} else if dm != "" {
+		// A rule with no @mode belongs to the default mode, which
+		// [xsl:]default-mode may have moved off the unnamed one. Leaving
+		// Mode empty here put the rule in the unnamed mode instead, so a
+		// stylesheet that sets default-mode at the top and then writes plain
+		// rules found none of them.
+		t.Mode = []string{dm}
 	}
 
 	if as := el.AttrValue("as"); as != "" {

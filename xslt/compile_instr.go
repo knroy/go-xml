@@ -632,9 +632,22 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 	if m := strings.TrimSpace(n.AttrValue("mode")); m != "" {
 		// Expanded to match the form the template rules are indexed under;
 		// the pseudo-modes are not names and stay as written.
-		if m == "#current" || m == "#default" {
+		switch {
+		case m == "#current":
 			instr.mode = m
-		} else {
+		case m == "#unnamed":
+			instr.mode = ""
+		case m == "#default":
+			// #default names whatever [xsl:]default-mode is in scope here,
+			// which is the unnamed mode when none is. Resolving it now makes
+			// it a static property of the instruction, which is what section
+			// 6.6.2 says it is.
+			dm, err := defaultModeAt(n)
+			if err != nil {
+				return nil, err
+			}
+			instr.mode = dm
+		default:
 			// Section 6.5: the value "must either be a QName ... or the token
 			// #default ... or the token #current". The summary does not
 			// bracket the type, so it is not an attribute value template, and

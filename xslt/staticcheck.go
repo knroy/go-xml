@@ -35,6 +35,12 @@ var standardAttributes = map[string]bool{
 	"xpath-default-namespace":    true,
 	"default-collation":          true,
 	"use-when":                   true,
+	// default-mode is an XSLT 3.0 standard attribute (section 6.6.2), and
+	// like the rest of that list it may appear on any XSLT element. It is
+	// accepted at 2.0 for the same reason expand-text is: the alternative is
+	// XTSE0090 over an attribute that names a mode the 2.0 rules already
+	// dispatch to as the unnamed one.
+	"default-mode": true,
 	// expand-text is an XSLT 3.0 standard attribute (3.0 section 3.5), and
 	// like the other members of that list it may appear on any XSLT element.
 	// A 2.0 processor has no text value templates, so the attribute selects
@@ -418,6 +424,14 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 	if n.Kind == xdm.KindElement {
 		forwards = forwardsAt(n, forwards)
 		if err := checkStaticGrammar(n, forwards); err != nil {
+			return err
+		}
+		// expand-text is a standard attribute, so it is exempted from the
+		// per-element attribute table and has to be validated separately.
+		// Section 3.7 makes it boolean, which rules out the attribute value
+		// template a stylesheet might reach for: cvt-008 writes
+		// expand-text="{$yesOrNo}" and expects to be told it cannot.
+		if err := checkExpandText(n); err != nil {
 			return err
 		}
 		// Section 3.9 ignores an unknown top-level XSLT element "and its

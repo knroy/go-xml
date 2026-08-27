@@ -519,6 +519,9 @@ var literalResultXSLAttrs = map[string]bool{
 	"default-collation": true, "use-when": true,
 	"use-attribute-sets": true, "type": true, "validation": true,
 	"inherit-namespaces": true,
+	// XSLT 3.0 additions: both are standard attributes, so a literal result
+	// element may carry them in the XSLT namespace.
+	"default-mode": true, "expand-text": true,
 }
 
 // emptyXSLElements are the XSLT elements whose content model is empty
