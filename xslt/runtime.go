@@ -1066,6 +1066,16 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = root
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// The regular-expression dialect follows the processor, not the module.
+	// A pattern is a string read by fn:matches at the point of call rather
+	// than by the parser, so a version="2.0" stylesheet run by a 3.0
+	// processor may legitimately write "(?:...)" -- the regex-syntax set is
+	// exactly that, 2.0 stylesheets scoped XSLT30+. Raising RegexVersion
+	// rather than Version keeps every other 3.0 construct gated on the
+	// module's own declaration, which is what the syntax rules require.
+	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+		xctx.RegexVersion = xpath.XPath31
+	}
 	xctx.Ctx = ctx
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections

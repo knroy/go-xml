@@ -30,11 +30,11 @@ func registerRegexFuncs(l *Library) {
 		// but the fixed-width subset can be decided exactly by comparison.
 		// Anything outside that subset still raises FORX0002, so no answer is
 		// ever guessed. See regex_backref.go.
-		if br, err := compileArgBackref(args, 1, 2, ctx.Version); err != nil {
+		if br, err := compileArgBackref(args, 1, 2, ctx.regexVersion()); err != nil {
 			// The fixed-width analysis declined. When the backtracking engine
 			// is enabled it gets the pattern next; when it is not, this is the
 			// FORX0002 it has always been.
-			bt, btErr := argBacktrack(args, 1, 2, err, ctx.Version)
+			bt, btErr := argBacktrack(args, 1, 2, err, ctx.regexVersion())
 			if btErr != nil {
 				return nil, btErr
 			}
@@ -46,7 +46,7 @@ func registerRegexFuncs(l *Library) {
 		} else if br != nil {
 			return boolSeq(br.MatchString(matchInput(s, flags))), nil
 		}
-		re, err := compileArgRegexp(args, 1, 2, ctx.Version)
+		re, err := compileArgRegexp(args, 1, 2, ctx.regexVersion())
 		if err != nil {
 			return nil, err
 		}
@@ -62,16 +62,16 @@ func registerRegexFuncs(l *Library) {
 		// matches() uses: the fixed-width subset is decided by comparison,
 		// and the text the backreference consumed is part of what gets
 		// replaced. See regex_backref.go.
-		br, err := compileArgBackref(args, 1, 3, ctx.Version)
+		br, err := compileArgBackref(args, 1, 3, ctx.regexVersion())
 		var bt *btRegexp
 		if err != nil {
-			if bt, err = argBacktrack(args, 1, 3, err, ctx.Version); err != nil {
+			if bt, err = argBacktrack(args, 1, 3, err, ctx.regexVersion()); err != nil {
 				return nil, err
 			}
 		}
 		var re *regexp.Regexp
 		if br == nil && bt == nil {
-			if re, err = compileArgRegexp(args, 1, 3, ctx.Version); err != nil {
+			if re, err = compileArgRegexp(args, 1, 3, ctx.regexVersion()); err != nil {
 				return nil, err
 			}
 		}
@@ -166,12 +166,12 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		re, err := compileArgRegexp(args, 1, 2, ctx.Version)
+		re, err := compileArgRegexp(args, 1, 2, ctx.regexVersion())
 		if err != nil {
 			// fn:tokenize has no fixed-width backreference path — splitting on
 			// a backreference pattern was never supported — so the backtracking
 			// engine is the only one that can take it.
-			bt, btErr := argBacktrack(args, 1, 2, err, ctx.Version)
+			bt, btErr := argBacktrack(args, 1, 2, err, ctx.regexVersion())
 			if btErr != nil {
 				return nil, btErr
 			}

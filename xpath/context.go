@@ -46,6 +46,22 @@ type Context struct {
 	// existing caller behaves exactly as it did before.
 	Version Version
 
+	// RegexVersion raises the version of the *regular expression* dialect
+	// above Version, without admitting any other 3.0 construct.
+	//
+	// The two are separable because the regex language is not part of the
+	// XPath grammar: a pattern is a string, read by fn:matches and its
+	// siblings at the point of call rather than by the parser. So a host may
+	// legitimately want a 2.0 expression to accept a 3.0 pattern, which is
+	// exactly what XSLT needs -- the XSLT suite runs version="2.0"
+	// stylesheets under a 3.0 processor and expects "(?:...)" to compile,
+	// because the dialect follows the processor while the syntax follows the
+	// module.
+	//
+	// The zero value adds nothing: the effective dialect is the larger of
+	// this and Version, so an existing caller is unaffected.
+	RegexVersion Version
+
 	// StaticBaseURI is the base URI of the expression itself — the stylesheet
 	// or query it was written in — which is what fn:static-base-uri returns
 	// and what fn:resolve-uri resolves against by default.
@@ -378,4 +394,18 @@ func (c *Context) resetItems() {
 	if c != nil && c.items != nil {
 		atomic.StoreInt64(c.items, 0)
 	}
+}
+
+// regexVersion is the version of the regular expression dialect in force.
+//
+// The larger of Version and RegexVersion, so that raising one never lowers
+// the other and the zero value of RegexVersion means "whatever Version says".
+func (c *Context) regexVersion() Version {
+	if c == nil {
+		return XPath20
+	}
+	if c.RegexVersion > c.Version {
+		return c.RegexVersion
+	}
+	return c.Version
 }
