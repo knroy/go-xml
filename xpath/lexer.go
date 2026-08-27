@@ -263,7 +263,11 @@ func (l *Lexer) next() (Token, error) {
 	}
 
 	switch c {
-	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}', '#':
+	// ":" is a token in its own right only as the separator of a map entry.
+	// The two-character forms "::" and ":=" are matched above, and a colon
+	// inside a QName never reaches here because lexQName consumes the whole
+	// name, so what is left is the map constructor's separator.
+	case '(', ')', '[', ']', ',', '/', '+', '-', '=', '<', '>', '|', '@', '?', '{', '}', '#', ':':
 		l.pos++
 		op := string(c)
 		// A closing bracket ends an operand. So does "?" when one precedes

@@ -65,6 +65,12 @@ func (p *Parser) startsStep() bool {
 		switch t.Val {
 		case "@", "(", ".", "..":
 			return true
+		case "[", "?":
+			// A square-bracket array constructor and a unary lookup both begin
+			// an expression in 3.1. Neither can be confused with a predicate
+			// or an occurrence indicator here, because startsStep is asked
+			// where a step is expected rather than where one is continued.
+			return p.version.atLeast31()
 		}
 	}
 	return false
@@ -142,6 +148,17 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 				return nil, err
 			}
 			base = &DynamicCall{Target: base, Args: args}
+			continue
+		}
+		// The lookup operator reaches into a map or an array. It is 3.1, and
+		// under an earlier version "?" after a primary is still the argument
+		// placeholder it was, which parseArgumentList handles.
+		if p.version.atLeast31() && p.peekIs(TokOp, "?") {
+			look, err := p.parseLookup(base)
+			if err != nil {
+				return nil, err
+			}
+			base = look
 			continue
 		}
 		return base, nil
@@ -243,6 +260,14 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 		} else if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokOp &&
 			p.toks[p.pos+1].Val == "(" && !isKindTestName(p.cur().Val) {
 			return nil, false, nil // function call: let parsePrimary handle it
+		} else if p.version.atLeast31() && p.pos+1 < len(p.toks) &&
+			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "{" &&
+			(p.cur().Val == "map" || p.cur().Val == "array") {
+			// "map {" and "array {" are constructors rather than name tests
+			// on elements so called. Only the brace makes them so — "map(1)"
+			// is still an ordinary call, and an element named "map" is still
+			// selectable as a step.
+			return nil, false, nil
 		} else if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
 			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "#" {
 			// "name#3" is a named function reference, not a name test on an
@@ -529,6 +554,33 @@ func (p *Parser) parsePredicates() ([]Expr, error) {
 // expression, context item, or function call.
 func (p *Parser) parsePrimary() (Expr, error) {
 	t := p.cur()
+	// The 3.1 constructors are spelled with names that are also perfectly
+	// ordinary function names, so they are recognised only when the token
+	// after them is the brace that makes them constructors: "map" followed by
+	// "{" is a map constructor, and "map(...)" is still a call.
+	if p.version.atLeast31() && t.Kind == TokName {
+		switch t.Val {
+		case "map":
+			if p.peekAheadIs(1, TokOp, "{") {
+				return p.parseMapConstructor()
+			}
+		case "array":
+			if p.peekAheadIs(1, TokOp, "{") {
+				return p.parseArrayConstructor(true)
+			}
+		}
+	}
+	// The square-bracket array constructor cannot be confused with a
+	// predicate: a predicate only ever follows a complete expression, and
+	// parsePrimary is called where one is expected rather than continued.
+	if p.version.atLeast31() && t.Kind == TokOp && t.Val == "[" {
+		return p.parseArrayConstructor(false)
+	}
+	// A unary lookup applies to the context item: "?name" with nothing
+	// before it, which is how a map is read inside a simple-map step.
+	if p.version.atLeast31() && t.Kind == TokOp && t.Val == "?" {
+		return p.parseLookup(nil)
+	}
 	switch t.Kind {
 	case TokNumber:
 		p.pos++
@@ -1415,3 +1467,143 @@ type errorExpr struct{ err error }
 
 func (e *errorExpr) Eval(c *Context) (xdm.Sequence, error) { return nil, e.err }
 func (e *errorExpr) String() string                        { return "error()" }
+
+// parseLookup parses the postfix lookup operator, production [54]:
+// Lookup ::= "?" KeySpecifier, where the specifier is an NCName, an integer,
+// "*", or a parenthesised expression.
+//
+// The base is nil for the unary form, "?name" with nothing before it, which
+// applies to the context item.
+func (p *Parser) parseLookup(base Expr) (Expr, error) {
+	if _, ok := p.acceptOp("?"); !ok {
+		return nil, p.errorf("expected '?' to start a lookup")
+	}
+	e := &LookupExpr{Base: base}
+	switch {
+	case p.cur().Kind == TokNumber:
+		// An integer key selects an array member by position. A
+		// non-integer is not a key specifier at all, so it is a syntax
+		// error rather than a lookup that fails at evaluation.
+		lit := numericLiteral(p.cur())
+		if lit.Type != xdm.TypeInteger {
+			return nil, p.errorf("a lookup by position needs an integer, got %s", p.cur().Val)
+		}
+		e.Index, e.HasIndex = int(lit.Float64()), true
+		p.pos++
+	case p.cur().Kind == TokWildcard && p.cur().Val == "*",
+		p.cur().Kind == TokOp && p.cur().Val == "*":
+		e.Wildcard = true
+		p.pos++
+	case p.peekIs(TokOp, "("):
+		p.pos++
+		inner, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectOp(")"); err != nil {
+			return nil, err
+		}
+		e.Expr = inner
+	case p.cur().Kind == TokName:
+		e.Name, e.HasName = p.cur().Val, true
+		p.pos++
+	default:
+		return nil, p.errorf("expected a name, an integer, '*' or '(' after '?'")
+	}
+	return e, nil
+}
+
+// peekAheadIs reports whether the token n places ahead has the given kind and
+// value, without consuming anything.
+func (p *Parser) peekAheadIs(n int, kind TokenKind, val string) bool {
+	if p.pos+n >= len(p.toks) {
+		return false
+	}
+	t := p.toks[p.pos+n]
+	return t.Kind == kind && t.Val == val
+}
+
+// parseMapConstructor parses "map { k : v, ... }", production [69].
+func (p *Parser) parseMapConstructor() (Expr, error) {
+	p.pos++ // "map"
+	if err := p.expectOp("{"); err != nil {
+		return nil, err
+	}
+	e := &MapConstructor{}
+	if p.peekIs(TokOp, "}") {
+		p.pos++
+		return e, nil
+	}
+	for {
+		k, err := p.parseExprSingle()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectOp(":"); err != nil {
+			return nil, err
+		}
+		v, err := p.parseExprSingle()
+		if err != nil {
+			return nil, err
+		}
+		e.Keys = append(e.Keys, k)
+		e.Values = append(e.Values, v)
+		if _, ok := p.acceptOp(","); !ok {
+			break
+		}
+	}
+	if err := p.expectOp("}"); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// parseArrayConstructor parses both array spellings, productions [70]-[72].
+//
+// The curly form takes one expression and makes a member of each item it
+// yields; the square form takes a comma-separated list and makes a member of
+// each expression, so "[(1,2), 3]" has two members where "array { (1,2), 3 }"
+// has three.
+func (p *Parser) parseArrayConstructor(curly bool) (Expr, error) {
+	e := &ArrayConstructor{Curly: curly}
+	if curly {
+		p.pos++ // "array"
+		if err := p.expectOp("{"); err != nil {
+			return nil, err
+		}
+		if p.peekIs(TokOp, "}") {
+			p.pos++
+			return e, nil
+		}
+		inner, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		e.Members = append(e.Members, inner)
+		if err := p.expectOp("}"); err != nil {
+			return nil, err
+		}
+		return e, nil
+	}
+	if err := p.expectOp("["); err != nil {
+		return nil, err
+	}
+	if p.peekIs(TokOp, "]") {
+		p.pos++
+		return e, nil
+	}
+	for {
+		m, err := p.parseExprSingle()
+		if err != nil {
+			return nil, err
+		}
+		e.Members = append(e.Members, m)
+		if _, ok := p.acceptOp(","); !ok {
+			break
+		}
+	}
+	if err := p.expectOp("]"); err != nil {
+		return nil, err
+	}
+	return e, nil
+}

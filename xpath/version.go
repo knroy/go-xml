@@ -22,6 +22,11 @@ const (
 	// XPath30 is XPath 3.0, as defined by the 2014 Recommendation. It admits
 	// everything in 2.0 with the same meaning, plus the 3.0 additions.
 	XPath30
+	// XPath31 is XPath 3.1, as defined by the 2017 Recommendation. Its
+	// additions are maps and arrays — two new kinds of item rather than new
+	// syntax over the existing ones — together with the lookup operator that
+	// reaches into them and the function libraries that build them.
+	XPath31
 )
 
 // atLeast30 reports whether v admits the XPath 3.0 additions.
@@ -30,6 +35,10 @@ const (
 // so that adding 3.1 later does not mean auditing every comparison for whether
 // it meant "exactly 3.0" or "3.0 and later".
 func (v Version) atLeast30() bool { return v >= XPath30 }
+
+// atLeast31 reports whether v admits the XPath 3.1 additions, on the same
+// reasoning as atLeast30.
+func (v Version) atLeast31() bool { return v >= XPath31 }
 
 // lookupFor resolves a function call, hiding functions the context's version
 // does not have.
@@ -83,6 +92,8 @@ func synthesizeVariadic(ctx *Context, name xdm.QName, arity int) (Function, bool
 // String implements fmt.Stringer.
 func (v Version) String() string {
 	switch v {
+	case XPath31:
+		return "XPath 3.1"
 	case XPath30:
 		return "XPath 3.0"
 	default:

@@ -52,7 +52,7 @@ func TestQT3(t *testing.T) {
 		t.Setenv(name, val)
 	}
 
-	for _, target := range []TargetVersion{XPath20, XPath30} {
+	for _, target := range []TargetVersion{XPath20, XPath30, XPath31} {
 		t.Run(target.String(), func(t *testing.T) { runSuite(t, root, cat, target) })
 	}
 }

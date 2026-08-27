@@ -182,10 +182,15 @@ const (
 	XPath20 TargetVersion = iota
 	// XPath30 scopes the run to cases that apply to XPath 2.0 or 3.0.
 	XPath30
+	// XPath31 scopes the run to cases that apply to 2.0, 3.0 or 3.1.
+	XPath31
 )
 
 func (v TargetVersion) String() string {
-	if v == XPath30 {
+	switch v {
+	case XPath31:
+		return "XPath 3.1"
+	case XPath30:
 		return "XPath 3.0"
 	}
 	return "XPath 2.0"
@@ -197,7 +202,10 @@ func (v TargetVersion) String() string {
 // decides which cases are in scope, the engine's version decides how an
 // expression is compiled. They happen to correspond one-to-one today.
 func xpathVersion(v TargetVersion) xpath.Version {
-	if v >= XPath30 {
+	switch {
+	case v >= XPath31:
+		return xpath.XPath31
+	case v >= XPath30:
 		return xpath.XPath30
 	}
 	return xpath.XPath20
@@ -209,7 +217,7 @@ func xpathVersion(v TargetVersion) xpath.Version {
 // if any alternative names a version at or below the target. "XP20+" means 2.0
 // and later, so it is in scope for both targets; "XP30" and "XP30+" are in
 // scope only for a 3.0 run. "XQ..." is XQuery, which this engine does not
-// implement at any version, and "XP31" is a later version than either target.
+// implement at any version.
 func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
 		switch alt {
@@ -225,8 +233,18 @@ func specInScope(v string, target TargetVersion) bool {
 			}
 		case "XP20+":
 			return true
-		case "XP30", "XP30+":
+		case "XP30":
+			// Exactly 3.0, for the same reason "XP20" is written exactly:
+			// where 3.1 changed an answer the suite pairs the two.
+			if target == XPath30 {
+				return true
+			}
+		case "XP30+":
 			if target >= XPath30 {
+				return true
+			}
+		case "XP31", "XP31+":
+			if target >= XPath31 {
 				return true
 			}
 		}
