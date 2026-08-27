@@ -506,7 +506,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// A <source> with a uri attribute is reachable through fn:doc under that
 	// URI. Without a resolver the function refuses — correct by default, but
 	// not what these cases are testing.
-	if docs := envDocs(r, env); docs != nil {
+	if docs := envDocs(r, ts.Dir, env); docs != nil {
 		ctx.Docs = docs
 	}
 	if len(env.Collections) > 0 {
@@ -1290,6 +1290,16 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 			return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
 		}
 	}
+	// A <resource> may declare a relative URI of its own — the UseCaseJSON
+	// environment publishes "table.json" rather than an absolute one — and
+	// the reference then matches it as written, before any base URI is
+	// applied. Matching only the resolved form left those resources
+	// unreachable and the cases failing on FOUT1170 for a file the checkout
+	// actually holds. The reference is still looked up in the environment's
+	// own table, so this reaches nothing the case did not declare.
+	if file, ok := t.byURI[uri]; ok {
+		return t.read(filepath.Join(t.root, filepath.FromSlash(file)), uri, encoding)
+	}
 
 	// The default static base URI is a file: URI naming the test-set's own
 	// directory, so a case that says unparsed-text("../docs/atomic.xml")
@@ -1502,8 +1512,19 @@ type envDocResolver struct {
 	byURI map[string]string
 }
 
-func envDocs(r *Runner, env Environment) *envDocResolver {
+func envDocs(r *Runner, dir string, env Environment) *envDocResolver {
 	byURI := map[string]string{}
+	// A <resource> is reachable through fn:doc as well as fn:unparsed-text
+	// when it holds XML: UseCaseJSON-008 publishes Wikipedia-Origami.xml that
+	// way and reads it with doc(). Registering only <source> left it
+	// unreachable, which reported FODC0002 for a file the checkout holds.
+	for _, res := range env.Resources {
+		if res.URI != "" && res.File != "" {
+			// A resource path is relative to the test-set file rather than to
+			// the suite root, the same rule newSuiteTextResolver follows.
+			byURI[res.URI] = filepath.Join(dir, res.File)
+		}
+	}
 	for _, src := range env.Sources {
 		if src.URI != "" {
 			byURI[src.URI] = src.File
@@ -1537,6 +1558,15 @@ func envDocs(r *Runner, env Environment) *envDocResolver {
 
 func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 	file, ok := d.byURI[uri]
+	if !ok {
+		// A relative reference resolves against the base URI before it is
+		// looked up. UseCaseJSON-008 calls doc('Wikipedia-Origami.xml') for a
+		// source the environment publishes under its full catalog URI, and
+		// matching only the reference as written left it unreachable.
+		if base != "" && !strings.Contains(uri, "://") {
+			file, ok = d.byURI[resolveAgainst(base, uri)]
+		}
+	}
 	if !ok {
 		return nil, fmt.Errorf("no document %q", uri)
 	}

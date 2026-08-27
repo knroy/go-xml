@@ -403,13 +403,15 @@ func registerContextFuncs(l *Library) {
 	// QName was previously ignored and every call reported FOER0000, which
 	// made "fn:error(QName(..., 'err:FORG0009'))" indistinguishable from any
 	// other error() call.
-	l.registerFn("error", []int{0, 1, 2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("error", []int{0, 1, 2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		code := "FOER0000"
-		// error(()) is XPTY0004. The parameter is xs:QName?, so the empty
-		// sequence is in its type, but the one-argument signature requires
-		// the argument to identify an error — passing nothing identifies
-		// nothing, and the zero-argument form is what means "no code".
-		if len(args) == 1 && len(args[0]) == 0 {
+		// error(()) is XPTY0004 up to 3.0 and FOER0000 from 3.1. The
+		// parameter is xs:QName? either way, so the empty sequence is always
+		// in its type; what changed is whether the one-argument form insists
+		// that the argument actually identify an error. The suite pins both
+		// halves with K-ErrorFunc-4, scoped "XQ10 XP20 XQ30 XP30", and
+		// K-ErrorFunc-4a, scoped "XQ31+ XP31+", over the same expression.
+		if len(args) == 1 && len(args[0]) == 0 && !ctx.Version.atLeast31() {
 			return nil, xdm.ErrType(
 				"fn:error: the single-argument form requires an error code")
 		}

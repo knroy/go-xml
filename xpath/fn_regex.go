@@ -1145,7 +1145,23 @@ var unicodeBlocks = map[string][][2]rune{
 	"IsMathematicalAlphanumericSymbols":      {{0x1D400, 0x1D7FF}},
 	"IsCJKUnifiedIdeographsExtensionB":       {{0x20000, 0x2A6D6}},
 	"IsCJKCompatibilityIdeographsSupplement": {{0x2F800, 0x2FA1F}},
-	"IsTags":                                 {{0xE0000, 0xE007F}},
+	// Blocks added after Unicode 3.1. Appendix G does not name them, but
+	// XPath 3.1 references a later Unicode, and a pattern naming one is a
+	// pattern for a block that genuinely exists — refusing it as an unknown
+	// block is wrong in a way that adding it is not. These are additions
+	// only: no boundary above is moved, so nothing a schema written against
+	// Appendix G accepts changes.
+	"IsEmoticons":                          {{0x1F600, 0x1F64F}},
+	"IsMiscellaneousSymbolsandPictographs": {{0x1F300, 0x1F5FF}},
+	"IsTransportandMapSymbols":             {{0x1F680, 0x1F6FF}},
+	"IsSupplementalSymbolsandPictographs":  {{0x1F900, 0x1F9FF}},
+	"IsAlchemicalSymbols":                  {{0x1F700, 0x1F77F}},
+	"IsGeometricShapesExtended":            {{0x1F780, 0x1F7FF}},
+	"IsSupplementalArrowsC":                {{0x1F800, 0x1F8FF}},
+	"IsPlayingCards":                       {{0x1F0A0, 0x1F0FF}},
+	"IsMahjongTiles":                       {{0x1F000, 0x1F02F}},
+	"IsDominoTiles":                        {{0x1F030, 0x1F09F}},
+	"IsTags":                               {{0xE0000, 0xE007F}},
 }
 
 // unicodeBlockRange maps an XML Schema Unicode block name to the RE2 class
