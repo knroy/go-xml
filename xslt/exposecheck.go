@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -63,4 +64,28 @@ func checkAbstractExposure(c *component, r *exposeRule) error {
 	return fmt.Errorf(
 		"XTSE3025: xsl:expose gives %s visibility=\"abstract\", but its "+
 			"declaration is not abstract", c.sym)
+}
+
+// checkModeName is XTSE0020 for a pseudo-name on xsl:mode/@name.
+//
+// "#default" and "#unnamed" are tokens of the @mode attribute of a template
+// rule, where they select a mode to apply in. xsl:mode/@name declares a mode,
+// and its value is an EQName: the unnamed mode is declared by omitting the
+// attribute, not by naming it, so a stylesheet that writes the pseudo-name
+// there has written something the grammar does not admit. package-909 turns
+// on it.
+func checkModeName(el *xdm.Node) error {
+	a := el.Attr("", "name")
+	if a == nil {
+		return nil
+	}
+	for _, tok := range strings.Fields(a.Value) {
+		if strings.HasPrefix(tok, "#") {
+			return fmt.Errorf(
+				"XTSE0020: xsl:mode/@name is an EQName, so it may not be %q; "+
+					"the unnamed mode is declared by omitting the attribute",
+				tok)
+		}
+	}
+	return nil
 }

@@ -279,7 +279,8 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			// of a module processed this way. Only a top-level position is
 			// covered -- inside a sequence constructor the third rule
 			// applies instead, and that one demands an xsl:fallback.
-			if isModuleElement(el) && forwardsAt(ch, forwards) {
+			if isModuleElement(el) && forwardsAt(ch, forwards) &&
+				!inPackage(ch) {
 				continue
 			}
 			if cm.seqCtor && isInstruction(ch.Name.Local) {
@@ -530,7 +531,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// missing attribute would be reporting an error about an element the
 		// processor was told to pretend it never saw.
 		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) &&
-			!xsltDeclarations[n.Name.Local] {
+			!xsltDeclarations[n.Name.Local] && !inPackage(n) {
 			return nil
 		}
 		if err := checkStaticGrammar(n, forwards); err != nil {
@@ -552,7 +553,8 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			// Unknown in the same sense checkStaticGrammar means it: an
 			// element of a later version is unknown to this stylesheet's.
 			def, known := xsltElements[n.Name.Local]
-			if !known || (def.since30 && !xpathVersionAt(n).AtLeast31()) {
+			if (!known || (def.since30 && !xpathVersionAt(n).AtLeast31())) &&
+				!inPackage(n) {
 				return nil
 			}
 			// A known element in a position 3.0 does not allow it is ignored
@@ -560,7 +562,7 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			// the element sits, not about whether this version knows it:
 			// xsl:value-of and xsl:when are both well known and both must be
 			// ignored as children of the module element.
-			if !xsltDeclarations[n.Name.Local] {
+			if !xsltDeclarations[n.Name.Local] && !inPackage(n) {
 				return nil
 			}
 		}
@@ -889,3 +891,20 @@ func xpathVersionAt(el *xdm.Node) xpath.Version {
 // scope, and threading the option through all of them would touch far more
 // code than the option is worth. See compileSchema for the full argument.
 var overrideXPathVersion *xpath.Version
+
+// inPackage reports whether el sits directly inside an xsl:package.
+//
+// Section 3.9's rule that a misplaced top-level element is ignored exists so
+// that a module written for a later version still runs here. xsl:package is
+// itself a 3.0 construct, so its version="3.0" is a statement of the version
+// the module is written in rather than of one this processor has yet to
+// learn -- and forwards-compatible mode, which forwardsAt reads off any
+// version above 2.0, is not what the author asked for. Ignoring the rule
+// there is what lets package-902 report its xsl:element, and package-905
+// through -905b their nested xsl:stylesheet and xsl:transform, as XTSE0010
+// rather than passing silently.
+func inPackage(el *xdm.Node) bool {
+	p := el.Parent
+	return p != nil && p.Kind == xdm.KindElement &&
+		p.Name.URI == xdm.NSXSL && p.Name.Local == "package"
+}

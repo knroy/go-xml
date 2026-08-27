@@ -791,6 +791,12 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 	if ch.Name.URI != xdm.NSXSL || !forwardsAtDeep(ch) {
 		return false
 	}
+	// Not inside an xsl:package: see inPackage. Discarding the element here
+	// would leave the grammar check nothing to report, which is why
+	// package-902 and -905 compiled clean rather than raising XTSE0010.
+	if inPackage(ch) {
+		return false
+	}
 	if _, known := xsltElements[ch.Name.Local]; !known {
 		return true
 	}

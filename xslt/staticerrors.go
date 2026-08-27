@@ -64,6 +64,13 @@ func checkStaticErrors(root *xdm.Node) error {
 		if err := checkExposeDeclarations(root); err != nil {
 			return err
 		}
+		for _, ch := range root.ChildElements() {
+			if isXSL(ch, "mode") {
+				if err := checkModeName(ch); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return walkStaticErrors(root, false)
 }
