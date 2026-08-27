@@ -347,6 +347,27 @@ type OutputSettings struct {
 	// in 27.1 says the separator "has no effect ... if the effective value
 	// of build-tree is yes".
 	BuildTree *bool
+	// ParameterDocument is the URI of an external
+	// output:serialization-parameters document whose parameters override the
+	// ones written here. It is kept as a URI rather than resolved at compile
+	// time because 25.1 says the document "should be read during run-time
+	// evaluation of the stylesheet", so that a stylesheet deployed away from
+	// where it was written still finds its own parameters.
+	ParameterDocument string
+	// InlineCharMap is a character map given by value rather than by name:
+	// the output:use-character-maps element of a parameter document spells
+	// its entries out, having no xsl:character-map declaration to point at.
+	// It overrides UseCharacterMaps entirely, being the higher-precedence
+	// source of the same parameter.
+	InlineCharMap map[rune]string
+	// AllowDuplicateNames is the JSON output method's parameter of that name:
+	// with it unset, two map keys that render to the same JSON string are
+	// SERE0022 rather than two entries in one object.
+	AllowDuplicateNames bool
+	// JSONNodeOutputMethod is the method a node nested inside a JSON value is
+	// serialised with, JSON having no node type of its own. Empty is the
+	// default, "xml".
+	JSONNodeOutputMethod string
 	// MediaType is the media type of the output. It affects no serialised
 	// character; it is metadata a caller passes on.
 	MediaType string

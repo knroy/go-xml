@@ -230,6 +230,17 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 		if err := res.Serialize(io.Discard); err != nil {
 			terr = err
 		}
+		// The secondary results are written too, since a stylesheet whose
+		// whole output goes to an xsl:result-document has an empty principal
+		// tree that always serialises cleanly. result-document-1405 sends a
+		// map with two keys that render alike to method="json" with
+		// allow-duplicate-names="no" and expects SERE0022; serialising only
+		// the principal result found nothing to complain about.
+		for i := range res.Secondary {
+			if err := res.Secondary[i].Serialize(io.Discard, nil); err != nil && terr == nil {
+				terr = err
+			}
+		}
 	}
 
 	// The schema the environment declares is part of the static context the

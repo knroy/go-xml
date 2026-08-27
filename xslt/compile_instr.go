@@ -1186,6 +1186,9 @@ func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver
 	// whatever the selected definition supplies, so they are kept separately
 	// and applied over it at run time. Each is an attribute value template.
 	instr.overrides = n
+	if err := checkLiteralHTMLVersion(n); err != nil {
+		return nil, err
+	}
 	instr.overrideAVTs = map[string]*avt{}
 	for _, a := range n.Attrs {
 		if a.Name.URI != "" || a.Name.Local == "href" || a.Name.Local == "format" {
@@ -1791,7 +1794,9 @@ func (i *breakInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		appendSequence(seq, out)
+		if err := appendSequence(seq, out); err != nil {
+			return err
+		}
 	} else if err := execSequence(i.body, rt, out); err != nil {
 		return err
 	}
@@ -1815,15 +1820,26 @@ func (i *nextIterationInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 // appendSequence writes a sequence to an output builder, the same way
 // xsl:sequence does.
-func appendSequence(seq xdm.Sequence, out *outputBuilder) {
+//
+// "The same way" has to include the third case. A function item, a map or an
+// array is an ordinary member of a sequence, and dropping one silently turns
+// it into the empty sequence rather than into an error -- which then fails a
+// type declaration somewhere far from the drop, reported against a variable
+// that looks correctly written.
+func appendSequence(seq xdm.Sequence, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
 			out.appendNode(v)
 		case *xdm.Atomic:
 			out.appendValue(v)
+		default:
+			if err := appendOpaqueItem(out, it); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -1909,7 +1925,9 @@ func (i *iterateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		appendSequence(vals, out)
+		if err := appendSequence(vals, out); err != nil {
+			return err
+		}
 		return nil
 	}
 	return execSequence(i.onCompletion, done, out)

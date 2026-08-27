@@ -1139,20 +1139,37 @@ type outputAttrDecl struct {
 // set: the instruction may override method, indent, encoding and the rest for
 // one document. Reading them in two places would let the two drift.
 func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
-	// @html-version is declared xs:decimal. A literal value that is not one
-	// is XTSE0020 -- the same rule and the same wording as any other
-	// attribute whose fixed value is outside the permitted set. Only a
-	// literal is checked here: a value written with curly brackets is
-	// excluded by the error's own definition, and xsl:result-document
-	// resolves its own attribute value templates at run time.
-	if v := el.AttrValue("html-version"); v != "" && !strings.Contains(v, "{") {
-		if _, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil {
-			return fmt.Errorf(
-				"XTSE0020: %s/@html-version value %q is not a decimal number",
-				el.Name.Lexical(), v)
-		}
+	if err := checkLiteralHTMLVersion(el); err != nil {
+		return err
 	}
 	return applyOutputValues(el, el.AttrValue, o)
+}
+
+// checkLiteralHTMLVersion applies XTSE0020 to a literal @html-version that is
+// not the xs:decimal the attribute is declared to be.
+//
+// It is the same rule and the same wording as any other attribute whose fixed
+// value is outside the permitted set, and it is decided entirely from the
+// stylesheet text -- so it is a compile-time check even on
+// xsl:result-document, whose serialisation attributes are otherwise resolved
+// when the instruction runs. result-document-0243 writes html-version="five"
+// and expects the stylesheet to be rejected; deferring it meant nothing ever
+// looked, because the effective value is only consulted by the html method
+// and the document there is xhtml.
+//
+// Only a literal is checked: a value written with curly brackets is excluded
+// by the error's own definition, being a value the stylesheet does not state.
+func checkLiteralHTMLVersion(el *xdm.Node) error {
+	v := el.AttrValue("html-version")
+	if v == "" || strings.Contains(v, "{") {
+		return nil
+	}
+	if _, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil {
+		return fmt.Errorf(
+			"XTSE0020: %s/@html-version value %q is not a decimal number",
+			el.Name.Lexical(), v)
+	}
+	return nil
 }
 
 // applyOutputValues is applyOutputAttrs with the values supplied by the
@@ -1228,6 +1245,15 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	if v := value("build-tree"); v != "" {
 		b := yes(v)
 		o.BuildTree = &b
+	}
+	if v := value("allow-duplicate-names"); v != "" {
+		o.AllowDuplicateNames = yes(v)
+	}
+	if v := value("json-node-output-method"); v != "" {
+		o.JSONNodeOutputMethod = strings.TrimSpace(v)
+	}
+	if v := value("parameter-document"); v != "" {
+		o.ParameterDocument = strings.TrimSpace(v)
 	}
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is

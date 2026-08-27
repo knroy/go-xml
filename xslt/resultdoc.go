@@ -122,6 +122,18 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 			return out, err
 		}
 	}
+	// Last, so that its parameters win over both the instruction's own
+	// attributes and the output definition they were applied to -- which is
+	// the precedence 25.1 states. The URI is resolved against the base URI of
+	// the xsl:result-document element, which is where the attribute was
+	// written.
+	base := rt.sheet.baseURI
+	if i.overrides != nil && i.overrides.BaseURI != "" {
+		base = i.overrides.BaseURI
+	}
+	if err := applyParameterDocument(rt, &out, base); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -172,13 +184,18 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 
 	// The tree is assessed as a document node before it is recorded, so that
 	// an invalid result is an error rather than a file written and then
-	// complained about.
-	doc, derr := sub.toDocument()
-	if derr != nil {
-		return derr
-	}
-	if err := i.validation.assess(rt, doc); err != nil {
-		return err
+	// complained about. With build-tree="no" -- which is the default for the
+	// json and adaptive methods -- there is no tree to assess: the raw
+	// sequence is delivered as it stands, and forming a document node from it
+	// is the very step 2.3.6 says is not taken. See buildsTree.
+	if sepSettings.buildsTree() {
+		doc, derr := sub.toDocument()
+		if derr != nil {
+			return derr
+		}
+		if err := i.validation.assess(rt, doc); err != nil {
+			return err
+		}
 	}
 
 	if href == "" {
@@ -216,6 +233,12 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	cm, err := rt.sheet.flattenCharacterMaps(settings.UseCharacterMaps)
 	if err != nil {
 		return err
+	}
+	// A parameter document's use-character-maps spells its entries out rather
+	// than naming an xsl:character-map, and it is the higher-precedence source
+	// of the same parameter, so it replaces the named maps outright.
+	if settings.InlineCharMap != nil {
+		cm = settings.InlineCharMap
 	}
 	// Normalisation has already run over these nodes, so the serialiser must
 	// not run it a second time and double every separator.
@@ -267,4 +290,31 @@ func (i *resultDocumentInstr) destination(rt *runtime, href string) string {
 		return resolved
 	}
 	return base
+}
+
+// buildsTree reports whether a result's raw sequence is normalised into a
+// final result tree before it is delivered.
+//
+// Section 2.3.6: "If the effective value of the build-tree attribute is yes,
+// then a final result tree is created by invoking the process of sequence
+// normalization. The default for the build-tree attribute depends on the
+// serialization method. For the xml, html, xhtml, and text methods the
+// default value is yes. For the json and adaptive methods (available only
+// with XPath 3.1) the default value is no."
+//
+// The distinction is not cosmetic. Normalisation wraps the raw sequence in a
+// document node, and a document node may not contain an attribute or a
+// function item -- so result-document-1407, which sends a map entry, a
+// function reference, five integers and an attribute to method="adaptive",
+// was XTDE0420 rather than the sequence the adaptive method is defined to
+// write item by item.
+func (o OutputSettings) buildsTree() bool {
+	if o.BuildTree != nil {
+		return *o.BuildTree
+	}
+	switch strings.ToLower(o.Method) {
+	case "json", "adaptive":
+		return false
+	}
+	return true
 }

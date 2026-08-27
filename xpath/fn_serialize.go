@@ -1011,3 +1011,81 @@ func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
 	}
 	return out, nil
 }
+
+// SerializeParams are the serialization parameters a caller outside this
+// package can set for SerializeJSON and SerializeAdaptive.
+//
+// It is deliberately narrow. The full serializeOptions set is what fn:serialize
+// reads out of its own parameter argument, and most of it — the XML
+// declaration, CDATA sections, indentation — has no meaning under either of
+// these two methods. What a caller does need is the handful the JSON and
+// adaptive rules actually consult, so that xsl:result-document/@method="json"
+// behaves as fn:serialize with the same parameters would.
+type SerializeParams struct {
+	// AllowDuplicateNames permits a JSON object to be written with two keys
+	// that render to the same string; without it that is SERE0022.
+	AllowDuplicateNames bool
+	// JSONNodeOutputMethod is the method a node nested inside a JSON value is
+	// serialised with, since JSON itself has no node type. Empty means the
+	// default, "xml".
+	JSONNodeOutputMethod string
+	// ItemSeparator, when HasItemSeparator is set, goes between the items of
+	// an adaptive result in place of the newline the method otherwise writes.
+	ItemSeparator    string
+	HasItemSeparator bool
+	// CharMap maps a character to the string that replaces it on output, as
+	// xsl:character-map defines. It is applied to the finished text, which is
+	// where the serialization spec puts it for these methods too.
+	CharMap map[rune]string
+}
+
+func (p SerializeParams) opts() serializeOptions {
+	o := serializeOptions{
+		method:               "json",
+		omitXMLDecl:          true,
+		allowDuplicateNames:  p.AllowDuplicateNames,
+		jsonNodeOutputMethod: p.JSONNodeOutputMethod,
+		itemSeparator:        p.ItemSeparator,
+		hasItemSep:           p.HasItemSeparator,
+		charMap:              p.CharMap,
+	}
+	if o.jsonNodeOutputMethod == "" {
+		o.jsonNodeOutputMethod = "xml"
+	}
+	return o
+}
+
+// SerializeJSON renders a sequence with the JSON output method of the
+// XSLT and XQuery Serialization 3.1 specification, section 4.
+//
+// It exists so that xsl:result-document and xsl:output can offer method="json"
+// without the xslt package reimplementing rules this package already applies
+// for fn:serialize. The reverse dependency is not available — xpath cannot
+// import xslt — and the two renderings must agree, since result-document-1401
+// and serialize-json-010 describe the same output by different routes.
+func SerializeJSON(seq xdm.Sequence, p SerializeParams) (string, error) {
+	opts := p.opts()
+	out, err := serializeJSON(seq, opts)
+	if err != nil {
+		return "", err
+	}
+	if len(opts.charMap) > 0 {
+		out = applyCharacterMap(out, opts.charMap)
+	}
+	return out, nil
+}
+
+// SerializeAdaptive renders a sequence with the adaptive output method of the
+// same specification, section 10. See SerializeJSON for why it is exported.
+func SerializeAdaptive(seq xdm.Sequence, p SerializeParams) (string, error) {
+	opts := p.opts()
+	opts.method = "adaptive"
+	out, err := serializeAdaptiveSeq(seq, opts)
+	if err != nil {
+		return "", err
+	}
+	if len(opts.charMap) > 0 {
+		out = applyCharacterMap(out, opts.charMap)
+	}
+	return out, nil
+}

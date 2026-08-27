@@ -9,7 +9,24 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
+
+// jsonParams carries the settings the JSON and adaptive output methods read
+// across to xpath, which owns their rendering. Only the parameters those two
+// methods consult are passed: the rest of xsl:output describes an XML
+// declaration, indentation and escaping that neither method has.
+func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializeParams {
+	p := xpath.SerializeParams{
+		AllowDuplicateNames:  opts.AllowDuplicateNames,
+		JSONNodeOutputMethod: opts.JSONNodeOutputMethod,
+		CharMap:              charMap,
+	}
+	if opts.ItemSeparator != nil {
+		p.ItemSeparator, p.HasItemSeparator = *opts.ItemSeparator, true
+	}
+	return p
+}
 
 // serialize writes a result sequence using the given output settings.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
@@ -47,6 +64,33 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		// tree it produces an explicit one.
 		opts.Method = defaultMethod(seq, opts.Version10Implicit)
 		s.opts.Method = opts.Method
+	}
+
+	// The json and adaptive methods do not serialise item by item and do not
+	// go through sequence normalisation at all: json renders the whole result
+	// as one JSON value, and adaptive writes each item in a form of its own.
+	// Both are XPath 3.1 rules that xpath already applies for fn:serialize, so
+	// they are delegated rather than written a second time -- the two must
+	// agree, since result-document-1401 and serialize-json-010 describe the
+	// same output by different routes. Delegating here, before
+	// checkOutputSettings, is also what lets a map through: that check exists
+	// to raise SENR0001 for an item the *XML-family* methods have no
+	// rendering for, and a map is precisely what the JSON method renders.
+	switch strings.ToLower(opts.Method) {
+	case "json":
+		out, err := xpath.SerializeJSON(seq, jsonParams(opts, charMap))
+		if err != nil {
+			return err
+		}
+		s.writeString(out)
+		return s.err
+	case "adaptive":
+		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
+		if err != nil {
+			return err
+		}
+		s.writeString(out)
+		return s.err
 	}
 
 	// Parameter conflicts are diagnosed before a byte is written. The
