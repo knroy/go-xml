@@ -443,7 +443,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// ordinary static context — it may name another static variable,
 		// which is not a global — so the value the pass computed is taken
 		// here rather than the expression recompiled.
-		if isStaticDecl(el) {
+		if isStaticDecl(el) && xpathVersionAt(el).AtLeast31() {
 			v, err := c.staticGlobal(el)
 			if err != nil {
 				return err

@@ -161,7 +161,12 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 	}
 	switch el.Name.Local {
 	case "variable", "param":
-		if !isStaticDecl(el) {
+		// static="yes" is XSLT 3.0's, and a 2.0 stylesheet writing it gets
+		// XTSE0090 from the grammar check. Evaluating the declaration here
+		// would bind a variable the stylesheet is about to be rejected for
+		// declaring, and — worse — would make the value visible to a
+		// use-when above the rejection.
+		if !isStaticDecl(el) || !xpathVersionAt(el).AtLeast31() {
 			return nil
 		}
 		return p.declare(el)
@@ -316,6 +321,14 @@ func isStaticDecl(el *xdm.Node) bool {
 // result tree carries through unchanged.
 func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	if el.Name.URI != xdm.NSXSL {
+		return nil
+	}
+	// Shadow attributes are XSLT 3.0's. To a 2.0 stylesheet an underscore is
+	// the ordinary first character of an attribute name the summaries do not
+	// define, which the grammar check reports as XTSE0090 — so expanding one
+	// here would silently accept a stylesheet every conforming 2.0 processor
+	// rejects.
+	if !xpathVersionAt(el).AtLeast31() {
 		return nil
 	}
 	// The overwhelmingly common case is an element with no shadow attribute
