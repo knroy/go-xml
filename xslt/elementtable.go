@@ -150,7 +150,7 @@ var xsltElements = map[string]elementDef{
 		"name":          {required: true},
 		"initial-value": {required: true},
 		"as":            {},
-		"streamable":    {values: []string{"yes", "no"}},
+		"streamable":    {values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
 		"match":    {required: true},
@@ -197,6 +197,10 @@ var xsltElements = map[string]elementDef{
 		"select": {},
 		"as":     {},
 		"static": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// 9.1's signature carries visibility; 9.2's for xsl:param does not,
+		// which is why the two entries differ. Where the declaration may
+		// appear is varparamattrs.go's rule, not the table's.
+		"visibility": {since30: true, values: []string{"public", "private", "final", "abstract", "hidden"}},
 	}},
 	"param": {attrs: map[string]attrDef{
 		"name":     {required: true},

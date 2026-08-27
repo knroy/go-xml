@@ -274,9 +274,15 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 		}
 
 		// XSLT 2.0 raises XTDE1310 for a malformed picture and 3.0 defers to
-		// XPath's FODF1310 for the same condition, so the code follows the
-		// version the expression was compiled in rather than being fixed.
-		out, err := xpath.FormatNumberVersion(num, picture, df, ctx.Version)
+		// XPath's FODF1310 for the same condition. Which one is right is a
+		// property of the processor, not of the module: the suite runs
+		// version="2.0" stylesheets under the 3.0 spec and demands the 3.0
+		// code, exactly as it does for XTDE1280 above.
+		picVersion := ctx.Version
+		if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+			picVersion = xpath.XPath31
+		}
+		out, err := xpath.FormatNumberVersion(num, picture, df, picVersion)
 		if err != nil {
 			return nil, err
 		}

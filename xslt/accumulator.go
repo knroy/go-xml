@@ -24,6 +24,11 @@ type accumulatorDef struct {
 	// xs:integer accumulator is atomised and cast, not rejected.
 	asType *sequenceType
 	rules  []*accumulatorRule
+	// streamable is @streamable="yes". Nothing here streams, so it only
+	// matters for XTDE3362: reading a non-streamable accumulator over a
+	// document that xsl:source-document asked to stream is an error even for
+	// a processor that answered the request by not streaming.
+	streamable bool
 	// declOrder is the position of the declaration in the stylesheet, used
 	// to break priority ties between two rules of the same accumulator the
 	// same way the template conflict rules do.
@@ -93,6 +98,7 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 			return fmt.Errorf("in xsl:accumulator/@as: %w", err)
 		}
 	}
+	def.streamable = isYes(el.AttrValue("streamable"))
 
 	for _, ch := range el.ChildElements() {
 		if !isXSL(ch, "accumulator-rule") {
@@ -420,7 +426,7 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	atoms := xdm.Atomize(args[0])
 	if len(atoms) == 0 {
 		return nil, fmt.Errorf(
-			"XTDE3400: %s() was called with no accumulator name", fname)
+			"XTDE3340: %s() was called with no accumulator name", fname)
 	}
 	lex := strings.TrimSpace(atoms[0].(*xdm.Atomic).String())
 	uri, local := "", ""
@@ -437,19 +443,19 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 			bound := false
 			if uri, bound = rt.sheet.prefixes[prefix]; !bound {
 				return nil, fmt.Errorf(
-					"XTDE3400: %s(%q): no namespace declaration is in scope "+
+					"XTDE3340: %s(%q): no namespace declaration is in scope "+
 						"for the prefix %q", fname, lex, prefix)
 			}
 		}
 	default:
 		return nil, fmt.Errorf(
-			"XTDE3400: %s(%q): the name is not a valid QName", fname, lex)
+			"XTDE3340: %s(%q): the name is not a valid QName", fname, lex)
 	}
 	name := xdm.QName{URI: uri, Local: local}.Clark()
 	def, ok := rt.sheet.accumulators[name]
 	if !ok {
 		return nil, fmt.Errorf(
-			"XTDE3400: no xsl:accumulator is named %q", lex)
+			"XTDE3340: no xsl:accumulator is named %q", lex)
 	}
 	// XTDE3400 also covers reading an accumulator the current mode does not
 	// list in @use-accumulators.
@@ -459,10 +465,22 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 				"which does not name it in use-accumulators", lex)
 	}
 
-	node, err := ctx.ContextNode()
-	if err != nil {
+	// 18.2 splits the focus errors three ways: an absent context item is
+	// XTDE3350, while a context item that is not a node — or is an attribute
+	// or namespace node, neither of which an accumulator rule can match — is
+	// the type error XTTE3360.
+	if ctx.Item == nil {
 		return nil, fmt.Errorf(
-			"XTDE3400: %s(%q) has no context node", fname, lex)
+			"XTDE3350: %s(%q) was called with no context item", fname, lex)
+	}
+	node, ok := ctx.Item.(*xdm.Node)
+	if !ok {
+		return nil, fmt.Errorf(
+			"XTTE3360: %s(%q): the context item is not a node", fname, lex)
+	}
+	if node.Kind == xdm.KindAttribute || node.Kind == xdm.KindNamespace {
+		return nil, fmt.Errorf(
+			"XTTE3360: %s(%q): the context item is an %v", fname, lex, node.Kind)
 	}
 	// A node produced by a copy-accumulators="yes" copy answers with the
 	// value its original had, not with what the rules would compute over the
@@ -474,6 +492,15 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	// here rather than at the call site because an accumulator rule may reach
 	// another accumulator, which is how merge-067 gets at a name its
 	// merge source never listed.
+	// 18.2 makes reading a non-streamable accumulator over a document that
+	// xsl:source-document asked to stream an error in its own right. This
+	// engine answers streamable="yes" by not streaming, which the spec
+	// permits, but the restriction the stylesheet asked for still stands.
+	if !def.streamable && rt.streamedTrees[node.Root()] {
+		return nil, fmt.Errorf(
+			"XTDE3362: accumulator %q is not declared streamable, so it "+
+				"cannot be read over a streamed document", lex)
+	}
 	if set, ok := rt.treeAccums[node.Root()]; ok && !set.all && !set.names[name] {
 		return nil, fmt.Errorf(
 			"XTDE3362: accumulator %q is not applicable to this document, "+

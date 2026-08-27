@@ -29,6 +29,10 @@ type sourceDocumentInstr struct {
 	href       *avt
 	validation validationSpec
 	body       []Instruction
+	// streamed is @streamable="yes". The evaluation is the same either way,
+	// but XTDE3362 bars a non-streamable accumulator from being read over a
+	// document the stylesheet asked to stream, so the request is recorded.
+	streamed bool
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -49,7 +53,8 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sourceDocumentInstr{href: href, validation: spec, body: body}, nil
+	return &sourceDocumentInstr{href: href, validation: spec, body: body,
+		streamed: isYes(n.AttrValue("streamable"))}, nil
 }
 
 func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -65,6 +70,9 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// xsl:for-each over a one-item sequence would. The current template rule
 	// is cleared for the same reason it is there: the body is a new
 	// selection, so xsl:next-match inside it has nothing to match against.
+	if i.streamed {
+		rt.streamedTrees[root] = true
+	}
 	sub := rt.withCurrent(root, 1, 1).clearCurrentRule()
 	return execSequence(i.body, sub, out)
 }
