@@ -53,6 +53,11 @@ type attrDef struct {
 	// xsl:variable is a 2.0 element, but its static attribute is not a 2.0
 	// attribute, and a 2.0 stylesheet writing one must get XTSE0090.
 	since30 bool
+	// optional30 marks a required attribute that XSLT 3.0 made optional,
+	// because 3.0 gave the element a second way to say the same thing.
+	// xsl:sequence/@select is the case: 3.0 lets a sequence constructor
+	// stand in for it, while 2.0 still requires the attribute.
+	optional30 bool
 }
 
 // xsltElements is the grammar, keyed by local name.
@@ -307,6 +312,34 @@ var xsltElements = map[string]elementDef{
 		"select": {},
 	}},
 	"where-populated": {since30: true, attrs: map[string]attrDef{}},
+	// The merging instructions of section 15. Every one of them is XSLT 3.0
+	// only, so a version="2.0" stylesheet writing one gets XTSE0010 rather
+	// than being told xsl:merge is an element it may use.
+	"merge": {since30: true, attrs: map[string]attrDef{}},
+	"merge-source": {since30: true, attrs: map[string]attrDef{
+		"name":             {},
+		"for-each-item":    {},
+		"for-each-source":  {},
+		"select":           {},
+		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"use-accumulators": {},
+		"sort-before-merge": {
+			values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"validation": {values: []string{"strict", "lax", "preserve", "strip"}},
+		"type":       {},
+	}},
+	// xsl:merge-key is xsl:sort's summary without @stable: 15.5 states the
+	// exception in as many words, and merge-010 is the test that writes
+	// stable="yes" on one and requires XTSE0090.
+	"merge-key": {since30: true, attrs: map[string]attrDef{
+		"select":     {},
+		"lang":       {avt: true},
+		"order":      {values: []string{"ascending", "descending"}, avt: true},
+		"collation":  {avt: true},
+		"case-order": {values: []string{"upper-first", "lower-first"}, avt: true},
+		"data-type":  {avt: true},
+	}},
+	"merge-action": {since30: true, attrs: map[string]attrDef{}},
 	"evaluate": {attrs: map[string]attrDef{
 		"xpath":             {required: true},
 		"as":                {},
@@ -316,8 +349,13 @@ var xsltElements = map[string]elementDef{
 		"namespace-context": {},
 		"schema-aware":      {avt: true},
 	}},
+	// XSLT 3.0 section 10.1.1, a child of xsl:template only.
+	"context-item": {since30: true, attrs: map[string]attrDef{
+		"as":  {},
+		"use": {values: []string{"required", "optional", "absent"}},
+	}},
 	"sequence": {attrs: map[string]attrDef{
-		"select": {required: true},
+		"select": {required: true, optional30: true},
 	}},
 	"number": {attrs: map[string]attrDef{
 		"value":              {},
@@ -495,6 +533,11 @@ var xsltElements = map[string]elementDef{
 // inside xsl:apply-imports a static error rather than a no-op.
 type contentModel struct {
 	seqCtor bool
+	// seqCtor30 marks an element whose content became a sequence constructor
+	// in XSLT 3.0 and was something narrower before. xsl:sequence is the
+	// case: 2.0 required the select attribute and allowed only xsl:fallback
+	// children, while 3.0 makes the two forms alternatives.
+	seqCtor30 bool
 	// decls marks the two elements whose model says "other-declarations",
 	// which stands for the whole declaration category rather than naming an
 	// element. Reading it as a literal name refused every stylesheet that
@@ -539,6 +582,10 @@ var contentModels = map[string]contentModel{
 	"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"merge":                  {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-source": true, "merge-action": true, "fallback": true}, model: "(xsl:merge-source+, xsl:merge-action, xsl:fallback*)"},
+	"merge-source":           {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-key": true}, model: "xsl:merge-key+"},
+	"merge-key":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"merge-action":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"evaluate":               {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true, "fallback": true}, model: "(xsl:with-param | xsl:fallback)*"},
 	"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
@@ -561,14 +608,15 @@ var contentModels = map[string]contentModel{
 	"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"sequence":               {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
+	"sequence":               {seqCtor30: true, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
 	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
 	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
 	"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
 	"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
-	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
+	"context-item":           {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "context-item": true}, model: "(xsl:context-item?, xsl:param*, sequence-constructor)"},
 	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
 	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
 	"value-of":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -602,6 +650,7 @@ var xsltInstructions = map[string]bool{
 	"on-empty":               true,
 	"on-non-empty":           true,
 	"where-populated":        true,
+	"merge":                  true,
 	"next-iteration":         true,
 	"break":                  true,
 	"fallback":               true,

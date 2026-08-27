@@ -335,7 +335,26 @@ func runTemplate(rt *runtime, t *Template,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
 
-	sub := rt
+	// The xsl:context-item declaration is checked before anything else the
+	// template does. A template that requires a context item and was called
+	// without one must fail here rather than at whatever expression first
+	// needs a focus, and a mistyped item must not be partly processed first.
+	if t.contextItem != nil {
+		var item xdm.Item
+		if rt.ctx != nil && rt.ctx.Item != nil {
+			item = rt.ctx.Item
+		}
+		if err := t.contextItem.check(item); err != nil {
+			return err
+		}
+	}
+
+	// 15.6: "All invocation constructs set the current merge group and current
+	// merge key to absent." A template rule or named template invoked from
+	// inside an xsl:merge-action is such a construct, so the two must not leak
+	// into it — which is what makes current-merge-group() in a called template
+	// the XTDE3480 that merge-087 and merge-088 require.
+	sub := rt.clearMergeContext()
 	// Tunnel parameters flow through templates that do not declare them, so
 	// they are merged into the runtime rather than matched against Params.
 	if len(tunnels) > 0 {
