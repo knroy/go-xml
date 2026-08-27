@@ -398,7 +398,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		// passing either means "start where a stylesheet with no @mode
 		// starts", which is the empty name.
 		initialMode := opts.InitialMode
-		if initialMode == "#default" || initialMode == "#unnamed" {
+		if initialMode == "#unnamed" {
 			initialMode = ""
 		}
 		// An invocation that names no mode at all starts in the module's
@@ -407,7 +407,24 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		// the unnamed mode would find none of them; mode-1701 is exactly that
 		// stylesheet. An explicit "#unnamed" is a different request and is
 		// left alone, which is why this reads opts rather than initialMode.
-		if opts.InitialMode == "" {
+		// "#default" is not a mode name: it asks for THE DEFAULT MODE, which
+		// is what @default-mode on the top-level package names and only the
+		// unnamed mode in the absence of that attribute. 5.7.1's definition
+		// of the invocation puts it as "if no initial mode is supplied, then
+		// the mode used is that named in the default-mode attribute of the
+		// (explicit or implicit) xsl:package element of the top-level package
+		// or in the absence of such an attribute, the unnamed mode", and
+		// "#default" is how a caller spells "none supplied".
+		//
+		// "#unnamed" is the different request, and is the one the grammar
+		// offers beside an EQName in @default-mode itself; it is normalised
+		// above and left alone here.
+		//
+		// package-001p, -001q and -001r each declare default-mode="start" and
+		// are invoked with initial-mode "#default". Treating that as the
+		// unnamed mode ran the built-in rules and copied the text through
+		// instead of firing the rule in mode "start".
+		if opts.InitialMode == "" || opts.InitialMode == "#default" {
 			initialMode = s.rootDefaultMode
 		}
 		// XTDE0045: "it is a non-recoverable dynamic error if the invocation
