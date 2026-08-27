@@ -138,6 +138,16 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 		if err := checkIterateStatic(n); err != nil {
 			return err
 		}
+		// Sections 9.1 and 9.2's positional attribute rules run even in
+		// forwards-compatible mode, for the reason checkIterateStatic does:
+		// this engine reads any version above 2.0 as forwards-compatible,
+		// so the guard above withholds the grammar from every 3.0 module —
+		// but a version="3.0" stylesheet writing static on a local xsl:param
+		// is inside what a 3.0 processor understands, and the suite reports
+		// the error. See varparamattrs.go.
+		if err := checkVarParamAttrs(n); err != nil {
+			return err
+		}
 	}
 	for _, c := range n.Children {
 		if err := walkStaticErrors(c, forwards); err != nil {

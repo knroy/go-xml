@@ -179,7 +179,7 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 		// would bind a variable the stylesheet is about to be rejected for
 		// declaring, and — worse — would make the value visible to a
 		// use-when above the rejection.
-		if !isStaticDecl(el) || !xpathVersionAt(el).AtLeast31() {
+		if !isStaticDecl(el) || !moduleAtLeast30(el) {
 			return nil
 		}
 		return p.declare(el)

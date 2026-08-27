@@ -132,10 +132,17 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 			// the module's declared version.
 			ok = false
 		}
-		if ok && ad.since30 && !xpathVersionAt(el).AtLeast31() {
+		if ok && ad.since30 && !moduleAtLeast30(el) {
 			// An attribute XSLT 3.0 added to an older element is not one that
 			// element has, to a stylesheet declaring an earlier version. It is
 			// treated exactly as a name the summary never defined.
+			//
+			// What decides is the version on the MODULE element, not the
+			// nearest one in scope. A version attribute written lower down
+			// selects forwards-compatible behaviour for that element's body;
+			// it does not move the element into an earlier stylesheet.
+			// static-015 writes version="1.0" on a static xsl:param of a
+			// version="3.0" module and expects the parameter to work.
 			ok = false
 		}
 		if !ok {
