@@ -14,16 +14,37 @@ import "github.com/knroy/go-xml/xdm"
 // implemented on the XSLT side, and duplicating it here would give two answers
 // to the same question.
 //
-// ok is false when st is not a typed function test, or when the value is not a
-// single function item of the declared arity; the caller then reports the
-// mismatch in whatever code its context requires.
+// The occurrence indicator is honoured, so "(function(A) as B)*" coerces every
+// item of the sequence: the clause is about the item type, and a declaration
+// admitting several function items has to admit each of them on the same terms
+// as one.
+//
+// ok is false when st is not a typed function test, when the cardinality is
+// wrong, or when any item is not a function item of the declared arity; the
+// caller then reports the mismatch in whatever code its context requires.
 func CoerceFunctionItem(v xdm.Sequence, st SequenceType) (xdm.Sequence, bool) {
-	if !st.IsFunctionTest || !st.HasFunctionArity || len(v) != 1 {
+	if !st.IsFunctionTest || !st.HasFunctionArity {
 		return nil, false
 	}
-	fn := functionItemView(v[0])
-	if fn == nil || fn.Arity != st.FunctionArity {
-		return nil, false
+	switch st.Occurrence {
+	case "", "+":
+		if len(v) == 0 {
+			return nil, false
+		}
 	}
-	return xdm.One(coerceFunctionItem(fn, st)), true
+	switch st.Occurrence {
+	case "", "?":
+		if len(v) > 1 {
+			return nil, false
+		}
+	}
+	out := make(xdm.Sequence, 0, len(v))
+	for _, it := range v {
+		fn := functionItemView(it)
+		if fn == nil || fn.Arity != st.FunctionArity {
+			return nil, false
+		}
+		out = append(out, coerceFunctionItem(fn, st))
+	}
+	return out, true
 }
