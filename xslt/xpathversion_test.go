@@ -70,21 +70,60 @@ func TestXPathVersionFollowsStylesheet(t *testing.T) {
 	}
 }
 
-// TestXPath20StylesheetRejects30Syntax is the other half of the same rule,
-// and the reason the version cannot simply be raised for everyone: a 2.0
-// processor is required to reject the 3.0 additions rather than accept them
-// quietly, so a stylesheet relying on one must fail here exactly as it would
-// on any other conforming processor.
+// TestXPath20StylesheetRejects30Syntax pins which processor refuses the 3.0
+// additions, which is not the same question as which module declares them.
+//
+// This test previously required a version="2.0" module to be refused them by
+// a 3.0 processor. That was an assumption, not a rule. XSLT 3.0 defines only
+// XPath *1.0* compatibility mode -- there is no XPath 2.0 mode -- and section
+// 3.10.2 makes it implementation-defined whether backwards compatible
+// behaviour is supported for an earlier XSLT version at all. The conformance
+// suite settles it in the other direction: it runs version="2.0" modules
+// scoped XSLT30+ that write maps, arrays and inline functions and expects
+// them to work.
+//
+// What a 2.0 PROCESSOR must refuse is unchanged, and that is what is tested
+// here. MaxVersion is how a host says which processor it is.
 func TestXPath20StylesheetRejects30Syntax(t *testing.T) {
 	for _, expr := range []string{
 		`for-each(1 to 3, function($x){$x})`,
 		`map{'k':'v'}?k`,
 		`[1,2,3]?1`,
 	} {
-		if _, err := runVersioned(t, sheetOf("2.0", expr), nil); err == nil {
-			t.Errorf("version=2.0 accepted the 3.0 construct %q", expr)
+		if _, err := runAsProcessor(t, sheetOf("2.0", expr), 2.0); err == nil {
+			t.Errorf("an XSLT 2.0 processor accepted the 3.0 construct %q", expr)
+		}
+		// The same module under a 3.0 processor is accepted: the grammar
+		// follows the processor, as the regex dialect, the function library
+		// and named function references already do.
+		if _, err := runAsProcessor(t, sheetOf("2.0", expr), 0); err != nil {
+			t.Errorf("an XSLT 3.0 processor refused %q in a 2.0 module: %v",
+				expr, err)
 		}
 	}
+}
+
+// runAsProcessor compiles and runs a stylesheet as a processor of the given
+// version. Zero means uncapped, and so 3.0.
+func runAsProcessor(t *testing.T, sheet string, maxVersion float64) (string, error) {
+	t.Helper()
+	stree, err := xdm.ParseString(sheet, xdm.ParseOptions{})
+	if err != nil {
+		return "", err
+	}
+	s, err := Compile(stree.Root, CompileOptions{MaxVersion: maxVersion})
+	if err != nil {
+		return "", err
+	}
+	dtree, err := xdm.ParseString(`<doc/>`, xdm.ParseOptions{})
+	if err != nil {
+		return "", err
+	}
+	res, err := s.Transform(context.Background(), dtree.Root, TransformOptions{})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(res.String()), nil
 }
 
 // TestXPathVersionOverride pins the version against what the stylesheet
@@ -112,11 +151,15 @@ func TestXPathVersionOverride(t *testing.T) {
 // override is cleared when Compile returns, so the next compilation reads the
 // stylesheet's own version again.
 func TestXPathVersionOverrideDoesNotLeak(t *testing.T) {
-	v31 := xpath.XPath31
-	if _, err := runVersioned(t, sheetOf("2.0", `[1]?1`), &v31); err != nil {
-		t.Fatalf("setup: %v", err)
+	// Pinned DOWN rather than up, because a raised version is now the
+	// default under a 3.0 processor and so could not tell a leak from
+	// ordinary behaviour. Holding a 3.0 module down to XPath 2.0 is a state
+	// nothing else produces, which makes its absence afterwards conclusive.
+	v20 := xpath.XPath20
+	if _, err := runVersioned(t, sheetOf("3.0", `[1]?1`), &v20); err == nil {
+		t.Fatal("setup: pinning XPath20 accepted an array constructor")
 	}
-	if _, err := runVersioned(t, sheetOf("2.0", `[1]?1`), nil); err == nil {
-		t.Error("the override leaked into the next compilation")
+	if _, err := runVersioned(t, sheetOf("3.0", `[1]?1`), nil); err != nil {
+		t.Errorf("the override leaked into the next compilation: %v", err)
 	}
 }

@@ -880,12 +880,35 @@ func xpathVersionAt(el *xdm.Node) xpath.Version {
 		}
 		switch v := versionAt(cur); {
 		case v < 3.0:
-			return xpath.XPath20
+			return xpathFloor(xpath.XPath20)
 		default:
 			return xpath.XPath31
 		}
 	}
-	return xpath.XPath20
+	return xpathFloor(xpath.XPath20)
+}
+
+// xpathFloor raises a module's XPath version to the processor's.
+//
+// XSLT 3.0 defines only XPath *1.0* compatibility mode; there is no XPath 2.0
+// mode for a version="2.0" module, and section 3.10.2 makes it
+// implementation-defined whether backwards compatible behaviour is supported
+// for an earlier XSLT version at all. So a 3.0 processor reading a 2.0 module
+// is not required to withhold the 3.1 grammar from it, and the suite relies
+// on that: it runs version="2.0" modules scoped XSLT30+ that write maps,
+// arrays and inline functions.
+//
+// This is the same principle already applied to the regex dialect
+// (Context.RegexVersion), the function library (Context.LibraryVersion) and
+// named function references. It is stated once here so the four cannot drift.
+//
+// The 1.0 compatibility rules are untouched: they are a separate setting,
+// carried on nsResolver.compat, and this does not read or change them.
+func xpathFloor(v xpath.Version) xpath.Version {
+	if processorAtLeast30() && v < xpath.XPath31 {
+		return xpath.XPath31
+	}
+	return v
 }
 
 // overrideXPathVersion pins the XPath version for the stylesheet being
