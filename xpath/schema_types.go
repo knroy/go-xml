@@ -110,6 +110,45 @@ type SchemaUnionTypes interface {
 	SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
 }
 
+// SchemaUnionMemberNames reports the annotation keys of a union type's member
+// types, transitively.
+//
+// It is separate from SchemaUnionMemberTypes because it answers a different
+// question for a different consumer. That method erases each member to the
+// built-in atomic type code an unannotated VALUE would carry, which is what
+// "instance of" compares against. A NODE carries the name it was validated
+// against instead, so an attribute validated as a union's xs:integer member is
+// annotated "integer" and matching it against the union needs the names.
+//
+// It is also deliberately looser about purity: a union used here need not be
+// pure. Purity exists to stop a member VALUE from standing in for a faceted
+// union it may not satisfy — the XSD 1.0 error XSD 1.1 3.16.6.3 corrected —
+// but a node reaching this point was actually validated against the union, so
+// the schema has already decided it satisfies whatever facets the union adds.
+// The unsafe substitution purity guards against cannot arise.
+//
+// It is STRICTER in the one way that matters instead: only atomic members are
+// reported. A union over list types annotates the node with the union itself
+// rather than with a member, so naming its members would admit no node that
+// should match and would admit sibling members that should not.
+type SchemaUnionNames interface {
+	SchemaUnionMemberNames(name xdm.QName) ([]string, bool)
+}
+
+// schemaUnionMemberNamesOf resolves a lexical type name to the annotation keys
+// of a union's members, through the same prefix bindings as everything else.
+func schemaUnionMemberNamesOf(lex string, ns NamespaceResolver) ([]string, bool) {
+	su, ok := ns.(SchemaUnionNames)
+	if !ok {
+		return nil, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return nil, false
+	}
+	return su.SchemaUnionMemberNames(name)
+}
+
 // schemaUnionMembersOf resolves a lexical type name to the member types of a
 // pure union, through the same prefix bindings as everything else.
 func schemaUnionMembersOf(lex string, ns NamespaceResolver) ([]xdm.TypeCode, bool) {

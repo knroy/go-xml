@@ -201,6 +201,23 @@ type KindTest struct {
 	// TypeNameLexical is TypeName as the author wrote it, kept only so that
 	// String() renders the test back in the syntax it was parsed from.
 	TypeNameLexical string
+	// TypeUnionMembers are the annotation keys of TypeName's member types,
+	// transitively, when TypeName is a union type.
+	//
+	// XPath 3.1 2.5.5 makes union membership a clause of derives-from in its
+	// own right, and a node validated against a union is annotated with the
+	// MEMBER that accepted it rather than with the union. So an attribute
+	// declared as a union of my:partNumberType and xs:integer whose value is
+	// "44" is annotated "integer", and attribute(*, my:partIntegerUnion)
+	// matches it only by knowing the members. match-232 asserts exactly that.
+	//
+	// The relation runs one way only. These names admit a MEMBER-annotated
+	// node to the UNION's test; they say nothing about the reverse, and a
+	// node annotated with the union does not match a test naming one member.
+	//
+	// Resolved at parse time, while the schema is still reachable, for the
+	// same reason SubstitutionGroup is. nil when TypeName is not a union.
+	TypeUnionMembers []string
 	// TypeNillable records the "?" of element(name, type?), which lets a
 	// nilled element match even though its content is absent.
 	TypeNillable bool

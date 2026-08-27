@@ -540,6 +540,12 @@ func (p *Parser) readTypeAnnotation(kt *KindTest) {
 		// namespaces.
 		kt.TypeName = annotationKeyOf(p.cur().Val, p.ns)
 		kt.TypeNameLexical = p.cur().Val
+		// A union's members are resolved here, while the schema is still
+		// reachable, because a node validated against a union carries the
+		// member's name rather than the union's. See TypeUnionMembers.
+		if members, ok := schemaUnionMemberNamesOf(p.cur().Val, p.ns); ok {
+			kt.TypeUnionMembers = members
+		}
 		p.pos++
 	}
 	if _, ok := p.acceptOp("?"); ok {

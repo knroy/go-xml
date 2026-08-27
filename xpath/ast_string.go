@@ -111,7 +111,7 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		return false
 	}
 	if t.TypeName != "" {
-		if !nodeTypeMatches(n, t.TypeName) {
+		if !nodeTypeMatches(n, t.TypeName) && !t.matchesUnionMember(n) {
 			return false
 		}
 		// The "?" of element(name, type?) is what admits a NILLED element.
@@ -132,6 +132,47 @@ func (t *KindTest) Matches(n *xdm.Node, _ xdm.NodeKind) bool {
 		return true
 	}
 	return true
+}
+
+// matchesUnionMember reports whether a node was validated against one of the
+// ATOMIC member types of the union the test names.
+//
+// When a union's members are atomic, validation records the member that
+// accepted the value rather than the union: match-232 declares age="44" over a
+// union of my:partNumberType and xs:integer and the attribute is annotated
+// "integer", so the union's own name appears nowhere on it. The ordinary
+// derivation walk cannot bridge that — a member and its union are siblings in
+// no hierarchy it can cross — which is why XPath 3.1 2.5.5 gives union
+// membership a clause of derives-from in its own right.
+//
+// A LIST member is excluded, and that exclusion is what the rule turns on. A
+// node validated against a union whose members are list types is annotated
+// with the UNION, not with a member, so there is no member-annotated node for
+// this clause to admit — while admitting one would wrongly match a sibling.
+// match-197 has <listUnion> annotated my:listUnionType and <simpleUserList>
+// annotated my:myListType, a member of that same union; element(*,
+// my:listUnionType) must select the first and not the second, and including
+// list members here selected both. The types are asked of the SCHEMA rather
+// than inferred from the node, because the distinction is a property of the
+// union's declaration and has to hold for a node that is absent too.
+//
+// Each member is compared through nodeTypeMatches rather than by string
+// equality, so a node validated against a RESTRICTION of a member matches too:
+// subtype substitution applies to the member exactly as if it had been named
+// directly.
+//
+// The relation runs one way only. This admits a member-annotated node to the
+// union's test; nothing here admits a union-annotated node to a test naming
+// one member, which would be the unsound direction — and match-197 asserts
+// that too, with element(*, my:myListType) not selecting the union-annotated
+// <listUnion>.
+func (t *KindTest) matchesUnionMember(n *xdm.Node) bool {
+	for _, m := range t.TypeUnionMembers {
+		if nodeTypeMatches(n, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // nodeIsNilled reports the data model's dm:nilled property for an element.

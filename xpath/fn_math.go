@@ -9,11 +9,18 @@ import (
 // registerMathFuncs adds the math: functions of F&O 3.0 section 4.8.
 //
 // They live in their own namespace rather than fn:, which is why they need a
-// registration helper of their own. The namespace is the only thing that
-// gates them: an expression can only reach one by writing a prefix bound to
-// the math URI, and a 2.0 stylesheet has no reason to bind it. Registering
-// them unconditionally therefore costs a 2.0 caller nothing, and avoids
-// making the builtin library depend on a version it is built once for.
+// registration helper of their own. The namespace goes most of the way to
+// gating them: an expression can only reach one by writing a prefix bound to
+// the math URI, and a 2.0 stylesheet has no reason to bind it.
+//
+// It does not go all the way, though, so they carry Since: XPath30 as well.
+// F&O 3.0 section 4.8 is where the math: namespace is introduced -- there is
+// no 2.0 edition of it -- and fn:function-available asks the question the
+// namespace cannot answer for itself: it takes the name as a *string*, so a
+// stylesheet that binds the prefix purely in order to ask reaches the entry
+// without ever writing a call. function-1902 does exactly that, binding math:
+// and then requiring function-available('math:pi', 0) to be false at the 2.0
+// target, and the unversioned registration answered true for all sixteen.
 //
 // Every one of them is defined over xs:double and delegates to Go's math
 // package, which is IEEE 754 as the spec requires. The interesting content is
@@ -103,7 +110,12 @@ func registerMathFuncs(l *Library) {
 func (l *Library) registerMath(local string, arities []int,
 	call func(*Context, []xdm.Sequence) (xdm.Sequence, error)) {
 	for _, a := range arities {
-		l.register(xdm.NSMath, local, a, call)
+		l.Add(Function{
+			Name:  xdm.QName{URI: xdm.NSMath, Local: local},
+			Arity: a,
+			Call:  call,
+			Since: XPath30,
+		})
 	}
 }
 

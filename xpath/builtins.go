@@ -77,6 +77,18 @@ var (
 // The item type is not carried in the result — this engine's type codes have
 // no list types — so each token becomes the atomic type the list is of, which
 // is what every operation on the result then sees.
+//
+// All three carry Since: XPath30, because that is where they were introduced.
+// F&O 2.0 section 5.1 gives a constructor to "every built-in *atomic* type",
+// which the three list types are explicitly not; F&O 3.0 section 17.3
+// "Constructor functions for XML Schema built-in list types" is what adds
+// them. function-1902 pins it, requiring function-available('xs:NMTOKENS', 1)
+// and its two siblings to read false at the 2.0 target.
+//
+// Only the constructor *function* is gated. The type name in type position --
+// "$x castable as xs:NMTOKENS", which listtype.go handles -- is XML Schema's
+// rather than F&O's and has always been available; castable-007 asserts it
+// under a 2.0 stylesheet.
 func registerListTypes(l *Library) {
 	lists := map[string]xdm.TypeCode{
 		"NMTOKENS": xdm.TypeString,
@@ -85,7 +97,7 @@ func registerListTypes(l *Library) {
 	}
 	for name, code := range lists {
 		target := code
-		l.register(xdm.NSXS, name, 1, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		body := func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
 				return xdm.Empty(), nil
@@ -107,6 +119,12 @@ func registerListTypes(l *Library) {
 				out = append(out, v)
 			}
 			return out, nil
+		}
+		l.Add(Function{
+			Name:  xdm.QName{URI: xdm.NSXS, Local: name},
+			Arity: 1,
+			Call:  body,
+			Since: XPath30,
 		})
 	}
 }
