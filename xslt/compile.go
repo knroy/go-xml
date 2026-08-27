@@ -1469,7 +1469,21 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if stub := abstractStubFor(el); stub != nil {
 		body = stub
 	}
-	fn := &userFunction{name: qn, params: params, body: body}
+	fn := &userFunction{
+		name: qn, params: params, body: body,
+		// Two attributes reach the same machinery. @new-each-time="no" is a
+		// promise the processor must keep -- 10.3 says two such calls return
+		// the same result, and for a node-building function "the same" is
+		// identity -- while @cache="yes" is only a hint. Honouring the hint
+		// is what makes function-1031 terminate: it computes fib(92) by naive
+		// double recursion, which without memoisation is some 2^92 calls.
+		//
+		// Only the explicit "no" obliges anything on the first: 10.3's
+		// default is "maybe", under which reusing a result and recomputing it
+		// are both allowed.
+		deterministic: functionDeterminism(el) == "no" ||
+			isYes(el.AttrValue("cache")),
+	}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.
 	if as := el.AttrValue("as"); as != "" {

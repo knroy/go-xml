@@ -258,9 +258,7 @@ var xsltElements = map[string]elementDef{
 		"override": {values: []string{"yes", "no", "true", "false", "1", "0"}},
 		// 3.0 renamed @override to @override-extension-function and added
 		// @new-each-time, which says whether two calls with the same
-		// arguments may share one result. Neither changes what this
-		// processor does -- it evaluates every call -- but refusing them
-		// rejected a legal 3.0 stylesheet outright.
+		// arguments may share one result.
 		//
 		// processor30 rather than since30: both say what the *processor* may
 		// do with a call, not what the module's grammar contains, and
@@ -275,6 +273,15 @@ var xsltElements = map[string]elementDef{
 		"new-each-time": {
 			processor30: true,
 			values:      []string{"yes", "no", "true", "false", "1", "0", "maybe"},
+		},
+		// @cache is a hint rather than a promise -- 10.3 leaves a processor
+		// free to ignore it -- but a stylesheet writes it where ignoring it
+		// is ruinous. function-1031 computes fib(92) by naive double
+		// recursion, which is some 2^92 calls without memoisation and
+		// finishes instantly with it.
+		"cache": {
+			processor30: true,
+			values:      []string{"yes", "no", "true", "false", "1", "0"},
 		},
 	}},
 	"namespace-alias": {attrs: map[string]attrDef{

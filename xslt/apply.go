@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -606,6 +607,12 @@ type userFunction struct {
 	params  []*Variable
 	body    []Instruction
 	returns *sequenceType
+	// deterministic is @new-each-time="no": a promise that two calls with
+	// the same arguments may return the SAME nodes rather than merely equal
+	// ones, which lets the result be computed once and reused. 10.3 makes
+	// the default "maybe", under which either is allowed, so only the
+	// explicit "no" obliges anything.
+	deterministic bool
 }
 
 // call adapts the function to the xpath.Function signature.
@@ -617,6 +624,34 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	if len(args) != len(f.params) {
 		return nil, fmt.Errorf("XPST0017: %s expects %d arguments, got %d",
 			f.name.Lexical(), len(f.params), len(args))
+	}
+
+	// A deterministic function is evaluated once per distinct argument list
+	// and its result reused, which is the observable content of the promise:
+	// 10.3 says two such calls "return the same result", and for a function
+	// building nodes "the same" is node identity rather than deep equality.
+	//
+	// function-1025 calls a node-building function ten times over seven
+	// distinct integers and counts the union, requiring 7. Its siblings pin
+	// the other two settings against the same stylesheet -- function-1027
+	// declares new-each-time="yes" and requires 10, and function-1029
+	// declares "maybe" and accepts anything from 7 to 10 -- so the caching
+	// must be keyed on the setting and not merely be an optimisation.
+	var cacheKey string
+	if f.deterministic {
+		switch k, err := rt.functionCallKey(f, args); {
+		case errors.Is(err, errNotCacheable):
+			// No value-based key for these arguments, so this call is
+			// evaluated afresh. That is always permitted: "no" licenses
+			// reuse, it does not require it.
+		case err != nil:
+			return nil, err
+		default:
+			if hit, ok := rt.funcResults[k]; ok {
+				return hit, nil
+			}
+			cacheKey = k
+		}
 	}
 
 	sub := rt
@@ -663,9 +698,58 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// A stylesheet function whose result will not convert to its declared
 	// type is XTTE0780.
-	return f.returns.convertAs(out.sequence(), "result of "+f.name.Lexical(),
+	res, err := f.returns.convertAs(out.sequence(), "result of "+f.name.Lexical(),
 		"XTTE0780")
+	if err != nil {
+		return nil, err
+	}
+	if f.deterministic && cacheKey != "" {
+		// Only a successful call is remembered. An error is not a result, and
+		// caching one would make a failure that depended on transient state
+		// -- an unavailable document, say -- permanent for the rest of the
+		// transform.
+		rt.funcResults[cacheKey] = res
+	}
+	return res, nil
 }
+
+// functionCallKey identifies one call of a deterministic function by its
+// arguments.
+//
+// The arguments are atomized and joined through the same grouping keys the
+// key and grouping machinery uses, so that the equality this caches under is
+// the one XPath already means by "the same value" -- 1 and 1.0 are one
+// argument list, and a collation-sensitive comparison stays collation
+// sensitive.
+//
+// A call carrying a node, a map, an array or a function item is NOT cached.
+// Those have no value-based key: two nodes are the same argument only if they
+// are the same node, and answering that here would need identity plumbing the
+// atomizer does not offer. Declining to cache is the safe direction, since
+// "maybe" is always a permitted behaviour for a call this cannot key.
+func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) (string, error) {
+	var b strings.Builder
+	b.WriteString(f.name.Clark())
+	for _, a := range args {
+		b.WriteByte(0x1d)
+		for _, it := range a {
+			at, ok := it.(*xdm.Atomic)
+			if !ok {
+				return "", errNotCacheable
+			}
+			k, err := xpath.GroupingKey(at, nil, rt.ctx.ImplicitTimezone)
+			if err != nil {
+				return "", err
+			}
+			b.WriteByte(0x1e)
+			b.WriteString(k)
+		}
+	}
+	return b.String(), nil
+}
+
+// errNotCacheable marks a call whose arguments have no value-based key.
+var errNotCacheable = errors.New("call is not cacheable")
 
 // nextMatchInstr implements xsl:next-match and xsl:apply-imports.
 //

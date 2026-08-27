@@ -18,6 +18,14 @@ import (
 // here, and the Stylesheet itself is read-only.
 type runtime struct {
 	sheet *Stylesheet
+
+	// funcResults memoises the results of stylesheet functions declared
+	// new-each-time="no". Section 10.3 makes that a promise that two calls
+	// with the same arguments return the SAME result, which for a function
+	// building nodes means the same nodes rather than merely equal ones --
+	// so the promise is only kept by evaluating once and reusing. Keyed by
+	// functionCallKey; see apply.go.
+	funcResults map[string]xdm.Sequence
 	ctx   *xpath.Context
 
 	// globalCtx is the context as it stood once the global variables were
@@ -1072,6 +1080,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
+		funcResults:   map[string]xdm.Sequence{},
 		messages:      new([]string),
 		warnings:      new([]string),
 		secondary:     new([]SecondaryResult),
