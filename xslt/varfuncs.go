@@ -110,6 +110,12 @@ var lateBoundFuncNames = func() map[string]bool {
 	m := map[string]bool{
 		"current-output-uri":          true,
 		"available-system-properties": true,
+		// Registered per transform by registerFormatNumber, which needs the
+		// stylesheet's decimal formats. It is not in xsltOnlyFunctions --
+		// 10.4.1 does not exclude it from xsl:evaluate, a decimal format
+		// being a static declaration rather than dynamic context -- so it has
+		// to be named here or a static check sees no fn:format-number at all.
+		"format-number": true,
 	}
 	for n := range runtimeFuncNames {
 		m[n] = true

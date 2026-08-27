@@ -568,11 +568,26 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 			if !ok {
 				return nil, unboundPrefixError("function-available", name)
 			}
+			// The argument is declared xs:integer, so the function
+			// conversion rules cast an untyped one to it. Reading Int64 off
+			// the atomized value directly skipped that, and Int64 answers 0
+			// for anything that is not already numeric -- so every arity read
+			// from a document became 0. function-1901 walks a list of every
+			// F+O function with @name and @arity read from an UNVALIDATED
+			// source document, where each attribute atomizes to
+			// xs:untypedAtomic, and reported all 300-odd of them missing at
+			// their real arity while quietly answering for arity 0.
 			arity := 0
 			for _, a := range xdm.Atomize(args[1]) {
-				if at, ok := a.(*xdm.Atomic); ok {
-					arity = int(at.Int64())
+				at, ok := a.(*xdm.Atomic)
+				if !ok {
+					continue
 				}
+				n, err := xpath.CastAtomic(at, xdm.TypeInteger)
+				if err != nil {
+					return nil, err
+				}
+				arity = int(n.Int64())
 			}
 			_, ok = xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
