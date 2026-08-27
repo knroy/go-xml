@@ -746,6 +746,9 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 				if err != nil {
 					return nil, err
 				}
+				if err := checkNotListType(st, "a function signature"); err != nil {
+					return nil, err
+				}
 				typ = &st
 			}
 			// Two parameters of the same name would make the second
@@ -774,6 +777,9 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 	if p.peekKeyword("as") {
 		p.pos++
 		st, err := p.parseSequenceType()
+		if err == nil {
+			err = checkNotListType(st, "a function signature")
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -754,6 +754,9 @@ func (p *Parser) parseInstanceOf() (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkNotListType(st, "instance of"); err != nil {
+			return nil, err
+		}
 		return &InstanceOfExpr{Operand: left, Type: st}, nil
 	}
 	return left, nil
@@ -771,6 +774,9 @@ func (p *Parser) parseTreat() (Expr, error) {
 		}
 		st, err := p.parseSequenceType()
 		if err != nil {
+			return nil, err
+		}
+		if err := checkNotListType(st, "treat as"); err != nil {
 			return nil, err
 		}
 		return &TreatExpr{Operand: left, Type: st}, nil
@@ -1100,4 +1106,25 @@ func (p *Parser) foldQNameCast(operand Expr, st SequenceType) (Expr, bool, error
 		return nil, false, err
 	}
 	return q, ok, nil
+}
+
+// checkNotListType refuses a built-in list type where a sequence type is
+// required.
+//
+// Casting to one is legal -- "xs:untypedAtomic('a b') cast as xs:NMTOKENS"
+// yields two items -- but a list type is not an ItemType, so it cannot stand
+// in an "instance of", a "treat as", or a function signature. XPath has no
+// way to say "a sequence of exactly the tokens this list admits", which is
+// why the specification refuses the question rather than answering it.
+//
+// instanceof111 asks "xs:NMTOKEN('abc') instance of xs:NMTOKENS" and
+// FunctionCall-027 declares a parameter "as xs:NMTOKENS"; both require
+// XPST0051, the code for a type name that is not in scope as an item type.
+func checkNotListType(st SequenceType, where string) error {
+	if st.ListItemFacet == "" {
+		return nil
+	}
+	return xdm.Errorf("XPST0051",
+		"a list type cannot be used in %s: xs:%s is not an item type",
+		where, st.ListItemFacet)
 }
