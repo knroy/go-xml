@@ -464,8 +464,11 @@ type copyInstr struct {
 	// noNamespaces records copy-namespaces="no", which copies the element
 	// without its namespace nodes. The default is to copy them all.
 	noNamespaces bool
-	body         []Instruction
-	validation   validationSpec
+	// noInherit records inherit-namespaces="no", which stops the children
+	// constructed by the body from acquiring the copy's namespace nodes.
+	noInherit  bool
+	body       []Instruction
+	validation validationSpec
 }
 
 func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -508,7 +511,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// one, and every other instruction that could receive one says
 			// so rather than dropping it silently.
 			return fmt.Errorf(
-				"XTDE0450: xsl:copy cannot copy a function item into a "+
+				"XTDE0450: xsl:copy cannot copy a function item into a " +
 					"result tree")
 		}
 		out.appendValue(v)
@@ -541,6 +544,9 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
+		}
+		if i.noInherit {
+			blockNamespaceInheritance(sub.open)
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.

@@ -1061,6 +1061,7 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 	instr := &copyInstr{
 		attrSets:     sets,
 		noNamespaces: n.AttrValue("copy-namespaces") == "no",
+		noInherit:    noAttr(n, "inherit-namespaces"),
 		body:         body,
 		validation:   spec,
 	}
@@ -1486,7 +1487,12 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// A static error in the target expression is XTDE3160 whatever its XPath
 	// code would have been: 10.4 defines the error by *when* it happens, not
 	// by which rule was broken.
-	comp, err := xpath.Compile(src, i.ns)
+	// 10.4.1 gives the target expression the XPath version of the stylesheet
+	// module that wrote the xsl:evaluate, exactly as a statically written
+	// expression gets it. Compiling at the default version instead refused
+	// every 3.0 construct — inline functions, "let", the arrow operator — in
+	// a 3.0 module that is entitled to them.
+	comp, err := xpath.CompileVersion(src, i.ns, i.ns.xpathVersion)
 	if err != nil {
 		return fmt.Errorf("XTDE3160: the target expression of xsl:evaluate "+
 			"is not a valid XPath expression: %w", err)
