@@ -909,8 +909,20 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		// reachable however the manifest labelled it. The loop below re-adds
 		// overridden components for the same reason.
 		if (v == visHidden || v == visAbsent) &&
-			u.hiddenByAccept[comp.sym.String()] &&
-			u.overriding[comp.sym.String()] == nil {
+			u.overriding[comp.sym.String()] == nil &&
+			(u.hiddenByAccept[comp.sym.String()] ||
+				!referencedWithin(u.root, comp)) {
+			// A component the using package cannot see is deleted, so that a
+			// reference to it fails as XPST0017 or XTSE0650 rather than
+			// quietly binding -- which is what use-package-003 asks for.
+			//
+			// Deleting it outright would break the used package's own calls,
+			// though: 3.5.3's private-to-hidden default speaks about the
+			// using package, and override-base-f-001's public p:f-final
+			// calls the private p:f-private. So a component the used package
+			// still references stays, and only what an xsl:accept explicitly
+			// hid -- the one visibility 3.6.3.1 says governs use within the
+			// declaring package too -- goes regardless.
 			continue
 		}
 		keep[comp.el] = true
@@ -950,7 +962,10 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				continue
 			}
 			if ov, ok := replaced[ch]; ok {
-				kept = append(kept, rewriteOverride(ov, ch))
+				// Both declarations stay: the overriding one under the
+				// component's real name, and the original under a generated
+				// one that only xsl:original inside the override can reach.
+				kept = append(kept, rewriteOverride(ov, ch), ch)
 				continue
 			}
 		}
@@ -972,6 +987,45 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// declarations win. It is compiled through compileDocument, which
 	// allocates the number and runs every check the module deserves.
 	return c.compileDocument(u.doc, 0)
+}
+
+// referencedWithin reports whether the used package's own tree names the
+// component somewhere outside the component's own declaration.
+//
+// The test is lexical: the component's name as written, looked for in every
+// attribute value of every other element. That is coarse -- a string literal
+// spelling the same name counts -- but it errs towards keeping a declaration,
+// and keeping one the package does not use costs nothing while deleting one
+// it does use breaks the package outright.
+func referencedWithin(root *xdm.Node, comp *component) bool {
+	name := comp.el.AttrValue("name")
+	if name == "" {
+		return false
+	}
+	local := name
+	if i := strings.IndexByte(local, ':'); i >= 0 {
+		local = local[i+1:]
+	}
+	var walk func(n *xdm.Node) bool
+	walk = func(n *xdm.Node) bool {
+		if n == comp.el {
+			return false
+		}
+		if n.Kind == xdm.KindElement {
+			for _, a := range n.Attrs {
+				if strings.Contains(a.Value, local) {
+					return true
+				}
+			}
+		}
+		for _, ch := range n.Children {
+			if walk(ch) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
 }
 
 // componentOf finds the component an element declares, if it declares one.
@@ -1021,14 +1075,81 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 	return nil
 }
 
+// originalNS is the namespace the declaration an xsl:override replaces is
+// renamed into, with a serial number appended per override.
+//
+// It is a URI no stylesheet can write, so a generated name in it cannot
+// collide with one the source declared.
+const originalNS = "http://go-xml.invalid/xslt/original/"
+
+// originalSerial numbers the generated namespaces. Two overrides in one
+// stylesheet each keep a distinct original -- override-t-015 overrides a
+// template in each of two used packages and calls xsl:original from both --
+// so the namespace has to differ per overriding declaration rather than per
+// stylesheet.
+var originalSerial int
+
 // rewriteOverride prepares an overriding declaration to stand in the used
 // package's tree in place of the declaration it overrides.
 //
 // xsl:original, written inside the override, means "the component this one
-// overrides". It is rewritten here into a call on a private copy of the
-// original declaration, kept alongside under a generated name — the original
-// is a component of the used package with its own body, and inlining it at
-// each xsl:original would evaluate it in the wrong static context.
+// overrides". The original is not inlined at each reference: it is a
+// component of the used package with its own body and its own static context,
+// and inlining would evaluate it in the override's context instead. Instead
+// the original keeps its body and is renamed into a generated namespace, and
+// the overriding declaration gets a namespace node rebinding the prefix "xsl"
+// to that same namespace.
+//
+// One rebinding covers every form the reference can take. xsl:original(...),
+// xsl:original#2, xsl:original(?, $n), $xsl:original, <xsl:call-template
+// name="xsl:original"> and use-attribute-sets="xsl:original" all expand their
+// prefix through the in-scope namespaces of the element they are written on,
+// so all six land on the generated name without a rewriter each. Element
+// names are not affected: they were resolved when the tree was parsed, and
+// the compiler reads Node.Name rather than re-expanding the prefix.
 func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+	originalSerial++
+	uri := fmt.Sprintf("%s%d", originalNS, originalSerial)
+	// A mode is not reachable through xsl:original -- there is no syntax for
+	// it -- and renaming it would detach the used package's template rules
+	// from the mode they name.
+	if isXSL(original, "mode") {
+		return overriding
+	}
+	setAttr(original, "name", "Q{"+uri+"}original")
+	if isXSL(original, "template") || isXSL(original, "function") {
+		// A renamed component must not stay visible under its old identity,
+		// and a named template renamed this way is no longer an eligible
+		// initial template either.
+		setAttr(original, "visibility", "private")
+	}
+	// The rebinding goes on the overriding declaration and nowhere higher.
+	// Widening it to xsl:override or to the package element would capture
+	// every other xsl:-prefixed QName written in an attribute value --
+	// name="xsl:initial-template" above all, which several cases in this set
+	// write just outside their xsl:override. That would rename the
+	// stylesheet's entry point into the generated namespace and fail as "no
+	// template named xsl:initial-template", a long way from the cause.
+	overriding.Namespaces = append(overriding.Namespaces, &xdm.Node{
+		Kind:  xdm.KindNamespace,
+		Name:  xdm.QName{Local: "xsl"},
+		Value: uri,
+	})
 	return overriding
+}
+
+// setAttr sets or replaces an unprefixed attribute of an element.
+func setAttr(el *xdm.Node, name, value string) {
+	for _, a := range el.Attrs {
+		if a.Name.URI == "" && a.Name.Local == name {
+			a.Value = value
+			return
+		}
+	}
+	el.Attrs = append(el.Attrs, &xdm.Node{
+		Kind:   xdm.KindAttribute,
+		Name:   xdm.QName{Local: name},
+		Value:  value,
+		Parent: el,
+	})
 }
