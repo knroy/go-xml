@@ -221,11 +221,20 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// The code is checked when the engine reports one. Matching only on
 		// "an error happened" would pass a test that failed for the wrong
 		// reason, which is the failure mode a conformance run exists to find.
-		if a.Code == "" || a.Code == "*" || !isErrorCode(a.Code) {
+		if a.Code == "" || a.Code == "*" || !isErrorCode(a.Code) ||
+			a.Code == "XXXX9999" {
 			// A value that is not shaped like an error code is the suite's
 			// placeholder for "an error, code unspecified": format-number-069b
 			// writes code="XXX" because the code depends on how the processor
 			// chooses to refuse an XPath 3.1 attribute it does not support.
+			//
+			// XXXX9999 is the same placeholder wearing the shape of a code.
+			// The specification defines no error in the XXXX family, and the
+			// suite uses it where the requirement is that the processor
+			// refuses at all rather than that it names a particular error:
+			// import-schema-203 asks that a schema document with the wrong
+			// target namespace be detected, and leaves the code open because
+			// XTSE0220 and a schema-assembly failure are both defensible.
 			return true, ""
 		}
 		if strings.Contains(terr.Error(), a.Code) {

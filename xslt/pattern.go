@@ -612,6 +612,23 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 			// xsl:variable/@as is its own root and has no parent, so it does
 			// not match — which is what match-178 and match-183 check, and
 			// what the built-in rule they expect to fire depends on.
+			//
+			// When the "//" is the pattern's leading operator the requirement
+			// is stronger: XSLT 3.0 §5.5.2 gives "//" only in the PathPattern
+			// productions that start at the root, so the whole expansion is
+			// root(.)/descendant-or-self::node()/child::X and it selects
+			// nothing at all unless root(.) is a document node. Having *a*
+			// parent is not enough — match-215 applies templates to a
+			// parentless element holding a child "a", and asks that "//a"
+			// not match that child even though the child has a parent,
+			// because the tree it sits in is rooted at an element.
+			if a.absolute {
+				root := node
+				for root.Parent != nil {
+					root = root.Parent
+				}
+				return root.Kind == xdm.KindDocument, nil
+			}
 			return node.Parent != nil, nil
 		}
 		inner := rest[len(rest)-1]

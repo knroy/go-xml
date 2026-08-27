@@ -93,8 +93,14 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 
 	var loaded *xsd.Schema
 	var err error
+	var schemaRoot *xdm.Node
 	switch {
 	case inline != nil:
+		// The namespace check below does not apply to an inline schema:
+		// checkImportSchemaInline already requires the namespace attribute
+		// to be absent when the declaration carries an <xs:schema> child,
+		// and the inline schema's own targetNamespace is then what the
+		// declaration imports rather than something to agree with.
 		loaded, err = xsd.Load(inline, c.opts.BaseURI, opts)
 	default:
 		rc, resolved, rerr := opts.Resolver.Resolve(ns, location, c.opts.BaseURI)
@@ -109,7 +115,11 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		if perr != nil {
 			return fmt.Errorf("xsl:import-schema %q: %w", location, perr)
 		}
+		schemaRoot = tree.Root
 		loaded, err = xsd.Load(tree.Root, resolved, opts)
+	}
+	if err == nil {
+		err = checkImportedNamespace(el, schemaRoot, ns)
 	}
 	if err != nil {
 		// XTSE0220 is the code for the synthetic schema document — the
@@ -123,6 +133,59 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 
 	mergeSchema(c.sheet.schema, loaded)
 	return nil
+}
+
+// checkImportedNamespace enforces the agreement between the namespace the
+// declaration names and the target namespace of the schema document it fetched.
+//
+// XSLT 3.0 §3.15 says the effect of xsl:import-schema is to import the schema
+// components whose target namespace is the value of the namespace attribute,
+// or the ones in no namespace when the attribute is absent. A schema document
+// whose targetNamespace disagrees therefore cannot supply what was asked for,
+// and the specification routes every failure of the notional schema document
+// holding the imports to XTSE0220 — "the synthetic schema document is not a
+// valid schema document according to the rules of XML Schema Part 1".
+//
+// The two shapes the suite writes are import-schema-200, which names a
+// namespace the schema document does not have, and import-schema-201, which
+// names none while the schema document declares one. Both must be errors:
+// without the check the stylesheet compiled and the declaration silently
+// imported components under a name the stylesheet could not have meant.
+func checkImportedNamespace(el, schemaRoot *xdm.Node, ns string) error {
+	if schemaRoot == nil {
+		return nil
+	}
+	root := schemaRoot
+	if root.Kind == xdm.KindDocument {
+		root = nil
+		for _, ch := range schemaRoot.Children {
+			if ch.Kind == xdm.KindElement {
+				root = ch
+				break
+			}
+		}
+	}
+	if root == nil {
+		return nil
+	}
+	declared := root.AttrValue("targetNamespace")
+	if declared == ns {
+		return nil
+	}
+	// A chameleon include is not in play here: the document named by
+	// schema-location is read as a schema document in its own right, so its
+	// own targetNamespace is the only one it can contribute.
+	switch {
+	case ns == "":
+		return fmt.Errorf("XTSE0220: xsl:import-schema names no namespace "+
+			"but the schema document has targetNamespace %q", declared)
+	case declared == "":
+		return fmt.Errorf("XTSE0220: xsl:import-schema names namespace %q "+
+			"but the schema document has no targetNamespace", ns)
+	default:
+		return fmt.Errorf("XTSE0220: xsl:import-schema names namespace %q "+
+			"but the schema document has targetNamespace %q", ns, declared)
+	}
 }
 
 // mergeSchema folds one schema's global components into another.
