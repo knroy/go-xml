@@ -462,7 +462,29 @@ func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	if err != nil || !ok {
 		return false, err
 	}
-	return a.matchAncestors(a.steps[:len(a.steps)-1], node, ctx)
+	rest := a.steps[:len(a.steps)-1]
+	// An explicit descendant axis on the LAST step separates it from what
+	// precedes it by any number of levels: "x/descendant::b" is a b at any
+	// depth below an x, not a b whose parent is an x. Written as "x//b" the
+	// same path carries the flag on the synthetic descendant-or-self::node()
+	// step that "//" expands to, which is never last, so matchAncestors saw
+	// it and scanned; written with the axis spelled out there is no such
+	// step, and the walk demanded a direct parent instead. match-266 and
+	// match-282 are that pattern, reached through the group expansion of
+	// "x/(child::a|descendant::b)".
+	if last.descendant && len(rest) > 0 {
+		for anc := node.Parent; anc != nil; anc = anc.Parent {
+			ok, err := a.matchAncestors(rest, anc, ctx)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return a.matchAncestors(rest, node, ctx)
 }
 
 // matchAncestors verifies the remaining steps against node's ancestors,
