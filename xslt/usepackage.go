@@ -1579,6 +1579,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// mistaken for its user on the way back out.
 	savedPkg := compilePackage
 	packageSerial++
+	packageParent[packageSerial] = savedPkg
 	compilePackage = packageSerial
 	defer func() { compilePackage = savedPkg }()
 	// A used package brings its own in-scope schema components, so the

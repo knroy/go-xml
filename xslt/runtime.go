@@ -1184,6 +1184,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	}
 	xctx = xctx.WithNow(now)
 	rt.ctx = xctx
+	// A variable reference resolves against the package the expression was
+	// written in, so that two packages' globals of one name stay distinct.
+	// See globalBindingName.
+	rt.ctx.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
+		return rt.qualifyGlobal(c, name)
+	}
 
 	// The key() and current() functions need the runtime, so they are bound
 	// per transform rather than living in the shared builtin library.
@@ -1252,7 +1258,11 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 
 	var bind func(g *Variable) error
 	bind = func(g *Variable) error {
-		key := g.Name.Clark()
+		// Keyed by the BINDING name, not the declared one: two packages may
+		// each declare a global of the same name and both are live, so the
+		// bare name marked one done and skipped the other entirely. See
+		// globalBindingName and use-package-175.
+		key := globalBindingName(g.Name, g.pkg).Clark()
 		switch state[key] {
 		case done:
 			return nil
@@ -1271,11 +1281,13 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		// CompileOptions.StaticParams, which is where the caller supplies a
 		// value that has to be in hand before the stylesheet is analysed.
 		if g.isStatic {
-			rt.ctx = rt.ctx.WithVar(g.Name, g.staticValue)
+			rt.bindGlobal(g, g.staticValue)
 			return nil
 		}
-		if supplied, ok := opts.Params[key]; ok {
-			rt.ctx = rt.ctx.WithVar(g.Name, supplied)
+		// A caller names a parameter by its declared name, not by the
+		// package-qualified one the binding uses.
+		if supplied, ok := opts.Params[g.Name.Clark()]; ok {
+			rt.bindGlobal(g, supplied)
 			return nil
 		}
 		if g.Required {
@@ -1376,7 +1388,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			}
 			return fmt.Errorf("evaluating global $%s: %w", g.Name.Lexical(), err)
 		}
-		rt.ctx = rt.ctx.WithVar(g.Name, val)
+		rt.bindGlobal(g, val)
 		return nil
 	}
 
@@ -1413,6 +1425,89 @@ func unresolvedGlobal(err error, byName map[string]*Variable) (*Variable, bool) 
 	g, ok := byName[xdm.QName{Local: name}.Clark()]
 	return g, ok
 }
+
+// qualifyGlobal is the VarQualifier that resolves a reference against the
+// package it was written in.
+//
+// The reference and the binding need not carry the same package. A component
+// of a used package is visible to the using package, so template "b" of
+// use-package-175 -- declared in package B -- refers to a $v that B's copy of
+// D declares. The reference carries B and the binding carries D.
+//
+// The search therefore starts at the referencing package and then tries the
+// packages it uses, nearest first, which is the order visibility flows in.
+// Falling off the end leaves the name unqualified, which is the top-level
+// package's binding and the answer for an expression carrying no package.
+func (rt *runtime) qualifyGlobal(c *xpath.Context, name xdm.QName) xdm.QName {
+	pkg := packageOf(c)
+	if pkg == 0 {
+		return name
+	}
+	if q := globalBindingName(name, pkg); rt.hasGlobal(q) {
+		return q
+	}
+	for _, used := range rt.sheet.packageUses[pkg] {
+		if q := globalBindingName(name, used); rt.hasGlobal(q) {
+			return q
+		}
+	}
+	return name
+}
+
+// hasGlobal reports whether the stylesheet declares a global that binds under
+// this exact name, which is what tells a qualified guess from a miss.
+func (rt *runtime) hasGlobal(q xdm.QName) bool {
+	for _, g := range rt.sheet.globals {
+		if globalBindingName(g.Name, g.pkg) == q {
+			return true
+		}
+	}
+	return false
+}
+
+// bindGlobal puts a global's value in scope under the name its package gives
+// it, and under the plain name as well while nothing else has claimed that.
+//
+// The plain binding is what an expression carrying no package resolves
+// against -- a pattern, or a global of the top-level package naming one it
+// uses. A later binding of the plain name legitimately shadows it; the
+// qualified name is what keeps two packages' copies distinct.
+func (rt *runtime) bindGlobal(g *Variable, val xdm.Sequence) {
+	rt.ctx = rt.ctx.WithVar(globalBindingName(g.Name, g.pkg), val)
+	if g.pkg != 0 {
+		if _, taken := rt.ctx.LookupVar(g.Name); !taken {
+			rt.ctx = rt.ctx.WithVar(g.Name, val)
+		}
+	}
+}
+
+// globalBindingName is the name a global variable is bound under.
+//
+// Two packages may each declare a variable of the same name, and a diamond
+// -- one package used by two routes, each overriding the same variable --
+// puts two live bindings of one name in one stylesheet. The runtime binds
+// into a flat, name-keyed scope, so the later binding shadowed the earlier
+// and both routes read one value: use-package-175 gave "bbbbb" for the
+// branch that had overridden the variable to "ccccc".
+//
+// A global declared in a used package is therefore bound under a name
+// qualified by that package, which no stylesheet can write and so cannot
+// collide with a declared one. The top-level package keeps the plain name:
+// its globals are what an external caller supplies parameters for, and what
+// an expression carrying no package resolves against.
+func globalBindingName(name xdm.QName, pkg int) xdm.QName {
+	if pkg == 0 {
+		return name
+	}
+	return xdm.QName{
+		URI:   fmt.Sprintf("%s%d/%s", packageVarNS, pkg, name.URI),
+		Local: name.Local,
+	}
+}
+
+// packageVarNS is the namespace a used package's globals are bound in. Like
+// originalNS it is a URI no stylesheet can write.
+const packageVarNS = "http://go-xml.invalid/xslt/package/"
 
 // globalRefs returns the names of the variables a global's select expression
 // refers to.

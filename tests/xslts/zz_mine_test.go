@@ -19,6 +19,9 @@ func TestMineOnly(t *testing.T) {
 		want[s] = true
 	}
 	r := &Runner{Root: "../../testdata/xslt30-test", Timeout: 10 * time.Second}
+	if os.Getenv("GOXSLT_ONLY_TARGET") == "3.0" {
+		r.Target = XSLT30
+	}
 	sum, err := r.Run()
 	if err != nil {
 		t.Fatal(err)

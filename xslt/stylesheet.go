@@ -26,6 +26,11 @@ type Stylesheet struct {
 	named map[string]*Template
 	// globals are top-level variables and parameters, in declaration order.
 	globals []*Variable
+	// packageUses lists, for each package, the packages it uses, nearest
+	// first. A reference resolves against the referencing package and then
+	// against these, because a used package's components are visible to the
+	// using one. Built from packageParent when compilation finishes.
+	packageUses map[int][]int
 	// funcs holds xsl:function declarations.
 	funcs *xpath.Library
 	// baseURI is where the principal stylesheet module was read from.
@@ -274,6 +279,13 @@ type Variable struct {
 	// override it.
 	isStatic    bool
 	staticValue xdm.Sequence
+	// pkg is the package whose module declared this variable. Section 3.5.5
+	// makes a component's identity belong to its package, and a diamond --
+	// one package used by two routes, each overriding the same variable --
+	// puts two live bindings of one name in the same stylesheet. The flat
+	// name-keyed scope the runtime binds into cannot hold both, so the name
+	// alone is not the identity: see use-package-175 and -176.
+	pkg int
 }
 
 // keyDef is a compiled xsl:key.
@@ -324,6 +336,48 @@ func packageOf(ctx *xpath.Context) int {
 	}
 	return 0
 }
+
+// buildPackageUses inverts packageParent into, for each package, the packages
+// it uses -- nearest first, then theirs, transitively.
+//
+// The order is the order visibility flows: a reference resolves against the
+// package it is written in, then against what that package used, and so on
+// outward. Depth-first from each package gives exactly that.
+func buildPackageUses(parent map[int]int) map[int][]int {
+	children := map[int][]int{}
+	for child, p := range parent {
+		children[p] = append(children[p], child)
+	}
+	for _, cs := range children {
+		sort.Ints(cs)
+	}
+	out := map[int][]int{}
+	for pkg := range children {
+		seen := map[int]bool{pkg: true}
+		var walk func(int)
+		walk = func(p int) {
+			for _, ch := range children[p] {
+				if seen[ch] {
+					continue
+				}
+				seen[ch] = true
+				out[pkg] = append(out[pkg], ch)
+				walk(ch)
+			}
+		}
+		walk(pkg)
+	}
+	return out
+}
+
+// packageParent maps a used package to the package that used it.
+//
+// A component of a used package is visible to the using package, so a
+// reference written there must reach it: template "b" of use-package-175 is
+// declared in package B and refers to $v, which B's copy of D declares. The
+// reference carries B, the binding carries D, and only this chain relates
+// them. Guarded by compileMu with the rest of the package state.
+var packageParent = map[int]int{}
 
 // packageSpace is one package's whitespace declarations.
 //
@@ -530,6 +584,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// one compilation cannot answer a question about another's nodes.
 	overridingDecls = nil
 	defer func() { overridingDecls = nil }()
+	// Which package used which is package state on the same terms; see
+	// packageParent.
+	packageParent = map[int]int{}
+	defer func() { packageParent = map[int]int{} }()
 	// The XPath version override is package state on the same terms and under
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
@@ -558,6 +616,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.pruneOverriddenGlobals()
+	c.sheet.packageUses = buildPackageUses(packageParent)
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one
 	// declared later or in a module imported afterwards.

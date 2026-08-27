@@ -566,8 +566,10 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// XTSE0630: two bindings of a global variable may not share a name
 		// at the same import precedence. A higher precedence legitimately
 		// overrides a lower one, so only a tie is an error.
+		v.pkg = compilePackage
 		for _, prev := range c.sheet.globals {
 			if prev.Name.Clark() == v.Name.Clark() &&
+				prev.pkg == v.pkg &&
 				prev.precedence == precedence {
 				return fmt.Errorf(
 					"XTSE0630: two global variables are named %s at the same "+
@@ -1984,16 +1986,20 @@ func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
 // decide which value a global took, so a stylesheet that imported a module
 // declaring the same parameter got the imported value.
 func (c *compiler) pruneOverriddenGlobals() {
-	best := make(map[string]int, len(c.sheet.globals))
+	type gkey struct {
+		name string
+		pkg  int
+	}
+	best := make(map[gkey]int, len(c.sheet.globals))
 	for _, g := range c.sheet.globals {
-		k := g.Name.Clark()
+		k := gkey{g.Name.Clark(), g.pkg}
 		if p, ok := best[k]; !ok || g.precedence > p {
 			best[k] = g.precedence
 		}
 	}
 	kept := c.sheet.globals[:0]
 	for _, g := range c.sheet.globals {
-		if g.precedence == best[g.Name.Clark()] {
+		if g.precedence == best[gkey{g.Name.Clark(), g.pkg}] {
 			kept = append(kept, g)
 		}
 	}

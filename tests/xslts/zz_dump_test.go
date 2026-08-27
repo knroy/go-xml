@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/xpath"
 )
 
 // TestDumpFailures writes the failing cases to a file, for working through
@@ -14,6 +16,10 @@ import (
 // whatever the suite reports. Set GOXSLT_DUMP to the file to write; without it
 // the test does nothing, so an ordinary `go test ./...` neither needs the
 // suite checked out nor writes anywhere.
+//
+// Set GOXSLT_DUMP_TARGET=3.0 to dump the XSLT 3.0 target's failures instead;
+// the two targets fail on different cases, so working through one cluster
+// means naming which target it belongs to.
 //
 //	GOXSLT_DUMP=/tmp/failures.txt go test ./tests/xslts/ -run TestDumpFailures
 func TestDumpFailures(t *testing.T) {
@@ -31,6 +37,11 @@ func TestDumpFailures(t *testing.T) {
 	}
 
 	r := &Runner{Root: root, Timeout: 10 * time.Second}
+	if os.Getenv("GOXSLT_DUMP_TARGET") == "3.0" {
+		r.Target = XSLT30
+		xpath.SetBacktrackingRegex(true)
+		defer xpath.SetBacktrackingRegex(false)
+	}
 	sum, err := r.Run()
 	if err != nil {
 		t.Fatalf("run: %v", err)

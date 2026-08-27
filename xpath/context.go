@@ -90,6 +90,11 @@ type Context struct {
 	// from another.
 	StaticBaseURI string
 
+	// QualifyVar lets the host language redirect a variable reference to a
+	// different name; see VarQualifier. Nil for the flat scoping XPath's own
+	// grammar implies.
+	QualifyVar VarQualifier
+
 	// StaticHost is an opaque value the host language attached to the
 	// expression being evaluated; see Compiled.WithStaticHost. This package
 	// never interprets it, only carries it.
@@ -367,8 +372,32 @@ func (c *Context) WithVar(name xdm.QName, val xdm.Sequence) *Context {
 	return &n
 }
 
+// QualifyVar, when set, is consulted before a variable reference is resolved
+// by name, and answers the name the reference should actually bind to.
+//
+// It exists for a host language whose variable scopes are not flat. XSLT 3.0
+// packages are the case: two packages may each declare a global of the same
+// name, and both bindings are live at once, so the name alone does not
+// identify the variable. The host attaches the package to the expression via
+// WithStaticHost and reads it back here. Returning the name unchanged, or
+// leaving the field nil, is the ordinary flat behaviour.
+type VarQualifier func(ctx *Context, name xdm.QName) xdm.QName
+
 // LookupVar resolves a variable by expanded name, walking enclosing scopes.
 func (c *Context) LookupVar(name xdm.QName) (xdm.Sequence, bool) {
+	if c.QualifyVar != nil {
+		if q := c.QualifyVar(c, name); q != name {
+			if v, ok := c.lookupVarPlain(q); ok {
+				return v, true
+			}
+		}
+	}
+	return c.lookupVarPlain(name)
+}
+
+// lookupVarPlain is LookupVar without the host's qualifier, and is what the
+// qualifier's own answer is resolved through.
+func (c *Context) lookupVarPlain(name xdm.QName) (xdm.Sequence, bool) {
 	key := name.Clark()
 	for s := c; s != nil; s = s.Parent {
 		if v, ok := s.Vars[key]; ok {
