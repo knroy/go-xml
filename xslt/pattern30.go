@@ -45,6 +45,10 @@ type generalPattern struct {
 	// is evaluated once against the candidate's context rather than tried
 	// from each of the candidate's ancestors.
 	rooted bool
+	// anchorsAboveRoot marks a pattern whose first step is a name test, so
+	// that on a temporary tree rooted at an element the anchor it needs sits
+	// one level above that root. See matchesFromVirtualParent.
+	anchorsAboveRoot bool
 	// prio is the default priority section 6.4 gives the form.
 	prio float64
 	src  string
@@ -95,8 +99,9 @@ func compileGeneralPattern(src string, ns xpath.NamespaceResolver) (*generalPatt
 		return nil, err
 	}
 	return &generalPattern{
-		expr:   expr,
-		rooted: startsFromOwnRoot(trimmed),
+		expr:             expr,
+		rooted:           startsFromOwnRoot(trimmed),
+		anchorsAboveRoot: startsWithNameStep(trimmed),
 		// Every form that reaches here is a multi-step or operator pattern,
 		// which section 6.4 scores 0.5 like any other complex pattern.
 		prio: 0.5,
@@ -260,7 +265,21 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 			// x needs the x's own parent, which the chain does not have — so
 			// the root's descendants are tried as anchors too, which is what
 			// the "//" in the equivalent expression amounts to.
-			return g.matchesUnderRoot(anc, node, ctx)
+			if ok, err := g.matchesUnderRoot(anc, node, ctx); err != nil || ok {
+				return ok, err
+			}
+			// A temporary tree rooted at an element has no node above that
+			// element to anchor from, so a pattern whose first step names the
+			// root itself has run out of anchors while still being true:
+			// match-273 applies "x/(descendant::a except child::a)" to a tree
+			// whose root is that x. The equivalent expression is
+			// root(.)//x/..., and "//" reaches the root element, so the step
+			// is satisfied by matching the root against the first step
+			// directly rather than by finding a parent that has no existence.
+			if !g.anchorsAboveRoot {
+				return false, nil
+			}
+			return g.matchesFromVirtualParent(anc, node, ctx)
 		}
 	}
 }
@@ -789,4 +808,140 @@ func unwrapParens(src string) (string, bool) {
 		return src, false
 	}
 	return t[1 : len(t)-1], true
+}
+
+// matchesFromVirtualParent retries a relative pattern against a temporary tree
+// whose root is an element, using a synthetic document node as the anchor.
+//
+// The equivalent expression of a relative pattern P is root(.)//P, and on an
+// ordinary tree root(.) is the document node, which is the anchor a pattern
+// whose first step names the outermost element needs. A tree built by
+// xsl:variable/@as has no document node: its root is the element itself, so
+// that anchor is missing and the pattern found nothing however far the walk
+// climbed.
+//
+// Supplying the missing node is enough, and it is done by wrapping rather than
+// by special-casing the first step, so that every form the equivalent
+// expression can take keeps working.
+//
+// The wrapper holds a shallow copy of the root rather than the root itself:
+// the same tree may be matched against from several goroutines at once —
+// TestConcurrentSortAndSharedDocument runs exactly that — so giving the real
+// node a parent, even briefly, would be a data race. Only the copy's identity
+// differs, so the candidate is located by position within the copy and the
+// answer is about the original node.
+func (g *generalPattern) matchesFromVirtualParent(root, node *xdm.Node,
+	ctx *xpath.Context) (bool, error) {
+
+	if root.Kind != xdm.KindElement {
+		return false, nil
+	}
+	// The path from the root down to the candidate, as child indexes. It is
+	// what identifies the candidate inside the copy.
+	var path []int
+	for n := node; n != root; n = n.Parent {
+		if n.Parent == nil {
+			return false, nil
+		}
+		idx := -1
+		for i, ch := range n.Parent.Children {
+			if ch == n {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return false, nil
+		}
+		path = append(path, idx)
+	}
+
+	doc, copied := wrapInDocument(root)
+	target := copied
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] >= len(target.Children) {
+			return false, nil
+		}
+		target = target.Children[path[i]]
+	}
+
+	seq, err := g.expr.Eval(ctx.WithFocus(doc, 1, 1))
+	if err != nil {
+		if !recoverPatternError(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	return containsNode(seq, target), nil
+}
+
+// wrapInDocument returns a document node whose only child is a deep copy of
+// el, along with that copy.
+func wrapInDocument(el *xdm.Node) (doc, copied *xdm.Node) {
+	var clone func(n, parent *xdm.Node) *xdm.Node
+	clone = func(n, parent *xdm.Node) *xdm.Node {
+		c := *n
+		c.Parent = parent
+		c.Children = nil
+		c.Attrs = nil
+		for _, a := range n.Attrs {
+			ac := *a
+			ac.Parent = &c
+			c.Attrs = append(c.Attrs, &ac)
+		}
+		for _, ch := range n.Children {
+			c.Children = append(c.Children, clone(ch, &c))
+		}
+		return &c
+	}
+	doc = &xdm.Node{Kind: xdm.KindDocument}
+	copied = clone(el, doc)
+	doc.Children = []*xdm.Node{copied}
+	return doc, copied
+}
+
+// startsWithNameStep reports whether src begins with a name test used as a
+// step, as "x/(a|b)" does and "descendant::a except child::a" does not.
+//
+// It decides whether a pattern needs an anchor above the root of a temporary
+// tree. One that opens with a name is anchored at that named element's
+// parent, which on a tree rooted at the element itself does not exist and has
+// to be supplied; match-273 is that shape. One that opens with an axis is
+// anchored at whatever the axis is applied to, and supplying a parent instead
+// invents an ancestor the tree does not have — which is exactly the
+// grandparent match-275 requires the pattern NOT to find.
+func startsWithNameStep(src string) bool {
+	t := strings.TrimSpace(src)
+	if t == "" || t[0] == '/' || t[0] == '(' || t[0] == '$' || t[0] == '.' {
+		return false
+	}
+	// Stop at the first character that cannot continue an NCName. A colon is
+	// deliberately not one: consuming it would swallow the "::" of an axis
+	// and make every axis step look like a name.
+	// isNameByte admits the colon, because a Clark or prefixed name may carry
+	// one, so it cannot be used to find where a name ends here: it would
+	// swallow the "::" of an axis and make every axis step look like a name.
+	nameByte := func(c byte) bool { return isNameByte(c) && c != ':' }
+	i := 0
+	for i < len(t) && nameByte(t[i]) {
+		i++
+	}
+	// A prefixed name is "p:local" — one colon, not two. Take the second half
+	// only when what follows is not the "::" of an axis.
+	if i < len(t) && t[i] == ':' && !strings.HasPrefix(t[i:], "::") {
+		i++
+		for i < len(t) && nameByte(t[i]) {
+			i++
+		}
+	}
+	if i == 0 {
+		return false
+	}
+	// An axis is written "name::", which is a name followed by "::" — not a
+	// name step. A "(" straight after the name is a kind test or a function
+	// call, neither of which names an element.
+	if strings.HasPrefix(t[i:], "::") || strings.HasPrefix(strings.TrimSpace(t[i:]), "(") {
+		return false
+	}
+	return true
 }
