@@ -97,7 +97,12 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 	// The "union" keyword joins pattern alternatives exactly as "|" does, and
 	// is spelled out only in a 3.0 pattern. See splitPatternAlts.
 	alts := splitTopLevel(src, '|')
-	if processorAtLeast30() {
+	// The "union" keyword as a pattern operator is 3.0 pattern syntax, which
+	// a stylesheet CONSTRUCTS, so it follows the module's version. match-057
+	// writes it in a version="3.0" module; match-038 is a version="2.0"
+	// module scoped XSLT10+ whose "/ union /*" must NOT parse as a union, so
+	// that the rule never matches and the plain "/" rule wins.
+	if patternsAllow30(ns) {
 		alts = splitPatternAlts(src)
 	}
 	// Where a PredicatePattern may stand is a grammar rule, not a matching
