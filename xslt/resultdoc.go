@@ -131,6 +131,13 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 	if i.overrides != nil && i.overrides.BaseURI != "" {
 		base = i.overrides.BaseURI
 	}
+	// The URI is resolved against the base URI of the element that wrote the
+	// attribute, which is not always the xsl:result-document: a named
+	// xsl:output selected by @format may sit in an included module in
+	// another directory, and output-0722 does exactly that.
+	if out.ParameterDocumentBase != "" {
+		base = out.ParameterDocumentBase
+	}
 	if err := applyParameterDocument(rt, &out, base); err != nil {
 		return out, err
 	}

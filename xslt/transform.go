@@ -461,13 +461,42 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 				"with no href")
 	}
 
+	// The principal result tree is serialized with the unnamed xsl:output,
+	// and §25.1 gives parameter-document to that declaration exactly as it
+	// gives it to a named one: "the parameter-document attribute allows
+	// serialization parameters to be supplied in an external document", with
+	// no restriction to xsl:result-document. Reading it only in the
+	// instruction left an <xsl:output parameter-document="..."/> at the top
+	// level with no effect at all, which is what output-0720 and output-0721
+	// see - both write a character map into the parameter document and expect
+	// the principal result to use it.
+	//
+	// The fetch happens here, after the transform, for the same reason it
+	// happens at run time in the instruction: the document is located
+	// relative to the deployed stylesheet, and a failure to find it leaves
+	// the settings alone rather than raising.
+	output := s.output
+	charMap := s.activeCharMap
+	if output.ParameterDocument != "" {
+		base := s.baseURI
+		if output.ParameterDocumentBase != "" {
+			base = output.ParameterDocumentBase
+		}
+		if err := applyParameterDocument(rt, &output, base); err != nil {
+			return nil, err
+		}
+		if output.InlineCharMap != nil {
+			charMap = output.InlineCharMap
+		}
+	}
+
 	return &Result{
 		Nodes:     out.sequence(),
 		Messages:  *rt.messages,
 		Warnings:  *rt.warnings,
 		Secondary: *rt.secondary,
-		output:    s.output,
-		charMap:   s.activeCharMap,
+		output:    output,
+		charMap:   charMap,
 	}, nil
 }
 

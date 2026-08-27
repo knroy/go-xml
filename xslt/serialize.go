@@ -89,6 +89,32 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if err != nil {
 			return err
 		}
+		// The adaptive method renders a node by handing it to the XML output
+		// method (Serialization 3.1 §10), so the XML declaration is part of
+		// what it produces and omit-xml-declaration is a parameter it
+		// honours. The JSON method is the opposite case and is left alone:
+		// a JSON document with "<?xml" in front of it is not JSON.
+		//
+		// output-0721 is the case that settles it. It selects the adaptive
+		// method through a parameter document and asks for
+		// "^<\?xml[^<]+><test>AAA</test>$" - the declaration once, ahead of
+		// the whole result rather than ahead of each item, which is why it
+		// is written here and not inside SerializeAdaptive.
+		if !opts.OmitXMLDecl {
+			enc := opts.Encoding
+			if enc == "" {
+				enc = "UTF-8"
+			}
+			decl := `<?xml version="1.0" encoding="` + enc + `"`
+			if opts.Standalone != "" {
+				decl += ` standalone="` + opts.Standalone + `"`
+			}
+			if opts.Indent {
+				s.writeString(decl + "?>\n")
+			} else {
+				s.writeString(decl + "?>")
+			}
+		}
 		s.writeString(out)
 		return s.err
 	}

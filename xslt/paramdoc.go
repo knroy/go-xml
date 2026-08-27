@@ -41,6 +41,7 @@ func applyParameterDocument(rt *runtime, o *OutputSettings, baseURI string) erro
 	// a named xsl:output selected by @format, say -- fetch the document a
 	// second time.
 	o.ParameterDocument = ""
+	o.ParameterDocumentBase = ""
 	if href == "" {
 		return nil
 	}

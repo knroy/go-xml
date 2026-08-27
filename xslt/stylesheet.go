@@ -138,7 +138,7 @@ type Stylesheet struct {
 	// name, and rootDefaultMode the mode the principal module's own
 	// @default-mode names. Together they decide XTDE0045; see
 	// modevisibility.go.
-	modeVisibility  map[string]string
+	modeVisibility map[string]string
 	// modeVisibilityStated marks the modes whose visibility was written out
 	// rather than defaulted; see modevisibility.go.
 	modeVisibilityStated map[string]bool
@@ -151,7 +151,7 @@ type Stylesheet struct {
 	// decides whether an invocation may start at the template; see
 	// entryvisibility.go.
 	templateVisibility map[string]string
-	rootDefaultMode string
+	rootDefaultMode    string
 	// isPackage says the principal module is an xsl:package, which is what
 	// gives mode visibility something to be relative to.
 	isPackage bool
@@ -366,6 +366,14 @@ type OutputSettings struct {
 	// evaluation of the stylesheet", so that a stylesheet deployed away from
 	// where it was written still finds its own parameters.
 	ParameterDocument string
+	// ParameterDocumentBase is the base URI of the element that wrote
+	// ParameterDocument, which is what a relative URI there resolves
+	// against. It has to travel with the URI rather than be taken from the
+	// principal module: an <xsl:output name="f" parameter-document="p.xml"/>
+	// in a module reached by xsl:include names a document beside *that*
+	// module, and output-0722 puts the included module and its parameter
+	// document in a subdirectory to make the difference visible.
+	ParameterDocumentBase string
 	// InlineCharMap is a character map given by value rather than by name:
 	// the output:use-character-maps element of a parameter document spells
 	// its entries out, having no xsl:character-map declaration to point at.
