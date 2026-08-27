@@ -66,6 +66,10 @@ type mergeSource struct {
 	baseURI string
 	// validation applies to documents read by @for-each-source only.
 	validation validationSpec
+	// accums is @use-accumulators: the accumulators 18.2.2 makes applicable
+	// to the documents this source reads. nil means the attribute was absent,
+	// which leaves every accumulator applicable.
+	accums *modeAccumulators
 	// streamed records streamable="yes", whose only visible consequence here
 	// is that the context size inside the action is absent.
 	streamed bool
@@ -284,6 +288,14 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 				"for-each-source")
 	}
 
+	if hasAccum {
+		set, err := parseUseAccumulators(n)
+		if err != nil {
+			return nil, err
+		}
+		src.accums = set
+	}
+
 	spec, err := compileValidation(n, "")
 	if err != nil {
 		return nil, err
@@ -293,8 +305,12 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 	// attributes describe are the ones for-each-source reads; with any other
 	// selection there is nothing for them to apply to.
 	if !hasSource && !spec.isDefault() {
+		// XTSE0020 rather than XTSE0090: the attributes are ones
+		// xsl:merge-source has, so the error is in the value being written at
+		// all in this combination rather than in the name being unknown.
+		// merge-054 is the case, and names XTSE0020.
 		return nil, fmt.Errorf(
-			"XTSE0090: xsl:merge-source/@validation and @type are only allowed " +
+			"XTSE0020: xsl:merge-source/@validation and @type are only allowed " +
 				"alongside for-each-source")
 	}
 	src.validation = spec
@@ -860,6 +876,14 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
+	if s.accums != nil {
+		// 18.2.2: use-accumulators names the accumulators applicable to the
+		// documents this source reads, and only those. An accumulator the
+		// list omits is inapplicable to the tree, which XTDE3362 makes a
+		// dynamic error to read — including, as merge-067 does, one reached
+		// indirectly by another accumulator's rule.
+		rt.treeAccums[tree.Root] = s.accums
+	}
 	if s.validation.isDefault() {
 		return tree.Root, nil
 	}
@@ -869,10 +893,37 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 		copied.Root.AppendChild(deepCopy(ch))
 	}
 	copied.Finalize()
+	if s.accums != nil {
+		rt.treeAccums[copied.Root] = s.accums
+	}
 	if err := s.validation.assess(rt, copied.Root); err != nil {
 		return nil, err
 	}
 	return copied.Root, nil
+}
+
+// parseUseAccumulators reads a use-accumulators attribute into the same set
+// xsl:mode/@use-accumulators compiles to, since 18.2.2 gives both the same
+// meaning and the same "#all" and "#default" tokens.
+func parseUseAccumulators(n *xdm.Node) (*modeAccumulators, error) {
+	set := &modeAccumulators{names: map[string]bool{}}
+	for _, tok := range strings.Fields(n.AttrValue("use-accumulators")) {
+		switch tok {
+		case "#all":
+			set.all = true
+			continue
+		case "#default":
+			// Meaningful only inside a package that sets a default, which
+			// this processor does not model.
+			continue
+		}
+		qn, err := resolveQNameAttr(n, tok)
+		if err != nil {
+			return nil, err
+		}
+		set.names[xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()] = true
+	}
+	return set, nil
 }
 
 // sortMergeEntries orders one input sequence, for sort-before-merge="yes".

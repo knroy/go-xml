@@ -46,6 +46,17 @@ type runtime struct {
 	accumValues   map[accumCacheKey]*accumulatorValues
 	accumBuilding map[accumCacheKey]bool
 
+	// treeAccums records, per document root, which accumulators 18.2.2 makes
+	// applicable to that tree. Only a document read by an
+	// xsl:merge-source/@for-each-source populates it — that is the one place
+	// this engine can say the set is anything narrower than "all of them" —
+	// and a root that is absent from the map is unrestricted.
+	//
+	// The map is shared with every derived runtime because the runtime struct
+	// is copied by value: a document loaded inside an xsl:merge must stay
+	// restricted for the whole of the action that reads it.
+	treeAccums map[*xdm.Node]*modeAccumulators
+
 	// depth bounds apply-templates recursion, which the spec does not bound
 	// and which a stylesheet with a cycle would otherwise run forever.
 	depth int
@@ -1020,6 +1031,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
 		accumBuilding: map[accumCacheKey]bool{},
+		treeAccums:    map[*xdm.Node]*modeAccumulators{},
 		tunnel:      map[string]xdm.Sequence{},
 		messages:    new([]string),
 		secondary:   new([]SecondaryResult),

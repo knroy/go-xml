@@ -451,6 +451,17 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 		return nil, fmt.Errorf(
 			"XTDE3400: %s(%q) has no context node", fname, lex)
 	}
+	// 18.2.2 narrows the applicable set for a document read with an explicit
+	// use-accumulators list — an xsl:merge-source is where this engine can
+	// say so — and XTDE3362 is reading one the list leaves out. The check is
+	// here rather than at the call site because an accumulator rule may reach
+	// another accumulator, which is how merge-067 gets at a name its
+	// merge source never listed.
+	if set, ok := rt.treeAccums[node.Root()]; ok && !set.all && !set.names[name] {
+		return nil, fmt.Errorf(
+			"XTDE3362: accumulator %q is not applicable to this document, "+
+				"whose use-accumulators list does not name it", lex)
+	}
 	// Section 18.2: an accumulator applies to the tree the node belongs to,
 	// so the walk starts at that tree's root even when the node is deep in
 	// it — the value at a node depends on everything that precedes it.
