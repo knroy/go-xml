@@ -1,6 +1,6 @@
 # go-xml
 
-**XML Schema 1.0/1.1 validation, XPath 2.0 and XSLT 2.0 in pure Go.** No cgo,
+**XML Schema 1.0/1.1 validation, XPath 2.0/3.0/3.1 and XSLT 2.0/3.0 in pure Go.** No cgo,
 no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 
 ```
@@ -68,8 +68,11 @@ Requires Go 1.26 or later.
 
 | | |
 |---|---|
-| **XPath 2.0** | 99.99% of the W3C QT3 suite (15,182 of 15,183 in scope) |
-| **XSLT 2.0** | 99.63% of the W3C XSLT suite filtered to 2.0 (6,136 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
+| **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
+| **XPath 3.1** | 99.98% of the W3C QT3 suite (21,782 of 21,786 in scope); maps, arrays, the lookup operator, the JSON family |
+| **XSLT 2.0** | 99.55% of the W3C XSLT suite filtered to 2.0 (6,132 of 6,159 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 92.79% of the W3C XSLT suite filtered to 3.0 (7,693 of 8,291 in scope). Streaming is not implemented, and its 2,677 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.56%** of its *schema-validity* tests (14,341 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,177 of 26,205); **99.18%** schema-validity (15,239 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -95,17 +98,25 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT is the weakest of the measured numbers, by a long way.** It sits at
-   99.63% of the W3C suite filtered to XSLT 2.0, against 98%+ for everything
-   else here. Two things follow from that. The figure is young — the suite was
-   only wired up recently, and the first runs were dominated by harness bugs
-   rather than engine ones, so it should be read as a floor. And it is not
-   comparable to the others: there is no maintained XSLT 2.0 suite, so this is
-   the XSLT 3.0 suite filtered by each test's declared version dependency,
-   which is a different kind of measurement from running a suite written for
-   the version under test. The corpus differential against Saxon remains the
-   stronger evidence for real stylesheets; *Where it fails* sets out what each
-   covers.
+3. **XSLT 3.0 is the weakest of the measured numbers, by a long way.** It sits
+   at 92.79% against 99%+ for everything else here, and the figure is young.
+   XSLT 2.0 is a different matter at 99.55%, and the corpus differential
+   against Saxon remains the stronger evidence for real stylesheets.
+
+   Neither XSLT number is directly comparable to the XPath and XSD ones. There
+   is no maintained XSLT 2.0 suite, so both are the XSLT 3.0 suite filtered by
+   each test's declared version dependency — a different kind of measurement
+   from running a suite written for the version under test.
+
+   **Streaming is not implemented**, and its 2,677 cases are out of scope
+   rather than counted as failures. That is the single largest gap, and it is
+   architectural rather than a matter of filling in instructions: streaming
+   wants a pull parser and a streamability static analysis, not another
+   feature. `xsl:stream` and `xsl:fork` are absent for the same reason. What a
+   streamable stylesheet *computes* is another question — the spec requires it
+   to be the same as a non-streaming evaluation, so the `si-*` sets, which
+   assert results rather than memory behaviour, are in scope and nearly all
+   pass. *Where it fails* sets out the rest.
 
 Every remote-reference mechanism — `DOCTYPE`, `fn:doc`, file reads — is off
 unless enabled; see [Security defaults](#security-defaults).
@@ -117,8 +128,8 @@ Six packages, each usable on its own:
 | Package | What it holds |
 |---|---|
 | [`xdm`](xdm/) | The XQuery/XPath data model: typed atomic values, the node tree, an XML parser |
-| [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, and the `fn:` function library |
-| [`xslt`](xslt/) | XSLT 2.0: pattern matching, the stylesheet compiler, the transform runtime, serialisation |
+| [`xpath`](xpath/) | XPath 2.0, 3.0 and 3.1: lexer, parser, evaluator, and the `fn:`, `map:`, `array:` and `math:` function libraries |
+| [`xslt`](xslt/) | XSLT 2.0 and 3.0: pattern matching, the stylesheet compiler, the transform runtime, serialisation |
 | [`xsd`](xsd/) | XML Schema 1.0 and 1.1: the component model, schema assembly, content models, facets, identity constraints |
 | [`dtd`](dtd/) | DTD validation: content models, attribute defaults, `ID`/`IDREF` |
 | [`relaxng`](relaxng/) | RELAX NG: the derivative algorithm, the section 7 restrictions, the XSD datatype library |
@@ -1201,12 +1212,16 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
 XSLT suite: 14601 cases, 6159 in scope, 8442 skipped
-in-scope: 6136 passed, 23 failed (99.63%)
+in-scope: 6132 passed, 27 failed (99.55%)
 ```
 
-The filter decides what the number means, so the run prints its own exclusions:
-5,681 cases need XSLT 3.0, 1,580 depend on a Unicode version, 347 on
-`xsl:package`. A dependency the runner does not model excludes the test rather
+`TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every
+change, because the question a change has to answer is not "how much 3.0 works"
+but "how much 3.0 works without costing 2.0".
+
+The filter decides what the number means, so each run prints its own
+exclusions: at the 2.0 target 5,681 cases need XSLT 3.0 and 1,580 depend on a
+Unicode version; at the 3.0 target 2,677 need streaming. A dependency the runner does not model excludes the test rather
 than being ignored — running a test under conditions it did not ask for reports
 the mismatch as a failure of the engine.
 

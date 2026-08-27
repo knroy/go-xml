@@ -28,7 +28,8 @@ kind — they break working documents — so they are listed first throughout.
 | XSD 1.1 | W3C xsdtests | 99.89% instance · 99.18% schema-validity |
 | RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
 | DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.63% — 6,136 of 6,159 in scope |
+| XSLT 2.0 | W3C xslt30-test, filtered | 99.55% — 6,132 of 6,159 in scope |
+| XSLT 3.0 | W3C xslt30-test, filtered | 92.79% — 7,693 of 8,291 in scope; streaming out of scope |
 | XDM | *no public suite* | exercised through the three above |
 
 XSLT and XDM have no percentage. That is not an oversight: there is no freely
@@ -72,18 +73,33 @@ Two limits remain, neither measured by the suite:
   specifies, while `xdm` follows the fifth, which is what XML now is. The two
   differ deliberately; `relaxng/ncname.go` says why.
 
-### XSLT 2.0
+### XSLT
 
-The weakest of the measured numbers, at 99.63%, and the newest — so it is a
-floor rather than a settled figure. Two things about how it is obtained matter
-before the failures are read.
+XSLT 2.0 is at 99.55% and XSLT 3.0 at 92.79%. The 3.0 figure is the weakest
+number measured here and the newest, so read it as a floor rather than a
+settled figure.
 
 There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
-2007 behind a click-through licence, with no repository. This runs the XSLT
-3.0 suite filtered by each test's declared version dependency, which measures
-something different from running a suite written for the version under test.
-6,159 of 14,601 cases are in scope; the largest exclusions are 6,115 needing
-XSLT 3.0, 1,580 depending on a Unicode version, and 347 on `xsl:package`.
+2007 behind a click-through licence, with no repository. Both numbers come
+from the XSLT 3.0 suite filtered by each test's declared version dependency,
+which measures something different from running a suite written for the
+version under test. The same catalog is run twice, once per target, because
+the question a change has to answer is not "how much 3.0 works" but "how much
+3.0 works without costing 2.0".
+
+At the 2.0 target 6,159 of 14,601 cases are in scope, the largest exclusions
+being those needing XSLT 3.0 and 1,580 depending on a Unicode version. At the
+3.0 target 8,291 are in scope.
+
+**Streaming is not implemented and is the largest single gap**: 2,677 cases
+depend on it and are out of scope rather than failing. It is architectural
+rather than a matter of filling in instructions — a streaming processor wants
+a pull parser and a streamability static analysis — and `xsl:stream` and
+`xsl:fork` are absent for the same reason. What a streamable stylesheet
+*computes* is a separate question: XSLT 3.0 section 18.1 defines the result of
+`xsl:source-document` as "the same as the result of the following
+(non-streaming) process", so the `si-*` sets, which assert results rather than
+memory behaviour, are in scope and nearly all pass.
 
 `GOXSLT_XSLTS_BYSET=1` prints the result of each test-set separately, which is
 what shows where the work is. A set failing nearly everything is an

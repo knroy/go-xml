@@ -9,8 +9,11 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,341 / 14,405 (99.56%) | 24,968 / 24,999 (99.88%) |
 | XSD 1.1 | 15,239 / 15,365 (99.18%) | 26,177 / 26,205 (99.89%) |
-| XPath 2.0 | 99.99% — 15,182 of 15,183 in scope (1 failing) |
-| XSLT 2.0 | 99.63% — 6,136 of 6,159 in scope (23 failing) |
+| XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
+| XPath 3.0 | 100.00% — 19,236 of 19,236 in scope |
+| XPath 3.1 | 99.98% — 21,782 of 21,786 in scope (4 failing) |
+| XSLT 2.0 | 99.55% — 6,132 of 6,159 in scope (27 failing) |
+| XSLT 3.0 | 92.79% — 7,693 of 8,291 in scope (598 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 671, clean under `-race` |
