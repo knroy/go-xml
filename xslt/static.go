@@ -52,6 +52,11 @@ type staticPhase struct {
 	// is reported by compileInclude with the right error code; this pass only
 	// has to avoid recursing forever before it gets there.
 	seen map[string]bool
+	// depth is how many xsl:import edges deep the walk currently is, which
+	// stands in for import precedence: the importing module outranks
+	// everything it imports. xsl:include does not change it, an included
+	// module having the precedence of its includer.
+	depth int
 	// done records the module trees this pass has already walked, so that
 	// compileModule does not run conditional inclusion over them a second
 	// time. The trees are shared: a resolver hands back the same nodes for
@@ -81,6 +86,13 @@ func (c *compiler) runStaticPhase(doc *xdm.Node) error {
 type staticVar struct {
 	name xdm.QName
 	val  xdm.Sequence
+	// isParam distinguishes the two spellings, which XTSE3450 treats as
+	// inconsistent with one another however equal their values.
+	isParam bool
+	// prec is the declaration's import precedence, as a depth: 0 is the
+	// principal module and every module it imports is one deeper. Only the
+	// comparison matters, and a smaller depth is a higher precedence.
+	prec int
 }
 
 // module walks one stylesheet module.
@@ -272,14 +284,93 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		val = conv
 	}
 
+	isParam := el.Name.Local == "param"
 	for i := range p.vars {
-		if p.vars[i].name.Clark() == key {
-			p.vars[i].val = val
+		if p.vars[i].name.Clark() != key {
+			continue
+		}
+		prev := &p.vars[i]
+		// XTSE3450, section 9.5 rule 2. When the declaration reached later in
+		// stylesheet tree order has the *higher* import precedence, it is the
+		// one that wins — but every static expression between the two has
+		// already been evaluated against the earlier value, and cannot be
+		// re-evaluated. The specification resolves that by requiring the two
+		// to agree, so that which one was used cannot be observed.
+		//
+		// The other direction needs no check: a later declaration of lower
+		// precedence simply loses, and the value in scope never changed.
+		if p.depth < prev.prec {
+			if isParam != prev.isParam {
+				return fmt.Errorf(
+					"XTSE3450: static $%s is declared as xsl:%s at a higher "+
+						"import precedence than the xsl:%s declared before it "+
+						"in stylesheet tree order",
+					qn.Lexical(), el.Name.Local,
+					declKind(prev.isParam))
+			}
+			// A parameter whose value came from the caller is not
+			// "initialized" in 9.5's sense: both declarations take the
+			// supplied value, so they cannot disagree.
+			if !(isParam && fromCaller) && !identicalStatic(prev.val, val) {
+				return fmt.Errorf(
+					"XTSE3450: the two declarations of the static variable $%s "+
+						"have different values, and the one with the higher "+
+						"import precedence comes later in stylesheet tree order",
+					qn.Lexical())
+			}
+			prev.val = val
+			prev.prec = p.depth
 			return nil
 		}
+		// Equal or lower precedence: the most recent declaration in tree
+		// order is the one a following static expression sees.
+		if p.depth == prev.prec {
+			prev.val = val
+			prev.isParam = isParam
+		}
+		return nil
 	}
-	p.vars = append(p.vars, staticVar{name: qn, val: val})
+	p.vars = append(p.vars, staticVar{
+		name: qn, val: val, isParam: isParam, prec: p.depth})
 	return nil
+}
+
+// declKind names the element a staticVar was declared by, for a diagnostic.
+func declKind(isParam bool) string {
+	if isParam {
+		return "param"
+	}
+	return "variable"
+}
+
+// identicalStatic reports whether two static values are identical in the
+// fn:deep-equal-with-identical-types sense 9.5 requires of two declarations
+// that must agree. Function items are never identical, which is why 9.5
+// forbids them here outright.
+func identicalStatic(a, b xdm.Sequence) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		xa, xok := a[i].(*xdm.Atomic)
+		ya, yok := b[i].(*xdm.Atomic)
+		if !xok || !yok {
+			// A node or a function item: identity for a node is being the
+			// same node, and a function item is never identical to anything.
+			if a[i] != b[i] {
+				return false
+			}
+			continue
+		}
+		// Identity is stricter than eq: it distinguishes the types as well as
+		// the values, so xs:integer 1 and xs:double 1 are not identical. The
+		// canonical lexical form stands in for the value, which is what makes
+		// it canonical.
+		if xa.Type != ya.Type || xa.String() != ya.String() {
+			return false
+		}
+	}
+	return true
 }
 
 // includeModule walks the module an xsl:include or xsl:import names, in place,
@@ -315,6 +406,12 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 		if sub := embeddedModule(doc, fragment); sub != nil {
 			doc = sub
 		}
+	}
+	// An imported module ranks below its importer; an included one shares the
+	// includer's precedence, so only xsl:import moves the depth.
+	if el.Name.Local == "import" {
+		p.depth++
+		defer func() { p.depth-- }()
 	}
 	return p.module(doc)
 }

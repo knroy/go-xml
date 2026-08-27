@@ -71,6 +71,11 @@ func checkStylesheetElement(root *xdm.Node) error {
 		}
 	}
 
+	// The version declared on the module element, not the processor's, decides
+	// which content model this module is judged by: a version="2.0" module is
+	// one every conforming 2.0 processor rejects for a late xsl:import.
+	importAnywhere := versionAt(root) >= 3.0
+
 	seenNonImport := false
 	for _, c := range root.Children {
 		switch c.Kind {
@@ -94,8 +99,15 @@ func checkStylesheetElement(root *xdm.Node) error {
 				c.Name.Local)
 		}
 		// XTSE0200: xsl:import must precede every other element child.
+		//
+		// The rule is XSLT 2.0's, whose content model for the module element
+		// is (xsl:import*, top-level-elements). XSLT 3.0 writes that content
+		// model as (declarations) with no distinguished prefix, and XTSE0200
+		// does not appear in its error list at all: a 3.0 module may place an
+		// xsl:import anywhere among its declarations, which is what lets a
+		// static variable be declared before the import that will see it.
 		if c.Name.URI == xdm.NSXSL && c.Name.Local == "import" {
-			if seenNonImport {
+			if seenNonImport && !importAnywhere {
 				return fmt.Errorf(
 					"XTSE0200: xsl:import must precede every other top-level element")
 			}
