@@ -140,9 +140,14 @@ func (p *Parser) parsePostfix(base Expr) (Expr, error) {
 			continue
 		}
 		// An argument list here is a dynamic call on whatever the base
-		// produced. Only 3.0 has them: under 2.0 a "(" after a complete
-		// primary expression is the syntax error it always was.
-		if p.version.atLeast30() && p.peekIs(TokOp, "(") {
+		// produced. It follows the reference floor rather than the parsed
+		// version, for the same reason "#N" does and because the two are
+		// halves of one feature: a reference the module may write but not
+		// call is of no use to it. system-property-023, regex-090 and
+		// for-each-group-090 each bind a reference in a global and then
+		// invoke it. Under a 2.0 *processor* a "(" after a complete primary
+		// expression is still the syntax error it always was.
+		if p.refVersion().atLeast30() && p.peekIs(TokOp, "(") {
 			args, err := p.parseArgumentList()
 			if err != nil {
 				return nil, err
@@ -268,12 +273,20 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 			// is still an ordinary call, and an element named "map" is still
 			// selectable as a step.
 			return nil, false, nil
-		} else if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
+		} else if p.refVersion().atLeast30() && p.pos+1 < len(p.toks) &&
 			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "#" {
 			// "name#3" is a named function reference, not a name test on an
 			// element called "name". Deferred to parsePrimary for the same
 			// reason a function call is: the name belongs to the construct
 			// that follows it, not to a step.
+			//
+			// The reference floor rather than the parsed version, matching
+			// the gate in parsePrimary: both have to agree, or the name is
+			// eaten as a step here and the "#" is left over.
+			//
+			// A step is what a 2.0 module would otherwise get, so this also
+			// settles which reading wins -- an element named "current-group"
+			// followed by a stray "#" was never a valid expression.
 			return nil, false, nil
 		}
 	}
@@ -630,7 +643,9 @@ func (p *Parser) parsePrimary() (Expr, error) {
 			return p.parseInlineFunction()
 		}
 		// A named function reference: name followed by "#" and an integer.
-		if p.version.atLeast30() && p.pos+1 < len(p.toks) &&
+		// Gated on the reference floor rather than on the parsed version,
+		// because resolving a name follows the processor; see refversion.go.
+		if p.refVersion().atLeast30() && p.pos+1 < len(p.toks) &&
 			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "#" {
 			return p.parseNamedFunctionRef()
 		}

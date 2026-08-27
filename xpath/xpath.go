@@ -87,6 +87,16 @@ func CompileVersion(src string, ns NamespaceResolver, v Version) (*Compiled, err
 	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
 }
 
+// CompileVersionRefFloor is CompileVersion with the named-function-reference
+// floor raised; see ParseVersionRefFloor and refversion.go.
+func CompileVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (*Compiled, error) {
+	e, err := ParseVersionRefFloor(src, ns, v, refFloor)
+	if err != nil {
+		return nil, err
+	}
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
+}
+
 // MustCompile is Compile, panicking on error. For tests and for expressions
 // that are literals in this package's own source.
 func MustCompile(src string, ns NamespaceResolver) *Compiled {

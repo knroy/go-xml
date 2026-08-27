@@ -39,6 +39,9 @@ type Parser struct {
 	// version is the language version being parsed. It gates the constructs
 	// 3.0 adds to the grammar, which a 2.0 processor must not accept.
 	version Version
+	// refFloor raises the version at which a named function reference is
+	// accepted, without admitting any other 3.0 construct. See refversion.go.
+	refFloor Version
 }
 
 // maxParseDepth bounds expression nesting.
@@ -87,7 +90,22 @@ func ParseExtended(src string, ns NamespaceResolver) (Expr, error) {
 	return parse(src, ns, true, XPath20)
 }
 
+// ParseVersionRefFloor is ParseVersion with the named-function-reference
+// floor raised: "#N" is accepted even when v is below 3.0.
+//
+// The floor exists because which functions exist -- and so whether a name can
+// be referenced at all -- follows the processor rather than the module, in the
+// same way Context.LibraryVersion and Context.RegexVersion already do. See
+// refversion.go.
+func ParseVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (Expr, error) {
+	return parseWith(src, ns, false, v, refFloor)
+}
+
 func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, error) {
+	return parseWith(src, ns, extended, v, 0)
+}
+
+func parseWith(src string, ns NamespaceResolver, extended bool, v, refFloor Version) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
@@ -103,7 +121,7 @@ func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, er
 	if len(lex.bracedURIs) > 0 {
 		ns = wrapBraced(ns, lex.bracedURIs)
 	}
-	p := &Parser{toks: toks, src: src, ns: ns, version: v}
+	p := &Parser{toks: toks, src: src, ns: ns, version: v, refFloor: refFloor}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err

@@ -82,6 +82,16 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 					p = p.WithVar(name, v)
 				}
 			}
+			// The clearing goes the same way, and for the same reason: the
+			// captured context still holds whatever grouping or captured
+			// substrings were in scope where the reference was written, and
+			// restoring it wholesale would hand them to the call. 5.3.4
+			// names regex-group#1(2) as the example -- the components are
+			// cleared, so regex-090 gets the zero-length string rather than
+			// the enclosing match.
+			for _, name := range ClearedOnDynamicCall {
+				p = p.WithVar(name, nil)
+			}
 		}
 		return inner(p, args)
 	}
