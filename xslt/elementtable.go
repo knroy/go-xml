@@ -397,6 +397,7 @@ var xsltElements = map[string]elementDef{
 		"ordinal":            {avt: true},
 		"grouping-separator": {avt: true},
 		"grouping-size":      {avt: true},
+		"start-at":           {avt: true, since30: true},
 	}},
 	"sort": {attrs: map[string]attrDef{
 		"select":     {},

@@ -847,6 +847,10 @@ type numberInstr struct {
 	lang         *avt
 	groupingSep  *avt
 	groupingSize *avt
+	// startAt is @start-at, which re-bases the numbers before they are
+	// formatted (section 12.1). It is an attribute value template like the
+	// conversion attributes, so its integers are parsed per execution.
+	startAt *avt
 }
 
 func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -861,6 +865,10 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 	opts, err := i.conversionOptions(rt)
+	if err != nil {
+		return err
+	}
+	starts, err := i.startValues(rt)
 	if err != nil {
 		return err
 	}
@@ -947,7 +955,7 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			nums = append(nums, n)
 		}
-		out.appendText(formatNumberSeq(nums, format, opts))
+		out.appendText(formatNumberSeq(rebaseNumbers(nums, starts), format, opts))
 		return nil
 	}
 
@@ -988,8 +996,27 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// literally, and that holds whether or not any number was found: the
 	// format "*1*" applied to nothing produces "**", not "". Returning early
 	// here dropped the prefix and suffix of every unnumbered node.
-	out.appendText(formatNumberSeq(numbers, format, opts))
+	out.appendText(formatNumberSeq(rebaseNumbers(numbers, starts), format, opts))
 	return nil
+}
+
+// startValues evaluates @start-at, which is an attribute value template and
+// so may only be checked once the transform is running. A value written
+// literally was already rejected at compile time under XTSE0020; a computed
+// one that is malformed is the dynamic counterpart, XTDE0030.
+func (i *numberInstr) startValues(rt *runtime) ([]int64, error) {
+	if i.startAt == nil {
+		return nil, nil
+	}
+	v, err := i.startAt.eval(rt)
+	if err != nil {
+		return nil, err
+	}
+	starts, err := parseStartAt(v)
+	if err != nil {
+		return nil, fmt.Errorf("XTDE0030: %w", err)
+	}
+	return starts, nil
 }
 
 // conversionOptions evaluates the number-to-string conversion attributes.
@@ -1470,6 +1497,7 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 		{"lang", &instr.lang},
 		{"grouping-separator", &instr.groupingSep},
 		{"grouping-size", &instr.groupingSize},
+		{"start-at", &instr.startAt},
 	} {
 		if v := n.AttrValue(a.name); v != "" {
 			// XTSE0020 is about an attribute whose *fixed* value is not one
@@ -1482,6 +1510,14 @@ func (c *compiler) compileNumber(n *xdm.Node, ns xpath.NamespaceResolver) (Instr
 				return nil, fmt.Errorf(
 					"XTSE0020: xsl:number/@lang value %q is not a valid "+
 						"language identifier", v)
+			}
+			// Same rule for @start-at: a fixed value that does not match
+			// section 12.1's production is XTSE0020, which is what
+			// number-0109 asserts of start-at="1..2".
+			if a.name == "start-at" && !strings.Contains(v, "{") {
+				if _, perr := parseStartAt(v); perr != nil {
+					return nil, fmt.Errorf("XTSE0020: %w", perr)
+				}
 			}
 			if *a.dst, err = compileAVT(v, ns); err != nil {
 				return nil, fmt.Errorf("in xsl:number/@%s: %w", a.name, err)
