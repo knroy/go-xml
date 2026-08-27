@@ -464,6 +464,14 @@ func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 		}
 		return nil
 	}
+	// on-multiple-match="fail" makes an ambiguity an error rather than a
+	// silent choice of the last tied rule, and an atomic value can be tied
+	// over just as a node can: match-260 declares the same map pattern
+	// twice. The node path checks this in failMultipleMatch; this is the
+	// same rule against the atomic candidate list.
+	if err := rt.sheet.failMultipleMatchAtomic(item, mode, t, next, rt.ctx); err != nil {
+		return err
+	}
 	// The resume index is the position after the winner, so xsl:next-match
 	// from such a rule continues down the list exactly as it does for a node.
 	sub := rt.withSelection(t, next, mode, params, tunnels)
@@ -1051,4 +1059,41 @@ func stripXPathComments(src string) string {
 func variablePatternAllowed(src string) bool {
 	return processorAtLeast30() &&
 		strings.HasPrefix(strings.TrimSpace(stripXPathComments(src)), "$")
+}
+
+// failMultipleMatchAtomic is failMultipleMatch for an atomic value.
+//
+// The tie is judged exactly as it is for a node: the list is sorted by
+// (import precedence, priority, declaration order) and selection stops at the
+// first match, so a later rule conflicts only when it ties the winner on both
+// precedence and priority.
+func (s *Stylesheet) failMultipleMatchAtomic(item xdm.Item, mode string,
+	won *Template, next int, ctx *xpath.Context) error {
+
+	if !s.modeFailMultiple[mode] {
+		return nil
+	}
+	for i := next; i < len(s.templates); i++ {
+		t := s.templates[i]
+		if t.importPrecedence != won.importPrecedence ||
+			t.Priority != won.Priority {
+			return nil
+		}
+		if t.Match == nil || !t.matchesMode(mode) {
+			continue
+		}
+		ok, err := t.Match.matchesAtomicItem(item, ctx)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return fmt.Errorf(
+				"XTDE0540: more than one template rule matches an atomic "+
+					"value of type %s in mode %s at the same import "+
+					"precedence and priority, and the mode declares "+
+					"on-multiple-match=\"fail\"",
+				item.TypeName(), modeLabel(mode))
+		}
+	}
+	return nil
 }
