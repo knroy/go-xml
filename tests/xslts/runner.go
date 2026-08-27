@@ -17,9 +17,36 @@ import (
 )
 
 // Runner executes the suite against this engine.
+// Target is the version of XSLT a run measures conformance against.
+//
+// The suite is one catalog covering every version, so which cases are in
+// scope is a property of the run rather than of the suite: a case declaring
+// XSLT30+ is out of scope for a 2.0 run and is the point of a 3.0 one. Two
+// runs over the same catalog is how a change is shown not to have cost
+// ground at 2.0 while gaining it at 3.0.
+type Target int
+
+const (
+	// XSLT20 measures what an XSLT 2.0 processor should pass.
+	XSLT20 Target = iota
+	// XSLT30 measures what an XSLT 3.0 processor should pass.
+	XSLT30
+)
+
+// String implements fmt.Stringer.
+func (t Target) String() string {
+	if t == XSLT30 {
+		return "XSLT 3.0"
+	}
+	return "XSLT 2.0"
+}
+
 type Runner struct {
 	// Root is the suite checkout.
 	Root string
+	// Target is the version measured. The zero value is XSLT 2.0, so an
+	// existing caller keeps the run it had.
+	Target Target
 	// Timeout bounds one transform. A stylesheet that does not terminate is a
 	// failure of that test rather than of the run.
 	Timeout time.Duration
@@ -166,7 +193,7 @@ func (r *Runner) loadSet(ref TestSetRef) (*TestSet, error) {
 // runCase runs one test and judges the result.
 func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 	out := Outcome{Set: set.Name, Name: tc.Name}
-	if ok, why := inScope(set, tc); !ok {
+	if ok, why := inScope(set, tc, r.Target); !ok {
 		out.Skipped, out.Why = true, why
 		return out
 	}

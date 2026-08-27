@@ -53,16 +53,25 @@ var unsupportedFeatures = map[string]string{
 	"xsl-stylesheet-processing-instruction": "not implemented",
 }
 
-// admitsXSLT20 reports whether a spec value admits an XSLT 2.0 processor.
+// admits reports whether a spec value admits a processor of the target
+// version.
 //
 // The value is a space-separated list of tokens, each naming a version and
 // optionally a "+" meaning that version or later. "XSLT10+" admits 2.0;
 // "XSLT30+" does not; "XSLT10 XSLT20" admits it explicitly.
-func admitsXSLT20(value string) bool {
+func admits(value string, target Target) bool {
 	for _, tok := range strings.Fields(value) {
 		switch tok {
-		case "XSLT10+", "XSLT20", "XSLT20+":
+		case "XSLT10+", "XSLT20+":
 			return true
+		case "XSLT20":
+			if target == XSLT20 {
+				return true
+			}
+		case "XSLT30", "XSLT30+":
+			if target == XSLT30 {
+				return true
+			}
 		}
 	}
 	return false
@@ -75,7 +84,7 @@ func admitsXSLT20(value string) bool {
 // thousand cases state none and inherit the set's. Reading only the
 // case-level ones admits tests needing XSLT 3.0 and counts them as failures
 // of this engine.
-func inScope(set *TestSet, tc *TestCase) (bool, string) {
+func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 	// A case's dependencies override the set's *per kind*, not wholesale.
 	//
 	// Reading it as wholesale loses the set's version gate whenever a case
@@ -95,6 +104,8 @@ func inScope(set *TestSet, tc *TestCase) (bool, string) {
 	}
 
 	// A streamability test is XSLT 3.0 by construction, whatever it declares.
+	// Streaming is not implemented at either target, so the exclusion does not
+	// depend on one.
 	if tc.Test.PostureAndSweep != nil {
 		return false, "streamability (XSLT 3.0)"
 	}
@@ -112,8 +123,12 @@ func inScope(set *TestSet, tc *TestCase) (bool, string) {
 	// XSLT 2.0, so a 2.0 processor cannot produce the asserted result and
 	// counting the disagreement as a conformance failure measures the
 	// catalog rather than the engine.
-	if why := xslt30OnlyConstruct(set, tc); why != "" {
-		return false, why
+	// Only when the target is 2.0: at the 3.0 target these constructs are
+	// exactly what is under test.
+	if target == XSLT20 {
+		if why := xslt30OnlyConstruct(set, tc); why != "" {
+			return false, why
+		}
 	}
 
 	// The version gate. A case with no spec dependency at any level states no
@@ -121,7 +136,7 @@ func inScope(set *TestSet, tc *TestCase) (bool, string) {
 	if len(deps.Specs) > 0 {
 		ok := false
 		for _, s := range deps.Specs {
-			if admitsXSLT20(s.Value) {
+			if admits(s.Value, target) {
 				ok = true
 				break
 			}
