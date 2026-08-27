@@ -49,7 +49,7 @@ func applyParameterDocument(rt *runtime, o *OutputSettings, baseURI string) erro
 	if docs == nil {
 		return nil
 	}
-	tree, err := docs.ResolveDocument(href, baseURI)
+	tree, err := resolveDocumentIn(rt.ctx, href, baseURI)
 	if err != nil || tree == nil {
 		// "if no document can be found at the specified location, the
 		// attribute should be ignored".

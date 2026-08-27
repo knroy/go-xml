@@ -888,7 +888,7 @@ func (s *mergeSource) load(rt *runtime, href string) (*xdm.Node, error) {
 	if base == "" {
 		base = rt.ctx.StaticBaseURI
 	}
-	tree, err := docs.ResolveDocument(href, base)
+	tree, err := resolveDocumentIn(rt.ctx, href, base)
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}

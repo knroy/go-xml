@@ -98,7 +98,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 			base = n.BaseURI
 		}
 	}
-	tree, err := docs.ResolveDocument(href, base)
+	tree, err := resolveDocumentIn(rt.ctx, href, base)
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
