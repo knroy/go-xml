@@ -40,7 +40,16 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
-		base = n.BaseURI
+		base = inheritedBaseURI(n)
+		// XTDE1162 names this case exactly: "the second argument to the
+		// function is a node that has no base URI". Falling back to the
+		// static base URI would resolve the reference against the stylesheet,
+		// which is the one thing supplying a $base-node says not to do.
+		if base == "" {
+			return nil, fmt.Errorf(
+				"XTDE1162: the second argument of document() is a node with " +
+					"no base URI")
+		}
 	}
 	// Without a $base-node the relative URI resolves against "the base URI
 	// from the static context (this will usually be the base URI of the
@@ -82,7 +91,19 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			// the parser did not stamp read back empty and fell through to
 			// the stylesheet's own directory.
 			if !explicitBase {
-				if nb := inheritedBaseURI(v); nb != "" {
+				nb := inheritedBaseURI(v)
+				// A relative reference held in a node resolves against that
+				// node's base URI, and a parentless node has none -- the
+				// example XTDE1162 gives. The static base URI is not a
+				// fallback here: 16.1 makes the containing node's base the
+				// one that applies, so its absence is the error rather than
+				// a cue to resolve somewhere else.
+				if nb == "" && isRelativeRef(v.StringValue()) {
+					return nil, fmt.Errorf(
+						"XTDE1162: document(%q) takes its relative reference "+
+							"from a node with no base URI", v.StringValue())
+				}
+				if nb != "" {
 					b = nb
 				}
 			}
@@ -177,4 +198,30 @@ func FragmentIsValidXMLName(uri string) bool {
 		return true
 	}
 	return xdm.IsNCName(frag)
+}
+
+// isRelativeRef reports whether a URI reference needs a base to resolve.
+//
+// Only a reference with a scheme stands on its own; XTDE1162 is about the
+// rest. An empty reference is document(""), which names the containing
+// stylesheet module and is handled separately.
+func isRelativeRef(ref string) bool { return IsRelativeReference(ref) }
+
+// IsRelativeReference is isRelativeRef for xslt, which registers its own
+// fn:document#1 and needs the same judgement.
+func IsRelativeReference(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	for i := 0; i < len(ref); i++ {
+		c := ref[i]
+		if c == ':' {
+			return i == 0
+		}
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.') {
+			return true
+		}
+	}
+	return true
 }

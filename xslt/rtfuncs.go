@@ -69,6 +69,7 @@ var runtimeFuncNames = map[string]bool{
 	"current-grouping-key": true,
 	"current-merge-group":  true,
 	"current-merge-key":    true,
+	"current-output-uri":   true,
 	"document":             true,
 	"element-available":    true,
 	"function-available":   true,
@@ -210,6 +211,17 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 					// xpath/fn_document.go has always walked; this arity-1
 					// shadow did not, and the two disagreed.
 					b := inScopeBaseURI(v)
+					// A relative reference held in a node resolves against
+					// that node's base URI, and a parentless node has none --
+					// the example XTDE1162 gives. The static base URI is not
+					// a fallback: 16.1 makes the containing node's base the
+					// one that applies, so its absence is the error.
+					if b == "" && xpath.IsRelativeReference(v.StringValue()) {
+						return nil, fmt.Errorf(
+							"XTDE1162: document(%q) takes its relative "+
+								"reference from a node with no base URI",
+							v.StringValue())
+					}
 					if b == "" {
 						b = ctx.StaticBaseURI
 					}
@@ -1001,6 +1013,13 @@ func registerGroupingFuncs(l *xpath.Library) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current-grouping-key"}, Arity: 0,
 		Call: func(ctx *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 			if !groupingInScope(ctx) {
+				return nil, errNoGrouping(ctx, "XTDE1071",
+					"current-grouping-key")
+			}
+			// 14.4: the key is absent, not empty, inside a
+			// group-starting-with or group-ending-with, which partition by
+			// position rather than by value.
+			if !groupingKeyPresent(ctx) {
 				return nil, errNoGrouping(ctx, "XTDE1071",
 					"current-grouping-key")
 			}

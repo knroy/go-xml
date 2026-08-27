@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xsd"
 )
 
@@ -291,4 +292,67 @@ func unboundTypePrefixError(name string) error {
 	return fmt.Errorf(
 		"XTDE1428: type-available(%q): no namespace declaration is in scope "+
 			"for prefix %q", name, prefix)
+}
+
+// groupingKeyVar marks that the grouping in scope has a grouping key at all.
+//
+// XTDE1071 distinguishes "no grouping" from "a grouping whose key is absent":
+// group-starting-with and group-ending-with partition by position, so there is
+// no key to report, where group-by and group-adjacent always have one. Both
+// bind the key sequence to nil in the first case, so a separate marker is what
+// tells them apart -- the same reason groupingScopeVar exists beside the group
+// itself.
+var groupingKeyVar = xdm.QName{URI: internalNS, Local: "grouping-key-present"}
+
+// withGroupingKeyPresence records whether the grouping form supplies a key.
+func (rt *runtime) withGroupingKeyPresence(present bool) *runtime {
+	if !present {
+		return rt.withVar(groupingKeyVar, nil)
+	}
+	return rt.withVar(groupingKeyVar, xdm.One(xdm.NewBoolean(true)))
+}
+
+// groupingKeyPresent reports whether the grouping in scope has a key.
+func groupingKeyPresent(ctx *xpath.Context) bool {
+	seq, _ := ctx.LookupVar(groupingKeyVar)
+	return len(seq) > 0
+}
+
+// failMultipleMatch applies XTDE0540 to a mode declared
+// on-multiple-match="fail".
+//
+// The conflict-resolution algorithm normally picks the last of the tied rules
+// and carries on; 6.4 lets a mode ask for the ambiguity to be reported
+// instead. The tie is the same one warning-on-multiple-match reports -- the
+// list is sorted by (import precedence, priority, declaration order) and
+// selection stops at the first match, so a later rule is a conflict only when
+// it ties the winner on both precedence and priority.
+func (s *Stylesheet) failMultipleMatch(node *xdm.Node, mode string,
+	won *Template, next int, ctx *xpath.Context) error {
+
+	if !s.modeFailMultiple[mode] {
+		return nil
+	}
+	for i := next; i < len(s.templates); i++ {
+		t := s.templates[i]
+		if t.importPrecedence != won.importPrecedence ||
+			t.Priority != won.Priority {
+			return nil
+		}
+		if !t.matchesMode(mode) {
+			continue
+		}
+		ok, err := t.Match.Matches(node, ctx)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return fmt.Errorf(
+				"XTDE0540: more than one template rule matches %s in mode "+
+					"%s at the same import precedence and priority, and the "+
+					"mode declares on-multiple-match=\"fail\"",
+				nodeLabel(node), modeLabel(mode))
+		}
+	}
+	return nil
 }

@@ -100,6 +100,9 @@ type Stylesheet struct {
 	// warning attributes by Clark mode name, stored exactly as modeNoMatch is
 	// and consulted at the same two points in template selection.
 	modeWarnMultiple map[string]bool
+	// modeFailMultiple is @on-multiple-match="fail", which turns the
+	// ambiguity warning-on-multiple-match reports into the error XTDE0540.
+	modeFailMultiple map[string]bool
 	modeWarnNoMatch  map[string]bool
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before

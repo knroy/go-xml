@@ -136,6 +136,10 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 		rt, node, mode, t, next, rt.ctx); err != nil {
 		return err
 	}
+	if err := rt.sheet.failMultipleMatch(
+		node, mode, t, next, rt.ctx); err != nil {
+		return err
+	}
 	// Record the selection state so xsl:next-match and xsl:apply-imports in
 	// the body can resume from here.
 	sub := rt.withSelection(t, next, mode, params, tunnels)

@@ -1365,9 +1365,10 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	c.funcPrecedence[key] = precedence
 
 	c.sheet.funcs.Add(xpath.Function{
-		Name:  qn,
-		Arity: len(params),
-		Call:  fn.call,
+		Name:      qn,
+		Arity:     len(params),
+		Call:      fn.call,
+		Signature: declaredSignature(fn.returns, params),
 	})
 	return nil
 }
@@ -1818,6 +1819,12 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeNoMatch = map[string]string{}
 		}
 		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+	}
+	if a := el.Attr("", "on-multiple-match"); a != nil {
+		if c.sheet.modeFailMultiple == nil {
+			c.sheet.modeFailMultiple = map[string]bool{}
+		}
+		c.sheet.modeFailMultiple[name] = strings.TrimSpace(a.Value) == "fail"
 	}
 	if a := el.Attr("", "warning-on-multiple-match"); a != nil {
 		if c.sheet.modeWarnMultiple == nil {

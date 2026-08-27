@@ -104,6 +104,7 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		sub := rt.withCurrent(focus, idx+1, size).clearCurrentRule()
 		sub = sub.withGroupingScope(g.items, g.key)
+		sub = sub.withGroupingKeyPresence(i.groupBy != nil || i.groupAdjacent != nil)
 		if err := execSequence(i.body, sub, out); err != nil {
 			return err
 		}
@@ -186,6 +187,7 @@ func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, er
 		}
 		sub := rt.withFocus(focus, n+1, len(groups))
 		sub = sub.withGroupingScope(g.items, g.key)
+		sub = sub.withGroupingKeyPresence(i.groupBy != nil || i.groupAdjacent != nil)
 		e := entry{g: g, idx: n, keys: make([]sortValue, len(sorts))}
 		for k, sk := range sorts {
 			v, err := sk.evalKey(sub)
