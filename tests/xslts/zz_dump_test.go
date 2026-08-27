@@ -37,10 +37,13 @@ func TestDumpFailures(t *testing.T) {
 	}
 
 	r := &Runner{Root: root, Timeout: 10 * time.Second}
+	// The suites' patterns are trusted input, exactly as in the two suite
+	// tests, so the dump must run the matcher they run or it reports
+	// failures the measured figure does not have.
+	xpath.SetBacktrackingRegex(true)
+	defer xpath.SetBacktrackingRegex(false)
 	if os.Getenv("GOXSLT_DUMP_TARGET") == "3.0" {
 		r.Target = XSLT30
-		xpath.SetBacktrackingRegex(true)
-		defer xpath.SetBacktrackingRegex(false)
 	}
 	sum, err := r.Run()
 	if err != nil {
