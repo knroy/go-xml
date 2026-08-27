@@ -92,6 +92,11 @@ type Result struct {
 	Nodes xdm.Sequence
 	// Messages holds xsl:message output, in the order produced.
 	Messages []string
+	// Warnings holds the warnings the transform raised, in the order
+	// produced. They report conditions the spec asks a processor to notice —
+	// currently the two xsl:mode warning attributes — and never affect the
+	// result.
+	Warnings []string
 	// Secondary holds the documents produced by xsl:result-document, in the
 	// order produced. It is empty for the great majority of stylesheets,
 	// which produce a single result.
@@ -316,6 +321,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	return &Result{
 		Nodes:     out.sequence(),
 		Messages:  *rt.messages,
+		Warnings:  *rt.warnings,
 		Secondary: *rt.secondary,
 		output:    s.output,
 		charMap:   s.activeCharMap,

@@ -95,6 +95,12 @@ type Stylesheet struct {
 	// without giving @on-no-match records nothing and the default still
 	// stands.
 	modeNoMatch map[string]string
+
+	// modeWarnMultiple and modeWarnNoMatch hold the two boolean xsl:mode
+	// warning attributes by Clark mode name, stored exactly as modeNoMatch is
+	// and consulted at the same two points in template selection.
+	modeWarnMultiple map[string]bool
+	modeWarnNoMatch  map[string]bool
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before
 	// resolves ties by. See accumulator.go.

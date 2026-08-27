@@ -389,6 +389,20 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		}
 		return true, ""
 
+	case "assert-warning":
+		// The suite always writes this assertion empty: it asserts that the
+		// processor raised some warning, never which one. A warning is not
+		// required to be raised at all for most recoverable conditions, but
+		// where the stylesheet asks for one — xsl:mode/@warning-on-no-match
+		// and @warning-on-multiple-match — these cases expect it.
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		if len(res.Warnings) == 0 {
+			return false, "no warning was raised"
+		}
+		return true, ""
+
 	case "assert-empty":
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())

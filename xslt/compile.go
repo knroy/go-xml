@@ -1777,6 +1777,18 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		}
 		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
 	}
+	if a := el.Attr("", "warning-on-multiple-match"); a != nil {
+		if c.sheet.modeWarnMultiple == nil {
+			c.sheet.modeWarnMultiple = map[string]bool{}
+		}
+		c.sheet.modeWarnMultiple[name] = modeWarningValue(a.Value)
+	}
+	if a := el.Attr("", "warning-on-no-match"); a != nil {
+		if c.sheet.modeWarnNoMatch == nil {
+			c.sheet.modeWarnNoMatch = map[string]bool{}
+		}
+		c.sheet.modeWarnNoMatch[name] = modeWarningValue(a.Value)
+	}
 	if c.sheet.declaredModeNames == nil {
 		c.sheet.declaredModeNames = map[string]bool{}
 	}

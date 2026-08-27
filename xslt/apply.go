@@ -129,7 +129,12 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 		return err
 	}
 	if t == nil {
+		rt.sheet.warnNoMatch(rt, node, mode)
 		return applyBuiltInRule(rt, node, mode, params, tunnels, out)
+	}
+	if err := rt.sheet.warnMultipleMatch(
+		rt, node, mode, t, next, rt.ctx); err != nil {
+		return err
 	}
 	// Record the selection state so xsl:next-match and xsl:apply-imports in
 	// the body can resume from here.

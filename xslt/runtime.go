@@ -112,6 +112,10 @@ type runtime struct {
 	// would never reach the caller.
 	messages *[]string
 
+	// warnings collects the recoverable-condition warnings xsl:mode asks for,
+	// and is a pointer for the same reason messages is.
+	warnings *[]string
+
 	// tunnel holds tunnel parameters, which pass through templates that do
 	// not declare them.
 	tunnel map[string]xdm.Sequence
@@ -1069,6 +1073,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		streamedTrees: map[*xdm.Node]bool{},
 		tunnel:        map[string]xdm.Sequence{},
 		messages:      new([]string),
+		warnings:      new([]string),
 		secondary:     new([]SecondaryResult),
 		baseURIUsed:   new(bool),
 		baseOutputURI: opts.BaseOutputURI,
