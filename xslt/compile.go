@@ -732,9 +732,18 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	}
 
 	// Leading xsl:param children declare the template's parameters; they must
-	// precede the body.
+	// precede the body. An xsl:context-item, when present, precedes even
+	// those: section 10.1.1 puts it first among the children.
 	children := el.ChildElements()
 	i := 0
+	if i < len(children) && isXSL(children[i], "context-item") {
+		ci, err := compileContextItem(children[i])
+		if err != nil {
+			return err
+		}
+		t.contextItem = ci
+		i++
+	}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
 			break
@@ -1709,6 +1718,12 @@ func (c *compiler) compileMode(el *xdm.Node) error {
 			c.sheet.modeNoMatch = map[string]string{}
 		}
 		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+	}
+	if c.sheet.declaredModeNames == nil {
+		c.sheet.declaredModeNames = map[string]bool{}
+	}
+	for _, m := range modeNamesOf(el) {
+		c.sheet.declaredModeNames[m] = true
 	}
 	return c.compileModeAccumulators(el, name)
 }

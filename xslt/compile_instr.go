@@ -459,15 +459,41 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 	case "on-empty", "on-non-empty", "where-populated":
 		return c.compileOnEmpty(n, ns)
 	case "sequence":
+		// XSLT 3.0 made the select attribute optional: "the items comprising
+		// the result sequence are evaluated either using the select
+		// attribute, or using the contained sequence constructor", and with
+		// neither the result is the empty sequence. 2.0 required select, and
+		// a 2.0 stylesheet that omits it must still be told so — sequence-
+		// 0132 asks for exactly that.
+		if n.AttrValue("select") == "" && xpathVersionAt(n).AtLeast31() {
+			body, err := c.compileSequence(n, n)
+			if err != nil {
+				return nil, err
+			}
+			return &sequenceInstr{body: body}, nil
+		}
 		sel, err := requiredExpr(n, "select", ns)
 		if err != nil {
 			return nil, err
+		}
+		// XTSE3185: with select present the only permitted children are
+		// xsl:fallback, which a 2.0 or 3.0 processor ignores. The content
+		// model admits a sequence constructor here at 3.0, so the two forms
+		// have to be kept apart by this rule rather than by the grammar.
+		for _, ch := range n.ChildElements() {
+			if !isXSL(ch, "fallback") {
+				return nil, fmt.Errorf(
+					"XTSE3185: xsl:sequence has a select attribute and a %s "+
+						"child", ch.Name.Lexical())
+			}
 		}
 		return &sequenceInstr{sel: sel}, nil
 	case "message":
 		return c.compileMessage(n, ns)
 	case "try":
 		return c.compileTry(n, ns)
+	case "merge":
+		return c.compileMerge(n, ns)
 	case "analyze-string":
 		return c.compileAnalyzeString(n, ns)
 	case "number":
@@ -512,7 +538,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return nil, nil
 	case "param", "sort", "with-param", "when", "otherwise",
 		"matching-substring", "non-matching-substring", "output-character",
-		"catch":
+		"catch", "merge-source", "merge-key", "merge-action":
 		// These are only meaningful inside a specific parent, and each parent
 		// reads them directly from its children rather than compiling them as
 		// instructions. Reaching this case therefore means the element is in
@@ -628,6 +654,17 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 			return nil, fmt.Errorf("in xsl:apply-templates/@select: %w", err)
 		}
 		instr.sel = comp
+	}
+	// An absent @mode means the default mode, which [xsl:]default-mode may
+	// have moved off the unnamed one. Reading it here rather than defaulting
+	// instr.mode to "" is what makes "<out xsl:default-mode='a'>" govern the
+	// xsl:apply-templates written inside it.
+	// @default-mode on the instruction itself takes precedence over one
+	// inherited from an ancestor, being nearer.
+	if dm, err := defaultModeAt(n); err != nil {
+		return nil, err
+	} else {
+		instr.mode = dm
 	}
 	if m := strings.TrimSpace(n.AttrValue("mode")); m != "" {
 		// Expanded to match the form the template rules are indexed under;
