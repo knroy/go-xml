@@ -88,6 +88,14 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 	if forXML {
 		opts.duplicates = "retain"
 	}
+	// Whether "duplicates" was written matters as well as what it says.
+	// fn:json-to-xml defaults it to "retain" -- except with validate=true,
+	// where the default is "reject", since a tree that retains duplicates
+	// cannot be schema-valid. Defaulting it to "retain" unconditionally made
+	// {'validate': true()} on its own a contradiction and raised FOJS0005
+	// for the whole of the json-to-xml-typed set, which supplies exactly
+	// that option and nothing else.
+	duplicatesGiven := false
 	if i >= len(args) {
 		return opts, nil
 	}
@@ -129,6 +137,7 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 				return err
 			}
 			opts.duplicates = s
+			duplicatesGiven = true
 		case "fallback":
 			fn, err := singleFunctionItem(v)
 			if err != nil {
@@ -145,6 +154,10 @@ func jsonOptionsFrom(ctx *Context, args []xdm.Sequence, i int, forXML bool) (jso
 	})
 	if err != nil {
 		return opts, err
+	}
+
+	if forXML && opts.validate && !duplicatesGiven {
+		opts.duplicates = "reject"
 	}
 
 	// "retain" is the fn:json-to-xml default and is meaningless elsewhere:
