@@ -180,7 +180,7 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if !ad.required {
 			continue
 		}
-		if ad.optional30 && xpathVersionAt(el).AtLeast31() {
+		if ad.optional30 && processorAtLeast30() {
 			continue
 		}
 		if el.Attr("", name) == nil {
@@ -218,9 +218,13 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 		return nil
 	}
 	// An element whose content became a sequence constructor in 3.0 is
-	// checked as one only for a stylesheet that declares 3.0; a 2.0
-	// stylesheet still gets the narrower model its version defines.
-	if cm.seqCtor30 && xpathVersionAt(el).AtLeast31() {
+	// checked as one by a 3.0 processor, whatever version the module
+	// declares. The suite is unambiguous: sequence-2402 and -2403 are
+	// version="1.0" modules, and their -b siblings run the very same files
+	// scoped XSLT30+ and expect the content to be accepted. Nothing in a bare
+	// sequence constructor is 3.0 syntax the parser has to learn -- what
+	// changed is only whether the instruction reads it.
+	if cm.seqCtor30 && processorAtLeast30() {
 		cm.seqCtor = true
 	}
 	for _, ch := range el.Children {

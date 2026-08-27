@@ -465,10 +465,13 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// XSLT 3.0 made the select attribute optional: "the items comprising
 		// the result sequence are evaluated either using the select
 		// attribute, or using the contained sequence constructor", and with
-		// neither the result is the empty sequence. 2.0 required select, and
-		// a 2.0 stylesheet that omits it must still be told so — sequence-
-		// 0132 asks for exactly that.
-		if n.AttrValue("select") == "" && xpathVersionAt(n).AtLeast31() {
+		// neither the result is the empty sequence.
+		//
+		// This follows the processor, not the module. sequence-0132 is a
+		// version="2.0" module scoped XSLT20+ that omits select and expects
+		// XTTE0570 from the type check afterwards -- so the instruction has
+		// to have compiled first, at both versions.
+		if n.AttrValue("select") == "" && processorAtLeast30() {
 			body, err := c.compileSequence(n, n)
 			if err != nil {
 				return nil, err
@@ -1409,6 +1412,9 @@ type evaluateInstr struct {
 	// base URI of the target expression. Nil when the attribute is absent,
 	// leaving the base URI of the xsl:evaluate element in force.
 	baseURI *avt
+	// nsContext is @namespace-context, whose single node supplies the
+	// statically known namespaces of the target expression. See resolverFor.
+	nsContext *xpath.Compiled
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1484,6 +1490,13 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 		}
 		instr.withParams = wp
 	}
+	if a := n.Attr("", "namespace-context"); a != nil {
+		nc, err := compileExpr(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@namespace-context: %w", err)
+		}
+		instr.nsContext = nc
+	}
 	if a := n.Attr("", "base-uri"); a != nil {
 		b, err := compileAVT(a.Value, ns)
 		if err != nil {
@@ -1505,15 +1518,17 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 
+	// The statically known namespaces come from @namespace-context when it is
+	// present and from the xsl:evaluate element otherwise; see resolverFor.
+	ns, err := i.resolverFor(rt)
+	if err != nil {
+		return err
+	}
 	// A static error in the target expression is XTDE3160 whatever its XPath
 	// code would have been: 10.4 defines the error by *when* it happens, not
-	// by which rule was broken.
-	// 10.4.1 gives the target expression the XPath version of the stylesheet
-	// module that wrote the xsl:evaluate, exactly as a statically written
-	// expression gets it. Compiling at the default version instead refused
-	// every 3.0 construct — inline functions, "let", the arrow operator — in
-	// a 3.0 module that is entitled to them.
-	comp, err := xpath.CompileVersion(src, i.ns, i.ns.xpathVersion)
+	// by which rule was broken. The version is the module's, exactly as a
+	// statically written expression gets it.
+	comp, err := xpath.CompileVersion(src, ns, ns.xpathVersion)
 	if err != nil {
 		return fmt.Errorf("XTDE3160: the target expression of xsl:evaluate "+
 			"is not a valid XPath expression: %w", err)
