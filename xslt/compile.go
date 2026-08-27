@@ -1577,12 +1577,30 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 		// name appearing in both lists as a conflict when the two
 		// declarations have the same import precedence.
 		d := spaceDecl{name: qn, precedence: precedence}
+		// Filed under the package the declaration appears in as well as in
+		// the flat list. 4.4 makes the effect "local to the package in which
+		// they appear", so a document loaded by a call written in one package
+		// is stripped by that package's declarations and no others.
+		//
+		// The flat list stays because the top-level package's declarations
+		// also strip the principal source document, and because XTSE0270 is
+		// judged over it.
+		if c.sheet.pkgSpace == nil {
+			c.sheet.pkgSpace = map[int]*packageSpace{}
+		}
+		ps := c.sheet.pkgSpace[compilePackage]
+		if ps == nil {
+			ps = &packageSpace{}
+			c.sheet.pkgSpace[compilePackage] = ps
+		}
 		if el.Name.Local == "strip-space" {
 			c.stripDecls = append(c.stripDecls, d)
 			c.sheet.strip = append(c.sheet.strip, qn)
+			ps.strip = append(ps.strip, qn)
 		} else {
 			c.preserveDecls = append(c.preserveDecls, d)
 			c.sheet.preserve = append(c.sheet.preserve, qn)
+			ps.preserve = append(ps.preserve, qn)
 		}
 	}
 	return nil

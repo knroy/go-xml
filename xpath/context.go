@@ -90,6 +90,11 @@ type Context struct {
 	// from another.
 	StaticBaseURI string
 
+	// StaticHost is an opaque value the host language attached to the
+	// expression being evaluated; see Compiled.WithStaticHost. This package
+	// never interprets it, only carries it.
+	StaticHost any
+
 	// collation is the collation in force for string comparison, when a
 	// function has been given one. Nil means the codepoint collation, which
 	// is the default everywhere.
@@ -212,6 +217,33 @@ const MaxItems = 5_000_000
 type DocumentResolver interface {
 	// ResolveDocument returns the tree for uri, resolved against base.
 	ResolveDocument(uri, base string) (*xdm.Tree, error)
+}
+
+// ContextDocumentResolver is a DocumentResolver that also wants the
+// evaluation context of the call.
+//
+// It is a separate optional interface rather than an extra parameter on
+// ResolveDocument so that existing implementations keep working: a resolver
+// that does not implement it is called through ResolveDocument exactly as
+// before. fn:doc and fn:document prefer this method where it is offered.
+//
+// XSLT needs it because whitespace stripping is scoped to the package the
+// CALL is written in -- section 4.4 of that specification -- so which
+// declarations apply is a property of the expression rather than of the
+// transform, and only the context carries it.
+type ContextDocumentResolver interface {
+	DocumentResolver
+	// ResolveDocumentIn is ResolveDocument for a call made from ctx.
+	ResolveDocumentIn(ctx *Context, uri, base string) (*xdm.Tree, error)
+}
+
+// resolveDocument loads a document through the richer interface when the
+// resolver offers one, and through the plain one otherwise.
+func resolveDocument(ctx *Context, uri, base string) (*xdm.Tree, error) {
+	if cr, ok := ctx.Docs.(ContextDocumentResolver); ok {
+		return cr.ResolveDocumentIn(ctx, uri, base)
+	}
+	return ctx.Docs.ResolveDocument(uri, base)
 }
 
 // CollectionResolver loads a named set of documents for fn:collection.

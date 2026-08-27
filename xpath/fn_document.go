@@ -143,7 +143,7 @@ func fnDocument(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 				"XTRE1160: %q has a fragment identifier that is not valid "+
 					"for an XML media type", uri)
 		}
-		tree, err := ctx.Docs.ResolveDocument(uri, r.base)
+		tree, err := resolveDocument(ctx, uri, r.base)
 		if err != nil {
 			return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
 		}

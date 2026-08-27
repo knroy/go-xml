@@ -522,7 +522,7 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	if strings.TrimSpace(uri) == "" && ctx.StaticBaseURI != "" {
 		base = ctx.StaticBaseURI
 	}
-	tree, err := ctx.Docs.ResolveDocument(uri, base)
+	tree, err := resolveDocument(ctx, uri, base)
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", uri, err)
 	}

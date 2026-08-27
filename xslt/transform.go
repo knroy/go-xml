@@ -519,6 +519,16 @@ func (s *Stylesheet) stripWhitespace(root *xdm.Node) *xdm.Node {
 // but an absent focus, and absence is what XPDY0002 reports at the point of
 // use.
 func (s *Stylesheet) stripWhitespaceFrom(root, want *xdm.Node) (*xdm.Node, *xdm.Node) {
+	return s.stripWhitespaceForFrom(0, root, want)
+}
+
+// stripWhitespaceFor is stripWhitespace under one package's declarations.
+func (s *Stylesheet) stripWhitespaceFor(pkg int, root *xdm.Node) *xdm.Node {
+	stripped, _ := s.stripWhitespaceForFrom(pkg, root, nil)
+	return stripped
+}
+
+func (s *Stylesheet) stripWhitespaceForFrom(pkg int, root, want *xdm.Node) (*xdm.Node, *xdm.Node) {
 	var found *xdm.Node
 	tree := xdm.NewTree()
 	tree.Root.BaseURI = root.BaseURI
@@ -535,7 +545,7 @@ func (s *Stylesheet) stripWhitespaceFrom(root, want *xdm.Node) (*xdm.Node, *xdm.
 		found = tree.Root
 	}
 	for _, ch := range root.Children {
-		if c := s.stripCopy(ch, false, want, &found); c != nil {
+		if c := s.stripCopy(pkg, ch, false, want, &found); c != nil {
 			tree.Root.AppendChild(c)
 		}
 	}
@@ -561,27 +571,63 @@ type stripSpaceResolver struct {
 	inner xpath.DocumentResolver
 	// done caches by the tree the inner resolver returned rather than by the
 	// URI string, so that two URIs the inner resolver maps to one document
-	// still map to one stripped document here.
-	done map[*xdm.Tree]*xdm.Tree
+	// still map to one stripped document here. The package is part of the key
+	// because 4.4 scopes the declarations to it: one file loaded from two
+	// packages is two documents.
+	done map[strippedKey]*xdm.Tree
+}
+
+// strippedKey identifies one stripping of one source tree.
+type strippedKey struct {
+	tree *xdm.Tree
+	pkg  int
 }
 
 func (r *stripSpaceResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
+	return r.resolve(0, uri, base)
+}
+
+// ResolveDocumentIn implements xpath.ContextDocumentResolver.
+//
+// Section 4.4 scopes whitespace stripping to the package the call appears in
+// LEXICALLY: "Declarations within a library package only affect the handling
+// of documents loaded using a call on the document, doc, or collection
+// functions ... appearing lexically within the same package." So which
+// declarations apply is a property of the expression, and the context is what
+// carries it -- compileExpr attached the package when the expression was
+// compiled.
+//
+// document-2401 is the case. Two packages declare different stripping over one
+// file, the using package calls document() and so does the package it uses,
+// and the two must see different trees: 0 stripped text nodes in one and 4 in
+// the other.
+func (r *stripSpaceResolver) ResolveDocumentIn(
+	ctx *xpath.Context, uri, base string) (*xdm.Tree, error) {
+
+	return r.resolve(packageOf(ctx), uri, base)
+}
+
+func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, error) {
 	t, err := r.inner.ResolveDocument(uri, base)
 	if err != nil || t == nil || t.Root == nil {
 		return t, err
 	}
-	if c, ok := r.done[t]; ok {
+	// Keyed by package as well as by tree: the same file loaded from two
+	// packages is two differently stripped documents, and caching on the
+	// source tree alone returned whichever package asked first to both.
+	k := strippedKey{tree: t, pkg: pkg}
+	if c, ok := r.done[k]; ok {
 		return c, nil
 	}
-	root := r.sheet.stripWhitespace(t.Root)
+	root := r.sheet.stripWhitespaceFor(pkg, t.Root)
 	out := root.Tree()
 	if out == nil {
 		return t, nil
 	}
 	if r.done == nil {
-		r.done = map[*xdm.Tree]*xdm.Tree{}
+		r.done = map[strippedKey]*xdm.Tree{}
 	}
-	r.done[t] = out
+	r.done[k] = out
 	return out, nil
 }
 
@@ -613,15 +659,15 @@ func (s *Stylesheet) SourceDocumentResolver(inner xpath.DocumentResolver) xpath.
 // preserving carries xml:space="preserve" down the subtree, and *only* that:
 // whether an element's own whitespace is stripped is decided from the
 // strip-space and preserve-space declarations matching its name.
-func (s *Stylesheet) stripCopy(n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
-	c := s.stripCopyNode(n, preserving, want, found)
+func (s *Stylesheet) stripCopy(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
+	c := s.stripCopyNode(pkg, n, preserving, want, found)
 	if c != nil && n == want {
 		*found = c
 	}
 	return c
 }
 
-func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
+func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *xdm.Node, found **xdm.Node) *xdm.Node {
 	switch n.Kind {
 	case xdm.KindText:
 		// Whitespace-only text is dropped unless xml:space preserves it or
@@ -637,7 +683,7 @@ func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node,
 		// an unvalidated document is unaffected and this stays inside the
 		// existing gate on there being a strip-space declaration at all.
 		if !preserving && xdm.IsXMLWhitespace(n.Value) &&
-			n.Parent != nil && s.stripsElement(n.Parent.Name) &&
+			n.Parent != nil && s.stripsElement(pkg, n.Parent.Name) &&
 			!xdm.HasSimpleTypeAnnotation(n.Parent.TypeAnnotation) {
 			return nil
 		}
@@ -683,7 +729,7 @@ func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node,
 		}
 
 		for _, ch := range n.Children {
-			if cc := s.stripCopy(ch, childPreserving, want, found); cc != nil {
+			if cc := s.stripCopy(pkg, ch, childPreserving, want, found); cc != nil {
 				c.AppendChild(cc)
 			}
 		}
@@ -697,7 +743,7 @@ func (s *Stylesheet) stripCopyNode(n *xdm.Node, preserving bool, want *xdm.Node,
 // stripsElement reports whether whitespace inside the named element is
 // stripped. A specific preserve-space entry wins over a wildcard strip-space
 // entry, matching the spec's import-precedence rule for the common case.
-func (s *Stylesheet) stripsElement(name xdm.QName) bool {
+func (s *Stylesheet) stripsElement(pkg int, name xdm.QName) bool {
 	best, strip := -1, false
 	rank := func(q xdm.QName) int {
 		switch {
@@ -731,13 +777,37 @@ func (s *Stylesheet) stripsElement(name xdm.QName) bool {
 			best, strip = r, isStrip
 		}
 	}
-	for _, q := range s.strip {
+	strips, preserves := s.spaceDeclsFor(pkg)
+	for _, q := range strips {
 		consider(q, true)
 	}
-	for _, q := range s.preserve {
+	for _, q := range preserves {
 		consider(q, false)
 	}
 	return strip
+}
+
+// spaceDeclsFor returns the whitespace declarations in force for a package.
+//
+// Section 4.4 makes them local to the package they appear in, so a document
+// loaded by a call written in a library package is stripped by that package's
+// declarations alone -- not by the ones its user declared, and not by the flat
+// union of every module's.
+//
+// A package with no declarations of its own strips nothing, which is the whole
+// point: document-2401a declares <xsl:strip-space elements=""/> and must see
+// the four whitespace text nodes its user's elements="*" would have removed.
+// The flat lists remain the answer only for the top-level package, which also
+// strips the principal source document.
+func (s *Stylesheet) spaceDeclsFor(pkg int) (strip, preserve []xdm.QName) {
+	if pkg == 0 || s.pkgSpace == nil {
+		return s.strip, s.preserve
+	}
+	ps := s.pkgSpace[pkg]
+	if ps == nil {
+		return nil, nil
+	}
+	return ps.strip, ps.preserve
 }
 
 // String renders the result using the stylesheet's output settings.

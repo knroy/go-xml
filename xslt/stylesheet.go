@@ -84,6 +84,12 @@ type Stylesheet struct {
 	activeCharMap map[rune]string
 	// strip and preserve control whitespace stripping of source documents.
 	strip, preserve []xdm.QName
+	// pkgSpace holds the same declarations filed by the package they appear
+	// in, which is the scope 4.4 gives them for a document loaded by
+	// fn:document, fn:doc or fn:collection. The flat pair above stays for the
+	// principal source document, which the top-level package's declarations
+	// strip, and for XTSE0270.
+	pkgSpace map[int]*packageSpace
 	// output holds the unnamed xsl:output settings, which configure the
 	// principal result.
 	output OutputSettings
@@ -296,6 +302,35 @@ type keyDef struct {
 	composite bool
 }
 
+// hostPackage is the package identity that travels with a compiled
+// expression, as xpath.Context.StaticHost. It is a named type rather than a
+// bare int so that nothing else can be mistaken for one.
+type hostPackage int
+
+// packageOf reads the package an expression was compiled in back out of the
+// evaluation context, defaulting to the top-level package for an expression
+// that carries nothing.
+func packageOf(ctx *xpath.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	if p, ok := ctx.StaticHost.(hostPackage); ok {
+		return int(p)
+	}
+	return 0
+}
+
+// packageSpace is one package's whitespace declarations.
+//
+// Section 4.4 scopes them: "The effect of xsl:strip-space and
+// xsl:preserve-space is local to the package in which they appear."
+// document-2401 is the case that pins it -- two packages declare different
+// stripping over the same file, and each must see its own.
+type packageSpace struct {
+	strip    []xdm.QName
+	preserve []xdm.QName
+}
+
 // OutputSettings holds the xsl:output declaration.
 type OutputSettings struct {
 	Method        string // "xml", "html", "text"
@@ -483,6 +518,8 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	defer compileMu.Unlock()
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
+	compilePackage = 0
+	defer func() { compilePackage = 0 }()
 	// The XPath version override is package state on the same terms and under
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
@@ -670,6 +707,18 @@ type nsResolver struct {
 	// stylesheet's imported types part of the static context, which is what
 	// lets "instance of my:partNumberType" resolve at all.
 	schema *xsd.Schema
+	// pkg identifies the package the element belongs to, which decides which
+	// xsl:strip-space declarations apply to a document the expressions on it
+	// load. Section 4.4: "The effect of xsl:strip-space and
+	// xsl:preserve-space is local to the package in which they appear.
+	// Declarations within a library package only affect the handling of
+	// documents loaded using a call on the document, doc, or collection
+	// functions ... appearing lexically within the same package."
+	//
+	// Lexically, so it is a static property of where the call is written --
+	// exactly like the base URI and the default collation beside it -- and
+	// not of which package's code is on the stack at the time.
+	pkg int
 	// xpathVersion is the version of XPath the expressions written on this
 	// element are in. It is static in exactly the way the base URI and the
 	// default collation are, and for the same reason: it is a property of
@@ -701,6 +750,17 @@ type nsResolver struct {
 var (
 	compileMu     sync.Mutex
 	compileSchema *xsd.Schema
+	// compilePackage identifies the package whose module is being compiled,
+	// for the same reason and by the same mechanism as compileSchema. It is
+	// what makes whitespace stripping package-scoped: 4.4 decides which
+	// declarations apply from where the CALL is written, lexically, so the
+	// answer has to be captured at compile time and travel with the
+	// expression.
+	//
+	// Zero is the top-level package. A used package gets a serial of its own
+	// so that two library packages are distinguishable from each other as
+	// well as from the top level.
+	compilePackage int
 )
 
 func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
@@ -722,6 +782,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		collation: defaultCollationAt(el),
 		compat:    compatModeAt(el),
 		schema:    compileSchema,
+		pkg:       compilePackage,
 
 		xpathVersion: xpathVersionAt(el),
 		xsltVersion:  declaredXSLTVersion(el),
@@ -981,6 +1042,13 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	if r, ok := ns.(*nsResolver); ok {
 		if r.baseURI != "" {
 			c = c.WithStaticBaseURI(r.baseURI)
+		}
+		// The package the expression was written in, for the whitespace
+		// declarations 4.4 scopes to it. Bound even for the top-level
+		// package, whose zero would otherwise be indistinguishable from
+		// "nothing attached".
+		if r.pkg >= 0 {
+			c = c.WithStaticHost(hostPackage(r.pkg))
 		}
 		// [xsl:]default-collation is static in the same way, and is what the
 		// collation-taking functions use when given no collation argument.

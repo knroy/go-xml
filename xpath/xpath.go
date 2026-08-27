@@ -20,6 +20,17 @@ type Compiled struct {
 	// for the expressions within it, so the module's own is only a default.
 	// Empty means the context's applies.
 	staticBase string
+	// staticHost is an opaque value the host language attaches to the
+	// expression and reads back from Context.StaticHost when it evaluates.
+	//
+	// It exists so a host-language static property can travel with the
+	// expression without this package having to know what it means. XSLT uses
+	// it for the package a call is written in, which section 4.4 of that
+	// specification makes decide which xsl:strip-space declarations apply to
+	// a document the call loads -- a question about where the call appears
+	// lexically, so a property of the compiled expression rather than of the
+	// runtime that reaches it.
+	staticHost any
 	// staticCollation is the default collation for this expression, which
 	// [xsl:]default-collation sets and which is static for the same reason
 	// the base URI is: it is written in the stylesheet.
@@ -62,6 +73,17 @@ func (c *Compiled) WithStaticBaseURI(base string) *Compiled {
 	}
 	n := *c
 	n.staticBase = base
+	return &n
+}
+
+// WithStaticHost attaches an opaque host-language value to the expression,
+// which Eval puts in Context.StaticHost. See Compiled.staticHost.
+func (c *Compiled) WithStaticHost(v any) *Compiled {
+	if c == nil || v == nil {
+		return c
+	}
+	n := *c
+	n.staticHost = v
 	return &n
 }
 
@@ -128,10 +150,14 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	ctx.resetItems()
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
-		c.version != ctx.Version {
+		c.version != ctx.Version ||
+		(c.staticHost != nil && c.staticHost != ctx.StaticHost) {
 		sub := *ctx
 		if c.staticBase != "" {
 			sub.StaticBaseURI = c.staticBase
+		}
+		if c.staticHost != nil {
+			sub.StaticHost = c.staticHost
 		}
 		// The version the expression was compiled in is what its function
 		// calls resolve against, whatever the caller's context says: an

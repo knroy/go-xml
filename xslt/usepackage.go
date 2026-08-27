@@ -1515,6 +1515,22 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// allocates the number and runs every check the module deserves.
 	c.usedPackageDepth++
 	defer func() { c.usedPackageDepth-- }()
+	// A used package's whitespace declarations are its own, on the same
+	// terms as its schema components below. 4.4: "The effect of
+	// xsl:strip-space and xsl:preserve-space is local to the package in
+	// which they appear. Declarations within a library package only affect
+	// the handling of documents loaded using a call on the document, doc, or
+	// collection functions ... appearing lexically within the same package."
+	//
+	// Every used package gets a serial rather than a flag, so that two
+	// library packages are distinguishable from each other and not merely
+	// from the top level. Saved and restored rather than incremented and
+	// decremented, because a package used from inside another must not be
+	// mistaken for its user on the way back out.
+	savedPkg := compilePackage
+	packageSerial++
+	compilePackage = packageSerial
+	defer func() { compilePackage = savedPkg }()
 	// A used package brings its own in-scope schema components, so the
 	// xsl:import-schema pre-pass runs again for it. 2.5.3 makes the set
 	// package-scoped in as many words: "The schema components that may be
@@ -1730,6 +1746,11 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	}
 	return overriding
 }
+
+// packageSerial numbers the packages one compilation sees, so that each has
+// an identity its declarations can be filed under. It is guarded by compileMu
+// with the rest of the compile-time package state.
+var packageSerial int
 
 // setAttr sets or replaces an unprefixed attribute of an element.
 func setAttr(el *xdm.Node, name, value string) {
