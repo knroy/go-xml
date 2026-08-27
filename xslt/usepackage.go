@@ -680,6 +680,23 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 					"from %s", comp.sym, u.name)
 		}
 	}
+	// A template rule naming a mode the manifest accepted is adding to that
+	// mode, which is overriding it, and 3.5.4 admits that only inside an
+	// xsl:override. Written at the top level it is the same clash as
+	// declaring a homonymous component: override-m-018 adds a rule to an
+	// accepted mode m3 from outside.
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "template") || el.AttrValue("name") != "" {
+			continue
+		}
+		for _, m := range overriddenModes(el) {
+			if u, dup := accepted[m.String()]; dup {
+				return fmt.Errorf(
+					"XTSE3050: a template rule outside xsl:override names "+
+						"%s, which is accepted from %s", m, u.name)
+			}
+		}
+	}
 	// The used packages are compiled below the using package, so that the
 	// using package's own declarations win any contest precedence decides.
 	// They are compiled in reverse manifest order for the same reason
@@ -995,6 +1012,17 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 				op[i].AttrValue("name"), a, b)
 		}
 	}
+	// Determinism is part of a function's signature. A caller compiled
+	// against new-each-time="no" may have been optimised on the promise that
+	// two calls with the same arguments give the same answer, which an
+	// override that says "yes" withdraws. override-f-021 turns on exactly
+	// that.
+	if a, b := functionDeterminism(overriding), functionDeterminism(original); a != b {
+		return fmt.Errorf(
+			"XTSE3070: the overriding xsl:function %s declares "+
+				"new-each-time=%q and the one it overrides declares %q",
+			overriding.AttrValue("name"), a, b)
+	}
 	// The declared return types must agree. A weaker type on the override
 	// would let a caller of the used package receive a value the used
 	// package's own signature promised it would not.
@@ -1006,6 +1034,15 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 			overriding.AttrValue("name"), a, b)
 	}
 	return nil
+}
+
+// functionDeterminism reads xsl:function/@new-each-time, whose default is
+// "maybe": the processor may or may not re-evaluate the body, 10.3.
+func functionDeterminism(el *xdm.Node) string {
+	if v := strings.TrimSpace(el.AttrValue("new-each-time")); v != "" {
+		return v
+	}
+	return "maybe"
 }
 
 // leadingParams returns the xsl:param children that open a declaration.
@@ -1054,6 +1091,19 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 					"and the one it overrides declares as=%q",
 				overriding.AttrValue("name"), name, a, b)
 		}
+		// A tunnel parameter and an ordinary one of the same name are not
+		// the same parameter: the first is supplied by an ancestor call and
+		// the second by the caller, so swapping them silently changes where
+		// the value comes from. override-t-013 makes the original's
+		// non-tunnel $in a tunnel parameter.
+		if a, b := stylesheetYes(p.AttrValue("tunnel")),
+			stylesheetYes(o.AttrValue("tunnel")); a != b {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s declares $%s "+
+					"tunnel=%q and the one it overrides declares %q",
+				overriding.AttrValue("name"), name,
+				p.AttrValue("tunnel"), o.AttrValue("tunnel"))
+		}
 	}
 	for name, o := range orig {
 		if !seen[name] && stylesheetYes(o.AttrValue("required")) {
@@ -1069,7 +1119,51 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 				"one it overrides declares as=%q",
 			overriding.AttrValue("name"), a, b)
 	}
+	// The context item is part of the signature too: it says what a caller
+	// must have established before calling, so an override that demands a
+	// different type, or demands one where the original wanted none, refuses
+	// callers the original accepted.
+	oc, nc := contextItemChild(overriding), contextItemChild(original)
+	for _, attr := range []string{"as", "use"} {
+		a, b := contextItemAttr(oc, attr), contextItemAttr(nc, attr)
+		if a != b {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s declares "+
+					"xsl:context-item/@%s=%q and the one it overrides "+
+					"declares %q", overriding.AttrValue("name"), attr, a, b)
+		}
+	}
 	return nil
+}
+
+// contextItemChild returns a declaration's xsl:context-item child, or nil.
+func contextItemChild(el *xdm.Node) *xdm.Node {
+	for _, ch := range el.ChildElements() {
+		if isXSL(ch, "context-item") {
+			return ch
+		}
+	}
+	return nil
+}
+
+// contextItemAttr reads one attribute of an xsl:context-item, filling in the
+// default a missing declaration implies.
+//
+// A template with no xsl:context-item at all is the same as one declaring
+// use="optional" with no type constraint, 6.2, so the two spell the same
+// signature and must compare equal.
+func contextItemAttr(el *xdm.Node, name string) string {
+	def := ""
+	if name == "use" {
+		def = "optional"
+	}
+	if el == nil {
+		return def
+	}
+	if v := strings.TrimSpace(el.AttrValue(name)); v != "" {
+		return v
+	}
+	return def
 }
 
 // compileUsedPackage compiles the components of one used package into the
