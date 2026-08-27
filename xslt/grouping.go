@@ -544,7 +544,16 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 // Only untypedAtomic is cast and only anyURI is promoted; xs:integer is
 // neither, which is what makes select="22" an error rather than the string
 // "22".
-func analyzeStringInput(seq xdm.Sequence) (string, error) {
+//
+// XSLT 3.0 added one exception ahead of the conversion: "if the result of
+// evaluating the select expression is an empty sequence, it is treated as a
+// zero-length string". It is decided when the instruction runs, so it follows
+// the processor rather than the module -- and it is only the empty sequence,
+// not the general laxity the joined form had.
+func analyzeStringInput(seq xdm.Sequence, xslt30 bool) (string, error) {
+	if len(seq) == 0 && xslt30 {
+		return "", nil
+	}
 	atoms := xdm.Atomize(seq)
 	if len(atoms) != 1 {
 		return "", fmt.Errorf(
@@ -615,7 +624,7 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	input, err := analyzeStringInput(seq)
+	input, err := analyzeStringInput(seq, rt.sheet == nil || rt.sheet.maxVersion == 0 || rt.sheet.maxVersion >= 3.0)
 	if err != nil {
 		return err
 	}
@@ -631,7 +640,13 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
-	re, err := xpath.CompileRegexp(pattern, flags)
+	// The dialect follows the processor, not the module, for the same reason
+	// fn:matches does: @regex is a string read when the instruction runs
+	// rather than by the parser, so nothing about a 3.0 construct in it needs
+	// a 3.0 module to have been parsed. Compiling at the 2.0 dialect refused
+	// non-capturing groups and the "q" flag even in a version="3.0"
+	// stylesheet -- analyze-string-036 and -037 are exactly that.
+	re, err := xpath.CompileRegexpVersion(pattern, flags, regexDialect(rt.ctx))
 	if err != nil {
 		// xsl:analyze-string has its own error codes for the two ways the
 		// regex can be rejected, and a caller matching on the code needs

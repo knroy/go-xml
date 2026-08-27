@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // blockNamespaceInheritance implements [xsl:]inherit-namespaces="no" on the
@@ -83,4 +84,16 @@ func usedByNames(el *xdm.Node, prefix, uri string) bool {
 		}
 	}
 	return false
+}
+
+// regexDialect is the version of the regular-expression grammar in force,
+// which xpath.Context exposes only through its two public fields.
+func regexDialect(ctx *xpath.Context) xpath.Version {
+	if ctx == nil {
+		return xpath.XPath20
+	}
+	if ctx.RegexVersion > ctx.Version {
+		return ctx.RegexVersion
+	}
+	return ctx.Version
 }

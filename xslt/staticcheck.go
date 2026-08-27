@@ -398,6 +398,37 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 			}
 		}
 
+	case cm.model == "(xsl:matching-substring?, xsl:non-matching-substring?, xsl:fallback*)":
+		// §17.1 gives the order as well as the membership: the
+		// xsl:matching-substring comes first if both are present, and the
+		// xsl:fallback instructions come last. The kids map alone only says
+		// which children are allowed, so an out-of-order pair was accepted --
+		// analyze-string-093 swaps the two substring elements and -094 puts
+		// an xsl:fallback between them.
+		rank := map[string]int{
+			"matching-substring": 0, "non-matching-substring": 1, "fallback": 2,
+		}
+		seen := -1
+		for _, ch := range el.ChildElements() {
+			r, ok := rank[ch.Name.Local]
+			if !ok || ch.Name.URI != xdm.NSXSL {
+				continue
+			}
+			if r < seen {
+				return fmt.Errorf(
+					"xsl:analyze-string: %s is out of order, its content is "+
+						"%s (XTSE0010)", ch.Name.Lexical(), cm.model)
+			}
+			// Each of the two substring elements may appear once; only
+			// xsl:fallback repeats, so an equal rank below it is a duplicate.
+			if r == seen && r != rank["fallback"] {
+				return fmt.Errorf(
+					"xsl:analyze-string: at most one %s is allowed, its "+
+						"content is %s (XTSE0010)", ch.Name.Lexical(), cm.model)
+			}
+			seen = r
+		}
+
 	case cm.model == "(xsl:when+, xsl:otherwise?)":
 		whens, otherwises := 0, 0
 		for _, ch := range el.ChildElements() {
