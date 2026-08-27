@@ -66,6 +66,11 @@ type Lexer struct {
 	// could not, `*` is a wildcard and `div` is a name test.
 	prevOperand bool
 
+	// lastOp is the previous operator token's spelling, used to tell the
+	// lookup "?" from the occurrence-indicator "?": only the former can
+	// follow a closing bracket.
+	lastOp string
+
 	// extended enables the braced URI literal Q{uri}local for a caller that
 	// is not otherwise running 3.0 — the XSLT test suite, which writes its
 	// assertion expressions in the 3.0 language even for 2.0 stylesheets. It
@@ -285,8 +290,24 @@ func (l *Lexer) next() (Token, error) {
 		// occurrence-indicator reading survives the change because
 		// parseMultiplicative accepts a wildcard-spelled "*" in operator
 		// position, so "xs:integer + * 3" still multiplies.
-		l.prevOperand = op == ")" || op == "]" ||
-			(op == "?" && l.prevOperand)
+		// "}" ends an operand for the same reason ")" and "]" do: it closes a
+		// map or array constructor, or an inline function body, and what
+		// precedes it is a complete expression. Leaving it out meant the
+		// keyword operators were still lexed as names after a constructor, so
+		// "map{1:1} eq 1" reported XPST0003 on the "eq" — the parser saw a
+		// name where it wanted an operator. The parenthesised spelling
+		// "(map{1:1}) eq 1" worked, which is what gave the lexer away.
+		// The "?" carve-out is narrower than "an operand precedes it". After a
+		// closing bracket the "?" is the lookup operator, and what follows is
+		// a *name* — "map{...} ? or or 2 = 3" looks up the key "or" and then
+		// applies the operator "or". Keeping prevOperand true there made the
+		// lookup's own name lex as an infix operator, which is Lookup-155.
+		// After a type name it is still the occurrence indicator, which does
+		// end the type it applies to.
+		wasBracket := l.lastOp == ")" || l.lastOp == "]" || l.lastOp == "}"
+		l.prevOperand = op == ")" || op == "]" || op == "}" ||
+			(op == "?" && l.prevOperand && !wasBracket)
+		l.lastOp = op
 		return Token{Kind: TokOp, Val: op, Pos: start}, nil
 	}
 

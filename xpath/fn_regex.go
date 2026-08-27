@@ -143,7 +143,11 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		s = strings.Join(strings.Fields(s), " ")
+		// strings.Fields splits on Unicode whitespace, which is a wider set
+		// than XML's. A non-breaking space is Unicode whitespace but not XML
+		// whitespace, so fn:normalize-space leaves it alone — and tokenizing
+		// "abc\u00a0def" gave two tokens where the spec wants one.
+		s = strings.Join(splitXMLSpace(s), " ")
 		if s == "" {
 			// The empty string has no tokens, the same answer the
 			// two-argument form gives rather than one empty token.
