@@ -15,6 +15,11 @@ func (e *Literal) Eval(*Context) (xdm.Sequence, error) {
 func (e *VarRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	v, ok := ctx.LookupVar(e.Name)
 	if !ok {
+		if ctx.MissingVar != nil {
+			if err := ctx.MissingVar(ctx, e.Name); err != nil {
+				return nil, err
+			}
+		}
 		return nil, fmt.Errorf("XPST0008: undeclared variable $%s", e.Name.Lexical())
 	}
 	return v, nil

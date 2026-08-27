@@ -95,6 +95,13 @@ type Context struct {
 	// grammar implies.
 	QualifyVar VarQualifier
 
+	// MissingVar lets the host language say what an unresolved reference
+	// means. Returning nil leaves the ordinary XPST0008. It exists because a
+	// host may decline to bind a variable whose evaluation failed, and owe
+	// the failure to whoever refers to it -- an XSLT 3.0 abstract variable
+	// is the case.
+	MissingVar func(ctx *Context, name xdm.QName) error
+
 	// StaticHost is an opaque value the host language attached to the
 	// expression being evaluated; see Compiled.WithStaticHost. This package
 	// never interprets it, only carries it.

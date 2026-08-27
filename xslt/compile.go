@@ -1008,6 +1008,14 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	}
 	if stub := abstractStubFor(el); stub != nil {
 		body = stub
+		// An abstract variable has no value to compute. Section 3.5.3.2
+		// makes XTDE3052 the error for an invocation that "is evaluated",
+		// so a variable nothing refers to must not raise it: accept-042
+		// hides v1 with xsl:accept and never mentions it, and the abstract
+		// v1-proxy that selects it is equally unreferenced. Binding every
+		// global eagerly reported the error for a value the transform had
+		// no reason to want.
+		v.deferred = true
 	}
 	v.Body = body
 	return v, nil
@@ -1973,6 +1981,46 @@ func (c *compiler) checkInputTypeAnnotations(doc *xdm.Node) error {
 		c.sheet.stripTypeAnnotations = true
 	}
 	return nil
+}
+
+// deferDependentGlobals spreads Variable.deferred to every global that
+// depends on one, transitively.
+//
+// A deferred global must not be evaluated unless something refers to it, and
+// evaluating a dependent would do exactly that: accept-042's v1 is abstract
+// and hidden, but the v1-proxy that selects it is an ordinary public
+// variable, so binding the proxy eagerly reached v1 and raised the XTDE3052
+// the case says must not occur. A dependent is therefore deferred too, and
+// the reference path binds the whole chain on demand.
+func (c *compiler) deferDependentGlobals() {
+	byName := make(map[string]*Variable, len(c.sheet.globals))
+	for _, g := range c.sheet.globals {
+		if _, dup := byName[g.Name.Clark()]; !dup {
+			byName[g.Name.Clark()] = g
+		}
+	}
+	// Repeated to a fixed point: a chain of proxies defers from the far end
+	// back, and one pass would only move the mark one link. The loop is
+	// bounded by the number of globals, since each pass that changes
+	// anything defers at least one more.
+	for range c.sheet.globals {
+		changed := false
+		for _, g := range c.sheet.globals {
+			if g.deferred {
+				continue
+			}
+			for _, dep := range globalRefs(g) {
+				if d, ok := byName[dep]; ok && d.deferred && d != g {
+					g.deferred = true
+					changed = true
+					break
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
 }
 
 // pruneOverriddenGlobals drops every global variable a higher-precedence

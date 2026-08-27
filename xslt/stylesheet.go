@@ -279,6 +279,11 @@ type Variable struct {
 	// override it.
 	isStatic    bool
 	staticValue xdm.Sequence
+	// deferred marks a global whose value is computed only if something
+	// refers to it. An abstract variable is the case: its body raises
+	// XTDE3052, which 3.5.3.2 makes the error for an invocation that "is
+	// evaluated", so a variable nothing refers to must not raise at all.
+	deferred bool
 	// pkg is the package whose module declared this variable. Section 3.5.5
 	// makes a component's identity belong to its package, and a diamond --
 	// one package used by two routes, each overriding the same variable --
@@ -616,6 +621,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 		return nil, err
 	}
 	c.pruneOverriddenGlobals()
+	c.deferDependentGlobals()
 	c.sheet.packageUses = buildPackageUses(packageParent)
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one

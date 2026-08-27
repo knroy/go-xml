@@ -28,6 +28,13 @@ type runtime struct {
 	funcResults map[string]xdm.Sequence
 	ctx   *xpath.Context
 
+	// deferredErr holds the failure of a global whose evaluation is not by
+	// itself the transform's failure -- an abstract variable, whose body
+	// raises XTDE3052. The error is kept against the name so that a
+	// reference to it raises what the reference deserves, and a transform
+	// that never mentions the name raises nothing. See evalGlobals.
+	deferredErr []deferredGlobal
+
 	// globalCtx is the context as it stood once the global variables were
 	// bound, holding those and nothing local. xsl:attribute-set bodies are
 	// evaluated against it; see the comment where it is set.
@@ -1190,6 +1197,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	rt.ctx.QualifyVar = func(c *xpath.Context, name xdm.QName) xdm.QName {
 		return rt.qualifyGlobal(c, name)
 	}
+	// A reference to a global whose evaluation was deferred and failed
+	// raises that failure, rather than the XPST0008 an unbound name would
+	// otherwise report. See runtime.deferredErr.
+	rt.ctx.MissingVar = func(c *xpath.Context, name xdm.QName) error {
+		return rt.deferredError(c, name)
+	}
 
 	// The key() and current() functions need the runtime, so they are bound
 	// per transform rather than living in the shared builtin library.
@@ -1393,7 +1406,28 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 	}
 
 	for _, g := range s.globals {
+		// A deferred global is bound like any other, but its failure is not
+		// the transform's failure: 3.5.3.2 makes XTDE3052 the error for an
+		// invocation that "is evaluated", so a variable nothing refers to
+		// must raise nothing. The value is simply left unbound, and a
+		// reference to it -- which is an invocation, and so is exactly the
+		// case the error is for -- raises when it is evaluated.
+		//
+		// accept-042 hides an abstract v1 and never mentions it, while the
+		// v1-proxy that selects it is public and equally unreferenced;
+		// accept-043b and -043c refer to the proxy and still expect
+		// XTDE3052. Binding eagerly failed the first pair and skipping
+		// entirely failed the second, because an unbound name reports
+		// XPST0008 rather than the error the reference deserves.
 		if err := bind(g); err != nil {
+			if g.deferred {
+				rt.deferredErr = append(rt.deferredErr, deferredGlobal{
+					name:     globalBindingName(g.Name, g.pkg),
+					declared: g.Name,
+					err:      err,
+				})
+				continue
+			}
 			return err
 		}
 	}
@@ -1479,6 +1513,47 @@ func (rt *runtime) bindGlobal(g *Variable, val xdm.Sequence) {
 			rt.ctx = rt.ctx.WithVar(g.Name, val)
 		}
 	}
+}
+
+// deferredError answers the failure recorded for a global that a reference
+// has just failed to resolve, or nil where the name is unbound for some other
+// reason and the ordinary XPST0008 is right.
+//
+// The reference is qualified the same way resolution qualifies it, so that a
+// package's copy of a name answers for that package.
+func (rt *runtime) deferredError(c *xpath.Context, name xdm.QName) error {
+	if len(rt.deferredErr) == 0 {
+		return nil
+	}
+	want := rt.qualifyGlobal(c, name)
+	for _, d := range rt.deferredErr {
+		if d.name == want || d.name == name {
+			return d.err
+		}
+	}
+	// The reference and the record need not agree on the package: the
+	// reference is written in the using package and the declaration belongs
+	// to the used one, and qualifyGlobal only bridges the two for a name
+	// that IS bound -- which a deferred global, by construction, is not. The
+	// declared name is what both agree on.
+	for _, d := range rt.deferredErr {
+		if d.declared == name {
+			return d.err
+		}
+	}
+	return nil
+}
+
+// deferredGlobal is a global whose evaluation failed and whose failure is
+// owed to a reference rather than to the transform. See runtime.deferredErr.
+type deferredGlobal struct {
+	// name is the binding name, which is what a resolvable reference would
+	// have found.
+	name xdm.QName
+	// declared is the name as written, which is what a reference from
+	// another package agrees with; see deferredError.
+	declared xdm.QName
+	err      error
 }
 
 // globalBindingName is the name a global variable is bound under.
