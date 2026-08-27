@@ -444,8 +444,20 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 			return fmt.Errorf("XTTE1555: %s is not valid: %w",
 				describeNode(n), err)
 		}
+		code := invalidCode(spec.mode)
+		if unresolvableXSIType(err) {
+			// An xsi:type naming a type the schema cannot resolve is not
+			// "lax assessment found the element invalid": nothing was
+			// assessed, because the type to assess against does not exist.
+			// XTTE1515 is defined for the case where lax validity assessment
+			// ran and reported invalid, so this falls to XTTE1510 in both
+			// modes. validation-1701 and validation-1702 run the same
+			// stylesheet under strict and under lax and expect XTTE1510
+			// from both.
+			code = "XTTE1510"
+		}
 		return fmt.Errorf("%s: %s is not valid: %w",
-			invalidCode(spec.mode), describeNode(n), err)
+			code, describeNode(n), err)
 	}
 	if docNode {
 		return checkDocumentIDs(n)
@@ -477,6 +489,27 @@ func idConstraintFailure(err error) bool {
 	}
 	for _, e := range errs.Errors {
 		if !strings.HasPrefix(e.Code, "cvc-id.") {
+			return false
+		}
+	}
+	return true
+}
+
+// unresolvableXSIType reports whether the assessment failed because an
+// xsi:type attribute names a type the schema has no definition for.
+//
+// cvc-elt.4.2 is the Schema Part 1 constraint that the local type definition
+// an xsi:type names must be resolvable, so its presence is the evidence that
+// no assessment against a type ever happened. Every error must be that one:
+// an element whose content is also wrong was genuinely assessed against
+// something, and the mode's own code is right for it.
+func unresolvableXSIType(err error) bool {
+	var errs *xsd.ValidationErrors
+	if !errors.As(err, &errs) || len(errs.Errors) == 0 {
+		return false
+	}
+	for _, e := range errs.Errors {
+		if !strings.HasPrefix(e.Code, "cvc-elt.4.") {
 			return false
 		}
 	}
