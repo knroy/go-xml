@@ -1,6 +1,9 @@
 package xpath
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -398,6 +401,31 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 		}
 		return ai - bi, true, nil
 
+	case isBinary(a.Type) || isBinary(b.Type):
+		// The binary types used to be lumped in with the string-like ones,
+		// which compared their *lexical* forms. That is wrong twice over.
+		// A base64 value has more than one spelling for the same octets, so
+		// lexical order is not a function of the value at all; and comparing
+		// a binary against a string or against the other binary type is a
+		// type error, which the string-like branch silently allowed —
+		// '"" lt xs:hexBinary("0002")' answered true instead of XPTY0004.
+		if a.Type != b.Type {
+			return 0, false, xdm.ErrType("cannot compare %s with %s", a.TypeName(), b.TypeName())
+		}
+		av, err := binaryOctets(a)
+		if err != nil {
+			return 0, false, err
+		}
+		bv, err := binaryOctets(b)
+		if err != nil {
+			return 0, false, err
+		}
+		// Ordering on the binary types is a 3.1 addition (op:hexBinary-less-
+		// than and friends). Under 2.0 and 3.0 they carry equality only, so
+		// the ordered flag is false there and "lt" reports the type error
+		// those versions expect.
+		return bytes.Compare(av, bv), ctx != nil && ctx.Version.atLeast31(), nil
+
 	case isStringLike(a.Type) && isStringLike(b.Type):
 		// String comparison uses the default collation from the static
 		// context, which [xsl:]default-collation sets. Comparing with the
@@ -466,8 +494,31 @@ func rawCompare(ctx *Context, a, b *xdm.Atomic) (int, bool, error) {
 }
 
 func isStringLike(t xdm.TypeCode) bool {
-	return t == xdm.TypeString || t == xdm.TypeAnyURI || t == xdm.TypeUntypedAtomic ||
-		t == xdm.TypeHexBinary || t == xdm.TypeBase64Binary
+	return t == xdm.TypeString || t == xdm.TypeAnyURI || t == xdm.TypeUntypedAtomic
+}
+
+func isBinary(t xdm.TypeCode) bool {
+	return t == xdm.TypeHexBinary || t == xdm.TypeBase64Binary
+}
+
+// binaryOctets decodes a binary value to the octets it denotes, which is what
+// the 3.1 ordering operators compare. Decoding rather than comparing lexical
+// forms is the whole point: xs:base64Binary("AAAA") and the same octets spelled
+// with different padding are one value, and no comparison of their spellings
+// would agree with eq.
+func binaryOctets(a *xdm.Atomic) ([]byte, error) {
+	if a.Type == xdm.TypeHexBinary {
+		b, err := hex.DecodeString(a.Str())
+		if err != nil {
+			return nil, xdm.ErrType("invalid xs:hexBinary value %q", a.Str())
+		}
+		return b, nil
+	}
+	b, err := base64.StdEncoding.DecodeString(a.Str())
+	if err != nil {
+		return nil, xdm.ErrType("invalid xs:base64Binary value %q", a.Str())
+	}
+	return b, nil
 }
 
 func isDateLike(t xdm.TypeCode) bool {

@@ -23,6 +23,62 @@ func register31Funcs(l *Library) {
 	registerNumericConstructor(l)
 	registerApply(l)
 	registerLoadXQueryModule(l)
+	registerDefaultLanguage(l)
+	registerTransform(l)
+}
+
+// --- fn:transform -----------------------------------------------------------
+
+// registerTransform adds fn:transform, F&O 3.1 section 14.7.1.
+//
+// The function runs a transformation described by an options map and returns
+// its results as a map. This engine has an XSLT processor, so refusing is not
+// obviously the honest answer — but what fn:transform requires is compiling
+// and running a stylesheet supplied at *evaluation* time, from inside an
+// expression the XSLT layer may itself be evaluating, under a set of options
+// this implementation does not model. Claiming support and then mishandling
+// those options would be worse than declining.
+//
+// FOXT0004 is the code the specification gives for exactly this: "the
+// implementation does not support the transformation". The two cases in scope
+// assert it, both declaring the fn-transform-XSLT feature unsatisfied.
+func registerTransform(l *Library) {
+	l.registerFnSince(XPath31, "transform", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		// The argument is still checked: a call passing something that is not
+		// a map is wrong whatever the implementation supports.
+		it, err := args[0].Single()
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := it.(*xdm.MapItem); !ok {
+			return nil, xdm.ErrType(
+				"fn:transform: the options must be a map, got %s", it.TypeName())
+		}
+		return nil, xdm.Errorf("FOXT0004",
+			"fn:transform: this implementation does not support the requested transformation")
+	})
+}
+
+// --- fn:default-language ----------------------------------------------------
+
+// registerDefaultLanguage adds fn:default-language, F&O 3.1 section 13.4.
+//
+// The function reports the default language component of the dynamic context,
+// which is the language fn:format-date, fn:format-time and fn:format-integer
+// fall back on when their own language argument is absent or empty. This
+// engine's formatters have exactly one set of names and ordinals — English —
+// so the honest report is "en", and the suite's consistency cases check
+// precisely that: format-integer(17, "Ww") must equal the same call with
+// default-language() passed explicitly.
+//
+// The result is annotated xs:language rather than left as a plain xs:string.
+// The signature's return type is xs:language, and the suite asserts it with
+// assert-type, so returning an unannotated string would produce the right
+// characters and still fail.
+func registerDefaultLanguage(l *Library) {
+	l.registerFnSince(XPath31, "default-language", []int{0}, func(_ *Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+		return xdm.One(xdm.NewString("en").WithDerived("language")), nil
+	})
 }
 
 // --- fn:load-xquery-module --------------------------------------------------

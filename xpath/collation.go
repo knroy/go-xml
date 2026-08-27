@@ -1,13 +1,18 @@
 package xpath
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -62,6 +67,33 @@ type Collation interface {
 	StartsWith(s, prefix string) bool
 	EndsWith(s, suffix string) bool
 	IndexOf(s, sub string) int
+}
+
+// collationMatchRange locates the substring of s that the collation says
+// equals sub, and returns its byte range.
+//
+// It exists because fn:substring-before and fn:substring-after need the *end*
+// of the match, not only its start, and under a collation the match need not
+// be len(sub) bytes long: with alternate=blanked the needle "--d-e-" matches
+// the three bytes "d-e" of "abc--d-e-fghi", so the caller cannot recover the
+// end by adding the needle's own length. Doing that produced substrings that
+// were merely wrong for most inputs and panicked when the needle was longer
+// than the span it matched.
+//
+// A collation that offers no MatchRange is one whose equality is codepoint
+// equality as far as this package can tell, so the match is exactly as long as
+// the needle.
+func collationMatchRange(c Collation, s, sub string) (start, end int, ok bool) {
+	if m, is := c.(interface {
+		MatchRange(s, sub string) (int, int, bool)
+	}); is {
+		return m.MatchRange(s, sub)
+	}
+	i := c.IndexOf(s, sub)
+	if i < 0 {
+		return 0, 0, false
+	}
+	return i, i + len(sub), true
 }
 
 type codepointCollation struct{}
@@ -138,7 +170,7 @@ func ResolveCollation(uri string) (Collation, error) {
 	// so a host can substitute its own implementation, and before the
 	// relative-form fallbacks because those match on a URI tail.
 	if strings.HasPrefix(uri, UCACollation) {
-		c, err := parseUCACollation(uri)
+		c, err := ucaCollationFor(uri)
 		if err != nil {
 			return nil, fmt.Errorf("FOCH0002: collation %q is not supported: %w", uri, err)
 		}
@@ -231,43 +263,130 @@ var (
 // (DUCET) collation; query parameters tailor it.
 const UCACollation = "http://www.w3.org/2013/collation/UCA"
 
-// ucaCollation is a UCA collation at a chosen strength and locale.
+// ucaCollation is a UCA collation at a chosen strength, locale and tailoring.
 //
 // It is a real Unicode Collation Algorithm implementation, not a fold: the
 // weights come from golang.org/x/text/collate, which carries the CLDR tables.
 // That distinction matters because an approximation would get equality right
 // and ordering silently wrong, and a sort that quietly misorders is
-// undetectable to the caller. Every ordering this type reports is the one the
-// UCA specifies for the parameters it accepted; the parameters it cannot
-// honour are refused in parseUCACollation rather than ignored.
+// undetectable to the caller.
 //
-// The collate.Collator it wraps reuses an internal buffer, so it is not safe
-// for concurrent use. CompareString does not touch that buffer, but Key does,
-// so the mutex guards the whole type rather than only the key path.
+// Everything is decided by comparing sort keys rather than by
+// collate.CompareString. Two reasons. First, Key and Compare must agree:
+// fn:collation-key promises that comparing keys orders the same way the
+// collation does, and collation-key("abc",C) lt collation-key("ABC",C) is a
+// test case, so deriving both from one function is the only way to be sure.
+// Second, x/text's streaming comparison disagrees with its own key for
+// alternate=blanked — CompareString("-", "") reports 1 where the keys are both
+// empty — so the key is the trustworthy of the two.
+//
+// The collate.Collator reuses an internal buffer for key generation, so it is
+// not safe for concurrent use; the mutex guards it.
 type ucaCollation struct {
 	mu sync.Mutex
-	c  *collate.Collator
-	// buf is reused across Key calls, which is what the mutex protects.
+	// base carries the primary and secondary levels, and the tertiary level
+	// too unless caseFirst is in play — see caseFirst below.
+	base *collate.Collator
+	// tertiary is nil unless caseFirst is set. When it is set, base has case
+	// folded away so that this implementation can insert its own case level,
+	// and tertiary is the untailored collator whose key breaks the remaining
+	// ties that are tertiary but not about case.
+	tertiary *collate.Collator
+	// caseFirst is "", "lower" or "upper". x/text has no kf setting, so an
+	// explicit request is honoured by comparing a case signature between the
+	// secondary and tertiary levels rather than by tailoring the table.
+	caseFirst string
+	// stripMarks removes combining marks before keying. It is set only when
+	// the case level is wanted at a strength that ignores diacritics, to work
+	// around x/text emitting a case weight for each combining mark: the case
+	// level of "DATABASE" and "DÃTABASE" then differs by the tilde's weight
+	// even though neither string's *letters* differ in case. Dropping the
+	// marks cannot change a weight at a strength that already ignores them.
+	stripMarks bool
+	// identical appends the NFD form of the string to the key, which is what
+	// TR10 section 4.3 says strength=identical does. x/text's ks=identic does
+	// not survive alternate=blanked — the blanked variable elements are
+	// removed before the identity level is reached — and compare-042 asserts
+	// that a blanked space is still significant at identical strength.
+	identical bool
+
 	buf collate.Buffer
 }
 
-func (u *ucaCollation) Compare(a, b string) int {
+// key builds the full sort key for s: the levels x/text produces, then the
+// case level if caseFirst asked for one, then the tertiary tiebreak, then the
+// identity level.
+func (u *ucaCollation) key(s string) []byte {
+	in := s
+	if u.stripMarks {
+		in = stripCombining(in)
+	}
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.c.CompareString(a, b)
+	k := append([]byte(nil), u.base.KeyFromString(&u.buf, in)...)
+	u.buf.Reset()
+	if u.tertiary != nil {
+		// The separator keeps a long case level from colliding with a short
+		// one followed by a large tertiary weight.
+		k = append(k, 0, 0)
+		k = append(k, caseSignature(in, u.caseFirst == "upper")...)
+		k = append(k, 0, 0)
+		k = append(k, u.tertiary.KeyFromString(&u.buf, in)...)
+		u.buf.Reset()
+	}
+	u.mu.Unlock()
+	if u.identical {
+		k = append(k, 0, 0, 0)
+		k = append(k, norm.NFD.String(s)...)
+	}
+	return k
+}
+
+// caseSignature is one byte per cased rune, ordered so that the class named by
+// caseFirst sorts first. Uncased runes contribute nothing, so "a-b" and "ab"
+// have the same signature and the case level cannot override a punctuation
+// difference that the primary level already decided.
+func caseSignature(s string, upperFirst bool) []byte {
+	first, second := byte(1), byte(2)
+	if upperFirst {
+		first, second = second, first
+	}
+	var out []byte
+	for _, r := range norm.NFD.String(s) {
+		switch {
+		case unicode.IsUpper(r), unicode.IsTitle(r):
+			out = append(out, second)
+		case unicode.IsLower(r):
+			out = append(out, first)
+		}
+	}
+	return out
+}
+
+// stripCombining drops the non-spacing marks from the NFD form. See
+// ucaCollation.stripMarks for why.
+func stripCombining(s string) string {
+	d := norm.NFD.String(s)
+	if !strings.ContainsFunc(d, func(r rune) bool { return unicode.Is(unicode.Mn, r) }) {
+		return d
+	}
+	out := make([]rune, 0, len(d))
+	for _, r := range d {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
+func (u *ucaCollation) Compare(a, b string) int {
+	return bytes.Compare(u.key(a), u.key(b))
 }
 
 // Key returns the UCA sort key. Two strings the collation calls equal produce
 // the same key, which is what lets fn:distinct-values and xsl:for-each-group
 // index by collation rather than compare every pair.
-func (u *ucaCollation) Key(s string) string {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	k := u.c.KeyFromString(&u.buf, s)
-	out := string(k)
-	u.buf.Reset()
-	return out
-}
+func (u *ucaCollation) Key(s string) string { return string(u.key(s)) }
 
 // The substring operations are defined over collation units. Implementing them
 // properly needs the collation element iterator, which x/text does not expose,
@@ -278,9 +397,13 @@ func (u *ucaCollation) Key(s string) string {
 // scanning candidate ranges by rune boundary. That is correct for the
 // contiguous case, which is what every use of fn:contains under a collation
 // actually asks, and it never reports a match the collation would deny.
+//
+// The empty candidate is deliberately in the scan. Under alternate=blanked a
+// needle of "--***-*---" has an empty key, so it matches everywhere — which is
+// exactly what contains("Eureka!", "--***-*---") is specified to report — and
+// a scan that skipped the zero-length range would miss it.
 func (u *ucaCollation) matchAt(s string, start int, sub string) (int, bool) {
-	// An empty needle matches at once, as it does for every collation.
-	if sub == "" {
+	if u.Compare("", sub) == 0 {
 		return start, true
 	}
 	for end := start; end <= len(s); end++ {
@@ -311,13 +434,52 @@ func (u *ucaCollation) IndexOf(s, sub string) int {
 
 func (u *ucaCollation) Contains(s, sub string) bool { return u.IndexOf(s, sub) >= 0 }
 
+// MatchRange reports the span of s that equals sub, as the smallest span at
+// the earliest position where a match exists.
+//
+// "Smallest" matters at both ends when characters are ignorable. Under
+// alternate=blanked the needle "--d-e-" has the key "de", so in
+// "abc--d-e-fghi" every span from "--d-e" through "--d-e-" compares equal to
+// it, and so does the shorter "d-e" starting two bytes later. The spec's own
+// examples pin the answer down: substring-before there is "abc--" and
+// substring-after is "-fghi", which is the "d-e" span. Reporting the first
+// start that matched instead gave "abc" and "-fghi" — an inconsistent pair
+// that overlapped the leading hyphens into neither result.
+//
+// So the end comes from the shortest match, found by scanning forward, and the
+// start is then advanced as far as it can go while the span still matches,
+// which drops exactly the leading ignorables.
+func (u *ucaCollation) MatchRange(s, sub string) (int, int, bool) {
+	for start := 0; start <= len(s); start++ {
+		if start < len(s) && !utf8.RuneStart(s[start]) {
+			continue
+		}
+		end, ok := u.matchAt(s, start, sub)
+		if !ok {
+			continue
+		}
+		for start < end {
+			next := start + 1
+			for next < end && !utf8.RuneStart(s[next]) {
+				next++
+			}
+			if u.Compare(s[next:end], sub) != 0 {
+				break
+			}
+			start = next
+		}
+		return start, end, true
+	}
+	return 0, 0, false
+}
+
 func (u *ucaCollation) StartsWith(s, prefix string) bool {
 	_, ok := u.matchAt(s, 0, prefix)
 	return ok
 }
 
 func (u *ucaCollation) EndsWith(s, suffix string) bool {
-	if suffix == "" {
+	if u.Compare("", suffix) == 0 {
 		return true
 	}
 	for start := 0; start <= len(s); start++ {
@@ -336,13 +498,17 @@ func (u *ucaCollation) EndsWith(s, suffix string) bool {
 //
 // XSLT 3.0 section 5.3.3 defines the parameters and the fallback rule: with
 // fallback=yes (the default) a processor may ignore a parameter it does not
-// support, and with fallback=no it must reject the URI. This implementation is
-// stricter than the fallback rule permits for the parameters that change the
-// *order* — caseFirst, alternate, reorder, maxVariable — because honouring the
-// rule there would mean returning a collation that answers ordering questions
-// wrongly with nothing to indicate it. Parameters that only affect which
-// strings compare equal, and which this implementation does support, are
-// applied; the rest are refused whatever fallback says.
+// support, and with fallback=no it must reject the URI. A *malformed* value is
+// an error either way — fallback licenses ignoring a tailoring the processor
+// lacks, not accepting nonsense — so caseLevel=unknown is refused whatever
+// fallback says, while reorder, which this implementation genuinely cannot do,
+// is refused only under fallback=no.
+//
+// Most of the tailoring is expressed by building a BCP-47 tag carrying the
+// LDML collation keys (ks, ka, kc, kb, kn) and letting collate.New apply them,
+// because x/text reads those from the tag even though it exposes no Option for
+// several of them. caseFirst is the exception: x/text has no kf, so it is
+// implemented here as a case level of this package's own — see ucaCollation.
 func parseUCACollation(uri string) (Collation, error) {
 	rest := strings.TrimPrefix(uri, UCACollation)
 	if rest != "" && !strings.HasPrefix(rest, "?") {
@@ -353,8 +519,27 @@ func parseUCACollation(uri string) (Collation, error) {
 	lang := ""
 	strength := "tertiary"
 	numeric := false
+	caseLevel := false
+	backwards := false
 	fallback := true
+	caseFirst := ""
+	alternate := ""
+	// unsupported collects tailorings this implementation cannot perform at
+	// all, as opposed to values it does not recognise. They are tolerated
+	// under fallback=yes, which is what the fallback rule is for.
 	var unsupported []string
+
+	// yesNo reads the yes/no parameters. A value that is neither is a
+	// malformed URI rather than an unsupported tailoring.
+	yesNo := func(k, v string) (bool, error) {
+		switch v {
+		case "yes":
+			return true, nil
+		case "no":
+			return false, nil
+		}
+		return false, fmt.Errorf("UCA %s=%q is not yes or no", k, v)
+	}
 
 	if rest != "" {
 		// The parameters are separated by ";" in the form the specification
@@ -368,6 +553,7 @@ func parseUCACollation(uri string) (Collation, error) {
 				return nil, fmt.Errorf("UCA parameter %q has no value", kv)
 			}
 			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+			var err error
 			switch k {
 			case "lang":
 				lang = v
@@ -379,57 +565,80 @@ func parseUCACollation(uri string) (Collation, error) {
 					strength = "secondary"
 				case "tertiary", "3":
 					strength = "tertiary"
-				case "quaternary", "4", "identical", "5":
-					// x/text has no separate quaternary level; identical
-					// ordering is what Force gives on top of tertiary.
+				case "quaternary", "4":
+					strength = "quaternary"
+				case "identical", "5":
 					strength = "identical"
 				default:
 					return nil, fmt.Errorf("UCA strength=%q is not one of primary, secondary, tertiary, quaternary, identical", v)
 				}
 			case "numeric":
-				numeric = v == "yes"
-			case "fallback":
-				switch v {
-				case "yes":
-					fallback = true
-				case "no":
-					fallback = false
-				default:
-					return nil, fmt.Errorf("UCA fallback=%q is not yes or no", v)
-				}
-			case "normalization":
-				// x/text normalises as the UCA requires, so normalization=yes
-				// is what it already does and normalization=no cannot be
-				// honoured — but the difference only shows for input that is
-				// not in NFD, and asking for less normalisation never changes
-				// which strings this collation calls equal for input that is.
-				if v != "yes" && v != "no" {
-					return nil, fmt.Errorf("UCA normalization=%q is not yes or no", v)
-				}
+				numeric, err = yesNo(k, v)
 			case "caseLevel":
-				// caseLevel=yes inserts a case level between secondary and
-				// tertiary. At tertiary strength case already distinguishes,
-				// so the request is satisfied; at a lower strength it is not.
-				if v == "yes" && strength != "tertiary" && strength != "identical" {
-					unsupported = append(unsupported, k)
+				caseLevel, err = yesNo(k, v)
+			case "backwards":
+				backwards, err = yesNo(k, v)
+			case "fallback":
+				fallback, err = yesNo(k, v)
+			case "normalization":
+				// x/text normalises to NFD as the UCA requires, so
+				// normalization=yes is what it already does.
+				// normalization=no asks it to skip that, which x/text has no
+				// way to express — but skipping normalisation can only change
+				// the answer for input that is not already in a normal form,
+				// so honouring the request is a no-op for well-formed input.
+				if _, err = yesNo(k, v); err != nil {
+					return nil, err
 				}
-			case "caseFirst", "alternate", "maxVariable", "reorder", "backwards", "version":
-				// These change the ordering, and x/text exposes no way to ask
-				// for them. Ignoring one would produce a wrong order silently.
+			case "caseFirst":
+				switch v {
+				case "upper", "lower":
+					caseFirst = v
+				default:
+					return nil, fmt.Errorf("UCA caseFirst=%q is not upper or lower", v)
+				}
+			case "alternate":
+				switch v {
+				case "non-ignorable", "shifted", "blanked":
+					alternate = v
+				default:
+					return nil, fmt.Errorf("UCA alternate=%q is not non-ignorable, shifted or blanked", v)
+				}
+			case "maxVariable":
+				// The variable top is fixed by the table x/text ships, so the
+				// set of characters alternate= applies to cannot be narrowed
+				// or widened. Naming the parameter at all is only meaningful
+				// alongside alternate, where getting it wrong changes which
+				// strings compare equal.
+				switch v {
+				case "space", "punct", "symbol", "currency":
+					unsupported = append(unsupported, k)
+				default:
+					return nil, fmt.Errorf("UCA maxVariable=%q is not space, punct, symbol or currency", v)
+				}
+			case "reorder":
+				// collate.Reorder panics: x/text needs fractional weights it
+				// does not have. There is no approximation worth offering.
+				unsupported = append(unsupported, k)
+			case "version":
+				// The UCA version is whatever the CLDR tables compiled into
+				// x/text are. Asking for a different one cannot be honoured,
+				// and quietly answering from the wrong version is the kind of
+				// silent wrongness fallback=no exists to prevent.
 				unsupported = append(unsupported, k)
 			default:
-				unsupported = append(unsupported, k)
+				return nil, fmt.Errorf("UCA parameter %q is not defined by the specification", k)
+			}
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	if len(unsupported) > 0 {
-		// Reported whatever fallback says: see the doc comment. The message
-		// names the parameters so the caller can tell a tailoring this
-		// implementation lacks from a URI it did not understand at all.
+	if len(unsupported) > 0 && !fallback {
 		return nil, fmt.Errorf(
-			"UCA collation parameter(s) %s change the collation order and are "+
-				"not implemented", strings.Join(unsupported, ", "))
+			"UCA collation parameter(s) %s are not implemented and "+
+				"fallback=no forbids ignoring them", strings.Join(unsupported, ", "))
 	}
 
 	tag := language.Und
@@ -451,24 +660,185 @@ func parseUCACollation(uri string) (Collation, error) {
 		tag = t
 	}
 
-	var opts []collate.Option
+	// CLDR marks fr-CA as sorting accents from the end of the string, and
+	// x/text ships the fr-CA table but reads backwards only from the tag's kb
+	// key, never from the locale's own default. Without this, fr-CA ordered
+	// accents exactly like fr, which is the one thing the locale exists to do
+	// differently.
+	if !backwards && isFrenchCanadian(tag) {
+		backwards = true
+	}
+
+	// The case level is what makes case significant below tertiary strength.
+	// caseFirst implies it: asking which case sorts first is meaningless if
+	// case is not compared at all.
+	if caseFirst != "" {
+		caseLevel = true
+	}
+
+	keys := map[string]string{}
 	switch strength {
 	case "primary":
-		// Primary strength ignores both case and diacritics: only base
-		// letters distinguish.
-		opts = append(opts, collate.IgnoreDiacritics, collate.IgnoreCase)
+		keys["ks"] = "level1"
 	case "secondary":
-		// Secondary strength keeps diacritics and ignores case.
-		opts = append(opts, collate.IgnoreCase)
+		keys["ks"] = "level2"
+	case "tertiary":
+		keys["ks"] = "level3"
+	case "quaternary":
+		keys["ks"] = "level4"
 	case "identical":
-		opts = append(opts, collate.Force)
+		keys["ks"] = "identic"
+	}
+	switch alternate {
+	case "shifted":
+		keys["ka"] = "shifted"
+	case "blanked":
+		keys["ka"] = "blanked"
+	case "non-ignorable":
+		keys["ka"] = "noignore"
 	}
 	if numeric {
-		opts = append(opts, collate.Numeric)
+		keys["kn"] = "true"
 	}
-	return &ucaCollation{c: collate.New(tag, opts...)}, nil
+	if backwards {
+		keys["kb"] = "true"
+	}
+
+	c := &ucaCollation{caseFirst: caseFirst}
+
+	if caseFirst != "" {
+		// The case comparison is this package's own, so x/text must not also
+		// apply one: base folds case away, leaving the case level entirely to
+		// caseSignature, and tertiary supplies the non-case tertiary
+		// distinctions that would otherwise be lost with it.
+		baseKeys := cloneKeys(keys)
+		baseKeys["kc"] = "false"
+		if strength == "tertiary" || strength == "quaternary" || strength == "identical" {
+			// IgnoreCase would also drop the tertiary level, so ask for
+			// secondary strength here and restore the tertiary level through
+			// the separate collator below.
+			baseKeys["ks"] = "level2"
+		}
+		base, err := newUCACollator(tag, baseKeys)
+		if err != nil {
+			return nil, err
+		}
+		tert, err := newUCACollator(tag, keys)
+		if err != nil {
+			return nil, err
+		}
+		c.base, c.tertiary = base, tert
+	} else {
+		if caseLevel {
+			keys["kc"] = "true"
+		}
+		base, err := newUCACollator(tag, keys)
+		if err != nil {
+			return nil, err
+		}
+		c.base = base
+	}
+
+	// See ucaCollation.stripMarks: the workaround is needed only where a case
+	// level is compared at a strength that has already discarded diacritics.
+	c.stripMarks = caseLevel && (strength == "primary")
+
+	// x/text's identity level does not survive blanking, so supply it here
+	// instead. See ucaCollation.identical.
+	c.identical = strength == "identical" && alternate == "blanked"
+
+	return c, nil
+}
+
+func cloneKeys(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// newUCACollator applies the LDML collation keys to the tag and builds the
+// collator. The keys go through the tag rather than through collate.Option
+// because x/text reads ka, kc and kb only from the tag.
+func newUCACollator(tag language.Tag, keys map[string]string) (*collate.Collator, error) {
+	// Sorted so the tag is deterministic, which keeps the collator the same
+	// object shape run to run and makes a failure reproducible.
+	names := make([]string, 0, len(keys))
+	for k := range keys {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	t := tag
+	for _, k := range names {
+		var err error
+		if t, err = t.SetTypeForKey(k, keys[k]); err != nil {
+			return nil, fmt.Errorf("UCA tailoring %s=%s cannot be expressed: %w", k, keys[k], err)
+		}
+	}
+	return collate.New(t), nil
+}
+
+// isFrenchCanadian reports whether the tag selects the fr-CA collation, whose
+// CLDR default is backwards accents. Matching on the base language and region
+// rather than on the tag string keeps fr-CA-u-... and fr-Latn-CA working.
+func isFrenchCanadian(t language.Tag) bool {
+	base, _ := t.Base()
+	region, _ := t.Region()
+	return base.String() == "fr" && region.String() == "CA"
 }
 
 // ucaMatcher is built once: constructing a matcher walks the full list of
 // supported tags, which is wasted work on every collation lookup.
 var ucaMatcher = language.NewMatcher(collate.Supported())
+
+// ucaCollationFor is parseUCACollation memoised on the URI.
+//
+// ResolveCollation runs on every call of every function that takes a collation
+// argument, and building a UCA collation parses a language tag and constructs
+// one or two collate.Collators, each of which walks the CLDR match tables.
+// Inside a predicate that is per-item work for a result that depends only on
+// the URI. The cached collation is shared, which is safe because ucaCollation
+// guards its collator with a mutex and is otherwise immutable.
+//
+// Failures are cached too: a stylesheet that names an unsupported collation
+// names it on every iteration, and re-deriving the same error is the same
+// waste.
+//
+// The cache is bounded and cleared wholesale when full, for the reasons set
+// out at regexCacheMax: a collation URI can be built from document data —
+// concat($base, $node/@lang) — so the set of URIs is not fixed by the
+// stylesheet, and a true LRU would cost a lock on every read to protect a
+// working set that is normally one or two entries.
+const ucaCacheMax = 256
+
+func ucaCollationFor(uri string) (Collation, error) {
+	if v, ok := ucaCache.Load(uri); ok {
+		e := v.(ucaCacheEntry)
+		return e.c, e.err
+	}
+	c, err := parseUCACollation(uri)
+	if ucaCacheSize.Load() >= ucaCacheMax {
+		// Two goroutines can both decide to clear; that is harmless, since
+		// every entry is reproducible from its key.
+		ucaCache.Range(func(k, _ any) bool {
+			ucaCache.Delete(k)
+			return true
+		})
+		ucaCacheSize.Store(0)
+	}
+	if _, loaded := ucaCache.LoadOrStore(uri, ucaCacheEntry{c, err}); !loaded {
+		ucaCacheSize.Add(1)
+	}
+	return c, err
+}
+
+type ucaCacheEntry struct {
+	c   Collation
+	err error
+}
+
+var (
+	ucaCache     sync.Map // URI -> ucaCacheEntry
+	ucaCacheSize atomic.Int64
+)

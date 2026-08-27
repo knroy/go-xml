@@ -563,6 +563,14 @@ func minMax(ctx *Context, seq xdm.Sequence, wantMin bool) (xdm.Sequence, error) 
 
 	kind := comparisonKind(vals[0])
 	for _, a := range vals[1:] {
+		// Within the binary family the two spellings are still separate
+		// types: min() over a mix of hexBinary and base64Binary has no
+		// answer, and the kind alone would not catch it.
+		if kind == cmpBinary && a.Type != vals[0].Type {
+			return nil, xdm.Errorf("FORG0006",
+				"fn:min/fn:max: sequence mixes %s with %s",
+				vals[0].TypeName(), a.TypeName())
+		}
 		if comparisonKind(a) != kind {
 			return nil, xdm.Errorf("FORG0006",
 				"fn:min/fn:max: sequence mixes %s with %s",
@@ -628,6 +636,7 @@ type cmpKind int
 const (
 	cmpNumeric cmpKind = iota
 	cmpString
+	cmpBinary
 	cmpBoolean
 	cmpDate
 	cmpDuration
@@ -640,6 +649,14 @@ func comparisonKind(a *xdm.Atomic) cmpKind {
 		return cmpNumeric
 	case isStringLike(a.Type):
 		return cmpString
+	case isBinary(a.Type):
+		// The binary types are ordered in 3.1 and comparable only with their
+		// own type, so they form their own family rather than joining the
+		// string-like one. Folding them into cmpString would be wrong twice:
+		// it would let a hexBinary be compared against a base64Binary, and
+		// the anyURI-to-string promotion below would rewrite the winner as an
+		// xs:string, losing the type the caller asked min/max about.
+		return cmpBinary
 	case a.Type == xdm.TypeBoolean:
 		return cmpBoolean
 	case isCalendarLike(a.Type):

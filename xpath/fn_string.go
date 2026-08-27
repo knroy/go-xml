@@ -77,7 +77,7 @@ func registerStringFuncs(l *Library) {
 		return strSeq(sb.String()), nil
 	})
 
-	stringJoin := func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	stringJoin := func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The separator is declared xs:string, not xs:string?, so an empty
 		// sequence is a type error rather than an empty separator. The
 		// one-argument form of 3.0 has no separator at all, which is the
@@ -97,7 +97,17 @@ func registerStringFuncs(l *Library) {
 		atoms := xdm.Atomize(args[0])
 		parts := make([]string, 0, len(atoms))
 		for _, it := range atoms {
-			v, err := stringArgValue(it.(*xdm.Atomic), 0)
+			a := it.(*xdm.Atomic)
+			// 3.1 widened the first parameter to xs:anyAtomicType* (bug
+			// 29184), so an integer or a date is joined via its string
+			// value rather than rejected. Earlier versions keep the strict
+			// xs:string* signature, which their own cases pin: under 2.0
+			// and 3.0, string-join(1 to 5, "") must still be XPTY0004.
+			if ctx != nil && ctx.Version.atLeast31() {
+				parts = append(parts, a.String())
+				continue
+			}
+			v, err := stringArgValue(a, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -210,11 +220,11 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		i := coll.IndexOf(a, b)
-		if i < 0 {
+		start, _, ok := collationMatchRange(coll, a, b)
+		if !ok {
 			return strSeq(""), nil
 		}
-		return strSeq(a[:i]), nil
+		return strSeq(a[:start]), nil
 	})
 
 	l.registerFn("substring-after", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
@@ -230,11 +240,13 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		i := coll.IndexOf(a, b)
-		if i < 0 {
+		// The end of the match, not start+len(b): under a collation the
+		// matched span can be longer or shorter than the needle.
+		_, end, ok := collationMatchRange(coll, a, b)
+		if !ok {
 			return strSeq(""), nil
 		}
-		return strSeq(a[i+len(b):]), nil
+		return strSeq(a[end:]), nil
 	})
 
 	l.registerFn("substring", []int{2, 3}, fnSubstring)

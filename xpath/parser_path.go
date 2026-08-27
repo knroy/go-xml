@@ -768,9 +768,23 @@ func (p *Parser) parseInlineFunction() (Expr, error) {
 	if err := p.expectOp("{"); err != nil {
 		return nil, err
 	}
-	body, err := p.parseExpr()
-	if err != nil {
-		return nil, err
+	// 3.1 made the expression inside an EnclosedExpr optional, so
+	// "function($x) {}" is legal and denotes the empty sequence. Parsing the
+	// body unconditionally reported XPST0003 on the closing brace. A comment
+	// between the braces is whitespace to the lexer, so "{ (: nothing :) }"
+	// arrives here as an empty body too and needs no separate case.
+	//
+	// The empty body is still only a *body*: the declared result type is
+	// checked against it as usual, which is why an empty body under
+	// "as xs:integer" is XPTY0004 rather than an accepted empty sequence.
+	var body Expr
+	if p.version.atLeast31() && p.peekIs(TokOp, "}") {
+		body = &SequenceExpr{}
+	} else {
+		var err error
+		if body, err = p.parseExpr(); err != nil {
+			return nil, err
+		}
 	}
 	if err := p.expectOp("}"); err != nil {
 		return nil, err
@@ -1571,6 +1585,22 @@ func (p *Parser) reservedFor(name string) bool {
 	if p.version.atLeast30() {
 		switch name {
 		case "function", "switch":
+			return true
+		}
+	}
+	// "map" and "array" become item-type keywords in 3.1, which reserves them
+	// as function names the same way "item" has always been reserved: they
+	// introduce map(K,V) and array(T) in type position, so "map()" is a
+	// malformed type test rather than a call. Before this they fell through to
+	// function lookup and reported XPST0017, "unknown function", where the
+	// suite wants the grammar error XPST0003.
+	//
+	// Only at 3.1: under 2.0 and 3.0 neither name means anything to the
+	// grammar, so "map()" there is an ordinary call to an undeclared function
+	// and must keep giving XPST0017.
+	if p.version.atLeast31() {
+		switch name {
+		case "map", "array":
 			return true
 		}
 	}
