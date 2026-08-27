@@ -1121,13 +1121,33 @@ var unicodeBlocks = map[string][][2]rune{
 	"IsHangulSyllables":                     {{0xAC00, 0xD7A3}},
 	"IsHighSurrogates":                      {{0xD800, 0xDB7F}},
 	"IsLowSurrogates":                       {{0xDC00, 0xDFFF}},
-	// The BMP area only. Extending this to the two supplementary private-use
-	// areas gains 3 tests in the XSLT suite and loses 4 in the XML Schema
-	// suite, which is the authority here: block names come from Unicode,
-	// and Unicode names E000-F8FF "Private Use Area" while the supplementary
-	// ranges are the separately named "Supplementary Private Use Area-A"
-	// and "-B". A block name denotes one block.
-	"IsPrivateUse":                           {{0xE000, 0xF8FF}},
+	// All three private-use areas, not the BMP one alone.
+	//
+	// XML Schema Part 2 Appendix F lists the block as "PrivateUse" spanning
+	// #xE000-#xF8FF, because the list was frozen against Unicode 3.1 when the
+	// supplementary planes were newly assigned; Unicode itself splits the same
+	// property into "Private Use Area" plus the separately named
+	// "Supplementary Private Use Area-A" and "-B". So the name is one the two
+	// authorities spell differently, and the suites disagree along that seam.
+	//
+	// The disagreement is not symmetric, which is what settles it. The XML
+	// Schema suite contradicts itself here: reL98 and reL99 apply
+	// "\p{IsPrivateUse}+" to #xF0000/#xFFFFD and #x100000/#x10FFFD, while
+	// reM98 and reN99 apply "\p{IsPrivateUse}" to #x100000 and #xFFFFD --
+	// the same codepoints, one pair required to match and the other required
+	// not to. No definition of the block satisfies all four. Every one of the
+	// four is marked status="queried" in msMeta/Regex_w3c.xml, two of them
+	// against a filed W3C bug, so all of them are disputed rather than
+	// settled; the tests that are marked "accepted" -- reM78 (#xF900),
+	// reM99 (#x007F) and reN98 (#xE007F) -- name codepoints outside every
+	// private-use area, and so are unaffected either way.
+	//
+	// The XSLT suite, curated later and not self-contradictory, requires the
+	// wider reading in regex-syntax-xslt20-0288, -0370 and -0480. Widening
+	// therefore trades four disputed assertions for three undisputed ones and
+	// leaves every undisputed assertion on both sides intact.
+	"IsPrivateUse": {{0xE000, 0xF8FF},
+		{0xF0000, 0xFFFFD}, {0x100000, 0x10FFFD}},
 	"IsCJKCompatibilityIdeographs":           {{0xF900, 0xFAFF}},
 	"IsAlphabeticPresentationForms":          {{0xFB00, 0xFB4F}},
 	"IsArabicPresentationForms-A":            {{0xFB50, 0xFDFF}},
