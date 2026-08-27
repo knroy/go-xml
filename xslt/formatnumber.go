@@ -263,7 +263,10 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 			df = defaultDecimalFormat()
 		}
 
-		out, err := xpath.FormatNumber(num, picture, df)
+		// XSLT 2.0 raises XTDE1310 for a malformed picture and 3.0 defers to
+		// XPath's FODF1310 for the same condition, so the code follows the
+		// version the expression was compiled in rather than being fixed.
+		out, err := xpath.FormatNumberVersion(num, picture, df, ctx.Version)
 		if err != nil {
 			return nil, err
 		}
