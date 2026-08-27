@@ -53,22 +53,31 @@ func MapKeyOf(a *Atomic) (string, error) {
 		return "", Errorf("XPTY0004", "a map key must be a single atomic value")
 	}
 	switch {
-	case a.Type == TypeUntypedAtomic:
-		// An untyped key would be equal to a string and to a number at once,
-		// which makes "which entry did I ask for" unanswerable.
-		return "", Errorf("XPTY0004",
-			"xs:untypedAtomic is not a valid map key")
 	case a.Type.IsNumeric():
 		f := a.Float64()
 		if math.IsNaN(f) {
 			// NaN is equal to nothing, itself included, so it can never be
-			// looked up. It is still storable: map:entry(xs:double('NaN'), 1)
-			// is a legal map with an unreachable entry, which is what the
-			// specification says rather than an error.
+			// looked up through the "eq" rule. The specification carves it
+			// out anyway: map:get(map:entry(xs:double('NaN'), 1), xs:float('NaN'))
+			// is required to find the entry, so every NaN — of whatever
+			// numeric type — is one key.
 			return "num:NaN", nil
 		}
 		// Compared as an exact rational so that an integer and the double
-		// spelling of the same value share an entry.
+		// spelling of the same value share an entry, while an xs:decimal that
+		// merely rounds to the same double does not: map-put-023 stores
+		// 1.0000000000100000000001 alongside the double 1.00000000001 and
+		// requires two entries.
+		if math.IsInf(f, 0) {
+			// An infinity has no rational value, so big.Rat.SetFloat64
+			// returns nil for it and the dereference below panicked. The two
+			// infinities are still keys, one apiece, and they are shared
+			// across the numeric types the way every other numeric key is.
+			if f > 0 {
+				return "num:INF", nil
+			}
+			return "num:-INF", nil
+		}
 		if r := a.Rat(); r != nil {
 			return "num:" + r.RatString(), nil
 		}
@@ -81,6 +90,30 @@ func MapKeyOf(a *Atomic) (string, error) {
 	case a.Type == TypeQName:
 		q := a.QName()
 		return "qname:" + q.URI + "\x00" + q.Local, nil
+	case a.Type == TypeDate || a.Type == TypeTime || a.Type == TypeDateTime:
+		// A zoned value keys on the instant it denotes, not on its spelling:
+		// xs:time('17:00:00Z') and xs:time('12:00:00-05:00') are the same
+		// moment and so the same key (same-key-027).
+		//
+		// An unzoned value keys on its spelling instead, and so occupies a
+		// space of its own. It could be normalised through the implicit
+		// timezone, but that would make an unzoned value collide with its own
+		// adjustment to that timezone, which same-key-013 through 015 require
+		// to stay distinct — a map key is decided by the value, and a value
+		// without a timezone is a different value from one with it.
+		if dt := a.DateTimeVal(); dt != nil && dt.HasTZ {
+			return a.Type.String() + ":tz:" + dt.ToSeconds(0).RatString(), nil
+		}
+	case a.Type == TypeDuration || a.Type == TypeYearMonthDuration ||
+		a.Type == TypeDayTimeDuration:
+		// The three duration types are one key family, and equality is over
+		// the (months, seconds) pair rather than the lexical form: map-get-017
+		// looks an entry keyed xs:duration('P1Y') up under
+		// xs:yearMonthDuration('P12M') and must find it.
+		if d := a.DurationVal(); d != nil {
+			return fmt.Sprintf("dur:%d/%s", d.SignedMonths(), d.SignedSeconds().RatString()), nil
+		}
+		return "dur:" + a.String(), nil
 	}
 	// Everything else compares by its lexical value under its own type
 	// family. The type name is part of the key so that xs:date("2001-01-01")
@@ -93,9 +126,17 @@ func MapKeyOf(a *Atomic) (string, error) {
 // The string family is one group because xs:string, xs:anyURI and the derived
 // string types compare with one another under "eq"; every other type stands
 // alone.
+//
+// xs:untypedAtomic is in that group rather than being rejected. The data model
+// admits it as a key — map:entry(xs:untypedAtomic("foo"), "bar") is a legal
+// map — and map:get on it applies the function conversion rules, which cast an
+// untyped key to xs:string. So the untyped spelling of "foo" finds the string
+// entry and vice versa (map-get-006, map-get-007), while the untyped spelling
+// of "12" does *not* find the integer entry (map-get-008): the cast is to
+// string, never to a number.
 func typeFamilyOf(a *Atomic) string {
 	switch a.Type {
-	case TypeString, TypeAnyURI:
+	case TypeString, TypeAnyURI, TypeUntypedAtomic:
 		return "str"
 	}
 	return a.Type.String()
@@ -121,28 +162,110 @@ func (m *MapItem) Put(key *Atomic, value Sequence) (*MapItem, error) {
 	return out, nil
 }
 
-// Remove returns a map without the given key.
-func (m *MapItem) Remove(key *Atomic) (*MapItem, error) {
+// MapBuilder accumulates entries into a map in one pass.
+//
+// Put clones the whole map, which is right for the immutable data model but
+// quadratic when a map is assembled entry by entry. map:merge is handed half a
+// million singleton maps by the suite (map-keys-014), and building the result
+// with Put took time proportional to the square of that. The builder owns its
+// map until Build hands it over, so it can mutate in place; nothing else has a
+// reference to observe the intermediate states.
+type MapBuilder struct {
+	m *MapItem
+}
+
+// NewMapBuilder returns a builder over an empty map.
+func NewMapBuilder() *MapBuilder { return &MapBuilder{m: NewMap()} }
+
+// NewMapBuilderFrom returns a builder seeded with a copy of m's entries, for
+// the operations that start from an existing map.
+func NewMapBuilderFrom(m *MapItem) *MapBuilder { return &MapBuilder{m: m.clone()} }
+
+// Set adds or replaces an entry.
+func (b *MapBuilder) Set(key *Atomic, value Sequence) error {
 	k, err := MapKeyOf(key)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if _, ok := m.index[k]; !ok {
+	if i, ok := b.m.index[k]; ok {
+		b.m.entries[i] = mapEntry{key: key, value: value}
+		return nil
+	}
+	b.m.index[k] = len(b.m.entries)
+	b.m.entries = append(b.m.entries, mapEntry{key: key, value: value})
+	return nil
+}
+
+// Lookup reports the value already held under key, if any. map:merge's
+// duplicate policies need to see the incumbent before deciding what to store.
+func (b *MapBuilder) Lookup(key *Atomic) (Sequence, bool, error) {
+	k, err := MapKeyOf(key)
+	if err != nil {
+		return nil, false, err
+	}
+	i, ok := b.m.index[k]
+	if !ok {
+		return nil, false, nil
+	}
+	return b.m.entries[i].value, true, nil
+}
+
+// Build returns the finished map. The builder must not be used afterwards, so
+// that the map it hands out really is immutable.
+func (b *MapBuilder) Build() *MapItem {
+	m := b.m
+	b.m = nil
+	return m
+}
+
+// RemoveAll returns a map without any of the given keys.
+//
+// map:remove takes a *sequence* of keys, and removing them one at a time would
+// rebuild the map once per key. Absent keys are ignored rather than being an
+// error, which is what makes map:remove($m, ("a", "nosuch")) legal.
+func (m *MapItem) RemoveAll(keys []*Atomic) (*MapItem, error) {
+	drop := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		k, err := MapKeyOf(key)
+		if err != nil {
+			return nil, err
+		}
+		drop[k] = true
+	}
+	// Nothing to do is answered with the receiver itself: a map is immutable,
+	// so sharing it is safe and saves copying half a million entries for the
+	// common map:remove($m, ()) .
+	any := false
+	for k := range drop {
+		if _, ok := m.index[k]; ok {
+			any = true
+			break
+		}
+	}
+	if !any {
 		return m, nil
 	}
-	out := NewMap()
+	out := &MapItem{
+		entries: make([]mapEntry, 0, len(m.entries)),
+		index:   make(map[string]int, len(m.index)),
+	}
 	for _, e := range m.entries {
 		ek, err := MapKeyOf(e.key)
 		if err != nil {
 			return nil, err
 		}
-		if ek == k {
+		if drop[ek] {
 			continue
 		}
 		out.index[ek] = len(out.entries)
 		out.entries = append(out.entries, e)
 	}
 	return out, nil
+}
+
+// Remove returns a map without the given key.
+func (m *MapItem) Remove(key *Atomic) (*MapItem, error) {
+	return m.RemoveAll([]*Atomic{key})
 }
 
 // Get returns the value a key maps to, and whether the key is present.

@@ -130,6 +130,17 @@ func Atomize(seq Sequence) Sequence {
 				continue
 			}
 			out = append(out, v.Atomize())
+		case *ArrayItem:
+			// Atomizing an array is the atomization of its members, flattened:
+			// XDM 3.1 defines data([[1,2],[3,4]]) as (1,2,3,4), not as two
+			// items. Falling into the default case instead passed the array
+			// through as though it were an atomic value, which is what made
+			// fn:data on an array answer one item.
+			out = append(out, Atomize(Flatten(One(v)))...)
+		case *MapItem:
+			// Atomizing a map is FOTY0013, like a function item, and for the
+			// same reason: it has no typed value. It is dropped here and the
+			// error raised by AtomizeChecked; see the FunctionItem case.
 		case *Opaque:
 			// Not atomisable; see above.
 		case *FunctionItem:
@@ -158,9 +169,27 @@ func Atomize(seq Sequence) Sequence {
 // that is about to demand a typed value uses this instead.
 func AtomizeChecked(seq Sequence) (Sequence, error) {
 	for _, it := range seq {
-		if f, ok := it.(*FunctionItem); ok {
+		switch v := it.(type) {
+		case *FunctionItem:
 			return nil, Errorf("FOTY0013",
-				"a function item (%s) cannot be atomized", f.String())
+				"a function item (%s) cannot be atomized", v.String())
+		case *MapItem:
+			// A map has no typed value, so atomizing one is the same error a
+			// function item gives. array:sort([map{},1]) asserts FOTY0013
+			// rather than the XPTY0004 a missing key would have produced.
+			return nil, Errorf("FOTY0013",
+				"a %s cannot be atomized", mapArrayString(v))
+		case *ArrayItem:
+			// An array *can* be atomized, but only if its members can: an
+			// array holding a map is FOTY0013 through the array. Flatten
+			// reduces it to the sequence its members hold, which is then
+			// checked the same way.
+			flat := Flatten(One(v))
+			if len(flat) != 1 || flat[0] != Item(v) {
+				if _, err := AtomizeChecked(flat); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return Atomize(seq), nil

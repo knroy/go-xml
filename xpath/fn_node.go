@@ -437,9 +437,17 @@ func registerContextFuncs(l *Library) {
 		return nil, xdm.Errorf(code, "%s", msg)
 	})
 
+	// The label became optional in 3.1, so the one-argument form is the same
+	// body at a version-gated arity. It is needed for more than tidiness:
+	// fn-sort-23 wraps its input in a bare fn:trace, and without this the
+	// case failed on the unknown function rather than on anything it was
+	// written to test.
 	l.registerFn("trace", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The value passes through unchanged; the label is ignored rather
 		// than written to stderr, since a library should not print.
+		return args[0], nil
+	})
+	l.registerFnSince(XPath31, "trace", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		return args[0], nil
 	})
 }

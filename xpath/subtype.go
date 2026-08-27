@@ -104,6 +104,13 @@ func itemTypeSubsumes(super, sub string) bool {
 	if sub == "item()" {
 		return false
 	}
+	// A map test in a signature. "map(*)" covers every map, and a typed one
+	// covers a narrower typed one — the key types are atomic and run the same
+	// way round, while the value types are sequence types compared whole.
+	// MapTest-050 and 051 turn on exactly this.
+	if strings.HasPrefix(super, "map(") || strings.HasPrefix(sub, "map(") {
+		return mapSpellingSubsumes(super, sub)
+	}
 	// A node kind test: node() covers every kind, and a named kind covers
 	// itself and its parameterised forms — element(A) is an element().
 	if super == "node()" {
@@ -234,4 +241,55 @@ func applyBuiltinSignatures(l *Library) {
 		fn.Signature = sig
 		l.Add(fn)
 	}
+}
+
+// mapSpellingSubsumes is itemTypeSubsumes for the map tests a signature can
+// name.
+//
+// Both sides have to be maps: nothing else is a subtype of a map test, and a
+// map is a subtype of no other item type except item() and the function tests,
+// which itemTypeSubsumes settles before reaching here.
+func mapSpellingSubsumes(super, sub string) bool {
+	superKey, superVal, superOK := splitMapSpelling(super)
+	subKey, subVal, subOK := splitMapSpelling(sub)
+	if !superOK || !subOK {
+		return false
+	}
+	if superKey == "" {
+		return true // map(*) covers every map
+	}
+	if subKey == "" {
+		// map(*) is wider than any typed map test, so it is subsumed by none.
+		return false
+	}
+	return atomicSubsumes(superKey, subKey) && spellingSubsumes(superVal, subVal)
+}
+
+// splitMapSpelling breaks "map(K, V)" into its two halves, answering "" for
+// both on the "map(*)" form.
+//
+// The split is on the *top-level* comma, since a value type may itself be a
+// map test with a comma of its own: "map(xs:integer, map(xs:integer, xs:string))".
+func splitMapSpelling(s string) (key, val string, ok bool) {
+	if !strings.HasPrefix(s, "map(") || !strings.HasSuffix(s, ")") {
+		return "", "", false
+	}
+	body := strings.TrimSpace(s[len("map(") : len(s)-1])
+	if body == "*" {
+		return "", "", true
+	}
+	depth := 0
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				return strings.TrimSpace(body[:i]), strings.TrimSpace(body[i+1:]), true
+			}
+		}
+	}
+	return "", "", false
 }

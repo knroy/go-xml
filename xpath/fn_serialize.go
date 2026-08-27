@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -17,10 +18,34 @@ import (
 // is the default output method with the handful of parameters the second
 // argument can set.
 func registerSerialize(l *Library) {
-	l.registerFnSince(XPath30, "serialize", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		opts, err := serializationParams(args)
+	l.registerFnSince(XPath30, "serialize", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		opts, err := serializationParams(ctx, args)
 		if err != nil {
 			return nil, err
+		}
+		// The json and adaptive methods do not serialise item by item: json
+		// renders the whole argument as one value, and both have their own
+		// rules about what a sequence even means. They are handled before the
+		// XML path rather than inside it.
+		switch opts.method {
+		case "json":
+			out, err := serializeJSON(seqArg(args, 0), opts)
+			if err != nil {
+				return nil, err
+			}
+			if len(opts.charMap) > 0 {
+				out = applyCharacterMap(out, opts.charMap)
+			}
+			return strSeq(out), nil
+		case "adaptive":
+			out, err := serializeAdaptiveSeq(seqArg(args, 0), opts)
+			if err != nil {
+				return nil, err
+			}
+			if len(opts.charMap) > 0 {
+				out = applyCharacterMap(out, opts.charMap)
+			}
+			return strSeq(out), nil
 		}
 		var sb strings.Builder
 		// omit-xml-declaration defaults to yes here, since a serialised
@@ -28,6 +53,12 @@ func registerSerialize(l *Library) {
 		// for it back produces the declaration the XML output method defines.
 		// A standalone value can only be written in a declaration, so asking
 		// for one is also a request for the declaration itself.
+		// The HTML method writes a doctype declaration ahead of the document.
+		// html-version 5 is the only one this serialiser is asked for, and
+		// its doctype carries no public or system identifier.
+		if opts.method == "html" {
+			sb.WriteString("<!DOCTYPE html>\n")
+		}
 		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
 			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"`)
 			if opts.standalone != "" {
@@ -77,6 +108,17 @@ type serializeOptions struct {
 	standalone string
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
+	// allowDuplicateNames permits a JSON object to be written with two keys
+	// that render to the same string; without it that is SERE0022.
+	allowDuplicateNames bool
+	// jsonNodeOutputMethod is the method a node nested inside a JSON value is
+	// serialised with, since JSON itself has no node type.
+	jsonNodeOutputMethod string
+	// cdataElements names the elements whose text children are written as
+	// CDATA sections rather than with escaping. The key drops the prefix,
+	// since QName equality is namespace URI plus local name and the picture
+	// names an element that may be written with any prefix at all.
+	cdataElements map[xdm.QName]bool
 }
 
 // serializationParams reads the second argument, an element whose children
@@ -86,10 +128,18 @@ type serializeOptions struct {
 // something to ignore: the spec makes an unknown serialization parameter an
 // error, and accepting one silently would let a stylesheet believe it had
 // asked for something it did not get.
-func serializationParams(args []xdm.Sequence) (serializeOptions, error) {
+func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, error) {
 	opts := serializeOptions{method: "xml", omitXMLDecl: true}
 	if len(args) < 2 {
 		return opts, nil
+	}
+	// XPath 3.1 lets the parameters be given as a map instead of an element,
+	// which is how every one of the json and adaptive cases writes them. The
+	// element form stays for 3.0, where a map is not an item at all.
+	if len(args[1]) == 1 {
+		if m, ok := args[1][0].(*xdm.MapItem); ok && ctx.Version.atLeast31() {
+			return mapSerializationParams(m, opts)
+		}
 	}
 	for _, it := range args[1] {
 		n, ok := it.(*xdm.Node)
@@ -356,12 +406,35 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 			sb.WriteString(escapeAttr(a.Value))
 			sb.WriteString(`"`)
 		}
-		if len(n.Children) == 0 {
+		// An empty head still receives the encoding declaration, so it cannot
+		// take the self-closing shortcut. HTML has no self-closing syntax for
+		// a non-void element anyway.
+		htmlHead := opts.method == "html" && n.Name.Local == "head" && n.Name.URI == ""
+		if len(n.Children) == 0 && !htmlHead {
 			sb.WriteString("/>")
 			return
 		}
 		sb.WriteString(">")
+		// The HTML method declares the output encoding inside head. The
+		// serialization spec words this as an http-equiv meta element, but
+		// HTML5 replaced it with meta/@charset and the suite accepts either;
+		// the modern spelling is what a browser reading this would expect.
+		if opts.method == "html" && n.Name.Local == "head" && n.Name.URI == "" {
+			sb.WriteString(`<meta charset="UTF-8">`)
+		}
+		// An element named by cdata-section-elements has its text written as
+		// a CDATA section instead of with escaping, which is what the
+		// parameter exists to ask for.
+		cdata := opts.cdataElements[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}]
 		for _, c := range n.Children {
+			if cdata && c.Kind == xdm.KindText {
+				sb.WriteString("<![CDATA[")
+				// A "]]>" inside the text would end the section early, so it
+				// is split across two sections rather than written literally.
+				sb.WriteString(strings.ReplaceAll(c.Value, "]]>", "]]]]><![CDATA[>"))
+				sb.WriteString("]]>")
+				continue
+			}
 			serializeNode(sb, c, opts)
 		}
 		sb.WriteString("</")
@@ -462,4 +535,479 @@ func applyCharacterMap(s string, m map[rune]string) string {
 		sb.WriteRune(r)
 	}
 	return sb.String()
+}
+
+// mapSerializationParams reads the parameters from the map form the 3.1
+// signature allows.
+//
+// The map form is typed where the element form is not: "indent" holds an
+// xs:boolean, not the string "yes". A value of the wrong type is XPTY0004 —
+// the argument does not match the declared map(xs:string, item()*) — rather
+// than the SEPM0017 the element form raises for a bad spelling, which is why
+// this cannot share the element form's checking (serialize-json-133..135).
+func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOptions, error) {
+	// A parameter whose value is a boolean is read through this, so that all
+	// three of "wrong type", "wrong cardinality" and "a string that looks
+	// like a boolean" come out as the same type error.
+	boolParam := func(name string, v xdm.Sequence) (bool, error) {
+		if len(v) != 1 {
+			return false, xdm.ErrType(
+				"XPTY0004: serialization parameter %q takes a single boolean", name)
+		}
+		a, ok := v[0].(*xdm.Atomic)
+		if !ok {
+			return false, xdm.ErrType(
+				"XPTY0004: serialization parameter %q takes a boolean", name)
+		}
+		// An xs:untypedAtomic is the one non-boolean that is accepted: the
+		// function conversion rules cast it to the declared type, so
+		// indent=xs:untypedAtomic('false') is the boolean false rather than a
+		// type error (serialize-xml-142b). A genuine xs:string is not — the
+		// map form is typed, and "true" is not true() (serialize-json-134).
+		if a.Type == xdm.TypeUntypedAtomic {
+			conv, err := CastAtomic(a, xdm.TypeBoolean)
+			if err != nil {
+				return false, xdm.ErrType(
+					"XPTY0004: serialization parameter %q takes a boolean, got %q",
+					name, a.String())
+			}
+			return conv.Bool(), nil
+		}
+		if a.Type != xdm.TypeBoolean {
+			return false, xdm.ErrType(
+				"XPTY0004: serialization parameter %q takes a boolean", name)
+		}
+		return a.Bool(), nil
+	}
+	strParam := func(name string, v xdm.Sequence) (string, error) {
+		if len(v) != 1 {
+			return "", xdm.ErrType(
+				"XPTY0004: serialization parameter %q takes a single string", name)
+		}
+		a, ok := v[0].(*xdm.Atomic)
+		if !ok {
+			return "", xdm.ErrType(
+				"XPTY0004: serialization parameter %q takes a string", name)
+		}
+		return a.String(), nil
+	}
+
+	err := m.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+		name := key.String()
+		switch name {
+		case "method":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			switch v {
+			case "xml", "text", "xhtml", "html", "json", "adaptive":
+				opts.method = v
+			default:
+				return fmt.Errorf("SEPM0017: unsupported serialization method %q", v)
+			}
+		case "indent":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.indent = v
+		case "omit-xml-declaration":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.omitXMLDecl = v
+		case "allow-duplicate-names":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.allowDuplicateNames = v
+		case "item-separator":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.itemSeparator, opts.hasItemSep = v, true
+		case "json-node-output-method":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.jsonNodeOutputMethod = v
+		case "standalone":
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			if v {
+				opts.standalone = "yes"
+			} else {
+				opts.standalone = "no"
+			}
+		case "use-character-maps":
+			m, err := readCharacterMapsFromMap(val)
+			if err != nil {
+				return err
+			}
+			opts.charMap = m
+		case "cdata-section-elements":
+			// The value is a sequence of QNames, so the names arrive already
+			// resolved; the element form takes lexical names instead and has
+			// no static context here to resolve them against.
+			for _, it := range val {
+				a, ok := it.(*xdm.Atomic)
+				if !ok || a.Type != xdm.TypeQName {
+					return xdm.ErrType(
+						"XPTY0004: cdata-section-elements takes QNames")
+				}
+				if opts.cdataElements == nil {
+					opts.cdataElements = map[xdm.QName]bool{}
+				}
+				if qn := a.QName(); qn != nil {
+					opts.cdataElements[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
+				}
+			}
+		case "encoding", "version", "media-type", "doctype-public",
+			"doctype-system", "normalization-form",
+			"undeclare-prefixes", "byte-order-mark", "escape-uri-attributes",
+			"include-content-type", "suppress-indentation",
+			"html-version", "parameter-document":
+			// Recognised and accepted; this serialiser does not vary its
+			// output for them.
+		default:
+			return fmt.Errorf(
+				"SEPM0017: serialization parameter %q is not supported", name)
+		}
+		return nil
+	})
+	return opts, err
+}
+
+// serializeJSON renders a sequence with the JSON output method, added in
+// XPath 3.1.
+//
+// JSON has exactly one value at the top, so the argument must be a single item
+// or empty; a sequence of two is SERE0023 rather than something to concatenate
+// (serialize-json-130). The empty sequence is the JSON null.
+func serializeJSON(seq xdm.Sequence, opts serializeOptions) (string, error) {
+	if len(seq) == 0 {
+		return "null", nil
+	}
+	if len(seq) > 1 {
+		return "", fmt.Errorf(
+			"SERE0023: the JSON output method takes a single item, got %d", len(seq))
+	}
+	var sb strings.Builder
+	if err := writeJSONItem(&sb, seq[0], opts); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// writeJSONValue writes a sequence appearing as a map entry or array member.
+//
+// The same "one value" rule applies at every level, not only the top: a map
+// whose entry holds (1 to 10) has no JSON rendering, and that is SERE0023
+// (serialize-json-131).
+func writeJSONValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOptions) error {
+	switch len(seq) {
+	case 0:
+		sb.WriteString("null")
+		return nil
+	case 1:
+		return writeJSONItem(sb, seq[0], opts)
+	}
+	return fmt.Errorf(
+		"SERE0023: a JSON value must be a single item, got %d", len(seq))
+}
+
+func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) error {
+	switch v := it.(type) {
+	case *xdm.ArrayItem:
+		sb.WriteString("[")
+		for i, m := range v.Members() {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			if err := writeJSONValue(sb, m, opts); err != nil {
+				return err
+			}
+		}
+		sb.WriteString("]")
+		return nil
+	case *xdm.MapItem:
+		sb.WriteString("{")
+		first := true
+		// Two keys that are distinct as XDM values can still render to the
+		// same JSON name — xs:QName("foo") and the string "foo" both write
+		// "foo" — and JSON has no way to keep them apart, so the default is to
+		// refuse rather than to emit an object the caller cannot read back
+		// (serialize-json-010).
+		seen := map[string]bool{}
+		err := v.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+			name := key.String()
+			if seen[name] && !opts.allowDuplicateNames {
+				return fmt.Errorf(
+					"SERE0022: the JSON object would have two entries named %q", name)
+			}
+			seen[name] = true
+			if !first {
+				sb.WriteString(",")
+			}
+			first = false
+			writeJSONString(sb, name)
+			sb.WriteString(":")
+			return writeJSONValue(sb, val, opts)
+		})
+		if err != nil {
+			return err
+		}
+		sb.WriteString("}")
+		return nil
+	case *xdm.FunctionItem:
+		return fmt.Errorf("SERE0021: a function item cannot be serialized as JSON")
+	case *xdm.Node:
+		// JSON has no node type, so a node is written as a string holding its
+		// serialization under the json-node-output-method (default xml).
+		var inner strings.Builder
+		nodeOpts := opts
+		nodeOpts.method = opts.jsonNodeOutputMethod
+		if nodeOpts.method == "" {
+			nodeOpts.method = "xml"
+		}
+		serializeNode(&inner, v, nodeOpts)
+		writeJSONString(sb, inner.String())
+		return nil
+	case *xdm.Atomic:
+		switch {
+		case v.Type == xdm.TypeBoolean:
+			if v.Bool() {
+				sb.WriteString("true")
+			} else {
+				sb.WriteString("false")
+			}
+		case v.Type.IsNumeric():
+			// JSON has no way to write NaN or an infinity, so a number that
+			// is one cannot be serialized at all (serialize-json-122).
+			if v.IsNaN() || math.IsInf(v.Float64(), 0) {
+				return fmt.Errorf(
+					"SERE0020: %s has no JSON representation", v.String())
+			}
+			sb.WriteString(v.String())
+		default:
+			// Everything else — dates, URIs, untyped values — becomes its
+			// lexical form as a JSON string (serialize-json-125, -128).
+			writeJSONString(sb, v.String())
+		}
+		return nil
+	}
+	return nil
+}
+
+// writeJSONString writes a JSON string literal.
+//
+// The solidus is escaped as "\/" even though JSON does not require it: the
+// spec's rule for this method escapes it, and the suite compares the output
+// literally (serialize-json-128).
+func writeJSONString(sb *strings.Builder, s string) {
+	sb.WriteString(`"`)
+	for _, r := range s {
+		switch r {
+		case '"':
+			sb.WriteString(`\"`)
+		case '\\':
+			sb.WriteString(`\\`)
+		case '/':
+			sb.WriteString(`\/`)
+		case '\b':
+			sb.WriteString(`\b`)
+		case '\f':
+			sb.WriteString(`\f`)
+		case '\n':
+			sb.WriteString(`\n`)
+		case '\r':
+			sb.WriteString(`\r`)
+		case '\t':
+			sb.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(sb, `\u%04X`, r)
+				continue
+			}
+			// A character outside the BMP is written as the surrogate pair
+			// JSON's \u escape can express, since \u names a single UTF-16
+			// code unit (serialize-json-114).
+			if r > 0xFFFF {
+				r -= 0x10000
+				fmt.Fprintf(sb, `\u%04X\u%04X`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
+				continue
+			}
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteString(`"`)
+}
+
+// serializeAdaptiveSeq renders a sequence with the adaptive output method.
+//
+// Adaptive exists to show a value the way a debugger would: every item is
+// written in whichever notation suits its kind, and items are separated by the
+// item-separator, which defaults to a newline rather than to nothing. Unlike
+// the XML method it has a rendering for maps, arrays and function items, so
+// nothing in it can fail.
+func serializeAdaptiveSeq(seq xdm.Sequence, opts serializeOptions) (string, error) {
+	sep := "\n"
+	if opts.hasItemSep {
+		sep = opts.itemSeparator
+	}
+	var sb strings.Builder
+	for i, it := range seq {
+		if i > 0 {
+			sb.WriteString(sep)
+		}
+		writeAdaptiveItem(&sb, it, opts)
+	}
+	return sb.String(), nil
+}
+
+func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) {
+	switch v := it.(type) {
+	case *xdm.MapItem:
+		sb.WriteString("map{")
+		first := true
+		_ = v.Entries(func(key *xdm.Atomic, val xdm.Sequence) error {
+			if !first {
+				sb.WriteString(",")
+			}
+			first = false
+			writeAdaptiveItem(sb, key, opts)
+			sb.WriteString(":")
+			writeAdaptiveValue(sb, val, opts)
+			return nil
+		})
+		sb.WriteString("}")
+	case *xdm.ArrayItem:
+		sb.WriteString("[")
+		for i, m := range v.Members() {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			writeAdaptiveValue(sb, m, opts)
+		}
+		sb.WriteString("]")
+	case *xdm.FunctionItem:
+		// A function is shown by name and arity, which is all of it that can
+		// be written down.
+		fmt.Fprintf(sb, "%s#%d", v.Name.Lexical(), v.Arity)
+	case *xdm.Node:
+		// An attribute has no XML serialization of its own, so adaptive gives
+		// it the name="value" form it has inside a start tag
+		// (serialize-adaptive-003).
+		if v.Kind == xdm.KindAttribute {
+			sb.WriteString(elementName(v))
+			sb.WriteString(`="`)
+			sb.WriteString(escapeAttr(v.Value))
+			sb.WriteString(`"`)
+			return
+		}
+		nodeOpts := opts
+		nodeOpts.method = "xml"
+		serializeNode(sb, v, nodeOpts)
+	case *xdm.Atomic:
+		writeAdaptiveAtomic(sb, v)
+	}
+}
+
+// writeAdaptiveValue writes a sequence nested inside a map or array, which
+// adaptive parenthesises when it is not a single item.
+func writeAdaptiveValue(sb *strings.Builder, seq xdm.Sequence, opts serializeOptions) {
+	if len(seq) == 1 {
+		writeAdaptiveItem(sb, seq[0], opts)
+		return
+	}
+	sb.WriteString("(")
+	for i, it := range seq {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		writeAdaptiveItem(sb, it, opts)
+	}
+	sb.WriteString(")")
+}
+
+// writeAdaptiveAtomic writes an atomic value in a form that could be typed
+// back into an expression: a string quoted, a boolean as a function call, a
+// number bare, and anything else as a constructor.
+func writeAdaptiveAtomic(sb *strings.Builder, a *xdm.Atomic) {
+	switch {
+	case a.Type == xdm.TypeBoolean:
+		if a.Bool() {
+			sb.WriteString("true()")
+		} else {
+			sb.WriteString("false()")
+		}
+	case a.Type.IsNumeric():
+		sb.WriteString(a.String())
+	case isStringLike(a.Type):
+		// The doubled quote is how an XPath string literal escapes one, so
+		// the output re-parses to the value it came from.
+		sb.WriteString(`"` + strings.ReplaceAll(a.String(), `"`, `""`) + `"`)
+	default:
+		fmt.Fprintf(sb, "%s(%q)", a.TypeName(), a.String())
+	}
+}
+
+// readCharacterMapsFromMap reads use-character-maps given in the map form,
+// where the parameter is itself a map from character to replacement.
+//
+// Its declared type is map(xs:string, xs:string), and the suite checks that
+// both halves are enforced: a QName key or a node value is XPTY0004, not
+// something to stringify (serialize-xml-139b, -140b, -141b). An
+// xs:untypedAtomic is accepted on the same function-conversion grounds as
+// elsewhere.
+func readCharacterMapsFromMap(val xdm.Sequence) (map[rune]string, error) {
+	if len(val) != 1 {
+		return nil, xdm.ErrType(
+			"XPTY0004: use-character-maps takes a single map")
+	}
+	m, ok := val[0].(*xdm.MapItem)
+	if !ok {
+		return nil, xdm.ErrType("XPTY0004: use-character-maps takes a map")
+	}
+	out := map[rune]string{}
+	err := m.Entries(func(key *xdm.Atomic, v xdm.Sequence) error {
+		if !isStringLike(key.Type) && key.Type != xdm.TypeUntypedAtomic {
+			return xdm.ErrType(
+				"XPTY0004: a use-character-maps key must be a string, got %s",
+				key.TypeName())
+		}
+		r := []rune(key.String())
+		if len(r) != 1 {
+			return fmt.Errorf(
+				"SEPM0016: a character map key must be one character, got %q",
+				key.String())
+		}
+		if len(v) != 1 {
+			return xdm.ErrType(
+				"XPTY0004: a use-character-maps value must be a single string")
+		}
+		a, ok := v[0].(*xdm.Atomic)
+		if !ok {
+			return xdm.ErrType(
+				"XPTY0004: a use-character-maps value must be a string, got a node")
+		}
+		if !isStringLike(a.Type) && a.Type != xdm.TypeUntypedAtomic {
+			return xdm.ErrType(
+				"XPTY0004: a use-character-maps value must be a string, got %s",
+				a.TypeName())
+		}
+		out[r[0]] = a.String()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

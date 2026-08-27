@@ -60,6 +60,10 @@ func TestQT3(t *testing.T) {
 func runSuite(t *testing.T, root string, cat *Catalog, target TargetVersion) {
 	r := NewRunner(root, cat)
 	r.Target = target
+	// The harness's own assertion expressions are compiled at the version
+	// being run, so that a 3.1 set's "array(*)" assert-type and "[1, 2]"
+	// expected value parse. See assertVersion.
+	assertVersion = xpathVersion(target)
 	var pass, fail, skip int
 	failsBySet := map[string]int{}
 	skipReasons := map[string]int{}

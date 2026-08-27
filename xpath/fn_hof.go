@@ -206,8 +206,12 @@ func argFunction(args []xdm.Sequence, i int, fn string) (*xdm.FunctionItem, erro
 	if i >= len(args) || len(args[i]) != 1 {
 		return nil, xdm.ErrType("%s: expected a single function item", fn)
 	}
-	f, ok := args[i][0].(*xdm.FunctionItem)
-	if !ok {
+	// functionItemView rather than a type assertion: a map and an array are
+	// function items of arity one in the data model, so fn:for-each and the
+	// rest must take one. map-get-100 passes a map straight to fn:for-each as
+	// the lookup function.
+	f := functionItemView(args[i][0])
+	if f == nil {
 		return nil, xdm.ErrType("%s: argument is %s, not a function",
 			fn, args[i][0].TypeName())
 	}

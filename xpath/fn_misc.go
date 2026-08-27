@@ -394,6 +394,14 @@ func deepEqualItem(ctx *Context, x, y xdm.Item) (bool, error) {
 			"fn:deep-equal: a function item cannot be compared")
 	}
 
+	// Maps and arrays compare structurally from 3.1 onwards. They reach here
+	// before the node and atomic branches because neither is either one: the
+	// fallback below compares unrecognised items by identity, so two equal
+	// arrays built separately were answering false.
+	if eq, handled, err := deepEqualMapArray(ctx, x, y); handled {
+		return eq, err
+	}
+
 	xn, xIsNode := x.(*xdm.Node)
 	yn, yIsNode := y.(*xdm.Node)
 	if xIsNode != yIsNode {

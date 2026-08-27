@@ -464,6 +464,15 @@ func (t SequenceType) String() string {
 	}
 	base := "item()"
 	switch {
+	case t.IsMapTest:
+		// Rendered because convertForParam names the declared type in its
+		// XPTY0004 message, and "item()" there says nothing about why a map
+		// of the wrong shape was refused.
+		if t.MapKey == nil || t.MapValue == nil {
+			base = "map(*)"
+		} else {
+			base = "map(" + t.MapKey.String() + ", " + t.MapValue.String() + ")"
+		}
 	case t.SchemaType != "":
 		base = t.SchemaType
 	case t.FacetName != "":

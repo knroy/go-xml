@@ -783,7 +783,7 @@ func (p *Parser) parseCastable() (Expr, error) {
 }
 
 func (p *Parser) parseCast() (Expr, error) {
-	left, err := p.parseUnary()
+	left, err := p.parseArrow()
 	if err != nil {
 		return nil, err
 	}
@@ -815,6 +815,12 @@ func (p *Parser) parseCast() (Expr, error) {
 	return left, nil
 }
 
+// parseUnary parses UnaryExpr ::= ("-" | "+")* ValueExpr.
+//
+// The grammar puts ArrowExpr *above* UnaryExpr, so the sign binds tighter than
+// "=>" and "-1=>abs()" is "abs(-1)", which is 1. Calling parseArrow from here
+// had it the other way round — the arrow consumed the bare literal and the
+// negation was applied to the call's result, so that expression answered -1.
 func (p *Parser) parseUnary() (Expr, error) {
 	if op, ok := p.acceptOp("-", "+"); ok {
 		operand, err := p.parseUnary()
@@ -823,18 +829,28 @@ func (p *Parser) parseUnary() (Expr, error) {
 		}
 		return &UnaryOp{Op: op, Operand: operand}, nil
 	}
-	return p.parseArrow()
+	return p.parseSimpleMap()
 }
 
-// parseArrow parses the XPath 3.0 arrow operator:
-// ArrowExpr ::= SimpleMapExpr ("=>" ArrowFunctionSpecifier ArgumentList)*.
+// parseArrow parses the arrow operator:
+// ArrowExpr ::= UnaryExpr ("=>" ArrowFunctionSpecifier ArgumentList)*
+// ArrowFunctionSpecifier ::= EQName | VarRef | ParenthesizedExpr.
 //
 // "$x => f(1)" is "f($x, 1)": the left operand becomes the call's first
-// argument and the written arguments follow it. Because it lowers to an
-// ordinary call, everything a call already does — reserved names, QName and
-// schema-constructor folding, arity-keyed lookup — applies without change.
+// argument and the written arguments follow it. When the specifier is a name
+// this lowers to an ordinary call, so everything a call already does —
+// reserved names, QName and schema-constructor folding, arity-keyed lookup —
+// applies without change.
+//
+// The other two specifier forms name no function at compile time: the callee
+// is whatever the variable or the parenthesized expression evaluates to, which
+// may be a function item but equally a map or an array, both of which are
+// callable. Those become a DynamicCall with the left operand prepended to the
+// arguments, which is the same lowering one level later. Only the name form
+// was accepted before, so every "$x => $f()" in the suite was rejected as a
+// syntax error when the spec makes it a type error at worst.
 func (p *Parser) parseArrow() (Expr, error) {
-	left, err := p.parseSimpleMap()
+	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
@@ -842,14 +858,65 @@ func (p *Parser) parseArrow() (Expr, error) {
 		if _, ok := p.acceptOp("=>"); !ok {
 			return left, nil
 		}
-		if p.cur().Kind != TokName {
-			return nil, p.errorf("expected a function name after \"=>\"")
+		switch {
+		case p.cur().Kind == TokName:
+			left, err = p.parseFunctionCallWith(left)
+			if err != nil {
+				return nil, err
+			}
+		case p.cur().Kind == TokVar, p.peekIs(TokOp, "("):
+			target, err := p.parseArrowTarget()
+			if err != nil {
+				return nil, err
+			}
+			args, err := p.parseArgumentList()
+			if err != nil {
+				return nil, err
+			}
+			// The left operand is the first argument, exactly as in the name
+			// form; the written arguments follow it.
+			left = &DynamicCall{Target: target, Args: append([]Expr{left}, args...)}
+		default:
+			return nil, p.errorf(
+				"expected a function name, variable or parenthesized expression after \"=>\"")
 		}
-		left, err = p.parseFunctionCallWith(left)
+	}
+}
+
+// parseArrowTarget parses the VarRef and ParenthesizedExpr forms of
+// ArrowFunctionSpecifier.
+//
+// It deliberately does not go through the postfix parser: "$f(...)" there
+// would swallow the argument list as a dynamic call of its own, leaving the
+// arrow with nothing to apply and losing the left operand. The specifier is
+// just the callee, so only the variable or the parenthesized expression is
+// taken and the argument list is left for the caller.
+func (p *Parser) parseArrowTarget() (Expr, error) {
+	if t := p.cur(); t.Kind == TokVar {
+		p.pos++
+		name, err := p.resolveVarName(t.Val)
 		if err != nil {
 			return nil, err
 		}
+		return &VarRef{Name: name}, nil
 	}
+	if err := p.expectOp("("); err != nil {
+		return nil, err
+	}
+	// "()" is a legal parenthesized expression, and an empty sequence is not
+	// callable — but that is FOTY0013 at evaluation, not a syntax error, so
+	// it is admitted here and left to DynamicCall to reject.
+	if _, ok := p.acceptOp(")"); ok {
+		return &SequenceExpr{}, nil
+	}
+	inner, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectOp(")"); err != nil {
+		return nil, err
+	}
+	return inner, nil
 }
 
 // parseSimpleMap parses the XPath 3.0 simple map operator, which sits between
@@ -966,6 +1033,12 @@ func checkCastTarget(st SequenceType) error {
 	// with FORG0001 because the type has no instances. Refusing it statically
 	// reported a syntax error for an expression that is well-formed.
 	if st.IsErrorType {
+		return nil
+	}
+	// xs:numeric is a legal cast target even though it is a union: the spec
+	// gives it cast semantics of its own, so the general "unions cannot be
+	// cast to" rule does not reach it.
+	if st.IsNumericType {
 		return nil
 	}
 	if !st.HasAtomicType {

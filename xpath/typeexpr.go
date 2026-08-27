@@ -47,20 +47,64 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 	if t.IsErrorType {
 		return false
 	}
-	// A function test matches a function item and nothing else. A typed test
-	// additionally fixes the arity, and where the item records a signature,
-	// the parameter and return types it must be compatible with.
-	if t.IsFunctionTest {
-		fn, ok := it.(*xdm.FunctionItem)
+	// xs:numeric matches any value whose type is or derives from one of the
+	// three numeric primitives, which is why this asks IsNumeric rather than
+	// comparing against a fixed list: xs:short is an xs:integer is an
+	// xs:decimal, and the suite asserts it is an xs:numeric.
+	if t.IsNumericType {
+		a, ok := it.(*xdm.Atomic)
+		return ok && a.Type.IsNumeric()
+	}
+	// A map test matches a map and nothing else, even though a map is also a
+	// function item: the relation runs one way only.
+	if t.IsMapTest {
+		m, ok := it.(*xdm.MapItem)
+		return ok && mapItemMatches(t, m)
+	}
+	// An array test matches an array and nothing else, even though an array is
+	// also a function item — the same one-way relation a map test has.
+	if t.IsArrayTest {
+		arr, ok := it.(*xdm.ArrayItem)
 		if !ok {
 			return false
 		}
-		return functionItemMatches(t, fn)
+		if t.ArrayMember == nil {
+			return true // array(*)
+		}
+		// Every member is a sequence, and each must satisfy the declared
+		// member type on its own. That is why "[(), 'A'] instance of
+		// array(xs:string)" is false while "array(xs:string?)" is true: the
+		// empty member fails the required cardinality, not the item type.
+		for _, m := range arr.Members() {
+			if !t.ArrayMember.Matches(m) {
+				return false
+			}
+		}
+		return true
 	}
-	// Nothing else matches a function item: it is neither a node nor an
-	// atomic value, so every other item type excludes it.
-	if _, isFn := it.(*xdm.FunctionItem); isFn {
-		return t.ItemType == nil && !t.HasAtomicType && t.SchemaType == ""
+	// A function test matches any function item, and a map or an array along
+	// with it — the data model says those *are* functions of arity one, so a
+	// map is an instance of "function(xs:anyAtomicType) as item()*". Their
+	// signatures depend on what they hold, so each is judged by its own rule
+	// rather than through the recorded-signature path a plain function uses.
+	if t.IsFunctionTest {
+		switch v := it.(type) {
+		case *xdm.FunctionItem:
+			return functionItemMatches(t, v)
+		case *xdm.MapItem:
+			return mapMatchesFunctionTest(t, v)
+		case *xdm.ArrayItem:
+			return arrayMatchesFunctionTest(t, v)
+		}
+		return false
+	}
+	// Nothing else matches a function item, or a map: neither is a node or an
+	// atomic value, so every other item type excludes them. Only item() is
+	// left, which is what the "no test at all" condition below says.
+	switch it.(type) {
+	case *xdm.FunctionItem, *xdm.MapItem, *xdm.ArrayItem:
+		return t.ItemType == nil && !t.HasAtomicType && t.SchemaType == "" &&
+			!t.IsArrayTest
 	}
 
 	switch {
@@ -140,6 +184,12 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 	case "anyAtomicType", "anySimpleType":
 		// The root of the atomic hierarchy: every atomic value is one.
 		return true
+	case "numeric":
+		// The union xs:double | xs:float | xs:decimal, and so xs:integer too
+		// by derivation from xs:decimal. It is a union rather than a type, so
+		// the code it parsed to says nothing; the membership test is the
+		// question of whether the value is numeric at all.
+		return a.Type.IsNumeric()
 	case "NOTATION":
 		// xs:NOTATION is abstract: no value can have it as its type directly,
 		// so an unannotated value is not an instance of one. Asking is legal
@@ -226,6 +276,29 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return xdm.One(xdm.NewBoolean(false)), nil
 		}
 		return nil, xdm.ErrType("cast: operand has %d items, want 1", len(atoms))
+	}
+
+	// Casting to xs:numeric is the identity on a value that already is one and
+	// a cast to xs:double on anything else. That is why the target cannot be
+	// reduced to a type code at parse time: "xs:short(256) cast as xs:numeric"
+	// keeps its xs:short type, which no single code would preserve, while
+	// "true() cast as xs:numeric" produces an xs:double.
+	if e.Type.IsNumericType {
+		a := atoms[0].(*xdm.Atomic)
+		if a.Type.IsNumeric() {
+			if e.Castable {
+				return xdm.One(xdm.NewBoolean(true)), nil
+			}
+			return xdm.One(a), nil
+		}
+		out, err := CastAtomic(a, xdm.TypeDouble)
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(err == nil)), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(out), nil
 	}
 
 	if !e.Type.HasAtomicType {

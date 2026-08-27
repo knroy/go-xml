@@ -130,6 +130,33 @@ func registerRegexFuncs(l *Library) {
 		return strSeq(re.ReplaceAllString(s, goRepl)), nil
 	})
 
+	// fn:tokenize($input as xs:string?) as xs:string*, added in 3.1.
+	//
+	// Defined as tokenize(normalize-space($input), ' '), which is why it needs
+	// no regular expression at all: the normalization collapses every run of
+	// whitespace and strips the ends, so a plain split on the single space
+	// left between tokens is exact. Registering it as another arity of the
+	// two-argument form would have sent an absent pattern into the regex
+	// compiler.
+	l.registerFnSince(XPath31, "tokenize", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		s, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s = strings.Join(strings.Fields(s), " ")
+		if s == "" {
+			// The empty string has no tokens, the same answer the
+			// two-argument form gives rather than one empty token.
+			return xdm.Empty(), nil
+		}
+		parts := strings.Split(s, " ")
+		out := make(xdm.Sequence, 0, len(parts))
+		for _, p := range parts {
+			out = append(out, xdm.NewString(p))
+		}
+		return out, nil
+	})
+
 	l.registerFn("tokenize", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		s, err := argString(args, 0)
 		if err != nil {

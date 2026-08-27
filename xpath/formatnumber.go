@@ -41,6 +41,12 @@ type DecimalFormat struct {
 	MinusSign         rune
 	Infinity          string
 	NaN               string
+	// ExponentSeparator is the character that introduces the exponent part of
+	// a picture, which XPath 3.1 added along with scientific notation itself.
+	// It is a declared symbol like every other one here because a locale that
+	// writes 1,2346E4 needs to say so; the default "e" is what an undeclared
+	// format uses.
+	ExponentSeparator rune
 }
 
 // DefaultDecimalFormat returns the format used when none is declared.
@@ -56,6 +62,7 @@ func DefaultDecimalFormat() *DecimalFormat {
 		MinusSign:         '-',
 		Infinity:          "Infinity",
 		NaN:               "NaN",
+		ExponentSeparator: 'e',
 	}
 }
 
@@ -151,6 +158,22 @@ type picture struct {
 	// outward from the decimal point, the opposite direction from the integer
 	// part, so its positions cannot share that field.
 	fracGroupPositions []int
+	// minExp is the minimum width of the exponent's digits, and exponent
+	// reports whether the picture had an exponent part at all. A picture may
+	// ask for a zero-width exponent, so the presence of the part cannot be
+	// inferred from minExp alone.
+	exponent bool
+	minExp   int
+	// expSuffix is the passive text that followed the exponent's digits, kept
+	// apart from the mantissa's own suffix because it belongs after the
+	// exponent rather than between the mantissa and it.
+	expSuffix string
+	// intHasDigitSign records whether the integer part of the sub-picture held
+	// an optional-digit-sign. With a minimum integer size of zero the mantissa
+	// is scaled below 1, and this is what decides whether the leading zero is
+	// written: "#.#e0" gives 0.2e0 but ".#e0" gives .2e0, and the only
+	// difference between them is the "#".
+	intHasDigitSign bool
 }
 
 // formatNumber2 implements fn:format-number.
@@ -173,14 +196,14 @@ func FormatNumber(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error
 // rather than of the check. Every message is written with the XSLT code and
 // rewritten here, since the two differ only in that prefix.
 func FormatNumberVersion(num *xdm.Atomic, pic string, df *DecimalFormat, v Version) (string, error) {
-	out, err := formatNumberImpl(num, pic, df)
+	out, err := formatNumberImpl(num, pic, df, v)
 	if err != nil && v.atLeast30() {
 		return "", errors.New(strings.Replace(err.Error(), "XTDE1310", "FODF1310", 1))
 	}
 	return out, err
 }
 
-func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, error) {
+func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat, v Version) (string, error) {
 	if num.IsNaN() {
 		return df.NaN, nil
 	}
@@ -200,7 +223,7 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 		chosen = subs[1]
 	}
 
-	p, err := parsePicture(chosen, df)
+	p, err := parsePicture(chosen, df, v)
 	if err != nil {
 		return "", err
 	}
@@ -256,14 +279,60 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 		value = new(big.Rat).Abs(value)
 	}
 
+	// Scientific notation divides the value by a power of ten so that the
+	// integer part comes out the width the mantissa's picture asks for, and
+	// reports that power as the exponent.
+	//
+	// The chosen scaling is the spec's: with a minimum integer size of N > 0
+	// the mantissa lands in [10^(N-1), 10^N), so "000.0e0" on 0.2 gives
+	// 200.0e-3 rather than 2.0e-1 (numberformat255). A minimum size of zero
+	// is the other case — the mantissa is put below 1 instead, which is why
+	// "#.99e99" on 12345.678 is 0.12e05 and not 1.23e04 (numberformat131).
+	exp := 0
+	if p.exponent {
+		exp = scaleForExponent(value, p.minInt)
+		value = scaleByPowerOfTen(value, -exp)
+		// With no mandatory integer digit the mantissa sits below 1, so every
+		// significant digit it has is in the fraction. A picture that asks for
+		// no fractional places at all — "#e0", "#.e0" — would then round the
+		// whole value away to "0e0"; the rule that a formatted number carries
+		// at least one digit means the fraction gets one place regardless
+		// (numberformat231, numberformat135).
+		if p.minInt == 0 && p.maxFrac < 1 {
+			p.maxFrac = 1
+		}
+	}
+
+	// The exponent is chosen from the value *before* rounding and is not
+	// revisited afterwards. Rounding can carry the mantissa up into the next
+	// power of ten — 0.99999999 against "0.0e0" scales to 9.9999999e-1 and
+	// rounds to 10.0 — and the spec keeps that extra digit rather than
+	// re-normalising to 1.0e0, so the answer really is "10.0e-1"
+	// (numberformat304).
 	rounded := roundToPlaces(value, p.maxFrac)
 	intPart, fracPart := splitRat(rounded, p.maxFrac)
 
-	intStr := padInt(intPart, p.minInt, df)
+	// A mantissa scaled below 1 still writes its leading zero when the
+	// picture's integer part had an optional-digit-sign to write it into. That
+	// is the one place padInt's "drop the zero" rule has to be suspended: the
+	// integer digit is not being omitted, it is the whole integer part of a
+	// value below one.
+	keepZero := p.exponent && p.minInt == 0 && p.intHasDigitSign
+	intStr := padInt(intPart, p.minInt, df, keepZero)
 	if p.grouping > 0 || len(p.groupPositions) > 0 {
 		intStr = applyGrouping(intStr, p.grouping, p.groupPositions, df.GroupingSeparator)
 	}
-	fracStr := trimFraction(fracPart, p.minFrac, df)
+	// A mantissa below 1 that rounded up to exactly 1 has all of its
+	// significance in the digit trimming is about to remove: ".#e0" on
+	// 0.99999999 rounds to 1.0, and dropping the optional trailing zero would
+	// leave "1e0" when the answer is "1.0e0" (numberformat301). Keeping one
+	// place applies only where the picture put the digits in the fraction to
+	// begin with.
+	minFrac := p.minFrac
+	if p.exponent && p.minInt == 0 && !p.intHasDigitSign && minFrac == 0 && intPart != "0" {
+		minFrac = 1
+	}
+	fracStr := trimFraction(fracPart, minFrac, df)
 	if len(p.fracGroupPositions) > 0 {
 		fracStr = applyFracGrouping(fracStr, p.fracGroupPositions, df.GroupingSeparator)
 	}
@@ -297,6 +366,23 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat) (string, e
 		sb.WriteString(fracStr)
 	}
 	sb.WriteString(p.suffix)
+	if p.exponent {
+		sb.WriteRune(df.ExponentSeparator)
+		// The exponent's own minus sign is the format's, but its digits are
+		// padded to the picture's width independently of the sign: "9.9999e99"
+		// on 0.05 is 5.0000e-02, two digits after the sign rather than in
+		// total (numberformat117).
+		if exp < 0 {
+			sb.WriteRune(df.MinusSign)
+		}
+		digits := strconv.Itoa(exp)
+		digits = strings.TrimPrefix(digits, "-")
+		for len(digits) < p.minExp {
+			digits = "0" + digits
+		}
+		sb.WriteString(translateDigits(digits, df.ZeroDigit))
+		sb.WriteString(p.expSuffix)
+	}
 	return sb.String(), nil
 }
 
@@ -344,12 +430,81 @@ func splitPicture(pic string, sep rune) []string {
 	return parts
 }
 
+// splitExponent separates a sub-picture's mantissa from its exponent part.
+//
+// The spec's rule is narrow, and the suite tests every corner of it: the
+// exponent part exists only where the separator is followed by one or more
+// members of the digit family *and nothing else*. So "9.9999e99" has one,
+// while "9.9999eDog" does not — the "e" there is an ordinary passive suffix
+// character and the number formats without scientific notation at all
+// (numberformat113). Anything else after the digits, as in "9.9999e99end",
+// is suffix rather than a reason to reject the picture (numberformat143).
+//
+// The separator is searched for from the left, so a second one lands inside
+// the trailing text and is passive: "9.9999e99e" keeps its final "e"
+// (numberformat144). But "9.99e99e99" is an error, because the text after the
+// exponent digits then contains a separator followed by digits, which is a
+// second exponent part rather than a suffix (numberformat108).
+func splitExponent(runes []rune, df *DecimalFormat) (mantissa, exp []rune, has bool, err error) {
+	for i, r := range runes {
+		if r != df.ExponentSeparator {
+			continue
+		}
+		rest := runes[i+1:]
+		// The digit run immediately after the separator is the exponent's
+		// width; the separator only introduces an exponent when at least one
+		// digit follows it.
+		n := 0
+		for n < len(rest) && isDigitOfFamily(rest[n], df.ZeroDigit) {
+			n++
+		}
+		if n == 0 {
+			continue
+		}
+		tail := rest[n:]
+		// A second separator-plus-digits in the tail is a second exponent
+		// part, which the spec makes an error rather than passive text.
+		for j, t := range tail {
+			if t == df.ExponentSeparator && j+1 < len(tail) &&
+				isDigitOfFamily(tail[j+1], df.ZeroDigit) {
+				return nil, nil, false, fmt.Errorf(
+					"XTDE1310: picture %q contains more than one exponent separator",
+					string(runes))
+			}
+		}
+		return runes[:i], rest[:n], true, nil
+	}
+	return runes, nil, false, nil
+}
+
 // parsePicture reads one sub-picture.
-func parsePicture(pic string, df *DecimalFormat) (picture, error) {
+//
+// v decides whether an exponent part is recognised at all: scientific notation
+// arrived in XPath 3.1, and 3.0 is required to reject "9.9999e999" as a
+// malformed picture rather than to format it (numberformat128). So under 3.0
+// the separator is never split off, and the "e" is then caught by the passive
+// character rule as it was before.
+func parsePicture(pic string, df *DecimalFormat, v Version) (picture, error) {
 	var p picture
 	p.maxFrac = -1
 
 	runes := []rune(pic)
+	if v.atLeast31() {
+		mantissa, exp, has, err := splitExponent(runes, df)
+		if err != nil {
+			return p, err
+		}
+		if has {
+			// The suffix that followed the exponent digits is carried
+			// separately: the mantissa's own parse must not see it, or its
+			// digit-region scan would run past the exponent entirely.
+			p.exponent = true
+			p.minExp = len(exp)
+			p.expSuffix = string(runes[len(mantissa)+1+len(exp):])
+			runes = mantissa
+			pic = string(runes)
+		}
+	}
 	// Locate the digit region: the span containing digit, zero, grouping and
 	// decimal characters. Everything before it is the prefix and everything
 	// after is the suffix.
@@ -374,11 +529,20 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 	p.suffix = string(runes[end+1:])
 
 	// Percent and per-mille anywhere in the picture scale the value.
-	if strings.ContainsRune(p.prefix+p.suffix, df.Percent) {
+	if strings.ContainsRune(p.prefix+p.suffix+p.expSuffix, df.Percent) {
 		p.percent = true
 	}
-	if strings.ContainsRune(p.prefix+p.suffix, df.PerMille) {
+	if strings.ContainsRune(p.prefix+p.suffix+p.expSuffix, df.PerMille) {
 		p.perMille = true
+	}
+	// "A sub-picture must not contain both an exponent-separator-sign and a
+	// percent-sign or per-mille-sign": the two ask for incompatible scalings
+	// of the same value, so the picture is rejected rather than one of them
+	// silently winning (numberformat110).
+	if p.exponent && (p.percent || p.perMille) {
+		return p, fmt.Errorf(
+			"XTDE1310: picture %q combines an exponent with a percent or "+
+				"per-mille sign", pic)
 	}
 
 	digits := runes[start : end+1]
@@ -445,13 +609,20 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 		if isDigitOfFamily(r, df.ZeroDigit) {
 			p.minInt++
 		}
+		if r == df.Digit {
+			p.intHasDigitSign = true
+		}
 	}
 	// Section 16.4.2: the minimum integer part size is normally the count of
 	// zero-digit-signs, "but if the sub-picture contains no zero-digit-sign
 	// and no decimal-separator-sign, it is set to one." That is what makes
 	// format-number(0, '#') produce "0" rather than nothing at all; the
 	// sub-picture "#.#" keeps a zero minimum, so it still gives ".5".
-	if p.minInt == 0 && !hasDecimalSep {
+	// Under an exponent the mantissa's scaling already guarantees a digit, and
+	// forcing a minimum of one here would change which power of ten is chosen:
+	// "#e0" on 0.2 is 0.2e0, so its minimum integer size stays zero even
+	// though the sub-picture has no decimal separator (numberformat231).
+	if p.minInt == 0 && !hasDecimalSep && !p.exponent {
 		p.minInt = 1
 	}
 	if len(fracPart) > 0 {
@@ -481,6 +652,54 @@ func parsePicture(pic string, df *DecimalFormat) (picture, error) {
 		p.maxFrac = 0
 	}
 	return p, nil
+}
+
+// scaleForExponent returns the power of ten to divide a non-negative value by
+// so that its integer part has exactly minInt digits.
+//
+// A minInt of zero means the mantissa belongs below 1 — the picture asked for
+// no mandatory integer digit, and the spec then normalises into [0.1, 1)
+// rather than [1, 10).
+//
+// Zero has no meaningful magnitude, so it keeps an exponent of zero and is
+// printed with whatever digits the picture demands (numberformat321-327).
+func scaleForExponent(value *big.Rat, minInt int) int {
+	if value.Sign() == 0 {
+		return 0
+	}
+	// The comparison is done on exact rationals rather than via a logarithm:
+	// a float log10 of a value near a power of ten lands on the wrong side of
+	// the boundary often enough to matter, and the whole point of carrying a
+	// big.Rat this far is that the digits are exact.
+	abs := new(big.Rat).Abs(value)
+	exp := 0
+	// upper is the first power of ten the mantissa must stay below, and lower
+	// the one it must reach: [10^(minInt-1), 10^minInt) for a positive minInt,
+	// and [0.1, 1) when it is zero.
+	upper := powerOfTen(minInt)
+	lower := powerOfTen(minInt - 1)
+	for abs.Cmp(upper) >= 0 {
+		abs = scaleByPowerOfTen(abs, -1)
+		exp++
+	}
+	for abs.Cmp(lower) < 0 {
+		abs = scaleByPowerOfTen(abs, 1)
+		exp--
+	}
+	return exp
+}
+
+// powerOfTen returns 10^n as an exact rational, for negative n as well.
+func powerOfTen(n int) *big.Rat {
+	if n < 0 {
+		return new(big.Rat).Inv(powerOfTen(-n))
+	}
+	return new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil))
+}
+
+// scaleByPowerOfTen multiplies a rational by 10^n.
+func scaleByPowerOfTen(r *big.Rat, n int) *big.Rat {
+	return new(big.Rat).Mul(r, powerOfTen(n))
 }
 
 // roundToPlaces rounds an exact rational to n decimal places, half away from
@@ -535,8 +754,8 @@ func containsFamilyDigit(s string, zero rune) bool {
 
 // padInt left-pads the integer digits to the minimum width, translating into
 // the format's digit family.
-func padInt(s string, minInt int, df *DecimalFormat) string {
-	if s == "0" && minInt == 0 {
+func padInt(s string, minInt int, df *DecimalFormat, keepZero bool) string {
+	if s == "0" && minInt == 0 && !keepZero {
 		// "#" with no "0" means the integer part is omitted when it is zero,
 		// so ".5" formats as ".5" rather than "0.5".
 		s = ""
@@ -786,7 +1005,7 @@ func registerFormatNumber(l *Library) {
 	// bare XPath expression has none declared — so only the absent name
 	// resolves, and any other is FODF1280 rather than XPST0017. A host that
 	// does have named formats registers its own over this one.
-	l.registerFnSince(XPath30, "format-number", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFnSince(XPath30, "format-number", []int{2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		num, err := FormatNumberArgStrict(args, 0)
 		if err != nil {
 			return nil, err
@@ -805,7 +1024,10 @@ func registerFormatNumber(l *Library) {
 					"FODF1280: no decimal format named %q is declared", name)
 			}
 		}
-		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), XPath30)
+		// The context's own version, not a fixed XPath30: scientific notation
+		// in the picture is a 3.1 feature, and a 3.0 expression must still be
+		// told that "9.9999e999" is malformed.
+		out, err := FormatNumberVersion(num, pic, DefaultDecimalFormat(), ctx.Version)
 		if err != nil {
 			return nil, err
 		}

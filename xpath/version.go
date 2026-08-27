@@ -40,6 +40,17 @@ func (v Version) atLeast30() bool { return v >= XPath30 }
 // reasoning as atLeast30.
 func (v Version) atLeast31() bool { return v >= XPath31 }
 
+// LookupVisible resolves a function the way a call does, hiding one the
+// context's version does not have.
+//
+// Exported because fn:function-available has to give the same answer a call
+// would: asking the library directly reported every function the engine can
+// implement, so a 2.0 stylesheet was told that map:get and fn:parse-json were
+// available to it and then refused when it called them.
+func LookupVisible(ctx *Context, name xdm.QName, arity int) (Function, bool) {
+	return lookupFor(ctx, name, arity)
+}
+
 // lookupFor resolves a function call, hiding functions the context's version
 // does not have.
 //

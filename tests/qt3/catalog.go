@@ -107,6 +107,7 @@ type DecimalFormatDecl struct {
 	MinusSign         string     `xml:"minus-sign,attr"`
 	Infinity          string     `xml:"infinity,attr"`
 	NaN               string     `xml:"NaN,attr"`
+	ExponentSeparator string     `xml:"exponent-separator,attr"`
 }
 
 // Resource is one <resource> declaration: a file in the checkout published

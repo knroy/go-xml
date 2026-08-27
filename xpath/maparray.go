@@ -199,9 +199,11 @@ func (e *LookupExpr) lookupIn(ctx *Context, it xdm.Item) (xdm.Sequence, error) {
 		out := xdm.Sequence{}
 		for _, k := range keys {
 			// An array is indexed by position, so the key has to be an
-			// integer: "?a" on an array is a type error rather than an
-			// absent member.
-			if !k.Type.IsNumeric() {
+			// xs:integer: "?a" on an array is a type error rather than an
+			// absent member, and so is "?(1.0)" — an xs:decimal is not an
+			// integer, and admitting it because it happens to be numeric made
+			// Lookup-119 answer with the members instead of XPTY0004.
+			if k.Type != xdm.TypeInteger {
 				return nil, xdm.ErrType(
 					"an array is looked up by position, but the key is %s", k.TypeName())
 			}

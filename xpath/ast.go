@@ -353,10 +353,40 @@ type SequenceType struct {
 	// existed.
 	FunctionParams []SequenceType
 	FunctionReturn *SequenceType
+	// IsArrayTest marks an "array(*)" or "array(T)" item type, added in 3.1.
+	//
+	// An array is also a function item, so a function test can match one too;
+	// the reverse does not hold, which is why this is a flag of its own rather
+	// than a shape of IsFunctionTest. ArrayMember is the declared member type
+	// of "array(T)", against which *every* member sequence is checked —
+	// members are sequences, so "array(xs:string)" admits only arrays whose
+	// members are each exactly one string.
+	IsArrayTest bool
+	ArrayMember *SequenceType
+	// IsMapTest marks a "map(*)" or "map(K, V)" item type, added in 3.1, on
+	// the same reasoning as IsArrayTest: a map is also a function item, so a
+	// function test matches one, but a map test matches only a map.
+	//
+	// MapKey is the declared key type, an atomic type with no occurrence
+	// indicator, and MapValue the declared value type, checked against every
+	// entry's value sequence.
+	IsMapTest bool
+	MapKey    *SequenceType
+	MapValue  *SequenceType
 	// IsErrorType marks xs:error, the empty type. Nothing is an instance of
 	// it, so it matches only the empty sequence — and only then because the
 	// occurrence indicator permits it, never because an item conformed.
 	IsErrorType bool
+	// IsNumericType marks xs:numeric, the union of xs:double, xs:float and
+	// xs:decimal that XPath 3.1 adds.
+	//
+	// It is a union rather than an atomic type, so it has no TypeCode of its
+	// own: an item is an instance of it when its type is any of the three or
+	// derived from one, which is what makes xs:short an xs:numeric. A cast to
+	// it is the identity on a value that already is one and a cast to
+	// xs:double on anything else, so the written name has to survive to the
+	// cast rather than collapsing to a type code here.
+	IsNumericType bool
 	// FacetName is the derived type actually written, when it differs from
 	// AtomicType — "byte" for xs:byte, which is an xs:integer with a range.
 	// The code alone cannot express the bound, and dropping it made

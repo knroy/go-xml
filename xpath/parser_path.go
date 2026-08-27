@@ -1098,6 +1098,30 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		return p.finishOccurrence(st)
 	}
 
+	// An array test, production [96] of XPath 3.1. Like the function test it
+	// is recognised before the kind tests, and only in sequence-type position:
+	// "array(" elsewhere is the array: function library or a name, and the two
+	// never meet because a type is only ever parsed where a type is expected.
+	if p.version.atLeast31() && t.Kind == TokName && t.Val == "array" &&
+		p.pos+1 < len(p.toks) && p.toks[p.pos+1].Val == "(" {
+		if err := p.parseArrayTest(&st); err != nil {
+			return st, err
+		}
+		return p.finishOccurrence(st)
+	}
+
+	// A map test, production [93] of XPath 3.1, recognised on the same terms
+	// as the array test above. "map(" in an expression is the map constructor
+	// or the map: function library; the two never collide because a type is
+	// only parsed where a type is expected.
+	if p.version.atLeast31() && t.Kind == TokName && t.Val == "map" &&
+		p.pos+1 < len(p.toks) && p.toks[p.pos+1].Val == "(" {
+		if err := p.parseMapTest(&st); err != nil {
+			return st, err
+		}
+		return p.finishOccurrence(st)
+	}
+
 	if t.Kind == TokName && isKindTestName(t.Val) &&
 		p.pos+1 < len(p.toks) && p.toks[p.pos+1].Val == "(" {
 		if t.Val == "item" {
@@ -1127,6 +1151,13 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		// code because there is no value it could ever hold.
 		if isErrorTypeName(t.Val, p.ns) {
 			st.IsErrorType = true
+			return p.finishOccurrence(st)
+		}
+		// xs:numeric is a union of the three numeric primitives. Like
+		// xs:error it is not in the atomic-type table, because no single type
+		// code stands for it.
+		if p.version.atLeast31() && isNumericTypeName(t.Val, p.ns) {
+			st.IsNumericType = true
 			return p.finishOccurrence(st)
 		}
 		code, ok := atomicTypeByName(t.Val, p.ns)
@@ -1270,6 +1301,70 @@ func (p *Parser) parseFunctionTest(st *SequenceType) error {
 	return nil
 }
 
+// parseArrayTest parses productions [95]-[97] of XPath 3.1.
+//
+// "array(*)" is AnyArrayTest and matches any array. "array(T)" is
+// TypedArrayTest, whose T constrains every member sequence.
+func (p *Parser) parseArrayTest(st *SequenceType) error {
+	p.pos++ // "array"
+	if err := p.expectOp("("); err != nil {
+		return err
+	}
+	st.IsArrayTest = true
+
+	// The "*" of AnyArrayTest arrives as a wildcard token rather than an
+	// operator, since no operand precedes it — the same disambiguation
+	// function(*) needs.
+	if (p.cur().Kind == TokWildcard || p.cur().Kind == TokOp) && p.cur().Val == "*" {
+		p.pos++
+		return p.expectOp(")")
+	}
+	mt, err := p.parseSequenceType()
+	if err != nil {
+		return err
+	}
+	st.ArrayMember = &mt
+	return p.expectOp(")")
+}
+
+// parseMapTest parses productions [93]-[94] of XPath 3.1.
+//
+// "map(*)" is AnyMapTest and matches any map. "map(K, V)" is TypedMapTest: K
+// is an atomic type, V a sequence type, and both parts are required —
+// "map(xs:integer)" is XPST0003 rather than a key type with the value left
+// open (MapTest-007).
+func (p *Parser) parseMapTest(st *SequenceType) error {
+	p.pos++ // "map"
+	if err := p.expectOp("("); err != nil {
+		return err
+	}
+	st.IsMapTest = true
+
+	if (p.cur().Kind == TokWildcard || p.cur().Kind == TokOp) && p.cur().Val == "*" {
+		p.pos++
+		return p.expectOp(")")
+	}
+	kt, err := p.parseSequenceType()
+	if err != nil {
+		return err
+	}
+	// The key type is an AtomicOrUnionType, so it carries no occurrence
+	// indicator: "map(xs:string+, ...)" is a grammar error (MapTest-016), not
+	// a key that may repeat.
+	if kt.Occurrence != "" || !kt.HasAtomicType {
+		return p.errorf("XPST0003: a map test's key type must be an atomic type")
+	}
+	if _, ok := p.acceptOp(","); !ok {
+		return p.errorf("XPST0003: a map test names both a key type and a value type")
+	}
+	vt, err := p.parseSequenceType()
+	if err != nil {
+		return err
+	}
+	st.MapKey, st.MapValue = &kt, &vt
+	return p.expectOp(")")
+}
+
 // finishOccurrence applies a trailing occurrence indicator to a type that was
 // parsed by a path returning early, rather than falling through to the shared
 // label.
@@ -1291,6 +1386,20 @@ func (p *Parser) finishOccurrence(st SequenceType) (SequenceType, error) {
 func isErrorTypeName(lex string, ns NamespaceResolver) bool {
 	prefix, local := xdm.SplitQName(lex)
 	if local != "error" {
+		return false
+	}
+	if prefix == "" {
+		return ns != nil && ns.DefaultElementNamespace() == xdm.NSXS
+	}
+	uri, ok := ns.ResolvePrefix(prefix)
+	return ok && uri == xdm.NSXS
+}
+
+// isNumericTypeName reports whether lex names xs:numeric, on the same
+// prefix-resolution rules as isErrorTypeName.
+func isNumericTypeName(lex string, ns NamespaceResolver) bool {
+	prefix, local := xdm.SplitQName(lex)
+	if local != "numeric" {
 		return false
 	}
 	if prefix == "" {
@@ -1380,6 +1489,15 @@ func atomicTypeByName(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
 	case "normalizedString", "token", "language", "Name", "NCName",
 		"ID", "IDREF", "ENTITY", "NMTOKEN":
 		return xdm.TypeString, true
+	case "numeric":
+		// xs:numeric is not a type in the schema at all: XPath 3.1 defines it
+		// as a union of xs:double, xs:float and xs:decimal, used in the
+		// signatures of fn:abs, fn:floor and the rest. It resolves to
+		// xs:double here only so that the name parses; membership is decided
+		// by FacetName in atomicTypeMatchesFacet, which is what keeps
+		// "1 instance of xs:numeric" true for an integer rather than only for
+		// a double.
+		return xdm.TypeDouble, true
 	case "anySimpleType", "anyAtomicType", "NOTATION":
 		// These are abstract: they name a position in the type hierarchy
 		// rather than a type anything can be. They resolve — "instance of
@@ -1400,8 +1518,11 @@ func localTypeName(name string) string {
 	// dateTimeStamp is named here for the same reason as the range- and
 	// string-facet types: its code is xs:dateTime, so the written name is
 	// the only thing that still carries explicitTimezone="required".
+	// xs:numeric is here for the same reason: its code is xs:double, so the
+	// written name is the only thing that still says "any of the numeric
+	// types" rather than "a double".
 	if hasRangeFacet(name) || hasStringFacet(name) || isAbstractType(name) ||
-		name == "dateTimeStamp" {
+		name == "dateTimeStamp" || name == "numeric" {
 		return name
 	}
 	return ""
@@ -1468,6 +1589,51 @@ type errorExpr struct{ err error }
 func (e *errorExpr) Eval(c *Context) (xdm.Sequence, error) { return nil, e.err }
 func (e *errorExpr) String() string                        { return "error()" }
 
+// lookupKeywordName reports whether the current token is a name that the lexer
+// classified as an infix operator.
+//
+// The lexer decides between the two by whether an operand precedes, and a "?"
+// leaves that state alone so that a sequence-type occurrence indicator still
+// ends its type. The consequence is that "$m?div" lexes "div" as the division
+// operator, and Lookup-165 requires it to be the key "div". Reclassifying here
+// rather than in the lexer keeps the occurrence-indicator reading intact,
+// which is what changing the lexer's state would have broken.
+func (p *Parser) lookupKeywordName() bool {
+	t := p.cur()
+	return t.Kind == TokOp && operatorKeywords[t.Val]
+}
+
+// joinLookupName reassembles a hyphenated NCName the lexer split apart.
+//
+// "$m?div-2" lexes as the operator "div", the operator "-" and the number 2,
+// because "div" was taken for an operator and a hyphen after one starts a new
+// token. The pieces are rejoined only when they are physically adjacent in the
+// source, so "$m?a - 1" is still a subtraction.
+func (p *Parser) joinLookupName(name string) string {
+	for p.peekIs(TokOp, "-") {
+		hyphen := p.cur()
+		if hyphen.Pos != p.toks[p.pos-1].Pos+len(p.toks[p.pos-1].Val) {
+			return name
+		}
+		next := p.toks[p.pos+1]
+		if next.Pos != hyphen.Pos+1 {
+			return name
+		}
+		switch next.Kind {
+		case TokName, TokNumber:
+		case TokOp:
+			if !operatorKeywords[next.Val] {
+				return name
+			}
+		default:
+			return name
+		}
+		name += "-" + next.Val
+		p.pos += 2
+	}
+	return name
+}
+
 // parseLookup parses the postfix lookup operator, production [54]:
 // Lookup ::= "?" KeySpecifier, where the specifier is an NCName, an integer,
 // "*", or a parenthesised expression.
@@ -1496,6 +1662,15 @@ func (p *Parser) parseLookup(base Expr) (Expr, error) {
 		p.pos++
 	case p.peekIs(TokOp, "("):
 		p.pos++
+		// "?()" names no key at all, which is the empty sequence rather than
+		// a syntax error: Lookup-146 asserts that "$maps?()" is empty. The
+		// parenthesised form is an Expr, and an Expr may be empty here only
+		// because the grammar writes the parentheses around it.
+		if p.peekIs(TokOp, ")") {
+			p.pos++
+			e.Expr = &SequenceExpr{}
+			break
+		}
 		inner, err := p.parseExpr()
 		if err != nil {
 			return nil, err
@@ -1504,9 +1679,17 @@ func (p *Parser) parseLookup(base Expr) (Expr, error) {
 			return nil, err
 		}
 		e.Expr = inner
-	case p.cur().Kind == TokName:
-		e.Name, e.HasName = p.cur().Val, true
+	case p.cur().Kind == TokName || p.lookupKeywordName():
+		name := p.cur().Val
+		// A key specifier is an NCName, so a colon in it is not a prefixed
+		// name that happens to be usable — it is a grammar error. Lookup-156
+		// writes "?xs:integer" over a map whose keys really are spelled that
+		// way and requires XPST0003 rather than the entry.
+		if strings.ContainsAny(name, ":{") {
+			return nil, p.errorf("XPST0003: a lookup key specifier is an NCName, not %q", name)
+		}
 		p.pos++
+		e.Name, e.HasName = p.joinLookupName(name), true
 	default:
 		return nil, p.errorf("expected a name, an integer, '*' or '(' after '?'")
 	}

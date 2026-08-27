@@ -72,6 +72,22 @@ func (r resolver) ResolvePrefix(p string) (string, bool) {
 		return xdm.NSErr, true
 	case "math":
 		return xdm.NSMath, true
+	case "array":
+		// "array" and "map" are predeclared prefixes in XPath 3.1, section
+		// 2.1.1, exactly as "fn" and "xs" are. The suite's 3.1 sets bind them
+		// through an environment for the case's own expression but write
+		// "array:size($result)" in an <assert> with no environment behind it,
+		// which only holds because the prefix is predeclared rather than
+		// declared.
+		return xdm.NSArray, true
+	case "map":
+		return xdm.NSMap, true
+	case "j":
+		// Not a predeclared prefix, but a convention of the JSON test sets:
+		// the fn-json-to-xml cases write "j:map" in assertions whose own
+		// environment does not bind it, expecting the driver to know the one
+		// prefix their sibling "json-ns" environment declares.
+		return "http://www.w3.org/2005/xpath-functions", true
 	}
 	return "", false
 }
@@ -659,7 +675,7 @@ func boolIs(got xdm.Sequence, want bool) (bool, string) {
 // evaluating that text as an XPath expression and using "eq" semantics. That
 // is what the suite means: the operand is an expression, not a string.
 func eqLiteral(got xdm.Sequence, want string) (bool, string) {
-	exp, err := xpath.Eval(want, xpath.NewContext(nil, xpath.Builtins()), resolver{})
+	exp, err := xpath.Eval(want, assertContext(), resolver{})
 	if err != nil {
 		return false, "cannot evaluate expected value " + want + ": " + err.Error()
 	}
@@ -678,7 +694,7 @@ func eqLiteral(got xdm.Sequence, want string) (bool, string) {
 }
 
 func deepEqLiteral(got xdm.Sequence, want string) (bool, string) {
-	exp, err := xpath.Eval(want, xpath.NewContext(nil, xpath.Builtins()), resolver{})
+	exp, err := xpath.Eval(want, assertContext(), resolver{})
 	if err != nil {
 		return false, "cannot evaluate expected value " + want + ": " + err.Error()
 	}
@@ -723,14 +739,38 @@ func isNumeric(t xdm.TypeCode) bool {
 	return false
 }
 
+// assertVersion is the language version the harness compiles its *own*
+// expressions in — the <assert> predicates, the <assert-type> tests and the
+// expected values of <assert-eq> and friends.
+//
+// It was pinned at 3.0, on the reasoning that an assert-type of "function(*)"
+// has to parse whatever version the case runs under. That reasoning holds, but
+// 3.0 is not the ceiling it was: the 3.1 sets write "array(*)" in an
+// assert-type and "[1, 2]" or "map{}" as an expected value, none of which a
+// 3.0 parser accepts, so pinning it there failed those cases for the harness's
+// own inability to read the assertion rather than for anything the engine did.
+// It is set once per target by runSuite, and the highest version is always at
+// least as permissive as the one the case itself uses.
+// It is package state rather than a field because every evaluator that needs
+// it is a free function called from deep inside the comparison code, and
+// threading a version through all of them would say nothing the single
+// assignment in runSuite does not. That assignment is safe only because the
+// three targets run one after another; running them in parallel would need
+// this carried on the Runner instead.
+var assertVersion = xpath.XPath30
+
+// assertContext builds the context the harness evaluates its own expressions
+// in.
+func assertContext() *xpath.Context {
+	ctx := xpath.NewContext(nil, xpath.Builtins())
+	ctx.Version = assertVersion
+	return ctx
+}
+
 func typeIs(got xdm.Sequence, want string) (bool, string) {
 	// "instance of" is the engine's own answer to this question, so the check
 	// is expressed in the language under test rather than reimplemented.
-	ctx := xpath.NewContext(nil, xpath.Builtins())
-	// The assertion is written in the 3.0 language whatever version the case
-	// itself runs under — an assert-type of "function(*)" has to parse — so
-	// the harness's own expression is always compiled as 3.0.
-	ctx.Version = xpath.XPath30
+	ctx := assertContext()
 	ctx = ctx.WithVar(xdm.QName{Local: "qt3v"}, got)
 	res, err := xpath.Eval("$qt3v instance of "+want, ctx, resolver{})
 	if err != nil {
@@ -773,12 +813,9 @@ func seqStringValue(s xdm.Sequence) string {
 // assertExpression evaluates an XPath predicate over the result, with the
 // result bound to $result — which is how the suite writes these.
 func assertExpression(got xdm.Sequence, expr string) (bool, string) {
-	ctx := xpath.NewContext(nil, xpath.Builtins())
-	// The assertion is the harness's own expression, not the case's, and it
-	// is written in the 3.0 language whatever version the case runs under —
-	// an <assert> of "exists(parse-xml($result)/e)" has to resolve. See
-	// typeIs, which compiles its own expression the same way.
-	ctx.Version = xpath.XPath30
+	// The assertion is the harness's own expression, not the case's. See
+	// assertVersion for the language it is compiled in.
+	ctx := assertContext()
 	ctx = ctx.WithVar(xdm.QName{Local: "result"}, got)
 	res, err := xpath.Eval(expr, ctx, resolver{})
 	if err != nil {
@@ -804,7 +841,7 @@ func assertExpression(got xdm.Sequence, expr string) (bool, string) {
 // suite compares as multisets. Sorting the string forms is enough here: the
 // values these cases produce are atomic.
 func permutationOf(got xdm.Sequence, want string) (bool, string) {
-	exp, err := xpath.Eval(want, xpath.NewContext(nil, xpath.Builtins()), resolver{})
+	exp, err := xpath.Eval(want, assertContext(), resolver{})
 	if err != nil {
 		return false, "cannot evaluate expected value " + want + ": " + err.Error()
 	}
@@ -1059,6 +1096,7 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		setRune(&df.Digit, decl.Digit)
 		setRune(&df.PatternSeparator, decl.PatternSeparator)
 		setRune(&df.MinusSign, decl.MinusSign)
+		setRune(&df.ExponentSeparator, decl.ExponentSeparator)
 		if decl.Infinity != "" {
 			df.Infinity = decl.Infinity
 		}
@@ -1068,7 +1106,7 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 		formats[expandDeclName(decl, ns)] = df
 	}
 
-	call := func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	call := func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		num, err := xpath.FormatNumberArg(args, 0)
 		if err != nil {
 			return nil, err
@@ -1096,7 +1134,9 @@ func decimalFormatLibrary(env Environment, ns resolver) xpath.FunctionLibrary {
 				return nil, fmt.Errorf("FODF1280: no decimal format named %q", key)
 			}
 		}
-		out, err := xpath.FormatNumberVersion(num, pic, df, xpath.XPath30)
+		// The running version, not a fixed 3.0: a picture using scientific
+		// notation is well-formed only from 3.1 on.
+		out, err := xpath.FormatNumberVersion(num, pic, df, ctx.Version)
 		if err != nil {
 			return nil, err
 		}

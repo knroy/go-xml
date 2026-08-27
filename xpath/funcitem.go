@@ -210,7 +210,11 @@ func convertForParam(v xdm.Sequence, st SequenceType) (xdm.Sequence, error) {
 	// xs:string, which is not a subtype of "function(item()) as item()", yet
 	// passing it there is legal and must work.
 	if st.IsFunctionTest && st.HasFunctionArity && len(v) == 1 {
-		if fn, ok := v[0].(*xdm.FunctionItem); ok && fn.Arity == st.FunctionArity {
+		// functionItemView rather than a type assertion, so that a map or an
+		// array supplied where a typed function test is declared is coerced
+		// like any other function item: MapTest-058 binds a map to a variable
+		// declared "function(xs:anyAtomicType) as xs:string?".
+		if fn := functionItemView(v[0]); fn != nil && fn.Arity == st.FunctionArity {
 			return xdm.One(coerceFunctionItem(fn, st)), nil
 		}
 	}
@@ -420,8 +424,12 @@ func singleFunctionItem(seq xdm.Sequence) (*xdm.FunctionItem, error) {
 			"XPTY0004: the target of a dynamic call must be a single function item, got %d items",
 			len(seq))
 	}
-	fn, ok := seq[0].(*xdm.FunctionItem)
-	if !ok {
+	// A map and an array are function items in the data model, so "$a(1)" and
+	// "$m('k')" are dynamic calls rather than a separate construct. They are
+	// represented as their own item kinds here, which is why the function
+	// view has to be asked for rather than being found by a type assertion.
+	fn := functionItemView(seq[0])
+	if fn == nil {
 		return nil, xdm.ErrType(
 			"XPTY0004: the target of a dynamic call is %s, not a function", seq[0].TypeName())
 	}
