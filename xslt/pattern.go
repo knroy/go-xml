@@ -500,8 +500,23 @@ func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	// match-282 are that pattern, reached through the group expansion of
 	// "x/(child::a|descendant::b)".
 	if last.descendant && len(rest) > 0 {
+		// The anchor is the node the step before the descendant one names,
+		// so it is tested against that step directly and the rest verified
+		// from it. Handing the anchor to matchAncestors instead would test
+		// that step against the anchor's PARENT, which starts the scan a
+		// level too high: "doc/descendant::foo" then missed the foo that is
+		// doc's own child, since the nearest anchor tried was doc's parent.
+		inner := rest[len(rest)-1]
+		before := rest[:len(rest)-1]
 		for anc := node.Parent; anc != nil; anc = anc.Parent {
-			ok, err := a.matchAncestors(rest, anc, ctx)
+			ok, err := matchStep(inner, anc, ctx)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				continue
+			}
+			ok, err = a.matchAncestors(before, anc, ctx)
 			if err != nil {
 				return false, err
 			}
