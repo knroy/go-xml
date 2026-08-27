@@ -111,6 +111,13 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	}
 	s.html5 = strings.HasPrefix(htmlVer, "5")
 
+	// Prefix normalisation is an HTML5 rule and applies to both methods that
+	// write HTML: output-0602a and -0602b are the html method and -0211 and
+	// -0225 the xhtml one, and all four want the same tree.
+	if s.html5 {
+		seq = normalizePrefixes(seq)
+	}
+
 	// A byte order mark, when asked for. It precedes everything, including
 	// the XML declaration, since it is what tells a reader how to decode
 	// that declaration in the first place.
@@ -493,7 +500,13 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.rawText, s.rawTextName = true, n.Name.Local
 		defer func() { s.rawText, s.rawTextName = saved, savedName }()
 	}
-	if s.html && strings.EqualFold(n.Name.Local, "head") {
+	// The head this belongs in is an HTML one. Under the html method every
+	// element is HTML by definition, but the xhtml method serialises whatever
+	// tree it is given, and a <head> of somebody else's vocabulary is not a
+	// place to describe a media type -- output-0214 and -0215 build exactly
+	// that and assert no meta appears.
+	if s.html && strings.EqualFold(n.Name.Local, "head") &&
+		(!s.xhtml || n.Name.URI == nsXHTML) {
 		s.inHead = true
 		defer func() { s.inHead = false }()
 		// include-content-type="no" suppresses the meta element. It defaults
