@@ -258,7 +258,17 @@ func registerFormatNumber(l *xpath.Library, s *Stylesheet) {
 		df, ok := s.decimalFormats[dfName]
 		if !ok {
 			if dfName != "" {
-				return nil, fmt.Errorf("XTDE1280: no xsl:decimal-format named %q", dfName)
+				// As with the picture error, 2.0 raises an XSLT code for the
+				// unknown format and 3.0 defers to XPath's own. It follows
+				// the version of the *processor*, not of the module: the
+				// -30 variants of these cases run the same version="2.0"
+				// stylesheet and require the 3.0 code from it.
+				code := "XTDE1280"
+				if s.maxVersion == 0 || s.maxVersion >= 3.0 {
+					code = "FODF1280"
+				}
+				return nil, xdm.Errorf(code,
+					"no xsl:decimal-format named %q", dfName)
 			}
 			df = defaultDecimalFormat()
 		}

@@ -35,6 +35,14 @@ type Stylesheet struct {
 	// reference against when there is no context node to take one from — a
 	// transform started from a named template has none.
 	baseURI string
+	// maxVersion is CompileOptions.MaxVersion, the XSLT version this
+	// processor is acting as. Zero means uncapped, and so 3.0.
+	//
+	// A few error codes were renamed between 2.0 and 3.0 for conditions that
+	// are otherwise identical, and the suite runs the same version="2.0"
+	// stylesheet under both processors expecting each to use its own code.
+	// The module's own @version therefore cannot decide it.
+	maxVersion float64
 	// keys holds xsl:key declarations, grouped by name.
 	keys map[string][]*keyDef
 
@@ -95,6 +103,11 @@ type Stylesheet struct {
 	// modeAccums holds xsl:mode/@use-accumulators by Clark mode name, which
 	// says which accumulators may be read while that mode is current.
 	modeAccums map[string]*modeAccumulators
+	// declaredModeNames holds every mode an xsl:mode declaration names, even
+	// one that set no attribute this processor acts on. Declaring a mode is
+	// itself meaningful — it is what makes the mode exist for XTDE0045 and
+	// for @declared-modes — so the bare declaration has to be recorded.
+	declaredModeNames map[string]bool
 	// source is the stylesheet's own document, which document("") returns.
 	//
 	// Section 16.1 defines the zero-length URI as naming the document
@@ -114,6 +127,11 @@ type Template struct {
 	Priority float64
 	Params   []*Variable
 	Body     []Instruction
+	// contextItem is the xsl:template's xsl:context-item child, or nil when
+	// it declares none. It is checked when the template is entered rather
+	// than compiled into the body: a template that requires a context item
+	// and is called without one must fail before its first instruction runs.
+	contextItem *contextItemDecl
 	// asType is xsl:template/@as, which constrains what the template's
 	// sequence constructor may produce. Section 6.1 applies the function
 	// conversion rules to the result, so it converts as well as checks.
@@ -321,6 +339,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			characterMaps:    map[string]map[rune]string{},
 			funcs:            newStylesheetFuncs(),
 			baseURI:          stylesheetBase(doc, opts.BaseURI),
+			maxVersion:       opts.MaxVersion,
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose
 			// first element is <html> defaults to the html or xhtml method
@@ -908,6 +927,19 @@ func defaultCollationAt(el *xdm.Node) string {
 // resolution recorded in W3C bugzilla 3690 and what initial-mode-002 asserts.
 // Mode names in Template.Mode are already Clark-form, so mode must be too.
 func (s *Stylesheet) declaresMode(mode string) bool {
+	// XSLT 3.0 added xsl:mode, which declares a mode in its own right: a mode
+	// that is declared but has no template rules is a legitimate mode whose
+	// on-no-match action is the whole of its behaviour, and running the
+	// transform in it is exactly what mode-1405 does.
+	if _, ok := s.modeNoMatch[mode]; ok {
+		return true
+	}
+	if _, ok := s.modeAccums[mode]; ok {
+		return true
+	}
+	if s.declaredModeNames[mode] {
+		return true
+	}
 	for _, t := range s.templates {
 		for _, m := range t.Mode {
 			if m == mode {
