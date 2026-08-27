@@ -159,13 +159,19 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 		if !keep {
 			continue
 		}
+		// The children are walked first, because whether a static
+		// declaration has "empty content" is a question about the tree
+		// conditional inclusion leaves behind. use-when-0421 writes a child
+		// with a false [xsl:]use-when inside a static xsl:variable and
+		// expects the declaration to be accepted: the child is not there by
+		// the time 9.5's rule is applied to it.
+		if err := p.children(ch, false); err != nil {
+			return err
+		}
 		if topLevel {
 			if err := p.topLevel(ch); err != nil {
 				return err
 			}
-		}
-		if err := p.children(ch, false); err != nil {
-			return err
 		}
 		kept = append(kept, ch)
 	}
@@ -224,14 +230,26 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	// Whitespace-only text does not count. Every declaration in the suite is
 	// written across indented lines, and treating that layout as content
 	// would reject static-004 along with static-007.
+	sel := el.AttrValue("select")
+
 	if !emptyStaticContent(el) {
+		// XTSE0620 is the general rule -- "a variable-binding element has a
+		// select attribute and has non-empty content" -- and it says the
+		// same thing about this declaration more specifically than the
+		// content-model violation does, so it takes precedence where both
+		// apply. Without a select the only rule broken is 9.5's, which the
+		// schema states as empty((*,text())): a content model violation, so
+		// XTSE0010.
+		if sel != "" {
+			return fmt.Errorf(
+				"XTSE0620: %s has a select attribute and non-empty content",
+				el.Name.Lexical())
+		}
 		return fmt.Errorf(
 			"XTSE0010: %s has static=\"yes\" and a sequence constructor; "+
 				"a static variable's value must come from its select attribute",
 			el.Name.Lexical())
 	}
-
-	sel := el.AttrValue("select")
 
 	// required="yes" says the value must come from the caller, and select
 	// supplies one from the stylesheet. The two contradict each other, and
@@ -616,16 +634,18 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 
 // included evaluates el's use-when, if it has one.
 func (p *staticPhase) included(el *xdm.Node) (bool, error) {
+	// use-when is written unprefixed on an XSLT element and prefixed on a
+	// literal result element, and neither form is accepted in the other's
+	// place. Reading xsl:use-when on an XSLT element here would prune the
+	// element on the strength of an attribute XTSE0090 is about to reject it
+	// for carrying -- and having pruned it, nothing would be left to reject.
 	var expr string
 	if el.Name.URI == xdm.NSXSL {
 		if a := el.Attr("", "use-when"); a != nil {
 			expr = a.Value
 		}
-	}
-	if expr == "" {
-		if a := el.Attr(xdm.NSXSL, "use-when"); a != nil {
-			expr = a.Value
-		}
+	} else if a := el.Attr(xdm.NSXSL, "use-when"); a != nil {
+		expr = a.Value
 	}
 	if expr == "" {
 		return true, nil

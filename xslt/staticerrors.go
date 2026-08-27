@@ -154,6 +154,38 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 		// this specification defines on a literal result element is not one
 		// of them, and a shadow attribute written xsl:_name is precisely
 		// that -- the shadow mechanism applies to XSLT elements alone.
+		// An attribute in the XSLT namespace on an XSLT element is XTSE0090:
+		// the summaries define every attribute of an XSLT element in no
+		// namespace, and the prefixed form belongs on a literal result
+		// element. use-when is the one a stylesheet reaches for by mistake,
+		// because on a literal result element the prefixed form is right.
+		// The rule runs outside the forwards guard for the reason the others
+		// do -- this engine reads every 3.0 module as forwards-compatible --
+		// but only where forwards compatible behavior is not actually in
+		// force, since rule 2 of section 3.9 ignores an attribute this
+		// version does not allow.
+		if n.Name.URI == xdm.NSXSL && moduleAtLeast30(n) &&
+			!effectiveForwards(n) {
+			for _, a := range n.Attrs {
+				if a.Name.URI != xdm.NSXSL {
+					continue
+				}
+				return fmt.Errorf(
+					"attribute xsl:%s is not allowed on xsl:%s (XTSE0090)",
+					a.Name.Local, n.Name.Local)
+			}
+		}
+		// The module element's own attributes, checked outside the forwards
+		// guard for the same reason: this engine reads every 3.0 module as
+		// forwards-compatible, which would withhold the table from the one
+		// element whose version attribute establishes that mode in the first
+		// place. package-version belongs to xsl:package alone, and writing it
+		// on an xsl:stylesheet is XTSE0090 rather than something to ignore.
+		if isModuleElement(n) && moduleAtLeast30(n) && !effectiveForwards(n) {
+			if err := checkModuleAttrs(n); err != nil {
+				return err
+			}
+		}
 		if !forwards {
 			if err := checkLiteralResultXSLAttrs(n); err != nil {
 				return err
@@ -954,4 +986,27 @@ func effectiveForwards(el *xdm.Node) bool {
 		}
 	}
 	return false
+}
+
+// checkModuleAttrs applies the attribute table to a module element.
+func checkModuleAttrs(el *xdm.Node) error {
+	def, known := xsltElements[el.Name.Local]
+	if !known {
+		return nil
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" {
+			continue
+		}
+		if _, ok := def.attrs[a.Name.Local]; ok {
+			continue
+		}
+		if standardAttributes[a.Name.Local] {
+			continue
+		}
+		return fmt.Errorf(
+			"attribute %q is not allowed on xsl:%s (XTSE0090)",
+			a.Name.Local, el.Name.Local)
+	}
+	return nil
 }
