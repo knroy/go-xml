@@ -175,16 +175,41 @@ func constructsElement(n *xdm.Node) bool {
 	return false
 }
 
-// moduleDefaultValidation returns the default-validation attribute of the
-// xsl:stylesheet element containing n, or "" when there is none.
+// moduleDefaultValidation returns the default-validation in force at n, or ""
+// when none is declared.
+//
+// Section 24.4 settles which one applies: "the [xsl:]default-validation
+// attribute of the innermost containing element having such an attribute".
+// It is a standard attribute, so any element in the ancestor chain may carry
+// it -- an XSLT element unprefixed, a literal result element in the XSLT
+// namespace -- and the nearest one wins. Reading it only from the module
+// element ignored import-schema-195..197, which set it on an inner LRE and on
+// xsl:template.
+//
+// The walk stops at the module element, which is what keeps the spec's other
+// half true: the default "does not extend to included or imported stylesheet
+// modules or used packages".
 func moduleDefaultValidation(n *xdm.Node) string {
 	for a := n; a != nil; a = a.Parent {
-		if a.Kind != xdm.KindElement || a.Name.URI != xdm.NSXSL {
+		if a.Kind != xdm.KindElement {
 			continue
 		}
-		switch a.Name.Local {
-		case "stylesheet", "transform", "package":
-			return a.AttrValue("default-validation")
+		if a.Name.URI == xdm.NSXSL {
+			if v := a.AttrValue("default-validation"); v != "" {
+				return v
+			}
+			switch a.Name.Local {
+			case "stylesheet", "transform", "package":
+				return ""
+			}
+			continue
+		}
+		// A literal result element spells the standard attribute with the
+		// xsl: prefix, to keep it apart from a user-defined attribute.
+		for _, at := range a.Attrs {
+			if at.Name.URI == xdm.NSXSL && at.Name.Local == "default-validation" {
+				return at.Value
+			}
 		}
 	}
 	return ""

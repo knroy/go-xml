@@ -57,6 +57,17 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 				return nil, err
 			}
 			exprSrc := src[i+1 : end]
+			// A brace pair enclosing nothing -- "{}", "{ }", or a pair
+			// holding only XPath comments -- is an absent expression, not a
+			// syntax error: XPath has no production for an empty expression,
+			// but 5.6.1 says a value template with no expression contributes
+			// nothing. avt-2102 writes all four spellings in one 2.0 module
+			// scoped XSLT30+, so it is the processor's version that decides,
+			// not the module's; a 2.0 processor still rejects the pair.
+			if processorAtLeast30() && strings.TrimSpace(commentsStripped(exprSrc)) == "" {
+				i = end + 1
+				continue
+			}
 			comp, err := compileExpr(exprSrc, ns)
 			if err != nil {
 				return nil, fmt.Errorf("in attribute value template {%s}: %w", exprSrc, err)
