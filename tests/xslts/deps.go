@@ -120,6 +120,27 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 	if target == XSLT20 && len(tc.Test.Packages) > 0 {
 		return false, "xsl:package (XSLT 3.0)"
 	}
+	// A package may also be declared by the environment rather than by
+	// <test>, and it makes the case just as much an XSLT 3.0 test either way:
+	// the principal stylesheet still has to name it in xsl:use-package, which
+	// a 2.0 processor has no element for. collection-006 is the case --
+	// declared XSLT20+, environment-scoped package, and both of its
+	// stylesheets written version="3.0" around xsl:package and
+	// xsl:use-package -- so at the 2.0 target it failed on the xsl:package
+	// its own metadata never mentioned.
+	if target == XSLT20 {
+		for _, env := range tc.Environments {
+			if len(env.Packages) > 0 {
+				return false, "xsl:package (XSLT 3.0)"
+			}
+		}
+		for _, env := range set.Environments {
+			if !envReferenced(env.Name, tc) || len(env.Packages) == 0 {
+				continue
+			}
+			return false, "xsl:package (XSLT 3.0)"
+		}
+	}
 	if tc.Test.InitialFunction != nil {
 		return false, "initial function (XSLT 3.0)"
 	}
@@ -238,4 +259,24 @@ func xslt30OnlyConstruct(set *TestSet, tc *TestCase) string {
 		}
 	}
 	return ""
+}
+
+// envReferenced reports whether tc runs against the test-set environment
+// called name.
+//
+// A case names its environment with <environment ref="..."/>, which the
+// catalog resolves against the set's own declarations and then the catalog's.
+// Only the set's are consulted here: the version gate this serves asks whether
+// the case brings a library package with it, and a package is declared beside
+// the stylesheets that use it rather than in the shared catalog.
+func envReferenced(name string, tc *TestCase) bool {
+	if name == "" {
+		return false
+	}
+	for _, e := range tc.Environments {
+		if e.Ref == name {
+			return true
+		}
+	}
+	return false
 }
