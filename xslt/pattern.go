@@ -550,15 +550,27 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 	step := steps[len(steps)-1]
 	rest := steps[:len(steps)-1]
 
-	// A self:: step constrains the node the walk has already reached rather
-	// than its parent, so it is verified in place and the walk continues from
-	// the same node: "self::foo/bar" is a bar whose parent is a foo, and the
-	// foo is the parent, not the grandparent.
+	// A self:: step names the same node the step to its right does, so it
+	// does not consume a level of the walk. In "self::foo/bar" the foo IS the
+	// bar's parent, so the step is verified against that parent and the walk
+	// carries on from there rather than stepping up again — which is what
+	// lets several self:: steps in a row all constrain the one node, as
+	// match-258's "self::foo/self::*[@att1]/baz" requires.
+	//
+	// Testing it against the node the walk has reached instead put it one
+	// level too low: the first such step then described the candidate rather
+	// than its parent, and a second found nothing left to agree with.
 	if step.self {
-		ok, err := matchStep(step, node, ctx)
+		parent := node.Parent
+		if parent == nil {
+			return false, nil
+		}
+		ok, err := matchStep(step, parent, ctx)
 		if err != nil || !ok {
 			return false, err
 		}
+		// The level is not consumed, so the remaining steps are matched from
+		// the same node — the next one up will test this same parent.
 		return a.matchAncestors(rest, node, ctx)
 	}
 
