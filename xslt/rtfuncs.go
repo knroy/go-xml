@@ -788,8 +788,11 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		}
 	}
 	keyName := xdm.QName{URI: uri, Local: local}.Clark()
-	defs, ok := rt.sheet.keys[keyName]
-	if !ok {
+	// 3.5.5 scopes a key to the package that declares it, so which
+	// declarations answer this call is decided by where the call is WRITTEN.
+	// The context carries that; see packageOf.
+	defs := rt.sheet.keyDefsFor(packageOf(ctx), keyName)
+	if len(defs) == 0 {
 		return nil, fmt.Errorf("XTDE1260: no xsl:key named %q", lexName)
 	}
 
@@ -1078,7 +1081,15 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	ctx *xpath.Context) (map[string]xdm.Sequence, error) {
 
-	ck := keyCacheKey{name: name, tree: root.Tree()}
+	// The package is taken from the declarations rather than passed in: they
+	// are already the ones keyDefsFor chose for the calling package, so they
+	// carry the answer. An index built from one package's declarations must
+	// not be handed to another's call of the same name over the same tree.
+	pkg := 0
+	if len(defs) > 0 {
+		pkg = defs[0].pkg
+	}
+	ck := keyCacheKey{name: name, tree: root.Tree(), pkg: pkg}
 	if idx, ok := rt.keyIndex[ck]; ok {
 		return idx, nil
 	}

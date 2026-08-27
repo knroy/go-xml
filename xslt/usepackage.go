@@ -1967,8 +1967,13 @@ func isXMLSpace(b byte) bool {
 // snapshotPackageLocalDecls records the package-local declaration tables as
 // they stand, and answers a function restoring them.
 //
-// Section 3.5.5 makes keys, decimal formats and character maps local to the
-// package that declares them. This composition compiles a used package into
+// Section 3.5.5 makes decimal formats and character maps local to the package
+// that declares them. Keys are scoped the other way, by filing each
+// declaration under its package and resolving a call against the package it
+// is written in; see keyDefsFor. That is the better mechanism -- it keeps
+// BOTH packages' declarations rather than removing one -- and is what
+// override-misc-004 needs, where each package's own template must reach its
+// own key of the same name. This composition compiles a used package into
 // the using package's Stylesheet, so the only way to keep the scopes apart is
 // to put the tables back the way the using package left them once the used
 // package has compiled. See the call site in compileUsedPackage for why a
@@ -1980,10 +1985,6 @@ func isXMLSpace(b byte) bool {
 // needs the scoping from one that relies on the inheritance, and narrowing a
 // scope with no test to hold it is how a regression gets in.
 func (c *compiler) snapshotPackageLocalDecls() func() {
-	keys := make(map[string][]*keyDef, len(c.sheet.keys))
-	for k, v := range c.sheet.keys {
-		keys[k] = v
-	}
 	formats := make(map[string]*DecimalFormat, len(c.sheet.decimalFormats))
 	for k, v := range c.sheet.decimalFormats {
 		formats[k] = v
@@ -1993,7 +1994,6 @@ func (c *compiler) snapshotPackageLocalDecls() func() {
 		maps[k] = nil
 	}
 	return func() {
-		c.sheet.keys = keys
 		c.sheet.decimalFormats = formats
 		// Character maps are the one table whose entries must stay. A
 		// character map is consulted at serialisation time, by name, from

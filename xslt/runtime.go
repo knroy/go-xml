@@ -163,6 +163,13 @@ type selection struct {
 type keyCacheKey struct {
 	name string
 	tree *xdm.Tree
+	// pkg is the package whose declarations of the name built this index.
+	// 3.5.5 makes a key local to its package, so two packages declaring one
+	// name index the same tree differently and an index cached on the name
+	// alone returned whichever package asked first to both. override-misc-004
+	// declares "k" over the element's content in the used package and over
+	// its name in the using one.
+	pkg int
 }
 
 // DefaultMaxDepth bounds template recursion when TransformOptions.MaxDepth is

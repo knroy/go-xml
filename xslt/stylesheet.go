@@ -300,6 +300,11 @@ type keyDef struct {
 	// composite="yes" asks for the single key ('a','b') and without it asks
 	// for either 'a' or 'b'.
 	composite bool
+	// pkg is the package the declaration was written in. 3.5.5 makes keys
+	// local to their package, so two packages may declare one name
+	// differently and a call resolves to the declarations of the package the
+	// CALL is written in. See keyDefsFor.
+	pkg int
 }
 
 // hostPackage is the package identity that travels with a compiled
@@ -1355,4 +1360,33 @@ func (s *Stylesheet) declaresMode(mode string) bool {
 		}
 	}
 	return false
+}
+
+// keyDefsFor returns the xsl:key declarations of one name that are in scope
+// for a call written in pkg.
+//
+// Section 3.5.5: keys "within a package have local scope within that package
+// -- they are all effectively private". So two packages may declare the same
+// key name with different match and use expressions, and neither sees the
+// other's. override-misc-004 is exactly that: the used package indexes on the
+// element's content and the using package on its name, both under "k", and
+// each package's own template must get its own index.
+//
+// A package with no declaration of the name falls back to nothing rather than
+// to another package's, which is what makes the scoping real. The fallback
+// that does exist is for modules that never set a package at all: everything
+// compiled outside any xsl:use-package carries package zero, so a plain
+// stylesheet keeps every key it declares.
+func (s *Stylesheet) keyDefsFor(pkg int, name string) []*keyDef {
+	all := s.keys[name]
+	if len(all) == 0 {
+		return nil
+	}
+	var out []*keyDef
+	for _, k := range all {
+		if k.pkg == pkg {
+			out = append(out, k)
+		}
+	}
+	return out
 }

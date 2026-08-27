@@ -1426,6 +1426,11 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 		return fmt.Errorf(
 			"XTSE1205: xsl:key needs a use attribute or a sequence constructor")
 	}
+	// 3.5.5 makes a key local to the package that declares it, so the
+	// declaration is filed under the package as well as the name: two
+	// packages may declare the same key name with different match and use
+	// expressions, and override-misc-004 does exactly that.
+	k.pkg = compilePackage
 	c.sheet.keys[qn.Clark()] = append(c.sheet.keys[qn.Clark()], k)
 	return nil
 }
