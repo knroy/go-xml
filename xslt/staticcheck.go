@@ -433,6 +433,9 @@ func checkModelOrder(el *xdm.Node, cm contentModel) error {
 			seen = r
 		}
 
+	case cm.model == "(xsl:param*, xsl:on-completion?, sequence-constructor)":
+		return checkIterateOrder(el, cm.model)
+
 	case cm.model == "(xsl:when+, xsl:otherwise?)":
 		whens, otherwises := 0, 0
 		for _, ch := range el.ChildElements() {

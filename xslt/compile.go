@@ -484,7 +484,15 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// ordinary static context — it may name another static variable,
 		// which is not a global — so the value the pass computed is taken
 		// here rather than the expression recompiled.
-		if isStaticDecl(el) && xpathVersionAt(el).AtLeast31() {
+		// The gate is the MODULE's version, not the declaration's own. A
+		// version attribute on the declaration states a compatibility mode
+		// for the expressions written on it, not whether static="yes" means
+		// anything; the static phase already used moduleAtLeast30 to decide
+		// that, and reading a different version here made the two walks
+		// disagree -- static-015 writes version="1.0" on one of three
+		// otherwise identical static parameters and requires all three to
+		// keep the value the caller supplied.
+		if isStaticDecl(el) && moduleAtLeast30(el) {
 			v, err := c.staticGlobal(el)
 			if err != nil {
 				return err
@@ -1426,6 +1434,11 @@ func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 			// wildcard rather than a prefixed name, so resolving "*" as a
 			// prefix reported an unbound-prefix error for a legal token.
 			qn = xdm.QName{URI: "*", Local: strings.TrimPrefix(n, "*:")}
+		case strings.HasPrefix(n, "Q{") && strings.HasSuffix(n, "}*"):
+			// Q{uri}* is the braced-URI spelling of prefix:*. The NameTest
+			// grammar admits it wherever it admits the prefixed form, and it
+			// names its namespace directly, so no prefix need be in scope.
+			qn = xdm.QName{URI: n[2 : len(n)-2], Local: "*"}
 		case strings.HasSuffix(n, ":*"):
 			prefix := strings.TrimSuffix(n, ":*")
 			uri, ok := el.LookupPrefix(prefix)

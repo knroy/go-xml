@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -50,4 +51,57 @@ func availableName(
 	}
 	u, l, found := resolve(name)
 	return u, l, found, nil
+}
+
+// checkIterateOrder applies the ordering half of xsl:iterate's content model.
+//
+// Section 8.4 writes it as (xsl:param*, xsl:on-completion?,
+// sequence-constructor): the parameters come first, the completion action
+// after them, and both before any instruction. The kids map says only which
+// children are allowed, so xsl:param written after an instruction was
+// accepted -- iterate901err.xsl puts an xsl:variable ahead of the xsl:param
+// precisely to check that it is not.
+func checkIterateOrder(el *xdm.Node, model string) error {
+	const (
+		rankParam = iota
+		rankOnCompletion
+		rankConstructor
+	)
+	seen := rankParam
+	for _, ch := range el.Children {
+		r := rankConstructor
+		switch ch.Kind {
+		case xdm.KindText:
+			if xdm.IsXMLWhitespace(ch.Value) {
+				continue
+			}
+		case xdm.KindElement:
+			if ch.Name.URI == xdm.NSXSL {
+				switch ch.Name.Local {
+				case "param":
+					r = rankParam
+				case "on-completion":
+					r = rankOnCompletion
+				}
+			}
+		default:
+			continue
+		}
+		if r < seen {
+			what := "the sequence constructor"
+			if ch.Kind == xdm.KindElement {
+				what = ch.Name.Lexical()
+			}
+			return fmt.Errorf(
+				"xsl:iterate: %s is out of order, its content is %s "+
+					"(XTSE0010)", what, model)
+		}
+		if r == rankOnCompletion && seen == rankOnCompletion {
+			return fmt.Errorf(
+				"xsl:iterate: at most one xsl:on-completion is allowed, its "+
+					"content is %s (XTSE0010)", model)
+		}
+		seen = r
+	}
+	return nil
 }

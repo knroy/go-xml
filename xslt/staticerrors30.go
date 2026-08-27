@@ -258,15 +258,24 @@ func findApplyImports(n *xdm.Node) error {
 //
 // Section 8.4: an xsl:iterate parameter is given its value by the
 // xsl:next-iteration of the previous cycle, and its initial value by the
-// declaration itself. A parameter with no select, no content and no
-// required="yes" is "implicitly mandatory" -- there is nothing to start it
-// from and no instruction that could supply one -- so the spec makes it a
-// static error rather than letting the first cycle fail.
+// declaration itself. A parameter with no explicit default is only an error
+// when its implicit default cannot be the parameter's value.
+//
+// Section 9.2 defines that narrowly: the implicit default is the empty
+// sequence when there is an as attribute and a zero-length string when there
+// is not, and the parameter is "implicitly mandatory" only if that value
+// cannot be converted to the required type -- "if it has an as attribute
+// which does not permit the empty sequence". <xsl:param name="p"
+// as="xs:string?"/> therefore starts at the empty sequence and is perfectly
+// legal; treating every defaultless parameter as mandatory refused it.
 //
 // required="yes" is not a way out either; 8.4 forbids the attribute on an
 // xsl:iterate parameter, which the element table already refuses.
 func checkIterateParam(ch *xdm.Node) error {
 	if ch.Attr("", "select") != nil {
+		return nil
+	}
+	if a := ch.Attr("", "as"); a == nil || sequenceTypePermitsEmpty(a.Value) {
 		return nil
 	}
 	for _, k := range ch.Children {
@@ -418,4 +427,22 @@ func (s *Stylesheet) checkModeTyped(node *xdm.Node, mode string) error {
 		}
 	}
 	return nil
+}
+
+// sequenceTypePermitsEmpty reports whether a sequence type written in an as
+// attribute admits the empty sequence.
+//
+// The occurrence indicator is the whole question, and it is the last
+// non-space character of the type, so the answer is lexical: no expression
+// parser is needed and none is available where the static checks run.
+func sequenceTypePermitsEmpty(as string) bool {
+	as = strings.TrimSpace(as)
+	if as == "" {
+		return true
+	}
+	switch as[len(as)-1] {
+	case '?', '*':
+		return true
+	}
+	return as == "empty-sequence()"
 }
