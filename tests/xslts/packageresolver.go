@@ -62,11 +62,14 @@ func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node
 	var bestFile string
 	var bestVer []int
 	for _, pk := range declared {
-		if pk.URI == "" {
-			// A <package> that states only a file leaves its identity to the
-			// module: an xsl:package carries its own name and version, and
-			// the suite relies on that for most secondary packages.
-			uri, ver := packageIdentity(filepath.Join(p.set.Dir, pk.File))
+		// The module is authoritative about its own identity. An xsl:package
+		// carries its name and version, and where the catalog states them too
+		// the two can disagree -- override-f-024's environment says 1.0.0 of
+		// a module that calls itself 0.0.1, and the stylesheet asks for the
+		// version the module states. The catalog's values are kept only as a
+		// fallback for a module that declares none.
+		if uri, ver := packageIdentity(
+			filepath.Join(p.set.Dir, pk.File)); uri != "" {
 			pk.URI, pk.Version = uri, ver
 		}
 		if pk.URI != name {

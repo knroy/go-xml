@@ -1082,13 +1082,36 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
-		if comp.sym.kind == kindMode {
-			// A mode declaration is never pruned. It is a component, but
-			// what it holds is the mode's properties, and the template rules
-			// that travel with the mode need them whatever the manifest said
-			// about who may name the mode from outside. Deleting a private
-			// unnamed mode left its own package's rules in a mode nothing
-			// declared, which under declared-modes="yes" is XTSE3085.
+		if comp.sym.kind == kindMode &&
+			!u.hiddenByAccept[comp.sym.String()] &&
+			!(comp.sym.name.Local == "" && c.principalHasUnnamedMode()) {
+			// A mode declaration survives the private-to-hidden default. It
+			// is a component, but what it holds is the mode's properties,
+			// and the template rules that travel with the mode need them
+			// whatever the manifest said about who may name the mode from
+			// outside. Deleting a private unnamed mode left its own
+			// package's rules in a mode nothing declared, which under
+			// declared-modes="yes" is XTSE3085.
+			//
+			// A mode an xsl:accept explicitly hid still goes, because that
+			// is the visibility 3.6.3.1 says governs use within the package
+			// too.
+			//
+			// The used package's UNNAMED mode declaration is the exception
+			// to the exception. It has no name for an xsl:expose or
+			// xsl:accept to reach it by, so each package's unnamed mode is
+			// its own -- but the flat declaration table this compiler keeps
+			// has room for one set of properties per mode name. Where the
+			// principal package declares an unnamed mode of its own, that is
+			// the one that must win, so the used package's declaration goes
+			// and its rules stay. package-019 sets on-no-match="text-only-copy"
+			// over a used package that sets on-no-match="fail"; keeping both
+			// let the used package's setting win and failed as XTDE0555.
+			//
+			// Where the principal declares none there is no contest, and the
+			// used package's declaration is kept so that its own rules are
+			// in a mode something declared -- which override-v-001 needs
+			// under declared-modes="yes".
 			keep[comp.el] = true
 			continue
 		}
@@ -1249,6 +1272,28 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 func isAbstractDecl(el *xdm.Node) bool {
 	return visibility(strings.TrimSpace(el.AttrValue("visibility"))) ==
 		visAbstract
+}
+
+// principalHasUnnamedMode reports whether the principal module declares the
+// unnamed mode.
+//
+// The principal rather than the module in hand, because an xsl:use-package
+// may sit in an included module while the mode is declared in the package
+// that includes it, which is how package-019 writes it.
+func (c *compiler) principalHasUnnamedMode() bool {
+	if c.sheet.source == nil {
+		return false
+	}
+	root := firstElement(c.sheet.source)
+	if root == nil {
+		return false
+	}
+	for _, el := range root.ChildElements() {
+		if isXSL(el, "mode") && strings.TrimSpace(el.AttrValue("name")) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // componentOf finds the component an element declares, if it declares one.

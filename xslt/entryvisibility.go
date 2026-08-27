@@ -26,6 +26,19 @@ import (
 // Both are about a visibility attribute written where the declaration has no
 // component to attach it to.
 func checkEntryVisibility(el *xdm.Node) error {
+	if isXSL(el, "mode") {
+		// xsl:mode/@name is a QName and nothing else. The pseudo-names an
+		// @mode attribute on a template rule admits -- "#unnamed", "#all",
+		// "#default", "#current" -- are ways of referring to a mode, not
+		// ways of naming one, so a declaration written with one has named
+		// nothing. package-909 writes name="#unnamed".
+		if n := strings.TrimSpace(el.AttrValue("name")); strings.HasPrefix(n, "#") {
+			return fmt.Errorf(
+				"XTSE0020: %q is not a valid value for xsl:mode/@name; "+
+					"the unnamed mode is declared by omitting the "+
+					"attribute", n)
+		}
+	}
 	vis := strings.TrimSpace(el.AttrValue("visibility"))
 	if vis == "" {
 		return nil
