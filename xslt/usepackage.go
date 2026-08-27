@@ -1004,7 +1004,7 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 		if i >= len(np) {
 			break
 		}
-		if a, b := op[i].AttrValue("as"), np[i].AttrValue("as"); a != b {
+		if a, b := op[i].AttrValue("as"), np[i].AttrValue("as"); !sameDeclaredType(a, b) {
 			return fmt.Errorf(
 				"XTSE3070: the overriding declaration of %s declares "+
 					"parameter $%s as=%q and the one it overrides declares "+
@@ -1026,8 +1026,8 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 	// The declared return types must agree. A weaker type on the override
 	// would let a caller of the used package receive a value the used
 	// package's own signature promised it would not.
-	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); a != b &&
-		a != "" && b != "" {
+	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); a != "" &&
+		b != "" && !sameDeclaredType(a, b) {
 		return fmt.Errorf(
 			"XTSE3070: the overriding xsl:function %s declares as=%q and the "+
 				"one it overrides declares as=%q",
@@ -1043,6 +1043,40 @@ func functionDeterminism(el *xdm.Node) string {
 		return v
 	}
 	return "maybe"
+}
+
+// sameDeclaredType compares two sequence types written on two declarations,
+// for the purpose of XTSE3070.
+//
+// 3.5.4 states the rule as subtype compatibility, which needs the schema
+// components to settle: two user-defined union types with different names may
+// be the same type, and override-f-031's u1 and u2 are exactly that pair.
+// Comparing the lexical forms answers every case the suite writes where the
+// types are built-in, and a name this compiler cannot resolve to a built-in
+// type is not judged rather than judged wrongly -- an override refused for a
+// difference that is not one costs more than an override let through.
+func sameDeclaredType(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	return !builtinTypeName(a) || !builtinTypeName(b)
+}
+
+// builtinTypeName reports whether a sequence type is written wholly in terms
+// this compiler can compare lexically: the XML Schema built-ins, the item
+// type keywords, and an occurrence indicator.
+func builtinTypeName(t string) bool {
+	t = strings.TrimRight(strings.TrimSpace(t), "?*+")
+	switch {
+	case t == "":
+		return false
+	case strings.HasPrefix(t, "xs:"), strings.HasPrefix(t, "Q{"+xdm.NSXS+"}"):
+		return true
+	}
+	// An item type keyword -- item(), node(), element(), function(*) and the
+	// rest -- is written with parentheses and no prefix.
+	return strings.Contains(t, "(")
 }
 
 // leadingParams returns the xsl:param children that open a declaration.
@@ -1085,7 +1119,7 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 					"$%s that the one it overrides does not declare",
 				overriding.AttrValue("name"), name)
 		}
-		if a, b := p.AttrValue("as"), o.AttrValue("as"); a != b {
+		if a, b := p.AttrValue("as"), o.AttrValue("as"); !sameDeclaredType(a, b) {
 			return fmt.Errorf(
 				"XTSE3070: the overriding template %s declares $%s as=%q "+
 					"and the one it overrides declares as=%q",
@@ -1113,7 +1147,7 @@ func checkTemplateParams(overriding, original *xdm.Node) error {
 					"declares", overriding.AttrValue("name"), name)
 		}
 	}
-	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); a != b {
+	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); !sameDeclaredType(a, b) {
 		return fmt.Errorf(
 			"XTSE3070: the overriding template %s declares as=%q and the "+
 				"one it overrides declares as=%q",
