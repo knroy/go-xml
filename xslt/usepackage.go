@@ -1709,11 +1709,25 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// write just outside their xsl:override. That would rename the
 	// stylesheet's entry point into the generated namespace and fail as "no
 	// template named xsl:initial-template", a long way from the cause.
-	overriding.Namespaces = append(overriding.Namespaces, &xdm.Node{
-		Kind:  xdm.KindNamespace,
-		Name:  xdm.QName{Local: "xsl"},
-		Value: uri,
-	})
+	//
+	// EVERY prefix bound to the XSLT namespace is rebound, not the literal
+	// "xsl". The reference is a QName, so what identifies it is the namespace
+	// its prefix expands to and not the spelling of the prefix; a stylesheet
+	// may bind the XSLT namespace to anything. document-2401b writes
+	// xmlns:t="http://www.w3.org/1999/XSL/Transform" throughout and calls
+	// <t:call-template name="t:original"/>, which expanded to the real XSLT
+	// namespace, missed a rebinding made only for "xsl", and failed as "no
+	// template named t:original".
+	for prefix, ns := range overriding.InScopeNamespaces() {
+		if ns != xdm.NSXSL || prefix == "" {
+			continue
+		}
+		overriding.Namespaces = append(overriding.Namespaces, &xdm.Node{
+			Kind:  xdm.KindNamespace,
+			Name:  xdm.QName{Local: prefix},
+			Value: uri,
+		})
+	}
 	return overriding
 }
 
