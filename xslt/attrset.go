@@ -320,15 +320,10 @@ func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	for _, it := range sorted {
-		switch v := it.(type) {
-		case *xdm.Node:
-			out.appendNode(v)
-		case *xdm.Atomic:
-			out.appendValue(v)
-		}
-	}
-	return nil
+	// appendSequence rather than a switch of its own: xsl:perform-sort
+	// returns the items it sorted, and a map or an array is as sortable as
+	// anything else once a sort key has been written for it.
+	return appendSequence(sorted, out)
 }
 
 func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {

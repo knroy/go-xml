@@ -490,13 +490,14 @@ func runTemplate(rt *runtime, t *Template,
 	if err != nil {
 		return err
 	}
-	for _, it := range converted {
-		switch v := it.(type) {
-		case *xdm.Node:
-			out.appendNode(v)
-		case *xdm.Atomic:
-			out.appendValue(v)
-		}
+	// appendSequence rather than a switch of its own, so that a map, an array
+	// or a function item survives. A template declared as="map(*)" returning
+	// one had it dropped here, and the empty sequence left behind then failed
+	// the CALLER's declaration -- higher-order-functions-071 reports
+	// XTTE0570 against $result, several steps away from where the value
+	// actually went missing.
+	if err := appendSequence(converted, out); err != nil {
+		return err
 	}
 	return nil
 }

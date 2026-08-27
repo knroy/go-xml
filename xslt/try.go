@@ -221,8 +221,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := newOutputBuilder()
 	err := i.run(rt, sub)
 	if err == nil {
-		appendSequence(sub.sequence(), out)
-		return nil
+		return appendSequence(sub.sequence(), out)
 	}
 
 	if !catchable(err) {
@@ -232,7 +231,11 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// <pos> element the try had already produced is part of the result,
 		// and only the loop stops.
 		if isUnwindSignal(err) {
-			appendSequence(sub.sequence(), out)
+			// The append's own error cannot displace the one being
+			// propagated: this path exists to preserve the output the body
+			// had already produced, and the signal is what the caller is
+			// waiting for.
+			_ = appendSequence(sub.sequence(), out)
 		}
 		return err
 	}
@@ -259,8 +262,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		appendSequence(seq, out)
-		return nil
+		return appendSequence(seq, out)
 	}
 	return execSequence(cl.body, crt, out)
 }
@@ -272,8 +274,7 @@ func (i *tryInstr) run(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		appendSequence(seq, out)
-		return nil
+		return appendSequence(seq, out)
 	}
 	return execSequence(i.body, rt, out)
 }

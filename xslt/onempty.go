@@ -64,8 +64,7 @@ func evalConditionalContent(sel *xpath.Compiled, body []Instruction,
 		if err != nil {
 			return err
 		}
-		appendSequence(seq, out)
-		return nil
+		return appendSequence(seq, out)
 	}
 	return execSequence(body, rt, out)
 }
