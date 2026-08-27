@@ -143,6 +143,10 @@ func snapshotItem(it xdm.Item) xdm.Item {
 
 	tree := xdm.NewTree()
 	tree.Root.BaseURI = spine[len(spine)-1].BaseURI
+	// 27.2: a snapshot's root "has the same unparsed entities as the tree
+	// from which it was taken". sf-unparsed-entity-03 hands snapshot(.) to an
+	// xsl:function and asks unparsed-entity-uri of it there.
+	tree.CopyDTDFrom(n.Tree())
 	parent := tree.Root
 	// Outermost first: spine was built from the node upwards.
 	for i := len(spine) - 1; i >= 0; i-- {

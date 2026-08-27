@@ -388,6 +388,41 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 				return xdm.One(xdm.NewAnyURI(resolveAgainst(n.Root().BaseURI, sys))), nil
 			},
 		})
+
+		// XSLT 3.0 20.4 adds a two-argument form naming the document to ask,
+		// so that a function with no focus of its own can still ask -- which
+		// is the point of it: sf-unparsed-entity-03 passes snapshot(.) into
+		// an xsl:function and asks there. The second argument is a node, and
+		// the tree that holds it answers.
+		l.Add(xpath.Function{
+			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 2,
+			Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+				name := stringArg(args[0])
+				var n *xdm.Node
+				if len(args[1]) == 1 {
+					n, _ = args[1][0].(*xdm.Node)
+				}
+				if n == nil {
+					return nil, fmt.Errorf(
+						"%s: the second argument of %s() is not a node",
+						code, fname)
+				}
+				if n.Root().Kind != xdm.KindDocument {
+					return nil, fmt.Errorf(
+						"%s: the root of the tree named by %s() is not a "+
+							"document node", code, fname)
+				}
+				sys, pub, _, found := n.Tree().UnparsedEntity(name)
+				if !found {
+					return xdm.One(xdm.NewAnyURI("")), nil
+				}
+				if public {
+					return xdm.One(xdm.NewString(pub)), nil
+				}
+				return xdm.One(xdm.NewAnyURI(
+					resolveAgainst(n.Root().BaseURI, sys))), nil
+			},
+		})
 	}
 
 	// The static functions are registered separately so that use-when, whose

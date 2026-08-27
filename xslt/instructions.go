@@ -422,9 +422,7 @@ func hasNamespaceSensitiveContent(n *xdm.Node) bool {
 func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
 	tree.Root.BaseURI = n.BaseURI
-	if src := n.Tree(); src != nil {
-		tree.DocType = src.DocType
-	}
+	tree.CopyDTDFrom(n.Tree())
 	tree.Root.TypeAnnotation = n.TypeAnnotation
 	for _, ch := range n.Children {
 		tree.Root.AppendChild(deepCopy(ch))
