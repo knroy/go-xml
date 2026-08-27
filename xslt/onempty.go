@@ -215,6 +215,15 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 	type pending struct {
 		instr Instruction
 		at    int // index in R where the results belong
+		// rt is the runtime as it stood where the instruction was written.
+		//
+		// A deferred xsl:on-non-empty is evaluated later than it appears, and
+		// a variable declared between the two positions would otherwise be in
+		// scope for it -- or, worse, a redeclaration of the same name would
+		// shadow the binding it was written against. on-non-empty-007
+		// declares $x twice, once before each of two xsl:on-non-empty
+		// instructions, and expects each to see its own.
+		rt *runtime
 	}
 	var (
 		r       xdm.Sequence
@@ -234,7 +243,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		for i := len(l) - 1; i >= 0; i-- {
 			p := l[i]
 			sub := newOutputBuilder()
-			if err := p.instr.Execute(rt, sub); err != nil {
+			if err := p.instr.Execute(p.rt, sub); err != nil {
 				return err
 			}
 			items := sub.sequence()
@@ -276,7 +285,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 				}
 				r = append(r, sub.sequence()...)
 			} else {
-				l = append(l, pending{instr: ci, at: len(r)})
+				l = append(l, pending{instr: ci, at: len(r), rt: rt})
 			}
 			continue
 
