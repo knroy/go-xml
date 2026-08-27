@@ -1813,6 +1813,9 @@ func (c *compiler) compileIterate(n *xdm.Node, ns *nsResolver) (Instruction, err
 		if ch.Kind == xdm.KindElement && ch.Name.URI == xdm.NSXSL {
 			switch ch.Name.Local {
 			case "param":
+				if err := checkIterateParam(ch); err != nil {
+					return nil, err
+				}
 				v, err := c.compileVariable(ch)
 				if err != nil {
 					return nil, err

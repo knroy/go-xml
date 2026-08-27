@@ -252,3 +252,43 @@ func findApplyImports(n *xdm.Node) error {
 	}
 	return nil
 }
+
+// checkIterateParam applies XTSE3520 to one xsl:param of an xsl:iterate.
+//
+// Section 8.4: an xsl:iterate parameter is given its value by the
+// xsl:next-iteration of the previous cycle, and its initial value by the
+// declaration itself. A parameter with no select, no content and no
+// required="yes" is "implicitly mandatory" -- there is nothing to start it
+// from and no instruction that could supply one -- so the spec makes it a
+// static error rather than letting the first cycle fail.
+//
+// required="yes" is not a way out either; 8.4 forbids the attribute on an
+// xsl:iterate parameter, which the element table already refuses.
+func checkIterateParam(ch *xdm.Node) error {
+	if ch.Attr("", "select") != nil {
+		return nil
+	}
+	for _, k := range ch.Children {
+		switch k.Kind {
+		case xdm.KindElement, xdm.KindComment, xdm.KindPI:
+			return nil
+		case xdm.KindText:
+			if strings.TrimSpace(k.Value) != "" {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf(
+		"XTSE3520: xsl:param %q of xsl:iterate supplies no default value, "+
+			"which makes it implicitly mandatory", ch.AttrValue("name"))
+}
+
+// unboundTypePrefixError is XTDE1428's second half: a lexically valid QName
+// whose prefix nothing binds. It parallels unboundPrefixError, which says the
+// same thing for function-available's XTDE1400.
+func unboundTypePrefixError(name string) error {
+	prefix, _ := xdm.SplitQName(name)
+	return fmt.Errorf(
+		"XTDE1428: type-available(%q): no namespace declaration is in scope "+
+			"for prefix %q", name, prefix)
+}

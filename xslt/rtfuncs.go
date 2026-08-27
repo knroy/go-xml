@@ -95,7 +95,7 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	// fn:copy-of and fn:snapshot need no transform state either, but they are
 	// bound here for the same reason: they are XSLT's, not XPath's, and a
 	// bare xpath.Eval caller has no business seeing them. See copyfuncs.go.
-	registerCopyFuncs(l)
+	registerCopyFuncs(l, rt)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,
@@ -394,6 +394,20 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 			// would otherwise fall through to the empty string, which is
 			// what a *valid* name for an unknown property returns — so the
 			// two cases would be indistinguishable.
+			// 3.0 widened the argument to an EQName, whose URIQualifiedName
+			// form carries its own namespace and so needs no prefix in scope
+			// -- which is the reason a stylesheet writes one.
+			if isEQName(name) {
+				end := strings.IndexByte(name, '}')
+				if name[2:end] != xdm.NSXSL {
+					return xdm.One(xdm.NewString("")), nil
+				}
+				if val, ok := systemPropertyValue(
+					name[end+1:], ctx.Version); ok {
+					return xdm.One(xdm.NewString(val)), nil
+				}
+				return xdm.One(xdm.NewString("")), nil
+			}
 			if !isLexicalQName(name) {
 				return nil, fmt.Errorf(
 					"XTDE1390: system-property(%q) is not a valid QName", name)
@@ -506,9 +520,16 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
 		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
+			// XTDE1428 is the type-available spelling of the condition
+			// XTDE1400 states for function-available: a name that is not a
+			// QName at all is an error, not a type that happens to be absent.
+			if err := checkAvailableArg(
+				"XTDE1428", "type-available", name); err != nil {
+				return nil, err
+			}
 			uri, local, ok := resolveType(name)
 			if !ok {
-				return xdm.One(xdm.NewBoolean(false)), nil
+				return nil, unboundTypePrefixError(name)
 			}
 			if uri != xdm.NSXS {
 				// Not a built-in: the only way it can be available is for the
@@ -569,7 +590,7 @@ var supportedInstructions = map[string]bool{
 	// try-012 asks about both halves of the pair.
 	"try": true, "catch": true,
 	"on-empty": true, "on-non-empty": true, "where-populated": true,
-	"fork": true,
+	"fork":    true,
 	"iterate": true, "break": true, "next-iteration": true,
 	"evaluate": true,
 	"map":      true, "map-entry": true,
@@ -589,7 +610,7 @@ var supportedInstructions = map[string]bool{
 var instructionsSince30 = map[string]bool{
 	"try": true, "catch": true,
 	"on-empty": true, "on-non-empty": true, "where-populated": true,
-	"fork": true,
+	"fork":    true,
 	"iterate": true, "break": true, "next-iteration": true,
 	"evaluate": true,
 	"map":      true, "map-entry": true,
