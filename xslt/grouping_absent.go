@@ -42,10 +42,26 @@ func groupingInScope(ctx *xpath.Context) bool {
 // errNoGrouping is XTDE1061 / XTDE1071.
 //
 // XSLT 2.0 answered the empty sequence outside a grouping, and section 14.4
-// of 3.0 made it an error instead; the version the expression was compiled
-// under is what decides, so a 2.0 stylesheet keeps the answer it had.
+// of 3.0 made it an error instead.
+//
+// Which of the two applies follows the PROCESSOR, not the module. Calling
+// current-group() is ordinary syntax at every version -- nothing about the
+// call needs 3.0 to parse -- so what changed in 3.0 is only the answer the
+// function gives, decided when it runs. for-each-group-081 and -081b settle
+// it: one version="2.0" stylesheet, scoped XSLT20 and XSLT30+ respectively,
+// wanting the empty sequence from one processor and XTDE1061 from the other.
+// LibraryVersion is the dial the processor's version already sets, for the
+// same reason -- it is about what the function library does, not about
+// grammar.
 func errNoGrouping(ctx *xpath.Context, code, fn string) error {
-	if !ctx.Version.AtLeast31() {
+	if ctx == nil {
+		return nil
+	}
+	v := ctx.Version
+	if ctx.LibraryVersion > v {
+		v = ctx.LibraryVersion
+	}
+	if !v.AtLeast31() {
 		return nil
 	}
 	return fmt.Errorf("%s: %s() called where there is no current group", code, fn)

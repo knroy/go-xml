@@ -382,7 +382,16 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 // value, so a population holding one is not automatically an error. The
 // pattern is asked whether it can match a value at all, and only a pattern
 // that cannot still raises XTTE1120.
-func requireNodePopulation(seq xdm.Sequence, attr string, pat *Pattern) error {
+//
+// XSLT 3.0 drops the error entirely: XTTE1120 has no entry in the 3.0 error
+// summary, and §14.1 says only "if an item matches the pattern", which an
+// atomic value simply does not. So the check is on the processor's version,
+// not the module's -- for-each-group-046 and -046a run the very same
+// version="2.0" stylesheet and differ only in the spec they are scoped to.
+func requireNodePopulation(rt *runtime, seq xdm.Sequence, attr string, pat *Pattern) error {
+	if rt != nil && rt.sheet != nil && (rt.sheet.maxVersion == 0 || rt.sheet.maxVersion >= 3.0) {
+		return nil
+	}
 	if pat != nil && pat.matchesAtomicValues() {
 		return nil
 	}
@@ -398,7 +407,7 @@ func requireNodePopulation(seq xdm.Sequence, attr string, pat *Pattern) error {
 }
 
 func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
-	if err := requireNodePopulation(seq, "group-starting-with", pat); err != nil {
+	if err := requireNodePopulation(rt, seq, "group-starting-with", pat); err != nil {
 		return nil, err
 	}
 	rt = rt.clearRegexGroups()
@@ -418,7 +427,7 @@ func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, er
 
 // groupEndingWith closes a group after each item matching the pattern.
 func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
-	if err := requireNodePopulation(seq, "group-ending-with", pat); err != nil {
+	if err := requireNodePopulation(rt, seq, "group-ending-with", pat); err != nil {
 		return nil, err
 	}
 	rt = rt.clearRegexGroups()
