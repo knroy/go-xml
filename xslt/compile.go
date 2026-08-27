@@ -52,6 +52,9 @@ type compiler struct {
 	// accumPrecedence records the import precedence each accumulator name was
 	// declared at, so that XTSE3350 fires only on a tie. See accumulator.go.
 	accumPrecedence map[string]int
+	// modePrecedence records the import precedence each mode was declared at,
+	// so that XTSE0545 fires only on a tie.
+	modePrecedence map[string]int
 
 	// statedDecimalFormat records, per format name, which attributes an
 	// xsl:decimal-format declaration actually named. XTSE1290 compares
@@ -512,7 +515,7 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// and the default (text-only-copy) produces visibly different output
 		// from shallow-copy or deep-skip. Its attributes were checked by the
 		// element table before this point.
-		return c.compileMode(el)
+		return c.compileMode(el, precedence)
 	}
 	// Section 3.9: where forwards-compatible behaviour is enabled, an XSLT
 	// element that XSLT 2.0 does not allow as a child of xsl:stylesheet "must
@@ -674,7 +677,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 			if tok == "#all" || tok == "#default" || tok == "#unnamed" {
 				continue
 			}
-			if !isLexicalQName(tok) {
+			if !isLexicalQName(tok) && !isEQName(tok) {
 				return fmt.Errorf(
 					"XTSE0550: xsl:template/@mode names %q, which is not a "+
 						"mode name", tok)
@@ -1721,7 +1724,7 @@ func (c *compiler) pruneOverriddenGlobals() {
 // The mode name is expanded like any other, and an absent @name declares the
 // unnamed mode, which is the empty Clark name. "#default" spells the same
 // thing and "#unnamed" is its XSLT 3.0 synonym, so both normalise to it.
-func (c *compiler) compileMode(el *xdm.Node) error {
+func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 	name := ""
 	if na := el.Attr("", "name"); na != nil {
 		tok := strings.TrimSpace(na.Value)
@@ -1745,6 +1748,24 @@ func (c *compiler) compileMode(el *xdm.Node) error {
 		c.sheet.declaredModeNames = map[string]bool{}
 	}
 	for _, m := range modeNamesOf(el) {
+		// XTSE0545: "it is a static error if there is more than one
+		// xsl:mode declaration for the same mode with the same import
+		// precedence". A mode has one set of properties, and two
+		// declarations that disagree about on-no-match leave no rule for
+		// deciding which built-in rules are in force.
+		if c.modePrecedence == nil {
+			c.modePrecedence = map[string]int{}
+		}
+		if prev, ok := c.modePrecedence[m]; ok && prev == precedence {
+			name := m
+			if name == "" {
+				name = "#unnamed"
+			}
+			return fmt.Errorf(
+				"XTSE0545: mode %s is declared by more than one xsl:mode at "+
+					"the same import precedence", name)
+		}
+		c.modePrecedence[m] = precedence
 		c.sheet.declaredModeNames[m] = true
 	}
 	return c.compileModeAccumulators(el, name)
