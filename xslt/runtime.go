@@ -1285,8 +1285,9 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			// error the conversion itself reports. This is the same rule
 			// that governs template parameters in runTemplate.
 			if g.IsParam && g.asType != nil && !hasExplicitDefault(g) {
-				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s, "+
+				return fmt.Errorf("%s: no value was supplied for parameter $%s, "+
 					"and the empty sequence is not a valid instance of %s",
+					missingParamCode(rt.sheet),
 					g.Name.Lexical(), g.asType.source())
 			}
 			// Only a failure of the *type conversion itself* becomes

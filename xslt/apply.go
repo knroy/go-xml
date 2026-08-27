@@ -447,7 +447,8 @@ func runTemplate(rt *runtime, t *Template,
 		// explicit default the default value is the empty sequence, and if
 		// the empty sequence is not a valid instance of the required type
 		// the parameter "is treated as a required parameter", so the caller
-		// supplying nothing is XTDE0610 — not a type error at all.
+		// supplying nothing is XTDE0610 — not a type error at all. XSLT 3.0
+		// renamed that code to XTDE0700; see missingParamCode.
 		//
 		// Both previously fell through to evalVariable's generic XTTE0570.
 		val, err := evalVariable(p, sub)
@@ -462,8 +463,9 @@ func runTemplate(rt *runtime, t *Template,
 					}
 					return err
 				}
-				return fmt.Errorf("XTDE0610: no value was supplied for parameter $%s of template %s, "+
+				return fmt.Errorf("%s: no value was supplied for parameter $%s of template %s, "+
 					"and the empty sequence is not a valid instance of %s",
+					missingParamCode(sub.sheet),
 					p.Name.Lexical(), templateLabel(t), p.asType.source())
 			}
 			return err
@@ -588,7 +590,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 		// parameter to a stylesheet function". Reporting 0590 here made
 		// error-0790a report the template code for a function call.
 		v, err := p.asType.convertAs(args[i], "parameter $"+p.Name.Lexical()+
-			" of "+f.name.Lexical(), "XTTE0790")
+			" of "+f.name.Lexical(), funcParamCode(rt.sheet))
 		if err != nil {
 			return nil, err
 		}
