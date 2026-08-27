@@ -236,6 +236,10 @@ type EnvPackage struct {
 type PackageRef struct {
 	File string `xml:"file,attr"`
 	Role string `xml:"role,attr"`
+	// A secondary package is addressed by name and version, exactly as one
+	// declared in an environment is; only the principal is addressed by file.
+	URI     string `xml:"uri,attr"`
+	Version string `xml:"package-version,attr"`
 }
 
 type NamedThing struct {

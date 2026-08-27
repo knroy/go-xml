@@ -21,6 +21,10 @@ import (
 type envPackageResolver struct {
 	set *TestSet
 	env *Environment
+	// tc is the case itself, because a secondary package may be declared on
+	// <test> rather than in the environment -- the suite writes it either
+	// way, and a package used by only one case has no reason to be shared.
+	tc *TestCase
 	// entities is the resolver used for the package documents themselves, so
 	// that a package is read under the same confinement a stylesheet is.
 	entities xdm.EntityResolver
@@ -28,8 +32,28 @@ type envPackageResolver struct {
 
 // ResolvePackage implements xslt.PackageResolver.
 func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node, error) {
-	if p.env == nil {
-		return nil, fmt.Errorf("no environment declares any package")
+	// Both sources are searched. A case-level declaration is not an override
+	// of an environment one -- the suite never writes both for a name -- so
+	// they are simply concatenated.
+	var declared []EnvPackage
+	if p.env != nil {
+		declared = append(declared, p.env.Packages...)
+	}
+	if p.tc != nil {
+		for _, pk := range p.tc.Test.Packages {
+			if pk.URI == "" {
+				// The principal package is addressed by file, not by name,
+				// and is the stylesheet under test rather than a library.
+				continue
+			}
+			declared = append(declared, EnvPackage{
+				File: pk.File, Role: pk.Role,
+				URI: pk.URI, Version: pk.Version,
+			})
+		}
+	}
+	if len(declared) == 0 {
+		return nil, fmt.Errorf("no package is declared")
 	}
 	// Every candidate is collected before one is chosen, because the choice
 	// is "the highest version that matches" rather than "the first": the
@@ -37,7 +61,7 @@ func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node
 	// package precisely to test that.
 	var bestFile string
 	var bestVer []int
-	for _, pk := range p.env.Packages {
+	for _, pk := range declared {
 		if pk.URI != name {
 			continue
 		}

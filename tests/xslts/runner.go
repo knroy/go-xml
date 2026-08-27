@@ -392,8 +392,8 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		SchemaResolver: envSchemaResolver{set: set, env: r.environment(set, tc)},
 		// xsl:use-package names a package rather than locating one, so the
 		// resolver matches on the name and version the environment declares.
-		PackageResolver: envPackageResolver{
-			set: set, env: r.environment(set, tc), entities: r.entityResolver()},
+		PackageResolver: envPackageResolver{set: set, tc: tc,
+			env: r.environment(set, tc), entities: r.entityResolver()},
 		// The suite's stylesheets include one another by relative path, and
 		// a resolver rooted at the test-set directory is what makes that
 		// work without opening the filesystem generally.
