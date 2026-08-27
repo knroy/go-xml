@@ -95,11 +95,25 @@ func registerMisc30Funcs(l *Library) {
 		return out, nil
 	})
 
-	// fn:element-with-id is fn:id restricted to element nodes.
+	// fn:element-with-id is fn:id with the one difference the function was
+	// introduced to make.
 	//
-	// In a document with no schema-declared ID attributes the two agree,
-	// because the only IDs are xml:id and DTD-declared ones, which are always
-	// on elements.
+	// F&O 14.7.2: "Whereas fn:id, for legacy reasons, returns the element that
+	// has the is-id property, [...] it would be more appropriate to return its
+	// PARENT, that being the element that is uniquely identified by the ID. A
+	// new function element-with-id is being introduced with the desired
+	// behavior."
+	//
+	// So the two agree exactly when the ID is carried by an ATTRIBUTE — the
+	// element having the attribute is already the element the ID identifies —
+	// and differ when a schema declares an ELEMENT to be of type xs:ID. There
+	// the ID-bearing element is a child holding the identifier, and what the
+	// identifier names is the thing it sits inside. match-054 validates
+	// <row><id>C</id><value>GAMMA</value></row> with <id> declared xs:ID and
+	// matches element-with-id('C'), which must select the <row>.
+	//
+	// A document with no schema-declared IDs cannot tell the difference: its
+	// only IDs are xml:id and DTD-declared ones, and both are attributes.
 	l.registerFnSince(XPath30, "element-with-id", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		seq, err := lookupByID(ctx, args, true)
 		if err != nil {
@@ -107,9 +121,25 @@ func registerMisc30Funcs(l *Library) {
 		}
 		out := make(xdm.Sequence, 0, len(seq))
 		for _, it := range seq {
-			if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindElement {
-				out = append(out, n)
+			n, ok := it.(*xdm.Node)
+			if !ok || n.Kind != xdm.KindElement {
+				continue
 			}
+			// The element was returned for its OWN is-id property rather than
+			// for an attribute's, so it is the identifier and its parent is
+			// what the identifier names. lookupByID appends the element
+			// itself in both cases, so the property is asked again here to
+			// tell them apart.
+			if n.IsID || isIDAnnotation(n.TypeAnnotation) {
+				// A parentless ID element identifies nothing containing it.
+				// Returning it instead would be fn:id's answer, which is the
+				// one this function exists not to give.
+				if p := n.Parent; p != nil && p.Kind == xdm.KindElement {
+					out = append(out, p)
+				}
+				continue
+			}
+			out = append(out, n)
 		}
 		return out, nil
 	})
