@@ -607,7 +607,7 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if err != nil {
 				return nil, err
 			}
-			out, err := formatDateTimePicture(a.DateTimeVal(), pic, name)
+			out, err := formatDateTimePicture(a.DateTimeVal(), pic, name, ctx.Version)
 			if err != nil {
 				return nil, err
 			}
@@ -739,7 +739,7 @@ func isCalendarName(s string) bool {
 // supply: fn:format-date has no clock and fn:format-time has no calendar, and
 // section 16.5.1 makes a marker naming an absent component XTDE1350 rather
 // than something to render as blank.
-func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string) (string, error) {
+func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string, v Version) (string, error) {
 	var sb strings.Builder
 	runes := []rune(pic)
 
@@ -773,7 +773,7 @@ func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string) (string, err
 		marker := strings.TrimSpace(string(runes[i+1 : end]))
 		i = end
 
-		text, err := formatComponent(dt, marker, fn)
+		text, err := formatComponent(dt, marker, fn, v)
 		if err != nil {
 			return "", err
 		}
@@ -790,7 +790,7 @@ const dateComponents = "YMDdFWwEC"
 const timeComponents = "HhPmsf"
 
 // formatComponent renders one [component]presentation marker.
-func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error) {
+func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version) (string, error) {
 	if marker == "" {
 		return "", fmt.Errorf("FOFD1340: empty component in picture")
 	}
@@ -941,7 +941,7 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string) (string, error)
 		whole := new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom()).Int64()
 		return num(whole)
 	case 'f':
-		return fractionalSeconds(dt, pres, width)
+		return fractionalSeconds(dt, pres, width, v)
 	case 'P':
 		half := "am"
 		if dt.Hour >= 12 {
@@ -1366,7 +1366,7 @@ func inDigitFamily(s string, zero rune) string {
 // Padding for this component is by *appending* zeroes rather than prepending
 // them, because the digits are read left to right from the point: a minimum
 // width of 3 turns ".5" into "500", not "005".
-func fractionalSeconds(dt *xdm.DateTime, pres, width string) (string, error) {
+func fractionalSeconds(dt *xdm.DateTime, pres, width string, v Version) (string, error) {
 	// The presentation modifier is a digit pattern, mirrored: a fraction is
 	// read away from the point, so its optional digits trail the mandatory
 	// ones. "[f99#]" is two required places and a third if the value has it;
@@ -1426,22 +1426,46 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string) (string, error) {
 	frac := new(big.Rat).Sub(dt.Second,
 		new(big.Rat).SetInt(new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom())))
 
-	// The fraction is *truncated* at the maximum width, not rounded: the
-	// digits of a fractional second are the digits the value has, and the
-	// component shows as many of them as the width allows. [f,2-2] on .456 is
-	// "45", which the suite asserts in six places — rounding it to "46" would
-	// report a time that did not occur.
+	// Whether the fraction rounds or truncates at the maximum width depends
+	// on the version, and the two suites disagree because the rule changed
+	// under them.
+	//
+	// The published F&O text says the value "is rounded to the specified size
+	// as if by applying the function round-half-to-even(fractional-seconds,
+	// max-width)". Erratum 29749 reversed that to truncation, and the suites
+	// pin where the boundary falls: the XSLT case format-date-002 is scoped
+	// XSLT20 and wants the rounding, while its twin format-date-002a is
+	// XSLT30+ and is annotated "Rounding rules for fractional seconds change
+	// in XPath 3.1". So 2.0 rounds and everything later truncates.
+	//
+	// The cut is at 3.0 rather than 3.1 because the QT3 format-dateTime
+	// cases carrying the erratum ("Bug 29749") sit in a file scoped XP30+
+	// and were never re-scoped, unlike their format-time twins which were
+	// given XP31+ individually. Truncating from 3.0 satisfies both spellings;
+	// truncating only from 3.1 leaves those eight failing.
+	//
+	// Truncation is what a fractional second means once the erratum landed:
+	// the digits shown are the digits the value has, and rounding .46 up to
+	// .5 reports a time that did not occur.
+	truncate := v.AtLeast30()
 	places := max
 	if places <= 0 {
 		// No maximum: render enough places to hold the value exactly, since a
 		// fraction stored as a rational always terminates in decimal here.
 		places = 9
 	}
-	// One extra place, then drop it: FloatString rounds, so the truncation is
-	// done by asking for more than is wanted and cutting.
-	s := frac.FloatString(places + 1)
-	if i := strings.IndexByte(s, '.'); i >= 0 && len(s)-i-1 > places {
-		s = s[:len(s)-1]
+	var s string
+	if truncate {
+		// One extra place, then drop it: FloatString rounds, so the
+		// truncation is done by asking for more than is wanted and cutting.
+		s = frac.FloatString(places + 1)
+		if i := strings.IndexByte(s, '.'); i >= 0 && len(s)-i-1 > places {
+			s = s[:len(s)-1]
+		}
+	} else {
+		// FloatString rounds half away from zero rather than half to even,
+		// so the tie is corrected explicitly.
+		s = roundHalfToEvenFrac(frac, places)
 	}
 	if i := strings.IndexByte(s, '.'); i >= 0 {
 		s = s[i+1:]
@@ -2541,4 +2565,39 @@ func padSequence(s, width string) string {
 		return s + strings.Repeat(" ", min-len([]rune(s)))
 	}
 	return s
+}
+
+// roundHalfToEvenFrac renders r to places decimal digits, rounding halves to
+// the even digit.
+//
+// big.Rat.FloatString rounds half away from zero, which differs from the rule
+// F&O 9.8.4.2 names for fractional seconds. The difference shows only on an
+// exact tie, so the tie is detected and corrected rather than the whole
+// rendering reimplemented: scale by 10^places, and when the remainder is
+// exactly half the divisor, round to whichever of the two neighbours is even.
+func roundHalfToEvenFrac(r *big.Rat, places int) string {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(places)), nil)
+	num := new(big.Int).Mul(r.Num(), scale)
+	q, rem := new(big.Int).QuoRem(num, r.Denom(), new(big.Int))
+	// Compare twice the remainder with the denominator to find the tie
+	// without leaving integer arithmetic.
+	twice := new(big.Int).Abs(rem)
+	twice.Lsh(twice, 1)
+	switch twice.Cmp(new(big.Int).Abs(r.Denom())) {
+	case 1:
+		q.Add(q, big.NewInt(1))
+	case 0:
+		// The exact tie: keep q when it is already even, step up when it is
+		// odd. This is the only place the rule differs from FloatString.
+		if q.Bit(0) == 1 {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	digits := q.String()
+	// Left-pad to the requested width so that .05 at two places is "05"
+	// rather than "5", which the caller reads positionally.
+	for len(digits) < places {
+		digits = "0" + digits
+	}
+	return "." + digits
 }
