@@ -1053,6 +1053,13 @@ func (t *Tree) assign(n *Node) {
 	}
 }
 
+// HasPositions reports whether the tree was parsed with TrackPositions, and so
+// can answer Node.Position for the elements it holds.
+//
+// A caller that caches trees needs it: one parsed without positions cannot
+// serve a request that needs them, and the only way to tell is to ask.
+func (t *Tree) HasPositions() bool { return t != nil && t.src != "" }
+
 // positionAt converts a byte offset into a 1-based line and column.
 //
 // Column is counted in bytes, not runes: the offsets come from the XML

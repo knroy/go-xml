@@ -172,7 +172,8 @@ func (r *FileResolver) ResolveModule(href, base string) (*xdm.Node, string, erro
 	if err != nil {
 		return nil, "", err
 	}
-	tree, err := r.load(path)
+	// A stylesheet module keeps its source positions; see load.
+	tree, err := r.loadTracked(path, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -224,11 +225,33 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 // return the *same* node for the same URI within one execution, so that
 // "doc('x') is doc('x')" is true. Re-parsing would break node identity.
 func (r *FileResolver) load(path string) (*xdm.Tree, error) {
+	return r.loadTracked(path, false)
+}
+
+// loadTracked is load, saying whether the parsed tree should remember where
+// each element was written.
+//
+// Positions are kept for stylesheet modules and not for source documents. A
+// module needs them because XSLT 3.0 §8.3 publishes the line an error was
+// raised on to an xsl:catch clause as $err:line-number, and there is nothing
+// else that can answer. A source document does not: retaining the text for
+// every document a transform reads costs memory on all of them to serve
+// gx:line-number(), which almost nothing calls. catalog-007 is the case that
+// settles it -- it reads several thousand stylesheets through fn:document,
+// and tracking positions on all of them pushed the run past its deadline.
+func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if t, ok := r.cache[path]; ok {
-		return t, nil
+		// A cached tree serves a request that does not need more than it
+		// has. Only a module asking for positions of a tree parsed without
+		// them has to go back to the file: node identity matters for fn:doc,
+		// which is the untracked side, and a module is compiled once before
+		// any expression can hold a node from it.
+		if !trackPos || t.HasPositions() {
+			return t, nil
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -249,16 +272,9 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 		// from that URI; a temporary tree gets a base URI from its
 		// stylesheet and no document URI at all, which is the distinction
 		// fn:document-uri exists to make.
-		DocumentURI:  fileURIOf(path),
-		AllowDOCTYPE: r.AllowDOCTYPE,
-		// A stylesheet module needs its positions kept: XSLT 3.0 section 8.3
-		// publishes the line an error was raised on to an xsl:catch clause as
-		// $err:line-number, and that can only be answered from the position
-		// of the instruction in the source. The cost is paid once per module
-		// at compile time. This resolver also loads source documents, for
-		// fn:document and fn:doc, and they are tracked too — gx:line-number()
-		// reports on those.
-		TrackPositions: true,
+		DocumentURI:    fileURIOf(path),
+		AllowDOCTYPE:   r.AllowDOCTYPE,
+		TrackPositions: trackPos,
 	}
 	if r.ExternalEntities {
 		opts.ExternalEntities = r

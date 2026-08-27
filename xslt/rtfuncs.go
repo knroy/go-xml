@@ -663,16 +663,34 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 			if err != nil {
 				return nil, err
 			}
-			if !supportedInstructions[local] {
+			def, ok := xsltElements[local]
+			if !ok {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}
-			// An instruction XSLT 3.0 introduced is not available to a
-			// stylesheet declaring an earlier version, whatever this engine
-			// implements. try-013 is that test: it asks about xsl:try and
-			// xsl:catch from a version="2.0" stylesheet and requires false
-			// for both, because the whole point of asking is to find out
-			// whether the instruction may be used here.
-			if instructionsSince30[local] && !ctx.Version.AtLeast31() {
+			// §24.2.2 answers for "an XSLT element that is defined in this
+			// specification and implemented by the XSLT processor" -- ANY
+			// element, not only an instruction. Its own note records that this
+			// is a change: "In earlier versions of this specification,
+			// element-available was defined to return true only for elements
+			// classified as instructions ... in XSLT 3.0 the effect of the
+			// function has therefore been aligned to do what its name might
+			// suggest."
+			//
+			// So which rule applies follows the PROCESSOR, not the module.
+			// function-0302 and function-0302b are one file, version="2.0",
+			// run under both: the 2.0 catalog asserts
+			// element-available('xsl:key') is false and the 3.0 catalog
+			// asserts it is true. Only a 2.0 processor answers by the old rule.
+			if !runProcessorAtLeast30(ctx) && !isInstruction(local) {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			// An element XSLT 3.0 introduced is not available to a stylesheet
+			// declaring an earlier version, whatever this engine implements.
+			// try-013 is that test: it asks about xsl:try and xsl:catch from a
+			// version="2.0" stylesheet and requires false for both, because
+			// the whole point of asking is to find out whether the element may
+			// be used here.
+			if def.since30 && !ctx.Version.AtLeast31() {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}
 			return xdm.One(xdm.NewBoolean(true)), nil
@@ -680,45 +698,22 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 	})
 }
 
-// supportedInstructions backs fn:element-available.
-var supportedInstructions = map[string]bool{
-	"apply-templates": true, "call-template": true, "value-of": true,
-	"for-each": true, "for-each-group": true, "if": true, "choose": true,
-	"variable": true, "element": true, "attribute": true, "comment": true,
-	"processing-instruction": true, "copy": true, "copy-of": true,
-	"sequence": true, "text": true, "message": true, "analyze-string": true,
-	"number": true,
-	// XSLT 3.0. xsl:catch is listed even though it is not an instruction in
-	// its own right: element-available answers for any XSLT element name, and
-	// try-012 asks about both halves of the pair.
-	"try": true, "catch": true,
-	"on-empty": true, "on-non-empty": true, "where-populated": true,
-	"fork":    true,
-	"iterate": true, "break": true, "next-iteration": true,
-	"evaluate": true,
-	"map":      true, "map-entry": true,
-	"source-document": true, "context-item": true,
-	// xsl:merge and its three companions. The last three are not instructions
-	// in their own right, but element-available answers for any XSLT element
-	// name and a stylesheet asking about the set asks about all four.
-	"merge": true, "merge-source": true, "merge-key": true, "merge-action": true,
-}
-
-// instructionsSince30 are the entries above that XSLT 3.0 introduced.
+// runProcessorAtLeast30 reports whether the processor running this transform
+// implements XSLT 3.0, as distinct from what the module's own @version says.
 //
-// Kept as a second set rather than a field on the first because
-// supportedInstructions answers "does this engine implement it" and this
-// answers "may this stylesheet use it" -- two questions that happen to share
-// a key and would be confusing to conflate under one name.
-var instructionsSince30 = map[string]bool{
-	"try": true, "catch": true,
-	"on-empty": true, "on-non-empty": true, "where-populated": true,
-	"fork":    true,
-	"iterate": true, "break": true, "next-iteration": true,
-	"evaluate": true,
-	"map":      true, "map-entry": true,
-	"source-document": true, "context-item": true,
-	"merge": true, "merge-source": true, "merge-key": true, "merge-action": true,
+// Distinct from processorAtLeast30 in message30.go, which answers the same
+// question about the compilation in progress from package state that is only
+// live during Compile. This one is asked while the transform runs, long after
+// that state has been cleared, so it reads the ceiling the stylesheet kept.
+func runProcessorAtLeast30(ctx *xpath.Context) bool {
+	rt, ok := runtimeFrom(ctx)
+	if !ok || rt.sheet == nil {
+		// No runtime means the expression is being evaluated outside a
+		// transform -- a use-when, say. Nothing there has declared a lower
+		// ceiling, so the full processor answers.
+		return true
+	}
+	return rt.sheet.maxVersion == 0 || rt.sheet.maxVersion >= 3.0
 }
 
 // generateID returns a stable identifier for a node.
