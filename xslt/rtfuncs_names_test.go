@@ -18,6 +18,7 @@ func TestRuntimeFuncNamesMatchRegistration(t *testing.T) {
 	lib := xpath.NewLibrary(nil)
 	registerRuntimeFuncs(lib, nil)
 	registerGroupingFuncs(lib)
+	registerMergeFuncs(lib)
 
 	// Every name the list claims must really be registered at some arity.
 	for name := range runtimeFuncNames {
@@ -36,6 +37,7 @@ func TestRuntimeFuncNamesMatchRegistration(t *testing.T) {
 		"current", "current-group", "current-grouping-key", "document",
 		"element-available", "function-available", "generate-id", "key",
 		"regex-group", "system-property", "type-available",
+		"current-merge-group", "current-merge-key",
 	} {
 		if !runtimeFuncNames[name] {
 			t.Errorf("registerRuntimeFuncs binds %q, but runtimeFuncNames omits it", name)

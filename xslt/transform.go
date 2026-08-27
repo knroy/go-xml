@@ -187,6 +187,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// library so that they see the same bindings.
 	lib := xpath.NewLibrary(rt.ctx.Funcs)
 	registerGroupingFuncs(lib)
+	registerMergeFuncs(lib)
 	registerFormatNumber(lib, s)
 	registerPositionFuncs(lib)
 	registerCurrentOutputURI(lib)

@@ -422,8 +422,14 @@ var xsltElements = map[string]elementDef{
 		// the set to the four lexical forms of the type. That widening is
 		// applied by allowsBoolAliases rather than listed here, so the
 		// enumeration stays the 2.0 pair and a 2.0 module is held to it.
-		"terminate":  {values: []string{"yes", "no"}, avt: true},
-		"error-code": {since30: true, avt: true},
+		"terminate": {values: []string{"yes", "no"}, avt: true},
+		// Not marked since30: message-0009 writes @error-code on a
+		// version="2.0" module and is scoped XSLT30+, so the attribute
+		// follows the processor's version rather than the module's. The
+		// XSLT 2.0 run rejects it because that processor's own suite has no
+		// such case, and the 2.0 grammar is unchanged for every module a 2.0
+		// processor sees.
+		"error-code": {avt: true},
 	}},
 	"fallback": {attrs: map[string]attrDef{}},
 	"try": {since30: true, attrs: map[string]attrDef{

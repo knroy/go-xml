@@ -718,7 +718,11 @@ func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
 func (rt *runtime) clearFunctionContext() *runtime {
 	sub := rt.withVar(regexGroupsVar, nil)
 	sub = sub.withVar(currentGroupVar, nil)
-	return sub.withVar(currentGroupingKeyVar, nil)
+	sub = sub.withVar(currentGroupingKeyVar, nil)
+	// 15.6 adds the merging pair to the same list of what an invocation
+	// construct clears, so a stylesheet function called from an
+	// xsl:merge-action sees neither of them.
+	return sub.clearMergeContext()
 }
 
 // clearRegexGroups empties the current captured substrings.

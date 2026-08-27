@@ -159,7 +159,15 @@ func splitTopLevel(s string, sep byte) []string {
 // parse but are not legal patterns.
 func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, error) {
 	allow30 := patternsAllow30(ns)
-	expr, err := xpath.Parse(src, ns)
+	// The version decides what the grammar admits, here as everywhere else:
+	// a predicate may contain any expression, and "instance of map(*)" names
+	// an item type that exists only in 3.1. Parsing every pattern as 2.0
+	// rejected such a predicate before the pattern machinery saw it.
+	v := xpath.XPath20
+	if r, ok := ns.(*nsResolver); ok {
+		v = r.xpathVersion
+	}
+	expr, err := xpath.ParseVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}
@@ -986,6 +994,11 @@ func checkNoGroupingFuncs(src string) error {
 	for _, fn := range []struct{ name, code string }{
 		{"current-group", "XTSE1060"},
 		{"current-grouping-key", "XTSE1070"},
+		// 15.6.1 and 15.6.2 give the merging pair codes of their own for the
+		// same condition: a pattern is matched with the merge state absent,
+		// so a call on either inside one could only ever fail.
+		{"current-merge-group", "XTSE3470"},
+		{"current-merge-key", "XTSE3500"},
 	} {
 		if callsFunction(src, fn.name) {
 			return fmt.Errorf(

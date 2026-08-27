@@ -67,6 +67,8 @@ var runtimeFuncNames = map[string]bool{
 	"current":              true,
 	"current-group":        true,
 	"current-grouping-key": true,
+	"current-merge-group":  true,
+	"current-merge-key":    true,
 	"document":             true,
 	"element-available":    true,
 	"function-available":   true,
@@ -571,6 +573,10 @@ var supportedInstructions = map[string]bool{
 	"evaluate": true,
 	"map":      true, "map-entry": true,
 	"source-document": true, "context-item": true,
+	// xsl:merge and its three companions. The last three are not instructions
+	// in their own right, but element-available answers for any XSLT element
+	// name and a stylesheet asking about the set asks about all four.
+	"merge": true, "merge-source": true, "merge-key": true, "merge-action": true,
 }
 
 // instructionsSince30 are the entries above that XSLT 3.0 introduced.
@@ -586,6 +592,7 @@ var instructionsSince30 = map[string]bool{
 	"evaluate": true,
 	"map":      true, "map-entry": true,
 	"source-document": true, "context-item": true,
+	"merge": true, "merge-source": true, "merge-key": true, "merge-action": true,
 }
 
 // generateID returns a stable identifier for a node.

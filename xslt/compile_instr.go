@@ -659,6 +659,7 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 	// have moved off the unnamed one. Reading it here rather than defaulting
 	// instr.mode to "" is what makes "<out xsl:default-mode='a'>" govern the
 	// xsl:apply-templates written inside it.
+	instr.atomicOK = patternsAllow30(ns)
 	// @default-mode on the instruction itself takes precedence over one
 	// inherited from an ancestor, being nearer.
 	if dm, err := defaultModeAt(n); err != nil {

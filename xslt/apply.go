@@ -18,6 +18,12 @@ type applyTemplatesInstr struct {
 	mode   string
 	params []*Variable
 	sorts  []*sortKey
+	// atomicOK records that the instruction was written in an XSLT 3.0
+	// module, where the selection may hold atomic values as well as nodes.
+	// A 2.0 module must still get XTTE0520 for one: 2.0 has no pattern that
+	// can match an atomic value, so accepting it would silently drop the
+	// item the author meant to process.
+	atomicOK bool
 }
 
 func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -28,14 +34,18 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 		seq = v
-		// XTTE0520: the select expression must yield nodes. An atomic value
-		// among them has no template to match it, and processing it silently
-		// would drop it rather than report the mistake.
-		for _, it := range seq {
-			if _, ok := it.(*xdm.Node); !ok {
-				return fmt.Errorf(
-					"XTTE0520: xsl:apply-templates/@select returned an item "+
-						"that is not a node (%s)", it.TypeName())
+		// XTTE0520: in XSLT 2.0 the select expression must yield nodes. An
+		// atomic value among them has no template to match it, and
+		// processing it silently would drop it rather than report the
+		// mistake. XSLT 3.0 added the ".[E]" pattern, which can match one,
+		// so a 3.0 module dispatches on atomic values instead.
+		if !i.atomicOK {
+			for _, it := range seq {
+				if _, ok := it.(*xdm.Node); !ok {
+					return fmt.Errorf(
+						"XTTE0520: xsl:apply-templates/@select returned an item "+
+							"that is not a node (%s)", it.TypeName())
+				}
 			}
 		}
 	} else {
@@ -74,10 +84,14 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		node, ok := it.(*xdm.Node)
 		if !ok {
-			// Atomic values in the selection are copied through, since there
-			// is no template to match them against.
-			if a, isAtomic := it.(*xdm.Atomic); isAtomic {
-				out.appendValue(a)
+			// An atomic value is dispatched like a node, against the ".[E]"
+			// patterns that can match one. Its built-in rule, section 6.7.1,
+			// is to copy it to the result — which is also what a 2.0 module
+			// did for the values it let through.
+			sub := rt.withCurrent(it, idx+1, size)
+			if err := applyToAtomic(sub, it, i.effectiveMode(rt),
+				params, tunnels, out); err != nil {
+				return err
 			}
 			continue
 		}
