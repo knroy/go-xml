@@ -405,6 +405,11 @@ func registerContextFuncs(l *Library) {
 	// other error() call.
 	l.registerFn("error", []int{0, 1, 2, 3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		code := "FOER0000"
+		// The full QName is kept alongside the local name because XSLT 3.0's
+		// $err:code is an xs:QName: xsl:catch compares it with one the
+		// stylesheet built itself, and a code reduced to its local name would
+		// never be equal to a QName in a namespace of the caller's choosing.
+		var codeQName *xdm.QName
 		// error(()) is XPTY0004 up to 3.0 and FOER0000 from 3.1. The
 		// parameter is xs:QName? either way, so the empty sequence is always
 		// in its type; what changed is whether the one-argument form insists
@@ -428,6 +433,7 @@ func registerContextFuncs(l *Library) {
 			}
 			if q := a.QName(); q != nil && q.Local != "" {
 				code = q.Local
+				codeQName = q
 			}
 		}
 		msg := "error() called"
@@ -436,7 +442,11 @@ func registerContextFuncs(l *Library) {
 				msg = s
 			}
 		}
-		return nil, xdm.Errorf(code, "%s", msg)
+		e := &xdm.Error{Code: code, Message: msg, CodeName: codeQName}
+		if len(args) > 2 {
+			e.Value = args[2]
+		}
+		return nil, e
 	})
 
 	// The label became optional in 3.1, so the one-argument form is the same

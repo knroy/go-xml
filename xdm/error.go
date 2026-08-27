@@ -30,6 +30,16 @@ type Error struct {
 	Message string
 	// Err is an underlying cause, if any.
 	Err error
+	// CodeName is the full QName of the code, when the error came from
+	// fn:error with a QName naming a namespace other than the standard error
+	// one. Code alone cannot carry it, and XSLT 3.0's $err:code is a QName.
+	CodeName *QName
+	// Value is the error object fn:error was given as its third argument.
+	//
+	// It exists for XSLT 3.0's xsl:catch, which exposes it as $err:value. Only
+	// fn:error can supply one, so it is nil on every error the engine raises
+	// itself, which is exactly the empty sequence the spec requires there.
+	Value Sequence
 }
 
 func (e *Error) Error() string {

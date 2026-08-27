@@ -110,12 +110,28 @@ var xsltElements = map[string]elementDef{
 	"preserve-space": {attrs: map[string]attrDef{
 		"elements": {required: true},
 	}},
+	"accumulator": {attrs: map[string]attrDef{
+		"name":          {required: true},
+		"initial-value": {required: true},
+		"as":            {},
+		"streamable":    {values: []string{"yes", "no"}},
+	}},
+	"accumulator-rule": {attrs: map[string]attrDef{
+		"match":    {required: true},
+		"phase":    {values: []string{"start", "end"}},
+		"select":   {},
+		"priority": {},
+	}},
 	"template": {attrs: map[string]attrDef{
 		"match":    {},
 		"name":     {},
 		"priority": {},
 		"mode":     {},
 		"as":       {},
+		// XSLT 3.0 section 3.5: a package declaration states whether it is
+		// visible outside the package. Accepted and ignored — this processor
+		// compiles a package as a stylesheet, where everything is visible.
+		"visibility": {values: []string{"public", "private", "final", "abstract", "hidden"}},
 	}},
 	"apply-templates": {attrs: map[string]attrDef{
 		"select": {},
@@ -134,10 +150,17 @@ var xsltElements = map[string]elementDef{
 		"test": {required: true},
 	}},
 	"otherwise": {attrs: map[string]attrDef{}},
+	// static marks a declaration whose value is computed before the
+	// stylesheet is analysed; see static.go. It is meaningful only on a
+	// top-level declaration, and 9.5 makes it XTSE0020 anywhere else — a
+	// rule the element grammar cannot state, since it does not know where in
+	// the tree the element sits, so it is checked with the other static
+	// errors.
 	"variable": {attrs: map[string]attrDef{
 		"name":   {required: true},
 		"select": {},
 		"as":     {},
+		"static": {values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"param": {attrs: map[string]attrDef{
 		"name":     {required: true},
@@ -145,6 +168,7 @@ var xsltElements = map[string]elementDef{
 		"as":       {},
 		"required": {values: []string{"yes", "no"}},
 		"tunnel":   {values: []string{"yes", "no"}},
+		"static":   {values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"call-template": {attrs: map[string]attrDef{
 		"name": {required: true},
@@ -333,6 +357,26 @@ var xsltElements = map[string]elementDef{
 		"terminate": {values: []string{"yes", "no"}, avt: true},
 	}},
 	"fallback": {attrs: map[string]attrDef{}},
+	"try": {attrs: map[string]attrDef{
+		"select":          {},
+		"rollback-output": {values: []string{"yes", "no"}},
+	}},
+	"catch": {attrs: map[string]attrDef{
+		"errors": {},
+		"select": {},
+	}},
+	// xsl:source-document reads a document by URI and evaluates its body with
+	// that document as the context item. streamable asks for streamed
+	// evaluation, which this engine does not do; 18.1 defines the result as
+	// that of the non-streaming process either way, so the attribute is
+	// accepted and the instruction evaluated conventionally.
+	"source-document": {attrs: map[string]attrDef{
+		"href":             {required: true, avt: true},
+		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"use-accumulators": {},
+		"validation":       {values: []string{"strict", "lax", "preserve", "strip"}},
+		"type":             {},
+	}},
 	"result-document": {attrs: map[string]attrDef{
 		"html-version":           {avt: true},
 		"suppress-indentation":   {avt: true},
@@ -449,6 +493,8 @@ var contentModels = map[string]contentModel{
 	"document":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"element":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"fallback":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"try":                    {seqCtor: true, pcdata: false, kids: map[string]bool{"catch": true, "fallback": true}, model: "(sequence-constructor, xsl:catch+)"},
+	"catch":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"for-each":               {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
 	"for-each-group":         {seqCtor: true, pcdata: false, kids: map[string]bool{"sort": true}, model: "(xsl:sort*, sequence-constructor)"},
 	"function":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
@@ -481,11 +527,14 @@ var contentModels = map[string]contentModel{
 	"preserve-space":         {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"processing-instruction": {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"result-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"source-document":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"sequence":               {seqCtor: false, pcdata: false, kids: map[string]bool{"fallback": true}, model: "xsl:fallback*"},
 	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
 	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+	"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
+	"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
 	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
 	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
@@ -521,6 +570,7 @@ var xsltInstructions = map[string]bool{
 	"next-iteration":         true,
 	"break":                  true,
 	"fallback":               true,
+	"try":                    true,
 	"for-each":               true,
 	"for-each-group":         true,
 	"if":                     true,
@@ -533,6 +583,7 @@ var xsltInstructions = map[string]bool{
 	"processing-instruction": true,
 	"result-document":        true,
 	"sequence":               true,
+	"source-document":        true,
 	"text":                   true,
 	"value-of":               true,
 	"variable":               true,
@@ -542,6 +593,7 @@ var xsltInstructions = map[string]bool{
 // children of xsl:stylesheet, which the syntax summary abbreviates to
 // "other-declarations" rather than naming.
 var xsltDeclarations = map[string]bool{
+	"accumulator":     true,
 	"attribute-set":   true,
 	"character-map":   true,
 	"decimal-format":  true,
@@ -608,6 +660,7 @@ var qnameAttrs = map[string]map[string]qnameAttrDef{
 	"output":          {"name": {}, "cdata-section-elements": {list: true}, "use-character-maps": {list: true}},
 	"param":           {"name": {}},
 	"result-document": {"format": {avt: true, code: "XTDE1460"}, "type": {}, "cdata-section-elements": {list: true, avt: true}, "use-character-maps": {list: true}},
+	"source-document": {"type": {}},
 	"template":        {"name": {}},
 	"variable":        {"name": {}},
 	"with-param":      {"name": {}},

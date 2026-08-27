@@ -61,6 +61,8 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 // TestRuntimeFuncNamesMatchRegistration holds the list and both registrars to
 // each other.
 var runtimeFuncNames = map[string]bool{
+	"accumulator-after":    true,
+	"accumulator-before":   true,
 	"current":              true,
 	"current-group":        true,
 	"current-grouping-key": true,
@@ -96,6 +98,19 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 3,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return fnKey(rt, ctx, args)
+		},
+	})
+
+	l.Add(xpath.Function{
+		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-before"}, Arity: 1,
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			return fnAccumulator(rt, ctx, args, false)
+		},
+	})
+	l.Add(xpath.Function{
+		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-after"}, Arity: 1,
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+			return fnAccumulator(rt, ctx, args, true)
 		},
 	})
 
@@ -334,6 +349,11 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 // than about the stylesheet or the source, so they need no runtime and are
 // legal in a context that has none.
 func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, schemaHasType func(xdm.QName) bool) {
+	// fn:available-system-properties answers from the same table
+	// fn:system-property does, and is available wherever it is -- including
+	// a use-when, which section 3.12 makes a static context like any other.
+	registerSystemPropertyFuncs(l)
+
 	// A nil resolver means there is no stylesheet to resolve prefixes
 	// against: this is the use-when library, built before the prefix map
 	// exists. system-property must not report XTDE1390 there, because it
@@ -354,7 +374,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 	}
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
-		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
 			// XTDE1390: the argument must be a valid QName. A malformed one
 			// would otherwise fall through to the empty string, which is
@@ -402,26 +422,11 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 			if uri != xdm.NSXSL {
 				return xdm.One(xdm.NewString("")), nil
 			}
-			switch local {
-			case "version":
-				return xdm.One(xdm.NewString("2.0")), nil
-			case "vendor":
-				return xdm.One(xdm.NewString("go-xml")), nil
-			case "vendor-url":
-				return xdm.One(xdm.NewString("https://github.com/knroy/go-xml")), nil
-			case "product-name":
-				return xdm.One(xdm.NewString("go-xml")), nil
-			case "product-version":
-				return xdm.One(xdm.NewString("0.1")), nil
-			case "is-schema-aware":
-				return xdm.One(xdm.NewString("no")), nil
-			case "supports-serialization":
-				return xdm.One(xdm.NewString("yes")), nil
-			case "supports-backwards-compatibility":
-				// XSLT 1.0 compatibility mode is implemented: the appendix
-				// B.1 coercion rules are in force for expressions written
-				// inside a version="1.0" scope. See compatModeAt.
-				return xdm.One(xdm.NewString("yes")), nil
+			// The table is in sysprops.go, shared with
+			// fn:available-system-properties: section 18.2 requires the two
+			// to agree, and a switch here plus a list there would drift.
+			if val, ok := systemPropertyValue(local, ctx.Version); ok {
+				return xdm.One(xdm.NewString(val)), nil
 			}
 			return xdm.One(xdm.NewString("")), nil
 		},
@@ -533,6 +538,10 @@ var supportedInstructions = map[string]bool{
 	"processing-instruction": true, "copy": true, "copy-of": true,
 	"sequence": true, "text": true, "message": true, "analyze-string": true,
 	"number": true,
+	// XSLT 3.0. xsl:catch is listed even though it is not an instruction in
+	// its own right: element-available answers for any XSLT element name, and
+	// try-012 asks about both halves of the pair.
+	"try": true, "catch": true,
 }
 
 // generateID returns a stable identifier for a node.
