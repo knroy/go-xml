@@ -45,6 +45,53 @@ abspath() {
 	esac
 }
 
+# ratchet compares a suite's passing count against the highest this repository
+# has recorded, and fails if it has gone down.
+#
+# The percentages elsewhere in this script are printed rather than asserted,
+# because a hard threshold turns every upstream suite update into a build
+# break. A ratchet does not: an update that adds cases moves the in-scope
+# count, and only the PASSING count going down is reported — which is a
+# regression however the suite changed underneath it.
+#
+# It exists because the build-and-test gate cannot see a silent revert. An
+# agent committing a stale copy of a shared file over an additive change
+# leaves a tree that compiles and a suite that still passes, because other
+# work is landing wins in parallel; the total looks plausible and nothing
+# flags it. That happened here, to commit 9843c44, and was found only by
+# accident. A number that may not go down is what catches it.
+#
+# Set GOXSLT_RATCHET=update to record a new high after a deliberate change,
+# or GOXSLT_RATCHET=off to skip the check entirely.
+RATCHET_FILE="$ROOT/tests/ratchet.txt"
+ratchet() {
+	_t=$1
+	_passed=$(printf '%s' "$2" | sed -n 's/.*in-scope: \([0-9]*\) passed.*/\1/p' | head -1)
+	[ -n "$_passed" ] || return 0
+	case "${GOXSLT_RATCHET:-on}" in
+	off) return 0 ;;
+	esac
+	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
+	if [ -n "$_best" ] && [ "$_passed" -lt "$_best" ]; then
+		fail "$_t: $_passed passing, down from $_best.
+    A passing count that went down is a regression even where the suite still
+    reports PASS. If this is deliberate, record it:
+        GOXSLT_RATCHET=update tests/check.sh"
+		return 0
+	fi
+	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
+		{ [ -n "$_passed" ] && [ -z "$_best" ]; } ||
+		{ [ -n "$_best" ] && [ "$_passed" -gt "$_best" ]; }; then
+		touch "$RATCHET_FILE"
+		_tmp="$RATCHET_FILE.tmp"
+		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
+		printf '%s %s\n' "$_t" "$_passed" >> "$_tmp"
+		sort -o "$RATCHET_FILE" "$_tmp"
+		rm -f "$_tmp"
+		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_passed"
+	fi
+}
+
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
 RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
@@ -143,6 +190,7 @@ if [ -f "$XSLTS/catalog.xml" ]; then
 		out=$(GOXSLT_XSLTS="$XSLTS" $GO test ./tests/xslts/ -count=1 -run "$t" -v 2>&1) || true
 		if printf '%s' "$out" | grep -q 'in-scope:'; then
 			printf '%s\n' "$out" | grep -E 'XSLT suite:|XSLT 3.0 suite:|in-scope:'
+			ratchet "$t" "$out"
 		else
 			fail "the XSLT suite ran but reported no summary — did it skip?"
 			printf '%s\n' "$out" | tail -5
