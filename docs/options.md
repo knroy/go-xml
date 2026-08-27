@@ -114,6 +114,7 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 | `Resolver` | `Resolver` | `FileResolver{}` | How a `schemaLocation` becomes bytes. See below. |
 | `ParseOptions` | `xdm.ParseOptions` | zero | Applied to every document the assembly reads. |
 | `LaxUPA` | `bool` | enforce | Relaxes Unique Particle Attribution. Some published schemas violate it; this loads them anyway. |
+| `XPathVersion` | `xpath.Version` | `XPath20` | The version of XPath the 1.1 assertions and conditional type alternatives are written in. See [Choosing a language version](#choosing-a-language-version). |
 
 ### Resolvers
 
@@ -222,6 +223,71 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name. |
 | `StaticParams` | `map[string]string` | none | Values for `xsl:param static="yes"`, which participate in `use-when` and so must be known at compile time. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
+| `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
+
+### Choosing a language version
+
+Three languages meet in this library and each picks its version differently,
+because each is asked a different question.
+
+**XSLT** is chosen by the stylesheet. The `version` attribute says which
+language the stylesheet is written in, and the engine believes it. A version
+this processor does not know is read as the highest it does, which is what
+forwards compatibility means.
+
+**XPath inside a stylesheet** follows from that, and not as the identity you
+might expect:
+
+| Stylesheet `version` | XPath compiled |
+|---|---|
+| `1.0` | XPath 2.0, under the 1.0 backwards-compatibility rules |
+| `2.0` | XPath 2.0 |
+| `3.0` | **XPath 3.1** |
+
+XSLT 3.0 section 2.2 requires an XPath 3.1 processor, so `version="3.0"` gets
+maps, arrays and the lookup operator, not merely the 3.0 additions. Such a
+stylesheet also gets the `map:`, `array:`, `math:` and `err:` prefixes
+predeclared, per section 3.1 — a stylesheet that binds one itself still wins.
+
+The version is *static per element*, exactly like the base URI and the default
+collation, so an included 2.0 module keeps its own answer inside a 3.0
+stylesheet rather than inheriting the importing module's.
+
+**XPath inside a schema** does not follow from anything, because a schema
+document states no XPath version anywhere. It is XPath 2.0, which is what XSD
+1.1 requires: assertions are defined against a subset of 2.0.
+
+`XPathVersion` overrides the derivation in both directions:
+
+```go
+// Hold an untrusted stylesheet down to the smaller language, whatever it
+// declares.
+v := xpath.XPath20
+sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{XPathVersion: &v})
+
+// Let assertions in your own schemas use the 3.1 function library.
+schema, err := xsd.LoadFile("main.xsd", xsd.Options{
+    Version:      xsd.Version11,
+    XPathVersion: xpath.XPath31,
+})
+```
+
+Setting it is a deliberate departure from conformance, which is why nothing
+sets it implicitly. Raising a version makes a document this engine's rather
+than every engine's: a stylesheet or schema that relies on a construct its
+declared version does not have will be rejected by any other conforming
+processor. Lowering one is the safer direction — it narrows the surface a
+document you did not write can reach.
+
+On the command line the same choice is `-xpath-version`:
+
+```sh
+go-xml -xsl sheet.xsl -xpath-version 2.0 in.xml
+go-xml validate -xsd s.xsd -xsd-version 1.1 -xpath-version 3.1 in.xml
+```
+
+For the transform it defaults to deriving from the stylesheet; for `validate`
+it defaults to `2.0`, since there is nothing in a schema to derive it from.
 
 ---
 

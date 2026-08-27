@@ -62,6 +62,12 @@ func run() error {
 				"XXE surface; it also requires -allow-doctype)")
 		allowUnparsedText = flag.Bool("allow-unparsed-text", false,
 			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
+		xpathVersion = flag.String("xpath-version", "",
+			"XPath version for the stylesheet's expressions: 2.0, 3.0 or 3.1. "+
+				"Empty derives it from the stylesheet's own version attribute, "+
+				"which is what conformance requires; setting it overrides the "+
+				"stylesheet in either direction")
+
 		backtrackRegex = flag.Bool("backtracking-regex", false,
 			"evaluate regular expressions whose backreferences the default "+
 				"engine cannot decide, using a backtracking matcher that has no "+
@@ -188,7 +194,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	// keyed on the setting, so this cannot serve a stale compilation.
 	xpath.SetBacktrackingRegex(*backtrackRegex)
 
-	sheet, err := compileStylesheet(*sheetPath, resolver)
+	sheet, err := compileStylesheet(*sheetPath, resolver, *xpathVersion)
 	if err != nil {
 		return err
 	}
@@ -262,7 +268,8 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	return nil
 }
 
-func compileStylesheet(path string, resolver *xslt.FileResolver) (*xslt.Stylesheet, error) {
+func compileStylesheet(path string, resolver *xslt.FileResolver,
+	xpathVersion string) (*xslt.Stylesheet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -272,9 +279,14 @@ func compileStylesheet(path string, resolver *xslt.FileResolver) (*xslt.Styleshe
 	if err != nil {
 		return nil, fmt.Errorf("parsing stylesheet: %w", err)
 	}
+	v, err := parseXPathVersion(xpathVersion)
+	if err != nil {
+		return nil, err
+	}
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{
-		Resolver: resolver,
-		BaseURI:  abs,
+		Resolver:     resolver,
+		BaseURI:      abs,
+		XPathVersion: v,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compiling stylesheet: %w", err)
@@ -450,4 +462,27 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 		}
 	}
 	return nil
+}
+
+// parseXPathVersion reads the -xpath-version flag.
+//
+// The empty string is nil rather than a default version, because "derive it
+// from the stylesheet" is a different instruction from "use 2.0": a
+// version="3.0" stylesheet must get XPath 3.1 when the flag is unset.
+func parseXPathVersion(s string) (*xpath.Version, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var v xpath.Version
+	switch s {
+	case "2.0":
+		v = xpath.XPath20
+	case "3.0":
+		v = xpath.XPath30
+	case "3.1":
+		v = xpath.XPath31
+	default:
+		return nil, fmt.Errorf("-xpath-version %q: expected 2.0, 3.0 or 3.1", s)
+	}
+	return &v, nil
 }

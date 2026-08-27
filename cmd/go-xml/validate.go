@@ -10,6 +10,7 @@ import (
 
 	"github.com/knroy/go-xml/relaxng"
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 	"github.com/knroy/go-xml/xsd"
 )
 
@@ -28,6 +29,10 @@ func runValidate(args []string) error {
 			"RELAX NG schema to validate against")
 		version = fs.String("xsd-version", "1.0",
 			"XSD version to apply: 1.0 or 1.1")
+		xpathVersion = fs.String("xpath-version", "2.0",
+			"XPath version for XSD 1.1 assertions and type alternatives: "+
+				"2.0, 3.0 or 3.1. 2.0 is what the specification requires; "+
+				"raising it makes a schema this engine's rather than portable")
 		allowDoctype = fs.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the instance documents and expand the entities "+
 				"it declares internally")
@@ -75,7 +80,8 @@ Exit status: 0 if every document is valid, 1 otherwise.
 		return errors.New("no instance documents given")
 	}
 
-	validate, err := schemaValidator(*xsdPaths, *rngPath, *version, *root, *maxErrors)
+	validate, err := schemaValidator(*xsdPaths, *rngPath, *version, *xpathVersion,
+		*root, *maxErrors)
 	if err != nil {
 		return err
 	}
@@ -114,7 +120,8 @@ Exit status: 0 if every document is valid, 1 otherwise.
 
 // schemaValidator compiles the schema once and returns the check to run per
 // document, so that a run over many instances pays for the schema once.
-func schemaValidator(xsdPaths, rngPath, version, root string, maxErrors int) (
+func schemaValidator(xsdPaths, rngPath, version, xpathVersion, root string,
+	maxErrors int) (
 	func(*xdm.Node) error, error) {
 
 	if rngPath != "" {
@@ -147,10 +154,23 @@ func schemaValidator(xsdPaths, rngPath, version, root string, maxErrors int) (
 		return nil, fmt.Errorf("-xsd-version %q: expected 1.0 or 1.1", version)
 	}
 
+	xv, err := parseXPathVersion(xpathVersion)
+	if err != nil {
+		return nil, err
+	}
+	// Unlike the transform's flag, this one has a real default rather than
+	// "derive it": a schema document states no XPath version anywhere, so
+	// there is nothing to derive it from.
+	var xvv xpath.Version
+	if xv != nil {
+		xvv = *xv
+	}
+
 	paths := strings.Split(xsdPaths, ",")
 	schema, err := xsd.LoadFiles(paths, xsd.Options{
-		Resolver: &xsd.FileResolver{Root: root},
-		Version:  v,
+		Resolver:     &xsd.FileResolver{Root: root},
+		Version:      v,
+		XPathVersion: xvv,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("loading schema: %w", err)
