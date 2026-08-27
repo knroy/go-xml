@@ -721,6 +721,15 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 		// 3.5's default is "*", every version.
 		u.versions = "*"
 	}
+	// The range is checked against the grammar before it is matched against
+	// anything, because a malformed range and an unsatisfied one are
+	// different errors: 3.5.2 requires the attribute to "conform to the rules
+	// for a PackageVersionRange", and a value that does not is XTSE0020,
+	// where a well-formed range that no available package satisfies is the
+	// XTSE3000 below.
+	if err := checkPackageVersionRange(u.versions); err != nil {
+		return nil, err
+	}
 	order := 0
 	for _, ch := range el.ChildElements() {
 		switch {
@@ -1550,4 +1559,150 @@ func setAttr(el *xdm.Node, name, value string) {
 		Value:  value,
 		Parent: el,
 	})
+}
+
+// checkPackageVersionRange applies the PackageVersionRange grammar of 3.5.1
+// to an xsl:use-package/@package-version attribute.
+//
+//	PackageVersionRange ::= AnyVersion | VersionRanges
+//	AnyVersion          ::= "*"
+//	VersionRanges       ::= VersionRange (S? "," S? VersionRange)*
+//	VersionRange        ::= PackageVersion | VersionPrefix |
+//	                        VersionFrom | VersionTo | VersionFromTo
+//	VersionPrefix       ::= PackageVersion ".*"
+//	VersionFrom         ::= PackageVersion "+"
+//	VersionTo           ::= "to" S (PackageVersion | VersionPrefix)
+//	VersionFromTo       ::= PackageVersion S "to" S (PackageVersion | VersionPrefix)
+//
+// The check is separate from the matching itself because a range that no
+// available package satisfies is XTSE3000 -- "no package can be located" --
+// while a range that is not a range at all is XTSE0020, the generic "attribute
+// value is invalid" error. The suite draws the line sharply: use-package-291
+// through -294 write "2.0.0-alpha:beta", "TotallyInvalid", "-3.6" and
+// "-alpha", and all four want XTSE0020 even though a resolver that simply
+// failed to match them would have reported XTSE3000 instead.
+func checkPackageVersionRange(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "*" {
+		return nil
+	}
+	for _, alt := range strings.Split(v, ",") {
+		if err := checkVersionRange(strings.TrimSpace(alt)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkVersionRange applies the VersionRange production to one alternative.
+func checkVersionRange(alt string) error {
+	bad := func() error {
+		return fmt.Errorf(
+			"XTSE0020: %q is not a valid package version range in "+
+				"xsl:use-package/@package-version", alt)
+	}
+	// "to X" is the only form that opens with a keyword, so it is recognised
+	// before anything is read as a version. The space after "to" is required
+	// by the grammar -- "to" is a terminal followed by S -- which is what
+	// keeps "to" itself from being read as an NCName-only version.
+	if rest, ok := cutVersionKeyword(alt, "to"); ok {
+		return checkVersionOrPrefix(rest, bad)
+	}
+	// VersionFromTo puts the keyword between two versions. It is looked for
+	// before the single-version forms because "1 to 5" would otherwise fail
+	// as a version containing a space.
+	if lo, hi, ok := cutVersionFromTo(alt); ok {
+		if err := checkPackageVersion(lo, bad); err != nil {
+			return err
+		}
+		return checkVersionOrPrefix(hi, bad)
+	}
+	// VersionFrom is a version with "+" appended.
+	if s, ok := strings.CutSuffix(alt, "+"); ok {
+		return checkPackageVersion(s, bad)
+	}
+	return checkVersionOrPrefix(alt, bad)
+}
+
+// cutVersionKeyword splits off a leading keyword that the grammar requires to
+// be followed by whitespace.
+func cutVersionKeyword(s, kw string) (string, bool) {
+	if !strings.HasPrefix(s, kw) {
+		return "", false
+	}
+	rest := s[len(kw):]
+	if rest == "" || !isXMLSpace(rest[0]) {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// cutVersionFromTo splits "V1 to V2" at the keyword.
+//
+// The keyword has to be delimited by whitespace on both sides, because "to"
+// is also a perfectly good NCName and "1.0-to" is one version rather than
+// two.
+func cutVersionFromTo(s string) (lo, hi string, ok bool) {
+	for i := 0; i+4 <= len(s); i++ {
+		if !isXMLSpace(s[i]) || s[i+1:i+3] != "to" {
+			continue
+		}
+		if !isXMLSpace(s[i+3]) {
+			continue
+		}
+		return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+3:]), true
+	}
+	return "", "", false
+}
+
+// checkVersionOrPrefix applies "PackageVersion | VersionPrefix".
+func checkVersionOrPrefix(s string, bad func() error) error {
+	if p, ok := strings.CutSuffix(s, ".*"); ok {
+		return checkPackageVersion(p, bad)
+	}
+	return checkPackageVersion(s, bad)
+}
+
+// checkPackageVersion applies the PackageVersion production:
+//
+//	PackageVersion ::= NumericPart ( "-" NamePart )?
+//	NumericPart    ::= IntegerLiteral ( "." IntegerLiteral )*
+//	NamePart       ::= NCName
+//
+// The NumericPart is not optional, which is what makes "-alpha" invalid
+// (use-package-294) and "-3.6" invalid (use-package-293) -- a leading hyphen
+// leaves nothing for the NumericPart to match. Only the FIRST hyphen
+// separates the two parts: the note under 3.5.1 says "1-alpha-2 is a valid
+// version number... The second hyphen is part of the NCName". That is also
+// why "2.0.0-alpha:beta" fails (use-package-291): the colon is not an NCName
+// character, so the NamePart is not an NCName.
+func checkPackageVersion(s string, bad func() error) error {
+	num := s
+	if i := strings.IndexByte(s, '-'); i >= 0 {
+		num = s[:i]
+		if !xdm.IsNCName(s[i+1:]) {
+			return bad()
+		}
+	}
+	if num == "" {
+		return bad()
+	}
+	for _, part := range strings.Split(num, ".") {
+		if part == "" {
+			return bad()
+		}
+		for i := 0; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '9' {
+				return bad()
+			}
+		}
+	}
+	return nil
+}
+
+// isXMLSpace reports whether a byte is one of XML's four whitespace
+// characters, which is what the S terminal of the version-range grammar
+// admits.
+func isXMLSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
