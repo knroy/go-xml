@@ -67,7 +67,23 @@ func (i *mapInstr) Execute(rt *runtime, out *outputBuilder) error {
 				"XTDE3365: duplicate key %q among the maps produced by xsl:map", dup.String())
 		}
 	}
-	out.items = append(out.items, b.Build())
+	return appendMap(out, b.Build())
+}
+
+// appendMap adds a map to the result, or reports that it cannot be.
+//
+// A map is not a node and has no textual form, so there is nowhere for it to
+// go inside an element under construction: 5.7.1 has no rule that would turn
+// one into content. maps-006 wraps an xsl:map in a literal result element for
+// exactly this reason and expects XTDE0450. At the top of a sequence the map
+// is an ordinary item, which is what makes xsl:variable over an xsl:map work.
+func appendMap(out *outputBuilder, m *xdm.MapItem) error {
+	if out.open != nil {
+		return fmt.Errorf(
+			"XTDE0450: a map cannot be added to the content of element %s",
+			out.open.Name.Lexical())
+	}
+	out.items = append(out.items, m)
 	return nil
 }
 
@@ -126,8 +142,7 @@ func (i *mapEntryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := b.Set(key, value); err != nil {
 		return err
 	}
-	out.items = append(out.items, b.Build())
-	return nil
+	return appendMap(out, b.Build())
 }
 
 // compileMap compiles xsl:map and xsl:map-entry.
