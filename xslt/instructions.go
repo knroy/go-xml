@@ -176,6 +176,20 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// declared as="document-node()*", a function body — must see
 				// the wrapper itself.
 				c := copyDocumentNode(v)
+				if i.noNamespaces {
+					// §11.9.2's namespace rules are about the elements being
+					// copied; a document node is only the wrapper they arrive
+					// in, and it carries no declarations of its own. Leaving
+					// this branch out let copy-of of a temporary tree keep the
+					// declarations copy-namespaces="no" had asked to be
+					// dropped -- copy-0614 and -0615 graft a whole $inner and
+					// expect the inner element's own xmlns:s to go with them.
+					for _, ch := range c.Children {
+						if ch.Kind == xdm.KindElement {
+							stripNamespaces(ch)
+						}
+					}
+				}
 				// The document node itself is assessed, not its children one
 				// at a time. Section 11.9.2 validates the copy, and the copy
 				// of a document node is a document node -- which is what
