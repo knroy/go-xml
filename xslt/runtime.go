@@ -146,6 +146,12 @@ type selection struct {
 	mode    string
 	params  map[string]xdm.Sequence
 	tunnels map[string]xdm.Sequence
+	// item is the item the rule matched, kept so xsl:next-match can tell
+	// whether it is still looking at it. Section 6.7 makes the current
+	// template rule and the context item two separate conditions, and an
+	// instruction that changes the focus without ending the rule leaves the
+	// first satisfied and the second not; see nextMatchInstr.Execute.
+	item xdm.Item
 }
 
 type keyCacheKey struct {
@@ -198,7 +204,14 @@ func (rt *runtime) withCurrent(item xdm.Item, pos, size int) *runtime {
 func (rt *runtime) withSelection(t *Template, next int, mode string,
 	params, tunnels map[string]xdm.Sequence) *runtime {
 	n := *rt
-	n.sel = selection{template: t, next: next, mode: mode, params: params, tunnels: tunnels}
+	var item xdm.Item
+	if rt.ctx != nil {
+		item = rt.ctx.Item
+	}
+	n.sel = selection{
+		template: t, next: next, mode: mode,
+		params: params, tunnels: tunnels, item: item,
+	}
 	return &n
 }
 

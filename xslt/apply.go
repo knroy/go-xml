@@ -751,6 +751,22 @@ func (rt *runtime) functionCallKey(f *userFunction, args []xdm.Sequence) (string
 // errNotCacheable marks a call whose arguments have no value-based key.
 var errNotCacheable = errors.New("call is not cacheable")
 
+// sameFocusItem reports whether the focus still holds the item a template
+// rule was selected for.
+//
+// Nodes compare by identity, which is what the question means: a different
+// node with the same content is a different item, and next-match-030 moves
+// the focus to a parent that the very same rule matches. Atomic values have
+// no identity, so an atomic focus is compared by pointer as well -- the
+// dispatcher passes the item through unchanged, so the one the rule matched
+// IS the one still in the focus unless something replaced it.
+func sameFocusItem(want, got xdm.Item) bool {
+	if want == nil || got == nil {
+		return want == nil && got == nil
+	}
+	return want == got
+}
+
 // nextMatchInstr implements xsl:next-match and xsl:apply-imports.
 //
 // Both re-dispatch the *same* node to a lower-ranked template, which is how a
@@ -769,6 +785,23 @@ func (i *nextMatchInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	if rt.sel.template == nil {
 		return fmt.Errorf("XTDE0560: %s used outside a template rule", name)
+	}
+	// Section 6.7 states two conditions, not one: there must be a current
+	// template rule AND the context item must still be the item that rule
+	// matched. An instruction may satisfy the first and break the second,
+	// because a named template called from a rule does not end the rule but
+	// may change or remove the focus.
+	//
+	// next-match-029 calls a named template declaring
+	// <xsl:context-item use="absent"/>, which removes the focus outright.
+	// next-match-030 writes <xsl:copy select=".."> around the instruction,
+	// which moves it to the parent. Checking only for a current rule left
+	// both re-dispatching: 029 against no item at all, and 030 against the
+	// parent, which the same rule matched again -- 5000 levels of it.
+	if !sameFocusItem(rt.sel.item, rt.ctx.Item) {
+		return fmt.Errorf(
+			"XTDE0560: %s: the context item is no longer the item the "+
+				"current template rule matched", name)
 	}
 	node, ok := rt.ctx.Item.(*xdm.Node)
 	if !ok {
