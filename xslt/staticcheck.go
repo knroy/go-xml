@@ -184,6 +184,12 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 	if !ok {
 		return nil
 	}
+	// An element whose content became a sequence constructor in 3.0 is
+	// checked as one only for a stylesheet that declares 3.0; a 2.0
+	// stylesheet still gets the narrower model its version defines.
+	if cm.seqCtor30 && xpathVersionAt(el).AtLeast31() {
+		cm.seqCtor = true
+	}
 	for _, ch := range el.Children {
 		switch ch.Kind {
 		case xdm.KindElement:

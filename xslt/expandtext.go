@@ -142,7 +142,7 @@ func (c *compiler) compileText(n *xdm.Node) (Instruction, error) {
 	if n.Parent == nil || !expandTextAt(n.Parent) {
 		return &textInstr{text: n.Value}, nil
 	}
-	tmpl, err := compileAVT(n.Value, newNSResolver(n.Parent, ""))
+	tmpl, err := compileAVT(emptyBracesRemoved(n.Value), newNSResolver(n.Parent, ""))
 	if err != nil {
 		return nil, err
 	}
@@ -168,4 +168,64 @@ func expandTextVersion(el *xdm.Node) bool {
 		return versionAt(cur) >= 3.0
 	}
 	return false
+}
+
+// emptyBracesRemoved drops the braces that enclose nothing at all.
+//
+// "{}", and equally "{ }" or "{(: comment :)}", contains no expression, and
+// XPath has no production for an empty one -- compiling it raises XPST0003.
+// The specification does not make it an error, though: cvt-033 writes {}
+// alongside a brace pair holding only a comment and expects both to
+// contribute nothing, so an empty pair is a template producing the empty
+// sequence. Removing it here rather than teaching the XPath parser to accept
+// an empty expression keeps the concession to the one place it applies; an
+// empty pair in an attribute value template is still the error it always was.
+func emptyBracesRemoved(src string) string {
+	if !strings.Contains(src, "{") {
+		return src
+	}
+	var b strings.Builder
+	for i := 0; i < len(src); {
+		if src[i] != '{' {
+			b.WriteByte(src[i])
+			i++
+			continue
+		}
+		if i+1 < len(src) && src[i+1] == '{' {
+			b.WriteString("{{")
+			i += 2
+			continue
+		}
+		end, err := findAVTClose(src, i+1)
+		if err != nil {
+			// An unterminated brace is left alone so that compileAVT reports
+			// it, with the message it has always used.
+			b.WriteString(src[i:])
+			break
+		}
+		if strings.TrimSpace(commentsStripped(src[i+1:end])) != "" {
+			b.WriteString(src[i : end+1])
+		}
+		i = end + 1
+	}
+	return b.String()
+}
+
+// commentsStripped removes XPath comments, which nest.
+func commentsStripped(s string) string {
+	var b strings.Builder
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '(' && i+1 < len(s) && s[i+1] == ':':
+			depth++
+			i++
+		case depth > 0 && s[i] == ':' && i+1 < len(s) && s[i+1] == ')':
+			depth--
+			i++
+		case depth == 0:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
