@@ -1131,6 +1131,18 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	lib := xpath.NewLibrary(s.funcs)
 	registerRuntimeFuncs(lib, rt)
 	registerOutputFuncs(lib)
+	// The grouping, merge and position accessors go in here too, rather than
+	// after the globals are bound, because a global may hold a *reference* to
+	// one: for-each-group-078 writes `<xsl:variable name="f"
+	// select="current-group#0"/>`, and a named function reference resolves
+	// against the library in force where it is written. Registered later,
+	// that was XPST0017 for a function this engine has. They read their state
+	// through variable bindings that no global has yet, so one *called* from
+	// a global still reports the XTDE1061 it should.
+	registerGroupingFuncs(lib)
+	registerMergeFuncs(lib)
+	registerFormatNumber(lib, s)
+	registerPositionFuncs(lib)
 	rt.ctx.Funcs = lib
 
 	// Global variables are evaluated in dependency order rather than

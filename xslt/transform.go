@@ -247,15 +247,6 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	rt.ctx = rt.ctx.WithVar(runtimeVar,
 		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))
 
-	// Grouping and regex accessors are added on top of the per-transform
-	// library so that they see the same bindings.
-	lib := xpath.NewLibrary(rt.ctx.Funcs)
-	registerGroupingFuncs(lib)
-	registerMergeFuncs(lib)
-	registerFormatNumber(lib, s)
-	registerPositionFuncs(lib)
-	rt.ctx.Funcs = lib
-
 	// The principal result tree begins here. Global variables were evaluated
 	// inside newRuntime, before this binding exists, which is what makes
 	// fn:current-output-uri answer the empty sequence in one — section 24.3
