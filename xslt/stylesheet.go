@@ -400,6 +400,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkAccumulatorConflicts(); err != nil {
 		return nil, err
 	}
+	if err := c.checkModeConflicts(); err != nil {
+		return nil, err
+	}
 	c.pruneOverriddenGlobals()
 	// Character-map inclusion is resolved before the xsl:output tables are
 	// flattened, and both after every module, so that a map may name one

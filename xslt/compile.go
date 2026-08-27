@@ -58,9 +58,10 @@ type compiler struct {
 	// checkAccumulatorConflicts.
 	accumTies  map[string][]int
 	accumNames map[string]xdm.QName
-	// modePrecedence records the import precedence each mode was declared at,
-	// so that XTSE0545 fires only on a tie.
-	modePrecedence map[string]int
+	// modeTies records every import precedence each mode was declared at.
+	// XTSE0545 is judged over these once every module has been compiled; see
+	// checkModeConflicts.
+	modeTies map[string][]int
 
 	// statedDecimalFormat records, per format name, which attributes an
 	// xsl:decimal-format declaration actually named. XTSE1290 compares
@@ -1778,20 +1779,13 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		// xsl:mode declaration for the same mode with the same import
 		// precedence". A mode has one set of properties, and two
 		// declarations that disagree about on-no-match leave no rule for
-		// deciding which built-in rules are in force.
-		if c.modePrecedence == nil {
-			c.modePrecedence = map[string]int{}
+		// deciding which built-in rules are in force. Only the winning
+		// precedence can carry that ambiguity, so the tie is judged after
+		// every module has been seen; see checkModeConflicts.
+		if c.modeTies == nil {
+			c.modeTies = map[string][]int{}
 		}
-		if prev, ok := c.modePrecedence[m]; ok && prev == precedence {
-			name := m
-			if name == "" {
-				name = "#unnamed"
-			}
-			return fmt.Errorf(
-				"XTSE0545: mode %s is declared by more than one xsl:mode at "+
-					"the same import precedence", name)
-		}
-		c.modePrecedence[m] = precedence
+		c.modeTies[m] = append(c.modeTies[m], precedence)
 		c.sheet.declaredModeNames[m] = true
 	}
 	return c.compileModeAccumulators(el, name)

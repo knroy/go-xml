@@ -31,7 +31,7 @@ func Builtins() FunctionLibrary {
 		registerPathFunc(l)
 		registerFormatNumber(l)
 		registerFormatInteger(l)
-		registerPathFunc(l)
+		registerStreamFuncs(l)
 		registerParseXML(l, XPath30)
 		registerAnalyzeString(l)
 		registerMisc30Funcs(l)
