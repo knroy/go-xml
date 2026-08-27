@@ -31,7 +31,16 @@ func compileSequenceType(src string, ns xpath.NamespaceResolver) (*sequenceType,
 	if src == "" {
 		return nil, nil
 	}
-	expr, err := xpath.Parse("() treat as "+src, ns)
+	// The version decides what the type grammar admits, exactly as it does
+	// for an expression: map(*) and array(*) are item types in 3.1 and
+	// nothing at all in 2.0, so an as="map(*)" would be a syntax error
+	// against the wrong grammar. It is read from the resolver the same way
+	// compileExpr reads it.
+	v := xpath.XPath20
+	if r, ok := ns.(*nsResolver); ok {
+		v = r.xpathVersion
+	}
+	expr, err := xpath.ParseVersion("() treat as "+src, ns, v)
 	if err != nil {
 		return nil, fmt.Errorf("invalid type %q: %w", src, err)
 	}

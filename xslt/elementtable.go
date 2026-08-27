@@ -25,6 +25,19 @@ package xslt
 type elementDef struct {
 	// attrs maps an attribute name to what the summary says about it.
 	attrs map[string]attrDef
+	// since30 marks an element XSLT 3.0 introduced.
+	//
+	// A 2.0 stylesheet using one must be told it is not an XSLT element at
+	// all -- XTSE0010, the same error every other conforming 2.0 processor
+	// raises -- rather than have it quietly recognised because this engine
+	// happens to implement 3.0 as well. package-version-912a is exactly that
+	// test: it writes xsl:package in a version="2.0" stylesheet and expects
+	// XTSE0010, and without the flag the table answered "known element".
+	//
+	// Forwards compatibility still applies ahead of this: a 2.0 stylesheet
+	// under xsl:version="3.0" is in forwards-compatible mode, and section
+	// 3.9 has such an element ignored rather than rejected.
+	since30 bool
 }
 
 type attrDef struct {
@@ -49,7 +62,7 @@ var xsltElements = map[string]elementDef{
 		"default-collation":          {},
 		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
 	}},
-	"package": {attrs: map[string]attrDef{
+	"package": {since30: true, attrs: map[string]attrDef{
 		"id":                         {},
 		"name":                       {},
 		"package-version":            {},
@@ -282,13 +295,13 @@ var xsltElements = map[string]elementDef{
 		"key":    {required: true},
 		"select": {},
 	}},
-	"on-empty": {attrs: map[string]attrDef{
+	"on-empty": {since30: true, attrs: map[string]attrDef{
 		"select": {},
 	}},
-	"on-non-empty": {attrs: map[string]attrDef{
+	"on-non-empty": {since30: true, attrs: map[string]attrDef{
 		"select": {},
 	}},
-	"where-populated": {attrs: map[string]attrDef{}},
+	"where-populated": {since30: true, attrs: map[string]attrDef{}},
 	"evaluate": {attrs: map[string]attrDef{
 		"xpath":             {required: true},
 		"as":                {},
@@ -361,8 +374,13 @@ var xsltElements = map[string]elementDef{
 		"pattern-separator":  {},
 	}},
 	"message": {attrs: map[string]attrDef{
-		"select":    {},
-		"terminate": {values: []string{"yes", "no"}, avt: true},
+		"select": {},
+		// XSLT 3.0 declares terminate as an AVT yielding xs:boolean, so the
+		// enumeration is the four lexical forms of the type rather than the
+		// two words XSLT 2.0 allowed. The effective value is checked again at
+		// run time, where the 2.0 pair is enforced for a 2.0 processor.
+		"terminate":  {values: []string{"yes", "no", "true", "false", "1", "0"}, avt: true},
+		"error-code": {avt: true},
 	}},
 	"fallback": {attrs: map[string]attrDef{}},
 	"try": {attrs: map[string]attrDef{

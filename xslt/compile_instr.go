@@ -1013,7 +1013,14 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 }
 
 func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &messageInstr{}
+	instr := &messageInstr{xslt30: c.opts.MaxVersion == 0 || c.opts.MaxVersion >= 3.0}
+	if v := n.AttrValue("error-code"); v != "" {
+		avt, err := compileAVT(v, ns)
+		if err != nil {
+			return nil, err
+		}
+		instr.errorCode, instr.errorCodeNS = avt, n
+	}
 	if v := n.AttrValue("terminate"); v != "" {
 		avt, err := compileAVT(v, ns)
 		if err != nil {
