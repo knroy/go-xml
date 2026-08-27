@@ -1398,13 +1398,28 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		// template and one does not -- so no static answer can be right for
 		// both. See abstractcomponent.go.
 		//
-		// Hiding it with xsl:accept does not change this. 3.5.3.2's note
-		// says an abstract component "accepted with visibility='hidden'...
-		// has the effect that any invocation of the component raises a
-		// dynamic error", which is this same error and not the absence of
-		// the component.
+		// Hiding it with xsl:accept does not change this WHERE THE USED
+		// PACKAGE ITSELF still reaches the component. 3.5.3.2's note says an
+		// abstract component "accepted with visibility='hidden'... has the
+		// effect that any invocation of the component raises a dynamic
+		// error", and such an invocation is one written inside the used
+		// package, whose reference bound before the accept was ever seen.
+		// accept-041 is that shape: the using package calls C:f1-proxy, a
+		// component of the used package, and the proxy reaches the hidden
+		// C:f1 from within. XTDE3052.
+		//
+		// A reference written in the USING package is the other case, and it
+		// is static. A hidden component is not a component of the using
+		// package at all -- 3.6.3.1 singles hidden out as the visibility that
+		// governs use within the declaring package too -- so naming it there
+		// names nothing. error-3052a calls the hidden abstract t-abstract
+		// directly from the using package and expects XTSE0650, the code for
+		// a template that does not exist, rather than the dynamic error for
+		// one that exists and has no body.
 		if comp.declared == visAbstract &&
-			u.overriding[comp.sym.String()] == nil {
+			u.overriding[comp.sym.String()] == nil &&
+			!(u.hiddenByAccept[comp.sym.String()] &&
+				!referencedWithin(u.root, comp)) {
 			markAbstract(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
