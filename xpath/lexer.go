@@ -487,6 +487,13 @@ func (l *Lexer) lexQName() (string, error) {
 			return "", fmt.Errorf("XQST0070: the namespace URI %s may not be used in a braced URI literal", uri)
 		}
 		l.pos += end + 1
+		// Q{uri}* is a wildcard on the namespace, the URI-qualified spelling
+		// of prefix:*, and is returned in the same shape: the prefix with a
+		// trailing colon, leaving the '*' for the caller to consume.
+		if l.pos < len(l.src) && l.src[l.pos] == '*' {
+			l.bracedURIs = append(l.bracedURIs, uri)
+			return fmt.Sprintf("%s%d:", bracedURIPrefix, len(l.bracedURIs)-1), nil
+		}
 		local, err := l.lexNCName()
 		if err != nil {
 			return "", err
