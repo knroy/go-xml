@@ -78,6 +78,10 @@ type patternStep struct {
 	// explicitAxis records that the axis was spelled out. The child-or-top
 	// widening of section 5.5.3 applies only to the abbreviated form.
 	explicitAxis bool
+	// orSelf marks the descendant-or-self axis, whose candidate set includes
+	// the anchor itself. It only matters where the set is materialised, which
+	// is when a positional predicate has to number it.
+	orSelf bool
 	// self marks a self:: step, which the XSLT 3.0 grammar admits. It
 	// constrains the candidate rather than its parent, so the walk does not
 	// step up before testing it. See pattern30.go.
@@ -365,6 +369,7 @@ func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 	case xpath.AxisDescendantOrSelf:
 		// This is what "//" expands to.
 		ps.descendant = true
+		ps.orSelf = true
 	case xpath.AxisDescendant:
 		ps.descendant = true
 	case xpath.AxisNamespace:
@@ -1471,7 +1476,14 @@ func (a *patternAlt) matchDescendantPositional(last patternStep,
 	}
 	inner := rest[len(rest)-1]
 	before := rest[:len(rest)-1]
-	for anc := node.Parent; anc != nil; anc = anc.Parent {
+	// descendant-or-self reaches the anchor itself, so the candidate may BE
+	// the node the preceding step names: match-274's outer x is the root of
+	// a parentless tree and is its own anchor.
+	start := node.Parent
+	if last.orSelf {
+		start = node
+	}
+	for anc := start; anc != nil; anc = anc.Parent {
 		// The anchor is the node the step before the descendant one names,
 		// so it is tested against that step directly; matchAncestors then
 		// verifies what precedes it, starting from the anchor.
@@ -1523,6 +1535,11 @@ func nodeTestHolds(s patternStep, node *xdm.Node) bool {
 // node test, in document order.
 func descendantsMatching(s patternStep, root *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
+	// descendant-or-self puts the anchor at the head of the set, which is
+	// where document order puts it.
+	if s.orSelf && nodeTestHolds(s, root) {
+		out = append(out, root)
+	}
 	var walk func(*xdm.Node)
 	walk = func(n *xdm.Node) {
 		for _, ch := range n.Children {
