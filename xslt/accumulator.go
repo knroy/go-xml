@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -16,7 +17,12 @@ import (
 // therefore has — the value on the way in and the value on the way out — are
 // what fn:accumulator-before and fn:accumulator-after return.
 type accumulatorDef struct {
-	name    xdm.QName
+	name xdm.QName
+	// pkg is the package the declaration was written in. 3.5.5 makes
+	// accumulators local to their package, so two packages may declare one
+	// name differently and a call resolves against the package the CALL is
+	// written in. See accumulatorFor.
+	pkg     int
 	initial *xpath.Compiled
 	// asType is @as, applied to the initial value and to the result of every
 	// rule. Section 18.1 applies the function conversion rules at each step,
@@ -48,8 +54,8 @@ type accumulatorRule struct {
 	// priority is the rule's effective priority, from @priority or from the
 	// pattern's default. Two rules of one accumulator that both match a node
 	// conflict, and the higher priority wins.
-	priority float64
-	hasPrio  bool
+	priority  float64
+	hasPrio   bool
 	declOrder int
 }
 
@@ -70,6 +76,11 @@ type accumulatorValues struct {
 type accumCacheKey struct {
 	name string
 	tree *xdm.Tree
+	// pkg is the package whose declaration produced these values, for the
+	// reason keyCacheKey carries one: two packages declaring an accumulator
+	// of the same name compute different values over the same tree, and a
+	// cache on the name alone returned whichever asked first to both.
+	pkg int
 }
 
 // compileAccumulator compiles an xsl:accumulator declaration.
@@ -145,7 +156,18 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 	c.declOrder++
 	def.declOrder = c.declOrder
 	c.accumPrecedence[key] = precedence
-	c.sheet.accumulators[key] = def
+	// Filed under the package as well as the name. 3.5.5 makes accumulators
+	// local to their package, so two packages may each declare "ac" and both
+	// declarations have to survive -- keeping one per name let the second
+	// compiled overwrite the first, and the package that lost its own then
+	// found no accumulator of that name at all. override-misc-005 declares
+	// "ac" counting up in the used package and down in the using one.
+	//
+	// Precedence, ties and declaration order stay keyed by name alone: those
+	// are questions about one package's declarations, which is the only place
+	// two declarations of a name can legitimately compete.
+	def.pkg = compilePackage
+	c.sheet.accumulators[accumKey(compilePackage, key)] = def
 	c.sheet.accumOrder = append(c.sheet.accumOrder, key)
 	return nil
 }
@@ -324,7 +346,10 @@ func (s *Stylesheet) accumulatorInScope(mode, name string) bool {
 func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	ctx *xpath.Context) (*accumulatorValues, error) {
 
-	key := accumCacheKey{name: def.name.Clark(), tree: root.Tree()}
+	// The package comes from the declaration, which is already the one the
+	// calling package's lookup chose, so an index built from one package's
+	// declaration is never handed to another's call of the same name.
+	key := accumCacheKey{name: def.name.Clark(), tree: root.Tree(), pkg: def.pkg}
 	if v, ok := rt.accumValues[key]; ok {
 		return v, nil
 	}
@@ -510,7 +535,11 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 			"XTDE3340: %s(%q): the name is not a valid QName", fname, lex)
 	}
 	name := xdm.QName{URI: uri, Local: local}.Clark()
-	def, ok := rt.sheet.accumulators[name]
+	// 3.5.5 scopes an accumulator to the package that declares it, so which
+	// declaration answers is decided by where the call is WRITTEN; the
+	// context carries that. override-misc-005 declares "ac" in both packages,
+	// counting up in one and down in the other.
+	def, ok := rt.sheet.accumulatorFor(packageOf(ctx), name)
 	if !ok {
 		return nil, fmt.Errorf(
 			"XTDE3340: no xsl:accumulator is named %q", lex)
@@ -651,4 +680,37 @@ func (c *compiler) checkAccumulatorConflicts() error {
 		}
 	}
 	return nil
+}
+
+// accumulatorFor returns the xsl:accumulator declaration of one name that is
+// in scope for a call written in pkg.
+//
+// Section 3.5.5 makes accumulators local to the package declaring them, so a
+// call sees its own package's declaration and not another's. The table holds
+// one declaration per name, which is what import precedence leaves; the
+// package is therefore matched rather than selected among, and a name the
+// calling package does not declare is absent rather than inherited.
+//
+// A declaration compiled outside any package carries zero, so a plain
+// stylesheet -- and every module of the top-level package -- keeps everything
+// it declares.
+func (s *Stylesheet) accumulatorFor(pkg int, name string) (*accumulatorDef, bool) {
+	def, ok := s.accumulators[accumKey(pkg, name)]
+	return def, ok
+}
+
+// accumKey qualifies an accumulator's Clark name with its package.
+//
+// The package number is prefixed rather than appended because a Clark name
+// may contain anything after the closing brace, while the separator here
+// cannot appear in a decimal integer.
+func accumKey(pkg int, name string) string {
+	if pkg == 0 {
+		// The top-level package's names are unqualified so that every table
+		// keyed by accumulator name elsewhere -- accumOrder, the mode
+		// use-accumulators check -- keeps working unchanged for the
+		// overwhelming majority of stylesheets, which use no package at all.
+		return name
+	}
+	return strconv.Itoa(pkg) + " " + name
 }
