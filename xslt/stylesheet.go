@@ -282,6 +282,14 @@ type keyDef struct {
 	// with a case-blind collation finds a node whose value differs from the
 	// sought one only in case.
 	collation string
+	// composite is @composite, section 16.3. With it, a node is indexed
+	// under the WHOLE sequence its use expression returns, taken as one key
+	// value; without it, under each item of that sequence separately. The
+	// lookup side mirrors it: the sought value is likewise one composite key
+	// rather than a set of alternatives, so key('k', ('a','b')) with
+	// composite="yes" asks for the single key ('a','b') and without it asks
+	// for either 'a' or 'b'.
+	composite bool
 }
 
 // OutputSettings holds the xsl:output declaration.

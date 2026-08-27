@@ -1374,7 +1374,10 @@ func (c *compiler) compileKey(el *xdm.Node) error {
 		return err
 	}
 
-	k := &keyDef{match: pat, collation: keyColl}
+	k := &keyDef{
+		match: pat, collation: keyColl,
+		composite: isYes(el.AttrValue("composite")),
+	}
 	hasBody := len(el.ChildElements()) > 0
 	switch {
 	case use != "" && hasBody:

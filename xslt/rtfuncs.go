@@ -837,6 +837,28 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 			coll = c
 		}
 	}
+	// A composite key's sought value is the WHOLE sequence taken as one key,
+	// mirroring how the index was built: key('k', ('a','b')) asks for the
+	// single key ('a','b') where a non-composite key would ask for either
+	// 'a' or 'b'. key-096 passes a tokenized line of seven words against a
+	// key tokenized the same way.
+	//
+	// Backwards compatibility does not apply: 1.0 had no composite keys, so
+	// there is no 1.0 behaviour for one to be compatible with.
+	if len(defs) > 0 && defs[0].composite {
+		vals := make([]*xdm.Atomic, 0, 8)
+		for _, kv := range xdm.Atomize(args[1]) {
+			if a, ok := kv.(*xdm.Atomic); ok {
+				vals = append(vals, a)
+			}
+		}
+		k, err := rt.compositeKey(vals, coll, rt.keySearchKey)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, index[k]...)
+		return rt.finishKeyLookup(out, top), nil
+	}
 	for _, kv := range xdm.Atomize(args[1]) {
 		a := kv.(*xdm.Atomic)
 		k, err := rt.keySearchKey(a, coll)
@@ -868,6 +890,17 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 			out = append(out, index[ak]...)
 		}
 	}
+	return rt.finishKeyLookup(out, top), nil
+}
+
+// finishKeyLookup applies the third argument's subtree restriction and puts
+// the result in document order.
+//
+// It is shared by the composite and non-composite paths, which differ only in
+// how they turn the sought value into index keys. Returning early from the
+// composite path instead would have skipped the restriction, which is a
+// silent wrong answer rather than a failure.
+func (rt *runtime) finishKeyLookup(out xdm.Sequence, top *xdm.Node) xdm.Sequence {
 	if top != nil && top.Kind != xdm.KindDocument {
 		// Section 16.3: the third argument names a *subtree*, not a document.
 		// "The selected subtree is the set of nodes that have $top as an
@@ -885,7 +918,7 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 		}
 		out = kept
 	}
-	return xdm.SortDocumentOrder(out), nil
+	return xdm.SortDocumentOrder(out)
 }
 
 // hasAncestorOrSelf reports whether top is n or one of its ancestors.
@@ -921,6 +954,60 @@ func (rt *runtime) keySearchKey(a *xdm.Atomic, coll xpath.Collation) (string, er
 		return "\x00fn:key-NaN-matches-nothing", nil
 	}
 	return rt.keyLookupKey(a, coll)
+}
+
+// indexKeys turns the key values one node produced into the index keys it is
+// filed under.
+//
+// Section 16.3 makes @composite the difference: composite="yes" files the
+// node under the WHOLE sequence taken as one value, and composite="no" under
+// each item of it separately. Without this the attribute was parsed, checked
+// for consistency between declarations, and then ignored -- so key-096, whose
+// key is a tokenized line and whose lookup passes the matching token
+// sequence, asked for twelve separate keys instead of one composite one.
+func (rt *runtime) indexKeys(def *keyDef, vals []*xdm.Atomic,
+	coll xpath.Collation) ([]string, error) {
+
+	if def.composite {
+		k, err := rt.compositeKey(vals, coll, rt.keyLookupKey)
+		if err != nil {
+			return nil, err
+		}
+		return []string{k}, nil
+	}
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		k, err := rt.keyLookupKey(v, coll)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+// compositeKey joins the per-item keys of a whole sequence into the single
+// key a composite declaration indexes under.
+//
+// The join is over the ordinary per-item keys so that the collation and the
+// numeric and date normalisations GroupingKey applies still hold of each
+// component. The separator is a codepoint no component key can contain,
+// which is what keeps ('a','b') distinct from the single value 'a b'.
+func (rt *runtime) compositeKey(vals []*xdm.Atomic, coll xpath.Collation,
+	one func(*xdm.Atomic, xpath.Collation) (string, error)) (string, error) {
+
+	var b strings.Builder
+	for i, v := range vals {
+		if i > 0 {
+			b.WriteByte(0x1e)
+		}
+		k, err := one(v, coll)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(k)
+	}
+	return b.String(), nil
 }
 
 // keyValues computes the key values one node contributes.
@@ -1033,11 +1120,11 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 			if err != nil {
 				return err
 			}
-			for _, kv := range vals {
-				k, err := rt.keyLookupKey(kv, coll)
-				if err != nil {
-					return err
-				}
+			ks, err := rt.indexKeys(def, vals, coll)
+			if err != nil {
+				return err
+			}
+			for _, k := range ks {
 				idx[k] = append(idx[k], n)
 			}
 		}
@@ -1059,11 +1146,11 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 				if err != nil {
 					return err
 				}
-				for _, kv := range vals {
-					k, err := rt.keyLookupKey(kv, coll)
-					if err != nil {
-						return err
-					}
+				ks, err := rt.indexKeys(def, vals, coll)
+				if err != nil {
+					return err
+				}
+				for _, k := range ks {
 					idx[k] = append(idx[k], a)
 				}
 			}
@@ -1091,11 +1178,11 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 					if err != nil {
 						return err
 					}
-					for _, kv := range vals {
-						k, err := rt.keyLookupKey(kv, coll)
-						if err != nil {
-							return err
-						}
+					ks, err := rt.indexKeys(def, vals, coll)
+					if err != nil {
+						return err
+					}
+					for _, k := range ks {
 						idx[k] = append(idx[k], nsNode)
 					}
 				}
