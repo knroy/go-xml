@@ -48,6 +48,11 @@ type attrDef struct {
 	// avt marks an attribute value template, whose value may be "{...}" and
 	// therefore cannot be checked against the enumeration at compile time.
 	avt bool
+	// since30 marks an attribute XSLT 3.0 added to an element that existed
+	// before it. The element-level flag of the same name cannot express this:
+	// xsl:variable is a 2.0 element, but its static attribute is not a 2.0
+	// attribute, and a 2.0 stylesheet writing one must get XTSE0090.
+	since30 bool
 }
 
 // xsltElements is the grammar, keyed by local name.
@@ -123,13 +128,13 @@ var xsltElements = map[string]elementDef{
 	"preserve-space": {attrs: map[string]attrDef{
 		"elements": {required: true},
 	}},
-	"accumulator": {attrs: map[string]attrDef{
+	"accumulator": {since30: true, attrs: map[string]attrDef{
 		"name":          {required: true},
 		"initial-value": {required: true},
 		"as":            {},
 		"streamable":    {values: []string{"yes", "no"}},
 	}},
-	"accumulator-rule": {attrs: map[string]attrDef{
+	"accumulator-rule": {since30: true, attrs: map[string]attrDef{
 		"match":    {required: true},
 		"phase":    {values: []string{"start", "end"}},
 		"select":   {},
@@ -173,7 +178,7 @@ var xsltElements = map[string]elementDef{
 		"name":   {required: true},
 		"select": {},
 		"as":     {},
-		"static": {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"static": {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"param": {attrs: map[string]attrDef{
 		"name":     {required: true},
@@ -181,7 +186,7 @@ var xsltElements = map[string]elementDef{
 		"as":       {},
 		"required": {values: []string{"yes", "no"}},
 		"tunnel":   {values: []string{"yes", "no"}},
-		"static":   {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"static":   {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"call-template": {attrs: map[string]attrDef{
 		"name": {required: true},
@@ -290,8 +295,8 @@ var xsltElements = map[string]elementDef{
 	// The map constructor instructions of section 14. xsl:map takes no
 	// attributes; on xsl:map-entry the key is required and select is the
 	// alternative to a sequence constructor.
-	"map": {attrs: map[string]attrDef{}},
-	"map-entry": {attrs: map[string]attrDef{
+	"map": {since30: true, attrs: map[string]attrDef{}},
+	"map-entry": {since30: true, attrs: map[string]attrDef{
 		"key":    {required: true},
 		"select": {},
 	}},
@@ -375,19 +380,19 @@ var xsltElements = map[string]elementDef{
 	}},
 	"message": {attrs: map[string]attrDef{
 		"select": {},
-		// XSLT 3.0 declares terminate as an AVT yielding xs:boolean, so the
-		// enumeration is the four lexical forms of the type rather than the
-		// two words XSLT 2.0 allowed. The effective value is checked again at
-		// run time, where the 2.0 pair is enforced for a 2.0 processor.
-		"terminate":  {values: []string{"yes", "no", "true", "false", "1", "0"}, avt: true},
-		"error-code": {avt: true},
+		// 3.0 declares terminate as an AVT yielding xs:boolean, which widens
+		// the set to the four lexical forms of the type. That widening is
+		// applied by allowsBoolAliases rather than listed here, so the
+		// enumeration stays the 2.0 pair and a 2.0 module is held to it.
+		"terminate":  {values: []string{"yes", "no"}, avt: true},
+		"error-code": {since30: true, avt: true},
 	}},
 	"fallback": {attrs: map[string]attrDef{}},
-	"try": {attrs: map[string]attrDef{
+	"try": {since30: true, attrs: map[string]attrDef{
 		"select":          {},
 		"rollback-output": {values: []string{"yes", "no"}},
 	}},
-	"catch": {attrs: map[string]attrDef{
+	"catch": {since30: true, attrs: map[string]attrDef{
 		"errors": {},
 		"select": {},
 	}},
@@ -396,7 +401,7 @@ var xsltElements = map[string]elementDef{
 	// evaluation, which this engine does not do; 18.1 defines the result as
 	// that of the non-streaming process either way, so the attribute is
 	// accepted and the instruction evaluated conventionally.
-	"source-document": {attrs: map[string]attrDef{
+	"source-document": {since30: true, attrs: map[string]attrDef{
 		"href":             {required: true, avt: true},
 		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
 		"use-accumulators": {},

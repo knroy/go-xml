@@ -1050,22 +1050,43 @@ type messageInstr struct {
 	sel       *xpath.Compiled
 	terminate *avt
 	body      []Instruction
+	// errorCode is xsl:message/@error-code, an XSLT 3.0 addition naming the
+	// code a terminating message raises in place of XTMM9000.
+	errorCode *avt
+	// errorCodeNS resolves the prefix of an error-code that was written as a
+	// lexical QName. The attribute is an AVT, so the name is not known until
+	// run time and the namespace context has to be carried to meet it.
+	errorCodeNS *xdm.Node
+	// xslt30 enables the 3.0 readings: the wider @terminate vocabulary, and
+	// surviving a dynamic error raised while building the content.
+	xslt30 bool
 }
 
 func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 	var text string
+	var value xdm.Sequence
 	if i.sel != nil {
 		seq, err := i.sel.Eval(rt.ctx)
 		if err != nil {
-			return err
+			if !i.xslt30 {
+				return err
+			}
+			// 3.0: "if a dynamic error occurs while evaluating the content,
+			// the error is not propagated"; the transformation carries on
+			// with whatever the message would have said left unsaid.
+			// message-0404 requires the result tree to be produced anyway.
+			return nil
 		}
-		text = stringJoin(seq, " ")
+		value, text = seq, stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
 		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
-			return err
+			if !i.xslt30 {
+				return err
+			}
+			return nil
 		}
-		text = constructedText(sub.sequence(), " ")
+		value, text = sub.sequence(), constructedText(sub.sequence(), " ")
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
@@ -1082,14 +1103,23 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// not one of the permitted values for that attribute." The summary
 		// gives terminate a closed set of two, and the static check cannot
 		// look inside a template, so the effective value is checked here.
-		switch strings.TrimSpace(v) {
-		case "yes":
-			return fmt.Errorf("XTMM9000: %s", text)
-		case "no":
-		default:
+		terminate, ok := messageTerminate(v, i.xslt30)
+		if !ok {
+			// XTDE0030: "it is a non-recoverable dynamic error if the
+			// effective value of an attribute written using curly brackets,
+			// in a position where an attribute value template is permitted,
+			// is a value that is not one of the permitted values for that
+			// attribute."
 			return fmt.Errorf(
 				"XTDE0030: xsl:message/@terminate evaluated to %q, which is "+
-					"neither yes nor no", v)
+					"not a permitted value", v)
+		}
+		if terminate {
+			code, err := i.resolveErrorCode(rt)
+			if err != nil {
+				return err
+			}
+			return terminateError(code, text, value)
 		}
 	}
 	return nil

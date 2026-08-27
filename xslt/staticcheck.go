@@ -112,6 +112,12 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		}
 
 		ad, ok := def.attrs[a.Name.Local]
+		if ok && ad.since30 && !xpathVersionAt(el).AtLeast31() {
+			// An attribute XSLT 3.0 added to an older element is not one that
+			// element has, to a stylesheet declaring an earlier version. It is
+			// treated exactly as a name the summary never defined.
+			ok = false
+		}
 		if !ok {
 			if standardAttributes[a.Name.Local] {
 				continue

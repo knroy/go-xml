@@ -282,17 +282,11 @@ func (i *tryInstr) selectCatch(name xdm.QName) (catchClause, bool) {
 // catchable reports whether err is a dynamic error xsl:try may recover from.
 //
 // Static errors are not: they are detected before the instruction runs, so no
-// try is ever in scope for one. Neither are the errors this engine raises to
-// stop a transform for reasons of its own — a terminating xsl:message, a
-// blown recursion limit, a cancelled context — which are not spec dynamic
-// errors and which a catch-all clause would otherwise swallow.
+// try is ever in scope for one. A terminating xsl:message is, despite ending
+// the transformation when nothing catches it — message-0501 wraps one in an
+// xsl:try and reads the code, description and value it carries.
 func catchable(err error) bool {
 	code := xdm.ErrorCode(err)
-	if code == "XTMM9000" {
-		// A terminating xsl:message stops the transform outright; 8.3 makes
-		// it explicitly not recoverable, so a catch-all must not swallow it.
-		return false
-	}
 	if code == "" {
 		// An error with no code is one of this engine's own internal
 		// failures. Treating it as catchable would let a stylesheet mask
