@@ -1253,12 +1253,26 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 				continue
 			}
 			if d == g {
-				// A variable whose select expression names itself is the
-				// simplest circularity there is, and the recursion below
-				// would never reach it: bind() has already marked this one
-				// active, so the cycle is reported here directly.
+				// A global variable is not in the scope of its own binding:
+				// XSLT 3.0 §9.1 gives the scope of a global xsl:variable as
+				// every stylesheet module in the package *except* the
+				// variable's own select expression and sequence constructor.
+				// A reference to the name from there is therefore a
+				// reference to nothing at all, and the static error for an
+				// unbound variable reference is XPST0008 rather than the
+				// XTDE0640 that a genuine circularity between two distinct
+				// declarations raises.
+				//
+				// higher-order-functions-070 writes the case that makes the
+				// distinction visible: $gcd's select is an inline function
+				// whose body calls $gcd, which "would make sense" as
+				// recursion and is still an error because the name is not
+				// in scope. The recursion below would never reach it -
+				// bind() has already marked this one active - so it is
+				// reported here directly.
 				return fmt.Errorf(
-					"XTDE0640: global variable $%s depends on itself",
+					"XPST0008: undeclared variable $%s: a global variable is "+
+						"not in scope within its own binding",
 					g.Name.Lexical())
 			}
 			if err := bind(d); err != nil {

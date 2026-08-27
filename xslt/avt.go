@@ -114,6 +114,21 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 // second ":)", and stopping at the first would resume brace scanning inside
 // text that is still commented out.
 //
+// A nested unescaped '{' is the fourth case, and it is the reason the scan
+// counts depth rather than stopping at the first '}'. XPath 3.0 gives '{' a
+// meaning of its own in an inline function body and in a map constructor, so
+// {let $f := function($x, $y){$x + $y} return $f(2, 2)} is one expression
+// whose text contains a balanced brace pair; stopping at the pair's own '}'
+// handed the parser "let $f := function($x, $y){$x + $y" and left the rest as
+// literal text. cvt-014 writes exactly that, and cvt-016 writes the harder
+// shape "{if (...) then 4 else function($x, $y){$x + $y}}", where the two
+// closing braces in a row are the function body's and the template's. Counting
+// depth reads both correctly.
+//
+// This is a processor-governed rule rather than a module-governed one: an
+// XPath 2.0 expression has no production in which '{' appears outside a string
+// literal, so depth counting cannot change how an older stylesheet reads.
+//
 // XPath 3.0's braced URI literal is the third case: the '}' of
 // {exists(x/parent::Q{http://example.com/ns}y)} closes the URI, not the
 // variable part, so stopping there hands the XPath parser "exists(x/parent::
@@ -124,6 +139,8 @@ func compileAVT(src string, ns xpath.NamespaceResolver) (*avt, error) {
 func findAVTClose(src string, i int) (int, error) {
 	var quote byte
 	comment := 0
+	depth := 0
+	nest := processorAtLeast30()
 	for ; i < len(src); i++ {
 		c := src[i]
 		switch {
@@ -158,7 +175,15 @@ func findAVTClose(src string, i int) (int, error) {
 				break
 			}
 			i = end
+		case c == '{':
+			if nest {
+				depth++
+			}
 		case c == '}':
+			if depth > 0 {
+				depth--
+				continue
+			}
 			return i, nil
 		}
 	}

@@ -20,7 +20,16 @@ func registerNumericFuncs(l *Library) {
 			}
 			a = xdm.NewUntypedAtomic(s)
 		} else {
-			atoms := xdm.Atomize(args[0])
+			// Checked, because the argument's declared type is
+			// xs:anyAtomicType? and the function conversion rules atomize
+			// it (F&O 3.1 §4.4.1). Atomizing a function item raises
+			// FOTY0013 — it is not a leniency fn:number extends to, and
+			// the plain Atomize dropped the item and answered NaN.
+			// higher-order-functions-056 writes number(local:f#1).
+			atoms, err := xdm.AtomizeChecked(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return numSeq(math.NaN()), nil
 			}
