@@ -485,10 +485,11 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			if err := checkAvailableArg("XTDE1400", "function-available", name); err != nil {
+			uri, local, ok, err := availableName(
+				ctx, "XTDE1400", "function-available", name, resolve)
+			if err != nil {
 				return nil, err
 			}
-			uri, local, ok := resolve(name)
 			if !ok {
 				return nil, unboundPrefixError("function-available", name)
 			}
@@ -508,18 +509,19 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			if err := checkAvailableArg("XTDE1400", "function-available", name); err != nil {
+			uri, local, ok, err := availableName(
+				ctx, "XTDE1400", "function-available", name, resolve)
+			if err != nil {
 				return nil, err
+			}
+			if !ok {
+				return nil, unboundPrefixError("function-available", name)
 			}
 			arity := 0
 			for _, a := range xdm.Atomize(args[1]) {
 				if at, ok := a.(*xdm.Atomic); ok {
 					arity = int(at.Int64())
 				}
-			}
-			uri, local, ok := resolve(name)
-			if !ok {
-				return nil, unboundPrefixError("function-available", name)
 			}
 			_, ok = xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
@@ -539,16 +541,16 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 	// second half of why an imported schema never registered.
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
-		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
 			// XTDE1428 is the type-available spelling of the condition
 			// XTDE1400 states for function-available: a name that is not a
 			// QName at all is an error, not a type that happens to be absent.
-			if err := checkAvailableArg(
-				"XTDE1428", "type-available", name); err != nil {
+			uri, local, ok, err := availableName(
+				ctx, "XTDE1428", "type-available", name, resolveType)
+			if err != nil {
 				return nil, err
 			}
-			uri, local, ok := resolveType(name)
 			if !ok {
 				return nil, unboundTypePrefixError(name)
 			}
@@ -577,10 +579,15 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			if err := checkAvailableArg("XTDE1440", "element-available", name); err != nil {
+			_, local, _, err := availableName(
+				ctx, "XTDE1440", "element-available", name,
+				func(n string) (string, string, bool) {
+					_, l := xdm.SplitQName(n)
+					return "", l, true
+				})
+			if err != nil {
 				return nil, err
 			}
-			_, local := xdm.SplitQName(name)
 			if !supportedInstructions[local] {
 				return xdm.One(xdm.NewBoolean(false)), nil
 			}

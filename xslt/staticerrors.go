@@ -598,6 +598,10 @@ var literalResultXSLAttrs = map[string]bool{
 	// XSLT 3.0 additions: both are standard attributes, so a literal result
 	// element may carry them in the XSLT namespace.
 	"default-mode": true, "expand-text": true,
+	// default-validation is a standard attribute too -- section 3.5 lists it
+	// among the names an LRE spells with the xsl: prefix. Leaving it out
+	// refused import-schema-195..197, which set it on the LRE itself.
+	"default-validation": true,
 }
 
 // emptyXSLElements are the XSLT elements whose content model is empty
@@ -910,7 +914,14 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	// from [xsl:]xpath-default-namespace — an unprefixed type name is a type
 	// name, so it follows the element/type default rather than no namespace.
 	ns := newNSResolver(el, "")
-	prefix, local := xdm.SplitQName(strings.TrimSpace(a.Value))
+	lex := strings.TrimSpace(a.Value)
+	// Q{uri}local names its namespace directly, so it resolves without any
+	// in-scope binding. Every other QName-valued attribute already accepts the
+	// spelling; type= rejected it before the schema was ever consulted.
+	if u, l, isEQ := splitEQName(lex); isEQ {
+		return checkTypeAttrName(el, schema, xdm.QName{URI: u, Local: l}, a.Value)
+	}
+	prefix, local := xdm.SplitQName(lex)
 	if local == "" || !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return fmt.Errorf("XTSE1520: type=%q on %s is not a valid QName",
 			a.Value, el.Name.Lexical())
@@ -931,15 +942,22 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 	// already covers "validation requires a schema; none was imported", so
 	// reporting XTSE1520 here as well would replace a more specific error
 	// with a less specific one.
+	return checkTypeAttrName(el, schema, xdm.QName{URI: uri, Local: local}, a.Value)
+}
+
+// checkTypeAttrName applies XTSE1520 and XTSE1530 to a resolved type= name.
+func checkTypeAttrName(
+	el *xdm.Node, schema *xsd.Schema, name xdm.QName, lexical string,
+) error {
 	if schema == nil {
 		return nil
 	}
-	t := schema.Types[xdm.QName{URI: uri, Local: local}]
+	t := schema.Types[name]
 	if t == nil {
 		return fmt.Errorf(
 			"XTSE1520: type=%q on %s is not the name of a type definition "+
 				"in the in-scope schema components",
-			a.Value, el.Name.Lexical())
+			lexical, el.Name.Lexical())
 	}
 	// XTSE1530 is narrower: only xsl:attribute is forbidden from naming a
 	// complex type, because an attribute can only ever have a simple type.
@@ -947,7 +965,7 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 		if _, complex := t.(*xsd.ComplexType); complex {
 			return fmt.Errorf(
 				"XTSE1530: type=%q on xsl:attribute names a complex type "+
-					"definition", a.Value)
+					"definition", lexical)
 		}
 	}
 	return nil
