@@ -383,6 +383,23 @@ func convertibleToParam(from, to xdm.TypeCode) bool {
 }
 
 // Eval implements Expr: it calls the function item the target produces.
+// ClearedOnDynamicCall names variables a host language wants unbound for the
+// duration of a dynamic function call.
+//
+// XSLT 3.0 section 24.3 clears the current output URI across a dynamic call,
+// and the value is carried as an ordinary variable binding so that it follows
+// the same scoping an expression does. XPath itself has no such notion, so
+// the host registers the name rather than this package knowing it.
+var ClearedOnDynamicCall []xdm.QName
+
+// clearHostVars unbinds the host-registered variables for one call.
+func clearHostVars(ctx *Context) *Context {
+	for _, name := range ClearedOnDynamicCall {
+		ctx = ctx.WithVar(name, nil)
+	}
+	return ctx
+}
+
 func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	target, err := e.Target.Eval(ctx)
 	if err != nil {
@@ -411,7 +428,7 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPTY0004: %s takes %d argument(s), got %d",
 			fn.String(), fn.Arity, len(args))
 	}
-	return fn.Invoke(ctx, args)
+	return fn.Invoke(clearHostVars(ctx), args)
 }
 
 // singleFunctionItem extracts the one function item a sequence must hold.

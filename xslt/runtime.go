@@ -63,6 +63,11 @@ type runtime struct {
 	// restricted for the whole of the action that reads it.
 	treeAccums map[*xdm.Node]*modeAccumulators
 
+	// streamedTrees records the roots that xsl:source-document was asked to
+	// read in streamed mode, which XTDE3362 bars a non-streamable accumulator
+	// from being read over.
+	streamedTrees map[*xdm.Node]bool
+
 	// depth bounds apply-templates recursion, which the spec does not bound
 	// and which a stylesheet with a cycle would otherwise run forever.
 	depth int
@@ -79,6 +84,12 @@ type runtime struct {
 	// builder because the state is inherited by everything the constructor
 	// calls, however deeply.
 	temporary bool
+
+	// baseOutputURI is TransformOptions.BaseOutputURI, kept for resolving a
+	// relative xsl:result-document/@href and for the value
+	// fn:current-output-uri reports while the principal result is being
+	// written.
+	baseOutputURI string
 
 	// secondary collects xsl:result-document outputs. Like messages it is a
 	// pointer, because the runtime struct is copied on every focus change:
@@ -1055,10 +1066,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		accumBuilding: map[accumCacheKey]bool{},
 		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
-		tunnel:      map[string]xdm.Sequence{},
-		messages:    new([]string),
-		secondary:   new([]SecondaryResult),
-		baseURIUsed: new(bool),
+		streamedTrees: map[*xdm.Node]bool{},
+		tunnel:        map[string]xdm.Sequence{},
+		messages:      new([]string),
+		secondary:     new([]SecondaryResult),
+		baseURIUsed:   new(bool),
+		baseOutputURI: opts.BaseOutputURI,
 	}
 
 	// A transform started from a named template has no source document, and
@@ -1112,6 +1125,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// per transform rather than living in the shared builtin library.
 	lib := xpath.NewLibrary(s.funcs)
 	registerRuntimeFuncs(lib, rt)
+	registerOutputFuncs(lib)
 	rt.ctx.Funcs = lib
 
 	// Global variables are evaluated in dependency order rather than

@@ -73,6 +73,14 @@ type TransformOptions struct {
 	// timezone. Defaults to UTC so that results are reproducible across
 	// machines.
 	ImplicitTimezone int
+
+	// BaseOutputURI is the URI the principal result tree is destined for.
+	// Section 19.1 makes it implementation-defined when the caller supplies
+	// none, and this engine never writes files itself, so the default is to
+	// have none at all: fn:current-output-uri then answers the empty
+	// sequence everywhere, and a relative @href on xsl:result-document
+	// resolves against the stylesheet's own location instead.
+	BaseOutputURI string
 }
 
 // Result is the outcome of a transform.
@@ -190,8 +198,13 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	registerMergeFuncs(lib)
 	registerFormatNumber(lib, s)
 	registerPositionFuncs(lib)
-	registerCurrentOutputURI(lib)
 	rt.ctx.Funcs = lib
+
+	// The principal result tree begins here. Global variables were evaluated
+	// inside newRuntime, before this binding exists, which is what makes
+	// fn:current-output-uri answer the empty sequence in one — section 24.3
+	// clears the current output URI while a global is evaluated.
+	rt = rt.withOutputURI(opts.BaseOutputURI)
 
 	out := newOutputBuilder()
 
@@ -307,30 +320,6 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		output:    s.output,
 		charMap:   s.activeCharMap,
 	}, nil
-}
-
-// registerCurrentOutputURI adds fn:current-output-uri.
-//
-// The function is XSLT 3.0, but result-document-1006 is declared XSLT20+ and
-// its expected result is XTRE1495/XTDE1490 rather than a rejection, so a 2.0
-// processor that raises XPST0017 for the name never reaches the condition the
-// test is about. Every test in the fn/current-output-uri set is XSLT30+ and so
-// out of scope; this name is reachable in scope from that one test alone.
-//
-// The value is the empty sequence whenever the transform is writing the
-// principal result tree and no base output URI was supplied to it — which is
-// always the case here, because TransformOptions has no base output URI and
-// this engine never writes files itself. Interpolated into @href by an
-// attribute value template the empty sequence gives "", which is the same
-// spelling xsl:result-document already uses for "the base output URI", so the
-// duplicate-destination check in Transform sees the collision it should.
-func registerCurrentOutputURI(l *xpath.Library) {
-	l.Add(xpath.Function{
-		Name: xdm.QName{URI: xdm.NSFN, Local: "current-output-uri"}, Arity: 0,
-		Call: func(*xpath.Context, []xdm.Sequence) (xdm.Sequence, error) {
-			return xdm.Empty(), nil
-		},
-	})
 }
 
 // stripWhitespace returns a copy of the tree with whitespace-only text nodes

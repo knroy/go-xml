@@ -585,6 +585,9 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	// A stylesheet function's body builds a temporary tree, which is
 	// temporary output state for XTDE1480.
 	sub.temporary = true
+	// Section 24.3: the current output URI is cleared while a stylesheet
+	// function's body is evaluated.
+	sub.ctx = sub.ctx.WithVar(outputURIVar, xdm.Empty())
 
 	out := newOutputBuilder()
 	if err := execSequence(f.body, sub, out); err != nil {

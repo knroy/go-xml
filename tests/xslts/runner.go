@@ -446,6 +446,16 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if env := r.environment(set, tc); env != nil && len(env.Collections) > 0 {
 		opts.Collections = &catalogCollections{set: set, decls: env.Collections}
 	}
+	// <output file="..."/> is how a test case supplies the base output URI.
+	// It is relative to the test-set directory, and setting it is what makes
+	// fn:current-output-uri answer anything but the empty sequence. The
+	// literal "#absent" is the catalog's way of asking for no base output URI
+	// at all -- current-output-uri-013 and -015 exist to distinguish that
+	// from a URI the driver picked for itself.
+	if tc.Test.Output != nil && tc.Test.Output.File != "#absent" {
+		opts.BaseOutputURI = fileURI(
+			filepath.Join(set.Dir, filepath.FromSlash(tc.Test.Output.File)))
+	}
 	if tc.Test.InitialTemplate != nil {
 		opts.InitialTemplate = tc.Test.InitialTemplate.Name
 		// The catalog binds its own prefixes, so the name is resolved

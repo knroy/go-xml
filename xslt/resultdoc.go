@@ -163,7 +163,10 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// constructor, so an xsl:variable inside it is in scope for the
 	// instructions that follow, and a plain Execute loop never binds it —
 	// which made every reference to such a variable XPST0008.
-	if err := execSequence(i.body, rt, sub); err != nil {
+	// The destination is resolved before the body runs, because the body is
+	// what fn:current-output-uri answers inside.
+	resolvedHref := i.destination(rt, href)
+	if err := execSequence(i.body, rt.withOutputURI(resolvedHref), sub); err != nil {
 		return err
 	}
 
@@ -198,10 +201,6 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// goes rather than to where the stylesheet was. rebase applies xml:base
 	// on the way down, which is what makes <l xml:base="in/third.xml"> come
 	// out at .../out/in/third.xml rather than at the bare reference.
-	resolvedHref := resolveAgainst(rt.sheet.baseURI, href)
-	if resolvedHref == "" {
-		resolvedHref = rt.sheet.baseURI
-	}
 	// The recorded sequence carries the separators too: the suite evaluates
 	// its assertions against these nodes, not against the serialised text,
 	// so a separator that existed only in the document node toDocument built
@@ -251,4 +250,21 @@ func (sr *SecondaryResult) String() string {
 	var sb strings.Builder
 	_ = sr.Serialize(&sb, nil)
 	return sb.String()
+}
+
+// destination resolves @href to the absolute URI this document is written to.
+//
+// Section 19.1 makes @href relative to the base output URI. When the caller
+// supplied none the stylesheet's own location is the only URI this engine
+// has, which is where a caller honouring the href would write the file, so
+// that is what it falls back to.
+func (i *resultDocumentInstr) destination(rt *runtime, href string) string {
+	base := rt.baseOutputURI
+	if base == "" {
+		base = rt.sheet.baseURI
+	}
+	if resolved := resolveAgainst(base, href); resolved != "" {
+		return resolved
+	}
+	return base
 }
