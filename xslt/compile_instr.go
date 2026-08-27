@@ -1430,6 +1430,14 @@ type evaluateInstr struct {
 // standard function namespace, which section 10.4.1 excludes from the target
 // expression's static context.
 //
+// fn:format-number is deliberately absent from it. The exclusion is of the
+// functions that "depend on the dynamic context of the calling instruction",
+// and a decimal format is a static declaration rather than part of that
+// context — so the function is callable, it simply resolves its format name
+// against nothing. evaluate-011 requires exactly that: it names an undeclared
+// format and expects FODF1280, the runtime error for a name the function
+// cannot find, not the static XTDE3160 for a function that is not there.
+//
 // It is deliberately not runtimeFuncNames. That map exists to tell a static
 // check which names are *declared* despite being absent from the compile-time
 // library, and it is missing the XSLT-defined functions that need no runtime —
@@ -1443,7 +1451,6 @@ var xsltOnlyFunctions = map[string]bool{
 	"element-available":         true,
 	"format-date":               true,
 	"format-dateTime":           true,
-	"format-number":             true,
 	"format-time":               true,
 	"function-available":        true,
 	"generate-id":               true,
@@ -1457,11 +1464,26 @@ var xsltOnlyFunctions = map[string]bool{
 	"unparsed-text-available":   true,
 }
 
-// restrictedLibrary hides the XSLT-defined functions from a function library.
-type restrictedLibrary struct{ inner xpath.FunctionLibrary }
+// restrictedLibrary hides from a function library the functions that section
+// 10.4.1 keeps out of the target expression's static context: the XSLT-defined
+// ones that read the calling instruction's dynamic context, and the ones the
+// stylesheet declares for itself.
+//
+// A stylesheet function is private to the stylesheet in the sense 10.4.1
+// means — evaluate-045 calls f:square(5) from inside xsl:evaluate and requires
+// the whole transform to fail with XTDE3160. Hiding it needs Declares rather
+// than a Lookup on sheetFuncs, because that library chains to the builtins and
+// would answer yes for every function in existence.
+type restrictedLibrary struct {
+	inner      xpath.FunctionLibrary
+	sheetFuncs *xpath.Library
+}
 
 func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
+		return xpath.Function{}, false
+	}
+	if r.sheetFuncs != nil && r.sheetFuncs.Declares(name, arity) {
 		return xpath.Function{}, false
 	}
 	if r.inner == nil {
@@ -1620,7 +1642,7 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// expression, and so is every XSLT-defined function.
 	ctx := sub.ctx
 	inner := *ctx
-	inner.Funcs = restrictedLibrary{inner: ctx.Funcs}
+	inner.Funcs = restrictedLibrary{inner: ctx.Funcs, sheetFuncs: rt.sheet.funcs}
 	seq, err := comp.Eval(&inner)
 	if err != nil {
 		// A call to a function the restricted library hides surfaces here as

@@ -38,6 +38,19 @@ func (l *Library) Lookup(name xdm.QName, arity int) (Function, bool) {
 	return Function{}, false
 }
 
+// Declares reports whether this library itself defines the name, without
+// consulting Parent.
+//
+// Lookup deliberately chains, so it cannot answer "is this one of the
+// stylesheet's own functions?" for a library whose parent is the builtins.
+// XSLT 3.0 10.4.1 needs exactly that question: the target expression of
+// xsl:evaluate sees the builtin functions but not the ones the stylesheet
+// declares.
+func (l *Library) Declares(name xdm.QName, arity int) bool {
+	_, ok := l.fns[libKey(name, arity)]
+	return ok
+}
+
 // Add registers a function.
 func (l *Library) Add(f Function) {
 	l.fns[libKey(f.Name, f.Arity)] = f
