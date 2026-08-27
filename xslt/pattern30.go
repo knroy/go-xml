@@ -231,22 +231,64 @@ func (g *generalPattern) matches(node *xdm.Node, ctx *xpath.Context) (bool, erro
 		return containsNode(seq, node), nil
 	}
 	// A relative pattern is anchored at some ancestor of the candidate: "a/b"
-	// matches a b whose parent is an a, wherever that a is. Evaluating from
-	// each ancestor in turn — and from the root, which an absolute form needs
-	// — finds every anchoring the pattern admits.
-	for anc := node; anc != nil; anc = anc.Parent {
+	// matches a b whose parent is an a, wherever that a is. Section 5.5.3
+	// says so by making the equivalent expression "root(.)//" + P, so the
+	// anchor may be any node on the candidate's ancestor-or-self chain, not
+	// only its parent — and the walk starts at the candidate itself so that
+	// a one-step pattern still finds it.
+	//
+	// A temporary tree makes the chain matter: the x built by an
+	// xsl:variable is its own root, so "x/(a|b)" has to be evaluated from
+	// that x's *parent*, which does not exist — the anchor is the x itself
+	// and the expression is evaluated from one level above where the first
+	// step names. Walking the whole chain covers both.
+	for anc := node; ; anc = anc.Parent {
 		seq, err := g.expr.Eval(ctx.WithFocus(anc, 1, 1))
 		if err != nil {
 			// A pattern evaluated against a node it was not written for is a
 			// non-match rather than a failure; 5.5.4 says so, and Matches
 			// applies the same rule to the step forms.
-			if recoverPatternError(err) {
-				continue
+			if !recoverPatternError(err) {
+				return false, err
 			}
-			return false, err
-		}
-		if containsNode(seq, node) {
+		} else if containsNode(seq, node) {
 			return true, nil
+		}
+		if anc.Parent == nil {
+			// The chain ends at the root. A relative pattern is still
+			// anchored below it — "x/(a|b)" against a tree whose root is the
+			// x needs the x's own parent, which the chain does not have — so
+			// the root's descendants are tried as anchors too, which is what
+			// the "//" in the equivalent expression amounts to.
+			return g.matchesUnderRoot(anc, node, ctx)
+		}
+	}
+}
+
+// matchesUnderRoot tries every descendant of root as the anchor for a relative
+// pattern, stopping as soon as one selects node.
+//
+// This is the "//" of the equivalent expression root(.)//P made explicit. It
+// is only reached once the ancestor chain has been exhausted, and only for the
+// XSLT 3.0 forms, so the ordinary step patterns never pay for it.
+func (g *generalPattern) matchesUnderRoot(root, node *xdm.Node,
+	ctx *xpath.Context) (bool, error) {
+
+	for _, ch := range root.Children {
+		if ch.Kind != xdm.KindElement && ch.Kind != xdm.KindDocument {
+			continue
+		}
+		seq, err := g.expr.Eval(ctx.WithFocus(ch, 1, 1))
+		if err != nil {
+			if !recoverPatternError(err) {
+				return false, err
+			}
+		} else if containsNode(seq, node) {
+			return true, nil
+		}
+		ok, err := g.matchesUnderRoot(ch, node, ctx)
+		if err != nil || ok {
+			return ok, err
 		}
 	}
 	return false, nil
