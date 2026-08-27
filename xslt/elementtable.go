@@ -418,6 +418,16 @@ var xsltElements = map[string]elementDef{
 		"namespace-context": {},
 		"schema-aware":      {avt: true},
 	}},
+	// XSLT 3.0 section 3.10, a top-level declaration.
+	"global-context-item": {since30: true, attrs: map[string]attrDef{
+		"as":  {},
+		"use": {values: []string{"required", "optional", "absent"}},
+		// streamable and use-accumulators are accepted and not enforced:
+		// this processor does not stream, and section 19 lets one decline
+		// the analysis.
+		"streamable":       {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"use-accumulators": {},
+	}},
 	// XSLT 3.0 section 10.1.1, a child of xsl:template only.
 	"context-item": {since30: true, attrs: map[string]attrDef{
 		"as":  {},
@@ -710,6 +720,7 @@ var contentModels = map[string]contentModel{
 	"accumulator":            {seqCtor: false, pcdata: false, kids: map[string]bool{"accumulator-rule": true}, model: "xsl:accumulator-rule+"},
 	"accumulator-rule":       {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"context-item":           {seqCtor: false, pcdata: false, kids: nil, model: ""},
+	"global-context-item":    {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true, "context-item": true}, model: "(xsl:context-item?, xsl:param*, sequence-constructor)"},
 	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
 	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
@@ -794,8 +805,9 @@ var xsltDeclarations = map[string]bool{
 	// forwards-compatible processing must not ignore them the way it ignores
 	// an element from a later version. Leaving them out had the static phase
 	// prune every xsl:use-package before composition could read it.
-	"use-package": true,
-	"expose":      true,
+	"use-package":         true,
+	"expose":              true,
+	"global-context-item": true,
 }
 
 // qnameAttrDef records that an attribute's value is a QName, or a

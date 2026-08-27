@@ -157,6 +157,17 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// xsl:global-context-item constrains the item the whole transformation
+	// runs against, so it is checked before anything else: every global
+	// variable is evaluated from that item, and a mistyped one must not have
+	// half the globals bound before it is noticed.
+	var globalItem xdm.Item
+	if source != nil {
+		globalItem = source
+	}
+	if err := s.checkGlobalContextItem(globalItem); err != nil {
+		return nil, err
+	}
 	// A nil source is legal when the transform starts from a named template.
 	// XSLT 2.0 section 2.3 makes the source document optional in exactly that
 	// case, and it is how a stylesheet that generates its own content is

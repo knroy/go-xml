@@ -43,6 +43,10 @@ type Stylesheet struct {
 	// stylesheet under both processors expecting each to use its own code.
 	// The module's own @version therefore cannot decide it.
 	maxVersion float64
+	// globalContextItem is the xsl:global-context-item declaration, or nil.
+	// It constrains the item the transformation is started with, which every
+	// global variable is then evaluated against.
+	globalContextItem *globalContextItemDecl
 	// keys holds xsl:key declarations, grouped by name.
 	keys map[string][]*keyDef
 
@@ -796,7 +800,17 @@ func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error
 	if r, ok := ns.(*nsResolver); ok {
 		v = r.xpathVersion
 	}
-	c, err := xpath.CompileVersion(src, ns, v)
+	// A named function reference resolves at the processor's version, not the
+	// module's: "#N" names a function, and which functions exist is already a
+	// processor property (see xpath.Context.LibraryVersion). The XSLT suite
+	// runs version="2.0" modules scoped XSLT30+ that write "current-group#0"
+	// and "system-property#1", and a 3.0 processor must resolve them. Every
+	// other 3.0 construct stays gated on the module's own declaration.
+	refFloor := xpath.Version(0)
+	if processorAtLeast30() {
+		refFloor = xpath.XPath31
+	}
+	c, err := xpath.CompileVersionRefFloor(src, ns, v, refFloor)
 	if err != nil {
 		return nil, err
 	}

@@ -76,6 +76,7 @@ type compiler struct {
 	// checkModeConflicts.
 	modeTies map[string][]int
 
+
 	// statedDecimalFormat records, per format name, which attributes an
 	// xsl:decimal-format declaration actually named. XTSE1290 compares
 	// declarations attribute by attribute, and the merged format kept in the
@@ -434,6 +435,11 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 			return err
 		}
 	}
+	// The template rules an xsl:override contributes take this module's
+	// precedence, which is only settled above.
+	if err := c.compileOverrideRules(root, precedence); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -475,6 +481,8 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 	}
 
 	switch el.Name.Local {
+	case "global-context-item":
+		return c.compileGlobalContextItem(el)
 	case "template":
 		return c.compileTemplate(el, precedence)
 	case "variable", "param":
