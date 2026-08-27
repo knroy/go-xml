@@ -127,6 +127,18 @@ func modeNamesOf(el *xdm.Node) []string {
 // templateModeNames expands xsl:template/@mode into Clark names. "#all" is
 // excluded: it names every mode there is, so it cannot be undeclared.
 func templateModeNames(el *xdm.Node) []string {
+	// Only a template *rule* is in a mode. Section 6.1: "an xsl:template
+	// element that has no match attribute must have no mode attribute", so a
+	// named template belongs to no mode at all and cannot be a reference to
+	// the unnamed one.
+	//
+	// Reading a named template as using the unnamed mode made every package
+	// whose only template is xsl:initial-template a static error, which is
+	// most of the package-version set: those stylesheets declare no mode,
+	// use no mode, and were still told the unnamed mode was undeclared.
+	if el.Attr("", "match") == nil {
+		return nil
+	}
 	a := el.Attr("", "mode")
 	if a == nil {
 		return []string{""}
@@ -192,4 +204,49 @@ func yesAttr(el *xdm.Node, name string) bool {
 		return true
 	}
 	return false
+}
+
+// defaultModeAt returns the mode that "#default" names at el.
+//
+// XSLT 3.0 section 6.6.2 makes [xsl:]default-mode a standard attribute: it may
+// be written on any XSLT element or, in the xsl: namespace, on a literal
+// result element, and it applies to that element and everything within. Where
+// none is in scope the default mode is the unnamed one, which is why the
+// pseudo-mode used to be compiled straight to "".
+//
+// It is resolved statically, at the element the mode token is written on,
+// exactly as the default collation and the default element namespace are. The
+// Clark name is returned, or "" for the unnamed mode.
+func defaultModeAt(el *xdm.Node) (string, error) {
+	for a := el; a != nil; a = a.Parent {
+		if a.Kind != xdm.KindElement {
+			continue
+		}
+		v := ""
+		if a.Name.URI == xdm.NSXSL {
+			if at := a.Attr("", "default-mode"); at != nil {
+				v = at.Value
+			}
+		}
+		if v == "" {
+			// On a literal result element the attribute must be in the XSLT
+			// namespace to be the stylesheet's rather than the output's.
+			if at := a.Attr(xdm.NSXSL, "default-mode"); at != nil {
+				v = at.Value
+			}
+		}
+		if v == "" {
+			continue
+		}
+		tok := strings.TrimSpace(v)
+		if tok == "#unnamed" || tok == "#default" {
+			return "", nil
+		}
+		qn, err := resolveQNameAttr(a, tok)
+		if err != nil {
+			return "", err
+		}
+		return xdm.QName{URI: qn.URI, Local: qn.Local}.Clark(), nil
+	}
+	return "", nil
 }
