@@ -159,6 +159,29 @@ func checkRegexGrammar(p string, v Version) error {
 			if err := checkQuantifier(p, i); err != nil {
 				return err
 			}
+			// Past the quantifier's own closing brace, so the "}" case below
+			// sees only braces that close nothing. checkQuantifier has
+			// already established that one exists.
+			i += strings.IndexByte(p[i:], '}')
+		case '}':
+			if inClass {
+				break
+			}
+			// An unescaped "}" outside a class that closes no quantifier has
+			// no meaning in the grammar. Appendix F's NormalChar is
+			// [^.\?*+{}()|#x5B#x5D], so the brace is one of the characters
+			// that must be backslash-escaped to stand for itself; Perl and
+			// RE2 both read a stray one as a literal instead.
+			//
+			// analyze-string-097 is the case: its pattern writes "(\{[^}]+})"
+			// with the closing brace unescaped, and the suite's own note
+			// records that this makes the regex invalid - the corrected
+			// pattern is a separate test, analyze-string-097a. Note that the
+			// "}" inside the character class above is legal and is skipped by
+			// the inClass guard.
+			return fmt.Errorf(
+				"FORX0002: invalid regular expression %q: %q must be "+
+					"escaped outside a character class", p, "}")
 		}
 	}
 	if inClass {

@@ -150,12 +150,71 @@ func (c *compiler) compileAccumulator(el *xdm.Node, precedence int) error {
 	return nil
 }
 
+// referencesValueVar reports whether an accumulator rule's match pattern names
+// $value, skipping occurrences inside string literals so that
+// match="p[@x = '$value']" is not mistaken for one.
+//
+// A prefixed name such as $my:value is a different variable and is left alone;
+// only the unprefixed "value" is the one §18.2 declares.
+func referencesValueVar(src string) bool {
+	var quote byte
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != '$' {
+			continue
+		}
+		j := i + 1
+		for j < len(src) && (src[j] == ':' || src[j] == '-' || src[j] == '_' ||
+			src[j] == '.' ||
+			(src[j] >= 'a' && src[j] <= 'z') ||
+			(src[j] >= 'A' && src[j] <= 'Z') ||
+			(src[j] >= '0' && src[j] <= '9')) {
+			j++
+		}
+		if src[i+1:j] == "value" {
+			return true
+		}
+		i = j - 1
+	}
+	return false
+}
+
 // compileAccumulatorRule compiles one xsl:accumulator-rule.
 func (c *compiler) compileAccumulatorRule(el *xdm.Node) (*accumulatorRule, error) {
 	match := strings.TrimSpace(el.AttrValue("match"))
 	if match == "" {
 		return nil, fmt.Errorf(
 			"XTSE0010: xsl:accumulator-rule requires a match attribute")
+	}
+	// $value is bound only for the rule's select expression and sequence
+	// constructor. XSLT 3.0 §18.2 gives the scope of the implicitly declared
+	// $value as "the select attribute or contained sequence constructor of
+	// the xsl:accumulator-rule element", which excludes its own match
+	// pattern, so a reference from there is a reference to an undeclared
+	// variable: XPST0008.
+	//
+	// The check is textual and made before the pattern is compiled, for the
+	// same reason globalRefs is textual: the compiled pattern does not carry
+	// its variable references, and an unbound name in a pattern is otherwise
+	// only discovered when a node happens to reach the rule - which for
+	// accumulator-091 is never, because the accumulator is applied through a
+	// mode and the pattern is evaluated in a context where the outer $value
+	// was still visible.
+	if referencesValueVar(match) {
+		return nil, fmt.Errorf(
+			"XPST0008: undeclared variable $value in " +
+				"xsl:accumulator-rule/@match: $value is in scope only in the " +
+				"rule's select expression or sequence constructor")
 	}
 	ns := newNSResolver(el, "")
 	pat, err := CompilePattern(match, ns)
