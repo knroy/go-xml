@@ -658,3 +658,40 @@ func isNameByte(c byte) bool {
 		c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.' ||
 		c == ':' || c >= 0x80
 }
+
+// canMatchNamespaceNode reports whether any alternative of the pattern could
+// select a namespace node.
+//
+// It exists so that the xsl:key index walk only synthesizes the namespace axis
+// where a key actually asks for it: the axis is built from the accumulated
+// in-scope set rather than stored, so offering it for every element of every
+// document would cost every stylesheet for the sake of the few that key on it.
+//
+// The question is asked of the last step, which is the one that tests the
+// candidate itself. A general pattern is answered conservatively — its whole
+// point is that the step walk cannot express it.
+func (p *Pattern) canMatchNamespaceNode() bool {
+	if len(p.general) > 0 {
+		return true
+	}
+	for _, a := range p.alts {
+		if a.call != nil {
+			// An id() or key() pattern selects by membership, so the step
+			// walk cannot answer; neither selects namespace nodes in
+			// practice, but saying so here would be a guess.
+			return true
+		}
+		if len(a.steps) == 0 {
+			continue
+		}
+		last := a.steps[len(a.steps)-1]
+		if last.namespace {
+			return true
+		}
+		if kt, ok := last.nodeTest.(*xpath.KindTest); ok &&
+			(kt.Any || kt.Kind == xdm.KindNamespace) {
+			return true
+		}
+	}
+	return false
+}

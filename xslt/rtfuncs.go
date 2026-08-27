@@ -931,6 +931,16 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	rt.keyBuilding[ck] = true
 	defer delete(rt.keyBuilding, ck)
 
+	// Synthesizing the namespace axis is only worth doing where a key can
+	// match a namespace node; see canMatchNamespaceNode.
+	nsKeys := false
+	for _, def := range defs {
+		if def.match.canMatchNamespaceNode() {
+			nsKeys = true
+			break
+		}
+	}
+
 	idx := map[string]xdm.Sequence{}
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
@@ -982,6 +992,39 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 						return err
 					}
 					idx[k] = append(idx[k], a)
+				}
+			}
+		}
+		// XSLT 3.0 lets a pattern match a namespace node, so the index walk
+		// has to offer them. They are synthesized per element from the whole
+		// in-scope set rather than read off the element's own declarations:
+		// key-087 keys on the namespace axis, where an inherited binding
+		// belongs to every element that inherits it.
+		if nsKeys && n.Kind == xdm.KindElement {
+			for _, nsNode := range xpath.NamespaceNodesOf(n) {
+				for _, def := range defs {
+					ok, err := def.match.Matches(nsNode, ctx)
+					if err != nil {
+						return err
+					}
+					if !ok {
+						continue
+					}
+					vals, err := rt.keyValues(def, ctx, nsNode)
+					if err != nil {
+						return err
+					}
+					coll, err := rt.keyCollation(def)
+					if err != nil {
+						return err
+					}
+					for _, kv := range vals {
+						k, err := rt.keyLookupKey(kv, coll)
+						if err != nil {
+							return err
+						}
+						idx[k] = append(idx[k], nsNode)
+					}
 				}
 			}
 		}
