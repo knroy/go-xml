@@ -399,3 +399,55 @@ func (c *compiler) compileOnEmpty(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	}
 	return &onNonEmptyInstr{sel: sel, body: body}, nil
 }
+
+// checkOnEmptyPlacement enforces the two positional rules of 8.4.2.
+//
+// The check is on the source nodes rather than the compiled instructions
+// because it is a static error about what the stylesheet *says*, and the
+// compiled form has already dropped the stripped whitespace and the comments
+// that decide whether a following text node is significant.
+func checkOnEmptyPlacement(nodes []*xdm.Node) error {
+	seen := false
+	for _, n := range nodes {
+		switch n.Kind {
+		case xdm.KindText:
+			// Only a text node that survives whitespace stripping counts;
+			// the indentation between two instructions does not.
+			if !seen || xdm.IsXMLWhitespace(n.Value) && !stylesheetTextPreserved(n) {
+				continue
+			}
+			return fmt.Errorf(
+				"XTSE0010: a significant text node may not follow xsl:on-empty")
+
+		case xdm.KindElement:
+			if n.Name.URI == xdm.NSXSL && n.Name.Local == "on-empty" {
+				if seen {
+					// "It must be the only xsl:on-empty instruction in the
+					// sequence constructor."
+					return fmt.Errorf(
+						"XTSE0010: a sequence constructor may contain only one xsl:on-empty")
+				}
+				seen = true
+				continue
+			}
+			if !seen {
+				continue
+			}
+			// xsl:fallback is named as the one instruction that may follow,
+			// and anything that is not an instruction at all — xsl:catch, a
+			// declaration read by its parent — is not "followed by any other
+			// instruction" in the sense the rule means.
+			if n.Name.URI == xdm.NSXSL {
+				if n.Name.Local == "fallback" || !xsltInstructions[n.Name.Local] {
+					continue
+				}
+				return fmt.Errorf(
+					"XTSE0010: xsl:%s may not follow xsl:on-empty", n.Name.Local)
+			}
+			// A literal result element is named by the rule explicitly.
+			return fmt.Errorf(
+				"XTSE0010: a literal result element may not follow xsl:on-empty")
+		}
+	}
+	return nil
+}

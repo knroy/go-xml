@@ -42,6 +42,9 @@ func (c *compiler) compileSequenceFrom(el, nsScope *xdm.Node, fromElem int) ([]I
 
 func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruction, error) {
 	nodes = mergeAcrossComments(nodes)
+	if err := checkOnEmptyPlacement(nodes); err != nil {
+		return nil, err
+	}
 	var out []Instruction
 	for i, n := range nodes {
 		instr, err := c.compileNode(n, nsScope)
@@ -168,7 +171,7 @@ func (c *compiler) compileNode(n *xdm.Node, nsScope *xdm.Node) (Instruction, err
 		if xdm.IsXMLWhitespace(n.Value) && !stylesheetTextPreserved(n) {
 			return nil, nil
 		}
-		return &textInstr{text: n.Value}, nil
+		return c.compileText(n)
 
 	case xdm.KindComment:
 		// Comments in the stylesheet are not copied to the output.
@@ -380,7 +383,13 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 	case "value-of":
 		return c.compileValueOf(n, ns)
 	case "text":
-		return &textInstr{text: n.StringValue()}, nil
+		// A child of xsl:text is a text value template on the same terms as
+		// one in a sequence constructor, so it is compiled through the same
+		// path rather than taken literally. The node stands in for the
+		// element's whole content, which xsl:text is defined to concatenate.
+		return c.compileText(&xdm.Node{
+			Kind: xdm.KindText, Value: n.StringValue(), Parent: n,
+		})
 	case "apply-templates":
 		return c.compileApplyTemplates(n, ns)
 	case "call-template":
@@ -455,6 +464,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &sequenceInstr{sel: sel}, nil
 	case "message":
 		return c.compileMessage(n, ns)
+	case "try":
+		return c.compileTry(n, ns)
 	case "analyze-string":
 		return c.compileAnalyzeString(n, ns)
 	case "number":
@@ -487,6 +498,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &documentInstr{body: body, validation: spec}, nil
 	case "result-document":
 		return c.compileResultDocument(n, ns)
+	case "source-document":
+		return c.compileSourceDocument(n)
 	case "fallback":
 		// xsl:fallback is instantiated only when its containing instruction is
 		// one the processor does not recognise. Every instruction that reaches
@@ -496,7 +509,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		// render "A<xsl:fallback>B</xsl:fallback>C" as "AC".
 		return nil, nil
 	case "param", "sort", "with-param", "when", "otherwise",
-		"matching-substring", "non-matching-substring", "output-character":
+		"matching-substring", "non-matching-substring", "output-character",
+		"catch":
 		// These are only meaningful inside a specific parent, and each parent
 		// reads them directly from its children rather than compiling them as
 		// instructions. Reaching this case therefore means the element is in
@@ -1142,6 +1156,8 @@ func enclosingElementFor(local string) string {
 		return "xsl:analyze-string"
 	case "output-character":
 		return "xsl:character-map"
+	case "catch":
+		return "xsl:try"
 	}
 	return "its defining parent"
 }
