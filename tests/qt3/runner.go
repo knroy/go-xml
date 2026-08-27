@@ -943,6 +943,16 @@ func xmlMatches(got xdm.Sequence, want string) (bool, string) {
 	if sortTagAttrs(normalizeXML(g)) == sortTagAttrs(normalizeXML(w)) {
 		return true, ""
 	}
+	// A last resort: parse both and compare the trees. A namespace prefix is
+	// not part of an XML document either — fn:analyze-string may write its
+	// result element as "fn:analyze-string-result" or as
+	// "analyze-string-result" under a default declaration of the same
+	// namespace, and the specification's own examples use one spelling while
+	// the fn-analyze-string set uses the other. Comparing text made the two
+	// differ where the infosets are identical.
+	if infosetEqual(g, w) {
+		return true, ""
+	}
 	if len(g) > 120 {
 		g = g[:120] + "..."
 	}
@@ -1749,4 +1759,84 @@ func checkXMLChars(s string) error {
 		}
 	}
 	return nil
+}
+
+// infosetEqual reports whether two serialised documents have the same infoset,
+// ignoring everything serialisation is free to choose: the prefix a namespace
+// is bound to, the order of attributes, and where the declarations sit.
+//
+// It is the last comparison xmlMatches tries, after the textual ones, because
+// parsing is the expensive answer and a text match is the common case.
+func infosetEqual(a, b string) bool {
+	ta, err := xdm.ParseString(a, xdm.ParseOptions{})
+	if err != nil {
+		return false
+	}
+	tb, err := xdm.ParseString(b, xdm.ParseOptions{})
+	if err != nil {
+		return false
+	}
+	return nodesEqual(ta.Root, tb.Root)
+}
+
+// nodesEqual compares two trees by name, value and children, taking a name to
+// be its namespace and local part rather than its lexical form.
+func nodesEqual(a, b *xdm.Node) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Kind != b.Kind {
+		return false
+	}
+	if a.Name.URI != b.Name.URI || a.Name.Local != b.Name.Local {
+		return false
+	}
+	if a.Kind != xdm.KindElement && a.Kind != xdm.KindDocument && a.Value != b.Value {
+		return false
+	}
+	if a.Kind == xdm.KindElement && !attrsEqual(a, b) {
+		return false
+	}
+	ac, bc := significantChildren(a), significantChildren(b)
+	if len(ac) != len(bc) {
+		return false
+	}
+	for i := range ac {
+		if !nodesEqual(ac[i], bc[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// attrsEqual compares two elements' attributes as sets keyed by expanded name.
+// Namespace declarations are not attributes in the data model and are excluded.
+func attrsEqual(a, b *xdm.Node) bool {
+	if len(a.Attrs) != len(b.Attrs) {
+		return false
+	}
+	want := make(map[string]string, len(b.Attrs))
+	for _, at := range b.Attrs {
+		want[at.Name.Clark()] = at.Value
+	}
+	for _, at := range a.Attrs {
+		v, ok := want[at.Name.Clark()]
+		if !ok || v != at.Value {
+			return false
+		}
+	}
+	return true
+}
+
+// significantChildren drops whitespace-only text, which the expected value in
+// a test-set file carries from its own indentation.
+func significantChildren(n *xdm.Node) []*xdm.Node {
+	out := make([]*xdm.Node, 0, len(n.Children))
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindText && strings.TrimSpace(c.Value) == "" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
