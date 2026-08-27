@@ -32,6 +32,10 @@ type forEachGroupInstr struct {
 	// at compile time: collation="{$c}" is legal and names a collation the
 	// stylesheet computes.
 	collation *avt
+	// composite records composite="yes": the whole atomized key sequence is
+	// one grouping key rather than a set of them. XSLT 3.0 section 14.2; see
+	// grouping_composite.go.
+	composite bool
 	sorts     []*sortKey
 	body      []Instruction
 }
@@ -55,13 +59,21 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if coll, err = i.resolveCollation(rt); err != nil {
 			return err
 		}
-		groups, err = groupByKey(rt, seq, i.groupBy, coll)
+		if i.composite {
+			groups, err = groupByCompositeKey(rt, seq, i.groupBy, coll)
+		} else {
+			groups, err = groupByKey(rt, seq, i.groupBy, coll)
+		}
 	case i.groupAdjacent != nil:
 		var coll xpath.Collation
 		if coll, err = i.resolveCollation(rt); err != nil {
 			return err
 		}
-		groups, err = groupAdjacentKey(rt, seq, i.groupAdjacent, coll)
+		if i.composite {
+			groups, err = groupAdjacentCompositeKey(rt, seq, i.groupAdjacent, coll)
+		} else {
+			groups, err = groupAdjacentKey(rt, seq, i.groupAdjacent, coll)
+		}
 	case i.groupStartsWith != nil:
 		groups, err = groupStartingWith(rt, seq, i.groupStartsWith)
 	case i.groupEndsWith != nil:
@@ -485,6 +497,16 @@ func (c *compiler) compileForEachGroup(n *xdm.Node, ns xpath.NamespaceResolver) 
 		return nil, fmt.Errorf(
 			"XTSE1090: xsl:for-each-group/@collation requires either " +
 				"group-by or group-adjacent")
+	}
+	// XTSE1090 names @composite in the same breath, for the same reason: a
+	// positional grouping has no key for the attribute to describe.
+	if v := n.AttrValue("composite"); v != "" {
+		if instr.groupBy == nil && instr.groupAdjacent == nil {
+			return nil, fmt.Errorf(
+				"XTSE1090: xsl:for-each-group/@composite requires either " +
+					"group-by or group-adjacent")
+		}
+		instr.composite = isYes(v)
 	}
 
 	_, sorts, err := c.compileParamsAndSorts(n, ns)
