@@ -12,6 +12,22 @@ import (
 // and makes a failure while building the message content something the
 // transformation survives rather than something it dies of.
 
+// compileMaxVersion is the MaxVersion of the compilation in progress, held as
+// package state for the duration of Compile under the same lock as
+// compileSchema and overrideXPathVersion; see their declarations.
+//
+// The static grammar check is a free function walking the tree, with no route
+// to the compiler's options, and threading them through every level of it to
+// answer one question about one attribute would be a large change for a small
+// one. Zero means uncapped, and so 3.0.
+var compileMaxVersion float64
+
+// processorAtLeast30 reports whether the compilation in progress is acting as
+// an XSLT 3.0 processor.
+func processorAtLeast30() bool {
+	return compileMaxVersion == 0 || compileMaxVersion >= 3.0
+}
+
 // messageTerminate reads the effective value of xsl:message/@terminate.
 //
 // XSLT 2.0 gives the attribute a closed set of "yes" and "no", so anything

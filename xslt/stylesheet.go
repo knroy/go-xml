@@ -233,8 +233,18 @@ type OutputSettings struct {
 	DocTypeSystem string
 	CDataElements []xdm.QName
 	Standalone    string
-	// Version is xsl:output/@version; "5.0" selects the HTML5 doctype.
+	// Version is xsl:output/@version. For the html method it selects the
+	// HTML version; for xml and xhtml it is the XML version.
 	Version string
+	// HTMLVersion is xsl:output/@html-version, new in XSLT 3.0.
+	//
+	// It exists because @version cannot answer the question for XHTML: there
+	// it states the version of XML, so an XHTML5 document is still
+	// version="1.0" and the HTML version had nowhere to go. Section 9.1: if
+	// html-version is absent "the html output method uses the value of the
+	// version parameter in its place", so it overrides for html and is the
+	// only source for xhtml.
+	HTMLVersion string
 	// UseCharacterMaps names the xsl:character-map declarations applied at
 	// serialisation.
 	UseCharacterMaps []xdm.QName
@@ -363,6 +373,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// the same lock; see overrideXPathVersion.
 	overrideXPathVersion = opts.XPathVersion
 	defer func() { overrideXPathVersion = nil }()
+	// So is the processor's own version, which a few grammar rules turn on;
+	// see compileMaxVersion.
+	compileMaxVersion = opts.MaxVersion
+	defer func() { compileMaxVersion = 0 }()
 
 	if err := c.compileDocument(doc, 0); err != nil {
 		return nil, err
