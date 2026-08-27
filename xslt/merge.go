@@ -374,6 +374,22 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 // the element table gives xsl:merge-key no @stable, and the key is evaluated
 // with a singleton focus rather than the position in the unsorted sequence.
 func (c *compiler) compileMergeKey(n *xdm.Node) (*sortKey, error) {
+	// 15.5 says xsl:merge-key follows xsl:sort's summary with "the only
+	// exception being the absence of the stable attribute". The table check
+	// would normally report that, but a version="3.0" stylesheet is in
+	// forwards-compatible mode as far as this engine's threshold is
+	// concerned, so an attribute the summary does not define is ignored
+	// there. That leniency is meant for elements of a *later* version, and
+	// xsl:merge-key belongs to this one: a 2.0 processor never sees the
+	// element at all, so nothing is gained by pretending not to understand
+	// its attributes. merge-010 requires the error.
+	if a := n.Attr("", "stable"); a != nil {
+		return nil, fmt.Errorf(
+			"XTSE0090: attribute \"stable\" is not allowed on xsl:merge-key; " +
+				"an xsl:merge-key declares an existing order rather than " +
+				"causing a sort")
+	}
+
 	// XTSE3200 is XTSE1015's counterpart for xsl:merge-key. Both say a select
 	// attribute and content are mutually exclusive; only the code differs, so
 	// the condition is tested here rather than letting compileSort report the
