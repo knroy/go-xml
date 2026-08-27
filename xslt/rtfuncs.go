@@ -110,12 +110,17 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-before"}, Arity: 1,
+		// XSLT 3.0 added accumulators, so a 2.0 stylesheet must get
+		// XPST0017 rather than a working call. A version="3.0" stylesheet
+		// compiles as XPath 3.1, which is what the gate tests.
+		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return fnAccumulator(rt, ctx, args, false)
 		},
 	})
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "accumulator-after"}, Arity: 1,
+		Since: xpath.XPath31,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			return fnAccumulator(rt, ctx, args, true)
 		},

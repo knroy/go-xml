@@ -26,7 +26,11 @@ import (
 type Pattern struct {
 	src  string
 	alts []*patternAlt
-	prio float64
+	// general holds the alternatives written in one of the XSLT 3.0 forms
+	// the step walk cannot express, matched by the equivalent-expression
+	// rule instead. See pattern30.go.
+	general []*generalPattern
+	prio    float64
 }
 
 // patternAlt is one alternative of a "|"-separated pattern.
@@ -69,6 +73,10 @@ type patternStep struct {
 	// explicitAxis records that the axis was spelled out. The child-or-top
 	// widening of section 5.5.3 applies only to the abbreviated form.
 	explicitAxis bool
+	// self marks a self:: step, which the XSLT 3.0 grammar admits. It
+	// constrains the candidate rather than its parent, so the walk does not
+	// step up before testing it. See pattern30.go.
+	self bool
 }
 
 // CompilePattern compiles an XSLT match pattern.
@@ -88,6 +96,15 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		}
 		a, err := compilePatternAlt(alt, ns)
 		if err != nil {
+			// XSLT 3.0 widened the grammar past what the step walk can
+			// express. Before reporting the error, see whether this is one
+			// of the forms the equivalent-expression rule covers; see
+			// pattern30.go.
+			g, gerr := compileGeneralPattern(alt, ns)
+			if gerr == nil && g != nil && patternsAllow30(ns) {
+				p.general = append(p.general, g)
+				continue
+			}
 			// Every way a pattern can fail to compile is the same static
 			// error: the attribute does not match the Pattern production.
 			// The code is attached here, once, rather than at each of the
@@ -97,7 +114,7 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 		}
 		p.alts = append(p.alts, a)
 	}
-	if len(p.alts) == 0 {
+	if len(p.alts) == 0 && len(p.general) == 0 {
 		return nil, fmt.Errorf("XTSE0340: pattern %q is empty", src)
 	}
 	p.prio = p.computePriority()
@@ -141,6 +158,7 @@ func splitTopLevel(s string, sep byte) []string {
 // allows parses here; the reinterpretation below rejects the constructs that
 // parse but are not legal patterns.
 func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, error) {
+	allow30 := patternsAllow30(ns)
 	expr, err := xpath.Parse(src, ns)
 	if err != nil {
 		return nil, err
@@ -183,7 +201,7 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 			if !ok {
 				return nil, fmt.Errorf("not a valid pattern step: %s", s.String())
 			}
-			ps, err := convertStep(step)
+			ps, err := convertStep(step, allow30)
 			if err != nil {
 				return nil, err
 			}
@@ -215,7 +233,7 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 		}
 
 	case *xpath.Step:
-		ps, err := convertStep(e)
+		ps, err := convertStep(e, allow30)
 		if err != nil {
 			return nil, err
 		}
@@ -268,7 +286,7 @@ func checkPITarget(t xpath.NodeTest) error {
 	return nil
 }
 
-func convertStep(s *xpath.Step) (patternStep, error) {
+func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 	ps := patternStep{nodeTest: s.Test, preds: s.Predicates, explicitAxis: s.Explicit}
 	if err := checkPITarget(s.Test); err != nil {
 		return ps, err
@@ -282,6 +300,13 @@ func convertStep(s *xpath.Step) (patternStep, error) {
 		ps.descendant = true
 	case xpath.AxisDescendant:
 		ps.descendant = true
+	case xpath.AxisSelf:
+		// XSLT 3.0 admits self:: in a pattern, where it constrains the
+		// candidate itself. The walk therefore does not step up for it.
+		if !allow30 {
+			return ps, fmt.Errorf("axis %q is not allowed in a pattern", s.String())
+		}
+		ps.self = true
 	default:
 		return ps, fmt.Errorf("axis %q is not allowed in a pattern", s.String())
 	}
@@ -304,6 +329,18 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	// the outer node instead made the predicate select only the candidates
 	// sharing the numbered node's value.
 	ctx = ctx.WithVar(currentVar, xdm.One(node))
+	for _, g := range p.general {
+		ok, err := g.matches(node, ctx)
+		if err != nil {
+			if recoverPatternError(err) {
+				continue
+			}
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
 	for _, alt := range p.alts {
 		ok, err := alt.matches(node, ctx)
 		if err != nil {
@@ -388,6 +425,18 @@ func (a *patternAlt) matchAncestors(steps []patternStep, node *xdm.Node, ctx *xp
 
 	step := steps[len(steps)-1]
 	rest := steps[:len(steps)-1]
+
+	// A self:: step constrains the node the walk has already reached rather
+	// than its parent, so it is verified in place and the walk continues from
+	// the same node: "self::foo/bar" is a bar whose parent is a foo, and the
+	// foo is the parent, not the grandparent.
+	if step.self {
+		ok, err := matchStep(step, node, ctx)
+		if err != nil || !ok {
+			return false, err
+		}
+		return a.matchAncestors(rest, node, ctx)
+	}
 
 	if step.descendant {
 		// A "//" step matches at any depth, so try every ancestor. The step
@@ -688,6 +737,11 @@ func (p *Pattern) computePriority() float64 {
 		pr := alt.priority()
 		if pr > best {
 			best = pr
+		}
+	}
+	for _, g := range p.general {
+		if g.prio > best {
+			best = g.prio
 		}
 	}
 	return best

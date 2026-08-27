@@ -507,6 +507,12 @@ type nsResolver struct {
 	// XPath 3.1, a version="2.0" one writes XPath 2.0, and an included module
 	// keeps its own answer rather than the importing module's.
 	xpathVersion xpath.Version
+	// xsltVersion is the XSLT version declared on or above the element this
+	// resolver was built for. It is not the same question xpathVersion
+	// answers: forwards-compatible mode raises the XPath version to the
+	// latest implemented while leaving the XSLT grammar at 2.0, and the
+	// pattern grammar follows the XSLT version. See patternsAllow30.
+	xsltVersion float64
 }
 
 // compileSchema is the schema in force while a stylesheet is being compiled.
@@ -548,6 +554,7 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		schema:    compileSchema,
 
 		xpathVersion: xpathVersionAt(el),
+		xsltVersion:  declaredXSLTVersion(el),
 	}
 }
 
