@@ -90,6 +90,47 @@ func checkDeclaredModes(root *xdm.Node) error {
 	}
 	scan(root)
 
+	// A @default-mode on the package element names a mode "implicitly", which
+	// is the case 3.6.4.1 calls out by name: the error covers a mode name the
+	// package contains "either explicitly or implicitly (for example, by
+	// virtue of a relevant default-mode attribute)". A package whose default
+	// mode is one no xsl:mode declares has named an undeclared mode however
+	// few templates it goes on to write.
+	//
+	// It is judged even for a package with no templates at all, because that
+	// is the whole point of package-914d and -914e: an empty package whose
+	// default-mode names nothing. The catalog's description says why the
+	// answer must be the static error rather than the dynamic one the
+	// invocation would otherwise reach -- "static errors come before dynamic
+	// errors, XTDE0044 is not raised, but XTSE3085 is".
+	//
+	// package-914b is the contrast that fixes the boundary: its
+	// default-mode="#unnamed" is declared by a bare <xsl:mode/>, so it is not
+	// this error and goes on to the XTDE0044 it expects.
+	//
+	// A package that uses another is exempt on the same grounds as the walk
+	// below: a mode this package's default-mode names may be one it accepts
+	// from a used package, and which those are is not knowable here.
+	if !usesPackage {
+		if a := root.Attr("", "default-mode"); a != nil {
+			tok := strings.TrimSpace(a.Value)
+			name := ""
+			switch tok {
+			case "", "#default", "#unnamed":
+			default:
+				if qn, err := resolveQNameAttr(root, tok); err == nil {
+					name = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
+				}
+			}
+			if name != "" && !declared[name] {
+				return fmt.Errorf(
+					"XTSE3085: the package's default-mode names the mode %s, "+
+						"but no xsl:mode declaration introduces it and the "+
+						"package sets declared-modes=\"yes\"", tok)
+			}
+		}
+	}
+
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		for _, ch := range n.ChildElements() {
