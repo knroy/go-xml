@@ -650,6 +650,23 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			accepted[key] = u
 		}
 	}
+	// XTSE3050 again, this time between the manifest and the using package's
+	// own declarations: a package may not declare a component whose symbolic
+	// name it also accepted from a package it uses. There is no precedence
+	// contest to settle it -- 3.5 removed the one xsl:import has -- so the
+	// clash is simply an error. override-t-008 declares a template named "t"
+	// alongside an xsl:use-package that accepts one.
+	own, err := packageComponents(root)
+	if err != nil {
+		return err
+	}
+	for _, comp := range own {
+		if u, dup := accepted[comp.sym.String()]; dup {
+			return fmt.Errorf(
+				"XTSE3050: %s is declared in this package and also accepted "+
+					"from %s", comp.sym, u.name)
+		}
+	}
 	// The used packages are compiled below the using package, so that the
 	// using package's own declarations win any contest precedence decides.
 	// They are compiled in reverse manifest order for the same reason
@@ -685,6 +702,9 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 			order++
 			u.accepts = append(u.accepts, r)
 		case isXSL(ch, "override"):
+			if err := checkOverrideChildren(ch); err != nil {
+				return nil, err
+			}
 			u.overrides = append(u.overrides, ch)
 		}
 	}
@@ -848,6 +868,30 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 	return vis, nil
 }
 
+// overrideChildren is the content model of xsl:override, 3.5.4.
+//
+// It is not "every component kind": xsl:mode is a component and is still not
+// allowed here, because an override supplies a component's *body* and a mode
+// declaration has none -- what it carries is the mode's properties, which
+// belong to the package that introduced the mode. A rule for that mode is
+// written as an ordinary template child instead.
+var overrideChildren = map[string]bool{
+	"template": true, "function": true, "variable": true,
+	"param": true, "attribute-set": true,
+}
+
+// checkOverrideChildren applies that content model, XTSE0010.
+func checkOverrideChildren(ov *xdm.Node) error {
+	for _, ch := range ov.ChildElements() {
+		if ch.Name.URI != xdm.NSXSL || !overrideChildren[ch.Name.Local] {
+			return fmt.Errorf(
+				"XTSE0010: %s is not allowed as a child of xsl:override",
+				ch.Name.Lexical())
+		}
+	}
+	return nil
+}
+
 // checkOverrideSignature compares an overriding declaration with the one it
 // overrides, XTSE3070.
 //
@@ -858,6 +902,13 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 // two declarations are the same kind of thing at all — the latter is already
 // guaranteed by the homonymy check, since the symbolic name carries the kind.
 func checkOverrideSignature(overriding, original *xdm.Node) error {
+	if isXSL(overriding, "template") {
+		// A template's parameters are named rather than positional, so they
+		// are compared by name: an override may declare them in any order,
+		// but every one it declares must have the type the original gave it,
+		// and it may not introduce or drop one.
+		return checkTemplateParams(overriding, original)
+	}
 	if !isXSL(overriding, "function") {
 		return nil
 	}
@@ -867,6 +918,23 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 				"the one it overrides has %d",
 			overriding.AttrValue("name"), a, b)
 	}
+	// The parameters' declared types must agree, position by position. A
+	// caller of the used package was compiled against the original
+	// signature, so an override that widens or narrows a parameter would
+	// receive a value its body was not written for.
+	op, np := leadingParams(overriding), leadingParams(original)
+	for i := range op {
+		if i >= len(np) {
+			break
+		}
+		if a, b := op[i].AttrValue("as"), np[i].AttrValue("as"); a != b {
+			return fmt.Errorf(
+				"XTSE3070: the overriding declaration of %s declares "+
+					"parameter $%s as=%q and the one it overrides declares "+
+					"as=%q", overriding.AttrValue("name"),
+				op[i].AttrValue("name"), a, b)
+		}
+	}
 	// The declared return types must agree. A weaker type on the override
 	// would let a caller of the used package receive a value the used
 	// package's own signature promised it would not.
@@ -874,6 +942,66 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 		a != "" && b != "" {
 		return fmt.Errorf(
 			"XTSE3070: the overriding xsl:function %s declares as=%q and the "+
+				"one it overrides declares as=%q",
+			overriding.AttrValue("name"), a, b)
+	}
+	return nil
+}
+
+// leadingParams returns the xsl:param children that open a declaration.
+func leadingParams(el *xdm.Node) []*xdm.Node {
+	var out []*xdm.Node
+	for _, ch := range el.ChildElements() {
+		if !isXSL(ch, "param") {
+			break
+		}
+		out = append(out, ch)
+	}
+	return out
+}
+
+// checkTemplateParams compares the parameters of an overriding template with
+// those of the template it overrides, XTSE3070.
+func checkTemplateParams(overriding, original *xdm.Node) error {
+	orig := map[string]*xdm.Node{}
+	for _, p := range leadingParams(original) {
+		orig[p.AttrValue("name")] = p
+	}
+	seen := map[string]bool{}
+	for _, p := range leadingParams(overriding) {
+		name := p.AttrValue("name")
+		seen[name] = true
+		o, ok := orig[name]
+		if !ok {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s declares a parameter "+
+					"$%s that the one it overrides does not",
+				overriding.AttrValue("name"), name)
+		}
+		if a, b := p.AttrValue("as"), o.AttrValue("as"); a != b {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s declares $%s as=%q "+
+					"and the one it overrides declares as=%q",
+				overriding.AttrValue("name"), name, a, b)
+		}
+		if a, b := p.AttrValue("required"), o.AttrValue("required"); a != b {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s declares $%s "+
+					"required=%q and the one it overrides declares %q",
+				overriding.AttrValue("name"), name, a, b)
+		}
+	}
+	for name := range orig {
+		if !seen[name] {
+			return fmt.Errorf(
+				"XTSE3070: the overriding template %s does not declare the "+
+					"parameter $%s that the one it overrides declares",
+				overriding.AttrValue("name"), name)
+		}
+	}
+	if a, b := overriding.AttrValue("as"), original.AttrValue("as"); a != b {
+		return fmt.Errorf(
+			"XTSE3070: the overriding template %s declares as=%q and the "+
 				"one it overrides declares as=%q",
 			overriding.AttrValue("name"), a, b)
 	}
