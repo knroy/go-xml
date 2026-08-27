@@ -144,6 +144,14 @@ func (p *staticPhase) children(n *xdm.Node, topLevel bool) error {
 		if err := p.expandShadow(ch); err != nil {
 			return err
 		}
+		// A top-level element that forwards compatible behavior ignores is
+		// ignored entirely, use-when included. Section 3.9 says "the element
+		// and its content must be ignored", and forwards-008 writes
+		// use-when="fn:new-function()" on such an element -- an expression
+		// this version cannot even compile, which is the point.
+		if topLevel && ignoredTopLevel(ch) {
+			continue
+		}
 		keep, err := p.included(ch)
 		if err != nil {
 			return err
@@ -477,7 +485,15 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// define, which the grammar check reports as XTSE0090 — so expanding one
 	// here would silently accept a stylesheet every conforming 2.0 processor
 	// rejects.
-	if !xpathVersionAt(el).AtLeast31() {
+	//
+	// The module element is the exception, because @_version is what sets the
+	// version the rest of the module is read at. Reading the version it is
+	// about to overwrite to decide whether to expand it would make the
+	// attribute unable to do the one thing it is for, so on the module
+	// element the shadow form is expanded first and the version read after.
+	// A version="2.0" module is not reached at all: whether the processor
+	// admits 3.0 has already been settled by the time this pass runs.
+	if !moduleAtLeast30(el) && !isModuleElement(el) {
 		return nil
 	}
 	// The overwhelmingly common case is an element with no shadow attribute
@@ -663,4 +679,42 @@ func (c *compiler) staticGlobal(el *xdm.Node) (*Variable, error) {
 	// stylesheet is at fault.
 	return nil, fmt.Errorf("static %s $%s was not evaluated by the static phase",
 		el.Name.Local, qn.Lexical())
+}
+
+// isModuleElement reports whether el is the element a stylesheet module is
+// rooted at.
+func isModuleElement(el *xdm.Node) bool {
+	return el.Kind == xdm.KindElement && el.Name.URI == xdm.NSXSL &&
+		isStylesheetRootName(el.Name.Local) &&
+		(el.Parent == nil || el.Parent.Kind != xdm.KindElement ||
+			el.Parent.Name.URI != xdm.NSXSL)
+}
+
+// forwardsAtDeep reports whether el is processed with forwards compatible
+// behavior, reading the version from the nearest ancestor-or-self that
+// declares one. forwardsAt asks the same question of a single element and
+// takes the inherited answer as an argument, which this pass does not carry.
+func forwardsAtDeep(el *xdm.Node) bool {
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind == xdm.KindElement && hasVersionAttr(cur) {
+			return forwardsAt(cur, false)
+		}
+	}
+	return false
+}
+
+// ignoredTopLevel reports whether ch, a child of a module element, is one
+// section 3.9's first rule of forwards compatible behavior discards.
+//
+// That rule covers any XSLT element XSLT 3.0 does not allow in this position,
+// known or not, provided the element's effective version puts it under
+// forwards compatible behavior.
+func ignoredTopLevel(ch *xdm.Node) bool {
+	if ch.Name.URI != xdm.NSXSL || !forwardsAtDeep(ch) {
+		return false
+	}
+	if _, known := xsltElements[ch.Name.Local]; !known {
+		return true
+	}
+	return !xsltDeclarations[ch.Name.Local]
 }

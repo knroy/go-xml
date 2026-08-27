@@ -148,6 +148,29 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 		if err := checkVarParamAttrs(n); err != nil {
 			return err
 		}
+		// XTSE0805 runs even in forwards-compatible mode, for the same
+		// reason. Section 3.9 excuses constructs the processor does not
+		// understand; an attribute in the XSLT namespace that no version of
+		// this specification defines on a literal result element is not one
+		// of them, and a shadow attribute written xsl:_name is precisely
+		// that -- the shadow mechanism applies to XSLT elements alone.
+		if !forwards {
+			if err := checkLiteralResultXSLAttrs(n); err != nil {
+				return err
+			}
+		} else if moduleAtLeast30(n) && !effectiveForwards(n) {
+			// Forwards compatible behavior ignores an attribute this version
+			// does not allow (section 3.9, second rule), so XTSE0805 is only
+			// reportable where that behavior is not in force. This engine
+			// reads any version above 2.0 as forwards-compatible, which would
+			// withhold the rule from every 3.0 module; a version="3.0"
+			// literal result element is not in fact processed with forwards
+			// compatible behavior, whose definition is "effective version
+			// greater than 3.0", so the check runs for it.
+			if err := checkLiteralResultXSLAttrs(n); err != nil {
+				return err
+			}
+		}
 	}
 	for _, c := range n.Children {
 		if err := walkStaticErrors(c, forwards); err != nil {
@@ -160,17 +183,8 @@ func walkStaticErrors(n *xdm.Node, forwards bool) error {
 // checkElementStatic applies the rules that look at one element.
 func checkElementStatic(el *xdm.Node) error {
 	if el.Name.URI != xdm.NSXSL {
-		// XTSE0805: an attribute on a literal result element may not be in
-		// the XSLT namespace unless the specification defines it there.
-		for _, a := range el.Attrs {
-			if a.Name.URI != xdm.NSXSL {
-				continue
-			}
-			if !literalResultXSLAttrs[a.Name.Local] {
-				return fmt.Errorf(
-					"XTSE0805: xsl:%s is not an attribute this specification "+
-						"defines on a literal result element", a.Name.Local)
-			}
+		if err := checkLiteralResultXSLAttrs(el); err != nil {
+			return err
 		}
 		// A literal result element carries the prefix-list attributes in
 		// their xsl: form, and the rules about them are the same there.
@@ -905,4 +919,39 @@ func checkTypeAttribute(el *xdm.Node, schema *xsd.Schema) error {
 		}
 	}
 	return nil
+}
+
+// checkLiteralResultXSLAttrs applies XTSE0805 to a literal result element: an
+// attribute on one may not be in the XSLT namespace unless the specification
+// defines it there.
+func checkLiteralResultXSLAttrs(el *xdm.Node) error {
+	if el.Kind != xdm.KindElement || el.Name.URI == xdm.NSXSL {
+		return nil
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != xdm.NSXSL {
+			continue
+		}
+		if !literalResultXSLAttrs[a.Name.Local] {
+			return fmt.Errorf(
+				"XTSE0805: xsl:%s is not an attribute this specification "+
+					"defines on a literal result element", a.Name.Local)
+		}
+	}
+	return nil
+}
+
+// effectiveForwards reports whether el is processed with forwards compatible
+// behavior in section 3.9's sense: its effective version is greater than 3.0.
+//
+// The effective version is the one on the nearest ancestor-or-self carrying a
+// version attribute, which is a different question from the one forwardsAt
+// answers for this engine, whose baseline is 2.0.
+func effectiveForwards(el *xdm.Node) bool {
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind == xdm.KindElement && hasVersionAttr(cur) {
+			return versionAt(cur) > 3.0
+		}
+	}
+	return false
 }

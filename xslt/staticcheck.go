@@ -263,6 +263,21 @@ func checkContentModel(el *xdm.Node, forwards bool) error {
 			if _, known := xsltElements[ch.Name.Local]; !known && forwards {
 				continue
 			}
+			// Section 3.9, first rule of forwards compatible behavior: "if
+			// the element is in the XSLT namespace and appears as a child of
+			// the xsl:stylesheet element, and XSLT 3.0 does not allow the
+			// element to appear as a child of the xsl:stylesheet element,
+			// then the element and its content must be ignored."
+			//
+			// The rule is about the position, not about whether the element
+			// is one this version knows: xsl:value-of and xsl:when are both
+			// perfectly well known and both must be ignored at the top level
+			// of a module processed this way. Only a top-level position is
+			// covered -- inside a sequence constructor the third rule
+			// applies instead, and that one demands an xsl:fallback.
+			if isModuleElement(el) && forwardsAt(ch, forwards) {
+				continue
+			}
 			if cm.seqCtor && isInstruction(ch.Name.Local) {
 				continue
 			}
@@ -471,6 +486,15 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 	if n.Kind == xdm.KindElement {
 		forwards = forwardsAt(n, forwards)
+		// Section 3.9's first rule ignores the element "and its content", so
+		// the element itself is not checked either -- forwards-006 writes a
+		// nested xsl:transform with no version attribute, and reporting the
+		// missing attribute would be reporting an error about an element the
+		// processor was told to pretend it never saw.
+		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) &&
+			!xsltDeclarations[n.Name.Local] {
+			return nil
+		}
 		if err := checkStaticGrammar(n, forwards); err != nil {
 			return err
 		}
@@ -493,6 +517,35 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 			if !known || (def.since30 && !xpathVersionAt(n).AtLeast31()) {
 				return nil
 			}
+			// A known element in a position 3.0 does not allow it is ignored
+			// with its content too. Section 3.9's first rule is about where
+			// the element sits, not about whether this version knows it:
+			// xsl:value-of and xsl:when are both well known and both must be
+			// ignored as children of the module element.
+			if !xsltDeclarations[n.Name.Local] {
+				return nil
+			}
+		}
+		// Section 3.9's third rule: an XSLT element a sequence constructor
+		// does not admit, processed with forwards compatible behavior and
+		// carrying at least one xsl:fallback child, is not an error --
+		// "siblings of the xsl:fallback elements are ignored, even if they
+		// are valid XSLT 3.0 instructions". So the walk descends into the
+		// fallbacks alone: a sibling is not merely unevaluated, it is not
+		// looked at, and forwards-203 relies on that by writing an
+		// xsl:accumulator with no name where the name is required.
+		if forwards && n.Name.URI == xdm.NSXSL && hasFallbackChild(n) {
+			if _, known := xsltElements[n.Name.Local]; !known {
+				for _, c := range n.Children {
+					if !isXSL(c, "fallback") {
+						continue
+					}
+					if err := checkStaticGrammarTree(c, forwards); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 		}
 	}
 	for _, c := range n.Children {
@@ -501,6 +554,16 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		}
 	}
 	return nil
+}
+
+// hasFallbackChild reports whether el has an xsl:fallback child.
+func hasFallbackChild(el *xdm.Node) bool {
+	for _, c := range el.Children {
+		if isXSL(c, "fallback") {
+			return true
+		}
+	}
+	return false
 }
 
 // forwardsAt reports the compatibility mode in force at el, given the mode
