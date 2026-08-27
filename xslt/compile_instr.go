@@ -458,6 +458,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return c.compileMap(n, ns)
 	case "on-empty", "on-non-empty", "where-populated":
 		return c.compileOnEmpty(n, ns)
+	case "fork":
+		return c.compileFork(n)
 	case "sequence":
 		// XSLT 3.0 made the select attribute optional: "the items comprising
 		// the result sequence are evaluated either using the select

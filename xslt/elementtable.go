@@ -319,6 +319,9 @@ var xsltElements = map[string]elementDef{
 		"select": {},
 	}},
 	"where-populated": {since30: true, attrs: map[string]attrDef{}},
+	// xsl:fork, section 16. It has no attributes; its content model is the
+	// alternation in 16.1, which compileFork checks.
+	"fork": {since30: true, attrs: map[string]attrDef{}},
 	// The merging instructions of section 15. Every one of them is XSLT 3.0
 	// only, so a version="2.0" stylesheet writing one gets XTSE0010 rather
 	// than being told xsl:merge is an element it may use.
@@ -598,6 +601,7 @@ var contentModels = map[string]contentModel{
 	"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"fork":                   {seqCtor: false, pcdata: false, kids: map[string]bool{"sequence": true, "for-each-group": true, "fallback": true}, model: "(xsl:fallback*, ((xsl:sequence, xsl:fallback*)* | (xsl:for-each-group, xsl:fallback*)))"},
 	"merge":                  {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-source": true, "merge-action": true, "fallback": true}, model: "(xsl:merge-source+, xsl:merge-action, xsl:fallback*)"},
 	"merge-source":           {seqCtor: false, pcdata: false, kids: map[string]bool{"merge-key": true}, model: "xsl:merge-key+"},
 	"merge-key":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
@@ -666,6 +670,7 @@ var xsltInstructions = map[string]bool{
 	"on-empty":               true,
 	"on-non-empty":           true,
 	"where-populated":        true,
+	"fork":                   true,
 	"merge":                  true,
 	"next-iteration":         true,
 	"break":                  true,

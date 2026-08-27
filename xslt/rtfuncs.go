@@ -569,6 +569,7 @@ var supportedInstructions = map[string]bool{
 	// try-012 asks about both halves of the pair.
 	"try": true, "catch": true,
 	"on-empty": true, "on-non-empty": true, "where-populated": true,
+	"fork": true,
 	"iterate": true, "break": true, "next-iteration": true,
 	"evaluate": true,
 	"map":      true, "map-entry": true,
@@ -588,6 +589,7 @@ var supportedInstructions = map[string]bool{
 var instructionsSince30 = map[string]bool{
 	"try": true, "catch": true,
 	"on-empty": true, "on-non-empty": true, "where-populated": true,
+	"fork": true,
 	"iterate": true, "break": true, "next-iteration": true,
 	"evaluate": true,
 	"map":      true, "map-entry": true,
