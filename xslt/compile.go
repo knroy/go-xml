@@ -276,6 +276,15 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	// one traversal; see static.go. A module it has not reached — a nested
 	// include whose href it could not resolve, say — is pruned here so that
 	// no tree ever reaches the grammar checks unpruned.
+	// XTSE3440 and XTSE3460 are read off the tree before the static phase,
+	// which prunes xsl:use-package: this engine does not implement packages,
+	// so the declaration is treated as one forwards-compatible processing
+	// ignores, and by the time the grammar checks run its content is gone.
+	// The two rules are purely structural, so reading them here costs nothing
+	// and asks nothing of the package machinery.
+	if err := checkOverrideTemplates(root); err != nil {
+		return err
+	}
 	if !c.staticDone[doc] {
 		if err := c.runStaticPhase(doc); err != nil {
 			return err
@@ -1035,6 +1044,19 @@ type outputAttrDecl struct {
 // set: the instruction may override method, indent, encoding and the rest for
 // one document. Reading them in two places would let the two drift.
 func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
+	// @html-version is declared xs:decimal. A literal value that is not one
+	// is XTSE0020 -- the same rule and the same wording as any other
+	// attribute whose fixed value is outside the permitted set. Only a
+	// literal is checked here: a value written with curly brackets is
+	// excluded by the error's own definition, and xsl:result-document
+	// resolves its own attribute value templates at run time.
+	if v := el.AttrValue("html-version"); v != "" && !strings.Contains(v, "{") {
+		if _, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil {
+			return fmt.Errorf(
+				"XTSE0020: %s/@html-version value %q is not a decimal number",
+				el.Name.Lexical(), v)
+		}
+	}
 	return applyOutputValues(el, el.AttrValue, o)
 }
 

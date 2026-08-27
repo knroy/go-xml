@@ -155,3 +155,100 @@ func inlineSchemaOf(el *xdm.Node) *xdm.Node {
 	}
 	return nil
 }
+
+// checkOverrideTemplates applies XTSE3440 and XTSE3460 to the template rules
+// declared inside an xsl:use-package's xsl:override.
+//
+// Both rules exist because an overriding template rule replaces one named
+// component of the used package, so it has to identify exactly one mode and
+// has to have a way of reaching the component it replaces.
+//
+// XTSE3440 (section 3.5.2): the mode list may not contain #all or #unnamed,
+// may not contain #default when the default mode is the unnamed mode, and may
+// not be omitted when the default mode is the unnamed mode. A component of the
+// used package belongs to one named mode; #all and #unnamed do not name one.
+//
+// XTSE3460: xsl:apply-imports inside such a rule has no meaning -- import
+// precedence is a property of the using package, not of the overridden
+// component -- so xsl:next-match is the instruction that reaches it.
+//
+// The walk is over the stylesheet tree because this engine does not resolve
+// xsl:use-package: the rules are entirely structural, and answering them does
+// not require knowing which package is being used.
+func checkOverrideTemplates(root *xdm.Node) error {
+	var walk func(n *xdm.Node) error
+	walk = func(n *xdm.Node) error {
+		for _, ch := range n.ChildElements() {
+			if isXSL(ch, "override") {
+				for _, decl := range ch.ChildElements() {
+					if !isXSL(decl, "template") ||
+						decl.Attr("", "match") == nil {
+						continue
+					}
+					if err := checkOverrideRule(decl); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if err := walk(ch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(root)
+}
+
+// checkOverrideRule applies XTSE3440 and XTSE3460 to one template rule.
+func checkOverrideRule(decl *xdm.Node) error {
+	dflt, err := defaultModeAt(decl)
+	if err != nil {
+		return err
+	}
+	mode := decl.Attr("", "mode")
+	if mode == nil {
+		if dflt == "" {
+			return fmt.Errorf(
+				"XTSE3440: a template rule in xsl:override omits the mode " +
+					"attribute and the default mode is the unnamed mode")
+		}
+	} else {
+		for _, tok := range strings.Fields(mode.Value) {
+			switch tok {
+			case "#all", "#unnamed":
+				return fmt.Errorf(
+					"XTSE3440: a template rule in xsl:override names mode %s",
+					tok)
+			case "#default":
+				if dflt == "" {
+					return fmt.Errorf(
+						"XTSE3440: a template rule in xsl:override names " +
+							"mode #default and the default mode is the " +
+							"unnamed mode")
+				}
+			}
+		}
+	}
+	return findApplyImports(decl)
+}
+
+// findApplyImports reports XTSE3460 for an xsl:apply-imports anywhere in a
+// template rule's body. It does not descend into a nested xsl:template,
+// because a rule declared inside one is not this rule.
+func findApplyImports(n *xdm.Node) error {
+	for _, ch := range n.ChildElements() {
+		if isXSL(ch, "apply-imports") {
+			return fmt.Errorf(
+				"XTSE3460: xsl:apply-imports appears in a template rule " +
+					"declared within xsl:override; use xsl:next-match")
+		}
+		if isXSL(ch, "template") {
+			continue
+		}
+		if err := findApplyImports(ch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
