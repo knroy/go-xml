@@ -442,7 +442,7 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		}
 		return &copyOfInstr{
 			sel:              sel,
-			noNamespaces:     n.AttrValue("copy-namespaces") == "no",
+			noNamespaces:     noAttr(n, "copy-namespaces"),
 			copyAccumulators: yesAttr(n, "copy-accumulators"),
 			validation:       spec,
 			baseURI:          n.BaseURI,
@@ -1060,7 +1060,7 @@ func (c *compiler) compileCopy(n *xdm.Node, ns xpath.NamespaceResolver) (Instruc
 	}
 	instr := &copyInstr{
 		attrSets:     sets,
-		noNamespaces: n.AttrValue("copy-namespaces") == "no",
+		noNamespaces: noAttr(n, "copy-namespaces"),
 		noInherit:    noAttr(n, "inherit-namespaces"),
 		body:         body,
 		validation:   spec,
@@ -1402,6 +1402,13 @@ type evaluateInstr struct {
 	params []*Variable
 	// as is @as, or nil for the item()* that permits anything.
 	as *sequenceType
+	// withParams computes the @with-params map, whose keys name parameters
+	// that are only known dynamically. See bindWithParams.
+	withParams *xpath.Compiled
+	// baseURI is @base-uri, an AVT whose effective value replaces the static
+	// base URI of the target expression. Nil when the attribute is absent,
+	// leaving the base URI of the xsl:evaluate element in force.
+	baseURI *avt
 }
 
 // xsltOnlyFunctions is appendix G's list: the functions XSLT defines in the
@@ -1470,6 +1477,20 @@ func (c *compiler) compileEvaluate(n *xdm.Node, ns *nsResolver) (Instruction, er
 		}
 		instr.as = st
 	}
+	if a := n.Attr("", "with-params"); a != nil {
+		wp, err := compileExpr(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@with-params: %w", err)
+		}
+		instr.withParams = wp
+	}
+	if a := n.Attr("", "base-uri"); a != nil {
+		b, err := compileAVT(a.Value, ns)
+		if err != nil {
+			return nil, fmt.Errorf("in xsl:evaluate/@base-uri: %w", err)
+		}
+		instr.baseURI = b
+	}
 	params, _, err := c.compileParamsAndSorts(n, ns)
 	if err != nil {
 		return nil, err
@@ -1497,8 +1518,18 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return fmt.Errorf("XTDE3160: the target expression of xsl:evaluate "+
 			"is not a valid XPath expression: %w", err)
 	}
-	if i.ns.baseURI != "" {
-		comp = comp.WithStaticBaseURI(i.ns.baseURI)
+	// 10.4.1: the static base URI is the effective value of @base-uri when
+	// present, and the base URI of the xsl:evaluate element otherwise.
+	base := i.ns.baseURI
+	if i.baseURI != nil {
+		b, err := i.baseURI.eval(rt)
+		if err != nil {
+			return err
+		}
+		base = b
+	}
+	if base != "" {
+		comp = comp.WithStaticBaseURI(base)
 	}
 	// 10.4.1: "Default collation: the same as the default collation defined at
 	// this point in the stylesheet". compileExpr applies this for a statically
@@ -1519,6 +1550,10 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 				p.Name.Lexical(), err)
 		}
 		sub = sub.withVar(p.Name, v)
+	}
+	sub, err = i.bindWithParams(rt, sub)
+	if err != nil {
+		return err
 	}
 
 	// 10.4.2: with no @context-item the target expression has no focus, and

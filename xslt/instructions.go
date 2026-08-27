@@ -421,14 +421,45 @@ func inheritNamespaces(dst, src *xdm.Node) {
 }
 
 // stripNamespaces removes the namespace nodes from a copied subtree, which is
-// what copy-namespaces="no" asks for. The names keep their URIs — only the
-// declarations go, and the serialiser re-creates whatever the names still
-// need.
+// what copy-namespaces="no" asks for, and then puts back the ones the names
+// still depend on.
+//
+// The declarations going is the point of the attribute; the ones a name needs
+// coming back is §5.8.3 namespace fixup, which the constructed tree has to
+// satisfy however it was built. Leaving them out was invisible in the output
+// -- the serialiser writes what a name needs whether the tree says so or not
+// -- but the namespace axis reads the tree, so in-scope-prefixes() on a copy
+// answered with the bindings of wherever the copy landed. copy-0623 and
+// copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
 	n.Namespaces = nil
+	fixupNamespaces(n)
 	for _, c := range n.Children {
 		if c.Kind == xdm.KindElement {
 			stripNamespaces(c)
+		}
+	}
+}
+
+// fixupNamespaces declares on el whatever its own name and its attribute names
+// need and cannot already see, which is the part of §5.8.3 that applies to an
+// element whose declarations have just been taken away.
+func fixupNamespaces(el *xdm.Node) {
+	scope := el.InScopeNamespaces()
+	need := func(prefix, uri string) {
+		if uri == "" || uri == xdm.NSXML || scope[prefix] == uri {
+			return
+		}
+		el.AddNamespace(prefix, uri)
+		scope[prefix] = uri
+	}
+	need(el.Name.Prefix, el.Name.URI)
+	for _, a := range el.Attrs {
+		// An attribute in a namespace must be prefixed: the default
+		// declaration never applies to an attribute name, so a binding for
+		// the empty prefix would not satisfy the constraint.
+		if a.Name.URI != "" && a.Name.Prefix != "" {
+			need(a.Name.Prefix, a.Name.URI)
 		}
 	}
 }
