@@ -273,9 +273,14 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		}
 		got := resultString(res)
 		want := a.Value
-		if a.Normalize {
-			got, want = normalize(got), normalize(want)
-		}
+		// The W3C runner's assert.xsl normalizes both sides whenever the
+		// assertion comes from the XSLT catalog namespace, not only when
+		// @normalize-space asks for it — see its $isXSLT. Every assertion
+		// this harness reads is an XSLT catalog one, so the expected value
+		// is written as indented element content and arrives with the
+		// surrounding layout attached; comparing that verbatim fails on
+		// whitespace the suite never meant as part of the value.
+		got, want = normalize(got), normalize(want)
 		if got == want {
 			return true, ""
 		}
