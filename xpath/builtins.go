@@ -28,6 +28,7 @@ func Builtins() FunctionLibrary {
 		registerJSONFuncs(l)
 		registerSeq30Funcs(l)
 		registerHOFuncs(l)
+		registerPathFunc(l)
 		registerFormatNumber(l)
 		registerFormatInteger(l)
 		registerPathFunc(l)
