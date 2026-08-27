@@ -226,7 +226,22 @@ var xsltElements = map[string]elementDef{
 	"function": {attrs: map[string]attrDef{
 		"name":     {required: true},
 		"as":       {},
-		"override": {values: []string{"yes", "no"}},
+		"override": {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// 3.0 renamed @override to @override-extension-function and added
+		// @new-each-time, which says whether two calls with the same
+		// arguments may share one result. Neither changes what this
+		// processor does -- it evaluates every call -- but refusing them
+		// rejected a legal 3.0 stylesheet outright.
+		"override-extension-function": {
+			since30: true,
+			values:  []string{"yes", "no", "true", "false", "1", "0"},
+		},
+		// "maybe" is the third value, and the default: it leaves the
+		// processor free to reuse a result or not.
+		"new-each-time": {
+			since30: true,
+			values:  []string{"yes", "no", "true", "false", "1", "0", "maybe"},
+		},
 	}},
 	"namespace-alias": {attrs: map[string]attrDef{
 		"stylesheet-prefix": {required: true},
