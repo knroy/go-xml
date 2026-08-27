@@ -112,6 +112,12 @@ type runtime struct {
 	// reason secondary is: the runtime is copied on every focus change.
 	baseURIUsed *bool
 
+	// readDocs is the set of absolute URIs the transformation has read, for
+	// XTDE1500. A pointer for the same reason secondary and baseURIUsed are:
+	// the runtime is copied on every focus change, and a document read in one
+	// template must be visible to an xsl:result-document in another.
+	readDocs *map[string]bool
+
 	// messages collects xsl:message output rather than writing to stderr.
 	//
 	// It is a pointer to a slice because the runtime struct is copied on

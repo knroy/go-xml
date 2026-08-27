@@ -265,10 +265,20 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
 
+	// Every document the transformation reads is recorded, so that
+	// xsl:result-document can refuse to write over one. See readdocs.go. The
+	// wrapper goes OUTSIDE the stripping one, so that it sees the document
+	// URI of the tree actually delivered to the stylesheet.
+	readDocs := map[string]bool{}
+	if opts.Documents != nil {
+		opts.Documents = &readDocResolver{inner: opts.Documents, read: readDocs}
+	}
+
 	rt, err := newRuntime(s, ctx, source, opts)
 	if err != nil {
 		return nil, err
 	}
+	rt.readDocs = &readDocs
 	// Bind the runtime so key(), current() and xsl:function can reach it.
 	rt.ctx = rt.ctx.WithVar(runtimeVar,
 		xdm.One(&xdm.Opaque{Label: "runtime", Value: rt}))

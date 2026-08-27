@@ -209,6 +209,13 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		*rt.baseURIUsed = true
 	}
 
+	// A resource this transformation has already read may not be written to:
+	// the document the stylesheet holds would stop matching what is on disk.
+	// See readdocs.go.
+	if err := checkReadThenWrite(rt, resolvedHref); err != nil {
+		return err
+	}
+
 	// Two result documents sharing an href would mean one silently
 	// overwriting the other, so the collision is reported instead.
 	for _, prev := range *rt.secondary {
