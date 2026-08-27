@@ -683,6 +683,16 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		return nil, err
 	}
 	ctx := xpath.NewContext(nil, useWhenFuncs(ns.bindings))
+	// 3.12's table gives a static expression "the core functions defined in
+	// [Functions and Operators]" -- the whole library, not a 2.0 subset of
+	// it. Which functions exist follows the PROCESSOR, exactly as it does at
+	// run time; the module's own version still governs the grammar. Left at
+	// the default the library was 2.0, so use-when-0127b could not call
+	// fn:generate-id, which F&O 3.0 defines.
+	if processorAtLeast30() {
+		ctx.LibraryVersion = xpath.XPath31
+		ctx.RegexVersion = xpath.XPath31
+	}
 	ctx.StaticBaseURI = el.BaseURI
 	for _, sv := range p.vars {
 		ctx = ctx.WithVar(sv.name, sv.val)
