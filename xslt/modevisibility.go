@@ -12,6 +12,10 @@ import (
 type modeVisibility struct {
 	visibility string
 	precedence int
+	// stated distinguishes a declaration that wrote visibility="private"
+	// from one that merely defaulted to it. Outside a package only the
+	// former withholds the mode as an entry point; see eligibleInitialMode.
+	stated bool
 }
 
 // recordModeVisibility notes what an xsl:mode declaration says about
@@ -23,6 +27,7 @@ type modeVisibility struct {
 // ineligible as an initial mode.
 func (c *compiler) recordModeVisibility(el *xdm.Node, precedence int) {
 	vis := strings.TrimSpace(el.AttrValue("visibility"))
+	stated := vis != ""
 	if vis == "" {
 		vis = "private"
 	}
@@ -33,7 +38,8 @@ func (c *compiler) recordModeVisibility(el *xdm.Node, precedence int) {
 		if prev, ok := c.modeVisibility[m]; ok && prev.precedence > precedence {
 			continue
 		}
-		c.modeVisibility[m] = modeVisibility{visibility: vis, precedence: precedence}
+		c.modeVisibility[m] = modeVisibility{
+			visibility: vis, precedence: precedence, stated: stated}
 	}
 }
 
@@ -44,8 +50,10 @@ func (c *compiler) publishModeVisibility() {
 		return
 	}
 	c.sheet.modeVisibility = make(map[string]string, len(c.modeVisibility))
+	c.sheet.modeVisibilityStated = make(map[string]bool, len(c.modeVisibility))
 	for m, v := range c.modeVisibility {
 		c.sheet.modeVisibility[m] = v.visibility
+		c.sheet.modeVisibilityStated[m] = v.stated
 	}
 }
 
@@ -76,15 +84,20 @@ func (s *Stylesheet) eligibleInitialMode(mode string) bool {
 	if mode == "" {
 		return true
 	}
-	// Visibility is a property of a package boundary. A plain xsl:stylesheet
-	// has none — nothing can use it as a library — so its modes are all
-	// invocable, which is what the many xsl:stylesheet cases invoked in a
-	// bare-declared mode rely on.
-	if !s.isPackage {
-		return true
-	}
 	vis, ok := s.modeVisibility[mode]
 	if !ok {
+		return true
+	}
+	// Visibility is a property of a package boundary. A plain xsl:stylesheet
+	// has none — nothing can use it as a library — so a mode it declared
+	// without saying anything about visibility stays invocable, which is what
+	// the many xsl:stylesheet cases invoked in a bare-declared mode rely on.
+	//
+	// An explicit visibility="private" is different: it is the stylesheet
+	// saying so, and 6.6.1 has it withhold the mode as an entry point whether
+	// or not the module calls itself a package. package-001i writes exactly
+	// that on an xsl:stylesheet and expects XTDE0045.
+	if !s.isPackage && !s.modeVisibilityStated[mode] {
 		return true
 	}
 	return vis == "public" || vis == "final"

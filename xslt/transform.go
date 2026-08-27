@@ -310,6 +310,13 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			return nil, fmt.Errorf(
 				"XTDE0040: no template named %q", opts.InitialTemplate)
 		}
+		if !s.eligibleInitialTemplate(initName) {
+			// The template exists but the package does not offer it as an
+			// entry point; see entryvisibility.go.
+			return nil, fmt.Errorf(
+				"XTDE0040: the template named %q is not public, so a "+
+					"transform may not start at it", opts.InitialTemplate)
+		}
 		// XTDE0060: the initial template may not declare a required
 		// parameter, because a transform started at it supplies none.
 		// XSLT 2.0 has no way to supply a parameter to the initial template:

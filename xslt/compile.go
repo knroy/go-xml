@@ -21,6 +21,15 @@ type compiler struct {
 	// module twice.
 	seen       map[string]bool
 	schemaSeen map[string]bool
+	// importDepth counts how many xsl:import declarations the compiler is
+	// currently inside.
+	//
+	// XTSE3008 forbids xsl:use-package in a module reached by import, and
+	// only by import: xsl:include is explicitly fine, because an included
+	// module is part of the including one and shares its package, while an
+	// imported module is a separate stylesheet whose manifest would belong
+	// to nobody. A depth rather than a flag, since imports nest.
+	importDepth int
 	// schemaHoisted records that the xsl:import-schema pre-pass has run, so
 	// that the recursion for each included module does not repeat it from a
 	// root that sees less than the first one did.
@@ -692,6 +701,10 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 			return err
 		}
 		t.Name, t.HasName = qn, true
+		c.recordTemplateVisibility(el, qn)
+	}
+	if err := checkEntryVisibility(el); err != nil {
+		return err
 	}
 	if t.Match == nil && !t.HasName {
 		return fmt.Errorf("XTSE0500: xsl:template must have a match or name attribute")
@@ -1625,6 +1638,10 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 		// counter still advances, which only leaves a gap.
 		return c.compileIncludedDocument(doc, precedence)
 	}
+	// Everything below this point is inside an xsl:import, which is what
+	// XTSE3008 asks about. See importDepth.
+	c.importDepth++
+	defer func() { c.importDepth-- }()
 	return c.compileDocument(doc, precedence)
 }
 
@@ -1924,6 +1941,9 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeWarnNoMatch = map[string]bool{}
 		}
 		c.sheet.modeWarnNoMatch[name] = stylesheetYes(a.Value)
+	}
+	if err := checkEntryVisibility(el); err != nil {
+		return err
 	}
 	if c.sheet.declaredModeNames == nil {
 		c.sheet.declaredModeNames = map[string]bool{}

@@ -129,6 +129,13 @@ type Stylesheet struct {
 	// @default-mode names. Together they decide XTDE0045; see
 	// modevisibility.go.
 	modeVisibility  map[string]string
+	// modeVisibilityStated marks the modes whose visibility was written out
+	// rather than defaulted; see modevisibility.go.
+	modeVisibilityStated map[string]bool
+	// templateVisibility is xsl:template/@visibility per Clark name, which
+	// decides whether an invocation may start at the template; see
+	// entryvisibility.go.
+	templateVisibility map[string]string
 	rootDefaultMode string
 	// isPackage says the principal module is an xsl:package, which is what
 	// gives mode visibility something to be relative to.
