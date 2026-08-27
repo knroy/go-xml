@@ -46,12 +46,35 @@ func declaredModes(root *xdm.Node) bool {
 // declared only if an xsl:mode declares it: a package that declares no modes
 // at all and writes an unnamed-mode template is the error the rule is for.
 //
-// Only xsl:template/@mode is checked. @mode on xsl:apply-templates may name a
-// mode reached through a package this module uses, which this processor does
-// not model, so flagging it would reject stylesheets the spec allows.
+// A mode accepted from a used package counts as declared, and 3.5.4.1 says so
+// in as many words: "A mode is declared if either of the following conditions
+// is true: the package contains an xsl:mode declaration for that mode; the
+// mode is a public or final mode accepted from a used package."
+//
+// Which modes those are cannot be read off this module's tree. A manifest may
+// accept a mode without naming it -- an xsl:use-package with no xsl:accept at
+// all takes every public component the used package offers -- so answering
+// needs the used package loaded, which happens much later than this check.
+// use-package-170 writes exactly that: its xsl:use-package names no
+// components, and the mode "normal" it applies templates in is declared two
+// packages down.
+//
+// So a module that uses a package is not judged on the modes it merely
+// references. What can still be judged is what the module DECLARES: a
+// template rule naming a mode is a rule the module itself contributes, and
+// 6.6.1's rule about it holds whatever the manifest brings in. Where the
+// module uses no package at all there is nothing a manifest could supply and
+// both halves are checked.
 func checkDeclaredModes(root *xdm.Node) error {
 	if !declaredModes(root) {
 		return nil
+	}
+	usesPackage := false
+	for _, el := range root.ChildElements() {
+		if isXSL(el, "use-package") {
+			usesPackage = true
+			break
+		}
 	}
 	declared := map[string]bool{}
 	var scan func(*xdm.Node)
@@ -70,7 +93,18 @@ func checkDeclaredModes(root *xdm.Node) error {
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		for _, ch := range n.ChildElements() {
-			if isXSL(ch, "template") || isXSL(ch, "apply-templates") {
+			// A template rule inside xsl:override adds a rule to a mode of
+			// the USED package, which 3.5.4 admits precisely because that
+			// mode is public or abstract there. It is not a reference to a
+			// mode of this package, so this package's xsl:mode declarations
+			// have nothing to say about it: use-package-170's override adds
+			// a rule to the mode "normal" that its used package declares
+			// public two levels down.
+			if isXSL(ch, "override") {
+				continue
+			}
+			if isXSL(ch, "template") ||
+				(isXSL(ch, "apply-templates") && !usesPackage) {
 				for _, m := range templateModeNames(ch) {
 					if !declared[m] {
 						name := m
