@@ -111,3 +111,12 @@ func (v Version) String() string {
 		return "XPath 2.0"
 	}
 }
+
+// AtLeast30 and AtLeast31 are the exported spellings of atLeast30 and
+// atLeast31, for a host that has to make the same distinction the engine does
+// — the XSLT layer decides whether a stylesheet gets the predeclared map: and
+// array: prefixes on exactly this question.
+func (v Version) AtLeast30() bool { return v.atLeast30() }
+
+// AtLeast31 reports whether v admits the XPath 3.1 additions.
+func (v Version) AtLeast31() bool { return v.atLeast31() }

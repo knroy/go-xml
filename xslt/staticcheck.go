@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // Static checks that the element grammar decides, from elementtable.go.
@@ -658,3 +659,44 @@ func isEQName(s string) bool {
 	}
 	return xdm.IsNCName(s[end+1:])
 }
+
+// xpathVersionAt returns the version of XPath the expressions written on el
+// are in, from the nearest ancestor-or-self stating a version.
+//
+// The mapping is not the identity it looks like. XSLT 3.0 is defined against
+// XPath 3.1 — section 2.2 of the XSLT 3.0 Recommendation requires a processor
+// to support XPath 3.1, so maps, arrays and the lookup operator are available
+// to a version="3.0" stylesheet, not merely the 3.0 additions. XSLT 2.0 and
+// 1.0 are defined against XPath 2.0; 1.0 differs from 2.0 in the backwards
+// compatibility rules rather than in the grammar, which compatModeAt reads
+// separately.
+//
+// A version this processor does not know is read as the highest it does. That
+// is what forwards compatibility means: a version="4.0" stylesheet is not
+// rejected outright, it is processed as far as this implementation reaches.
+func xpathVersionAt(el *xdm.Node) xpath.Version {
+	if overrideXPathVersion != nil {
+		return *overrideXPathVersion
+	}
+	for cur := el; cur != nil; cur = cur.Parent {
+		if cur.Kind != xdm.KindElement || !hasVersionAttr(cur) {
+			continue
+		}
+		switch v := versionAt(cur); {
+		case v < 3.0:
+			return xpath.XPath20
+		default:
+			return xpath.XPath31
+		}
+	}
+	return xpath.XPath20
+}
+
+// overrideXPathVersion pins the XPath version for the stylesheet being
+// compiled, ignoring what the stylesheet itself declares.
+//
+// It is package state guarded by compileMu, for the same reason compileSchema
+// is: newNSResolver is called from a dozen places that have no compiler in
+// scope, and threading the option through all of them would touch far more
+// code than the option is worth. See compileSchema for the full argument.
+var overrideXPathVersion *xpath.Version

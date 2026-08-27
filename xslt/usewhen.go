@@ -110,7 +110,12 @@ func elementIncluded(el *xdm.Node) (bool, error) {
 		// module that imports one.
 	}
 
-	compiled, err := xpath.Compile(expr, ns)
+	// use-when is compiled in the version its own element declares, like
+	// every other expression in the stylesheet. It is evaluated before
+	// anything else -- exclusion has to happen before compilation can object
+	// to what it excluded -- so it cannot go through compileExpr, and reads
+	// the version directly.
+	compiled, err := xpath.CompileVersion(expr, ns, xpathVersionAt(el))
 	if err != nil {
 		// An error in the use-when expression itself is reported: it is the
 		// one error the exclusion rule does not suppress.

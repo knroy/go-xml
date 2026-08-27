@@ -325,6 +325,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	defer compileMu.Unlock()
 	compileSchema = nil
 	defer func() { compileSchema = nil }()
+	// The XPath version override is package state on the same terms and under
+	// the same lock; see overrideXPathVersion.
+	overrideXPathVersion = opts.XPathVersion
+	defer func() { overrideXPathVersion = nil }()
 
 	if err := c.compileDocument(doc, 0); err != nil {
 		return nil, err
@@ -394,6 +398,21 @@ type CompileOptions struct {
 	// disables xsl:include: following a location means fetching whatever
 	// the stylesheet names. An inline <xs:schema> child needs no resolver.
 	SchemaResolver xsd.Resolver
+
+	// XPathVersion pins the version of XPath every expression in the
+	// stylesheet is compiled in, overriding what the stylesheet declares.
+	//
+	// Nil, the default, derives it from the version attribute the way the
+	// specification requires: 1.0 and 2.0 are XPath 2.0, 3.0 is XPath 3.1,
+	// since XSLT 3.0 section 2.2 requires an XPath 3.1 processor.
+	//
+	// Setting it is for a host that must decide the language itself rather
+	// than let the document decide — pinning XPath20 to run an untrusted
+	// stylesheet under a smaller surface, or raising a stylesheet that
+	// declares 2.0 but is known to want the later functions. It is a
+	// deliberate departure from conformance in both directions, which is why
+	// nothing sets it implicitly.
+	XPathVersion *xpath.Version
 }
 
 // ModuleResolver loads an included or imported stylesheet module.
@@ -448,6 +467,13 @@ type nsResolver struct {
 	// stylesheet's imported types part of the static context, which is what
 	// lets "instance of my:partNumberType" resolve at all.
 	schema *xsd.Schema
+	// xpathVersion is the version of XPath the expressions written on this
+	// element are in. It is static in exactly the way the base URI and the
+	// default collation are, and for the same reason: it is a property of
+	// where the expression was written. A version="3.0" stylesheet writes
+	// XPath 3.1, a version="2.0" one writes XPath 2.0, and an included module
+	// keeps its own answer rather than the importing module's.
+	xpathVersion xpath.Version
 }
 
 // compileSchema is the schema in force while a stylesheet is being compiled.
@@ -487,6 +513,8 @@ func newNSResolver(el *xdm.Node, defaultElementNS string) *nsResolver {
 		collation: defaultCollationAt(el),
 		compat:    compatModeAt(el),
 		schema:    compileSchema,
+
+		xpathVersion: xpathVersionAt(el),
 	}
 }
 
@@ -640,7 +668,16 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 // for everything within. Compiling through here is what keeps that true
 // without threading a base URI through every call site.
 func compileExpr(src string, ns xpath.NamespaceResolver) (*xpath.Compiled, error) {
-	c, err := xpath.Compile(src, ns)
+	// The version is read from the resolver before compiling rather than
+	// applied after, because it decides how the expression *parses*: an
+	// inline function or a map constructor is a syntax error in 2.0, so
+	// compiling first and versioning afterwards would reject a legal 3.0
+	// stylesheet before there was anything to version.
+	v := xpath.XPath20
+	if r, ok := ns.(*nsResolver); ok {
+		v = r.xpathVersion
+	}
+	c, err := xpath.CompileVersion(src, ns, v)
 	if err != nil {
 		return nil, err
 	}
@@ -668,8 +705,31 @@ func (r *nsResolver) ResolvePrefix(p string) (string, bool) {
 	if p == "xml" {
 		return xdm.NSXML, true
 	}
-	uri, ok := r.bindings[p]
-	return uri, ok
+	if uri, ok := r.bindings[p]; ok {
+		return uri, ok
+	}
+	// XSLT 3.0 section 3.1 predeclares four prefixes in every stylesheet, so
+	// that map:get and math:pi can be written without an xmlns declaration.
+	// They are only defaults: a stylesheet that binds the prefix itself wins,
+	// which is why they are consulted after the explicit bindings rather than
+	// merged into them.
+	//
+	// Only for a 3.0 stylesheet. Predeclaring them for 2.0 would resolve a
+	// prefix that a conforming 2.0 processor reports as unbound, and would do
+	// it silently -- the stylesheet would work here and fail elsewhere.
+	if r.xpathVersion.AtLeast31() {
+		switch p {
+		case "map":
+			return xdm.NSMap, true
+		case "array":
+			return xdm.NSArray, true
+		case "math":
+			return xdm.NSMath, true
+		case "err":
+			return xdm.NSErr, true
+		}
+	}
+	return "", false
 }
 
 func (r *nsResolver) DefaultElementNamespace() string  { return r.defaultNS }
