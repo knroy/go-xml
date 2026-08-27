@@ -434,7 +434,9 @@ func (r *exposeRule) matches(sym symbolicName) (ok, wild bool) {
 	return ok, wild
 }
 
-// exposeTable is section 3.5.2's table of permitted (declared, exposed) pairs.
+// exposeTable is section 3.5.2's table of permitted (declared, exposed) pairs,
+// indexed in that order: the declaration's visibility selects the row, and the
+// row holds the visibilities an xsl:expose may then assign.
 //
 // The exposed visibility wins wherever the pair is permitted, which is why
 // the table answers only "permitted or not": the caller already knows what the
@@ -484,7 +486,7 @@ func applyExpose(comps []*component, exposes []*exposeRule) error {
 			if !ok {
 				continue
 			}
-			if c.declared != "" && !exposeTable[r.vis][c.declared] {
+			if c.declared != "" && !exposeTable[c.declared][r.vis] {
 				if wild {
 					// "unless the token that matches the component is a
 					// wildcard, in which case it is treated as not matching
@@ -552,6 +554,17 @@ type usePackageDecl struct {
 	// acceptComponents, because xsl:accept may both narrow and widen and the
 	// answer has to be settled before any reference is resolved.
 	acceptedVis map[string]visibility
+	// assignedVis records which of those an xsl:accept actually named, as
+	// against inheriting the used package's own answer. XTSE3080 turns on the
+	// difference; see compileUsePackages.
+	assignedVis map[string]bool
+	// hiddenByAccept records the components an xsl:accept explicitly gave
+	// visibility="hidden" or "absent". Only those are unreachable within the
+	// used package too. The private-to-hidden default of 3.5.3 withholds a
+	// component from the *using* package while the used package's own
+	// references must still bind -- which is what override-base-f-001 relies
+	// on when its p:f-final calls the private p:f-private.
+	hiddenByAccept map[string]bool
 	// overriding maps a symbolic name to the xsl:override child that
 	// replaces it, so that compiling the used package can substitute the
 	// overriding declaration for the original.
@@ -565,6 +578,10 @@ type usePackageDecl struct {
 // the using package regardless of where the xsl:use-package sits — 3.5 puts no
 // ordering constraint on the manifest beyond xsl:import coming first.
 func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
+	// The principal module is the one whose tree was recorded first, and its
+	// package is the top-level package: nobody uses it, so nothing can
+	// resolve an abstract component it accepts. See the XTSE3080 check below.
+	topLevel := c.sheet.source != nil && firstElement(c.sheet.source) == root
 	var uses []*usePackageDecl
 	for _, el := range root.ChildElements() {
 		if !isXSL(el, "use-package") {
@@ -590,6 +607,32 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 		}
 		for _, comp := range u.comps {
 			v := vis[comp.sym.String()]
+			// XTSE3080: "a top-level package ... contains symbolic
+			// references referring to components whose visibility is
+			// abstract". An abstract component has no body, so a package
+			// nobody will use has no later chance to supply one: the
+			// unresolved reference a library may legitimately carry is at
+			// the top level simply a call to nothing.
+			//
+			// An xsl:override supplies exactly that missing body, which is
+			// what abstract components are for, so an overridden one is not
+			// a reference to nothing and is not this error.
+			//
+			// Nor is one that is abstract only because the used package said
+			// so and no xsl:accept mentioned it: 3.5.3 turns such a component
+			// hidden, and a hidden component is not referenced at all. The
+			// error belongs to the manifest that deliberately wrote
+			// visibility="abstract", which is what accept-904 and -912 do;
+			// accept-902 and -910 inherit it and want the dynamic XTDE3052
+			// when the component is actually invoked.
+			_, supplied := u.overriding[comp.sym.String()]
+			if v == visAbstract && topLevel && !supplied &&
+				u.assignedVis[comp.sym.String()] {
+				return fmt.Errorf(
+					"XTSE3080: %s is accepted into the top-level package "+
+						"with visibility=\"abstract\", and nothing can "+
+						"supply its implementation", comp.sym)
+			}
 			if v == visHidden || v == visAbsent || v == "" {
 				continue
 			}
@@ -658,9 +701,21 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	}
 	// The used package's own manifest is processed first: its components
 	// include what it in turn accepted from the packages it uses.
+	//
+	// A package is its own static scope, so the used package's static
+	// variables are evaluated separately and then discarded: what the using
+	// package's own use-when expressions see must be its own declarations.
+	// runStaticPhase assigns c.staticVars outright, so without saving them
+	// the using package's static parameters vanished the moment it used a
+	// package -- which is why accept-041a could not find its $accept.
+	// staticDone is deliberately not restored: it records the trees whose
+	// shadow attributes have already been expanded, and expanding one twice
+	// is not idempotent.
+	savedVars := c.staticVars
 	if err := c.runStaticPhase(doc); err != nil {
 		return nil, err
 	}
+	c.staticVars = savedVars
 	comps, err := packageComponents(u.root)
 	if err != nil {
 		return nil, err
@@ -724,6 +779,8 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 		}
 	}
 	vis := map[string]visibility{}
+	assigned := map[string]bool{}
+	hidden := map[string]bool{}
 	for _, comp := range u.comps {
 		// 3.5.3: a component the manifest does not mention keeps its
 		// visibility, except that a private one becomes hidden.
@@ -758,6 +815,8 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 					comp.sym, r.vis, comp.vis, u.name)
 			}
 			vis[comp.sym.String()] = r.vis
+			assigned[comp.sym.String()] = true
+			hidden[comp.sym.String()] = r.vis == visHidden || r.vis == visAbsent
 		}
 	}
 	// XTSE3030: a non-wildcard xsl:accept token matching no component of the
@@ -775,6 +834,8 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 		}
 	}
 	u.acceptedVis = vis
+	u.assignedVis = assigned
+	u.hiddenByAccept = hidden
 	u.overriding = overridden
 	return vis, nil
 }
@@ -821,6 +882,29 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
+		v := u.acceptedVis[comp.sym.String()]
+		// A hidden component is not merely unexported. The note under 3.6.3.1
+		// singles it out: visibility "primarily affects how the component can
+		// be used in other packages... There is one exception: if the
+		// visibility is hidden, it also affects how the component can be used
+		// WITHIN P." So hidden is genuinely unreachable, and leaving the
+		// declaration in the tree would let a reference resolve to it --
+		// which is the only thing distinguishing hidden from private. That
+		// applies only where an xsl:accept said hidden: 3.5.3's default of
+		// treating an unmentioned private component as hidden speaks about
+		// the using package, and pruning on it would break the used
+		// package's own calls to its private components.
+		//
+		// An overridden component is exempt, and the exemption is about
+		// xsl:original rather than about visibility: the overriding body may
+		// call the declaration it replaces, so that declaration has to stay
+		// reachable however the manifest labelled it. The loop below re-adds
+		// overridden components for the same reason.
+		if (v == visHidden || v == visAbsent) &&
+			u.hiddenByAccept[comp.sym.String()] &&
+			u.overriding[comp.sym.String()] == nil {
+			continue
+		}
 		keep[comp.el] = true
 	}
 	// An overriding declaration replaces the one it overrides. The original
@@ -883,6 +967,43 @@ func componentOf(comps []*component, el *xdm.Node) (*component, bool) {
 		}
 	}
 	return nil, false
+}
+
+// compileOverrideRules compiles the template rules an xsl:override adds to a
+// mode of a used package.
+//
+// A match template inside xsl:override is not a component: it has no symbolic
+// name, so it overrides nothing by name. What it does is add a rule to the
+// mode it names, and 3.5.4 makes that rule outrank every rule the used package
+// declared for the same mode. Compiling it as a declaration of the *using*
+// module gives it exactly that: the using module already ranks above every
+// package it uses, so the ordinary conflict rules settle it without a special
+// case.
+//
+// It runs after the module's own declarations, once the module's final import
+// precedence is known.
+func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
+	for _, use := range root.ChildElements() {
+		if !isXSL(use, "use-package") {
+			continue
+		}
+		for _, ov := range use.ChildElements() {
+			if !isXSL(ov, "override") {
+				continue
+			}
+			for _, decl := range ov.ChildElements() {
+				if !isXSL(decl, "template") || decl.AttrValue("name") != "" {
+					// A named declaration is a component, and has already
+					// been substituted into the used package's tree.
+					continue
+				}
+				if err := c.compileTopLevel(decl, precedence); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // rewriteOverride prepares an overriding declaration to stand in the used
