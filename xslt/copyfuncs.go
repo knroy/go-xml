@@ -28,7 +28,7 @@ import (
 // The instruction's base URI is not available here — a function call has no
 // instruction — so a detached copy keeps the base URI it had, which is what
 // xsl:copy-of does for a copy whose source carries an absolute one.
-func registerCopyFuncs(l *xpath.Library) {
+func registerCopyFuncs(l *xpath.Library, rt *runtime) {
 	// Since XPath31: both were introduced by XSLT 3.0, and a version="3.0"
 	// stylesheet is what compiles as XPath 3.1. A 2.0 stylesheet calling one
 	// must get XPST0017 -- and, through the same library,
@@ -39,14 +39,18 @@ func registerCopyFuncs(l *xpath.Library) {
 			Name: xdm.QName{URI: xdm.NSFN, Local: "copy-of"}, Arity: arity,
 			Since: xpath.XPath31,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				return mapItems(ctx, args, copyItem)
+				return mapItems(ctx, args, func(it xdm.Item) xdm.Item {
+					return noteCopy(rt, it, copyItem(it))
+				})
 			},
 		})
 		l.Add(xpath.Function{
 			Name: xdm.QName{URI: xdm.NSFN, Local: "snapshot"}, Arity: arity,
 			Since: xpath.XPath31,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				return mapItems(ctx, args, snapshotItem)
+				return mapItems(ctx, args, func(it xdm.Item) xdm.Item {
+					return noteCopy(rt, it, snapshotItem(it))
+				})
 			},
 		})
 	}
@@ -189,4 +193,26 @@ func snapshotItem(it xdm.Item) xdm.Item {
 	parent.AppendChild(bottom)
 	tree.Finalize()
 	return bottom
+}
+
+// noteCopy records where a copy came from, so that accumulator-before() and
+// accumulator-after() on the copy answer with the original's values.
+//
+// §18.3 defines fn:copy-of as an xsl:copy-of, and 18.2 makes accumulator
+// values a property of the node rather than of the tree it happens to sit in:
+// a copy taken so that a streamed subtree can be walked freely is worthless if
+// walking it loses what the accumulators had reached. Without this, an
+// accumulator on the copy restarted from its initial value, so accumulator-064
+// through -067 read 1 or 2 where the source position gives 3.
+func noteCopy(rt *runtime, orig, copied xdm.Item) xdm.Item {
+	o, ok := orig.(*xdm.Node)
+	if !ok {
+		return copied
+	}
+	c, ok := copied.(*xdm.Node)
+	if !ok {
+		return copied
+	}
+	rt.noteCopiedAccumulators(o, c)
+	return copied
 }
