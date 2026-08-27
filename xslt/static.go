@@ -666,7 +666,17 @@ func (p *staticPhase) valueTemplate(el *xdm.Node, src string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			v, err := p.eval(el, src[i+1:end])
+			exprSrc := src[i+1 : end]
+			// A brace pair enclosing nothing contributes nothing, exactly as
+			// it does in an ordinary value template: 5.6.1's rule is about
+			// the value template, not about which of the two evaluates it.
+			// shadow-001 writes _select="${}{$N}" to make "$x".
+			if processorAtLeast30() &&
+				strings.TrimSpace(commentsStripped(exprSrc)) == "" {
+				i = end + 1
+				continue
+			}
+			v, err := p.eval(el, exprSrc)
 			if err != nil {
 				return "", err
 			}
