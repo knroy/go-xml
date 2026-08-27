@@ -67,6 +67,11 @@ type patternStep struct {
 	descendant bool
 	// attribute marks a step matching on the attribute axis.
 	attribute bool
+	// namespace marks a step matching on the namespace axis, which XSLT 3.0
+	// added to ForwardAxisP. Like the attribute axis it holds nodes that are
+	// not children of their parent, so it is kept apart from attribute rather
+	// than folded into it: the two select from different collections.
+	namespace bool
 	// preds are predicates on this step, evaluated with the candidate node as
 	// context.
 	preds []xpath.Expr
@@ -328,6 +333,13 @@ func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 		ps.descendant = true
 	case xpath.AxisDescendant:
 		ps.descendant = true
+	case xpath.AxisNamespace:
+		// XSLT 3.0 added namespace:: to ForwardAxisP. A 2.0 module must still
+		// refuse it, as every conforming 2.0 processor does.
+		if !allow30 {
+			return ps, fmt.Errorf("axis %q is not allowed in a pattern", s.String())
+		}
+		ps.namespace = true
 	case xpath.AxisSelf:
 		// XSLT 3.0 admits self:: in a pattern, where it constrains the
 		// candidate itself. The walk therefore does not step up for it.
@@ -526,6 +538,14 @@ func matchStep(s patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) 
 	principal := xdm.KindElement
 	if s.attribute {
 		principal = xdm.KindAttribute
+	}
+	if s.namespace {
+		principal = xdm.KindNamespace
+	}
+	// The namespace axis contains only namespace nodes, and no other axis
+	// contains any, so the two disagreeing is an immediate non-match.
+	if s.namespace != (node.Kind == xdm.KindNamespace) {
+		return false, nil
 	}
 	if node.Kind == xdm.KindAttribute && !s.attribute {
 		// A child-axis step never matches an attribute.
