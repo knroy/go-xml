@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -24,19 +25,56 @@ type contextItemDecl struct {
 }
 
 // compileContextItem reads an xsl:context-item child of xsl:template.
-func compileContextItem(el *xdm.Node) (*contextItemDecl, error) {
+//
+// tmpl is the containing xsl:template, whose @name decides which values of
+// @use are open to the declaration.
+func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
+	// XTSE0090: the summary gives xsl:context-item exactly two attributes.
+	// The check is here rather than left to the element table because this
+	// engine reads every 3.0 module as forwards-compatible, which withholds
+	// the table from all of them; @select is the one a stylesheet reaches
+	// for, xsl:param having accustomed it to the idea.
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" {
+			continue
+		}
+		switch a.Name.Local {
+		case "as", "use":
+		default:
+			if standardAttributes[a.Name.Local] {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"attribute %q is not allowed on xsl:context-item (XTSE0090)",
+				a.Name.Local)
+		}
+	}
+
 	d := &contextItemDecl{use: "optional"}
-	if v := el.AttrValue("use"); v != "" {
-		switch v {
+	if a := el.Attr("", "use"); a != nil {
+		// The value space is a closed set of tokens, so surrounding
+		// whitespace is layout rather than part of the value -- 3.7 says so
+		// of every such attribute, and context-item-007 writes use=" required "
+		// under xml:space="preserve" to insist on it.
+		switch v := strings.TrimSpace(a.Value); v {
 		case "required", "optional", "absent":
 			d.use = v
 		default:
 			return nil, fmt.Errorf(
 				"XTSE0020: xsl:context-item/@use must be required, optional "+
-					"or absent, not %q", v)
+					"or absent, not %q", a.Value)
 		}
 	}
-	as := el.AttrValue("as")
+	// "If the containing xsl:template element has no name attribute then the
+	// only permitted value is required." A template rule is always entered
+	// through a focus, so declaring the item optional or absent would be
+	// declaring something the invocation cannot honour.
+	if tmpl != nil && tmpl.Attr("", "name") == nil && d.use != "required" {
+		return nil, fmt.Errorf(
+			"XTSE0020: xsl:context-item/@use must be \"required\" in a "+
+				"template with no name attribute, not %q", d.use)
+	}
+	as := strings.TrimSpace(el.AttrValue("as"))
 	if as != "" {
 		// XTSE3088: a type cannot be required of an item declared absent,
 		// because there is no item to have one.
@@ -44,6 +82,17 @@ func compileContextItem(el *xdm.Node) (*contextItemDecl, error) {
 			return nil, fmt.Errorf(
 				"XTSE3088: xsl:context-item may not have an as attribute " +
 					"when use=\"absent\"")
+		}
+		// The attribute is typed ItemType, not SequenceType: an occurrence
+		// indicator would be saying how many context items there are, and
+		// there is exactly one. context-item-901 writes xs:integer? and
+		// expects XTSE0020, the code for a value outside an attribute's
+		// permitted range.
+		if strings.HasSuffix(as, "?") || strings.HasSuffix(as, "*") ||
+			strings.HasSuffix(as, "+") {
+			return nil, fmt.Errorf(
+				"XTSE0020: xsl:context-item/@as is an ItemType and admits no "+
+					"occurrence indicator, so %q is not one", as)
 		}
 		t, err := compileSequenceType(as, newNSResolver(el, ""))
 		if err != nil {

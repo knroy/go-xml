@@ -1114,6 +1114,12 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 		return v == "yes"
 	}
 	if v := value("method"); v != "" {
+		// @method is declared as an XSD type derived from xs:QName, whose
+		// whitespace facet is "collapse", so method=" xhtml " names the
+		// xhtml method -- output-0221 writes exactly that, with @html-version
+		// spaced the same way. Keeping the spaces made every comparison
+		// against "xhtml" fail and the document came out as plain XML.
+		v = strings.TrimSpace(v)
 		o.Method = v
 	}
 	if v := value("indent"); v != "" {
@@ -1174,7 +1180,7 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 		o.Version = v
 	}
 	if v := value("html-version"); v != "" {
-		o.HTMLVersion = v
+		o.HTMLVersion = strings.TrimSpace(v)
 	}
 	if v := value("byte-order-mark"); v != "" {
 		o.ByteOrderMark = yes(v)
@@ -1862,13 +1868,13 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		if c.sheet.modeWarnMultiple == nil {
 			c.sheet.modeWarnMultiple = map[string]bool{}
 		}
-		c.sheet.modeWarnMultiple[name] = modeWarningValue(a.Value)
+		c.sheet.modeWarnMultiple[name] = stylesheetYes(a.Value)
 	}
 	if a := el.Attr("", "warning-on-no-match"); a != nil {
 		if c.sheet.modeWarnNoMatch == nil {
 			c.sheet.modeWarnNoMatch = map[string]bool{}
 		}
-		c.sheet.modeWarnNoMatch[name] = modeWarningValue(a.Value)
+		c.sheet.modeWarnNoMatch[name] = stylesheetYes(a.Value)
 	}
 	if c.sheet.declaredModeNames == nil {
 		c.sheet.declaredModeNames = map[string]bool{}
