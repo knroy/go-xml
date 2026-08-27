@@ -62,6 +62,23 @@ type Context struct {
 	// this and Version, so an existing caller is unaffected.
 	RegexVersion Version
 
+	// LibraryVersion raises the version of the *function library* above
+	// Version, without admitting any new syntax.
+	//
+	// Which functions exist is a property of the processor rather than of the
+	// module, in the same way the regular-expression dialect is: calling a
+	// function is ordinary syntax at every version, and only the name has to
+	// resolve. The XSLT suite requires the separation — accessor-050 and
+	// fifteen others are version="2.0" stylesheets scoped XSLT30+ that call
+	// fn:path, and a 3.0 processor must find it for them.
+	//
+	// Raising Version instead would also hand those modules inline functions
+	// and map constructors, which the XSLT 2.0 grammar must refuse.
+	//
+	// The zero value adds nothing: the effective floor is the larger of this
+	// and Version, so an existing caller is unaffected.
+	LibraryVersion Version
+
 	// StaticBaseURI is the base URI of the expression itself — the stylesheet
 	// or query it was written in — which is what fn:static-base-uri returns
 	// and what fn:resolve-uri resolves against by default.
@@ -406,6 +423,20 @@ func (c *Context) regexVersion() Version {
 	}
 	if c.RegexVersion > c.Version {
 		return c.RegexVersion
+	}
+	return c.Version
+}
+
+// libraryVersion is the version the function library is visible at.
+//
+// The larger of Version and LibraryVersion, on the same reasoning as
+// regexVersion.
+func (c *Context) libraryVersion() Version {
+	if c == nil {
+		return XPath20
+	}
+	if c.LibraryVersion > c.Version {
+		return c.LibraryVersion
 	}
 	return c.Version
 }

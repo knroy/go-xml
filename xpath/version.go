@@ -77,7 +77,7 @@ func lookupFor(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 		}
 		return Function{}, false
 	}
-	if fn.Since > ctx.Version {
+	if fn.Since > ctx.libraryVersion() {
 		return Function{}, false
 	}
 	return fn, true

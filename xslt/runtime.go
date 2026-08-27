@@ -1082,6 +1082,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	// module's own declaration, which is what the syntax rules require.
 	if s.maxVersion == 0 || s.maxVersion >= 3.0 {
 		xctx.RegexVersion = xpath.XPath31
+		// Which functions exist follows the processor for the same reason:
+		// calling one is ordinary syntax at every version, and only the name
+		// has to resolve. A 3.0 processor running a version="2.0" stylesheet
+		// must find fn:path for it, which accessor-050 and its siblings
+		// require. The module's own version still governs the grammar.
+		xctx.LibraryVersion = xpath.XPath31
 	}
 	xctx.Ctx = ctx
 	xctx.Docs = opts.Documents
