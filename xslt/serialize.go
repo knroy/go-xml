@@ -232,16 +232,21 @@ func (s *serializer) writeString(str string) {
 
 // writeDoctypeFor writes the document type declaration naming this element.
 func (s *serializer) writeDoctypeFor(n *xdm.Node) {
-	// HTML5 with no identifiers is the bare form: just the name.
+	// HTML5 with no identifiers is the bare form.
+	//
+	// The two methods take the name from different places. XHTML is XML, so
+	// the DOCTYPE name must match the document element exactly and <HtMl>
+	// takes "<!DOCTYPE HtMl>" -- which is why the declaration is deferred to
+	// the element rather than written with the prolog. HTML5's doctype is
+	// instead a fixed string: it is "<!DOCTYPE HTML>" whatever the document
+	// element is called, so a fragment rooted at <input> still gets it, and
+	// naming the element there produced "<!DOCTYPE INPUT>".
 	if s.html5 && s.opts.DocTypeSystem == "" && s.opts.DocTypePublic == "" {
-		name := s.elementName(n)
-		if !s.xhtml {
-			// The html method's doctype is conventionally uppercase, and its
-			// names are not case-sensitive, so the element's own spelling
-			// does not constrain it the way XML's does.
-			name = strings.ToUpper(name)
+		if s.xhtml {
+			s.writeString("<!DOCTYPE " + s.elementName(n) + ">\n")
+		} else {
+			s.writeString("<!DOCTYPE HTML>\n")
 		}
-		s.writeString("<!DOCTYPE " + name + ">\n")
 		return
 	}
 	s.writeString("<!DOCTYPE " + s.elementName(n))
