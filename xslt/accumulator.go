@@ -367,24 +367,23 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 		}
 		cur = next
 		vals.before[n] = cur
-		// Attributes and namespaces are not descended into, but they are
-		// visited: section 18.1 lets a rule match an attribute, and such a
-		// node's before and after values are the same because it has no
-		// children to descend past.
-		for _, a := range n.Attrs {
-			av, err := rt.applyAccumRules(def, a, cur, ctx, false)
-			if err != nil {
-				return err
-			}
-			cur = av
-			vals.before[a] = cur
-			ae, err := rt.applyAccumRules(def, a, cur, ctx, true)
-			if err != nil {
-				return err
-			}
-			cur = ae
-			vals.after[a] = cur
-		}
+		// Attributes and namespaces are NOT visited. §18.2.4's formal model
+		// defines an accumulator over the sequence of events a streamed
+		// traversal of the tree produces, and those events are the start and
+		// end of each element and the arrival of each text, comment and
+		// processing-instruction node; an attribute arrives as part of its
+		// element's start event rather than as an event of its own, so no
+		// rule ever fires for one. A pattern matching an attribute is legal
+		// to write and simply never matches anything the walk offers.
+		//
+		// accumulator-026 is named for exactly this - "Rules matching
+		// attribute nodes are legal but ignored" - and its third rule,
+		// match="@alt" select="$value + 100000", would otherwise add 100000
+		// to every figure number.
+		//
+		// The before and after maps are left without entries for attribute
+		// nodes for the same reason; accumulator-before on an attribute is
+		// XTTE3360 and never reaches the map.
 		for _, ch := range n.Children {
 			if err := walk(ch); err != nil {
 				return err
