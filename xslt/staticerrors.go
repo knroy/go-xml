@@ -737,15 +737,35 @@ func checkParamStatic(el *xdm.Node) error {
 		// template parameters; it must not be specified for function
 		// parameters, which are always mandatory."
 		if inFunction {
-			// The code here is XTSE0090 rather than XTSE0020, which is what
-			// the suite asks for: the rule is that the attribute is not
-			// allowed on an xsl:param in this position at all, not that its
-			// value is wrong. The element syntax summary cannot express
-			// "allowed only under some parents", so the rule lives here while
-			// the code stays the one the grammar check would have given.
-			return fmt.Errorf(
-				"XTSE0090: required may not be specified on an xsl:param of " +
-					"a stylesheet function, which is always mandatory")
+			// XSLT 3.0 relaxed this. A function parameter is still always
+			// mandatory, but the attribute became permitted so long as it
+			// SAYS so: required="yes" is accepted and required="no"
+			// contradicts the rule and is rejected. 2.0 forbade the attribute
+			// outright, whatever its value.
+			//
+			// The two codes follow from that difference. Where the attribute
+			// is not permitted at all the error is XTSE0090, the code for an
+			// attribute the element summary does not allow; where it is
+			// permitted but wrongly valued it is XTSE0020, the code for a
+			// value not allowed in this position.
+			//
+			// The gate is the PROCESSOR's version, not the module's.
+			// function-0119.xsl and function-0120.xsl are each one
+			// version="2.0" stylesheet run twice by the suite, scoped XSLT20
+			// once and XSLT30+ once, and the expected code differs between
+			// the two runs — so nothing in the stylesheet text can decide it.
+			if !processorAtLeast30() {
+				return fmt.Errorf(
+					"XTSE0090: required may not be specified on an xsl:param " +
+						"of a stylesheet function, which is always mandatory")
+			}
+			if strings.TrimSpace(a.Value) != "yes" {
+				return fmt.Errorf(
+					"XTSE0020: required=%q on an xsl:param of a stylesheet "+
+						"function: the only permitted value is \"yes\", such "+
+						"a parameter always being mandatory", a.Value)
+			}
+			return nil
 		}
 		// "If the parameter is mandatory, then the xsl:param element must be
 		// empty and must not have a select attribute."
