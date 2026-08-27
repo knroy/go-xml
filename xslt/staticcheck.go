@@ -62,6 +62,14 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 	}
 
 	def, known := xsltElements[el.Name.Local]
+	// An element XSLT 3.0 introduced is not an XSLT element to a stylesheet
+	// declaring an earlier version, so it is treated exactly as an unknown
+	// one: XTSE0010 outside forwards-compatible mode, ignored within it.
+	// Recognising it because this engine also implements 3.0 would accept a
+	// stylesheet every other conforming 2.0 processor rejects.
+	if known && def.since30 && !xpathVersionAt(el).AtLeast31() {
+		known = false
+	}
 	if !known {
 		if forwards {
 			// Section 3.9: where forwards-compatible behaviour is enabled, an
@@ -411,7 +419,10 @@ func checkStaticGrammarTree(n *xdm.Node, forwards bool) error {
 		// rejected a stylesheet for a required attribute missing from an
 		// element the processor was told to pretend it never saw.
 		if forwards && n.Name.URI == xdm.NSXSL && isTopLevel(n) {
-			if _, known := xsltElements[n.Name.Local]; !known {
+			// Unknown in the same sense checkStaticGrammar means it: an
+			// element of a later version is unknown to this stylesheet's.
+			def, known := xsltElements[n.Name.Local]
+			if !known || (def.since30 && !xpathVersionAt(n).AtLeast31()) {
 				return nil
 			}
 		}

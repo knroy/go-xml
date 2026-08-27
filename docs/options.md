@@ -213,7 +213,9 @@ share the `*Stylesheet`.
 sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
     BaseURI:      "file:///srv/xsl/main.xsl",
     Resolver:     resolver,
-    StaticParams: map[string]string{"build": "42"},
+    StaticParams: map[string]xdm.Sequence{
+        "build": xdm.One(xdm.NewString("42")),
+    },
 })
 ```
 
@@ -221,7 +223,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 |---|---|---|---|
 | `BaseURI` | `string` | none | What relative `xsl:include` and `xsl:import` resolve against. |
 | `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name. |
-| `StaticParams` | `map[string]string` | none | Values for `xsl:param static="yes"`, which participate in `use-when` and so must be known at compile time. |
+| `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |
 

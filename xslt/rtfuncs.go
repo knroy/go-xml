@@ -63,6 +63,7 @@ func runtimeFrom(ctx *xpath.Context) (*runtime, bool) {
 var runtimeFuncNames = map[string]bool{
 	"accumulator-after":    true,
 	"accumulator-before":   true,
+	"copy-of":              true,
 	"current":              true,
 	"current-group":        true,
 	"current-grouping-key": true,
@@ -72,6 +73,7 @@ var runtimeFuncNames = map[string]bool{
 	"generate-id":          true,
 	"key":                  true,
 	"regex-group":          true,
+	"snapshot":             true,
 	"system-property":      true,
 	"type-available":       true,
 }
@@ -87,6 +89,11 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	// The name is in the EXSLT namespace, so this does not touch
 	// runtimeFuncNames, which is keyed on locals in the fn namespace only.
 	xpath.RegisterEXSLTFuncs(l)
+
+	// fn:copy-of and fn:snapshot need no transform state either, but they are
+	// bound here for the same reason: they are XSLT's, not XPath's, and a
+	// bare xpath.Eval caller has no business seeing them. See copyfuncs.go.
+	registerCopyFuncs(l)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,
@@ -519,13 +526,25 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
-		Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
 			if err := checkAvailableArg("XTDE1440", "element-available", name); err != nil {
 				return nil, err
 			}
 			_, local := xdm.SplitQName(name)
-			return xdm.One(xdm.NewBoolean(supportedInstructions[local])), nil
+			if !supportedInstructions[local] {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			// An instruction XSLT 3.0 introduced is not available to a
+			// stylesheet declaring an earlier version, whatever this engine
+			// implements. try-013 is that test: it asks about xsl:try and
+			// xsl:catch from a version="2.0" stylesheet and requires false
+			// for both, because the whole point of asking is to find out
+			// whether the instruction may be used here.
+			if instructionsSince30[local] && !ctx.Version.AtLeast31() {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			return xdm.One(xdm.NewBoolean(true)), nil
 		},
 	})
 }
@@ -542,6 +561,26 @@ var supportedInstructions = map[string]bool{
 	// its own right: element-available answers for any XSLT element name, and
 	// try-012 asks about both halves of the pair.
 	"try": true, "catch": true,
+	"on-empty": true, "on-non-empty": true, "where-populated": true,
+	"iterate": true, "break": true, "next-iteration": true,
+	"evaluate": true,
+	"map":      true, "map-entry": true,
+	"source-document": true, "context-item": true,
+}
+
+// instructionsSince30 are the entries above that XSLT 3.0 introduced.
+//
+// Kept as a second set rather than a field on the first because
+// supportedInstructions answers "does this engine implement it" and this
+// answers "may this stylesheet use it" -- two questions that happen to share
+// a key and would be confusing to conflate under one name.
+var instructionsSince30 = map[string]bool{
+	"try": true, "catch": true,
+	"on-empty": true, "on-non-empty": true, "where-populated": true,
+	"iterate": true, "break": true, "next-iteration": true,
+	"evaluate": true,
+	"map":      true, "map-entry": true,
+	"source-document": true, "context-item": true,
 }
 
 // generateID returns a stable identifier for a node.
