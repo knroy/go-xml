@@ -445,6 +445,20 @@ func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 
 	t, next := rt.sheet.findAtomicTemplateFrom(item, mode, rt.ctx, 0)
 	if t == nil {
+		// The built-in rule for an atomic value copies it, which is what
+		// text-only-copy does for a text node. @on-no-match replaces that
+		// wholesale, exactly as it does for a node: match-256 selects an
+		// integer no rule matches under deep-skip and expects no output,
+		// and got the value copied.
+		switch rt.sheet.modeNoMatch[mode] {
+		case "deep-skip", "shallow-skip":
+			return nil
+		case "fail":
+			return fmt.Errorf(
+				"XTDE0555: no template rule matches an atomic value of type "+
+					"%s in mode %q, and the mode declares on-no-match=\"fail\"",
+				item.TypeName(), mode)
+		}
 		if a, ok := item.(*xdm.Atomic); ok {
 			out.appendValue(a)
 		}

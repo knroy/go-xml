@@ -665,7 +665,12 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 	// have moved off the unnamed one. Reading it here rather than defaulting
 	// instr.mode to "" is what makes "<out xsl:default-mode='a'>" govern the
 	// xsl:apply-templates written inside it.
-	instr.atomicOK = patternsAllow30(ns)
+	// Whether an atomic value may be dispatched on follows the PROCESSOR's
+	// version. Every XTTE0520 case in the suite -- error-0520a through d and
+	// type-0159 -- is scoped XSLT20, so the error is what a 2.0 processor
+	// owes; match-256 is a version="2.0" module scoped XSLT30+ that selects
+	// an integer and expects it to be matched against, not refused.
+	instr.atomicOK = patternsAllow30(ns) || processorAtLeast30()
 	// @default-mode on the instruction itself takes precedence over one
 	// inherited from an ancestor, being nearer.
 	if dm, err := defaultModeAt(n); err != nil {
