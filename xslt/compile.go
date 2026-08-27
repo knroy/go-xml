@@ -48,6 +48,18 @@ type compiler struct {
 	aliasDecls        map[string]aliasDecl
 	charMapPrecedence map[string]int
 
+	// packageLocalCharMaps names the xsl:character-map declarations that
+	// reached the flat table from inside a used package.
+	//
+	// 3.5.5 makes a character map local to the package declaring it, but the
+	// table is consulted at serialisation time by name and the used
+	// package's own xsl:result-document has every right to its own map -- so
+	// the entries stay and the names are recorded here instead. The one
+	// consumer that speaks for the top-level package, the XTSE1590 check on
+	// the principal xsl:output/@use-character-maps, consults this to refuse a
+	// name it may not see. See snapshotPackageLocalDecls.
+	packageLocalCharMaps map[string]bool
+
 	// usedAttributeSets collects every name a use-attribute-sets attribute
 	// refers to, for XTSE0710.
 	usedAttributeSets []xdm.QName
