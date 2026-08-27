@@ -72,6 +72,14 @@ func (p envPackageResolver) ResolvePackage(name, versionMatch string) (*xdm.Node
 		if pk.URI != name {
 			continue
 		}
+		if pk.Version == "" {
+			// Section 3.5 gives a package that states no package-version the
+			// version "1.0". The default is applied here as well as in
+			// packageIdentity because a <package> that names its uri in the
+			// catalog never reaches that function, and a versionless package
+			// then matched no expression at all -- not even "1".
+			pk.Version = "1.0"
+		}
 		if !versionInRange(pk.Version, versionMatch) {
 			continue
 		}

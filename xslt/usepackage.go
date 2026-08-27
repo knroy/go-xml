@@ -554,6 +554,10 @@ type usePackageDecl struct {
 	// acceptComponents, because xsl:accept may both narrow and widen and the
 	// answer has to be settled before any reference is resolved.
 	acceptedVis map[string]visibility
+	// staticVars are the static variables the used package's own static phase
+	// evaluated. They belong to that package and not to the using one, so
+	// they are reinstated only while it compiles; see compileUsedPackage.
+	staticVars []staticVar
 	// assignedVis records which of those an xsl:accept actually named, as
 	// against inheriting the used package's own answer. XTSE3080 turns on the
 	// difference; see compileUsePackages.
@@ -715,6 +719,10 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err := c.runStaticPhase(doc); err != nil {
 		return nil, err
 	}
+	// The used package's own static variables are kept for the moment it is
+	// compiled, which happens later and needs them: package-version-001
+	// declares a static parameter and spells a shadow attribute with it.
+	u.staticVars = c.staticVars
 	c.staticVars = savedVars
 	comps, err := packageComponents(u.root)
 	if err != nil {
@@ -952,6 +960,13 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	for _, ch := range kept {
 		ch.Parent = u.root
 	}
+	// The used package's static variables are its own, so they are put back
+	// for the compilation and taken away again after: a using package must
+	// not see them, and the two packages may legitimately declare the same
+	// name with different values.
+	savedVars := c.staticVars
+	c.staticVars = u.staticVars
+	defer func() { c.staticVars = savedVars }()
 	// The used package compiles as an imported module: a lower import
 	// precedence than the using package, so that the using package's own
 	// declarations win. It is compiled through compileDocument, which
