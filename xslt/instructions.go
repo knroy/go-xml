@@ -720,9 +720,44 @@ type attrTemplate struct {
 
 type nsBinding struct{ prefix, uri string }
 
+// stampConstructedBaseURI records the stylesheet element's base URI on a
+// newly constructed element, unless the element has been attached to a parent
+// that already supplies one.
+//
+// XDM 3.0 §6.2 gives dm:base-uri for an element as the value of its xml:base
+// attribute if it has one, otherwise the base URI of its parent, and only for
+// a parentless element does it fall back to the base URI in force where the
+// element was constructed. Stamping the stylesheet's URI unconditionally
+// made that last case the only one: an element built inside an xsl:copy of a
+// node from a source document reported the *stylesheet's* URI rather than
+// the copied node's, because the walk up the ancestors stopped at the stamp.
+//
+// base-uri-053 is the case. It shallow-copies two documents read with
+// fn:doc, puts a <z/> inside each copy, and requires base-uri() of that z to
+// end in the copied document's name; every other node in that test was
+// already right, and only the two constructed children were not.
+//
+// An xml:base attribute written by the stylesheet still wins, because it is
+// added to the element after this and the accessor reads the attribute
+// before the field.
+func stampConstructedBaseURI(el *xdm.Node, base string) {
+	if base == "" || el.Parent == nil {
+		el.BaseURI = base
+		return
+	}
+	for cur := el.Parent; cur != nil; cur = cur.Parent {
+		if cur.BaseURI != "" {
+			// The parent chain answers, so leaving the field empty is what
+			// makes the element inherit rather than override.
+			return
+		}
+	}
+	el.BaseURI = base
+}
+
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := out.startElement(rt.sheet.aliasFor(i.name))
-	sub.open.BaseURI = i.baseURI
+	stampConstructedBaseURI(sub.open, i.baseURI)
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
@@ -820,7 +855,7 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	sub := out.startElement(qn)
-	sub.open.BaseURI = i.baseURI
+	stampConstructedBaseURI(sub.open, i.baseURI)
 	if qn.URI != "" {
 		sub.open.AddNamespace(qn.Prefix, qn.URI)
 	} else if qn.Prefix == "" {
