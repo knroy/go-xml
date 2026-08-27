@@ -44,10 +44,22 @@ func terminateError(code xdm.QName, text string, value xdm.Sequence) error {
 	if name.Local == "" {
 		name = xdm.QName{Prefix: "err", URI: xdm.NSErr, Local: "XTMM9000"}
 	}
+	// The rendered message names the code in full when it is not one of the
+	// standard err: codes. A bare local name is how every spec code is
+	// written and is what a reader expects, but a user-defined code in a
+	// namespace of its own is only identified by the pair, so that one is
+	// spelled Q{uri}local.
+	shown := name.Local
+	if name.URI != xdm.NSErr {
+		// EQName form, which is how the catalogue writes a code that is not
+		// one of the standard ones -- including Q{}UIOP9876 for a code in no
+		// namespace at all.
+		shown = "Q{" + name.URI + "}" + name.Local
+	}
 	return &xdm.Error{
 		Code:     name.Local,
 		CodeName: &name,
-		Message:  text,
+		Message:  shown + ": " + text,
 		Value:    value,
 	}
 }
