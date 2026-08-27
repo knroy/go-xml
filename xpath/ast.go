@@ -387,6 +387,11 @@ type SequenceType struct {
 	// xs:double on anything else, so the written name has to survive to the
 	// cast rather than collapsing to a type code here.
 	IsNumericType bool
+	// ListItemFacet is the item type's facet name when the written type is
+	// one of the built-in list types -- "NMTOKEN" for xs:NMTOKENS. A list
+	// type's value is a sequence, so no TypeCode stands for it and the name
+	// has to survive to the cast; see listtype.go.
+	ListItemFacet string
 	// FacetName is the derived type actually written, when it differs from
 	// AtomicType — "byte" for xs:byte, which is an xs:integer with a range.
 	// The code alone cannot express the bound, and dropping it made

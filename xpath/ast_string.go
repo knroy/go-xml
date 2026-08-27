@@ -473,6 +473,12 @@ func (t SequenceType) String() string {
 		} else {
 			base = "map(" + t.MapKey.String() + ", " + t.MapValue.String() + ")"
 		}
+	case t.ListItemFacet != "":
+		// Rendered as the list type itself, not as its item type: an error
+		// naming xs:NMTOKEN where the stylesheet wrote xs:NMTOKENS points at
+		// the wrong type. xs:ENTITIES is not its item type plus an "S", so
+		// the name is looked up rather than derived.
+		base = "xs:" + listTypeOfItemFacet(t.ListItemFacet)
 	case t.SchemaType != "":
 		base = t.SchemaType
 	case t.FacetName != "":

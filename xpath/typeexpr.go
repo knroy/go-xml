@@ -55,6 +55,17 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		a, ok := it.(*xdm.Atomic)
 		return ok && a.Type.IsNumeric()
 	}
+	// A list type has no item type of its own in this engine: its tokens
+	// become the atomic type the list is of, so an item is an instance of it
+	// when it is a string whose value is a legal token.
+	if t.ListItemFacet != "" {
+		a, ok := it.(*xdm.Atomic)
+		if !ok || a.Type != xdm.TypeString {
+			return false
+		}
+		_, err := applyStringFacet(a, t.ListItemFacet)
+		return err == nil
+	}
 	// A map test matches a map and nothing else, even though a map is also a
 	// function item: the relation runs one way only.
 	if t.IsMapTest {
@@ -299,6 +310,20 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, err
 		}
 		return xdm.One(out), nil
+	}
+
+	// A cast to a built-in list type produces one item per whitespace-
+	// separated token, so it cannot go through CastAtomic, which maps one
+	// item to one. See listtype.go.
+	if e.Type.ListItemFacet != "" {
+		out, err := castToListType(atoms[0].(*xdm.Atomic), e.Type.ListItemFacet)
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(err == nil)), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
 	}
 
 	if !e.Type.HasAtomicType {

@@ -1041,6 +1041,12 @@ func checkCastTarget(st SequenceType) error {
 	if st.IsNumericType {
 		return nil
 	}
+	// The built-in list types are legal cast targets too. They have no atomic
+	// type code because their value is a sequence of tokens rather than one
+	// item; see listtype.go.
+	if st.ListItemFacet != "" {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)

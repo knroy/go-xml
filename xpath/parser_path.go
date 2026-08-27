@@ -945,6 +945,16 @@ func (p *Parser) foldQNameConstructor(name xdm.QName, args []Expr) (Expr, bool, 
 	if name.URI != xdm.NSXS || name.Local != "QName" || len(args) != 1 {
 		return nil, false, nil
 	}
+	// XPath 3.0 lifts the literal-only restriction, resolving the prefix
+	// against the statically known namespaces of the expression instead. The
+	// resolver is still in hand here, so a non-literal argument becomes a
+	// node that carries it; see dynamicQName. A *literal* still folds, so a
+	// malformed one is the static error it has always been.
+	if p.version.atLeast30() {
+		if lit, ok := args[0].(*Literal); !ok || lit.Val.Type != xdm.TypeString {
+			return &dynamicQName{arg: args[0], ns: p.ns}, true, nil
+		}
+	}
 	q, ok, err := p.foldQNameLiteral(args[0])
 	if err != nil || !ok {
 		return nil, false, err
@@ -1172,6 +1182,13 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 		// code stands for it.
 		if p.version.atLeast31() && isNumericTypeName(t.Val, p.ns) {
 			st.IsNumericType = true
+			return p.finishOccurrence(st)
+		}
+		// The built-in list types are not in the atomic-type table either,
+		// for the same reason: their value is a sequence of tokens, not one
+		// item. castable-007..009 write them in type position.
+		if facet, ok := listTypeName(t.Val, p.ns); ok {
+			st.ListItemFacet = facet
 			return p.finishOccurrence(st)
 		}
 		code, ok := atomicTypeByName(t.Val, p.ns)
