@@ -129,15 +129,25 @@ else
     cp jing-trang/mod/rng-validate/test/spectest.xml $RNG"
 fi
 
-section "W3C XSLT suite (filtered to XSLT 2.0)"
+# Both targets, always. The same catalog measures 2.0 and 3.0, and the question
+# a change has to answer is not "how much 3.0 works" but "how much 3.0 works
+# without costing 2.0" — which only two runs answer.
+section "W3C XSLT suite (XSLT 2.0 and 3.0)"
 if [ -f "$XSLTS/catalog.xml" ]; then
-	out=$(GOXSLT_XSLTS="$XSLTS" $GO test ./tests/xslts/ -count=1 -run TestXSLTSuite -v 2>&1) || true
-	if printf '%s' "$out" | grep -q 'in-scope:'; then
-		printf '%s\n' "$out" | grep -E 'XSLT suite:|in-scope:'
-	else
-		fail "the XSLT suite ran but reported no summary — did it skip?"
-		printf '%s\n' "$out" | tail -5
-	fi
+	for t in TestXSLTSuite TestXSLT30Suite; do
+		if [ "$t" = TestXSLTSuite ]; then
+			printf -- '--- filtered to XSLT 2.0\n'
+		else
+			printf -- '--- filtered to XSLT 3.0\n'
+		fi
+		out=$(GOXSLT_XSLTS="$XSLTS" $GO test ./tests/xslts/ -count=1 -run "$t" -v 2>&1) || true
+		if printf '%s' "$out" | grep -q 'in-scope:'; then
+			printf '%s\n' "$out" | grep -E 'XSLT suite:|XSLT 3.0 suite:|in-scope:'
+		else
+			fail "the XSLT suite ran but reported no summary — did it skip?"
+			printf '%s\n' "$out" | tail -5
+		fi
+	done
 else
 	skip "the XSLT suite is not at $XSLTS
     git clone --depth 1 https://github.com/w3c/xslt30-test.git $XSLTS"
