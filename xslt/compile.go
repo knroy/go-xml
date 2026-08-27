@@ -1023,14 +1023,26 @@ func applyOutputAttrs(el *xdm.Node, o *OutputSettings) error {
 // cdata-section-elements name QNames that resolve against the stylesheet's
 // namespace context.
 func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSettings) error {
+	// XSLT 3.0 declares every yes/no serialisation attribute as a boolean,
+	// which admits true/false/1/0 as synonyms. The static check already lets
+	// a 3.0 module write them; reading them here as anything other than
+	// "yes" turned indent="true" into indent="no" and wrote
+	// standalone="true" straight into the XML declaration, which is not a
+	// value the declaration may carry at all.
+	yes := func(v string) bool {
+		if alias, ok := boolAliases[v]; ok {
+			v = alias
+		}
+		return v == "yes"
+	}
 	if v := value("method"); v != "" {
 		o.Method = v
 	}
 	if v := value("indent"); v != "" {
-		o.Indent = v == "yes"
+		o.Indent = yes(v)
 	}
 	if v := value("omit-xml-declaration"); v != "" {
-		o.OmitXMLDecl = v == "yes"
+		o.OmitXMLDecl = yes(v)
 	}
 	if v := value("encoding"); v != "" {
 		o.Encoding = v
@@ -1054,27 +1066,37 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is
 		// normalised to the absent state rather than written out literally.
-		if v == "omit" {
+		// The declaration itself admits only "yes" and "no", so a 3.0
+		// module's true/false/1/0 is normalised to one of those.
+		switch {
+		case v == "omit":
 			v = ""
+		default:
+			if alias, ok := boolAliases[v]; ok {
+				v = alias
+			}
 		}
 		o.Standalone = v
 	}
 	if v := value("version"); v != "" {
 		o.Version = v
 	}
+	if v := value("html-version"); v != "" {
+		o.HTMLVersion = v
+	}
 	if v := value("byte-order-mark"); v != "" {
-		o.ByteOrderMark = v == "yes"
+		o.ByteOrderMark = yes(v)
 	}
 	if v := value("include-content-type"); v != "" {
-		b := v == "yes"
+		b := yes(v)
 		o.IncludeContentType = &b
 	}
 	if v := value("escape-uri-attributes"); v != "" {
-		b := v == "yes"
+		b := yes(v)
 		o.EscapeURIAttributes = &b
 	}
 	if v := value("undeclare-prefixes"); v != "" {
-		o.UndeclarePrefixes = v == "yes"
+		o.UndeclarePrefixes = yes(v)
 	}
 	if v := value("media-type"); v != "" {
 		o.MediaType = v

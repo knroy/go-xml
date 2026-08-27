@@ -96,7 +96,14 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 	xhtml := strings.EqualFold(opts.Method, "xhtml")
 	s.html = html || xhtml
 	s.xhtml = xhtml
-	s.html5 = strings.HasPrefix(opts.Version, "5")
+	// html-version decides, falling back to version for the html method
+	// only: for xhtml, @version is the version of XML, so reading it would
+	// make every XHTML document version="1.0" and never HTML5.
+	htmlVer := opts.HTMLVersion
+	if htmlVer == "" && !xhtml {
+		htmlVer = opts.Version
+	}
+	s.html5 = strings.HasPrefix(htmlVer, "5")
 
 	// A byte order mark, when asked for. It precedes everything, including
 	// the XML declaration, since it is what tells a reader how to decode
@@ -128,11 +135,18 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		}
 	}
 	switch {
-	case html && opts.DocTypeSystem == "" && opts.DocTypePublic == "":
-		// HTML5 asks for a bare "<!DOCTYPE HTML>"; earlier HTML versions get
-		// one only when the stylesheet names a public or system identifier.
-		if strings.HasPrefix(opts.Version, "5") {
-			s.writeString("<!DOCTYPE HTML>\n")
+	case s.html && opts.DocTypeSystem == "" && opts.DocTypePublic == "":
+		// HTML5 asks for a bare doctype; earlier HTML versions get one only
+		// when the stylesheet names a public or system identifier.
+		//
+		// s.html rather than html: XHTML5 wants the declaration too. It is
+		// deferred like every other doctype rather than written now, because
+		// its name has to be the document element's own -- an XHTML document
+		// is XML, where the DOCTYPE name must match the root element exactly,
+		// so <HtMl> takes "<!DOCTYPE HtMl>". Writing it here would have to
+		// guess the name before the element is in hand.
+		if s.html5 {
+			s.pendingDoctype = true
 		}
 	case opts.DocTypeSystem != "":
 		// A document type declaration is written only when a system
@@ -218,6 +232,18 @@ func (s *serializer) writeString(str string) {
 
 // writeDoctypeFor writes the document type declaration naming this element.
 func (s *serializer) writeDoctypeFor(n *xdm.Node) {
+	// HTML5 with no identifiers is the bare form: just the name.
+	if s.html5 && s.opts.DocTypeSystem == "" && s.opts.DocTypePublic == "" {
+		name := s.elementName(n)
+		if !s.xhtml {
+			// The html method's doctype is conventionally uppercase, and its
+			// names are not case-sensitive, so the element's own spelling
+			// does not constrain it the way XML's does.
+			name = strings.ToUpper(name)
+		}
+		s.writeString("<!DOCTYPE " + name + ">\n")
+		return
+	}
 	s.writeString("<!DOCTYPE " + s.elementName(n))
 	if s.opts.DocTypePublic != "" {
 		s.writeString(" PUBLIC " + quoteLiteral(s.opts.DocTypePublic))
