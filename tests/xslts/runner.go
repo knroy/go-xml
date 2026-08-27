@@ -310,24 +310,39 @@ func (r *Runner) transformSafely(set *TestSet, tc *TestCase) (res *xslt.Result, 
 // error the engine reported.
 func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	sheets := tc.Test.Stylesheets
+	// A package test names its principal module as <package> rather than
+	// <stylesheet>: an xsl:package IS the stylesheet when it is the one being
+	// run, and the element says which of the two roles the file plays rather
+	// than what kind of module it is.
+	//
+	// It is looked for BEFORE the <stylesheet> children rather than only when
+	// there are none. A case may name a principal package and secondary
+	// stylesheets together -- the modules that package imports or includes --
+	// and taking the first <stylesheet> as the principal module then compiled
+	// a secondary in its place. package-015 declares its principal package
+	// alongside the module that package imports; the import was compiled as
+	// the whole stylesheet, so the package's own
+	// <xsl:mode on-no-match="text-only-copy"/> never reached the compiler and
+	// the imported module's on-no-match="fail" was the only mode declaration
+	// there was. Twelve cases in this set are written that way, and none of
+	// them names a principal <stylesheet> as well, so the package always
+	// settles it where it appears.
+	var principalPackage []StylesheetRef
+	for _, pk := range tc.Test.Packages {
+		if pk.Role == "principal" {
+			principalPackage = append(principalPackage,
+				StylesheetRef{File: pk.File, Role: "principal"})
+		}
+	}
+	if len(principalPackage) > 0 {
+		sheets = append(principalPackage, sheets...)
+	}
 	if len(sheets) == 0 {
 		// A test-set may declare one stylesheet in an environment and share
 		// it across every case, which is how the larger generated sets are
 		// written.
 		if env := r.environment(set, tc); env != nil {
 			sheets = env.Stylesheets
-		}
-	}
-	if len(sheets) == 0 {
-		// A package test names its principal module as <package> rather than
-		// <stylesheet>: an xsl:package IS the stylesheet when it is the one
-		// being run, and the element says which of the two roles the file
-		// plays rather than what kind of module it is.
-		for _, pk := range tc.Test.Packages {
-			if pk.Role == "principal" {
-				sheets = append(sheets,
-					StylesheetRef{File: pk.File, Role: "principal"})
-			}
 		}
 	}
 	if len(sheets) == 0 {
