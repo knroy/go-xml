@@ -46,3 +46,37 @@ func (i *evaluateInstr) bindWithParams(rt, sub *runtime) (*runtime, error) {
 	}
 	return sub, nil
 }
+
+// resolverFor returns the static context the target expression compiles in.
+//
+// 10.4.1: with no @namespace-context that is the context of the xsl:evaluate
+// element itself. With one, the attribute's value is a single node whose
+// in-scope namespaces replace the statically known namespaces, and whose
+// binding for the default namespace becomes the default namespace for
+// elements and types — which is the one case where a default namespace
+// reaches the target expression at all.
+func (i *evaluateInstr) resolverFor(rt *runtime) (*nsResolver, error) {
+	if i.nsContext == nil {
+		return i.ns, nil
+	}
+	seq, err := i.nsContext.Eval(rt.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(seq) != 1 {
+		return nil, fmt.Errorf("XTTE3170: the namespace-context attribute of "+
+			"xsl:evaluate selected %d items, not one node", len(seq))
+	}
+	node, ok := seq[0].(*xdm.Node)
+	if !ok {
+		return nil, fmt.Errorf("XTTE3170: the namespace-context attribute of " +
+			"xsl:evaluate did not select a node")
+	}
+	bindings := node.InScopeNamespaces()
+	sub := *i.ns
+	sub.bindings = bindings
+	// InScopeNamespaces keys the default declaration by the empty prefix, and
+	// the resolver keeps it in its own field instead.
+	sub.defaultNS = bindings[""]
+	return &sub, nil
+}
