@@ -965,6 +965,13 @@ func registerGroupingFuncs(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current-group"}, Arity: 0,
 		Call: func(ctx *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+			// Section 14.4 made calling this outside a grouping an error in
+			// 3.0, where 2.0 answered the empty sequence; see
+			// grouping_absent.go for why an in-scope marker is needed to
+			// tell that apart from an empty group.
+			if !groupingInScope(ctx) {
+				return nil, errNoGrouping(ctx, "XTDE1061", "current-group")
+			}
 			seq, _ := ctx.LookupVar(currentGroupVar)
 			return seq, nil
 		},
@@ -972,6 +979,10 @@ func registerGroupingFuncs(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "current-grouping-key"}, Arity: 0,
 		Call: func(ctx *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+			if !groupingInScope(ctx) {
+				return nil, errNoGrouping(ctx, "XTDE1071",
+					"current-grouping-key")
+			}
 			seq, _ := ctx.LookupVar(currentGroupingKeyVar)
 			return seq, nil
 		},

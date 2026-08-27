@@ -91,8 +91,7 @@ func (i *forEachGroupInstr) Execute(rt *runtime, out *outputBuilder) error {
 			focus = g.items[0]
 		}
 		sub := rt.withCurrent(focus, idx+1, size).clearCurrentRule()
-		sub = sub.withVar(currentGroupVar, g.items)
-		sub = sub.withVar(currentGroupingKeyVar, g.key)
+		sub = sub.withGroupingScope(g.items, g.key)
 		if err := execSequence(i.body, sub, out); err != nil {
 			return err
 		}
@@ -174,8 +173,7 @@ func (i *forEachGroupInstr) sortGroups(rt *runtime, groups []group) ([]group, er
 			focus = g.items[0]
 		}
 		sub := rt.withFocus(focus, n+1, len(groups))
-		sub = sub.withVar(currentGroupVar, g.items)
-		sub = sub.withVar(currentGroupingKeyVar, g.key)
+		sub = sub.withGroupingScope(g.items, g.key)
 		e := entry{g: g, idx: n, keys: make([]sortValue, len(sorts))}
 		for k, sk := range sorts {
 			v, err := sk.evalKey(sub)
@@ -717,9 +715,7 @@ func (i *analyzeStringInstr) runBranch(rt *runtime, out *outputBuilder,
 // xsl:matching-substring saw the caller's captured substrings and
 // regex-group(1) returned the match instead of the required empty string.
 func (rt *runtime) clearFunctionContext() *runtime {
-	sub := rt.withVar(regexGroupsVar, nil)
-	sub = sub.withVar(currentGroupVar, nil)
-	sub = sub.withVar(currentGroupingKeyVar, nil)
+	sub := rt.withVar(regexGroupsVar, nil).withoutGroupingScope()
 	// 15.6 adds the merging pair to the same list of what an invocation
 	// construct clears, so a stylesheet function called from an
 	// xsl:merge-action sees neither of them.
