@@ -98,6 +98,12 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	} else if i.sel != nil {
 		sep = " "
 	}
+	// A map, an array of non-atomizable items or a function item has no typed
+	// value, so building simple content out of one is FOTY0013 rather than
+	// the empty string the joiner would otherwise produce.
+	if err := checkAtomizable(seq); err != nil {
+		return err
+	}
 	out.appendText(constructedText(seq, sep))
 	return nil
 }

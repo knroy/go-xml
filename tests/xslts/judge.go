@@ -221,7 +221,11 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// The code is checked when the engine reports one. Matching only on
 		// "an error happened" would pass a test that failed for the wrong
 		// reason, which is the failure mode a conformance run exists to find.
-		if a.Code == "" || a.Code == "*" {
+		if a.Code == "" || a.Code == "*" || !isErrorCode(a.Code) {
+			// A value that is not shaped like an error code is the suite's
+			// placeholder for "an error, code unspecified": format-number-069b
+			// writes code="XXX" because the code depends on how the processor
+			// chooses to refuse an XPath 3.1 attribute it does not support.
 			return true, ""
 		}
 		if strings.Contains(terr.Error(), a.Code) {
@@ -1053,4 +1057,21 @@ func trunc(s string) string {
 		return s[:90] + "..."
 	}
 	return s
+}
+
+// isErrorCode reports whether s has the shape of a specification error code:
+// four uppercase letters followed by four digits, as in XTSE0010.
+func isErrorCode(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for i, c := range s {
+		if i < 4 && (c < 'A' || c > 'Z') {
+			return false
+		}
+		if i >= 4 && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }

@@ -364,7 +364,17 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 		if p.Static != "yes" && p.Static != "true" {
 			continue
 		}
-		v, err := xpath.Eval(p.Select, xpath.NewContext(nil, xpath.Builtins()),
+		// The catalog may declare the type the value is supplied AS, which
+		// is not the type of the expression it wrote: static-013c supplies
+		// select="111" as="xs:string", so the stylesheet receives the string
+		// "111" and its own as="xs:integer" must reject it. Evaluating the
+		// expression alone handed the parameter an xs:integer that converted
+		// perfectly well.
+		sel := p.Select
+		if p.As != "" {
+			sel = "(" + sel + ") cast as " + p.As
+		}
+		v, err := xpath.Eval(sel, xpath.NewContext(nil, xpath.Builtins()),
 			catalogNS{})
 		if err != nil {
 			return nil, fmt.Errorf("static parameter %s: %w", p.Name, err)

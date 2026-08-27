@@ -311,14 +311,35 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 		if terr != nil {
 			return fmt.Errorf("in %s/@as: %w", el.Name.Lexical(), terr)
 		}
+		// A value the CALLER supplied that will not convert is a type error,
+		// XTTE0590 -- the same code an xsl:param gets anywhere else, which is
+		// what static-013c asks for. A value the DECLARATION supplied that
+		// will not convert leaves the parameter with no usable default, so
+		// section 9.2 makes it implicitly mandatory and the caller having
+		// supplied nothing is the missing-value error rather than a type one.
+		code := "XTSE0590"
+		if fromCaller && el.Name.Local == "param" {
+			code = "XTTE0590"
+		}
 		conv, cerr := t.convertAs(val,
 			"static "+strings.TrimPrefix(el.Name.Local, "xsl:")+" $"+qn.Lexical(),
-			"XTSE0590")
+			code)
 		if cerr != nil {
-			if len(val) == 0 && !fromCaller && sel == "" {
+			if !fromCaller && el.Name.Local == "param" {
+				if len(val) == 0 && sel == "" {
+					return fmt.Errorf(
+						"XTDE0700: no value was supplied for the static parameter $%s, "+
+							"and the empty sequence is not a valid instance of %s",
+						qn.Lexical(), as)
+				}
+				// W3C bug 28355 settled this one on XTDE0050: an explicit
+				// default that does not match the declared type is no default
+				// at all, so the parameter is required and no value was
+				// supplied for it. static-013 is the case.
 				return fmt.Errorf(
-					"XTDE0700: no value was supplied for the static parameter $%s, "+
-						"and the empty sequence is not a valid instance of %s",
+					"XTDE0050: the declared default of the static parameter $%s "+
+						"is not a valid instance of %s, which makes the "+
+						"parameter required, and no value was supplied",
 					qn.Lexical(), as)
 			}
 			return cerr

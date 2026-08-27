@@ -249,3 +249,24 @@ func firstElementIn(el *xdm.Node, uri string) string {
 	}
 	return ""
 }
+
+// checkAtomizable reports FOTY0013 for a sequence holding an item that cannot
+// be atomized.
+//
+// Simple content is built by atomizing the sequence, and F&O 3.1 gives
+// fn:data FOTY0013 for a map, an array-of-non-atomizable or a function item:
+// they have no typed value. The builders join whatever they can turn into a
+// string and silently drop the rest, so a map reached xsl:value-of as the
+// empty string rather than as the error maps-907 requires.
+func checkAtomizable(seq xdm.Sequence) error {
+	for _, it := range seq {
+		switch it.(type) {
+		case *xdm.Node, *xdm.Atomic:
+		default:
+			if _, err := xdm.AtomizeChecked(xdm.Sequence{it}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
