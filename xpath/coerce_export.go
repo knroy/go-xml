@@ -48,3 +48,31 @@ func CoerceFunctionItem(v xdm.Sequence, st SequenceType) (xdm.Sequence, bool) {
 	}
 	return out, true
 }
+
+// CastToUnion applies the function conversion rules for a *pure union type*
+// declared with "as".
+//
+// XPath 3.1 2.5.5 already makes a value whose type is one of the union's
+// members an instance of the union, so such a value is returned untouched and
+// this is not reached for it. What is left is the one case the conversion
+// rules do convert: an xs:untypedAtomic, which is cast to the first member
+// type that accepts its lexical form — exactly as a cast to the union would.
+//
+// import-schema-192 declares a variable "as=dateUnion" over a union of
+// xs:date, xs:time and xs:dateTime and selects xs:untypedAtomic('12:00:00'),
+// then asserts the result is an instance of xs:time. Without the conversion
+// the value stayed untyped, matched no member, and every such variable raised
+// XTTE0570 on a value the rules exist to convert for it.
+//
+// ok is false when st is not a pure union, so the caller keeps whatever answer
+// its ordinary path gave.
+func CastToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, bool) {
+	if len(st.SchemaUnionMembers) == 0 {
+		return nil, false
+	}
+	out, err := castToUnion(a, st)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}

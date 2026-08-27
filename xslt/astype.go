@@ -82,6 +82,20 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		if conv, ok := xpath.CoerceFunctionItem(seq, t.stype); ok {
 			return conv, nil
 		}
+		// A declared *pure union type* does convert, even though it has no
+		// single atomic type to convert to. The conversion rules atomise and
+		// cast xs:untypedAtomic, and for a union that cast is "try the member
+		// types in order" — so as="dateUnion" over a union of xs:date,
+		// xs:time and xs:dateTime turns xs:untypedAtomic('12:00:00') into an
+		// xs:time, which is what import-schema-192 asserts.
+		//
+		// Only xs:untypedAtomic is converted. A value already of a member
+		// type is an instance of the union by XPath 3.1 2.5.5 and was
+		// admitted by Matches above, and converting anything else would be
+		// the general cast the rules deliberately do not perform.
+		if conv, ok := t.convertUnion(seq); ok {
+			return conv, nil
+		}
 		return nil, fmt.Errorf("%s: %s does not match its declared type %s", code, what, t.src)
 	}
 
@@ -217,4 +231,44 @@ func recodeError(err error, code string) error {
 		return fmt.Errorf("%s%s", code, msg[i:])
 	}
 	return fmt.Errorf("%s: %s", code, msg)
+}
+
+// convertUnion applies the function conversion rules to a value declared with
+// a pure union type.
+//
+// The sequence is atomised first, because the rules atomise before they cast
+// and a variable declared over a union may be given a node. Each item is then
+// converted only if it is xs:untypedAtomic; anything else keeps its type and
+// is judged by the union's own membership test, which Matches has already run.
+//
+// ok is false when the declared type is not a pure union, or when any item
+// will not convert, and the caller then reports the mismatch in its own code.
+func (t *sequenceType) convertUnion(seq xdm.Sequence) (xdm.Sequence, bool) {
+	if len(t.stype.SchemaUnionMembers) == 0 {
+		return nil, false
+	}
+	atoms := xdm.Atomize(seq)
+	out := make(xdm.Sequence, 0, len(atoms))
+	for _, it := range atoms {
+		a, ok := it.(*xdm.Atomic)
+		if !ok {
+			return nil, false
+		}
+		if t.stype.MatchesItem(a) {
+			out = append(out, a)
+			continue
+		}
+		if a.Type != xdm.TypeUntypedAtomic {
+			return nil, false
+		}
+		conv, ok := xpath.CastToUnion(a, t.stype)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, conv)
+	}
+	if !t.stype.Matches(out) {
+		return nil, false
+	}
+	return out, true
 }

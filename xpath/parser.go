@@ -1071,6 +1071,22 @@ func checkCastTarget(st SequenceType) error {
 	if st.ListItemFacet != "" {
 		return nil
 	}
+	// A named *pure union type* from an imported schema is a legal cast
+	// target. XPath 3.1 3.14.2 admits any simple type in the in-scope schema
+	// types as a SingleType, and F&O defines the cast by trying the union's
+	// member types in order and taking the first that accepts the value —
+	// which is why the result is an instance of a member, not of the union
+	// itself. import-schema-192 is "'2008-11-14' cast as dateUnion" over a
+	// union of xs:date, xs:time and xs:dateTime, and expects an xs:date.
+	//
+	// Purity is what SchemaUnionMembers already stands for: it is nil unless
+	// the union carries no facets and has no list type anywhere in its
+	// transitive membership. An impure union therefore still lands on the
+	// error below rather than being cast to permissively, which is the strict
+	// direction XSD 1.1 3.16.6.3 requires.
+	if len(st.SchemaUnionMembers) > 0 {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)

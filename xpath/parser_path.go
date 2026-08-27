@@ -903,8 +903,37 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		lex = name.Prefix + ":" + name.Local
 	}
 	prim, isAtomic, found := schemaTypeOf(lex, p.ns)
-	if !found || !isAtomic {
+	if !found {
 		return nil, false
+	}
+	if !isAtomic {
+		// A *pure union type* has a constructor for the same reason an atomic
+		// type does: the constructor is defined as a cast, and a cast to a
+		// pure union is legal — it tries the member types in order. Only a
+		// pure union qualifies, because SchemaUnionMembers is nil for any
+		// other, and an impure one has no cast to be defined as.
+		//
+		// Castable-UnionType-10 is "s:myUnionType1('2001-01-01') castable as
+		// s:myUnionType1", which needs the inner constructor to exist at all.
+		members, pure := schemaUnionMembersOf(lex, p.ns)
+		if !pure {
+			return nil, false
+		}
+		st := SequenceType{
+			SchemaType:         annotationKeyOf(lex, p.ns),
+			SchemaUnionMembers: members,
+			Occurrence:         "?",
+		}
+		if lex, ns := lex, p.ns; true {
+			st.SchemaValueValid = func(value string) error {
+				known, err := schemaValueValid(lex, ns, value)
+				if !known {
+					return nil
+				}
+				return err
+			}
+		}
+		return &CastExpr{Operand: args[0], Type: st}, true
 	}
 	if prim == xdm.TypeQName {
 		// A type derived from xs:NOTATION (or from xs:QName) has the QName

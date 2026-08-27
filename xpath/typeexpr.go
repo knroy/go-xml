@@ -341,6 +341,20 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return out, nil
 	}
 
+	// A cast to a named pure union type tries the member types in order and
+	// takes the first that accepts the value, so the result is an instance of
+	// that member rather than of the union. See castToUnion.
+	if len(e.Type.SchemaUnionMembers) > 0 {
+		out, err := castToUnion(atoms[0].(*xdm.Atomic), e.Type)
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(err == nil)), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return xdm.One(out), nil
+	}
+
 	if !e.Type.HasAtomicType {
 		return nil, fmt.Errorf("XPST0080: cast target must be an atomic type, got %s", e.Type)
 	}
@@ -516,4 +530,61 @@ func schemaTypeNameMatches(annotation, want string) bool {
 		}
 	}
 	return false
+}
+
+// castToUnion casts a value to a named pure union type.
+//
+// XPath 3.1 3.14.2 admits any simple type in the in-scope schema types as a
+// cast target, and F&O gives the union case its own rule: the member types are
+// tried in the order they are declared, and the first one that accepts the
+// value produces the result. So the result is an instance of a *member*, never
+// of the union itself — "'2008-11-14' cast as dateUnion" over a union of
+// xs:date, xs:time and xs:dateTime is an xs:date, which is what
+// import-schema-192 asserts.
+//
+// A value already of a member type is returned untouched. That is not merely
+// an optimisation: casting it onwards would canonicalise it away, and XPath
+// 3.1 2.5.5 makes such a value an instance of the union already, so a cast has
+// nothing left to do.
+//
+// The union's own facets are deliberately not consulted here, because there
+// are none to consult: SchemaUnionMembers is nil unless the union is *pure* in
+// XPath 3.1 2.5's sense, which requires an empty {facets} property. An impure
+// union never reaches this function — it is refused as a cast target instead.
+// That is the strict direction XSD 1.1 3.16.6.3 requires: a member does not
+// necessarily satisfy the facets a union adds, and casting to such a union as
+// though it did would reintroduce the XSD 1.0 error 1.1 corrected.
+func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
+	// An item that is already an instance of one of the members needs no
+	// conversion. xs:untypedAtomic is excluded: it is the type a cast is
+	// there to resolve, and it is never itself a member.
+	if a.Type != xdm.TypeUntypedAtomic {
+		for _, m := range st.SchemaUnionMembers {
+			if a.Type == m {
+				return a, nil
+			}
+		}
+	}
+	// The lexical form is what the member types are tried against, because a
+	// union is defined over the lexical space: "12:00:00" is an xs:time and
+	// not an xs:date, and only the written form says so.
+	lex := a.String()
+	for _, m := range st.SchemaUnionMembers {
+		out, err := CastAtomic(a, m)
+		if err != nil {
+			continue
+		}
+		// The built-in cast settles the lexical form of the member. The
+		// union's *declared* validity is a further question when the member
+		// is a restriction carrying facets the type code cannot express, so
+		// the schema is asked as well when it is reachable.
+		if st.SchemaValueValid != nil {
+			if st.SchemaValueValid(lex) != nil {
+				continue
+			}
+		}
+		return out, nil
+	}
+	return nil, xdm.Errorf("FORG0001",
+		"%q is not castable to %s: no member type accepts it", lex, st)
 }
