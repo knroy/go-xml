@@ -38,6 +38,26 @@ func (c *compiler) compileGlobalContextItem(el *xdm.Node) error {
 	if err != nil {
 		return err
 	}
+	// A declaration inside a LIBRARY package is not the transform's own. The
+	// global context item is supplied to the transformation, and only the
+	// top-level package has a say in what that is; 3.10 makes a used
+	// package's declaration ignored outright -- except that use="required"
+	// asserts something the library cannot be given, and is XTTE0590.
+	//
+	// glob-cxt-item-009 and -010 are the pair. Both use a library package
+	// declaring a global context item; 010 declares it use="optional" and
+	// expects the transform to run, 009 declares it required and expects the
+	// error. Comparing a library's declaration against the principal
+	// package's made both XTSE3087 instead, a used package having no reason
+	// to agree with its user about this.
+	if c.usedPackageDepth > 0 {
+		if d.use == "required" {
+			return fmt.Errorf(
+				"XTTE0590: a used package requires a global context item, " +
+					"which only the top-level package may be supplied")
+		}
+		return nil
+	}
 	// XTSE3089: streamable="yes" constrains the global variables, which this
 	// engine does not stream. The attribute is accepted and the constraint is
 	// not enforced, which is what a non-streaming processor may do: section

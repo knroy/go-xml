@@ -201,6 +201,21 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 					"name a template to start at, or declare a template named " +
 					"xsl:initial-template")
 		}
+		// Being the conventional entry point does not exempt it from the
+		// visibility rule. A named template of a package is a component like
+		// any other and defaults to private, and 3.5.2 offers only the public
+		// ones as entry points -- spec bug 30398 settled that this applies to
+		// xsl:initial-template too. glob-cxt-item-006err declares it without
+		// a visibility attribute and expects XTDE0040; reaching it through
+		// this path rather than through opts.InitialTemplate was what let it
+		// past the check the named path already made.
+		if !s.eligibleInitialTemplate(xdm.QName{
+			URI: xdm.NSXSL, Local: "initial-template",
+		}) {
+			return nil, fmt.Errorf(
+				"XTDE0040: the template named xsl:initial-template is not " +
+					"public, so a transform may not start at it")
+		}
 		useDefaultEntry = true
 	}
 
