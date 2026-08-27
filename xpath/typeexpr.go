@@ -139,7 +139,22 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 		if m := a.DerivedMember(); m != "" && schemaTypeNameMatches(m, t.SchemaType) {
 			return true
 		}
-		return schemaTypeNameMatches(a.Derived(), t.SchemaType)
+		if schemaTypeNameMatches(a.Derived(), t.SchemaType) {
+			return true
+		}
+		// A pure union type matches by MEMBERSHIP rather than by annotation.
+		// XPath 3.1 2.5.5 gives derives-from a clause of its own for it —
+		// "ET is a pure union type of which AT is a member type" — which is
+		// a question about the value's actual type, not about what validated
+		// it. So the plain xs:date fn:current-date returns is an instance of
+		// a union over xs:date, xs:time and xs:dateTime, having never been
+		// near the schema that declares the union.
+		for _, m := range t.SchemaUnionMembers {
+			if a.Type == m {
+				return true
+			}
+		}
+		return false
 
 	case t.HasAtomicType:
 		a, ok := it.(*xdm.Atomic)

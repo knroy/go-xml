@@ -1270,6 +1270,11 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 				}
 				if isAtomic {
 					st.AtomicType, st.HasAtomicType = prim, true
+				} else if members, pure := schemaUnionMembersOf(t.Val, p.ns); pure {
+					// A pure union has no single primitive to erase to, so it
+					// arrives here as "known but not atomic". Its members are
+					// what makes it matchable at all.
+					st.SchemaUnionMembers = members
 				}
 				goto occurrence
 			}

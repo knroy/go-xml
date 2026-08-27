@@ -414,6 +414,23 @@ type SequenceType struct {
 	// nil when the type is not an imported simple type, in which case a cast
 	// is decided entirely by the built-in the type derives from.
 	SchemaValueValid func(value string) error
+
+	// SchemaUnionMembers are the built-in atomic types a *pure union type*
+	// from an imported schema admits, transitively.
+	//
+	// XPath 3.1 2.5.5 writes union membership as its own clause of
+	// derives-from — "ET is a pure union type of which AT is a member type" —
+	// so a value is an instance of the union whenever its actual type is one
+	// of the members. No validation and no annotation are involved: the
+	// xs:date that fn:current-date returns is an instance of a union over
+	// xs:date, xs:time and xs:dateTime purely because xs:date is a member.
+	//
+	// Resolved at parse time, while the schema is still reachable, for the
+	// same reason SchemaValueValid is. nil for anything that is not a pure
+	// union, which is what keeps the impure cases 2.5 excludes — a union
+	// carrying facets, or one with a list type anywhere in its transitive
+	// membership — matching nothing rather than matching too much.
+	SchemaUnionMembers []xdm.TypeCode
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string
 }

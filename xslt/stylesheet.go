@@ -810,6 +810,83 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 	return code, true, true
 }
 
+// SchemaUnionMemberTypes implements xpath.SchemaUnionTypes.
+//
+// XPath 3.1 2.5.5 makes union membership a clause of derives-from in its own
+// right, so a value whose type is one of a pure union's members is an instance
+// of the union without ever having been validated against it. LookupSchemaType
+// cannot express that — it returns one primitive, and a union has none — so
+// the members are resolved here instead.
+//
+// Purity is enforced rather than assumed. 2.5 admits a union as an item type
+// only when it carries no facets and has no list type anywhere in its
+// transitive membership; a union failing either returns false and so matches
+// nothing. That is deliberately the strict direction: XSD 1.1 3.16.6.3 fixed
+// an XSD 1.0 error by which a member could substitute for a faceted union it
+// does not actually satisfy, and being permissive here would reintroduce it.
+func (r *nsResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if r.schema == nil {
+		return nil, false
+	}
+	t, ok := r.schema.Types[name]
+	if !ok {
+		return nil, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok || st.Variety != xsd.VarietyUnion {
+		return nil, false
+	}
+	var walk func(u *xsd.SimpleType, depth int) ([]xdm.TypeCode, bool)
+	walk = func(u *xsd.SimpleType, depth int) ([]xdm.TypeCode, bool) {
+		// A union whose members form a cycle is not a schema this can
+		// answer for, and the bound is what keeps a malformed one from
+		// recursing forever rather than being a limit on real schemas.
+		if depth > 32 || !u.Facets.IsEmpty() {
+			return nil, false
+		}
+		var out []xdm.TypeCode
+		for _, m := range u.MemberTypes {
+			if m == nil {
+				return nil, false
+			}
+			switch m.Variety {
+			case xsd.VarietyUnion:
+				sub, pure := walk(m, depth+1)
+				if !pure {
+					return nil, false
+				}
+				out = append(out, sub...)
+			case xsd.VarietyAtomic:
+				// The member is matched by the built-in it erases to,
+				// because that is the code an unannotated value carries.
+				// A member that is itself a restriction contributes its
+				// nearest built-in ancestor, which is what LookupSchemaType
+				// resolves for the same reason.
+				code, isAtomic, ok := r.LookupSchemaType(m.Name)
+				if !ok || !isAtomic {
+					if c, found := xpath.BuiltinAtomicTypeCode(m.Name.Local); found &&
+						m.Name.URI == xsd.NSSchema {
+						out = append(out, c)
+						continue
+					}
+					return nil, false
+				}
+				out = append(out, code)
+			default:
+				// VarietyList. 2.5 excludes a union with a list type
+				// anywhere in its transitive membership outright.
+				return nil, false
+			}
+		}
+		return out, true
+	}
+	members, pure := walk(st, 0)
+	if !pure || len(members) == 0 {
+		return nil, false
+	}
+	return members, true
+}
+
 // compileExpr compiles an expression in an element's namespace context and
 // binds the element's base URI to it.
 //

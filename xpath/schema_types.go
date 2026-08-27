@@ -90,6 +90,40 @@ type SchemaTypes interface {
 	ValidateSchemaValue(name xdm.QName, value string) (known bool, err error)
 }
 
+// SchemaUnionTypes reports the member types of a pure union type.
+//
+// It is separate from SchemaTypes rather than a method on it because it is
+// optional: an implementation that does not know about unions simply does not
+// implement it, and every union then matches nothing, which is the behaviour
+// before this existed. Folding it into SchemaTypes would have broken every
+// implementation of that interface instead.
+type SchemaUnionTypes interface {
+	// SchemaUnionMemberTypes returns the built-in atomic types a pure union
+	// type admits, transitively, and whether name is a pure union type at
+	// all.
+	//
+	// "Pure" is XPath 3.1 2.5's term and its constraints are the caller's to
+	// enforce: variety union, no facets, no list type in the transitive
+	// membership, and no member union carrying facets. A union failing any of
+	// them returns false — XSD 1.1 fixed a 1.0 error here, and matching such
+	// a type is unsafe rather than merely unsupported.
+	SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
+}
+
+// schemaUnionMembersOf resolves a lexical type name to the member types of a
+// pure union, through the same prefix bindings as everything else.
+func schemaUnionMembersOf(lex string, ns NamespaceResolver) ([]xdm.TypeCode, bool) {
+	su, ok := ns.(SchemaUnionTypes)
+	if !ok {
+		return nil, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return nil, false
+	}
+	return su.SchemaUnionMemberTypes(name)
+}
+
 // schemaValueValid checks a value against a named schema simple type,
 // resolving the name through the same prefix bindings as everything else.
 //
@@ -227,22 +261,33 @@ func schemaTypeOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool, bool) {
 	if !ok {
 		return 0, false, false
 	}
-	prefix, local := xdm.SplitQName(lex)
-	name := xdm.QName{Local: local}
-	if prefix != "" {
-		uri, found := ns.ResolvePrefix(prefix)
-		if !found {
-			return 0, false, false
-		}
-		// Only the URI: a QName is a map key here, and Go compares the
-		// whole struct including the prefix. Carrying the prefix through
-		// made every lookup miss, because a schema stores a type under the
-		// prefix *it* was written with, which is rarely the stylesheet's.
-		name.URI = uri
-	} else {
-		name.URI = ns.DefaultElementNamespace()
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return 0, false, false
 	}
 	return st.LookupSchemaType(name)
+}
+
+// resolveTypeQName expands a lexical type name against a resolver's prefix
+// bindings, reporting false for a prefix nothing binds.
+//
+// Only the URI is carried into the QName, never the prefix. A QName is a map
+// key here and Go compares the whole struct, so carrying the prefix through
+// made every lookup miss: a schema stores a type under the prefix IT was
+// written with, which is rarely the stylesheet's.
+func resolveTypeQName(lex string, ns NamespaceResolver) (xdm.QName, bool) {
+	prefix, local := xdm.SplitQName(lex)
+	name := xdm.QName{Local: local}
+	if prefix == "" {
+		name.URI = ns.DefaultElementNamespace()
+		return name, true
+	}
+	uri, found := ns.ResolvePrefix(prefix)
+	if !found {
+		return xdm.QName{}, false
+	}
+	name.URI = uri
+	return name, true
 }
 
 // annotationKeyOf resolves a lexical type name into the key the data model

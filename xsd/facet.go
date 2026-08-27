@@ -227,6 +227,26 @@ type FacetSet struct {
 	ExplicitTimezone *Timezone
 }
 
+// IsEmpty reports whether the set constrains nothing.
+//
+// XPath 3.1 2.5 needs it: a *pure* union type is one whose {facets} property
+// is empty, and only a pure union may be used as an item type. A union
+// carrying facets is excluded because substituting a member for the union is
+// unsafe there — the member is not constrained by the facets the union adds —
+// which is the XSD 1.0 error XSD 1.1 corrected.
+func (f *FacetSet) IsEmpty() bool {
+	if f == nil {
+		return true
+	}
+	return f.Length == nil && f.MinLength == nil && f.MaxLength == nil &&
+		f.TotalDigits == nil && f.FractionDigits == nil &&
+		f.WhiteSpace == nil &&
+		f.MinInclusive == nil && f.MaxInclusive == nil &&
+		f.MinExclusive == nil && f.MaxExclusive == nil &&
+		len(f.Patterns) == 0 && !f.HasEnumerations &&
+		len(f.Assertions) == 0 && f.ExplicitTimezone == nil
+}
+
 // Timezone is the value of the XSD 1.1 explicitTimezone facet.
 type Timezone uint8
 
