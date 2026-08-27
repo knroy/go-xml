@@ -474,13 +474,21 @@ func (a *patternAlt) matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	if len(a.steps) == 0 {
 		return false, nil
 	}
-	// The last step must match the candidate node itself.
 	last := a.steps[len(a.steps)-1]
+	rest := a.steps[:len(a.steps)-1]
+	// A positional predicate on a descendant step counts within the whole
+	// descendant set of the anchor, not among the candidate's siblings:
+	// "chapter/descendant::foo[1]" is the first foo anywhere under a chapter.
+	// The anchor is not known until the steps before it have been satisfied,
+	// so the two are resolved together. See matchDescendantPositional.
+	if last.descendant && len(rest) > 0 && stepIsPositional(last) {
+		return a.matchDescendantPositional(last, rest, node, ctx)
+	}
+	// The last step must match the candidate node itself.
 	ok, err := matchStep(last, node, ctx)
 	if err != nil || !ok {
 		return false, err
 	}
-	rest := a.steps[:len(a.steps)-1]
 	// An explicit descendant axis on the LAST step separates it from what
 	// precedes it by any number of levels: "x/descendant::b" is a b at any
 	// depth below an x, not a b whose parent is an x. Written as "x//b" the
@@ -1394,4 +1402,145 @@ func schemaDeclaredMatches(nt xpath.NodeTest, node *xdm.Node) bool {
 // failure to match, which is what pattern evaluation is for.
 func isNonRecoverable(err error) bool {
 	return strings.HasPrefix(err.Error(), "XTDE0640")
+}
+
+// stepIsPositional reports whether any of a step's predicates can observe the
+// context position.
+func stepIsPositional(s patternStep) bool {
+	for _, pred := range s.preds {
+		if needsPosition(pred) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDescendantPositional matches a final descendant step whose predicates
+// are positional.
+//
+// The equivalent expression of "chapter/descendant::foo[1]" numbers the foos
+// within each chapter: the predicate filters the sequence descendant::foo
+// selects from one anchor, in document order. Numbering the candidate among
+// its siblings instead — which is what a step predicate ordinarily counts —
+// gave every first-of-its-parent foo, so match-235 found the foo under a
+// section but not the one that is its chapter's only child.
+//
+// Each ancestor that satisfies the preceding steps is a candidate anchor, and
+// the node matches if it survives the predicates under any of them. The anchor
+// is sought from the nearest ancestor outwards so that the innermost match is
+// found first, which is the one document order would reach.
+func (a *patternAlt) matchDescendantPositional(last patternStep,
+	rest []patternStep, node *xdm.Node, ctx *xpath.Context) (bool, error) {
+
+	// The node test has to hold whatever the anchor turns out to be.
+	if !nodeTestHolds(last, node) {
+		return false, nil
+	}
+	inner := rest[len(rest)-1]
+	before := rest[:len(rest)-1]
+	for anc := node.Parent; anc != nil; anc = anc.Parent {
+		// The anchor is the node the step before the descendant one names,
+		// so it is tested against that step directly; matchAncestors then
+		// verifies what precedes it, starting from the anchor.
+		ok, err := matchStep(inner, anc, ctx)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		ok, err = a.matchAncestors(before, anc, ctx)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		ok, err = predicatesHoldAmong(last, node, descendantsMatching(last, anc), ctx)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// nodeTestHolds applies a step's axis and node test to a node, without its
+// predicates.
+func nodeTestHolds(s patternStep, node *xdm.Node) bool {
+	principal := xdm.KindElement
+	if s.attribute {
+		principal = xdm.KindAttribute
+	}
+	if s.namespace {
+		principal = xdm.KindNamespace
+	}
+	if s.namespace != (node.Kind == xdm.KindNamespace) {
+		return false
+	}
+	if s.attribute != (node.Kind == xdm.KindAttribute) {
+		return false
+	}
+	return s.nodeTest.Matches(node, principal) && schemaDeclaredMatches(s.nodeTest, node)
+}
+
+// descendantsMatching returns the descendants of root that satisfy a step's
+// node test, in document order.
+func descendantsMatching(s patternStep, root *xdm.Node) []*xdm.Node {
+	var out []*xdm.Node
+	var walk func(*xdm.Node)
+	walk = func(n *xdm.Node) {
+		for _, ch := range n.Children {
+			if nodeTestHolds(s, ch) {
+				out = append(out, ch)
+			}
+			walk(ch)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// predicatesHoldAmong applies a step's predicates to node, numbering it within
+// cand, and renumbering after each predicate as a path does.
+func predicatesHoldAmong(s patternStep, node *xdm.Node, cand []*xdm.Node,
+	ctx *xpath.Context) (bool, error) {
+
+	for _, pred := range s.preds {
+		kept := make([]*xdm.Node, 0, len(cand))
+		for i, c := range cand {
+			v, err := pred.Eval(ctx.WithFocus(c, i+1, len(cand)))
+			if err != nil {
+				return false, err
+			}
+			ok := false
+			if len(v) == 1 {
+				if at, isAtomic := v[0].(*xdm.Atomic); isAtomic && at.Type.IsNumeric() {
+					ok = !at.IsNaN() && at.Float64() == float64(i+1)
+				} else {
+					ok, err = xpath.EffectiveBooleanValue(v)
+					if err != nil {
+						return false, err
+					}
+				}
+			} else {
+				ok, err = xpath.EffectiveBooleanValue(v)
+				if err != nil {
+					return false, err
+				}
+			}
+			if ok {
+				kept = append(kept, c)
+			}
+		}
+		cand = kept
+	}
+	for _, c := range cand {
+		if c == node {
+			return true, nil
+		}
+	}
+	return false, nil
 }
