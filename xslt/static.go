@@ -57,6 +57,9 @@ type staticPhase struct {
 	// everything it imports. xsl:include does not change it, an included
 	// module having the precedence of its includer.
 	depth int
+	// tick counts the xsl:import edges the walk has crossed, so that two
+	// imports at the same nesting can still be ordered against one another.
+	tick int
 	// done records the module trees this pass has already walked, so that
 	// compileModule does not run conditional inclusion over them a second
 	// time. The trees are shared: a resolver hands back the same nodes for
@@ -82,6 +85,12 @@ func (c *compiler) runStaticPhase(doc *xdm.Node) error {
 	return nil
 }
 
+// importRankSpan is how far apart two nesting levels are placed, which bounds
+// how many imports one level may hold before it could reach into the next.
+// The suite's deepest module graph is a handful of modules; a million is
+// beyond anything a stylesheet writes and still far from overflow.
+const importRankSpan = 1 << 20
+
 // staticVar is one evaluated static variable or parameter declaration.
 type staticVar struct {
 	name xdm.QName
@@ -98,7 +107,14 @@ type staticVar struct {
 // module walks one stylesheet module.
 func (p *staticPhase) module(doc *xdm.Node) error {
 	if p.done[doc] {
-		return nil
+		// The tree has already been pruned and its shadow attributes
+		// expanded, both of which must happen once. Its static variables
+		// still have to be re-declared, though: stylesheet tree order
+		// replaces every xsl:import by the declarations of the module it
+		// names, so a module imported twice contributes its declarations
+		// twice, at two different import precedences. use-when-0137 imports
+		// one module either side of another and expects the two to conflict.
+		return p.redeclare(doc)
 	}
 	p.done[doc] = true
 	root := firstElement(doc)
@@ -436,8 +452,24 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	// An imported module ranks below its importer; an included one shares the
 	// includer's precedence, so only xsl:import moves the depth.
 	if el.Name.Local == "import" {
-		p.depth++
-		defer func() { p.depth-- }()
+		// Section 3.10.2 orders sibling imports as well as nested ones: "the
+		// one that occurs later in document order has higher import
+		// precedence". Depth alone gave two siblings the same rank, which is
+		// what let the second import of a module silently agree with the
+		// first instead of outranking what came between them. The tick
+		// distinguishes them: it only ever rises, so a later import is a
+		// smaller number here, where smaller is higher.
+		saved := p.depth
+		p.tick++
+		// Every import ranks below its importer, and among the imports one
+		// module makes, the later one ranks above the earlier. Encoding the
+		// nesting in the high bits and the tick in the low ones gives both
+		// orderings at once, with smaller meaning higher precedence: a
+		// deeper import is a larger number however early it was reached, and
+		// two imports at the same depth are separated by their ticks, the
+		// later one -- the larger tick -- being made the smaller number.
+		p.depth = (saved+1)*importRankSpan - p.tick
+		defer func() { p.depth = saved }()
 	}
 	return p.module(doc)
 }
@@ -737,4 +769,38 @@ func ignoredTopLevel(ch *xdm.Node) bool {
 		return true
 	}
 	return !xsltDeclarations[ch.Name.Local]
+}
+
+// redeclare walks a module tree that has already been pruned, re-evaluating
+// only its static variable declarations and its nested module references.
+//
+// It is the second and later visit to a module the graph reaches more than
+// once. The tree is shared, so pruning it again would be a no-op and
+// expanding its shadow attributes again would re-evaluate expressions against
+// a static context that has since moved on; only the declarations belong to
+// the position in tree order this visit occupies.
+func (p *staticPhase) redeclare(doc *xdm.Node) error {
+	root := firstElement(doc)
+	if root == nil || root.Kind != xdm.KindElement ||
+		root.Name.URI != xdm.NSXSL || !isStylesheetRootName(root.Name.Local) {
+		return nil
+	}
+	for _, ch := range root.ChildElements() {
+		if ch.Name.URI != xdm.NSXSL {
+			continue
+		}
+		switch ch.Name.Local {
+		case "variable", "param":
+			if isStaticDecl(ch) && moduleAtLeast30(ch) {
+				if err := p.declare(ch); err != nil {
+					return err
+				}
+			}
+		case "include", "import":
+			if err := p.includeModule(ch); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

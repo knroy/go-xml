@@ -289,6 +289,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 					inheritNamespaces(c, v)
 				}
 			}
+
 			// The copy is assessed rather than the original: validation may
 			// annotate, and annotating the source document would leak a
 			// property of this instruction into the tree everything else
@@ -297,6 +298,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				return err
 			}
 			out.appendNode(c)
+			// After the copy has a parent, because the repair §5.8.3 needs
+			// depends on what the destination declares: an element in no
+			// namespace landing under one that declares a default has to
+			// undeclare it, or the copy silently changes namespace.
+			// copy-1220 grafts elements in no namespace into a
+			// <doc xmlns="http://www.out.com/">.
+			if c.Kind == xdm.KindElement {
+				fixupNamespaces(c)
+			}
 		case *xdm.Atomic:
 			out.appendValue(v)
 		}
@@ -472,6 +482,16 @@ func fixupNamespaces(el *xdm.Node) {
 		}
 		el.AddNamespace(prefix, uri)
 		scope[prefix] = uri
+	}
+	if el.Name.URI == "" && el.Name.Prefix == "" && scope[""] != "" {
+		// An unprefixed name in no namespace UNDECLARES the default
+		// namespace when one is in scope: without the undeclaration the name
+		// would read as being in whatever the parent declares. This is the
+		// same repair xsl:element makes for a computed name, reached here by
+		// a copy that lands under a parent declaring a default -- copy-1220
+		// grafts elements in no namespace into a <doc xmlns="...">.
+		el.AddNamespace("", "")
+		scope[""] = ""
 	}
 	need(el.Name.Prefix, el.Name.URI)
 	for _, a := range el.Attrs {
