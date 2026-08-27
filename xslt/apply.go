@@ -303,12 +303,39 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 	// replace it wholesale.
 	switch rt.sheet.modeNoMatch[mode] {
 	case "deep-skip":
-		// Nothing is produced and nothing is recursed into.
-		return nil
-	case "shallow-skip":
-		// The node itself produces nothing, but its children are still
-		// processed — which is the text-only rule minus the text copying.
+		// A document node is the exception: 6.7.4 gives it the rule
+		//
+		//   <xsl:template match="document-node()" mode="M">
+		//     <xsl:apply-templates mode="#current"/>
+		//   </xsl:template>
+		//
+		// and only "all items other than document nodes" do nothing. The
+		// distinction is what spec bug #30219 changed, and mode-1437a is the
+		// case it was changed for: with the document node skipped too,
+		// nothing in the source was ever reached and a stylesheet whose only
+		// rules match book and bktlong produced an empty result. Attributes
+		// are not visited -- the rule has no select, so it selects children
+		// only, and a document node has no attributes anyway.
+		if node.Kind != xdm.KindDocument {
+			return nil
+		}
 		return builtInDescend(rt, node, mode, params, tunnels, out, false)
+	case "shallow-skip":
+		// The node itself produces nothing, but its attributes and then its
+		// children are still processed. The attributes are the part that
+		// distinguishes this rule from text-only-copy: 6.7.5 writes it as
+		//
+		//   <xsl:template match="document-node()|element()" mode="M">
+		//     <xsl:apply-templates select="@*" mode="#current"/>
+		//     <xsl:apply-templates mode="#current"/>
+		//   </xsl:template>
+		//
+		// where 6.7.1 gives text-only-copy an xsl:apply-templates with no
+		// select at all -- children only, since an attribute is not a child.
+		// Sharing one descent for both lost the attributes, and mode-0015
+		// applies a rule matching @bar in a shallow-skip mode and expects it
+		// to fire; it produced nothing at all.
+		return builtInSkipDescend(rt, node, mode, params, tunnels, out)
 	case "fail":
 		// XTDE0555: with on-no-match="fail" the absence of a matching rule
 		// is the error, so it is reported for the node that had none rather
@@ -723,6 +750,44 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 			out.appendText(node.StringValue())
 		}
 		return nil
+	}
+	return nil
+}
+
+// builtInSkipDescend is the on-no-match="shallow-skip" rule for a document or
+// element node: apply templates to the attributes, then to the children,
+// producing nothing for the node itself.
+//
+// A document node has no attributes, so the loop simply finds none there; the
+// rule is written over both kinds because 6.7.5 words it that way, and the
+// document case matters for the recursion rather than for the attributes.
+// Every other kind of node produces the empty sequence, which is what falling
+// off the switch does.
+func builtInSkipDescend(rt *runtime, node *xdm.Node, mode string,
+	params, tunnels map[string]xdm.Sequence, out *outputBuilder) error {
+
+	if node.Kind != xdm.KindDocument && node.Kind != xdm.KindElement {
+		return nil
+	}
+	if err := rt.descend(); err != nil {
+		return err
+	}
+	defer rt.ascend()
+	// Two separate xsl:apply-templates instructions, so position() restarts
+	// at 1 for the children -- the same distinction 6.7.3's note draws about
+	// the identity rule.
+	for idx, a := range node.Attrs {
+		an := rt.withCurrent(a, idx+1, len(node.Attrs))
+		if err := applyToNode(an, a, mode, params, tunnels, out); err != nil {
+			return err
+		}
+	}
+	size := len(node.Children)
+	for idx, ch := range node.Children {
+		cn := rt.withCurrent(ch, idx+1, size)
+		if err := applyToNode(cn, ch, mode, params, tunnels, out); err != nil {
+			return err
+		}
 	}
 	return nil
 }
