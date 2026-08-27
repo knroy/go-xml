@@ -124,6 +124,15 @@ type Stylesheet struct {
 	// itself meaningful — it is what makes the mode exist for XTDE0045 and
 	// for @declared-modes — so the bare declaration has to be recorded.
 	declaredModeNames map[string]bool
+	// modeVisibility holds the winning xsl:mode/@visibility per Clark mode
+	// name, and rootDefaultMode the mode the principal module's own
+	// @default-mode names. Together they decide XTDE0045; see
+	// modevisibility.go.
+	modeVisibility  map[string]string
+	rootDefaultMode string
+	// isPackage says the principal module is an xsl:package, which is what
+	// gives mode visibility something to be relative to.
+	isPackage bool
 	// source is the stylesheet's own document, which document("") returns.
 	//
 	// Section 16.1 defines the zero-length URI as naming the document
@@ -419,6 +428,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkModeConflicts(); err != nil {
 		return nil, err
 	}
+	c.publishModeVisibility()
 	if err := checkStripPreserveConflict(
 		c.stripDecls, c.preserveDecls); err != nil {
 		return nil, err

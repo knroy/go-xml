@@ -369,6 +369,15 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		if initialMode == "#default" || initialMode == "#unnamed" {
 			initialMode = ""
 		}
+		// An invocation that names no mode at all starts in the module's
+		// default mode, which @default-mode on the root moves off the unnamed
+		// one. The rules written without @mode moved with it, so starting in
+		// the unnamed mode would find none of them; mode-1701 is exactly that
+		// stylesheet. An explicit "#unnamed" is a different request and is
+		// left alone, which is why this reads opts rather than initialMode.
+		if opts.InitialMode == "" {
+			initialMode = s.rootDefaultMode
+		}
 		// XTDE0045: "it is a non-recoverable dynamic error if the invocation
 		// of the stylesheet specifies an initial mode (other than the default
 		// mode) that does not match the expanded-QName in the mode attribute
@@ -386,10 +395,26 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 					want = xdm.QName{URI: uri, Local: local}.Clark()
 				}
 			}
-			if !s.declaresMode(want) {
-				return nil, fmt.Errorf(
-					"XTDE0045: the invocation specifies initial mode %q, "+
-						"which no template declares", opts.InitialMode)
+			// The mode named by the module's own @default-mode is an entry
+			// point the module nominated, so it is eligible whether or not a
+			// rule mentions it and whatever its visibility; mode-1803
+			// declares such a mode and no rule uses it. Tested first because
+			// it excuses both of the checks below.
+			if want != s.rootDefaultMode {
+				if !s.declaresMode(want) {
+					return nil, fmt.Errorf(
+						"XTDE0045: the invocation specifies initial mode %q, "+
+							"which no template declares", opts.InitialMode)
+				}
+				// Existing is not the same as invocable: a mode a package
+				// keeps private cannot be entered from outside it. See
+				// modevisibility.go.
+				if !s.eligibleInitialMode(want) {
+					return nil, fmt.Errorf(
+						"XTDE0045: the invocation specifies initial mode %q, "+
+							"which is not an eligible initial mode because "+
+							"the package declares it private", opts.InitialMode)
+				}
 			}
 			initialMode = want
 		}

@@ -209,7 +209,7 @@ func (p *staticPhase) topLevel(el *xdm.Node) error {
 		// would bind a variable the stylesheet is about to be rejected for
 		// declaring, and — worse — would make the value visible to a
 		// use-when above the rejection.
-		if !isStaticDecl(el) || !moduleAtLeast30(el) {
+		if !staticDeclAllowed(el) {
 			return nil
 		}
 		return p.declare(el)
@@ -474,6 +474,25 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 	return p.module(doc)
 }
 
+// staticDeclAllowed reports whether el may carry static="yes" here.
+//
+// The two declarations differ in what governs them, and the grammar table is
+// where that is recorded: xsl:variable/@static is since30, so a 2.0 module
+// may not write it, while xsl:param/@static is processor30, because a static
+// parameter is supplied by whoever drives the processor. Binding a
+// declaration the grammar check is about to reject would make its value
+// visible to a use-when above the rejection, so the same distinction has to
+// be drawn here rather than assumed either way.
+func staticDeclAllowed(el *xdm.Node) bool {
+	if !isStaticDecl(el) {
+		return false
+	}
+	if el.Name.Local == "param" {
+		return processorAtLeast30()
+	}
+	return moduleAtLeast30(el)
+}
+
 // isStaticDecl reports whether a declaration carries static="yes".
 //
 // The attribute is a boolean in the XSLT sense, so "true" is a synonym. It is
@@ -543,7 +562,14 @@ func (p *staticPhase) expandShadow(el *xdm.Node) error {
 	// element the shadow form is expanded first and the version read after.
 	// A version="2.0" module is not reached at all: whether the processor
 	// admits 3.0 has already been settled by the time this pass runs.
-	if !moduleAtLeast30(el) && !isModuleElement(el) {
+	// A shadow attribute supplies the value of the attribute it names, and
+	// that attribute is still put through the grammar afterwards -- so a
+	// version="2.0" module writing a shadow form of an attribute 2.0 does not
+	// have is refused just the same, only by the check that owns the rule.
+	// What expansion itself follows is therefore the processor: function-1025
+	// writes _new-each-time in a version="2.0" module scoped XSLT30+, the
+	// same shape as the plain new-each-time beside it.
+	if !processorAtLeast30() && !isModuleElement(el) {
 		return nil
 	}
 	// The overwhelmingly common case is an element with no shadow attribute
@@ -791,7 +817,7 @@ func (p *staticPhase) redeclare(doc *xdm.Node) error {
 		}
 		switch ch.Name.Local {
 		case "variable", "param":
-			if isStaticDecl(ch) && moduleAtLeast30(ch) {
+			if staticDeclAllowed(ch) {
 				if err := p.declare(ch); err != nil {
 					return err
 				}

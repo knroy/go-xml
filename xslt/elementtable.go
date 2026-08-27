@@ -102,14 +102,14 @@ var xsltElements = map[string]elementDef{
 		"package-version": {},
 	}},
 	"expose": {since30: true, attrs: map[string]attrDef{
-		"component":  {required: true},
-		"names":      {required: true},
+		"component": {required: true},
+		"names":     {required: true},
 		"visibility": {required: true, values: []string{
 			"public", "private", "final", "abstract", "hidden"}},
 	}},
 	"accept": {since30: true, attrs: map[string]attrDef{
-		"component":  {required: true},
-		"names":      {required: true},
+		"component": {required: true},
+		"names":     {required: true},
 		"visibility": {required: true, values: []string{
 			"public", "private", "final", "abstract", "hidden"}},
 	}},
@@ -229,7 +229,15 @@ var xsltElements = map[string]elementDef{
 		"as":       {},
 		"required": {values: []string{"yes", "no"}},
 		"tunnel":   {values: []string{"yes", "no"}},
-		"static":   {since30: true, values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// processor30, not since30: a static parameter is supplied by the
+		// caller, so whether one may be declared follows the processor the
+		// caller is driving rather than the module's own @version.
+		// function-1025 declares one in a version="2.0" module and is scoped
+		// XSLT30+, the same shape as function-1032's new-each-time above.
+		"static": {
+			processor30: true,
+			values:      []string{"yes", "no", "true", "false", "1", "0"},
+		},
 	}},
 	"call-template": {attrs: map[string]attrDef{
 		"name": {required: true},

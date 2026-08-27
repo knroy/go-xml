@@ -75,6 +75,10 @@ type compiler struct {
 	// XTSE0545 is judged over these once every module has been compiled; see
 	// checkModeConflicts.
 	modeTies map[string][]int
+	// modeVisibility records xsl:mode/@visibility per mode at the precedence
+	// it was declared at. It decides which modes an invocation may name as
+	// its initial mode; see modevisibility.go.
+	modeVisibility map[string]modeVisibility
 
 
 	// statedDecimalFormat records, per format name, which attributes an
@@ -254,6 +258,14 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 	// document a stylesheet reads through document("") is the one on disk.
 	if c.sheet.source == nil {
 		c.sheet.source = doc
+		// @default-mode on the principal module's own root names a mode the
+		// package expects to be entered in, which makes it an eligible
+		// initial mode however private it is; see modevisibility.go. Only
+		// this root counts, so it is read here rather than at each use.
+		if dm, err := defaultModeAt(root); err == nil {
+			c.sheet.rootDefaultMode = dm
+		}
+		c.sheet.isPackage = isXSL(root, "package")
 		// The principal module's declared version decides the default output
 		// method for the implicit result tree. Under backwards compatibility
 		// there is no xhtml method to default to, so an XHTML-rooted result
@@ -500,7 +512,14 @@ func (c *compiler) compileTopLevel(el *xdm.Node, precedence int) error {
 		// disagree -- static-015 writes version="1.0" on one of three
 		// otherwise identical static parameters and requires all three to
 		// keep the value the caller supplied.
-		if isStaticDecl(el) && moduleAtLeast30(el) {
+		// The test is staticDeclAllowed's rather than the module version's so
+		// that it admits exactly the declarations the static phase bound. A
+		// declaration the phase evaluated but this arm rejected would be
+		// compiled a second time as an ordinary global, and a parameter whose
+		// value only ever came from the caller would then be reported unset:
+		// function-1025's static param in a version="2.0" module did exactly
+		// that.
+		if staticDeclAllowed(el) {
 			v, err := c.staticGlobal(el)
 			if err != nil {
 				return err
@@ -822,8 +841,8 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	for _, ch := range children[i:] {
 		if isXSL(ch, "context-item") {
 			return fmt.Errorf(
-				"xsl:template may not contain xsl:context-item here: its "+
-					"content is (xsl:context-item?, xsl:param*, "+
+				"xsl:template may not contain xsl:context-item here: its " +
+					"content is (xsl:context-item?, xsl:param*, " +
 					"sequence-constructor) (XTSE0010)")
 		}
 	}
@@ -1923,5 +1942,6 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		c.modeTies[m] = append(c.modeTies[m], precedence)
 		c.sheet.declaredModeNames[m] = true
 	}
+	c.recordModeVisibility(el, precedence)
 	return c.compileModeAccumulators(el, name)
 }
