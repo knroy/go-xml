@@ -10,14 +10,25 @@ import (
 // blockNamespaceInheritance implements [xsl:]inherit-namespaces="no" on the
 // element el has just finished building.
 //
-// §5.8.1 makes namespace inheritance a property of complex content
-// construction rather than of the tree: the children of a new element normally
-// acquire its namespace nodes, and inherit-namespaces="no" stops them. The
-// XDM has no separate place to record that, because in-scope namespaces are
-// derived by walking ancestors — so the only way to express "this child does
-// not have that binding" is the undeclaration the note in §5.8.1 points at,
-// xmlns:foo="" as XML 1.1 writes it. InScopeNamespaces already reads an
-// empty-valued namespace node that way.
+// §5.7.1 makes namespace inheritance a property of complex content
+// construction rather than of the tree: "each namespace node of the newly
+// constructed element ... is copied to each descendant element", and
+// inherit-namespaces="no" stops that copy. The XDM has no separate place to
+// record that, because in-scope namespaces are derived by walking ancestors —
+// so the only way to express "this child does not have that binding" is the
+// undeclaration the note in §5.8.1 points at, xmlns:foo="" as XML 1.1 writes
+// it. InScopeNamespaces already reads an empty-valued namespace node that way.
+//
+// What is blocked is exactly EL'S OWN namespace nodes, which §11.2.3 names as
+// those "copied from those of the source node, or generated as a result of
+// namespace fixup" — el.Namespaces, in this engine. A binding el merely
+// inherited from ITS parent is not el's to withhold: that one was copied down
+// by the ancestor's own inheritance pass, and blocking it here would take it
+// from a child the spec entitles to it. element-0306 is the case that turns on
+// the difference. It writes inherit-namespaces="no" on an xsl:element whose
+// two prefix bindings came from the literal result element above it, and
+// asserts the grandchildren still have all four namespace nodes; undeclaring
+// everything in scope left them with two.
 //
 // Only the direct children are touched. A grandchild inherits from its own
 // parent, whose bindings are whatever survived this pass, so the effect
@@ -37,14 +48,20 @@ func blockNamespaceInheritance(el *xdm.Node) {
 	if el == nil || el.Kind != xdm.KindElement {
 		return
 	}
-	scope := el.InScopeNamespaces()
-	prefixes := make([]string, 0, len(scope))
-	for p := range scope {
+	scope := map[string]string{}
+	prefixes := make([]string, 0, len(el.Namespaces))
+	for _, ns := range el.Namespaces {
+		p := ns.Name.Local
 		// The xml prefix is bound everywhere by the XML Namespaces
 		// specification and cannot be undeclared.
-		if p != "xml" {
-			prefixes = append(prefixes, p)
+		//
+		// An empty value is itself an undeclaration el is carrying, so there
+		// is nothing for the children to inherit and nothing to block.
+		if p == "xml" || ns.Value == "" {
+			continue
 		}
+		scope[p] = ns.Value
+		prefixes = append(prefixes, p)
 	}
 	// A stable order, for the same reason copyNamespacesTo sorts.
 	sort.Strings(prefixes)

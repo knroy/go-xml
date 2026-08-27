@@ -1509,35 +1509,6 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	savedVars := c.staticVars
 	c.staticVars = u.staticVars
 	defer func() { c.staticVars = savedVars }()
-	// Section 3.5.5, "Declarations Local to a Package", is explicit that
-	// several kinds of declaration do not cross a package boundary at all:
-	// "Declarations of keys, accumulators, decimal formats, namespace
-	// aliases, output definitions, and character maps within a package have
-	// local scope within that package -- they are all effectively private.
-	// The elements that declare these constructs do not have a visibility
-	// attribute. The unnamed decimal format and the unnamed output format
-	// are also local to a package."
-	//
-	// They are not components: no xsl:expose can publish one and no
-	// xsl:accept can name one, so a using package has no way to ask for one
-	// and must never inherit one by accident. The composition here compiles
-	// the used package into the SAME Stylesheet, which put every such
-	// declaration into one flat table and let the using package see -- and
-	// collide with -- the used package's.
-	//
-	// The names the used package adds are therefore taken away again once it
-	// has compiled. Removal rather than a separate table is what this
-	// flattened composition can express: compileUsePackages runs before the
-	// using module's own declarations are compiled, so everything a table
-	// gains across this call came from the used package and nothing the
-	// using package declares has been added yet.
-	//
-	// use-package-104 asks for FODF1280 when the using package names a
-	// decimal format only the used package declares, and -105 for XTDE1260
-	// on a key. Both succeeded before, because the used package's
-	// declaration was simply still there for the using package to find.
-	restore := c.snapshotPackageLocalDecls()
-	defer restore()
 	// The used package compiles as an imported module: a lower import
 	// precedence than the using package, so that the using package's own
 	// declarations win. It is compiled through compileDocument, which
@@ -1941,61 +1912,4 @@ func checkPackageVersion(s string, bad func() error) error {
 // admits.
 func isXMLSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
-}
-
-// snapshotPackageLocalDecls records the package-local declaration tables as
-// they stand, and answers a function restoring them.
-//
-// Section 3.5.5 makes keys, decimal formats and character maps local to the
-// package that declares them. This composition compiles a used package into
-// the using package's Stylesheet, so the only way to keep the scopes apart is
-// to put the tables back the way the using package left them once the used
-// package has compiled. See the call site in compileUsedPackage for why a
-// snapshot taken there captures exactly the using package's own state.
-//
-// Only the three tables the conformance suite pins are touched. The section
-// names namespace aliases, output definitions and accumulators too; those are
-// left alone deliberately, because nothing yet distinguishes a case that
-// needs the scoping from one that relies on the inheritance, and narrowing a
-// scope with no test to hold it is how a regression gets in.
-func (c *compiler) snapshotPackageLocalDecls() func() {
-	keys := make(map[string][]*keyDef, len(c.sheet.keys))
-	for k, v := range c.sheet.keys {
-		keys[k] = v
-	}
-	formats := make(map[string]*DecimalFormat, len(c.sheet.decimalFormats))
-	for k, v := range c.sheet.decimalFormats {
-		formats[k] = v
-	}
-	maps := make(map[string]map[rune]string, len(c.sheet.characterMaps))
-	for k := range c.sheet.characterMaps {
-		maps[k] = nil
-	}
-	return func() {
-		c.sheet.keys = keys
-		c.sheet.decimalFormats = formats
-		// Character maps are the one table whose entries must stay. A
-		// character map is consulted at serialisation time, by name, from
-		// whatever xsl:output or xsl:result-document named it -- including
-		// one written inside the used package, whose right to its own map is
-		// not in question. use-package-108 calls the used package's "go"
-		// template, which does xsl:result-document format="with-maps" over
-		// that package's own "cm"; removing the entry left the substitution
-		// undone and the output unmapped.
-		//
-		// So the scope is enforced on the NAME rather than on the table: the
-		// names a used package contributed are recorded, and the one check
-		// that speaks for the top-level package -- the XTSE1590 raised for
-		// the principal xsl:output/@use-character-maps -- refuses them. That
-		// is what use-package-106 asks for, naming a "cm" only the used
-		// package declares.
-		for name := range c.sheet.characterMaps {
-			if _, had := maps[name]; !had {
-				if c.packageLocalCharMaps == nil {
-					c.packageLocalCharMaps = map[string]bool{}
-				}
-				c.packageLocalCharMaps[name] = true
-			}
-		}
-	}
 }

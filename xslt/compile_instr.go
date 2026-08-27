@@ -977,7 +977,8 @@ func (c *compiler) compileElement(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	if err != nil {
 		return nil, err
 	}
-	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets, baseURI: n.BaseURI}
+	instr := &elementInstr{name: nameAVT, scope: n, attrSets: sets,
+		baseURI: n.BaseURI, noInherit: noAttr(n, "inherit-namespaces")}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}

@@ -843,6 +843,13 @@ type elementInstr struct {
 	// validation is the validation or type attribute, which asks for the
 	// constructed element to be assessed against the imported schema.
 	validation validationSpec
+	// noInherit records inherit-namespaces="no", which stops the children
+	// of the constructed element acquiring its namespace nodes. §11.2 gives
+	// xsl:element the attribute in the same terms §11.9 gives it to xsl:copy,
+	// and it was only ever honoured on the latter: namespace-0913 writes it
+	// on xsl:element and asserts the default namespace does not reach the
+	// child.
+	noInherit bool
 }
 
 func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -874,6 +881,9 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
+	}
+	if i.noInherit {
+		blockNamespaceInheritance(sub.open)
 	}
 	// The element is complete only now, so validity is assessed here rather
 	// than at construction: a content model cannot be checked against

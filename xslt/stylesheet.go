@@ -592,20 +592,6 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	// Character maps are resolved last, so that an xsl:output in the
 	// importing module can name a map declared in an imported one.
-	//
-	// The principal xsl:output belongs to the top-level package, and 3.5.5
-	// makes a character map local to the package that declares it, so a name
-	// that only a used package declares is not in scope here however plainly
-	// it sits in the flat table. use-package-106 names such a map and wants
-	// XTSE1590 for it.
-	for _, n := range c.sheet.output.UseCharacterMaps {
-		if c.packageLocalCharMaps[n.Clark()] {
-			return nil, fmt.Errorf(
-				"XTSE1590: no xsl:character-map named %q is in scope; it is "+
-					"declared in a used package, and 3.5.5 makes character "+
-					"maps local to the package declaring them", n.Lexical())
-		}
-	}
 	if err := c.sheet.resolveOutputCharacterMaps(c.sheet.output.UseCharacterMaps); err != nil {
 		return nil, err
 	}
