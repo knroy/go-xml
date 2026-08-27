@@ -364,6 +364,23 @@ func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 	}
 	switch s.Axis {
 	case xpath.AxisChild:
+		// A namespace-node() kind test selects namespace nodes wherever it is
+		// written, exactly as attribute() selects attributes. Written without
+		// an axis it parses as a child step, and the child axis holds no
+		// namespace nodes -- so the step has to be marked as selecting them,
+		// or matchStep rejects every candidate on the axis disagreement alone
+		// before the node test is ever consulted.
+		//
+		// key-087 declares xsl:key match="namespace-node()" and gets no
+		// entries at all without this, though the index walk offers every
+		// namespace node to the pattern.
+		if kt, ok := s.Test.(*xpath.KindTest); ok && kt.Kind == xdm.KindNamespace {
+			if !allow30 {
+				return ps, fmt.Errorf(
+					"namespace-node() is not allowed in an XSLT 2.0 pattern")
+			}
+			ps.namespace = true
+		}
 	case xpath.AxisAttribute:
 		ps.attribute = true
 	case xpath.AxisDescendantOrSelf:
