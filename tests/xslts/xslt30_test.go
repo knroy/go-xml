@@ -5,6 +5,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/knroy/go-xml/xpath"
 )
 
 // TestXSLT30Suite is TestXSLTSuite at the XSLT 3.0 target.
@@ -21,6 +23,18 @@ func TestXSLT30Suite(t *testing.T) {
 	if _, err := os.Stat(root + "/catalog.xml"); err != nil {
 		t.Skip("set GOXSLT_XSLTS to a checkout of w3c/xslt30-test to run the suite")
 	}
+
+
+	// The suite's patterns are trusted input, so the backtracking matcher is
+	// enabled for the run, exactly as the QT3 harness enables it. It is off by
+	// default because a pattern can come from document data and the matcher
+	// has no linear-time guarantee -- a conformance run is the case where that
+	// does not apply. Leaving it off failed nine backreference cases across
+	// the two targets for a reason that is a deployment choice rather than a
+	// conformance gap, which made the headline figure understate what the
+	// engine does: the matcher for them is written, tested and shipped.
+	xpath.SetBacktrackingRegex(true)
+	defer xpath.SetBacktrackingRegex(false)
 
 	r := &Runner{Root: root, Timeout: 10 * time.Second, Target: XSLT30}
 	sum, err := r.Run()
