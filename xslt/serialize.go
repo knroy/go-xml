@@ -457,10 +457,16 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// reading "<div/>" sees an unclosed start tag, so a non-void
 			// element gets an explicit end tag; a void element has no end
 			// tag in HTML at all, so it is written self-closed with the
-			// space that the HTML compatibility guidelines ask for. Which
-			// side of the rule an element falls on is decided by its HTML
-			// name, which only makes sense inside the XHTML namespace.
-			if n.Name.URI == nsXHTML && isVoidElement(n.Name.Local) {
+			// space that the HTML compatibility guidelines ask for.
+			//
+			// The name decides, not the namespace. output-0217 and -0223
+			// write the void names with no namespace at all and want them
+			// self-closed, while -0219 and -0220 write non-void names the
+			// same way and want a full end tag: what an HTML parser would
+			// do with the name is the whole of the rule, and requiring the
+			// XHTML namespace for it sent every no-namespace element down
+			// the wrong half.
+			if isVoidElement(n.Name.Local) {
 				s.writeString(" />")
 			} else {
 				s.writeString("></" + name + ">")
