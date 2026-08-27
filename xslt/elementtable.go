@@ -413,6 +413,10 @@ var xsltElements = map[string]elementDef{
 		"group-starting-with": {},
 		"group-ending-with":   {},
 		"collation":           {avt: true},
+		// composite="yes" makes the whole key sequence one grouping key.
+		// XSLT 3.0 only: a 2.0 stylesheet naming it must still be told so.
+		"composite": {since30: true,
+			values: []string{"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"analyze-string": {attrs: map[string]attrDef{
 		"select": {required: true},

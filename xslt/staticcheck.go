@@ -146,6 +146,15 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		if err := checkAttrValue(el, a, ad); err != nil {
 			return err
 		}
+		// package-version has a grammar rather than a closed set of values,
+		// so the attribute table cannot state it and checkAttrValue cannot
+		// check it.
+		if a.Name.Local == "package-version" && isXSL(el, "package") &&
+			!validPackageVersion(a.Value) {
+			return fmt.Errorf(
+				"attribute package-version=%q on xsl:package is not a valid "+
+					"version number (XTSE0020)", a.Value)
+		}
 		if err := checkQNameAttr(el, a); err != nil {
 			return err
 		}
