@@ -144,7 +144,8 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 			// of the forms the equivalent-expression rule covers; see
 			// pattern30.go.
 			g, gerr := compileGeneralPattern(alt, ns)
-			if gerr == nil && g != nil && patternsAllow30(ns) {
+			if gerr == nil && g != nil &&
+				(patternsAllow30(ns) || variablePatternAllowed(alt)) {
 				p.general = append(p.general, g)
 				continue
 			}

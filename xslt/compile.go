@@ -89,7 +89,6 @@ type compiler struct {
 	// its initial mode; see modevisibility.go.
 	modeVisibility map[string]modeVisibility
 
-
 	// statedDecimalFormat records, per format name, which attributes an
 	// xsl:decimal-format declaration actually named. XTSE1290 compares
 	// declarations attribute by attribute, and the merged format kept in the
@@ -638,7 +637,10 @@ type patternFuncRef struct {
 // reported: an unbound prefix is XTSE0080/XPST0081 and is diagnosed where
 // prefixes are resolved, and guessing at it here would report the wrong code.
 func (c *compiler) notePatternFuncs(pat string, ns *nsResolver) {
-	for _, call := range patternFuncCalls(pat) {
+	// patternFuncCalls counts arguments by scanning the text, so a comment
+	// between the parentheses reads as one: match-246a writes "true((:2:))",
+	// which is a nullary call the scan saw as unary.
+	for _, call := range patternFuncCalls(stripXPathComments(pat)) {
 		prefix, local := splitPatternQName(call.name)
 		uri := xdm.NSFN
 		if prefix != "" {

@@ -69,8 +69,8 @@ func compileGeneralPattern(src string, ns xpath.NamespaceResolver) (*generalPatt
 	// candidate item is what it is evaluated against, so the pattern is used
 	// as written: "." with its predicates yields the candidate itself exactly
 	// when every predicate holds.
-	if strings.HasPrefix(trimmed, ".") {
-		rest := strings.TrimSpace(trimmed[1:])
+	if bare := strings.TrimSpace(stripXPathComments(trimmed)); strings.HasPrefix(bare, ".") {
+		rest := strings.TrimSpace(bare[1:])
 		if rest == "" || strings.HasPrefix(rest, "[") {
 			expr, err := compileExpr(trimmed, ns)
 			if err != nil {
@@ -718,7 +718,9 @@ func (p *Pattern) canMatchNamespaceNode() bool {
 // isPredicatePatternForm reports whether src is written as a
 // PredicatePattern: a "." carrying only predicates.
 func isPredicatePatternForm(src string) bool {
-	rest := strings.TrimSpace(src)
+	// Comments are stripped first: they may stand between the "." and its
+	// predicates, and match-246a writes exactly that.
+	rest := strings.TrimSpace(stripXPathComments(src))
 	if !strings.HasPrefix(rest, ".") {
 		return false
 	}
@@ -944,4 +946,82 @@ func startsWithNameStep(src string) bool {
 		return false
 	}
 	return true
+}
+
+// stripXPathComments removes "(: ... :)" comments from src, leaving a space
+// where each stood so that adjacent tokens do not run together.
+//
+// The structural tests a pattern is put through — which form it is, whether a
+// group stands where a step may — read the source text, and an XPath comment
+// may sit anywhere a token may. match-246a writes one in every such position,
+// including ".(::)", where the comment straight after the "." hid the
+// PredicatePattern from the test that recognises it.
+//
+// Comments nest, so the depth is counted rather than the first ":)" taken.
+// String literals are skipped: "(:" inside one is text, not a comment.
+func stripXPathComments(src string) string {
+	var b strings.Builder
+	depth := 0
+	quote := byte(0)
+	for i := 0; i < len(src); {
+		c := src[i]
+		if quote != 0 {
+			if depth == 0 {
+				b.WriteByte(c)
+			}
+			if c == quote {
+				quote = 0
+			}
+			i++
+			continue
+		}
+		if depth == 0 && (c == '\'' || c == '"') {
+			quote = c
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '(' && i+1 < len(src) && src[i+1] == ':' {
+			depth++
+			i += 2
+			continue
+		}
+		if c == ':' && i+1 < len(src) && src[i+1] == ')' && depth > 0 {
+			depth--
+			if depth == 0 {
+				b.WriteByte(' ')
+			}
+			i += 2
+			continue
+		}
+		if depth == 0 {
+			b.WriteByte(c)
+		}
+		i++
+	}
+	if depth != 0 {
+		// Unbalanced: leave the source as written and let the parser report
+		// it, which names the position.
+		return src
+	}
+	return b.String()
+}
+
+// variablePatternAllowed reports whether src is the variable-reference
+// pattern form and this processor may accept it whatever the module says.
+//
+// The form follows the PROCESSOR's version, unlike the rest of the 3.0
+// pattern grammar. The suite settles it: match-050, match-072, match-264 and
+// a dozen others write "$v" patterns in version="1.0" modules and are scoped
+// XSLT30+, while match-083 and match-084 are version="1.0" modules scoped
+// XSLT20 that demand XTSE0340 for the same construct. Only the processor's
+// version tells those two groups apart -- exactly the shape match-081 and
+// match-081a already establish for grouped steps.
+//
+// It is confined to this one form. The rest of the 3.0 pattern grammar stays
+// on the module's version, so version-023 still gets XTSE0340 for "/(a|b)"
+// in a version="25.0" stylesheet.
+func variablePatternAllowed(src string) bool {
+	return processorAtLeast30() &&
+		strings.HasPrefix(strings.TrimSpace(stripXPathComments(src)), "$")
 }
