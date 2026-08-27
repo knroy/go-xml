@@ -90,6 +90,29 @@ func checkDeclaredModes(root *xdm.Node) error {
 	}
 	scan(root)
 
+	// The package's own default-mode is a mode reference in its own right:
+	// XTSE3085 covers a mode named "either explicitly or implicitly (for
+	// example, by virtue of a relevant default-mode attribute)". An empty
+	// package naming an undeclared mode there has no template to carry the
+	// reference, and the rule still holds -- package-914d and -914e declare
+	// nothing else at all and expect the static error rather than the
+	// dynamic one their invocation would otherwise reach.
+	if dm := root.Attr("", "default-mode"); dm != nil && !usesPackage {
+		tok := strings.TrimSpace(dm.Value)
+		if tok != "" && tok != "#unnamed" && tok != "#default" {
+			qn, err := resolveQNameAttr(root, tok)
+			if err != nil {
+				return err
+			}
+			if name := (xdm.QName{URI: qn.URI, Local: qn.Local}).Clark(); !declared[name] {
+				return fmt.Errorf(
+					"XTSE3085: mode %s is named by default-mode but no "+
+						"xsl:mode declaration introduces it, and the package "+
+						"sets declared-modes=\"yes\"", tok)
+			}
+		}
+	}
+
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		for _, ch := range n.ChildElements() {

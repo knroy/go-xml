@@ -196,9 +196,16 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if source == nil && opts.InitialTemplate == "" &&
 		opts.InitialMatchSelection == nil {
 		if _, ok := s.named[defaultEntry]; !ok {
+			// An invocation that names no template starts by applying
+			// templates in the initial mode, which defaults to the unnamed
+			// one. That is an initial mode like any other, so supplying no
+			// initial match selection is the XTDE0044 above rather than a
+			// bare complaint: package-914a invokes an empty package with
+			// nothing at all and accepts XTDE0040 or XTDE0044.
 			return nil, fmt.Errorf(
-				"no source document and no entry point: pass a source document, " +
-					"name a template to start at, or declare a template named " +
+				"XTDE0044: no initial match selection and no source " +
+					"document: pass a source document, name a template to " +
+					"start at, or declare a template named " +
 					"xsl:initial-template")
 		}
 		// Being the conventional entry point does not exempt it from the
