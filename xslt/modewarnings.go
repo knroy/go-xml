@@ -53,6 +53,13 @@ func (s *Stylesheet) warnMultipleMatch(rt *runtime, node *xdm.Node,
 			// below the winner too.
 			return nil
 		}
+		// Branches of one union pattern are one template rule, and the same
+		// reasoning failMultipleMatch spells out applies to the warning:
+		// re-matching the winner through a different branch is not an
+		// ambiguity worth reporting.
+		if t.unionGroup == won.unionGroup {
+			continue
+		}
 		if !t.matchesMode(mode) {
 			continue
 		}

@@ -142,6 +142,11 @@ type Stylesheet struct {
 	// modeVisibilityStated marks the modes whose visibility was written out
 	// rather than defaulted; see modevisibility.go.
 	modeVisibilityStated map[string]bool
+	// functionVisibility is xsl:function/@visibility keyed by Clark name and
+	// arity; see entryvisibility.go. It is what tells the target expression
+	// of xsl:evaluate which stylesheet functions it may call.
+	functionVisibility map[string]string
+
 	// templateVisibility is xsl:template/@visibility per Clark name, which
 	// decides whether an invocation may start at the template; see
 	// entryvisibility.go.
@@ -201,6 +206,20 @@ type Template struct {
 	// declOrder breaks ties between equal-priority templates: the last one
 	// declared wins, per the spec's conflict-resolution rule.
 	declOrder int
+	// unionGroup identifies the xsl:template declaration a rule came from.
+	//
+	// compileTemplate splits a union pattern into one rule per branch so that
+	// each branch gets its own default priority and its own place in
+	// declaration order. Those rules are still a single template rule as far
+	// as the spec is concerned, and 6.4 makes on-multiple-match="fail" an
+	// error only when "more than one template rule" matches. Spec bug 30402
+	// settled that a node matching two branches of one union pattern is not
+	// such a conflict: mode-1516 matches "para[foo] | para[text()]" against a
+	// para that has both a foo child and text, and expects the rule to run,
+	// not XTDE0540. All the rules split from one declaration share the group,
+	// so the ambiguity check can skip a candidate that is really the winner
+	// seen through a different branch.
+	unionGroup int
 }
 
 // Variable is a compiled xsl:variable, xsl:param or xsl:with-param.

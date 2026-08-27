@@ -704,7 +704,11 @@ func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver
 			// which is XTSE0020. Left unchecked, mode="{$x}" was resolved to
 			// a mode literally named "{$x}", so a stylesheet expecting an
 			// error selected no template rules and quietly produced nothing.
-			if !isLexicalQName(m) {
+			// The 3.0 grammar spells the name as an EQName, so Q{uri}local
+			// is a mode name too: mode-1429 writes mode=" Q{}s " for the
+			// no-namespace mode it elsewhere calls "s", and both spellings
+			// have to reach the same mode.
+			if !isLexicalQName(m) && !isEQName(m) {
 				return nil, fmt.Errorf(
 					"XTSE0020: xsl:apply-templates/@mode=%q is neither a "+
 						"QName nor #default nor #current", m)
@@ -1469,21 +1473,31 @@ var xsltOnlyFunctions = map[string]bool{
 // ones that read the calling instruction's dynamic context, and the ones the
 // stylesheet declares for itself.
 //
-// A stylesheet function is private to the stylesheet in the sense 10.4.1
-// means — evaluate-045 calls f:square(5) from inside xsl:evaluate and requires
-// the whole transform to fail with XTDE3160. Hiding it needs Declares rather
-// than a Lookup on sheetFuncs, because that library chains to the builtins and
-// would answer yes for every function in existence.
+// What 10.4.1 excludes of the stylesheet's own functions is the PRIVATE ones,
+// not all of them, and the suite draws that line sharply: evaluate-006 and
+// evaluate-045 are the same stylesheet calling the same f:square(5), differing
+// only in that 006 writes visibility="public" on the declaration. 006 expects
+// 25 and 045 expects XTDE3160.
+//
+// Two questions have to be asked, not one. Declares says whether the name is
+// the stylesheet's own function at all — a plain Lookup cannot, because that
+// library chains to the builtins and so answers yes for every function in
+// existence — and only then does visibility decide. Asking visibility alone
+// would let a builtin through a map that has no entry for it, which is right,
+// but asking Declares alone hides the public functions too, which is what the
+// first attempt at this did.
 type restrictedLibrary struct {
 	inner      xpath.FunctionLibrary
 	sheetFuncs *xpath.Library
+	sheet      *Stylesheet
 }
 
 func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
 		return xpath.Function{}, false
 	}
-	if r.sheetFuncs != nil && r.sheetFuncs.Declares(name, arity) {
+	if r.sheetFuncs != nil && r.sheetFuncs.Declares(name, arity) &&
+		r.sheet != nil && !r.sheet.evaluateMayCall(name, arity) {
 		return xpath.Function{}, false
 	}
 	if r.inner == nil {
@@ -1642,7 +1656,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// expression, and so is every XSLT-defined function.
 	ctx := sub.ctx
 	inner := *ctx
-	inner.Funcs = restrictedLibrary{inner: ctx.Funcs, sheetFuncs: rt.sheet.funcs}
+	inner.Funcs = restrictedLibrary{
+		inner: ctx.Funcs, sheetFuncs: rt.sheet.funcs, sheet: rt.sheet,
+	}
 	seq, err := comp.Eval(&inner)
 	if err != nil {
 		// A call to a function the restricted library hides surfaces here as

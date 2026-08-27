@@ -1079,6 +1079,14 @@ func (s *Stylesheet) failMultipleMatchAtomic(item xdm.Item, mode string,
 			t.Priority != won.Priority {
 			return nil
 		}
+		// Branches of one union pattern are one template rule, so a node
+		// matching two of them is not a conflict (spec bug 30402, test
+		// mode-1516). compileTemplate stamps every rule split from the same
+		// xsl:template with the declaration's own declOrder, which is what
+		// makes them recognisable here as the winner seen again.
+		if t.unionGroup == won.unionGroup {
+			continue
+		}
 		if t.Match == nil || !t.matchesMode(mode) {
 			continue
 		}

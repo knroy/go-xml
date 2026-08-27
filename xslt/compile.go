@@ -87,10 +87,11 @@ type compiler struct {
 	// checkAccumulatorConflicts.
 	accumTies  map[string][]int
 	accumNames map[string]xdm.QName
-	// modeTies records every import precedence each mode was declared at.
-	// XTSE0545 is judged over these once every module has been compiled; see
-	// checkModeConflicts.
-	modeTies map[string][]int
+	// modeTies records every xsl:mode declaration of each mode: the import
+	// precedence it was made at, and the normalised value of each attribute
+	// it explicitly states. XTSE0545 is judged over these once every module
+	// has been compiled; see checkModeConflicts.
+	modeTies map[string][]modeDecl
 	// modeVisibility records xsl:mode/@visibility per mode at the precedence
 	// it was declared at. It decides which modes an invocation may name as
 	// its initial mode; see modevisibility.go.
@@ -924,6 +925,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 		if !explicitPriority {
 			alts = t.Match.Alternatives()
 		}
+		group := t.declOrder
 		for i, alt := range alts {
 			rule := t
 			if i > 0 {
@@ -932,6 +934,7 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 				c.declOrder++
 				rule.declOrder = c.declOrder
 			}
+			rule.unionGroup = group
 			rule.Match = alt
 			if !explicitPriority {
 				rule.Priority = alt.Priority()
@@ -1418,6 +1421,8 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if err != nil {
 		return err
 	}
+
+	c.recordFunctionVisibility(el, qn, len(params))
 
 	fn := &userFunction{name: qn, params: params, body: body}
 	// The function's own "as" declaration converts the returned value, which
@@ -1972,17 +1977,24 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 		c.sheet.declaredModeNames = map[string]bool{}
 	}
 	for _, m := range modeNamesOf(el) {
-		// XTSE0545: "it is a static error if there is more than one
-		// xsl:mode declaration for the same mode with the same import
-		// precedence". A mode has one set of properties, and two
-		// declarations that disagree about on-no-match leave no rule for
-		// deciding which built-in rules are in force. Only the winning
-		// precedence can carry that ambiguity, so the tie is judged after
-		// every module has been seen; see checkModeConflicts.
+		// XTSE0545 is about *conflicting values*, one attribute at a time:
+		// "it is a static error if ... a package explicitly specifies two
+		// conflicting values for the same attribute in different xsl:mode
+		// declarations having the same import precedence, unless there is
+		// another definition of the same attribute with higher import
+		// precedence". Two declarations that agree leave no ambiguity to
+		// report, so the values are recorded alongside the precedence and
+		// the tie is judged after every module has been seen; see
+		// checkModeConflicts.
 		if c.modeTies == nil {
-			c.modeTies = map[string][]int{}
+			c.modeTies = map[string][]modeDecl{}
 		}
-		c.modeTies[m] = append(c.modeTies[m], precedence)
+		attrs, err := modeDeclAttrs(el)
+		if err != nil {
+			return err
+		}
+		c.modeTies[m] = append(c.modeTies[m],
+			modeDecl{prec: precedence, attrs: attrs})
 		c.sheet.declaredModeNames[m] = true
 	}
 	c.recordModeVisibility(el, precedence)
