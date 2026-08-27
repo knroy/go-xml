@@ -559,8 +559,24 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			opts.InitialModeParams[key] = v
 		}
 		if sel := tc.Test.InitialMode.Select; sel != "" {
-			v, err := xpath.Eval(sel,
-				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})
+			// The selection is a real XPath expression evaluated over the
+			// test's own input, not a constant like the <param> selects
+			// above: mode-1802 writes doc('mode-14.xml')//v[position() = 1
+			// to 5]. So it gets the source document as its context item and
+			// the same document resolver the transform gets, based at the
+			// stylesheet -- which is where the catalog's relative references
+			// are written to resolve. Evaluating it in a bare context made
+			// every such selection FODC0002 on a document the transform
+			// itself reads without trouble.
+			selCtx := xpath.NewContext(src, xpath.Builtins())
+			// Through the stylesheet's own stripping wrapper, so that a
+			// document this expression loads arrives with the same
+			// whitespace the transform would have seen: mode-1802 indexes
+			// the source by position, which counts the whitespace text nodes
+			// xsl:strip-space removes.
+			selCtx.Docs = ss.SourceDocumentResolver(docs)
+			selCtx.StaticBaseURI = fileURI(sheetPath)
+			v, err := xpath.Eval(sel, selCtx, catalogNS{})
 			if err != nil {
 				return nil, fmt.Errorf("initial-mode selection %s: %w", sel, err)
 			}

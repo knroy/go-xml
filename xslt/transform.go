@@ -556,6 +556,29 @@ func (r *stripSpaceResolver) ResolveDocument(uri, base string) (*xdm.Tree, error
 	return out, nil
 }
 
+// SourceDocumentResolver wraps a document resolver so that the trees it hands
+// back are whitespace-stripped by this stylesheet's xsl:strip-space and
+// xsl:preserve-space declarations, exactly as Transform strips the ones fn:doc
+// returns during the transformation.
+//
+// It exists for the one caller that has to evaluate an expression over the
+// source documents *before* the transform begins: the initial match selection
+// is supplied to Transform as a sequence, so whoever computes that sequence
+// computes it outside the transform and would otherwise see unstripped trees
+// the transform itself never sees. Section 4.4 scopes stripping to "all source
+// documents", and a node reaches the transform through the initial match
+// selection as surely as through fn:doc. mode-1802 selects
+// doc('mode-14.xml')//v[position() = 1 to 5] and then indexes the source by
+// position, which counts the whitespace text nodes if they are still there.
+//
+// Passing nil returns nil, so a caller with no resolver to wrap is unchanged.
+func (s *Stylesheet) SourceDocumentResolver(inner xpath.DocumentResolver) xpath.DocumentResolver {
+	if inner == nil {
+		return nil
+	}
+	return &stripSpaceResolver{sheet: s, inner: inner}
+}
+
 // stripCopy copies n, dropping whitespace-only text where stripping applies.
 //
 // preserving carries xml:space="preserve" down the subtree, and *only* that:
@@ -839,9 +862,15 @@ func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
 	out *outputBuilder) error {
 
 	if sel == nil {
+		noteInitialAccumulators(rt, mode, source)
 		return applyToNode(rt, source, mode, params, tunnels, out)
 	}
 	size := len(sel)
+	for _, it := range sel {
+		if node, ok := it.(*xdm.Node); ok {
+			noteInitialAccumulators(rt, mode, node)
+		}
+	}
 	for idx, it := range sel {
 		node, ok := it.(*xdm.Node)
 		if !ok {
@@ -860,4 +889,39 @@ func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
 		}
 	}
 	return nil
+}
+
+// noteInitialAccumulators records which accumulators are applicable to a tree
+// reached through the initial match selection.
+//
+// 18.2.2: "For a document containing nodes supplied in the initial match
+// selection, the accumulators that are applicable are those determined by the
+// xsl:mode declaration of the initial mode." Reading one the list leaves out
+// is XTDE3362, the same code and the same rule xsl:source-document and
+// xsl:merge-source already answer to through rt.treeAccums -- this is the
+// third source of the same per-tree restriction, so it is recorded the same
+// way rather than checked separately.
+//
+// Only a mode that states @use-accumulators restricts anything. The spec adds
+// that "in the absence of an xsl:mode declaration, no accumulators are
+// applicable", but this engine does not stream: taking that literally would
+// refuse every accumulator read by the many stylesheets that declare no mode
+// at all and expect their accumulators to work, which is the reading the
+// suite's own passing cases rule out. What a mode does say is honoured
+// exactly -- mode-1106b starts in a mode declared use-accumulators="" and
+// expects accumulator-after('counter') to fail.
+func noteInitialAccumulators(rt *runtime, mode string, node *xdm.Node) {
+	set, ok := rt.sheet.modeAccums[mode]
+	if !ok || node == nil {
+		return
+	}
+	root := node.Root()
+	if root == nil {
+		return
+	}
+	// An entry already there was put by a nearer rule -- a copy carrying its
+	// origin's applicability, say -- and is not displaced by this one.
+	if _, seen := rt.treeAccums[root]; !seen {
+		rt.treeAccums[root] = set
+	}
 }
