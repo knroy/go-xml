@@ -670,10 +670,15 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
 	}
-	if zeroLen {
+	xslt30 := rt.sheet == nil || rt.sheet.maxVersion == 0 || rt.sheet.maxVersion >= 3.0
+	if zeroLen && !xslt30 {
 		// XTDE1150: xsl:analyze-string's own error for a regex that matches
 		// a zero-length string. FORX0003 is fn:tokenize's; the instruction
 		// has its own code and a caller matching on one needs the right one.
+		//
+		// XSLT 3.0 dropped the error: XTDE1150 has no entry in its error
+		// summary, and §17.1 gives an algorithm that says what a zero-length
+		// match means instead. So the refusal follows the processor.
 		return fmt.Errorf(
 			"XTDE1150: the xsl:analyze-string regex matches a zero-length string")
 	}
@@ -681,31 +686,10 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// The substrings are collected before any is processed, because the
 	// context size is the number of matching *and* non-matching substrings
 	// and that is not known until the whole input has been scanned.
-	type run struct {
-		text  string
-		loc   []int // nil for a non-matching run
-		match bool
-	}
-	var runs []run
-	pos := 0
-	all := re.FindAllStringSubmatchIndex(input, -1)
-	// Checked for the same reason as the zero-length test above: a budget
-	// exhausted part way through the scan returns the matches found so far,
-	// which is a truncated answer rather than a wrong-shaped one and so is
-	// even easier to mistake for the truth.
-	if err := xpath.RegexpErr(re); err != nil {
+	runs, err := analyzeStringRuns(re, input)
+	if err != nil {
 		return fmt.Errorf(
 			"XTDE1140: invalid xsl:analyze-string/@regex %q: %w", pattern, err)
-	}
-	for _, loc := range all {
-		if loc[0] > pos {
-			runs = append(runs, run{text: input[pos:loc[0]]})
-		}
-		runs = append(runs, run{text: input[loc[0]:loc[1]], loc: loc, match: true})
-		pos = loc[1]
-	}
-	if pos < len(input) {
-		runs = append(runs, run{text: input[pos:]})
 	}
 
 	for n, r := range runs {
@@ -718,6 +702,53 @@ func (i *analyzeStringInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 	return nil
+}
+
+// analyzeStringRun is one matching or non-matching substring of the input.
+type analyzeStringRun struct {
+	text  string
+	loc   []int // the submatch indices; nil for a non-matching run
+	match bool
+}
+
+// analyzeStringRuns splits the input the way §17.1 describes.
+//
+// The section words the scan as a loop over inter-character positions rather
+// than as "find every match", because the two differ once the pattern can
+// match nothing. They differ less than the wording suggests: after a
+// zero-length match the spec has the following character join the current
+// non-matching substring and resumes one character later, which is the same
+// advance Go's scanner makes, so the set of matches is the same and the gaps
+// between them are exactly the non-matching substrings. What XSLT 3.0 really
+// changed is that such a pattern is allowed at all -- 2.0 refused it as
+// XTDE1150 before the scan began.
+//
+// The scan runs over the whole input in one call rather than restarting on
+// each remaining suffix, because ^ must keep meaning "the start of the input":
+// analyze-string-092 writes (?:^|,) and a per-suffix scan would let it match
+// at every resumption point.
+func analyzeStringRuns(re xpath.Regexp, input string) ([]analyzeStringRun, error) {
+	var runs []analyzeStringRun
+	pos := 0
+	all := re.FindAllStringSubmatchIndex(input, -1)
+	// A budget exhausted part way through the scan returns the matches found
+	// so far, which is a truncated answer rather than a wrong-shaped one and
+	// so is even easier to mistake for the truth.
+	if err := xpath.RegexpErr(re); err != nil {
+		return nil, err
+	}
+	for _, loc := range all {
+		if loc[0] > pos {
+			runs = append(runs, analyzeStringRun{text: input[pos:loc[0]]})
+		}
+		runs = append(runs, analyzeStringRun{
+			text: input[loc[0]:loc[1]], loc: loc, match: true})
+		pos = loc[1]
+	}
+	if pos < len(input) {
+		runs = append(runs, analyzeStringRun{text: input[pos:]})
+	}
+	return runs, nil
 }
 
 // runBranch executes one branch with the run as the context item.
