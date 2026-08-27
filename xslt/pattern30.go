@@ -518,3 +518,32 @@ func expandGroupedSteps(src string) []string {
 	}
 	return nil
 }
+
+// matchesAtomicValues reports whether the pattern has an alternative that can
+// match something other than a node.
+//
+// Only the ".[E]" form can. It is asked wherever a construct would otherwise
+// refuse an atomic value out of hand — positional grouping is the case — so
+// that a 3.0 stylesheet grouping a sequence of integers is not turned away.
+func (p *Pattern) matchesAtomicValues() bool {
+	for _, g := range p.general {
+		if g.selfOnly {
+			return true
+		}
+	}
+	return false
+}
+
+// patternMatchesItem asks a pattern about an item of any kind.
+//
+// A node goes through the ordinary match; anything else can only be answered
+// by the ".[E]" alternatives, since every other pattern form selects nodes.
+// It exists so that the constructs which ask a pattern about each member of a
+// sequence — positional grouping above all — do not have to know which forms
+// can match what.
+func patternMatchesItem(pat *Pattern, it xdm.Item, ctx *xpath.Context) (bool, error) {
+	if n, ok := it.(*xdm.Node); ok {
+		return pat.Matches(n, ctx)
+	}
+	return pat.matchesAtomicItem(it, ctx)
+}

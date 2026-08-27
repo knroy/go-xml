@@ -367,7 +367,15 @@ func groupAdjacentKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 // population therefore has no defined answer; treating it silently as "does
 // not match" put every atomic value in the first group instead of reporting
 // the type error the spec requires.
-func requireNodePopulation(seq xdm.Sequence, attr string) error {
+//
+// XSLT 3.0 changes the answer for one pattern form: ".[E]" matches an atomic
+// value, so a population holding one is not automatically an error. The
+// pattern is asked whether it can match a value at all, and only a pattern
+// that cannot still raises XTTE1120.
+func requireNodePopulation(seq xdm.Sequence, attr string, pat *Pattern) error {
+	if pat != nil && pat.matchesAtomicValues() {
+		return nil
+	}
 	for _, it := range seq {
 		if _, ok := it.(*xdm.Node); !ok {
 			return fmt.Errorf(
@@ -380,20 +388,15 @@ func requireNodePopulation(seq xdm.Sequence, attr string) error {
 }
 
 func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
-	if err := requireNodePopulation(seq, "group-starting-with"); err != nil {
+	if err := requireNodePopulation(seq, "group-starting-with", pat); err != nil {
 		return nil, err
 	}
 	rt = rt.clearRegexGroups()
 	var groups []group
 	for _, it := range seq {
-		n, ok := it.(*xdm.Node)
-		start := false
-		if ok {
-			m, err := pat.Matches(n, rt.ctx)
-			if err != nil {
-				return nil, err
-			}
-			start = m
+		start, err := patternMatchesItem(pat, it, rt.ctx)
+		if err != nil {
+			return nil, err
 		}
 		if start || len(groups) == 0 {
 			groups = append(groups, group{})
@@ -405,7 +408,7 @@ func groupStartingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, er
 
 // groupEndingWith closes a group after each item matching the pattern.
 func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, error) {
-	if err := requireNodePopulation(seq, "group-ending-with"); err != nil {
+	if err := requireNodePopulation(seq, "group-ending-with", pat); err != nil {
 		return nil, err
 	}
 	rt = rt.clearRegexGroups()
@@ -418,14 +421,12 @@ func groupEndingWith(rt *runtime, seq xdm.Sequence, pat *Pattern) ([]group, erro
 		}
 		groups[len(groups)-1].items = append(groups[len(groups)-1].items, it)
 
-		if n, ok := it.(*xdm.Node); ok {
-			m, err := pat.Matches(n, rt.ctx)
-			if err != nil {
-				return nil, err
-			}
-			if m {
-				open = false
-			}
+		m, err := patternMatchesItem(pat, it, rt.ctx)
+		if err != nil {
+			return nil, err
+		}
+		if m {
+			open = false
 		}
 	}
 	return groups, nil
