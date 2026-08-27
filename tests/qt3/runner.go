@@ -604,7 +604,8 @@ func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
 		// behaviour as a failure — fn:error(QName("","FOO")) is *supposed* to
 		// raise FOO.
 		got := xdm.ErrorCode(evalErr)
-		if got == "" || a.Code == "" || a.Code == "*" || got == a.Code {
+		if got == "" || a.Code == "" || a.Code == "*" ||
+			got == a.Code || sameErrorCode(got, a.Code) {
 			return true, ""
 		}
 		return false, fmt.Sprintf("error %s, want %s", got, a.Code)
@@ -1869,4 +1870,14 @@ func significantChildren(n *xdm.Node) []*xdm.Node {
 		out = append(out, c)
 	}
 	return out
+}
+
+// sameErrorCode reports whether two spellings name the same error.
+//
+// A code in no namespace may be written bare or in Clark notation with an
+// empty URI, and the suite uses both: parse-json-943 expects "Q{}USER9999" for
+// the error fn:error(QName("","USER9999"), ?) raises, which carries the local
+// name alone. They are one name written two ways.
+func sameErrorCode(got, want string) bool {
+	return strings.TrimPrefix(got, "Q{}") == strings.TrimPrefix(want, "Q{}")
 }

@@ -104,26 +104,23 @@ func registerDefaultLanguage(l *Library) {
 // pretending to have looked.
 func registerLoadXQueryModule(l *Library) {
 	l.registerFnSince(XPath31, "load-xquery-module", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		uri, err := argStringRequired(args, 0)
-		if err != nil {
-			return nil, err
-		}
-		if uri == "" {
+		// An empty module URI is FOQM0001, which is a fact about the call
+		// rather than about a processor that is not there. Everything after
+		// it — locating the module, converting the arguments — describes a
+		// step only a processor could take, so the absence of one is reported
+		// ahead of those: function-lookup-761 calls this with an integer
+		// where a string is declared and still wants FOQM0006.
+		//
+		// The suite contradicts itself in two places and cannot be fully
+		// satisfied. load-xquery-module-003 wants FOQM0002, "the module could
+		// not be located", for the expression -903 wants FOQM0006 for; and
+		// function-lookup-764 wants FOQM0006 for the empty URI that -001
+		// wants FOQM0001 for. This order costs those two and -004, and is the
+		// one that leaves the most cases passing while every code it reports
+		// is true of this implementation.
+		if uri, err := argStringRequired(args, 0); err == nil && uri == "" {
 			return nil, xdm.Errorf("FOQM0001",
 				"fn:load-xquery-module: the module URI may not be a zero-length string")
-		}
-		// The options map is validated before the refusal below, so that a
-		// caller passing something that is not a map learns that rather than
-		// being told about the missing processor.
-		if len(args) > 1 && len(args[1]) > 0 {
-			it, err := args[1].Single()
-			if err != nil {
-				return nil, err
-			}
-			if _, ok := it.(*xdm.MapItem); !ok {
-				return nil, xdm.ErrType(
-					"fn:load-xquery-module: the options must be a map, got %s", it.TypeName())
-			}
 		}
 		return nil, xdm.Errorf("FOQM0006",
 			"fn:load-xquery-module: this implementation has no XQuery processor")
@@ -148,8 +145,11 @@ func registerApply(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		fn, ok := fnItem.(*xdm.FunctionItem)
-		if !ok {
+		// functionItemView rather than a type assertion: a map and an array
+		// are function items too, and "map?next => apply([])" applies one.
+		// Asserting *xdm.FunctionItem refused them.
+		fn := functionItemView(fnItem)
+		if fn == nil {
 			return nil, xdm.ErrType(
 				"fn:apply: the first argument must be a function, got %s", fnItem.TypeName())
 		}
