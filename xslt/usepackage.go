@@ -1093,7 +1093,18 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 				// Both declarations stay: the overriding one under the
 				// component's real name, and the original under a generated
 				// one that only xsl:original inside the override can reach.
-				kept = append(kept, rewriteOverride(ov, ch), ch)
+				//
+				// An abstract original is the exception. It has no body by
+				// definition -- supplying one is what the override is for --
+				// so there is nothing for xsl:original to call, and keeping
+				// it would leave a global variable with a declared type and
+				// no value, which fails as XTTE0570 the moment anything
+				// evaluates it. accept-040 and its neighbours override
+				// exactly such a component.
+				kept = append(kept, rewriteOverride(ov, ch))
+				if !isAbstractDecl(ch) {
+					kept = append(kept, ch)
+				}
 				continue
 			}
 		}
@@ -1154,6 +1165,16 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		return false
 	}
 	return walk(root)
+}
+
+// isAbstractDecl reports whether a declaration declares itself abstract.
+//
+// The effective visibility is not consulted: what matters here is whether the
+// declaration has a body, and only the declaration's own visibility attribute
+// says that.
+func isAbstractDecl(el *xdm.Node) bool {
+	return visibility(strings.TrimSpace(el.AttrValue("visibility"))) ==
+		visAbstract
 }
 
 // componentOf finds the component an element declares, if it declares one.
