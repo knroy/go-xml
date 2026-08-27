@@ -388,6 +388,19 @@ func runTemplate(rt *runtime, t *Template,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
 
+	// An abstract template fails before anything else it declares is
+	// applied. XTDE3052 is about the *invocation* -- "it is a dynamic error
+	// if an invocation of an abstract component is evaluated" -- so the
+	// error belongs to the call itself and not to whatever the missing body
+	// would have needed. Checking parameters first reported XTDE0700 for the
+	// declared but unsupplied $one of accept-906's t:abstract, which is a
+	// complaint about a signature nothing was ever going to run.
+	if t.abstract != "" {
+		return fmt.Errorf(
+			"XTDE3052: %s is abstract and has no implementation, so it "+
+				"cannot be invoked", t.abstract)
+	}
+
 	// The xsl:context-item declaration is checked before anything else the
 	// template does. A template that requires a context item and was called
 	// without one must fail here rather than at whatever expression first

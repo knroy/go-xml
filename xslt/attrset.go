@@ -57,6 +57,9 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 	if err != nil {
 		return err
 	}
+	if stub := abstractStubFor(el); stub != nil {
+		body = stub
+	}
 	as.body = body
 
 	// Several declarations of one name are merged, highest precedence last so

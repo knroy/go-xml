@@ -892,6 +892,12 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	if err != nil {
 		return err
 	}
+	// An abstract component keeps its signature and loses its body: reaching
+	// the body is the invocation XTDE3052 describes. See abstractcomponent.go.
+	if stub := abstractStubFor(el); stub != nil {
+		body = stub
+		t.abstract = abstractNameOf(el)
+	}
 	t.Body = body
 
 	if t.HasName {
@@ -985,6 +991,9 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 	body, err := c.compileSequence(el, el)
 	if err != nil {
 		return nil, err
+	}
+	if stub := abstractStubFor(el); stub != nil {
+		body = stub
 	}
 	v.Body = body
 	return v, nil
@@ -1254,6 +1263,10 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	}
 	if v := value("parameter-document"); v != "" {
 		o.ParameterDocument = strings.TrimSpace(v)
+		// Recorded together with the URI: 25.1 resolves it against the base
+		// URI of the element carrying the attribute, and by the time the
+		// document is fetched at run time that element is long gone.
+		o.ParameterDocumentBase = el.BaseURI
 	}
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is
@@ -1453,6 +1466,9 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 
 	c.recordFunctionVisibility(el, qn, len(params))
 
+	if stub := abstractStubFor(el); stub != nil {
+		body = stub
+	}
 	fn := &userFunction{name: qn, params: params, body: body}
 	// The function's own "as" declaration converts the returned value, which
 	// matters for the same reason the parameter declarations do.

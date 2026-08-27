@@ -401,8 +401,35 @@ func lookupPrefix(el *xdm.Node, prefix string) string {
 // assign an inconsistent visibility is "treated as not matching", where an
 // explicit name is XTSE3010 or XTSE3040.
 func (r *exposeRule) matches(sym symbolicName) (ok, wild bool) {
+	ok, _, wild = r.matchRank(sym)
+	return ok, wild
+}
+
+// matchTier is how specific a token's match is, which is what decides between
+// two rules that both match one component.
+//
+// 3.5.2 states the ladder for xsl:expose, and the "best-matching xsl:accept
+// element" of 3.5.3.2 is settled the same way: an explicit EQName beats a
+// wildcard that constrains half the name, which in turn beats a bare "*".
+// Within one tier the last matching element in document order wins.
+//
+// accept-901 turns on this. It accepts xsl:initial-template by name with
+// visibility="public" and then writes a blanket
+// <xsl:accept names="*" component="*" visibility="hidden"/>. Taking simply
+// the last rule that matched hid the template the previous rule had just
+// made public, and the package was left with no entry point at all.
+const (
+	tierNone = iota
+	tierAnyName
+	tierPartialWildcard
+	tierExact
+)
+
+// matchRank reports whether the rule matches, how specific the best matching
+// token was, and whether that token was a wildcard.
+func (r *exposeRule) matchRank(sym symbolicName) (ok bool, tier int, wild bool) {
 	if !r.kinds[sym.kind] {
-		return false, false
+		return false, tierNone, false
 	}
 	for _, t := range r.tokens {
 		if t.arity >= 0 && (sym.kind != kindFunction || t.arity != sym.arity) {
@@ -427,11 +454,21 @@ func (r *exposeRule) matches(sym symbolicName) (ok, wild bool) {
 			// prefers the more specific match, so an exact hit ends the scan
 			// rather than being overwritten by a later wildcard in the same
 			// element.
-			return true, false
+			return true, tierExact, false
+		}
+		// A wildcard that pins half the name -- "p:*", "*:local", "Q{uri}*"
+		// -- is its own tier above a bare "*", which the ladder in 3.5.2
+		// lists as the last resort.
+		this := tierAnyName
+		if !t.anyURI || !t.anyLocal {
+			this = tierPartialWildcard
+		}
+		if this > tier {
+			tier = this
 		}
 		ok, wild = true, true
 	}
-	return ok, wild
+	return ok, tier, wild
 }
 
 // exposeTable is section 3.5.2's table of permitted (declared, exposed) pairs,
@@ -947,9 +984,13 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 		}
 		vis[comp.sym.String()] = v
 	}
+	// The tier each component's winning xsl:accept matched at, so that a
+	// later but vaguer rule does not displace an earlier, more specific one.
+	// See matchRank.
+	bestTier := map[string]int{}
 	for _, r := range u.accepts {
 		for _, comp := range u.comps {
-			ok, wild := r.matches(comp.sym)
+			ok, tier, wild := r.matchRank(comp.sym)
 			if !ok {
 				continue
 			}
@@ -971,6 +1012,12 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 						"incompatible with its visibility=%q in package %s",
 					comp.sym, r.vis, comp.vis, u.name)
 			}
+			// Within a tier the last element in document order wins, so a
+			// tie is taken; a strictly vaguer match is not.
+			if tier < bestTier[comp.sym.String()] {
+				continue
+			}
+			bestTier[comp.sym.String()] = tier
 			vis[comp.sym.String()] = r.vis
 			assigned[comp.sym.String()] = true
 			hidden[comp.sym.String()] = r.vis == visHidden || r.vis == visAbsent
@@ -1338,6 +1385,30 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		// call the declaration it replaces, so that declaration has to stay
 		// reachable however the manifest labelled it. The loop below re-adds
 		// overridden components for the same reason.
+		// An abstract component nothing overrides is kept, with its body
+		// replaced by a stub that raises XTDE3052 if it is ever reached.
+		//
+		// It cannot be deleted, because the error the specification asks for
+		// is dynamic: "It is a dynamic error if an invocation of an abstract
+		// component is evaluated". Deleting the declaration turns every
+		// reference to it into a static error at compile time instead, which
+		// fails the cases that reference an abstract component without
+		// evaluating it. accept-045a and accept-045b are the same stylesheet
+		// under different runtime parameters -- one reaches the abstract
+		// template and one does not -- so no static answer can be right for
+		// both. See abstractcomponent.go.
+		//
+		// Hiding it with xsl:accept does not change this. 3.5.3.2's note
+		// says an abstract component "accepted with visibility='hidden'...
+		// has the effect that any invocation of the component raises a
+		// dynamic error", which is this same error and not the absence of
+		// the component.
+		if comp.declared == visAbstract &&
+			u.overriding[comp.sym.String()] == nil {
+			markAbstract(comp.el, comp.sym.String())
+			keep[comp.el] = true
+			continue
+		}
 		if (v == visHidden || v == visAbsent) &&
 			u.overriding[comp.sym.String()] == nil &&
 			(u.hiddenByAccept[comp.sym.String()] ||

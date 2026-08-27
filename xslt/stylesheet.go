@@ -183,6 +183,10 @@ type Template struct {
 	// sequence constructor may produce. Section 6.1 applies the function
 	// conversion rules to the result, so it converts as well as checks.
 	asType *sequenceType
+	// abstract names the component this template declares when its
+	// visibility is abstract, and is empty otherwise. An abstract template
+	// has no body, so invoking it is XTDE3052; see abstractcomponent.go.
+	abstract string
 	// importPrecedence orders templates from imported stylesheets below those
 	// of the importing one.
 	importPrecedence int
