@@ -56,6 +56,14 @@ func checkStaticErrors(root *xdm.Node) error {
 		if err := checkDeclaredModes(root); err != nil {
 			return err
 		}
+		// A package's own xsl:expose declarations are checked whether or not
+		// anybody uses the package. readUsePackage runs the same arithmetic
+		// on the way into a using package, for its answers; here it is run
+		// purely for its errors, so that a manifest that would be rejected in
+		// a library is rejected in the principal package too.
+		if err := checkExposeDeclarations(root); err != nil {
+			return err
+		}
 	}
 	return walkStaticErrors(root, false)
 }

@@ -48,6 +48,19 @@ type TransformOptions struct {
 	// InitialMode names the mode for the initial apply-templates.
 	InitialMode string
 
+	// InitialMatchSelection is what the initial apply-templates selects from.
+	//
+	// Section 2.3.2 makes the initial match selection an arbitrary sequence,
+	// not a node: a caller may start the transform at a set of nodes, or —
+	// since XSLT 3.0 gave patterns the power to match one — at atomic values
+	// with no source document behind them at all. Leaving it nil defaults the
+	// selection to the source document, which is the ordinary invocation.
+	//
+	// Setting it is also what satisfies XTDE0044: naming an initial mode
+	// obliges the caller to say what to apply it to, and the source document
+	// is only the usual way of saying it.
+	InitialMatchSelection xdm.Sequence
+
 	// InitialTemplate names a template to invoke instead of matching the
 	// document root, which is how a stylesheet with only named templates is
 	// entered.
@@ -151,12 +164,14 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// from the source document, so no source means no selection at all. The
 	// name is not consulted: #default and #unnamed specify a mode just as a
 	// QName does, and error-0044a/aa/ac use all three.
-	if source == nil && opts.InitialMode != "" && opts.InitialTemplate == "" {
+	if source == nil && opts.InitialMode != "" && opts.InitialTemplate == "" &&
+		opts.InitialMatchSelection == nil {
 		return nil, fmt.Errorf(
 			"XTDE0044: the invocation specifies initial mode %q but supplies "+
 				"no initial match selection", opts.InitialMode)
 	}
-	if source == nil && opts.InitialTemplate == "" {
+	if source == nil && opts.InitialTemplate == "" &&
+		opts.InitialMatchSelection == nil {
 		if _, ok := s.named[defaultEntry]; !ok {
 			return nil, fmt.Errorf(
 				"no source document and no entry point: pass a source document, " +
@@ -364,7 +379,8 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 			}
 			initialMode = want
 		}
-		if err := applyToNode(rt, source, initialMode, nil, nil, out); err != nil {
+		if err := applyInitialSelection(rt, source, opts.InitialMatchSelection,
+			initialMode, out); err != nil {
 			return nil, err
 		}
 	}
@@ -746,4 +762,39 @@ func SerializeAsXML(r *Result) string {
 	var sb strings.Builder
 	_ = serialize(&sb, r.Nodes, OutputSettings{Method: "xml"}, r.charMap)
 	return sb.String()
+}
+
+// applyInitialSelection runs the initial apply-templates over the initial
+// match selection, section 2.3.2.
+//
+// The selection is a sequence rather than a node because a caller may name
+// several starting nodes, or — in XSLT 3.0, where a pattern can match an
+// atomic value — supply values that never belonged to a source tree. The
+// position and size of each item have to be set the way xsl:apply-templates
+// sets them, since a template rule reached this way may call fn:position().
+func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
+	mode string, out *outputBuilder) error {
+
+	if sel == nil {
+		return applyToNode(rt, source, mode, nil, nil, out)
+	}
+	size := len(sel)
+	for idx, it := range sel {
+		node, ok := it.(*xdm.Node)
+		if !ok {
+			sub := rt.withCurrent(it, idx+1, size)
+			if err := applyToAtomic(sub, it, mode, nil, nil, out); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rt.sheet.checkModeTyped(node, mode); err != nil {
+			return err
+		}
+		sub := rt.withCurrent(node, idx+1, size)
+		if err := applyToNode(sub, node, mode, nil, nil, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -249,6 +249,11 @@ type NamedThing struct {
 
 	// Name is the lexical QName exactly as the catalog wrote it.
 	Name string `xml:"name,attr"`
+	// Select is the initial match selection, which only <initial-mode>
+	// carries. It is an XPath expression evaluated with no context, and the
+	// package tests use it to start an initial mode with no source document
+	// at all -- which is the only way those cases can avoid XTDE0044.
+	Select string `xml:"select,attr"`
 	// URI is the namespace the catalog's own declarations bind Name's prefix
 	// to. It is filled in by resolveInitialTemplateNames rather than by
 	// encoding/xml, which never resolves a QName held in an attribute value.

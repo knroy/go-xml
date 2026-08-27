@@ -146,8 +146,15 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 			kind = kindFunction
 		case "attribute-set":
 			kind = kindAttributeSet
-		case "variable", "param":
+		case "variable":
 			kind = kindVariable
+		case "param":
+			// A stylesheet parameter is not a component. 3.5.1 lists the
+			// component kinds and xsl:param is not among them: a parameter is
+			// supplied from outside the whole stylesheet, so a package has
+			// nothing to publish about it and an xsl:expose naming one names
+			// nothing -- which is what expose-908 asserts.
+			continue
 		case "mode":
 			kind = kindMode
 		default:
@@ -218,6 +225,9 @@ type exposeRule struct {
 	// decides the winner when two rules match the same component: 3.5.2 takes
 	// the last matching xsl:expose in document order.
 	order int
+	// anyKind records component="*", which constrains what @names may say:
+	// see the XTSE3022 check in parseExposeRule.
+	anyKind bool
 }
 
 // nameToken is one token of an @names attribute.
@@ -251,6 +261,7 @@ func parseExposeRule(el *xdm.Node, order int) (*exposeRule, error) {
 				kindAttributeSet, kindVariable, kindMode} {
 				r.kinds[k] = true
 			}
+			r.anyKind = true
 		default:
 			return nil, fmt.Errorf(
 				"XTSE0020: %s/@component may not be %q",
@@ -272,6 +283,19 @@ func parseExposeRule(el *xdm.Node, order int) (*exposeRule, error) {
 		nt, err := parseNameToken(el, tok)
 		if err != nil {
 			return nil, err
+		}
+		// component="*" spans every kind at once, and a name means different
+		// components in different kinds. Erratum bug 29478 settles that by
+		// forbidding the combination outright rather than picking one
+		// reading: with component="*" the names must all be wildcards.
+		if r.anyKind && !nt.wildcard {
+			code := "XTSE3022"
+			if isXSL(el, "accept") {
+				code = "XTSE3032"
+			}
+			return nil, fmt.Errorf(
+				"%s: %s has component=\"*\", so the token %q in @names must "+
+					"be a wildcard", code, el.Name.Lexical(), nt.lexical)
 		}
 		r.tokens = append(r.tokens, nt)
 	}
@@ -300,6 +324,25 @@ func parseNameToken(el *xdm.Node, tok string) (nameToken, error) {
 			nt.arity = n
 		}
 	}
+	// The pseudo-names an @mode attribute admits are not names here. The
+	// unnamed mode is private to its package by definition -- 3.5.2 gives it
+	// no visibility to change -- so a manifest naming it has written
+	// something the grammar does not admit at all.
+	if strings.HasPrefix(tok, "#") {
+		return nt, fmt.Errorf(
+			"XTSE0020: %q is not a component name in %s/@names",
+			nt.lexical, el.Name.Lexical())
+	}
+	// Q{uri}* is the EQName spelling of prefix:*, and the only way to write a
+	// wildcard over the no-namespace components: there is no prefix bound to
+	// "", so "Q{}*" cannot be said any other way. accept-022 relies on it.
+	if strings.HasPrefix(tok, "Q{") {
+		if end := strings.IndexByte(tok, '}'); end > 0 && tok[end+1:] == "*" {
+			nt.wildcard, nt.anyLocal = true, true
+			nt.uri = tok[2:end]
+			return nt, nil
+		}
+	}
 	switch {
 	case tok == "*":
 		nt.wildcard, nt.anyURI, nt.anyLocal = true, true, true
@@ -313,8 +356,11 @@ func parseNameToken(el *xdm.Node, tok string) (nameToken, error) {
 		prefix := tok[:len(tok)-2]
 		uri := lookupPrefix(el, prefix)
 		if uri == "" {
+			// An unbound prefix makes the token unreadable as a name at all,
+			// which is the grammar error XTSE0020 rather than the namespace
+			// error XTSE0280: expose-927 asks for the former.
 			return nt, fmt.Errorf(
-				"XTSE0280: the prefix %q in %s/@names is not bound",
+				"XTSE0020: the prefix %q in %s/@names is not bound",
 				prefix, el.Name.Lexical())
 		}
 		nt.uri = uri
@@ -362,6 +408,14 @@ func (r *exposeRule) matches(sym symbolicName) (ok, wild bool) {
 		if t.arity >= 0 && (sym.kind != kindFunction || t.arity != sym.arity) {
 			continue
 		}
+		// Draft erratum E36: a token naming a function must state the arity.
+		// Two overloads are two components, and a bare name says nothing
+		// about which one is meant -- so rather than read it as "all of
+		// them", the erratum makes it match none, which surfaces as the
+		// XTSE3020 that expose-926 asks for.
+		if sym.kind == kindFunction && t.arity < 0 && !t.wildcard {
+			continue
+		}
 		if !t.anyURI && t.uri != sym.name.URI {
 			continue
 		}
@@ -402,7 +456,14 @@ var acceptTable = map[visibility]map[visibility]bool{
 	visFinal: {
 		visPrivate: true, visFinal: true, visHidden: true,
 	},
-	visAbstract: {visAbstract: true, visAbsent: true},
+	// An abstract component may also be hidden. Hiding it is not the same as
+	// supplying it: the using package simply declines to see it, and 3.5.3
+	// leaves that legal because nothing then invokes the missing body. What
+	// makes it an error is *calling* the hidden component, which is the
+	// dynamic error XTDE3052 rather than anything visible statically --
+	// accept-040 hides an abstract function and passes, accept-041b hides the
+	// same one and calls it.
+	visAbstract: {visAbstract: true, visAbsent: true, visHidden: true},
 }
 
 // applyExpose computes each component's effective visibility from its declared
@@ -434,6 +495,9 @@ func applyExpose(comps []*component, exposes []*exposeRule) error {
 					"XTSE3010: xsl:expose gives %s visibility=%q, which is "+
 						"inconsistent with its declared visibility=%q",
 					c.sym, r.vis, c.declared)
+			}
+			if err := checkAbstractExposure(c, r); err != nil {
+				return err
 			}
 			best, bestWild = r, wild
 			_ = bestWild
@@ -757,10 +821,6 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
-		v := u.acceptedVis[comp.sym.String()]
-		if v == visHidden || v == visAbsent {
-			continue
-		}
 		keep[comp.el] = true
 	}
 	// An overriding declaration replaces the one it overrides. The original

@@ -514,6 +514,14 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	}
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
+		if sel := tc.Test.InitialMode.Select; sel != "" {
+			v, err := xpath.Eval(sel,
+				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})
+			if err != nil {
+				return nil, fmt.Errorf("initial-mode selection %s: %w", sel, err)
+			}
+			opts.InitialMatchSelection = v
+		}
 	}
 	for _, p := range tc.Test.Params {
 		// The static ones went to the compiler; supplying them again here
