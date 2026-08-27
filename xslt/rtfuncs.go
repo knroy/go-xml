@@ -142,6 +142,15 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 			// must compare each sibling against the node being numbered, not
 			// against itself — where the test is trivially true and counts
 			// every sibling.
+			// A dynamic call carries no XSLT focus across it, and XTDE1360
+			// makes current#0() behave as if the context item were absent --
+			// so the fallback to the context item below must not apply.
+			if currentIsAbsent(ctx) {
+				return nil, fmt.Errorf(
+					"XTDE1360: current() was reached by a dynamic function " +
+						"call, which is evaluated as if the context item " +
+						"were absent")
+			}
 			if seq, ok := ctx.LookupVar(currentVar); ok {
 				return seq, nil
 			}

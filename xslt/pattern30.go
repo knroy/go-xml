@@ -390,6 +390,12 @@ func declaredXSLTVersion(el *xdm.Node) float64 {
 // over a sequence of integers dispatch on ".[. mod 3 = 0]".
 func (p *Pattern) matchesAtomicItem(item xdm.Item, ctx *xpath.Context) (bool, error) {
 	ctx = ctx.WithVar(currentVar, xdm.One(item))
+	// Section 24.3 clears the current output URI while a pattern is
+	// evaluated, whether the item being matched is a node or an atomic
+	// value. Pattern.Matches does the same for the node case;
+	// current-output-uri-008 matches atomic values with
+	// group-starting-with and needs both.
+	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
 	for _, g := range p.general {
 		ok, err := g.matchesAtomic(item, ctx)
 		if err != nil {
@@ -581,4 +587,74 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 	defer rt.ascend()
 	sub := rt.withSelection(t, next, rt.sel.mode, params, tunnels)
 	return runTemplate(sub, t, params, tunnels, out)
+}
+
+// splitPatternAlts splits a pattern into its top-level alternatives.
+//
+// XSLT 3.0 spells the union of a pattern's alternatives two ways: "|" and the
+// "union" keyword, which the XPath grammar has always treated as synonyms.
+// splitTopLevel only knows single-byte separators, and a pattern is the one
+// place the word form appears, so the keyword is recognised here rather than
+// by widening a helper a dozen other callers share.
+func splitPatternAlts(s string) []string {
+	var out []string
+	depth := 0
+	var quote byte
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '[' || c == '(':
+			depth++
+		case c == ']' || c == ')':
+			depth--
+		case c == '|' && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		case depth == 0 && isUnionKeywordAt(s, i):
+			out = append(out, s[start:i])
+			start = i + len("union")
+			i = start - 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+// isUnionKeywordAt reports whether the word "union" starts at i and stands
+// alone there.
+//
+// It has to be a whole word: "union" is also a perfectly good element name, so
+// the pattern "union" is one name test and "a union b" is two joined by the
+// operator. Requiring a non-name character on each side separates them, which
+// is the same rule the XPath lexer applies.
+func isUnionKeywordAt(s string, i int) bool {
+	if !strings.HasPrefix(s[i:], "union") {
+		return false
+	}
+	if i > 0 && isNameByte(s[i-1]) {
+		return false
+	}
+	j := i + len("union")
+	if j >= len(s) || isNameByte(s[j]) {
+		return false
+	}
+	// An operator needs an operand before it; at the front of the pattern
+	// "union" can only be a name.
+	return strings.TrimSpace(s[:i]) != ""
+}
+
+// isNameByte reports whether c can appear inside an unprefixed XML name. It is
+// deliberately ASCII-only: it exists to find a word boundary around an ASCII
+// keyword, and every byte of a multi-byte UTF-8 rune has the high bit set, so
+// such a rune is treated as a name character and correctly blocks the match.
+func isNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+		c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.' ||
+		c == ':' || c >= 0x80
 }
