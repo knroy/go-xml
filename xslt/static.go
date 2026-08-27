@@ -96,7 +96,8 @@ func (p *staticPhase) module(doc *xdm.Node) error {
 	// xsl:stylesheet is treated specially: excluding it excludes its children
 	// but not the element itself, so that one condition at the top of a module
 	// can govern every declaration in it.
-	if isXSL(root, "stylesheet") || isXSL(root, "transform") {
+	if root.Kind == xdm.KindElement && root.Name.URI == xdm.NSXSL &&
+		isStylesheetRootName(root.Name.Local) {
 		if err := p.expandShadow(root); err != nil {
 			return err
 		}
@@ -193,17 +194,42 @@ func (p *staticPhase) declare(el *xdm.Node) error {
 	// may be set that way; XTSE0020 covers a variable that tries.
 	supplied, fromCaller := p.c.opts.StaticParams[key]
 
-	// 3.13.2 forbids content on a static declaration outright: the value has
-	// to come from an expression, since there is no result tree to build one
-	// in at static analysis time.
-	if len(el.ChildElements()) > 0 {
+	// 9.5 forbids content on a static declaration outright: "when the
+	// attribute static="yes" is specified, the xsl:variable or xsl:param
+	// element must have empty content", because the value has to come from an
+	// expression — there is no result tree to build one in at static analysis
+	// time. The schema states the same rule as empty((*,text())), and the
+	// violation is a content model violation, so the code is XTSE0010.
+	//
+	// Whitespace-only text does not count. Every declaration in the suite is
+	// written across indented lines, and treating that layout as content
+	// would reject static-004 along with static-007.
+	if !emptyStaticContent(el) {
 		return fmt.Errorf(
-			"XTSE0620: %s has static=\"yes\" and a sequence constructor; "+
+			"XTSE0010: %s has static=\"yes\" and a sequence constructor; "+
 				"a static variable's value must come from its select attribute",
 			el.Name.Lexical())
 	}
 
 	sel := el.AttrValue("select")
+
+	// required="yes" says the value must come from the caller, and select
+	// supplies one from the stylesheet. The two contradict each other, and
+	// 9.5's content model admits only one of them — static-005a asks for
+	// XTSE0010 even in the run where the caller does supply a value, so the
+	// rejection cannot be conditional on what was supplied.
+	required := isYes(el.AttrValue("required"))
+	if required && sel != "" {
+		return fmt.Errorf(
+			"XTSE0010: %s has required=\"yes\" and a select attribute; "+
+				"a required parameter takes its value from the caller",
+			el.Name.Lexical())
+	}
+	if required && !fromCaller {
+		return fmt.Errorf(
+			"XTDE0050: no value was supplied for the required static "+
+				"parameter $%s", qn.Lexical())
+	}
 	var val xdm.Sequence
 	switch {
 	case fromCaller && el.Name.Local == "param":
@@ -299,11 +325,37 @@ func (p *staticPhase) includeModule(el *xdm.Node) error {
 // only meaningful on a top-level declaration; XTSE0020 for one written on a
 // local variable is checked with the rest of the static errors.
 func isStaticDecl(el *xdm.Node) bool {
-	switch strings.TrimSpace(el.AttrValue("static")) {
+	return isYes(el.AttrValue("static"))
+}
+
+// isYes reads an attribute whose value space is XSLT's boolean vocabulary.
+func isYes(v string) bool {
+	switch strings.TrimSpace(v) {
 	case "yes", "true", "1":
 		return true
 	}
 	return false
+}
+
+// emptyStaticContent reports whether el satisfies 9.5's requirement that a
+// static declaration have empty content.
+//
+// Whitespace-only text is not content: the schema writes the rule as
+// empty((*,text())), but every declaration in a real stylesheet is indented,
+// and reading the indentation as a sequence constructor would reject the
+// declarations 9.5 exists to allow.
+func emptyStaticContent(el *xdm.Node) bool {
+	for _, ch := range el.Children {
+		switch ch.Kind {
+		case xdm.KindElement:
+			return false
+		case xdm.KindText:
+			if strings.TrimSpace(ch.Value) != "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // expandShadow replaces the shadow attributes of an XSLT element with the
