@@ -176,6 +176,41 @@ func (t SequenceType) matchesItem(it xdm.Item) bool {
 	return true
 }
 
+// derivedSubtypeOfThroughSchema is derivedSubtypeOf continued across the join
+// between a schema's derivation chain and the built-in hierarchy.
+//
+// The built-in table knows that xs:int restricts xs:long restricts xs:integer;
+// the schema's registry knows that a type it declares restricts xs:int. Only
+// one of the two knows any given step, so a chain that crosses from one to the
+// other is invisible to either alone — which is why "data() instance of
+// xs:long" answered false in type-functions-0202 for an element whose type is
+// a restriction of xs:int, while "instance of xs:int" answered true. The same
+// break made a restriction of xs:negativeInteger miss xs:nonPositiveInteger.
+//
+// nodeTypeMatches already walks the two together for a NODE's annotation; this
+// is the same walk for an atomic VALUE's, and the reason is identical.
+//
+// Only an unqualified step is offered to the built-in table: a qualified name
+// is a schema type and is never reachable through the built-in hierarchy, and
+// letting one in would compare local parts across namespaces.
+func derivedSubtypeOfThroughSchema(derived, facet string) bool {
+	if derivedSubtypeOf(derived, facet) {
+		return true
+	}
+	// The walk is bounded so that a schema whose derivations somehow formed a
+	// cycle cannot loop here, exactly as in nodeTypeMatches.
+	for i := 0; i < 32 && derived != ""; i++ {
+		derived = xdm.DerivedBase(derived)
+		if derived == "" {
+			return false
+		}
+		if !xdm.IsQualifiedAnnotation(derived) && derivedSubtypeOf(derived, facet) {
+			return true
+		}
+	}
+	return false
+}
+
 // atomicTypeMatches implements the subtype relation over atomic types.
 //
 // The hierarchy this engine models is shallow: xs:integer is a subtype of
@@ -242,7 +277,7 @@ func atomicTypeMatchesFacet(a *xdm.Atomic, want xdm.TypeCode, facet string) bool
 		// A derived type matches only a value that was built as that type or
 		// as one below it. A plain xs:integer literal is the *parent* of
 		// xs:int, so it is not an instance of it.
-		return derivedSubtypeOf(a.Derived(), facet)
+		return derivedSubtypeOfThroughSchema(a.Derived(), facet)
 	}
 	return atomicTypeMatches(a.Type, want)
 }
