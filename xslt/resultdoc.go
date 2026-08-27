@@ -203,6 +203,21 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := i.validation.assess(rt, doc); err != nil {
 			return err
 		}
+		// The assessment annotated the document toDocument built, and that
+		// document is a COPY: toTree deep-copies every node it adopts, so
+		// that a constructed element is not re-parented out of whatever else
+		// holds it. The nodes recorded below are the originals, which means
+		// a successful validation left them exactly as untyped as they were.
+		//
+		// si-result-document-116 writes <in>2.1</in> under type="xs:decimal"
+		// and then asks "/in instance of element(*, xs:decimal)" of the
+		// recorded document; the annotation existed only on the discarded
+		// copy, so the answer was false for a tree the processor had just
+		// validated. The annotations are carried back rather than the
+		// document being recorded in place of the sequence, because the
+		// recorded sequence has to keep the item separators the document
+		// node does not carry -- see the comment on nodes below.
+		carryAnnotations(doc, sub.sequence())
 	}
 
 	if href == "" {

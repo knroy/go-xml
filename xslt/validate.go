@@ -685,3 +685,99 @@ func checkDocumentIDs(doc *xdm.Node) error {
 	}
 	return nil
 }
+
+// carryAnnotations copies the type annotations a validated document acquired
+// back onto the nodes the result document actually records.
+//
+// xsl:result-document assesses a document node built by toDocument, and that
+// document is a copy: toTree deep-copies every node it adopts so that a
+// constructed element is not re-parented out of whatever else holds it. The
+// sequence recorded for the result keeps the originals instead, because it
+// must also carry the item separators a document node does not. So a
+// successful validation annotated a tree that is then thrown away, and
+// si-result-document-116 asked "/in instance of element(*, xs:decimal)" of a
+// document the processor had just validated as xs:decimal and was told false.
+//
+// The two are matched positionally over ELEMENT children only, which is exactly
+// the correspondence toTree establishes: it appends one child per node item in
+// order, and validation adds and removes nothing. Text, comments and PIs are
+// skipped on both sides — none of them carries an annotation, and the item
+// separators the recorded sequence has and the document lacks are text, so
+// skipping text is also what keeps the two walks aligned.
+//
+// A mismatch in the number of elements means the correspondence does not hold,
+// and nothing is copied rather than something being copied to the wrong node.
+func carryAnnotations(doc *xdm.Node, recorded xdm.Sequence) {
+	if doc == nil {
+		return
+	}
+	var src []*xdm.Node
+	for _, c := range doc.Children {
+		if c.Kind == xdm.KindElement {
+			src = append(src, c)
+		}
+	}
+	var dst []*xdm.Node
+	for _, it := range recorded {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		switch n.Kind {
+		case xdm.KindElement:
+			dst = append(dst, n)
+		case xdm.KindDocument:
+			// toTree absorbs a document node's children rather than the node
+			// itself, so its elements are what the copy holds.
+			for _, c := range n.Children {
+				if c.Kind == xdm.KindElement {
+					dst = append(dst, c)
+				}
+			}
+		}
+	}
+	if len(src) != len(dst) {
+		return
+	}
+	for i := range src {
+		copyAnnotationTree(src[i], dst[i])
+	}
+}
+
+// copyAnnotationTree copies a node's annotation, and its subtree's, onto the
+// node it was copied from.
+//
+// The walk descends elements and attributes because validation annotates both:
+// an element validated against a complex type has its attributes assessed
+// against that type's attribute uses, and si-copy-121 asks about the element
+// while other cases ask about the attributes. It stops the moment the two
+// trees disagree in shape, for the same reason carryAnnotations stops on a
+// count mismatch — a wrong annotation is worse than none.
+func copyAnnotationTree(src, dst *xdm.Node) {
+	if src == nil || dst == nil || src.Kind != dst.Kind {
+		return
+	}
+	dst.SetTypeAnnotation(src.TypeAnnotation)
+	for _, sa := range src.Attrs {
+		if da := dst.Attr(sa.Name.URI, sa.Name.Local); da != nil {
+			da.SetTypeAnnotation(sa.TypeAnnotation)
+		}
+	}
+	var se, de []*xdm.Node
+	for _, c := range src.Children {
+		if c.Kind == xdm.KindElement {
+			se = append(se, c)
+		}
+	}
+	for _, c := range dst.Children {
+		if c.Kind == xdm.KindElement {
+			de = append(de, c)
+		}
+	}
+	if len(se) != len(de) {
+		return
+	}
+	for i := range se {
+		copyAnnotationTree(se[i], de[i])
+	}
+}
