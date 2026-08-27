@@ -707,7 +707,34 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 
 	switch node.Kind {
 	case xdm.KindDocument:
-		return builtInDescend(rt, node, mode, params, tunnels, out, false)
+		// 6.7.3 spells the rule out as <xsl:copy>...</xsl:copy>, and xsl:copy
+		// over a document node constructs one rather than running the body
+		// inline. Descending straight into the children lost that: the
+		// difference is invisible in a result tree, where a document node's
+		// children flatten into the parent either way, but a function
+		// declared as="document-node()" gets its result rejected — which is
+		// exactly what merge-096 does.
+		sub := newOutputBuilder()
+		if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
+			return err
+		}
+		doc, err := sub.toDocument()
+		if err != nil {
+			return err
+		}
+		// The DOCTYPE and the base URI travel with the copy for the same
+		// reason they do in xsl:copy: the unparsed entity declarations and
+		// anything resolved against the base would otherwise be lost.
+		if src := node.Tree(); src != nil {
+			if dst := doc.Tree(); dst != nil {
+				dst.DocType = src.DocType
+			}
+		}
+		if doc.BaseURI == "" {
+			doc.BaseURI = node.BaseURI
+		}
+		out.appendNode(doc)
+		return nil
 	case xdm.KindElement:
 		sub := out.startElement(node.Name)
 		if out.open == nil && sub.open.BaseURI == "" {
