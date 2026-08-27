@@ -357,6 +357,11 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 	// the outer node instead made the predicate select only the candidates
 	// sharing the numbered node's value.
 	ctx = ctx.WithVar(currentVar, xdm.One(node))
+	// Section 24.3: the current output URI is cleared while evaluating a
+	// pattern. A pattern is matched against candidate nodes at moments that
+	// have nothing to do with which result tree is being written, and
+	// current-output-uri-008 asserts the absence directly.
+	ctx = ctx.WithVar(outputURIVar, xdm.Empty())
 	for _, g := range p.general {
 		ok, err := g.matches(node, ctx)
 		if err != nil {
@@ -1141,6 +1146,10 @@ var reservedNodeTest = map[string]bool{
 	"element": true, "attribute": true, "namespace-node": true,
 	"schema-element": true, "schema-attribute": true,
 	"item": true, "empty-sequence": true, "if": true,
+	// The 3.0/3.1 item types are spelled exactly like a call too. Without
+	// them a pattern testing ". instance of map(*)" reported XPST0017 for an
+	// undeclared function named "map".
+	"map": true, "array": true, "function": true,
 }
 
 // countCallArgs counts the arguments of the call whose "(" is at open, and

@@ -73,6 +73,15 @@ func (t *sequenceType) convertAs(seq xdm.Sequence, what, code string) (xdm.Seque
 		if t.stype.Matches(seq) {
 			return seq, nil
 		}
+		// The function conversion rules do not stop at an instance-of test for
+		// a function item: one supplied where a typed function test is declared
+		// is wrapped so that its arguments and result are converted at call
+		// time. An inline function($x){...} records no signature at all, so
+		// without this every xsl:param declared as="function(xs:string) as
+		// xs:string" rejected the very values the rules exist to admit.
+		if conv, ok := xpath.CoerceFunctionItem(seq, t.stype); ok {
+			return conv, nil
+		}
 		return nil, fmt.Errorf("%s: %s does not match its declared type %s", code, what, t.src)
 	}
 
