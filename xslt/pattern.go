@@ -218,7 +218,7 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 					"not a valid pattern step: %s may not follow \"/\"",
 					call.String())
 			}
-			if err := checkPatternCall(call); err != nil {
+			if err := checkPatternCall(call, allow30); err != nil {
 				return nil, err
 			}
 			a.call = call
@@ -271,7 +271,7 @@ func compilePatternAlt(src string, ns xpath.NamespaceResolver) (*patternAlt, err
 		// id() and key() are legal pattern starts; they are matched by
 		// evaluating the function and testing membership, which is the one
 		// case where the right-to-left trick does not apply.
-		if err := checkPatternCall(e); err != nil {
+		if err := checkPatternCall(e, allow30); err != nil {
 			return nil, err
 		}
 		a.call = e
@@ -859,7 +859,7 @@ func (p *Pattern) String() string { return p.src }
 //
 // Only fn:id and fn:key may appear there. Any other call parses as a path
 // expression but is not a pattern, which is XTSE0340.
-func checkPatternCall(e *xpath.FuncCall) error {
+func checkPatternCall(e *xpath.FuncCall, allow30 bool) error {
 	if e.Name.URI == xdm.NSFN || e.Name.URI == "" {
 		// The arities come from the IdKeyPattern production, which spells
 		// each call out rather than deferring to the function signature:
@@ -867,13 +867,25 @@ func checkPatternCall(e *xpath.FuncCall) error {
 		// pattern is matched against a node whose document is already fixed.
 		switch e.Name.Local {
 		case "id":
-			if len(e.Args) != 1 {
+			// XSLT 3.0 admits the two-argument form, whose second argument
+			// names the tree to search. The candidate node's own tree is
+			// what the one-argument form searches, so the two ask different
+			// questions and 3.0 wants both available.
+			maxArgs := 1
+			if allow30 {
+				maxArgs = 2
+			}
+			if len(e.Args) < 1 || len(e.Args) > maxArgs {
 				return fmt.Errorf(
 					"id() in a pattern takes one argument, not %d", len(e.Args))
 			}
 			return patternCallArg("id", e.Args[0])
 		case "key":
-			if len(e.Args) != 2 {
+			maxKeyArgs := 2
+			if allow30 {
+				maxKeyArgs = 3
+			}
+			if len(e.Args) < 2 || len(e.Args) > maxKeyArgs {
 				return fmt.Errorf(
 					"key() in a pattern takes two arguments, not %d", len(e.Args))
 			}

@@ -115,6 +115,21 @@ func (p *parser) readSimpleRestriction(el *xdm.Node, t *SimpleType) {
 		t.Primitive = st.Primitive
 		t.ItemType = st.ItemType
 		t.MemberTypes = st.MemberTypes
+		// The inline base's own itemType or memberTypes may be a forward
+		// reference, filled in by a fixup that has not run yet, so the copy
+		// above can take a nil where the settled component has a type. That
+		// left a restricted list validating its length and its patterns but
+		// never its items: <xs:restriction><xs:simpleType><xs:list
+		// itemType="d"/></xs:simpleType><xs:length value="3"/></...> accepted
+		// any three tokens at all. Re-reading once the graph has settled is
+		// what makes the derived component agree with its base.
+		p.postFixups = append(p.postFixups, func() error {
+			t.Variety = st.Variety
+			t.Primitive = st.Primitive
+			t.ItemType = st.ItemType
+			t.MemberTypes = st.MemberTypes
+			return nil
+		})
 	default:
 		p.errs = append(p.errs, errorAt(el, "src-simple-type.2",
 			"a restriction must have a base attribute or an inline simpleType"))
