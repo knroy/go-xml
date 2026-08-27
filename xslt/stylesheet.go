@@ -103,6 +103,9 @@ type Stylesheet struct {
 	// modeFailMultiple is @on-multiple-match="fail", which turns the
 	// ambiguity warning-on-multiple-match reports into the error XTDE0540.
 	modeFailMultiple map[string]bool
+	// modeTyped is @typed, which XTTE3100 and XTTE3110 make an assertion
+	// about the type annotation of every node the mode is applied to.
+	modeTyped map[string]string
 	modeWarnNoMatch  map[string]bool
 	// accumulators holds xsl:accumulator declarations by Clark name, and
 	// accumOrder keeps the declaration order that fn:accumulator-before

@@ -67,11 +67,23 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 	captured := *ref
 	return func(callCtx any, args []xdm.Sequence) (xdm.Sequence, error) {
 		sub := captured
+		p := &sub
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			sub.Ctx = c.Ctx
 			sub.items = c.items
+			// The retained focus does not retain the host's dynamic-call
+			// markers. XSLT 3.0 24.3 says the XSLT extensions to the dynamic
+			// context are not part of a function item's closure, so a marker
+			// the caller set for the duration of the call must survive being
+			// evaluated under the reference's focus -- XTDE1360's
+			// current#0() is exactly that case.
+			for _, name := range MarkedOnDynamicCall {
+				if v, ok := c.LookupVar(name); ok {
+					p = p.WithVar(name, v)
+				}
+			}
 		}
-		return inner(&sub, args)
+		return inner(p, args)
 	}
 }
 
@@ -382,7 +394,6 @@ func convertibleToParam(from, to xdm.TypeCode) bool {
 	return false
 }
 
-// Eval implements Expr: it calls the function item the target produces.
 // ClearedOnDynamicCall names variables a host language wants unbound for the
 // duration of a dynamic function call.
 //
@@ -392,14 +403,29 @@ func convertibleToParam(from, to xdm.TypeCode) bool {
 // the host registers the name rather than this package knowing it.
 var ClearedOnDynamicCall []xdm.QName
 
-// clearHostVars unbinds the host-registered variables for one call.
+// MarkedOnDynamicCall names variables a host language wants BOUND, to a single
+// true, for the duration of a dynamic function call.
+//
+// It is the counterpart of ClearedOnDynamicCall, for a condition the host
+// cannot express by unbinding: XSLT's fn:current() falls back to the context
+// item when nothing bound the current node, which is right for a bare XPath
+// evaluation and wrong across a dynamic call, where XTDE1360 says the
+// function behaves "as if the context item is absent". Clearing cannot say
+// that; a positive marker can.
+var MarkedOnDynamicCall []xdm.QName
+
+// clearHostVars applies both host registries for one call.
 func clearHostVars(ctx *Context) *Context {
 	for _, name := range ClearedOnDynamicCall {
 		ctx = ctx.WithVar(name, nil)
 	}
+	for _, name := range MarkedOnDynamicCall {
+		ctx = ctx.WithVar(name, xdm.One(xdm.NewBoolean(true)))
+	}
 	return ctx
 }
 
+// Eval implements Expr: it calls the function item the target produces.
 func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 	target, err := e.Target.Eval(ctx)
 	if err != nil {

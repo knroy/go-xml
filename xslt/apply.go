@@ -95,6 +95,9 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			continue
 		}
+		if err := rt.sheet.checkModeTyped(node, i.effectiveMode(rt)); err != nil {
+			return err
+		}
 		sub := rt.withCurrent(node, idx+1, size)
 		if err := applyToNode(sub, node, i.effectiveMode(rt), params, tunnels, out); err != nil {
 			return err
@@ -378,6 +381,19 @@ func runTemplate(rt *runtime, t *Template,
 	// into it — which is what makes current-merge-group() in a called template
 	// the XTDE3480 that merge-087 and merge-088 require.
 	sub := rt.clearMergeContext()
+	// use="absent" means "the contained sequence constructor, and any
+	// xsl:param elements, are evaluated with an absent focus". It is not an
+	// error to call such a template with a focus -- the item is simply not
+	// part of it -- so the focus is removed here rather than refused at the
+	// call. A "." in the body is then XPDY0002, which is what makes the
+	// declaration worth writing: it says the template does not read the item.
+	if t.contextItem != nil && t.contextItem.use == "absent" &&
+		sub.ctx != nil && sub.ctx.Item != nil {
+		n := *sub
+		c := sub.ctx.WithFocus(nil, 0, 0)
+		n.ctx = c
+		sub = &n
+	}
 	// Tunnel parameters flow through templates that do not declare them, so
 	// they are merged into the runtime rather than matched against Params.
 	if len(tunnels) > 0 {

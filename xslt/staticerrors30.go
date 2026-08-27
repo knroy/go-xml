@@ -356,3 +356,66 @@ func (s *Stylesheet) failMultipleMatch(node *xdm.Node, mode string,
 	}
 	return nil
 }
+
+// currentAbsentVar marks a dynamic function call, across which XTDE1360 makes
+// fn:current() behave "as if the context item is absent".
+//
+// A dynamic call carries no XSLT focus with it: 24.3 already clears the
+// current output URI the same way, and current#0() is the example the spec
+// itself gives. Clearing the current-node binding alone is not enough,
+// because fn:current() falls back to the context item when nothing bound it
+// -- which is right for a bare XPath evaluation and wrong here -- so the
+// crossing is recorded rather than inferred.
+var currentAbsentVar = xdm.QName{URI: internalNS, Local: "current-absent"}
+
+func init() {
+	xpath.ClearedOnDynamicCall = append(
+		xpath.ClearedOnDynamicCall, currentVar)
+	xpath.MarkedOnDynamicCall = append(
+		xpath.MarkedOnDynamicCall, currentAbsentVar)
+}
+
+// currentIsAbsent reports whether a dynamic call is being evaluated.
+func currentIsAbsent(ctx *xpath.Context) bool {
+	seq, _ := ctx.LookupVar(currentAbsentVar)
+	return len(seq) > 0
+}
+
+// checkModeTyped applies XTTE3100 and XTTE3110 to one node selected by an
+// xsl:apply-templates.
+//
+// Section 6.6 lets a mode declare what it expects of the nodes reaching it.
+// typed="yes"/"strict"/"lax" says the mode's template rules were written
+// against a schema, so an untyped element or attribute is a type error;
+// typed="no" says the opposite, and a typed one is the error. Both are about
+// the node's own annotation rather than about the tree it came from -- a
+// stylesheet may perfectly well build a validated element inside an
+// unvalidated result and apply templates to it, which is what error-3100a and
+// error-3110a do.
+func (s *Stylesheet) checkModeTyped(node *xdm.Node, mode string) error {
+	want, ok := s.modeTyped[mode]
+	if !ok {
+		return nil
+	}
+	if node.Kind != xdm.KindElement && node.Kind != xdm.KindAttribute {
+		return nil
+	}
+	untyped := node.TypeAnnotation == "" ||
+		node.TypeAnnotation == "{"+xdm.NSXS+"}untyped" ||
+		node.TypeAnnotation == "{"+xdm.NSXS+"}untypedAtomic"
+	switch want {
+	case "no":
+		if !untyped {
+			return fmt.Errorf(
+				"XTTE3110: mode %s declares typed=\"no\" but %s has type %s",
+				modeLabel(mode), nodeLabel(node), node.TypeAnnotation)
+		}
+	default:
+		if untyped {
+			return fmt.Errorf(
+				"XTTE3100: mode %s declares typed=%q but %s is untyped",
+				modeLabel(mode), want, nodeLabel(node))
+		}
+	}
+	return nil
+}

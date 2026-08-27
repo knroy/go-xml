@@ -768,13 +768,39 @@ func (c *compiler) compileTemplate(el *xdm.Node, precedence int) error {
 	// those: section 10.1.1 puts it first among the children.
 	children := el.ChildElements()
 	i := 0
-	if i < len(children) && isXSL(children[i], "context-item") {
-		ci, err := compileContextItem(children[i])
+	// Non-whitespace text before the declaration starts the sequence
+	// constructor, so an xsl:context-item after it is no longer first in the
+	// content model even though it is the first child ELEMENT.
+	// context-item-908 writes "banana" above one and expects XTSE0010.
+	textFirst := false
+	for _, ch := range el.Children {
+		if ch.Kind == xdm.KindElement {
+			break
+		}
+		if ch.Kind == xdm.KindText && !xdm.IsXMLWhitespace(ch.Value) {
+			textFirst = true
+			break
+		}
+	}
+	if !textFirst && i < len(children) && isXSL(children[i], "context-item") {
+		ci, err := compileContextItem(children[i], el)
 		if err != nil {
 			return err
 		}
 		t.contextItem = ci
 		i++
+	}
+	// XTSE0010: the content model is (xsl:context-item?, xsl:param*,
+	// sequence-constructor), so one anywhere but first is out of place.
+	// Ignoring it silently accepted a template that declared a required
+	// context item and then never checked for one.
+	for _, ch := range children[i:] {
+		if isXSL(ch, "context-item") {
+			return fmt.Errorf(
+				"xsl:template may not contain xsl:context-item here: its "+
+					"content is (xsl:context-item?, xsl:param*, "+
+					"sequence-constructor) (XTSE0010)")
+		}
 	}
 	for ; i < len(children); i++ {
 		if !isXSL(children[i], "param") {
@@ -1819,6 +1845,12 @@ func (c *compiler) compileMode(el *xdm.Node, precedence int) error {
 			c.sheet.modeNoMatch = map[string]string{}
 		}
 		c.sheet.modeNoMatch[name] = strings.TrimSpace(nm.Value)
+	}
+	if a := el.Attr("", "typed"); a != nil {
+		if c.sheet.modeTyped == nil {
+			c.sheet.modeTyped = map[string]string{}
+		}
+		c.sheet.modeTyped[name] = strings.TrimSpace(a.Value)
 	}
 	if a := el.Attr("", "on-multiple-match"); a != nil {
 		if c.sheet.modeFailMultiple == nil {
