@@ -1070,7 +1070,20 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	// must be distinguishable from the attribute being absent.
 	if el.Attr("", "item-separator") != nil {
 		v := value("item-separator")
-		o.ItemSeparator = &v
+		// "#absent" overrides a separator obtained from the output
+		// definition and leaves the parameter unset. The rule exists because
+		// item-separator="" is itself a meaningful value -- no separator
+		// anywhere, not even the default space between atomic values -- so
+		// there is no empty spelling left to mean "not set".
+		if v == "#absent" {
+			o.ItemSeparator = nil
+		} else {
+			o.ItemSeparator = &v
+		}
+	}
+	if v := value("build-tree"); v != "" {
+		b := yes(v)
+		o.BuildTree = &b
 	}
 	if v := value("standalone"); v != "" {
 		// "omit" is the way to say "no standalone declaration", so it is

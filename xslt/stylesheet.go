@@ -274,6 +274,18 @@ type OutputSettings struct {
 	// separated at all), while item-separator="" means every adjacency gets
 	// nothing, including between two atomic values.
 	ItemSeparator *string
+
+	// BuildTree says whether the raw result is normalised into a final
+	// result tree before it is delivered or serialised (XSLT 3.0 section
+	// 2.3.6). Nil is the default, which depends on the method: yes for xml,
+	// html, xhtml and text, no for json and adaptive.
+	//
+	// With build-tree="no" the raw sequence is serialised as it stands, so
+	// item-separator has something to separate -- normalisation would have
+	// merged the whole sequence into one tree first, which is why the note
+	// in 27.1 says the separator "has no effect ... if the effective value
+	// of build-tree is yes".
+	BuildTree *bool
 	// MediaType is the media type of the output. It affects no serialised
 	// character; it is metadata a caller passes on.
 	MediaType string
