@@ -165,11 +165,16 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		uri = constructedText(sub.sequence(), " ")
 	}
-	uri = strings.TrimSpace(uri)
-
+	// XTDE0930 is "results in a zero-length string", so the test is made on
+	// the value the instruction actually produced. Trimming first turned a
+	// whitespace-only result into an error it is not: on-empty-115b builds a
+	// single space out of two empty text nodes joined by the simple-content
+	// separator, and its xsl:attribute twin on-empty-115c requires that same
+	// space to survive as bar=" ".
 	if uri == "" {
 		return fmt.Errorf("XTDE0930: xsl:namespace must not create a binding to an empty URI")
 	}
+	uri = strings.TrimSpace(uri)
 	// XTDE0920: "if the effective value of the name attribute is neither a
 	// zero-length string nor an NCName, or if it is xmlns". The zero-length
 	// string is the default namespace, which is a legitimate thing to bind;

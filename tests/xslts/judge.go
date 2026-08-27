@@ -267,6 +267,29 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		}
 		return evalAssert(res, root, a.Value, a.NS, schema)
 
+	case "assert-eq":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// The catalog writes the expected value as an XPath literal, so the
+		// comparison is "$result eq <literal>" with the engine's own "eq".
+		// The result is atomized on the way in, which is what makes a
+		// document node holding "42 84 ..." compare equal to that string.
+		return evalAssert(res, root,
+			"data($result) = ("+strings.TrimSpace(a.Value)+")", a.NS, schema)
+
+	case "assert-type":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// The sequence type is checked against the result sequence, which is
+		// what $result binds. Building "$result instance of T" rather than
+		// implementing a type matcher here reuses the engine's own rules --
+		// and keeps the answer honest, since a matcher written in the
+		// harness could only agree with the engine by construction.
+		return evalAssert(res, root,
+			"$result instance of "+strings.TrimSpace(a.Value), a.NS, schema)
+
 	case "assert-string-value":
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
@@ -829,6 +852,13 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 		return false, "the transform produced no result tree"
 	}
 	ctx := xpath.NewContext(root, xpath.Builtins())
+	// The suite's own driver binds $result to the result of the
+	// transformation. That is the document node the assertions are written
+	// about, the same tree the context item is: on-empty-115b asks
+	// $result/child::foo of it and seqtor-043b asserts it is a
+	// document-node(). Binding the raw result sequence instead would leave
+	// both without the wrapper the suite expects.
+	ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
 	resolver := xpath.NamespaceResolver(mapNS(ns))
 	// The assertion is evaluated in the same static context the stylesheet
 	// had, which includes the schema the environment declares. An assertion
