@@ -375,7 +375,11 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			// document('') hands back has a dm:document-uri. Leaving it
 			// empty made document-uri(document('')) empty for a document
 			// that plainly has one.
-			DocumentURI:      fileURI(sheetPath),
+			DocumentURI: fileURI(sheetPath),
+			// $err:line-number can only be answered if the stylesheet
+			// remembers where each instruction was written. try-018 and
+			// try-022 assert exact line numbers.
+			TrackPositions:   true,
 			ExternalEntities: r.entityResolver()})
 	if err != nil {
 		return nil, err

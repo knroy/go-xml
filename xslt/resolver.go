@@ -251,6 +251,14 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 		// fn:document-uri exists to make.
 		DocumentURI:  fileURIOf(path),
 		AllowDOCTYPE: r.AllowDOCTYPE,
+		// A stylesheet module needs its positions kept: XSLT 3.0 section 8.3
+		// publishes the line an error was raised on to an xsl:catch clause as
+		// $err:line-number, and that can only be answered from the position
+		// of the instruction in the source. The cost is paid once per module
+		// at compile time. This resolver also loads source documents, for
+		// fn:document and fn:doc, and they are tracked too — gx:line-number()
+		// reports on those.
+		TrackPositions: true,
 	}
 	if r.ExternalEntities {
 		opts.ExternalEntities = r

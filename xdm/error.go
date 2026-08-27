@@ -40,6 +40,20 @@ type Error struct {
 	// fn:error can supply one, so it is nil on every error the engine raises
 	// itself, which is exactly the empty sequence the spec requires there.
 	Value Sequence
+	// Line and Module say where in a stylesheet the error was raised: the
+	// line number within the module, and the module's URI. XSLT 3.0 section
+	// 8.3 publishes them to an xsl:catch clause as $err:line-number and
+	// $err:module, and both are optional there — a processor that does not
+	// record the position reports the empty sequence. Line is 0 and Module
+	// is "" when nothing stamped them, which is how "not recorded" is
+	// spelled.
+	//
+	// They are stamped by the XSLT engine as the error passes out of the
+	// instruction that raised it, not at the point of construction: an error
+	// value is built in dozens of places across xdm, xpath and xsd, none of
+	// which knows anything about a stylesheet. See xslt/execSequence.
+	Line   int
+	Module string
 }
 
 func (e *Error) Error() string {

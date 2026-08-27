@@ -350,16 +350,32 @@ func bindErrorVars(rt *runtime, err error, module string) *runtime {
 	rt = bind(rt, "code", xdm.Sequence{xdm.NewQNameValue(name)})
 	rt = bind(rt, "description", xdm.Sequence{xdm.NewString(desc)})
 	rt = bind(rt, "value", errorValue(err))
+	// The module and line the error was raised in are stamped on the error as
+	// it unwinds past the instruction that raised it (see srcpos.go), so they
+	// name the failing instruction rather than the xsl:try that caught it.
+	// try-021 turns on the difference: the xsl:result-document that raised
+	// XTDE1490 is four lines below the xsl:try, and the test asserts the
+	// former. Only when nothing was stamped — a stylesheet parsed without
+	// positions, or an error raised outside any sequence constructor — does
+	// the catching instruction's own module stand in.
+	if e != nil && e.Module != "" {
+		module = e.Module
+	}
 	if module == "" {
 		rt = bind(rt, "module", nil)
 	} else {
 		rt = bind(rt, "module", xdm.Sequence{xdm.NewString(module)})
 	}
-	// err:line-number and err:column-number are xs:integer?, and the spec
-	// allows the empty sequence when the processor does not record where an
-	// error was raised. This engine attaches no line to an error, and the
-	// suite is written for that: try-002 accepts @line = ("17", "").
-	rt = bind(rt, "line-number", nil)
+	// err:line-number and err:column-number are xs:integer?, and 8.3 allows
+	// the empty sequence when the processor does not record where an error
+	// was raised. A column is never recorded here: the position tracked on a
+	// stylesheet element is where its start tag begins, which for a
+	// multi-line instruction is a column that says less than the line does.
+	if e != nil && e.Line != 0 {
+		rt = bind(rt, "line-number", xdm.Sequence{xdm.NewInteger(int64(e.Line))})
+	} else {
+		rt = bind(rt, "line-number", nil)
+	}
 	rt = bind(rt, "column-number", nil)
 	return rt
 }

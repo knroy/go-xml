@@ -864,7 +864,7 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 		// A variable declared mid-sequence is in scope for the instructions
 		// that follow it, so it rebinds the runtime for the rest of the loop
 		// rather than only for its own execution.
-		if v, ok := instr.(*varInstr); ok {
+		if v, ok := unwrapInstr(instr).(*varInstr); ok {
 			if v.unused {
 				// Nothing after this declaration can name the variable, so
 				// section 5.2's permission not to evaluate it applies and
@@ -882,7 +882,10 @@ func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
 			continue
 		}
 		if err := instr.Execute(rt, out); err != nil {
-			return err
+			// Where the error was raised, for $err:line-number. Only the
+			// innermost instruction to see it records anything; see
+			// srcpos.go.
+			return stampPosition(err, instr)
 		}
 	}
 	return nil

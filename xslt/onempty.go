@@ -182,7 +182,7 @@ func vacuous(it xdm.Item) bool {
 // answer of "no" costs one pass over a slice that is almost always short.
 func hasConditionalContent(body []Instruction) bool {
 	for _, instr := range body {
-		switch instr.(type) {
+		switch unwrapInstr(instr).(type) {
 		case *onEmptyInstr, *onNonEmptyInstr:
 			return true
 		}
@@ -263,7 +263,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		// A variable declared here is in scope for the rest of the
 		// constructor exactly as in execSequence; the conditional
 		// instructions do not change scoping.
-		if v, ok := instr.(*varInstr); ok {
+		if v, ok := unwrapInstr(instr).(*varInstr); ok {
 			if v.unused {
 				continue
 			}
@@ -275,7 +275,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			continue
 		}
 
-		switch ci := instr.(type) {
+		switch ci := unwrapInstr(instr).(type) {
 		case *onNonEmptyInstr:
 			if f {
 				sub := newOutputBuilder()
@@ -302,7 +302,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 
 		sub := newOutputBuilder()
 		if err := instr.Execute(rt, sub); err != nil {
-			return err
+			return stampPosition(err, instr)
 		}
 		for _, it := range sub.sequence() {
 			if !f && !vacuous(it) {

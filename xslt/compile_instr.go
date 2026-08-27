@@ -74,7 +74,9 @@ func (c *compiler) compileNodes(nodes []*xdm.Node, nsScope *xdm.Node) ([]Instruc
 			v.unused = !nameReferencedIn(nodes[i+1:], v.v.Name) &&
 				!nameReferencedIn([]*xdm.Node{n}, v.v.Name)
 		}
-		out = append(out, instr)
+		// The source position is attached last, so that everything above
+		// sees the instruction's own type. See srcpos.go.
+		out = append(out, withPosition(instr, n))
 	}
 	return out, nil
 }
