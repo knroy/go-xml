@@ -931,6 +931,88 @@ func (r *nsResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool)
 	return code, true, true
 }
 
+// SchemaUnionMemberNames implements xpath.SchemaUnionNames.
+//
+// It answers with the names a validated NODE could be annotated with, where
+// SchemaUnionMemberTypes answers with the built-in codes an unannotated VALUE
+// could carry. A node validated against a union is annotated with the member
+// that accepted it, so match-232's age="44" — declared as a union of
+// my:partNumberType and xs:integer — is annotated "integer", and the union's
+// own name appears nowhere on it.
+//
+// Purity is deliberately NOT required here, unlike SchemaUnionMemberTypes.
+// That constraint exists to stop a member VALUE substituting for a faceted
+// union it may not satisfy, which is the XSD 1.0 error XSD 1.1 3.16.6.3
+// corrected. A node reaching this test was actually validated against the
+// union, so the schema has already established that it satisfies the union's
+// facets; the unsound substitution has no way to arise.
+//
+// Only ATOMIC members are reported, because only they are ever recorded as a
+// node's annotation. See the walk below.
+func (r *nsResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
+	if r.schema == nil {
+		return nil, false
+	}
+	t, ok := r.schema.Types[name]
+	if !ok {
+		return nil, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok || st.Variety != xsd.VarietyUnion {
+		return nil, false
+	}
+	var out []string
+	seen := map[xdm.QName]bool{name: true}
+	var walk func(u *xsd.SimpleType, depth int)
+	walk = func(u *xsd.SimpleType, depth int) {
+		// A union whose members form a cycle is not a schema this can answer
+		// for; the bound stops a malformed one from recursing forever rather
+		// than limiting a real one.
+		if depth > 32 {
+			return
+		}
+		for _, m := range u.MemberTypes {
+			if m == nil || seen[m.Name] {
+				continue
+			}
+			seen[m.Name] = true
+			// A member that is itself a union contributes its own members
+			// too: 2.5.5 speaks of the TRANSITIVE membership, and a node may
+			// have been validated against a member of a member. The union
+			// itself is not contributed — nothing is annotated with it when
+			// its own members are atomic, and when they are not, the
+			// exclusion below is the point.
+			if m.Variety == xsd.VarietyUnion {
+				walk(m, depth+1)
+				continue
+			}
+			// ONLY AN ATOMIC MEMBER. Validation records the member that
+			// accepted the value only when that member is atomic; a union
+			// over LIST types annotates the node with the union itself, so
+			// there is no member-annotated node for the caller to admit and
+			// naming the members would only let a sibling match. match-197
+			// has <listUnion> annotated my:listUnionType and <simpleUserList>
+			// annotated my:myListType — a member of that very union — and
+			// element(*, my:listUnionType) must select the first alone.
+			if m.Variety != xsd.VarietyAtomic {
+				continue
+			}
+			// A built-in is annotated by its bare local name, a schema type
+			// by its expanded {uri}local key. AnnotationName draws exactly
+			// that distinction, so the name is handed to it rather than being
+			// spelled out here.
+			if m.Name.Local != "" {
+				out = append(out, xdm.AnnotationName(m.Name.URI, m.Name.Local))
+			}
+		}
+	}
+	walk(st, 0)
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
 // SchemaUnionMemberTypes implements xpath.SchemaUnionTypes.
 //
 // XPath 3.1 2.5.5 makes union membership a clause of derives-from in its own
