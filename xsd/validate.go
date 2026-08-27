@@ -480,6 +480,14 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 				v.checkNoForeignAttributes(el, nil, nil)
 			}
 			v.annotate(el, typ)
+			// dm:nilled is recorded on the node rather than left to be
+			// re-derived later. It is the outcome of THIS assessment: an
+			// xsi:nil that reaches here has been checked against a nillable
+			// declaration, where the same attribute on a non-nillable one
+			// failed above as cvc-elt.3.1 and is not a nilled element at all.
+			// Only the validator can draw that distinction, so only the
+			// validator records it. See xdm.Node.IsNilled.
+			el.IsNilled = true
 			return nil
 		}
 	}

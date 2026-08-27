@@ -337,6 +337,14 @@ func deepCopy(n *xdm.Node) *xdm.Node {
 		TypeAnnotation: n.TypeAnnotation,
 		IsID:           n.IsID,
 		IsIDREFS:       n.IsIDREFS,
+		// dm:nilled travels with the annotation on a COPY. A copy of an
+		// assessed element is an element that was assessed: validation-1202
+		// copies a nilled element with validation="preserve" and requires
+		// nilled() to stay true, and fn:copy-of and fn:snapshot in
+		// validation-1203 require the same. Only a NEWLY CONSTRUCTED element
+		// starts unnilled, which is xsl:copy's case in validation-1204 —
+		// there the annotation is preserved but the element itself is new.
+		IsNilled: n.IsNilled,
 	}
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)

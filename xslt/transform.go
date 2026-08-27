@@ -726,7 +726,8 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// the loss was not visible — removing that gate cost 115 tests.
 		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
 			TypeAnnotation: n.TypeAnnotation,
-			IsID:           n.IsID, IsIDREFS: n.IsIDREFS}
+			IsID:           n.IsID, IsIDREFS: n.IsIDREFS,
+			IsNilled:       n.IsNilled}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
@@ -927,12 +928,12 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
 		for _, a := range n.Attrs {
-			// xsi:nil is dropped rather than copied: the is-nilled
-			// property of every element becomes false, and this data
-			// model computes is-nilled from the attribute rather than
-			// storing it, so removing the attribute is what sets the
-			// property. Every other attribute is kept, which is what
-			// leaves is-id and is-idrefs unchanged.
+			// xsi:nil is dropped rather than copied: stripping makes
+			// the is-nilled property of every element false, and the
+			// attribute would otherwise remain as a claim the stripped
+			// tree no longer supports. The property itself is simply
+			// not carried onto the copy above. Every other attribute is
+			// kept, which is what leaves is-id and is-idrefs unchanged.
 			if a.Name.URI == xdm.NSXSI && a.Name.Local == "nil" {
 				continue
 			}

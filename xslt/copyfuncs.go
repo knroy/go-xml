@@ -104,6 +104,11 @@ func copyItem(it xdm.Item) xdm.Item {
 			TypeAnnotation: n.TypeAnnotation,
 			IsID:           n.IsID,
 			IsIDREFS:       n.IsIDREFS,
+			// A copy of an assessed element was assessed. fn:copy-of and
+			// fn:snapshot preserve type annotations, and dm:nilled is part
+			// of what they preserve — validation-1203 takes both of a nilled
+			// element and requires nilled() to stay true.
+			IsNilled: n.IsNilled,
 		}
 	}
 	c := deepCopy(n)

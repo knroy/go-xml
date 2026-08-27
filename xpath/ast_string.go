@@ -177,20 +177,24 @@ func (t *KindTest) matchesUnionMember(n *xdm.Node) bool {
 
 // nodeIsNilled reports the data model's dm:nilled property for an element.
 //
-// It is a PSVI property, so it takes both an xsi:nil marking AND evidence
-// that the element was validated: xsi:nil on an element whose declaration is
-// not nillable is an error rather than a nilled element, and only validation
-// distinguishes them. A non-empty type annotation is the evidence available
-// in the data model — an untyped tree leaves it empty on every node.
+// It is read from the node rather than re-derived from what the node looks
+// like, because it is the outcome of an assessment and not a property of the
+// markup. The validator sets it where it decides the question: an xsi:nil on
+// an element whose declaration is not nillable is an ERROR rather than a
+// nilled element, and nothing but the schema can tell those two apart.
+//
+// Deriving it instead from "carries an annotation AND has xsi:nil" got
+// xsl:copy validation="preserve" wrong. That instruction constructs a new
+// element and preserves the annotation onto it without assessing anything, so
+// the new element satisfied both halves of that test while nothing had ever
+// assessed it; validation-1204 asks nilled() of exactly that element and
+// requires false, while validation-1202 copies the node itself and requires
+// true.
 //
 // fn:nilled and the element() kind test must agree on this, which is why the
 // rule lives in one place rather than being written out at each.
 func nodeIsNilled(n *xdm.Node) bool {
-	if n == nil || n.Kind != xdm.KindElement || n.TypeAnnotation == "" {
-		return false
-	}
-	a := n.Attr(xdm.NSXSI, "nil")
-	return a != nil && (a.Value == "true" || a.Value == "1")
+	return n != nil && n.Kind == xdm.KindElement && n.IsNilled
 }
 
 // substitutes reports whether name is a member of the substitution group the

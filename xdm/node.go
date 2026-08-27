@@ -187,6 +187,28 @@ type Node struct {
 	IsID     bool
 	IsIDREFS bool
 
+	// IsNilled is the data model's dm:nilled property (XDM 5.10): true for an
+	// element that a schema assessment found nil, false for every other node.
+	//
+	// It is separate state from TypeAnnotation, and separate from the xsi:nil
+	// attribute, for the same reason IsID is. The property is fixed by the
+	// assessment that produced the node and does not follow from what the
+	// node looks like afterwards: xsi:nil on an element whose declaration is
+	// not nillable is an ERROR rather than a nilled element, and only the
+	// validator can tell those apart.
+	//
+	// Inferring it from "carries an annotation AND has xsi:nil='true'" gets
+	// xsl:copy validation="preserve" wrong, which is what validation-1204 is
+	// written to catch. That instruction CONSTRUCTS an element and preserves
+	// the annotation onto it without assessing anything, so the new element
+	// had both halves of that test while nothing had ever assessed it. The
+	// property is a fact about an event that either happened or did not, so
+	// it is recorded when it happens and copied when the node is.
+	//
+	// A node whose type was never determined leaves this false, which is the
+	// correct answer for an unvalidated document.
+	IsNilled bool
+
 	// detachedID numbers a node that roots a tree which was never finalized,
 	// assigned on the first cross-tree comparison. Zero means unassigned.
 	detachedID int64

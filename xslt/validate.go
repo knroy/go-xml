@@ -571,6 +571,11 @@ func stripAnnotations(n *xdm.Node) {
 		return
 	}
 	n.TypeAnnotation = ""
+	// dm:nilled goes with the annotation. Stripping says the node is to be
+	// treated as though nothing had assessed it, and an unassessed element is
+	// not nilled however it is marked up — the xsi:nil attribute survives as
+	// an ordinary attribute, which is all it is once the type is gone.
+	n.IsNilled = false
 	for _, a := range n.Attrs {
 		a.TypeAnnotation = ""
 	}
