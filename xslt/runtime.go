@@ -790,6 +790,13 @@ func (b *outputBuilder) toTree() *xdm.Node {
 
 // execSequence runs a sequence constructor into out.
 func execSequence(body []Instruction, rt *runtime, out *outputBuilder) error {
+	// A constructor holding xsl:on-empty or xsl:on-non-empty cannot be run
+	// left to right: whether either fires depends on what the whole
+	// constructor produced, so it goes to the section 8.4.4 algorithm
+	// instead. See onempty.go.
+	if hasConditionalContent(body) {
+		return execConditionalSequence(body, rt, out)
+	}
 	for _, instr := range body {
 		if err := rt.ctx.Err(); err != nil {
 			return err

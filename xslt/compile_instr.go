@@ -445,6 +445,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return c.compileBreak(n, ns)
 	case "next-iteration":
 		return c.compileNextIteration(n, ns)
+	case "on-empty", "on-non-empty", "where-populated":
+		return c.compileOnEmpty(n, ns)
 	case "sequence":
 		sel, err := requiredExpr(n, "select", ns)
 		if err != nil {

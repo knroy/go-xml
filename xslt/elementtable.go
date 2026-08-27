@@ -49,6 +49,21 @@ var xsltElements = map[string]elementDef{
 		"default-collation":          {},
 		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
 	}},
+	"package": {attrs: map[string]attrDef{
+		"id":                         {},
+		"name":                       {},
+		"package-version":            {},
+		"version":                    {},
+		"declared-modes":             {values: []string{"yes", "no", "true", "false", "1", "0"}},
+		"extension-element-prefixes": {},
+		"exclude-result-prefixes":    {},
+		"xpath-default-namespace":    {},
+		"default-validation":         {values: []string{"preserve", "strip"}},
+		"default-collation":          {},
+		"default-mode":               {},
+		"input-type-annotations":     {values: []string{"preserve", "strip", "unspecified"}},
+		"use-package":                {},
+	}},
 	"transform": {attrs: map[string]attrDef{
 		"id":                         {},
 		"extension-element-prefixes": {},
@@ -232,6 +247,16 @@ var xsltElements = map[string]elementDef{
 	"on-completion": {attrs: map[string]attrDef{
 		"select": {},
 	}},
+	// The XSLT 3.0 conditional content instructions, section 8.4. Both
+	// xsl:on-empty and xsl:on-non-empty share xsl:sequence's summary;
+	// xsl:where-populated has no attributes at all.
+	"on-empty": {attrs: map[string]attrDef{
+		"select": {},
+	}},
+	"on-non-empty": {attrs: map[string]attrDef{
+		"select": {},
+	}},
+	"where-populated": {attrs: map[string]attrDef{}},
 	"evaluate": {attrs: map[string]attrDef{
 		"xpath":             {required: true},
 		"as":                {},
@@ -432,6 +457,9 @@ var contentModels = map[string]contentModel{
 	"next-iteration":         {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true}, model: "xsl:with-param*"},
 	"break":                  {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"on-completion":          {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"on-empty":               {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"on-non-empty":           {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"where-populated":        {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"evaluate":               {seqCtor: false, pcdata: false, kids: map[string]bool{"with-param": true, "fallback": true}, model: "(xsl:with-param | xsl:fallback)*"},
 	"import":                 {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"import-schema":          {seqCtor: false, foreign: "schema", pcdata: false, kids: nil, model: "xs:schema?"},
@@ -457,6 +485,7 @@ var contentModels = map[string]contentModel{
 	"sort":                   {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"strip-space":            {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"stylesheet":             {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
+	"package":                {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
 	"template":               {seqCtor: true, pcdata: false, kids: map[string]bool{"param": true}, model: "(xsl:param*, sequence-constructor)"},
 	"text":                   {seqCtor: false, pcdata: true, kids: nil, model: "#PCDATA"},
 	"transform":              {seqCtor: false, decls: true, pcdata: false, kids: map[string]bool{"import": true}, model: "(xsl:import*, other-declarations)"},
@@ -486,6 +515,9 @@ var xsltInstructions = map[string]bool{
 	"element":                true,
 	"evaluate":               true,
 	"iterate":                true,
+	"on-empty":               true,
+	"on-non-empty":           true,
+	"where-populated":        true,
 	"next-iteration":         true,
 	"break":                  true,
 	"fallback":               true,
