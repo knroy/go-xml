@@ -586,6 +586,43 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	// package is the top-level package: nobody uses it, so nothing can
 	// resolve an abstract component it accepts. See the XTSE3080 check below.
 	topLevel := c.sheet.source != nil && firstElement(c.sheet.source) == root
+	// XTSE3080 over the package's own declarations, which is the half of the
+	// rule that needs no manifest at all: "It is a static error if a top-level
+	// package (as distinct from a library package) contains components whose
+	// visibility is abstract."
+	//
+	// An abstract component has no body, and only a package that uses this
+	// one can supply it through xsl:override. A top-level package is by
+	// definition the one nobody uses, so an abstract component it declares
+	// can never be supplied -- 3.5.4 puts it as "a package is executable if
+	// and only if it contains no component whose visibility is abstract",
+	// and a package that is not executable is not a stylesheet.
+	//
+	// The error is static, so it has to be raised here rather than left to
+	// surface when the component is invoked. error-3080a declares an
+	// abstract template t and calls it from main; without this the
+	// compilation succeeded and the failure appeared much later as the
+	// XTDE0040 eligibility check, a long way from the cause.
+	//
+	// Only a module compiled as the principal one is judged. A package
+	// reached by xsl:use-package is a library package, where an abstract
+	// component is exactly what the feature is for, and the check inside the
+	// manifest loop below covers the case where such a component is accepted
+	// into the top-level package still abstract.
+	if topLevel && c.usedPackageDepth == 0 && c.importDepth == 0 {
+		comps, err := packageComponents(root)
+		if err != nil {
+			return err
+		}
+		for _, comp := range comps {
+			if comp.declared == visAbstract {
+				return fmt.Errorf(
+					"XTSE3080: %s is declared with visibility=\"abstract\" "+
+						"in the top-level package, and nothing can supply "+
+						"its implementation", comp.sym)
+			}
+		}
+	}
 	// XTSE3008: a module reached by xsl:import may not use a package. An
 	// imported module is a separate stylesheet, so its manifest would belong
 	// to no package at all; an included one is part of the including module
@@ -672,6 +709,37 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	own, err := packageComponents(root)
 	if err != nil {
 		return err
+	}
+	// XTSE3055 comes first, because it is the more specific rule about the
+	// same shape of clash: "a component declaration appearing as a child of
+	// xsl:override is homonymous with any other declaration in the using
+	// package, regardless of import precedence, including any other
+	// overriding declaration in the package manifest".
+	//
+	// XTSE3050 is about a component the manifest *accepted* colliding with
+	// one the package declares. An overridden component is not accepted --
+	// the override supplies it -- so a top-level declaration of the same name
+	// is this error rather than that one. error-3055a overrides t-public and
+	// declares a t-public of its own.
+	ownByName := map[string]bool{}
+	for _, comp := range own {
+		ownByName[comp.sym.String()] = true
+	}
+	overridingSeen := map[string]bool{}
+	for _, u := range uses {
+		for key := range u.overriding {
+			if ownByName[key] {
+				return fmt.Errorf(
+					"XTSE3055: %s is declared as a child of xsl:override and "+
+						"also declared in the using package", key)
+			}
+			if overridingSeen[key] {
+				return fmt.Errorf(
+					"XTSE3055: %s is declared as a child of xsl:override in "+
+						"more than one place in the package manifest", key)
+			}
+			overridingSeen[key] = true
+		}
 	}
 	for _, comp := range own {
 		if u, dup := accepted[comp.sym.String()]; dup {
