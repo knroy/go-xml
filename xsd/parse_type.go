@@ -1226,7 +1226,16 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 	if w := p.childElement(el, "any"); w != nil {
 		oc.Wildcard = p.readWildcard(w)
 	} else {
-		// An openContent with no wildcard defaults to ##any, lax.
+		// src-ct.5: an <openContent> whose mode is not "none" must
+		// carry an <any>. There is nothing for the element to say
+		// otherwise — mode describes where the wildcard applies, and
+		// with no wildcard there is nothing to place. Only mode="none"
+		// is meaningful alone, and that returned above. s3_4_1si01
+		// writes three such elements, one per mode spelling.
+		p.errs = append(p.errs, errorAt(el, "src-ct.5",
+			"an openContent with mode %q must have an any child", oc.Mode))
+		// The default keeps the component well-formed for whatever
+		// runs before the error is reported.
 		oc.Wildcard = &Wildcard{Kind: NSAny, ProcessContents: ProcessLax}
 	}
 	return oc

@@ -62,6 +62,11 @@ type schemaDoc struct {
 	// every complex type in the document that does not declare its own.
 	defaultOpenContent *OpenContent
 
+	// sawDeclaration records that a declaration or definition has already
+	// been read from this document, which closes the window in which a
+	// <defaultOpenContent> may appear.
+	sawDeclaration bool
+
 	// appliesToEmpty records defaultOpenContent's appliesToEmpty, which
 	// decides whether a type with empty content is opened too. It defaults
 	// to false, so a type declaring no content model stays closed.
@@ -601,6 +606,15 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	p.checkSourceModel(el)
 
 	switch el.Name.Local {
+	case "annotation", "defaultOpenContent",
+		"override", "include", "import", "redefine":
+		// None of these is a declaration, so none of them closes the
+		// window a defaultOpenContent may appear in.
+	default:
+		p.doc.sawDeclaration = true
+	}
+
+	switch el.Name.Local {
 	case "annotation":
 		// Annotations carry documentation and application information.
 		// Neither affects validation.
@@ -637,6 +651,20 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	case "defaultOpenContent":
 		// XSD 1.1: an open content that applies to every complex type
 		// in the document that does not declare its own.
+		//
+		// The schema for schemas orders <xs:schema>'s children:
+		//   (include|import|redefine|override|annotation)*,
+		//   (defaultOpenContent, annotation*)?,
+		//   ((simpleType|complexType|group|attributeGroup|element
+		//     |attribute|notation), annotation*)*
+		// so it may not follow a declaration. s3_4_1si02 puts one after
+		// an <xs:element>. The readers dispatch by name and are
+		// otherwise order-blind, so the position is tracked here.
+		if p.doc.sawDeclaration {
+			p.errs = append(p.errs, errorAt(el, "src-schema.1",
+				"defaultOpenContent must come before every declaration "+
+					"and definition"))
+		}
 		p.doc.defaultOpenContent = p.readOpenContent(el)
 		p.doc.appliesToEmpty = p.boolAttr(el, "appliesToEmpty", false)
 
