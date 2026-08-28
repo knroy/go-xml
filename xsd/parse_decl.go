@@ -371,6 +371,24 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 		}
 	}
 
+	// 1.1 adds the fixed half of the same idea: a prohibited use never
+	// contributes an attribute, so a value constraint on it can never
+	// apply, and 3.2.3 clause 1 makes {value constraint} absent whenever
+	// {required} is false and the use is prohibited. attKb009 and attP029
+	// write use="prohibited" fixed="...". Gated on the version because
+	// 1.0's clause names default alone, and both tests are scored under
+	// 1.1 adds the fixed half of the same idea: a prohibited use never
+	// contributes an attribute, so a value constraint on it can never
+	// apply, and §3.2.3 makes {value constraint} absent for one. attKb009
+	// and attP029 write use="prohibited" together with fixed. Gated on the
+	// version because 1.0's clause names default alone, and both tests are
+	// scored under 1.1 only.
+	if p.schema.Version >= Version11 && el.Attr("", "fixed") != nil &&
+		el.AttrValue("use") == "prohibited" {
+		p.errs = append(p.errs, errorAt(el, "src-attribute.2",
+			"an attribute use with use=%q may not have fixed", "prohibited"))
+	}
+
 	use.Constraint = p.valueConstraint(el)
 	use.Inheritable = p.boolAttr(el, "inheritable", false)
 
