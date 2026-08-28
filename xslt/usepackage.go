@@ -1632,6 +1632,18 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 				}
 			}
 		}
+		// Text content counts as much as an attribute value. A text value
+		// template -- xsl:expand-text="yes" and a {...} in element content --
+		// is an expression written in a text node, and a package that calls
+		// its own private function from one is referencing it just as surely
+		// as one that calls it from a select attribute. package-100's
+		// csv:parse-field rule calls the private csv:preprocess-field from
+		// inside a TVT, and scanning attributes alone judged the function
+		// unreferenced and deleted it, leaving the package's own call to
+		// fail as XPST0017.
+		if n.Kind == xdm.KindText && strings.Contains(n.Value, local) {
+			return true
+		}
 		for _, ch := range n.Children {
 			if walk(ch) {
 				return true
