@@ -1538,16 +1538,25 @@ func (p *parser) checkSubstitutionGroupDerivation(el *xdm.Node, d *ElementDecl) 
 				continue
 			}
 			excl := head.SubstitutionGroupExclusions
-			if excl == 0 {
-				continue
-			}
 			used, reached := derivationMethodsTo(d.Type, head.Type)
 			if !reached {
-				// The member's type is not derived from the
-				// head's at all. That is its own violation of
-				// clause 4, but it is also what a schema looks
-				// like mid-edit, and the suite does not pin it
-				// here; leave it to validation.
+				// Clause 4 asks for derivation at all, not just
+				// for a permitted method. typeRestricts is
+				// consulted rather than the walk above because
+				// it also accepts naming one member of a union
+				// head — a member whose type *is* one of the
+				// head's alternatives satisfies the head.
+				// particlesZ014 gives a substitute for an
+				// xs:integer head a union type that shares no
+				// base with it.
+				if typeRestricts(d.Type, head.Type) {
+					continue
+				}
+				return errorAt(el, "e-props-correct.4",
+					"element %q may not substitute for %q: its type is "+
+						"not derived from the head's", d.Name.Local, head.Name.Local)
+			}
+			if excl == 0 {
 				continue
 			}
 			if excl.Has(DerivationExtension) && used.Has(DerivationExtension) {
