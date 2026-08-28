@@ -2034,6 +2034,12 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 // "function-lookup" counts -- because the only consequence of a false positive
 // is that a declaration nothing uses survives.
 func makesDynamicReference(root *xdm.Node) bool {
+	// Memoised on the root: referencedWithin asks once per component, and the
+	// answer is a property of the tree. Guarded by compileMu with the rest of
+	// the package-composition state.
+	if v, ok := dynamicRefCache[root]; ok {
+		return v
+	}
 	var walk func(n *xdm.Node) bool
 	walk = func(n *xdm.Node) bool {
 		switch n.Kind {
@@ -2058,8 +2064,17 @@ func makesDynamicReference(root *xdm.Node) bool {
 		}
 		return false
 	}
-	return walk(root)
+	v := walk(root)
+	if dynamicRefCache == nil {
+		dynamicRefCache = map[*xdm.Node]bool{}
+	}
+	dynamicRefCache[root] = v
+	return v
 }
+
+// dynamicRefCache memoises makesDynamicReference per package tree. Cleared
+// with the rest of the compile-scoped package state; see Compile.
+var dynamicRefCache map[*xdm.Node]bool
 
 // namesDynamicFunction reports whether text mentions one of the functions that
 // take a component name as a value.

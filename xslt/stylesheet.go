@@ -613,6 +613,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// one compilation cannot answer a question about another's nodes.
 	overridingDecls = nil
 	defer func() { overridingDecls = nil }()
+	// So is the memo of which package trees make a dynamic component
+	// reference; see makesDynamicReference.
+	dynamicRefCache = nil
+	defer func() { dynamicRefCache = nil }()
 	// Which package used which is package state on the same terms; see
 	// packageParent.
 	packageParent = map[int]int{}
