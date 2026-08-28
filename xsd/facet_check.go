@@ -90,6 +90,11 @@ func isAnyAtomicType(t *SimpleType) bool {
 	return t != nil && t.builtin && t.Name == xsName("anyAtomicType")
 }
 
+// isAnySimpleType reports whether t is xs:anySimpleType itself.
+func isAnySimpleType(t *SimpleType) bool {
+	return t != nil && t.builtin && t.Name == xsName("anySimpleType")
+}
+
 // checkSpecialBase enforces Part 2 §3.4.1's rule that xs:anyAtomicType is a
 // "special" type which may not be used in a schema as the base of a
 // restriction, the item type of a list, or a member type of a union.
@@ -122,6 +127,23 @@ func (p *parser) checkSpecialBase(t *SimpleType, el *xdm.Node) {
 			if isAnyAtomicType(m) {
 				p.errs = append(p.errs, errorAt(el, "st-props-correct",
 					"xs:anyAtomicType may not be a member type of a union"))
+				break
+			}
+			// xs:anySimpleType is special in the same way and for the
+			// same reason: 1.1 Part 2 §2.4.1 notes that it is not a
+			// type a schema may name as a union member, since a union
+			// including it has the value space of every simple type
+			// and constrains nothing. msData stE053 writes
+			// memberTypes="xsd:boolean xsd:int xsd:anySimpleType" and
+			// is valid under 1.0, invalid under 1.1.
+			//
+			// Naming it *through* a restriction stays legal — stZ011
+			// unions a type whose base is xs:anySimpleType — because
+			// what §2.4.1 forbids is the special type itself, not
+			// everything derived from it.
+			if isAnySimpleType(m) {
+				p.errs = append(p.errs, errorAt(el, "st-props-correct",
+					"xs:anySimpleType may not be a member type of a union"))
 				break
 			}
 		}
