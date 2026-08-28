@@ -788,9 +788,7 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	// of one file whenever a schema set reaches it by different spellings;
 	// see docKey.
 	key := docKey{location: canonicalLocation(resolved), adoptedNS: chameleon}
-	if a.seen[key] {
-		return
-	}
+	alreadySeen := a.seen[key]
 	a.seen[key] = true
 
 	if isInclude {
@@ -806,6 +804,15 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 			a.redefined = map[*xdm.Node]*xdm.Node{}
 		}
 		a.redefined[el] = tree.Root
+	}
+
+	// The document itself is read once, but the map above is keyed on the
+	// referring element, and a second reference to a document already read
+	// still needs its entry: over022 overrides one document twice, and the
+	// second override's children must still be checked against what that
+	// document declares.
+	if alreadySeen {
+		return
 	}
 
 	a.push(tree.Root, resolved, chameleon, redefining)
@@ -964,7 +971,11 @@ func (a *assembler) runRedefines() {
 func (a *assembler) runOverrides() {
 	for i := len(a.pendingOverrides) - 1; i >= 0; i-- {
 		o := a.pendingOverrides[i]
-		a.prepareRedefine(o.el, o.doc)
+		// Only children that actually override something are read below,
+		// so only those may displace the original: displacing for a
+		// child that is then ignored would delete a component and put
+		// nothing in its place.
+		a.prepareOverride(o.el, o.doc)
 
 		prev := a.p.doc
 		prevOverride := a.p.inOverride
@@ -976,6 +987,9 @@ func (a *assembler) runOverrides() {
 			switch c.Name.Local {
 			case "simpleType", "complexType", "group", "attributeGroup",
 				"element", "attribute", "notation":
+				if !a.overridesSomething(o.el, c) {
+					continue
+				}
 				a.p.readTopLevel(c)
 			}
 		}

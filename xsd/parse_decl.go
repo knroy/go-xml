@@ -101,12 +101,24 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		// declaration is needed for validation", and its schema is
 		// expected to load — so the reference is recorded and reported
 		// against the instance that reaches it.
+		//
+		// An <xs:override> child is the exception. §4.2.5 makes the
+		// override purely a transformation of the document it names, so
+		// a sibling that overrides nothing contributes no component;
+		// a name that resolves only to such a sibling therefore names
+		// nothing at all, and the spec calls that out as an error of
+		// the overriding document rather than of some instance that
+		// might later reach it. over024 and over026 pin it.
+		miss := func(ref string) { d.unresolved = ref }
+		if p.inOverride {
+			miss = nil
+		}
 		p.resolveTypeRefLazy(el, typeAttr.Value,
 			func(t Type) {
 				d.Type = t
 				p.rejectDirectNotation(el, t)
 			},
-			func(ref string) { d.unresolved = ref })
+			miss)
 	case inline != nil:
 		if inline.Name.Local == "simpleType" {
 			d.Type = p.readSimpleType(inline)
