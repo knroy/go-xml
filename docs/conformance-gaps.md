@@ -1,7 +1,7 @@
 # W3C conformance: the remaining gaps
 
 Every figure here comes from a full run of the suite it names, measured at
-commit `69c53cf` with `tests/check.sh`. Nothing is estimated.
+commit `dd377f4` with `tests/check.sh`. Nothing is estimated.
 
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
@@ -10,19 +10,26 @@ commit `69c53cf` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | 99.98% | **4** | 1 | 0 | **3** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 1 | **7** | 99.89% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,548 | 99.13% | **75** | 59 | 1 | **15** | 99.83% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,305 | 99.75% | **99** | 46 | 0 | **53** | 99.87% |
-| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,412 | 99.62% | **158** | 103 | 0 | **55** | 99.87% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,571 | 99.40% | **52** | 36 | 1 | **15** | 99.83% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,331 | 99.81% | **73** | 21 | 0 | **52** | 99.87% |
+| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,466 | 99.75% | **104** | 50 | 0 | **54** | 99.87% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **345** | **210** | **2** | **133** | |
+| | **Total** | | | | **242** | **109** | **2** | **131** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**345 disagreements in total**, of which **210 are ours to fix**, **133 cannot
+**242 disagreements in total**, of which **109 are ours to fix**, **131 cannot
 be fixed without shipping something less correct**, and **2 are open
 questions**.
+
+This is down from 345 at commit `69c53cf`. Four agents working in isolated
+worktrees cleared 103 cases: 10 of 10 in the `xsl:override` cluster, 9 of 12
+across `package`/`accept`/`expose`/`use-package`, and 80 XSD schema-validity
+disagreements. A fifth target — the regex and validation-ordering items —
+turned out not to be work at all, and moved seven cases into the "cannot be
+fixed" column instead.
 
 ## How to read the verdicts
 
@@ -79,7 +86,7 @@ have looked. That reasoning is recorded in `xpath/fn_31.go`.
 
 ---
 
-# xslt — 84 failures
+# xslt — 61 failures
 
 ## XSLT 2.0 — 9 failures
 
@@ -107,24 +114,24 @@ three failures involves `\w`, `\d` or `\c` membership. Only these three
 2012-era XSLT 2.0 cases disagree, each exactly where Unicode moved underneath
 them.
 
-## XSLT 3.0 — 75 failures
+## XSLT 3.0 — 52 failures
 
-### Package composition — 28
+### Package composition — 5
 
-The largest concentration and the most tractable. This session took it from 34.
+Was 28. Two agents cleared 23 of them: all ten `xsl:override` cases and nine of
+the twelve across `package`/`accept`/`expose`/`use-package`. Both independently
+found the same rule — §3.6.3.2, that a using package contains a component
+corresponding to every component in the package it uses — and the integration
+had to choose between their two implementations; folding the inherited
+components into the package's component list scores one case more than keeping
+them separate, and `override-t-003a` is the case.
 
 | Cases | Verdict | Why |
 |---|---|---|
 | `package-021err`, `package-022err` | **Not implementable** | Suite defect from a half-applied 2020 erratum (E36, "function arity must be given in accept/expose"). The editor appended `#0` to every occurrence, including `<xsl:function name="me:function1#0">` and `component="function#0"`. The spec gives `xsl:function/@name` as an `eqname` and `@component` as the enumeration `"template" \| "function" \| "attribute-set" \| "variable" \| "mode"` — neither admits an arity. |
-| `package-100`, `package-101` | **Implementable** | `csv:preprocess-field` is declared at line 76 of the same package with no `visibility` (so private) and called from within that package, where it must resolve. A visibility bug. |
-| `package-200` | **Implementable** | Error-code precedence: a quoted `@package-version` should reach `XTSE3000`, not `XTSE0020`. |
-| `package-001j`, `package-910`, `package-912` | **Implementable** | Three missing checks: `XTDE0045`, `XTSE0165`, `XPDY0002`. |
-| `package-version-011` | **Not implementable** | Reaches for a document with no resolver — same deliberate posture as `unparsed-text-2003`. |
-| `override-f-019`, `override-f-020`, `override-t-003a`, `override-v-003`, `override-v-006`, `override-v-007`, `override-v-015`, `override-as-003`, `override-as-005`, `override-m-012` | **Implementable** | `xsl:override` semantics: `$xsl:original` binding in overriding variables, the `XTSE3070`/`XTSE0770`/`XTSE3058` checks, attribute-set override composition. |
-| `accept-021`, `accept-022` | **Implementable** | `XTSE3050` raised when two packages legitimately expose the same name. |
-| `accept-913` | **Implementable** | Precedence: entry-point visibility before abstract-component invocation. |
-| `expose-003`, `expose-007` | **Implementable** | One missing error, one over-strict visibility check. |
-| `use-package-003`, `use-package-103`, `use-package-108b`, `use-package-171` | **Implementable** | Namespace-alias propagation across a package boundary; an accept token that should match a mode two packages down. |
+| `accept-913` | **Not implementable** | The case's own comment states its premise: "not specifically accepting xsl:initial-template makes it private." §3.6.3.2 says the opposite in as many words — a component matched by no `xsl:accept` keeps its visibility, and only a *private* one becomes hidden. The template is public and matched by nothing, so it stays public and XTDE0040 is unreachable. The correction was built, instrumented (`acceptedVis` correctly reports `public`) and reverted. |
+| `package-200` | **Not implementable** | `package-version="'1.0.0'"` wants XTSE3000, but `use-package-291`–`294` write four other malformed ranges and all want XTSE0020. One sentence — "an attribute contains a value that is not one of the permitted values" — covers all five identically, and nothing in the `PackageVersionRange` grammar separates a quoted version from any other malformed one. The current answer costs 1 case and saves 4. |
+| `use-package-003` | **Not implementable at this blast radius** | A private function of a used package must resolve inside it and not outside. Functions live in one flat `xpath.Library` resolved by name at runtime, and `FuncCall` carries only a QName. A lexical rename was implemented; it fixed this case and broke `override-f-026`, where `g:transitive-closure` exists at arity 1 (public) and arity 2 (private) — a name-based rewrite cannot separate arities. A real fix needs the package threaded through the XPath static context. |
 
 ### Schema-aware validation — 6
 
@@ -176,7 +183,7 @@ ambiguous-dash cases, `si-copy-117`, `si-copy-of-117` and `import-schema-137`.
 
 ---
 
-# xsd — 257 disagreements
+# xsd — 177 disagreements
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -195,8 +202,15 @@ them separately for that reason.
 
 | | Total | `accepted` (ours) | `queried`/`stable` (ceiling) |
 |---|---:|---:|---:|
-| XSD 1.0 | 99 | **46** | 53 |
-| XSD 1.1 | 158 | **103** | 55 |
+| XSD 1.0 | 73 | **21** | 52 |
+| XSD 1.1 | 104 | **50** | 54 |
+
+An agent cleared **80** of these — 26 on 1.0 and 54 on 1.1 — by implementing
+seventeen missing schema-validity rules, without a single agreement count
+falling. The largest were `explicitTimezone` (which had no schema-level
+constraints at all, 9 cases), occurrence attributes on any child of a named
+group (8), a type-cycle check that excused a type whose base is itself (6),
+and substitution-group type derivation (5).
 
 ## What the ceiling consists of
 
@@ -205,16 +219,19 @@ them separately for that reason.
 | `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Schema`, `MS-SimpleType`, `MS-Element`, `MS-DataTypes`, others | ~31–33 | `queried`/`stable` + bug | Assorted challenged expectations across the Microsoft-contributed sets. |
 
-**Not implementable: 53 (XSD 1.0) and 55 (XSD 1.1).**
+**Not implementable: 52 (XSD 1.0) and 54 (XSD 1.1).**
 
 ## What is genuinely ours
 
-| Kind | XSD 1.0 | XSD 1.1 | Reading |
-|---|---:|---:|---|
-| `SFALSEACCEPT` | 36 | 90 | **Missing schema-validity rules** — the dominant gap in both versions. We accept schemas that violate a constraint we do not yet check. |
-| `SFALSEREJECT` | 6 | 11 | Over-strict: a rule applied where it should not be. |
-| `IFALSEACCEPT` | 2 | 1 | Missing instance-validation rule. |
-| `IFALSEREJECT` | 2 | 1 | Over-strict instance validation. |
+What remains is a different shape from what was cleared. The bulk of the
+`SFALSEACCEPT` backlog is gone; several of the stragglers are the *opposite*
+problem — `particlesZ001`, `Z028`, `Hb008` and `Hb011` are places where the
+content-model restriction table is too **strict**, and loosening it risks
+re-admitting a false accept elsewhere. Four more (`simple006`, `idB005`,
+`over024`, `over026`) are unresolved type references that are structurally
+identical to `saxonData/Missing/missing001`, which the suite marks **valid** on
+the "error only if the declaration is needed for validation" reading;
+separating them needs reachability analysis.
 
 Concentrated by area:
 
@@ -230,7 +247,7 @@ All **implementable**. The 1.1-specific clusters (`Override`, `Open`, `Wild`,
 `All`) are the newer features — open content, wildcards, `xs:override`,
 relaxed `xs:all` — where the rules are both newer and less exercised.
 
-**XSD ceilings: 1.0 — 39,351 / 39,404 = 99.87%. 1.1 — 41,515 / 41,570 = 99.87%.**
+**XSD ceilings: 1.0 — 39,352 / 39,404 = 99.87%. 1.1 — 41,516 / 41,570 = 99.87%.**
 
 ---
 
@@ -271,7 +288,7 @@ cannot show is *why* the 126 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
-| **W3C has challenged its own expected result** | 108 | XSD 1.0 (53) and 1.1 (55). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
+| **W3C has challenged its own expected result** | 106 | XSD 1.0 (52) and 1.1 (54). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
 | **Suite defect** | 3 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
 | **Suite contradicts itself** | 3 | The `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. |
