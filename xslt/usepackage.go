@@ -1665,7 +1665,7 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		}
 		if n.Kind == xdm.KindElement {
 			for _, a := range n.Attrs {
-				if strings.Contains(a.Value, local) {
+				if mentionsComponent(n, a.Value, local, comp) {
 					return true
 				}
 			}
@@ -1679,7 +1679,8 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		// inside a TVT, and scanning attributes alone judged the function
 		// unreferenced and deleted it, leaving the package's own call to
 		// fail as XPST0017.
-		if n.Kind == xdm.KindText && strings.Contains(n.Value, local) {
+		if n.Kind == xdm.KindText &&
+			mentionsComponent(n.Parent, n.Value, local, comp) {
 			return true
 		}
 		for _, ch := range n.Children {
@@ -2234,4 +2235,70 @@ func (c *compiler) inheritedComponents(root *xdm.Node) ([]*component, error) {
 		return out, nil
 	}
 	return walk(root)
+}
+
+
+// mentionsComponent reports whether a piece of stylesheet text names the
+// component, as against merely containing its local name.
+//
+// The bare substring test this replaces ignored namespaces, and a package that
+// declares p:f2 and q:f2 has two components whose local names are equal and
+// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
+// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
+// so the using package's call to q:f2() bound instead of failing as XPST0017.
+//
+// Every occurrence of the local name is examined, and the prefix written in
+// front of it -- or the absence of one -- is resolved in the scope of the
+// element the text belongs to. Only an occurrence whose namespace is the
+// component's counts. That is still lexical, and deliberately so: it errs
+// towards keeping a declaration, and keeping one the package does not use
+// costs nothing while deleting one it does use breaks the package.
+func mentionsComponent(scope *xdm.Node, text, local string, comp *component) bool {
+	if scope == nil {
+		return false
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], local)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		i = at + len(local)
+		// A longer name that merely ends in this one is not this name.
+		if at > 0 && ncNameByte(text[at-1]) && text[at-1] != ':' {
+			continue
+		}
+		if i < len(text) && ncNameByte(text[i]) {
+			continue
+		}
+		prefix := ""
+		if at > 0 && text[at-1] == ':' {
+			k := at - 1
+			for k > 0 && ncNameByte(text[k-1]) {
+				k--
+			}
+			prefix = text[k : at-1]
+			if prefix == "" {
+				continue
+			}
+		}
+		if lookupPrefix(scope, prefix) == comp.sym.name.URI {
+			return true
+		}
+	}
+}
+
+// ncNameByte reports whether a byte may appear inside an NCName -- an
+// unprefixed name, so the colon is excluded, which is what separates it from
+// pattern30.go's isNameByte and is exactly what lets the prefix be cut off a
+// lexical QName here. Any non-ASCII byte is admitted, because a name may be
+// spelled in any script and this test only has to find the boundary.
+func ncNameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z',
+		b >= '0' && b <= '9',
+		b == '_', b == '-', b == '.', b >= 0x80:
+		return true
+	}
+	return false
 }
