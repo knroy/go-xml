@@ -22,6 +22,11 @@ type attributeSet struct {
 	body []Instruction
 	// importPrecedence orders declarations of the same name across modules.
 	importPrecedence int
+	// pkg is the package that WROTE this declaration, which for a declaration
+	// inside an xsl:override is the using package and not the used one whose
+	// tree it was spliced into. The static cycle check of 10.2.2 is scoped by
+	// it; see checkAttributeSetCycles.
+	pkg int
 }
 
 func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
@@ -34,7 +39,11 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		return err
 	}
 
-	as := &attributeSet{name: qn, importPrecedence: precedence}
+	as := &attributeSet{
+		name:             qn,
+		importPrecedence: precedence,
+		pkg:              overridingPackage(el, compilePackage),
+	}
 	for _, u := range strings.Fields(el.AttrValue("use-attribute-sets")) {
 		uq, err := resolveQNameAttr(el, u)
 		if err != nil {
@@ -84,7 +93,17 @@ func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
 	for _, n := range names {
 		key := n.Clark()
 		if active[key] {
-			return fmt.Errorf("XTSE0720: circular reference in xsl:attribute-set %q",
+			// A cycle within one package is XTSE0720 and was reported
+			// statically, before anything ran; see
+			// checkAttributeSetCycles. What is left to be found here is a
+			// cycle that closes only across a package boundary, which
+			// 10.2.2 explicitly puts outside static analysis -- "it is
+			// possible to detect a cycle during the static analysis of a
+			// package" -- and which is therefore the general dynamic
+			// circularity error. override-as-003 closes such a cycle by
+			// overriding one member of it from the using package.
+			return fmt.Errorf(
+				"XTDE0640: circular reference in xsl:attribute-set %q",
 				n.Lexical())
 		}
 		sets, ok := rt.sheet.attributeSets[key]
@@ -363,6 +382,79 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 // check is deferred rather than made as each reference compiles, because
 // xsl:attribute-set is a top-level declaration and may name one written below
 // it or in a module imported afterwards.
+// checkAttributeSetCycles applies XTSE0720 once every module has compiled.
+//
+// 10.2.2: "An attribute set A is dependent on an attribute set B if A contains
+// an attribute set invocation that is bound to B, or ... to an attribute set C
+// that is dependent on B. A cycle exists if any attribute set is dependent on
+// itself. Such a cycle is an error even if the attribute set is never
+// invoked."
+//
+// The graph is walked per package, because that sentence is qualified: "it is
+// possible to detect a cycle during the static analysis of a PACKAGE, before
+// it is known how the package will be used". A cycle that closes only when an
+// override from a using package is composed in is not visible to either
+// package's static analysis, and is the dynamic XTDE0640 instead. A
+// declaration written inside an xsl:override counts as the using package's,
+// which is what keeps the two apart.
+func (c *compiler) checkAttributeSetCycles() error {
+	// Edges are collected per package: only a use that both ends of agree on
+	// is an edge the static analysis of that package can see.
+	uses := map[int]map[string][]string{}
+	for key, sets := range c.sheet.attributeSets {
+		for _, as := range sets {
+			m := uses[as.pkg]
+			if m == nil {
+				m = map[string][]string{}
+				uses[as.pkg] = m
+			}
+			for _, u := range as.uses {
+				uk := u.Clark()
+				for _, target := range c.sheet.attributeSets[uk] {
+					if target.pkg == as.pkg {
+						m[key] = append(m[key], uk)
+						break
+					}
+				}
+			}
+		}
+	}
+	const (
+		unvisited = 0
+		active    = 1
+		done      = 2
+	)
+	for pkg, m := range uses {
+		_ = pkg
+		state := map[string]int{}
+		var visit func(string) error
+		visit = func(n string) error {
+			switch state[n] {
+			case active:
+				return fmt.Errorf(
+					"XTSE0720: xsl:attribute-set %s is dependent on itself",
+					clarkToEQName(n))
+			case done:
+				return nil
+			}
+			state[n] = active
+			for _, next := range m[n] {
+				if err := visit(next); err != nil {
+					return err
+				}
+			}
+			state[n] = done
+			return nil
+		}
+		for n := range m {
+			if err := visit(n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *compiler) checkAttributeSetRefs() error {
 	for _, n := range c.usedAttributeSets {
 		if _, ok := c.sheet.attributeSets[n.Clark()]; !ok {

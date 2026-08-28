@@ -650,6 +650,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	}
 	// XTSE0710 is checked here for the same reason: an attribute set may name
 	// one declared in a module compiled after it.
+	if err := c.checkAttributeSetCycles(); err != nil {
+		return nil, err
+	}
 	if err := c.checkAttributeSetRefs(); err != nil {
 		return nil, err
 	}
