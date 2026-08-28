@@ -501,6 +501,15 @@ func (p *schemaRegexpParser) charRange() (wasRange bool, err error) {
 	if loIsSet {
 		return false, p.errorf("a multi-character escape may not begin a range")
 	}
+	// [18] seRange ::= charOrEsc '-' charOrEsc, and [21] XmlChar excludes
+	// "-": neither end of a range may be an unescaped hyphen. So "[--z]" is
+	// malformed, and the author who wants the range must write "[\--z]".
+	// RE2 reads the unescaped form as the range it looks like, which is how
+	// simple041 used to load.
+	if lo == '-' && !isEsc {
+		return false, p.errorf("%q must be escaped to be the start of a "+
+			"character range", "-")
+	}
 	p.pos++ // the hyphen
 
 	hi, hiIsEsc, err := p.charOrEsc()
@@ -509,6 +518,14 @@ func (p *schemaRegexpParser) charRange() (wasRange bool, err error) {
 	}
 	if hiIsEsc && !isSingleCharEsc(hi) {
 		return false, p.errorf("a multi-character escape may not end a range")
+	}
+	// The same exclusion at the other end: "[!--]" is malformed, since the
+	// range "!"-"-" needs its endpoint written "\-". This is distinct from
+	// the trailing literal hyphen of "[a-z-]", which never reaches here
+	// because the "]" test above leaves it a member rather than a range.
+	if hi == '-' && !hiIsEsc {
+		return false, p.errorf("%q must be escaped to be the end of a "+
+			"character range", "-")
 	}
 	// F.1's fifth bullet for s-e: "the code point of e is greater than or
 	// equal to the code point of s". "[z-a]" is therefore malformed rather
