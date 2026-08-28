@@ -117,10 +117,78 @@ func itemTypeSubsumes(super, sub string) bool {
 		return isNodeSpelling(sub)
 	}
 	if isNodeSpelling(super) || isNodeSpelling(sub) {
-		return baseKind(super) == baseKind(sub) && baseKind(super) != ""
+		if baseKind(super) != baseKind(sub) || baseKind(super) == "" {
+			return false
+		}
+		if baseKind(super) == "element" {
+			return elementSpellingSubsumes(super, sub)
+		}
+		return true
 	}
 	// Atomic types: the built-in hierarchy, as far as the signatures use it.
 	return atomicSubsumes(super, sub)
+}
+
+// elementSpellingSubsumes is itemTypeSubsumes for two element tests.
+//
+// XPath 3.0's SequenceType subtype rules make element(N1, T1) a subtype of
+// element(N2, T2) only when N2 is a wildcard or the same name as N1, T1 is T2
+// or derived from it, AND either the SUPERTYPE admits a nilled element or the
+// subtype does not. That last clause is what a one-argument element test turns
+// on: element(e) is shorthand for element(e, xs:anyType?), which does admit a
+// nilled element, so it is NOT a subtype of the two-argument element(e,
+// xs:anyType), which does not.
+//
+// higher-order-functions-034 asks for exactly that distinction eight times
+// over a function declared as="element(e)?": element(e)* subsumes it and
+// element(e, xs:anyType)* does not.
+//
+// Only the type NAME is compared, not the schema derivation hierarchy, which
+// is what keeps this to spellings: a signature naming a derived type subsumes
+// only itself, the safe direction, as everywhere else in this file.
+func elementSpellingSubsumes(super, sub string) bool {
+	superName, superType, superNil := splitElementSpelling(super)
+	subName, subType, subNil := splitElementSpelling(sub)
+	if superName != "*" && superName != subName {
+		return false
+	}
+	if superType != "" && superType != subType {
+		// element() and element(N) place no constraint on the type, so an
+		// untyped supertype subsumes any typed subtype; a typed one demands
+		// the same type name.
+		return false
+	}
+	if subNil && !superNil {
+		return false
+	}
+	return true
+}
+
+// splitElementSpelling breaks an element test into its name, its type name and
+// whether that type admits a nilled element.
+//
+// element() and element(*) give a wildcard name and no type. A one-argument
+// element(N) gives no type either -- it constrains only the name -- but it
+// does admit a nilled element, which is the shorthand's whole difference from
+// element(N, xs:anyType).
+func splitElementSpelling(s string) (name, typ string, nillable bool) {
+	open := strings.IndexByte(s, '(')
+	if open < 0 || !strings.HasSuffix(s, ")") {
+		return "*", "", true
+	}
+	body := strings.TrimSpace(s[open+1 : len(s)-1])
+	if body == "" {
+		return "*", "", true
+	}
+	if i := strings.IndexByte(body, ','); i >= 0 {
+		name = strings.TrimSpace(body[:i])
+		typ = strings.TrimSpace(body[i+1:])
+		if strings.HasSuffix(typ, "?") {
+			return name, strings.TrimSuffix(typ, "?"), true
+		}
+		return name, typ, false
+	}
+	return body, "", true
 }
 
 // isNodeSpelling reports whether s names a node kind.

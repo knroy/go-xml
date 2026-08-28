@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // contextItemDecl is xsl:context-item, XSLT 3.0 section 10.1.1.
@@ -102,9 +103,13 @@ func compileContextItem(el, tmpl *xdm.Node) (*contextItemDecl, error) {
 				"XTSE0020: xsl:context-item/@as is an ItemType and admits no "+
 					"occurrence indicator, so %q is not one", as)
 		}
-		t, err := compileSequenceType(as, newNSResolver(el, ""))
+		res := newNSResolver(el, "")
+		t, err := compileSequenceType(as, res)
 		if err != nil {
 			return nil, fmt.Errorf("in xsl:context-item/@as: %w", err)
+		}
+		if err := checkAnnotationTypeKnown(t, res); err != nil {
+			return nil, err
 		}
 		d.as = t
 	}
@@ -151,4 +156,56 @@ func (d *contextItemDecl) check(item xdm.Item) error {
 				"xsl:context-item: %s", d.as.source())
 	}
 	return nil
+}
+
+// checkAnnotationTypeKnown rejects an element()/attribute() test whose type
+// argument names a type no schema in the static context defines.
+//
+// The XPath parser records the type argument lexically, because at run time
+// the comparison is against the annotation the node carries rather than
+// against a resolved schema component -- so a name nothing defines parses
+// cleanly and simply matches nothing. That is the right behaviour for a
+// pattern, where failing to match is the answer. It is the wrong behaviour
+// for xsl:context-item/@as, where the declaration is a static promise about
+// the template's focus: a type that cannot exist makes every call fail at
+// run time with XTTE0590, reporting a type mismatch for a type the
+// stylesheet never had. context-item-903 writes
+// as="element(*, my:percentage)" against no imported schema and expects the
+// error at compile time.
+//
+// XTSE0020 is the code XSLT gives an attribute whose value is outside its
+// permitted range, and the suite accepts it here alongside XPST0008.
+func checkAnnotationTypeKnown(t *sequenceType, res *nsResolver) error {
+	if t == nil {
+		return nil
+	}
+	kt, ok := t.stype.ItemType.(*xpath.KindTest)
+	if !ok || kt.TypeNameLexical == "" {
+		return nil
+	}
+	prefix, local := xdm.SplitQName(kt.TypeNameLexical)
+	uri := ""
+	if prefix == "" {
+		uri = res.DefaultElementNamespace()
+	} else {
+		u, found := res.ResolvePrefix(prefix)
+		if !found {
+			// An unbound prefix is XPST0081 and belongs to the parser, which
+			// has already had its chance; saying nothing here leaves that
+			// diagnosis where it is.
+			return nil
+		}
+		uri = u
+	}
+	if uri == xdm.NSXS {
+		// A built-in type is in every static context, whether or not any
+		// schema was imported.
+		return nil
+	}
+	if _, _, ok := res.LookupSchemaType(xdm.QName{URI: uri, Local: local}); ok {
+		return nil
+	}
+	return fmt.Errorf(
+		"XTSE0020: xsl:context-item/@as names the type %s, which no schema "+
+			"in the static context defines", kt.TypeNameLexical)
 }

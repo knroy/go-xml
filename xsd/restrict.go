@@ -351,6 +351,13 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 		if err, ok := allSubsumes(r, b); ok {
 			return err
 		}
+		// The general form of the same 1.1 constraint, decided by
+		// language inclusion where the models can be unrolled exactly.
+		// It declines for an all group, a recursive model or a range
+		// too wide to unroll, and the table below then answers.
+		if err, ok := particleSubsumes(r, b); ok {
+			return err
+		}
 	}
 
 	switch rt := r.Term.(type) {
@@ -641,7 +648,21 @@ func typeRestricts(t, want Type) bool {
 	if ct, ok := want.(*ComplexType); ok && isUrType(ct) {
 		return true
 	}
-	if st, ok := want.(*SimpleType); ok && st.Variety == VarietyUnion {
+	// A member of a union stands in for the union itself, but only while
+	// the union is *pure* — its {facets} empty. A union derived by
+	// restriction constrains its members further, and the member type on
+	// its own carries none of that: substituting it would admit values the
+	// restricted union rejects. saxonData simple014 restricts a union with
+	// a pattern and then names a bare member in the derived element;
+	// simple015 does the same one level down, where the member named is
+	// itself a member of a restricted union.
+	//
+	// Purity is checked at every step of the walk, not only at the top,
+	// because the substitutability has to survive the whole chain: a pure
+	// union whose member is a restricted union is no more substitutable
+	// than the restricted union was.
+	if st, ok := want.(*SimpleType); ok && st.Variety == VarietyUnion &&
+		unionIsPure(st) {
 		for _, m := range st.MemberTypes {
 			if m != nil && typeRestricts(t, m) {
 				return true
@@ -672,6 +693,27 @@ func typeRestricts(t, want Type) bool {
 		cur = next
 	}
 	return false
+}
+
+// unionIsPure reports whether a union type constrains nothing of its own, so
+// that any one of its members may stand in for it.
+//
+// The union's own facet set has to be empty, and so does every set inherited
+// from a union it was itself restricted from: the facets of a derivation chain
+// accumulate, and a member is unconstrained by all of them alike. The walk
+// stops when it leaves the union variety, which is where xs:anySimpleType sits.
+func unionIsPure(st *SimpleType) bool {
+	for cur := st; cur != nil && cur.Variety == VarietyUnion; {
+		if !cur.Facets.IsEmpty() {
+			return false
+		}
+		base, ok := cur.Base.(*SimpleType)
+		if !ok || base == cur {
+			break
+		}
+		cur = base
+	}
+	return true
 }
 
 // nsCompat is Particle Derivation OK (Elt:Any) (§3.9.6): an element may

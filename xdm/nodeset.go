@@ -35,6 +35,24 @@ func SortDocumentOrder(seq Sequence) Sequence {
 		}
 		nodes = append(nodes, n)
 	}
+	// A detached root -- a parentless element built by a sequence constructor
+	// -- has no tree to order it, so Compare falls back to an identity number
+	// stamped on the root. That number is assigned on FIRST COMPARISON, which
+	// makes it a function of the order the sort happens to ask questions in
+	// rather than of the order the nodes were built in. sort.SliceStable runs
+	// insertion sort over a short slice and compares (1,0) before (0,1), so a
+	// variable declared as="element()*" holding four sibling elements came
+	// back with its first two transposed, and fn:copy-of over a node sequence
+	// -- one detached tree per item -- came out in an order that depended on
+	// the sort's internals rather than on the sequence.
+	//
+	// Numbering every detached root here, walking the sequence forwards
+	// before any comparison is made, ties the number to the position the
+	// caller supplied. The spec leaves the relative order of nodes in
+	// different trees implementation-dependent but requires it to be stable;
+	// this is what makes it so. A root already numbered keeps its number, so
+	// a sequence mixing nodes from earlier sorts still compares consistently.
+	numberDetachedRoots(nodes)
 	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Compare(nodes[j]) < 0
 	})
@@ -211,4 +229,24 @@ func IsXMLWhitespace(s string) bool {
 		}
 	}
 	return true
+}
+
+// numberDetachedRoots assigns cross-tree identities to the roots of any
+// treeless nodes in ns, in the order they appear.
+//
+// detachedRootID is idempotent: a root that already has an id keeps it, so
+// this only fixes the order in which previously unnumbered roots are first
+// seen. Roots inside a real Tree are skipped — their order comes from the
+// tree id, which the parser assigned.
+func numberDetachedRoots(ns []*Node) {
+	for _, n := range ns {
+		if n.tree != nil {
+			continue
+		}
+		root := n
+		for root.Parent != nil {
+			root = root.Parent
+		}
+		detachedRootID(root)
+	}
 }

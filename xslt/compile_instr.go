@@ -1451,15 +1451,27 @@ type evaluateInstr struct {
 // format and expects FODF1280, the runtime error for a name the function
 // cannot find, not the static XTDE3160 for a function that is not there.
 //
+// Appendix G's list is longer than this map, because it indexes every
+// function the XSLT specification defines -- fn:collation-key, fn:deep-equal,
+// fn:json-to-xml, fn:xml-to-json and the map: functions among them. Those are
+// in [Functions and Operators] as well, so "all core functions" already brings
+// them in and 10.4.1 does not take them away. What is listed here is the rest:
+// the names XSLT defines and F&O does not.
+//
 // It is deliberately not runtimeFuncNames. That map exists to tell a static
 // check which names are *declared* despite being absent from the compile-time
 // library, and it is missing the XSLT-defined functions that need no runtime —
 // unparsed-entity-uri and unparsed-entity-public-id among them. Reusing it
 // here would have let those through.
 var xsltOnlyFunctions = map[string]bool{
+	"accumulator-after":         true,
+	"accumulator-before":         true,
 	"current":                   true,
 	"current-group":             true,
 	"current-grouping-key":      true,
+	"current-merge-group":       true,
+	"current-merge-key":         true,
+	"current-output-uri":        true,
 	"document":                  true,
 	"element-available":         true,
 	"format-date":               true,
@@ -1473,6 +1485,8 @@ var xsltOnlyFunctions = map[string]bool{
 	"type-available":            true,
 	"unparsed-entity-public-id": true,
 	"unparsed-entity-uri":       true,
+	"snapshot":                  true,
+	"stream-available":          true,
 	"unparsed-text":             true,
 	"unparsed-text-available":   true,
 }

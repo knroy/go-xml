@@ -11,6 +11,36 @@ import (
 func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 	matched := make(map[*AttributeUse]bool, len(t.AttributeUses))
 
+	// XSD 1.0 permits an element at most one attribute of a type derived
+	// from xs:ID (Part 2 §3.3.8). ct-props-correct.5 catches the case where
+	// both are declared in the type, but two ID attributes can also reach
+	// one element without the type ever naming them together: attZ014a
+	// declares an <anyAttribute> and two global ID-typed attributes, and
+	// the instance carries both. Nothing about the type is wrong there —
+	// only the instance is — so the rule has to be counted here, over the
+	// attributes actually present. XSD 1.1 dropped it, which is why this is
+	// gated on the version and why the same instance is expected valid
+	// under 1.1.
+	idAttrs := 0
+	var firstID xdm.QName
+	countID := func(a *xdm.Node, name xdm.QName, decl *AttributeDecl) {
+		if v.schema.Version >= Version11 || decl == nil ||
+			nearestBuiltinName(decl.Type) != "ID" {
+			return
+		}
+		idAttrs++
+		if idAttrs == 1 {
+			firstID = name
+			return
+		}
+		if idAttrs == 2 {
+			v.fail(a, "cvc-complex-type.3",
+				"attribute %s has a type derived from xs:ID, and so "+
+					"does %s; XSD 1.0 allows an element at most one",
+				attrName(name), attrName(firstID))
+		}
+	}
+
 	for _, a := range el.Attrs {
 		name := xdm.QName{URI: a.Name.URI, Local: a.Name.Local}
 
@@ -38,11 +68,18 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 		use := findAttributeUse(t.AttributeUses, name)
 		if use != nil {
 			matched[use] = true
+			countID(a, name, use.Decl)
 			v.validateAttribute(a, use.Decl, use.Constraint)
 			continue
 		}
 
 		if t.AttributeWildcard != nil && t.AttributeWildcard.AllowsName(name, v.attributeDefined) {
+			// A skipped wildcard contributes no declaration, so it
+			// contributes no ID either: the count is over what the
+			// schema says these attributes are, and it says nothing.
+			if t.AttributeWildcard.ProcessContents != ProcessSkip {
+				countID(a, name, v.schema.Attributes[name])
+			}
 			v.validateWildcardAttribute(a, t.AttributeWildcard, name)
 			continue
 		}
@@ -66,6 +103,18 @@ func (v *validator) validateAttributes(el *xdm.Node, t *ComplexType) {
 			continue
 		}
 		if !matched[use] {
+			// A defaulted attribute is an attribute for this
+			// purpose: §3.4.5 makes the {value constraint} a
+			// contribution to the infoset, indistinguishable from
+			// one the instance wrote.
+			if c := use.Constraint; c != nil || use.Decl.Constraint != nil {
+				if c == nil {
+					c = use.Decl.Constraint
+				}
+				if c.Lexical != "" {
+					countID(el, use.Decl.Name, use.Decl)
+				}
+			}
 			v.recordDefaultID(el, use)
 			v.applyAttributeDefault(el, use)
 		}

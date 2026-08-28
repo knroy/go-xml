@@ -878,6 +878,24 @@ func (r *Result) Tree() *xdm.Node {
 	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
 		switch v := it.(type) {
 		case *xdm.Node:
+			// 5.7.1: "Any document node within the result sequence is
+			// replaced by a sequence containing each of its children, in
+			// document order." A result tree may not hold a document node
+			// below its root, and appending one anyway put the content out
+			// of reach of the tree's own string value -- xsl:document at the
+			// top of a template returns exactly such a node, and its text
+			// vanished from the result.
+			//
+			// The raw sequence in r.Nodes keeps the wrapper, because a
+			// caller reading the sequence must still see the document node
+			// it asked for; the flattening belongs to building the tree,
+			// which is the step this rule describes.
+			if v.Kind == xdm.KindDocument {
+				for _, ch := range append([]*xdm.Node(nil), v.Children...) {
+					tree.Root.AppendChild(ch)
+				}
+				continue
+			}
 			tree.Root.AppendChild(v)
 		case *xdm.Atomic:
 			tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: v.String()})
@@ -1025,6 +1043,10 @@ func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
 	return nil
 }
 
+// emptyModeAccumulators is the applicable set for a mode that declares no
+// use-accumulators list: nothing. See noteInitialAccumulators.
+var emptyModeAccumulators = &modeAccumulators{names: map[string]bool{}}
+
 // noteInitialAccumulators records which accumulators are applicable to a tree
 // reached through the initial match selection.
 //
@@ -1036,18 +1058,36 @@ func applyInitialSelection(rt *runtime, source *xdm.Node, sel xdm.Sequence,
 // third source of the same per-tree restriction, so it is recorded the same
 // way rather than checked separately.
 //
-// Only a mode that states @use-accumulators restricts anything. The spec adds
-// that "in the absence of an xsl:mode declaration, no accumulators are
-// applicable", but this engine does not stream: taking that literally would
-// refuse every accumulator read by the many stylesheets that declare no mode
-// at all and expect their accumulators to work, which is the reading the
-// suite's own passing cases rule out. What a mode does say is honoured
-// exactly -- mode-1106b starts in a mode declared use-accumulators="" and
-// expects accumulator-after('counter') to fail.
+// What a mode does say is honoured exactly: mode-1106b starts in a mode
+// declared use-accumulators="" and expects accumulator-after('counter') to
+// fail, while mode-1106c starts in one declared use-accumulators="#all" and
+// expects it to succeed.
+//
+// A mode that says nothing is the interesting case, and the suite splits it
+// on whether an xsl:mode declaration exists at all. 18.2.2's "in the absence
+// of an xsl:mode declaration, no accumulators are applicable" is taken at its
+// word: copy-3002 declares no mode, copies from the initial match selection
+// with copy-accumulators="yes", and expects XTDE3362 -- and copy-3003, which
+// is the same stylesheet with <xsl:mode use-accumulators="latest-pick"/>
+// added, expects it to work. But a mode that IS declared and merely omits
+// @use-accumulators is left permissive, because the suite requires that too:
+// accumulator-073 declares <xsl:mode on-no-match="shallow-copy"/> with no
+// accumulator list, copies from the initial match selection the same way, and
+// asserts the copied accumulator values. Reading the absent attribute as an
+// empty list would fail it.
 func noteInitialAccumulators(rt *runtime, mode string, node *xdm.Node) {
-	set, ok := rt.sheet.modeAccums[mode]
-	if !ok || node == nil {
+	if node == nil {
 		return
+	}
+	set, ok := rt.sheet.modeAccums[mode]
+	if !ok {
+		// The mode says nothing about accumulators. Whether that means
+		// "all" or "none" turns on whether the mode was declared at all;
+		// see the comment above.
+		if rt.sheet.declaredModeNames[mode] {
+			return
+		}
+		set = emptyModeAccumulators
 	}
 	root := node.Root()
 	if root == nil {

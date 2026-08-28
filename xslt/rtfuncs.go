@@ -436,14 +436,15 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 
 	// The static functions are registered separately so that use-when, whose
 	// context has no runtime at all, can have exactly these and nothing else.
-	registerStaticFuncs(l, rt.resolveFunctionName, rt.resolveTypeName, rt.schemaHasType)
+	registerStaticFuncs(l, rt.resolveFunctionName, rt.resolveTypeName,
+		rt.resolveElementName, rt.schemaHasType)
 }
 
 // registerStaticFuncs adds the four functions section 3.12 makes available to
 // a use-when expression: they answer questions about the *processor* rather
 // than about the stylesheet or the source, so they need no runtime and are
 // legal in a context that has none.
-func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, schemaHasType func(xdm.QName) bool) {
+func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement prefixResolver, schemaHasType func(xdm.QName) bool) {
 	// fn:available-system-properties answers from the same table
 	// fn:system-property does, and is available wherever it is -- including
 	// a use-when, which section 3.12 makes a static context like any other.
@@ -554,7 +555,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 				return nil, unboundPrefixError("function-available", name)
 			}
 			for arity := 0; arity <= 4; arity++ {
-				if _, ok := xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity); ok {
+				if _, ok := xpath.LookupDynamic(ctx, xdm.QName{URI: uri, Local: local}, arity); ok {
 					return xdm.One(xdm.NewBoolean(true)), nil
 				}
 			}
@@ -598,7 +599,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 				}
 				arity = int(n.Int64())
 			}
-			_, ok = xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity)
+			_, ok = xpath.LookupDynamic(ctx, xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
 		},
 	})
@@ -654,14 +655,41 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType prefixResolver, 
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			name := stringArg(args[0])
-			_, local, _, err := availableName(
+			uri, local, resolved, err := availableName(
 				ctx, "XTDE1440", "element-available", name,
-				func(n string) (string, string, bool) {
-					_, l := xdm.SplitQName(n)
-					return "", l, true
-				})
+				resolveElement)
 			if err != nil {
 				return nil, err
+			}
+			// 23.2.2: "If the resulting expanded QName is in the XSLT
+			// namespace, the function returns true if and only if the local
+			// name matches the name of an XSLT element ... If the expanded
+			// QName has a null namespace URI, the element-available function
+			// will return false. If the expanded QName is not in the XSLT
+			// namespace, the function returns true if and only if the
+			// processor has an implementation available of an extension
+			// instruction with the given expanded QName."
+			//
+			// This engine implements no extension instructions, so every
+			// name outside the XSLT namespace -- the null one included --
+			// answers false. function-0303 asks about Q{}value-of and
+			// Q{http://not-saxon.sf.net}assign and requires false for both,
+			// which reading the local name alone could not give.
+			// A name whose prefix nothing binds is left to the local name:
+			// resolveElement reports it unresolved, and the alternative would
+			// be to raise XTDE1440 on a name a stylesheet is entitled to ask
+			// about.
+			//
+			// An UNPREFIXED lexical name is the awkward case. 5.1 expands it
+			// with the default namespace in scope AT THE EXPRESSION, and that
+			// is static context the runtime does not carry: the function
+			// library is registered once per transform, not once per
+			// expression. function-0302 writes element-available('value-of')
+			// inside an element whose xmlns is the XSLT namespace and
+			// requires true, so an unprefixed name is still answered by its
+			// local name alone, as it was before the URI was consulted.
+			if resolved && !unprefixedLexical(name) && uri != xdm.NSXSL {
+				return xdm.One(xdm.NewBoolean(false)), nil
 			}
 			def, ok := xsltElements[local]
 			if !ok {
@@ -1456,6 +1484,38 @@ func (rt *runtime) resolveTypeName(name string) (uri, local string, ok bool) {
 		if u, found := rt.sheet.prefixes[prefix]; found {
 			return u, local, true
 		}
+	}
+	return "", local, false
+}
+
+// unprefixedLexical reports whether name is a lexical QName with no prefix --
+// the one form of argument to fn:element-available whose namespace depends on
+// static context the runtime does not carry. An EQName is excluded: Q{}local
+// names no namespace explicitly and needs no default to expand it.
+func unprefixedLexical(name string) bool {
+	if strings.HasPrefix(name, "Q{") {
+		return false
+	}
+	return !strings.Contains(name, ":")
+}
+
+// resolveElementName expands the lexical QName fn:element-available is given.
+//
+// 5.1 lists element-available among the places where "the default namespace is
+// used when expanding the first argument", so an unprefixed name is in the
+// default ELEMENT namespace rather than in no namespace -- element-available
+// tests an element name, and an element name written without a prefix in a
+// stylesheet means whatever xmlns declares. Where nothing declares one the
+// expanded name is in no namespace, and 23.2.2 makes that false.
+func (rt *runtime) resolveElementName(name string) (uri, local string, ok bool) {
+	prefix, local := xdm.SplitQName(name)
+	if rt != nil && rt.sheet != nil {
+		if u, found := rt.sheet.prefixes[prefix]; found {
+			return u, local, true
+		}
+	}
+	if prefix == "" {
+		return "", local, true
 	}
 	return "", local, false
 }

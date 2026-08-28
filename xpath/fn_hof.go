@@ -65,7 +65,7 @@ func registerHOFuncs(l *Library) {
 			return nil, xdm.ErrType("fn:function-lookup: arity is required")
 		}
 		n := int(arity.Float64())
-		fn, ok := lookupFor(ctx, name, n)
+		fn, ok := LookupDynamic(ctx, name, n)
 		if !ok {
 			return xdm.Empty(), nil
 		}

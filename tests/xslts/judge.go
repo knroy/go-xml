@@ -104,7 +104,7 @@ func compileMatchPattern(pat, flags string) (*regexp.Regexp, error) {
 	return regexp.Compile(pat)
 }
 
-func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet, schema *xsd.Schema) (bool, string) {
+func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet, schema *xsd.Schema, rawVar string) (bool, string) {
 	res, redirected, wasRedirected := principalOf(res)
 	// The result tree is built once, here, and handed to every assertion
 	// underneath. Result.Tree re-parents the result's nodes into the fresh
@@ -112,7 +112,7 @@ func (r *Runner) judge(a Assertion, res *xslt.Result, terr error, set *TestSet, 
 	// out of the tree the previous assertion was evaluated against: an all-of
 	// with several assert children saw every rooted path after the first
 	// return nothing.
-	return r.judgeIn(a, res, treeOf(res), redirected, wasRedirected, terr, set, schema)
+	return r.judgeIn(a, res, treeOf(res), redirected, wasRedirected, terr, set, schema, rawVar)
 }
 
 // treeOf builds the document node an XPath assertion is evaluated against.
@@ -164,7 +164,7 @@ func treeOf(res *xslt.Result) *xdm.Node {
 // result, whose principal tree is no longer empty, and every nested
 // assert-serialization would then read a re-serialisation with default output
 // settings instead of the text xsl:result-document actually produced.
-func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirected string, wasRedirected bool, terr error, set *TestSet, schema *xsd.Schema) (bool, string) {
+func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirected string, wasRedirected bool, terr error, set *TestSet, schema *xsd.Schema, rawVar string) (bool, string) {
 	// A nil result with no error should not happen; treating it as a failure
 	// rather than dereferencing it keeps a harness bug from looking like an
 	// engine crash.
@@ -175,7 +175,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 	switch a.Kind {
 	case "all-of":
 		for _, c := range a.Children {
-			if ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema); !ok {
+			if ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema, rawVar); !ok {
 				return false, why
 			}
 		}
@@ -189,7 +189,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// an engine bug from a harness one without re-running it by hand.
 		var reasons []string
 		for _, c := range a.Children {
-			ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema)
+			ok, why := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema, rawVar)
 			if ok {
 				return true, ""
 			}
@@ -203,7 +203,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 
 	case "not":
 		for _, c := range a.Children {
-			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema); ok {
+			if ok, _ := r.judgeIn(c, res, root, redirected, wasRedirected, terr, set, schema, rawVar); ok {
 				return false, "the negated assertion held"
 			}
 		}
@@ -278,7 +278,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
 		}
-		return evalAssert(res, root, a.Value, a.NS, schema)
+		return evalAssert(res, root, a.Value, a.NS, schema, rawVar)
 
 	case "assert-eq":
 		if terr != nil {
@@ -289,7 +289,8 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// The result is atomized on the way in, which is what makes a
 		// document node holding "42 84 ..." compare equal to that string.
 		return evalAssert(res, root,
-			"data($result) = ("+strings.TrimSpace(a.Value)+")", a.NS, schema)
+			"data($result) = ("+strings.TrimSpace(a.Value)+")", a.NS, schema,
+			rawVar)
 
 	case "assert-type":
 		if terr != nil {
@@ -301,7 +302,8 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 		// and keeps the answer honest, since a matcher written in the
 		// harness could only agree with the engine by construction.
 		return evalAssert(res, root,
-			"$result instance of "+strings.TrimSpace(a.Value), a.NS, schema)
+			"$result instance of "+strings.TrimSpace(a.Value), a.NS, schema,
+			rawVar)
 
 	case "assert-string-value":
 		if terr != nil {
@@ -410,7 +412,7 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 			// assert-serialization was special-cased above, so a nested
 			// serialization-matches re-serialised the tree with the wrong
 			// output definition and compared the wrong bytes.
-			if ok, why := r.judgeIn(c, sub, treeOf(sub), serialized, true, nil, set, schema); !ok {
+			if ok, why := r.judgeIn(c, sub, treeOf(sub), serialized, true, nil, set, schema, rawVar); !ok {
 				return false, a.URI + ": " + why
 			}
 		}
@@ -846,7 +848,7 @@ func (s schemaNS) ValidateSchemaValue(name xdm.QName, value string) (bool, error
 	return true, s.schema.ValidateValue(value, name)
 }
 
-func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]string, schema *xsd.Schema) (bool, string) {
+func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]string, schema *xsd.Schema, rawVar string) (bool, string) {
 	// The result tree itself, not a re-parse of its serialisation.
 	//
 	// Serialising and re-parsing asks the XML parser to accept whatever the
@@ -872,6 +874,14 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	// document-node(). Binding the raw result sequence instead would leave
 	// both without the wrapper the suite expects.
 	ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
+	// A test declaring <output tree="no" result-var="v"/> asks for the raw
+	// result sequence instead of the document node wrapping it. The two are
+	// not interchangeable: a sequence of atomic values has no tree form, and
+	// wrapping it turns eight xs:decimal items into one text node, against
+	// which the deep-equal the test writes can never hold.
+	if rawVar != "" {
+		ctx = ctx.WithVar(xdm.QName{Local: rawVar}, res.Nodes)
+	}
 	resolver := xpath.NamespaceResolver(mapNS(ns))
 	// The assertion is evaluated in the same static context the stylesheet
 	// had, which includes the schema the environment declares. An assertion

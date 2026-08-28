@@ -369,6 +369,11 @@ type ComplexType struct {
 	// content model does not name. Nil means the type is closed.
 	OpenContent *OpenContent
 
+	// mixedWritten records that the <xs:complexType> element carried a
+	// mixed attribute of its own, which src-ct.4 needs in order to tell
+	// "the two disagree" from "only one was written".
+	mixedWritten bool
+
 	// declaredOpenContent records that the type wrote its own
 	// <xs:openContent>, so that a document-level <xs:defaultOpenContent>
 	// does not override it.

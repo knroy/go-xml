@@ -101,12 +101,24 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		// declaration is needed for validation", and its schema is
 		// expected to load — so the reference is recorded and reported
 		// against the instance that reaches it.
+		//
+		// An <xs:override> child is the exception. §4.2.5 makes the
+		// override purely a transformation of the document it names, so
+		// a sibling that overrides nothing contributes no component;
+		// a name that resolves only to such a sibling therefore names
+		// nothing at all, and the spec calls that out as an error of
+		// the overriding document rather than of some instance that
+		// might later reach it. over024 and over026 pin it.
+		miss := func(ref string) { d.unresolved = ref }
+		if p.inOverride {
+			miss = nil
+		}
 		p.resolveTypeRefLazy(el, typeAttr.Value,
 			func(t Type) {
 				d.Type = t
 				p.rejectDirectNotation(el, t)
 			},
-			func(ref string) { d.unresolved = ref })
+			miss)
 	case inline != nil:
 		if inline.Name.Local == "simpleType" {
 			d.Type = p.readSimpleType(inline)
@@ -1033,7 +1045,7 @@ func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), mi
 	p.fixups = append(p.fixups, func() error {
 		t, ok := p.schema.Types[name]
 		if !ok {
-			if miss != nil {
+			if miss != nil && p.deferrableMiss(name.URI) {
 				miss(ref)
 				return nil
 			}
@@ -1043,6 +1055,58 @@ func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), mi
 		set(t)
 		return nil
 	})
+}
+
+// deferrableMiss reports whether a type reference into ns that matched nothing
+// could still be satisfied by a document this assembly did not read, and so may
+// be carried on the component instead of reported.
+//
+// The deferral §3.3.3 grants an element declaration is not unconditional. It
+// exists because a missing type matters only where the declaration is used, and
+// that reasoning holds only while the namespace the reference names is one this
+// assembly was never given the whole of. Two cases qualify: a namespace an
+// <xs:import> named but whose document could not be fetched, which §5.3 makes
+// explicitly not a schema error; and a namespace this schema set contributes no
+// type to at all, which is the shape missing001 relies on — it writes
+// type="absent" in a schema with no target namespace and is expected to load.
+//
+// A namespace that *is* represented here was assembled in full, so a name it
+// does not define is not missing, it is wrong, and no later document will
+// supply it. schG10_a writes type="c:ct-A" for a prefix bound to a namespace it
+// never imports while defining types in its own; deferring that reported
+// nothing at all, since no instance names the offending declaration.
+func (p *parser) deferrableMiss(ns string) bool {
+	if p.absentNamespace(ns) {
+		return true
+	}
+	// A reference into a namespace no <xs:import> ever named cannot be
+	// satisfied by any document this assembly could have read: without an
+	// import there is no route by which components of that namespace enter
+	// this schema at all. The miss is final, so report it.
+	//
+	// The schema's own namespaces are exempt -- a reference within them is
+	// resolved from the documents already assembled, and the absent
+	// namespace needs no import to be referenced.
+	if p.assembled && ns != "" && !p.importedNamespaces[ns] && !p.ownNamespace(ns) {
+		return false
+	}
+	return true
+}
+
+// ownNamespace reports whether ns is a namespace this assembly defines
+// components in, as opposed to one it only refers to.
+func (p *parser) ownNamespace(ns string) bool {
+	for name := range p.schema.Types {
+		if name.URI == ns {
+			return true
+		}
+	}
+	for name := range p.schema.Elements {
+		if name.URI == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // intersectWildcards combines two attribute wildcards (§3.10.6).
@@ -1348,7 +1412,7 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 		// 1.1-only: {inheritable} does not exist as a property in 1.0,
 		// where the attribute is not even allowed, so this must not
 		// fire under Version10.
-		if false && p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
+		if p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
 			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.2",
 				"restriction changes the inheritability of attribute %q "+
 					"from %t to %t", r.Decl.Name.Local,

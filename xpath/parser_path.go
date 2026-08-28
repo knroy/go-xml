@@ -311,9 +311,23 @@ func (p *Parser) tryParseAxisStep() (*Step, bool, error) {
 	// exactly that. Rewriting the axis there made such a pattern match every
 	// attribute named x, so a stylesheet using it to say "this must not
 	// match" got the opposite.
+	//
+	// namespace-node() is the same case. XPath 3.1 extended the
+	// AbbrevForwardStep rule to it: an unabbreviated namespace-node() test
+	// implies the namespace axis, where XPath 3.0 left it on child and so
+	// selected nothing. snapshot-equivalent.xsl -- the reference
+	// implementation of fn:snapshot that snapshot-0102a compares this engine
+	// against -- writes "$n/namespace-node()[local-name(.) = $name]" inside a
+	// function declared "as function(node()) as node()", so the empty result
+	// was a type error rather than a wrong answer.
 	if kt, isKind := test.(*KindTest); isKind && !kt.Any &&
-		kt.Kind == xdm.KindAttribute && step.Axis == AxisChild && !explicitAxis {
-		step.Axis = AxisAttribute
+		step.Axis == AxisChild && !explicitAxis {
+		switch kt.Kind {
+		case xdm.KindAttribute:
+			step.Axis = AxisAttribute
+		case xdm.KindNamespace:
+			step.Axis = AxisNamespace
+		}
 	}
 	preds, err := p.parsePredicates()
 	if err != nil {
@@ -724,7 +738,21 @@ func (p *Parser) parseNamedFunctionRef() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &NamedFunctionRef{Name: name, Arity: arity}, nil
+	ref := &NamedFunctionRef{Name: name, Arity: arity}
+	// A reference to the constructor function of an imported schema type is
+	// resolved the same way a call on one is: as the cast the constructor is
+	// defined to be. See foldSchemaConstructor, and NamedFunctionRef.Cast for
+	// why it has to happen here.
+	//
+	// higher-order-functions-007 writes local:abc123#1 for a simple type
+	// declared in an inline xsl:import-schema, which no library holds.
+	if arity == 1 {
+		if c, ok := p.foldSchemaConstructor(
+			name, []Expr{&VarRef{Name: ConstructorArgVar}}); ok {
+			ref.Cast = c
+		}
+	}
+	return ref, nil
 }
 
 // parseInlineFunction parses "function($x as T, ...) as T { expr }",

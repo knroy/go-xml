@@ -1007,13 +1007,25 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 	}
 }
 
+// A carriage return must be written as a character reference. XML 1.0 section
+// 2.11 has the parser turn a literal CR in the source into a line feed, so a
+// CR written literally does not survive a round trip: the comparison in
+// infosetEqual re-parses both sides, and a result holding a CR came back
+// holding a LF while the expected text, which spells it "&#13;", came back
+// holding the CR. json-to-xml-048 is that case -- the engine's tree was right
+// and only this serialiser lost the character.
 func escapeText(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;",
+		"\r", "&#13;")
 	return r.Replace(s)
 }
 
+// An attribute value normalises more aggressively than text: XML 1.0 section
+// 3.3.3 replaces every tab, line feed and carriage return with a space, so all
+// three have to be written as character references to survive re-parsing.
 func escapeAttr(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", "\"", "&quot;")
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", "\"", "&quot;",
+		"\r", "&#13;", "\n", "&#10;", "\t", "&#9;")
 	return r.Replace(s)
 }
 

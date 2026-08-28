@@ -90,6 +90,11 @@ func isAnyAtomicType(t *SimpleType) bool {
 	return t != nil && t.builtin && t.Name == xsName("anyAtomicType")
 }
 
+// isAnySimpleType reports whether t is xs:anySimpleType itself.
+func isAnySimpleType(t *SimpleType) bool {
+	return t != nil && t.builtin && t.Name == xsName("anySimpleType")
+}
+
 // checkSpecialBase enforces Part 2 §3.4.1's rule that xs:anyAtomicType is a
 // "special" type which may not be used in a schema as the base of a
 // restriction, the item type of a list, or a member type of a union.
@@ -122,6 +127,23 @@ func (p *parser) checkSpecialBase(t *SimpleType, el *xdm.Node) {
 			if isAnyAtomicType(m) {
 				p.errs = append(p.errs, errorAt(el, "st-props-correct",
 					"xs:anyAtomicType may not be a member type of a union"))
+				break
+			}
+			// xs:anySimpleType is special in the same way and for the
+			// same reason: 1.1 Part 2 §2.4.1 notes that it is not a
+			// type a schema may name as a union member, since a union
+			// including it has the value space of every simple type
+			// and constrains nothing. msData stE053 writes
+			// memberTypes="xsd:boolean xsd:int xsd:anySimpleType" and
+			// is valid under 1.0, invalid under 1.1.
+			//
+			// Naming it *through* a restriction stays legal — stZ011
+			// unions a type whose base is xs:anySimpleType — because
+			// what §2.4.1 forbids is the special type itself, not
+			// everything derived from it.
+			if isAnySimpleType(m) {
+				p.errs = append(p.errs, errorAt(el, "st-props-correct",
+					"xs:anySimpleType may not be a member type of a union"))
 				break
 			}
 		}
@@ -465,6 +487,8 @@ func (p *parser) checkFacetRestriction(t, base *SimpleType, el *xdm.Node) {
 			*f.ExplicitTimezone, *b.ExplicitTimezone))
 	}
 
+	p.checkFixedFacets(t, base, el, b)
+
 	// "whiteSpace valid restriction" (§4.3.6.4). The modes are ordered by
 	// strength and a derivation may only strengthen, which the WhiteSpace
 	// constants are numbered to express, so the whole constraint is one
@@ -475,6 +499,64 @@ func (p *parser) checkFacetRestriction(t, base *SimpleType, el *xdm.Node) {
 				"xs:whiteSpace %s weakens the base's %s",
 				*f.WhiteSpace, parent))
 		}
+	}
+}
+
+// checkFixedFacets enforces the {fixed} half of "Facet Valid (Restriction)"
+// (§4.3): where the base type fixed a facet, a restriction may repeat that
+// value but may not state a different one.
+//
+// Fixing a facet is how a type author declares a bound closed to further
+// narrowing. The ordinary valid-restriction clauses only stop a derivation
+// from *widening* a bound, so without this rule a fixed minInclusive could
+// still be tightened — which is precisely what fixed="true" says it may not
+// be. ibmData d3_4_26si11 and d3_4_27si11 fix the four bounds on a duration
+// and then restate them, and both used to load.
+//
+// The values compare lexically. A bound facet is held as the literal the
+// schema wrote, and "same value" for this rule means the base's value: two
+// spellings of one value — "P1Y" against "P12M" — would compare unequal here,
+// but a derivation that meant to repeat the base's fixed facet has no reason
+// to respell it, and the suite writes none.
+func (p *parser) checkFixedFacets(t, base *SimpleType, el *xdm.Node, b *FacetSet) {
+	f := t.Facets
+
+	uintFixed := func(kind FacetKind, got, want *uint64) {
+		if got == nil || want == nil || !b.isFixed(kind) || *got == *want {
+			return
+		}
+		p.errs = append(p.errs, errorAt(el, "fixed-facet-value",
+			"xs:%s %d differs from the base's fixed xs:%s %d",
+			kind, *got, kind, *want))
+	}
+	uintFixed(FacetLength, f.Length, b.Length)
+	uintFixed(FacetMinLength, f.MinLength, b.MinLength)
+	uintFixed(FacetMaxLength, f.MaxLength, b.MaxLength)
+	uintFixed(FacetTotalDigits, f.TotalDigits, b.TotalDigits)
+	uintFixed(FacetFractionDigits, f.FractionDigits, b.FractionDigits)
+
+	strFixed := func(kind FacetKind, got, want *string) {
+		if got == nil || want == nil || !b.isFixed(kind) || *got == *want {
+			return
+		}
+		p.errs = append(p.errs, errorAt(el, "fixed-facet-value",
+			"xs:%s %q differs from the base's fixed xs:%s %q",
+			kind, *got, kind, *want))
+	}
+	strFixed(FacetMinInclusive, f.MinInclusive, b.MinInclusive)
+	strFixed(FacetMaxInclusive, f.MaxInclusive, b.MaxInclusive)
+	strFixed(FacetMinExclusive, f.MinExclusive, b.MinExclusive)
+	strFixed(FacetMaxExclusive, f.MaxExclusive, b.MaxExclusive)
+
+	// explicitTimezone already has a stronger rule of its own above: the
+	// base fixing it to required or prohibited closes it whether or not
+	// fixed="true" was written. Only the "optional" case is left here.
+	if f.ExplicitTimezone != nil && b.ExplicitTimezone != nil &&
+		b.isFixed(FacetExplicitTimezone) &&
+		*f.ExplicitTimezone != *b.ExplicitTimezone {
+		p.errs = append(p.errs, errorAt(el, "fixed-facet-value",
+			"xs:explicitTimezone %s differs from the base's fixed %s",
+			*f.ExplicitTimezone, *b.ExplicitTimezone))
 	}
 }
 
@@ -613,37 +695,56 @@ func (p *parser) checkFacetCombinations(t *SimpleType, el *xdm.Node) {
 // taking the base's minLength instead would compare the wrong pair.
 func mergedFacets(t *SimpleType) *FacetSet {
 	out := &FacetSet{}
+	// carry copies the {fixed} property along with the value it belongs to.
+	// The flag has to travel with the step that *set* the facet: a later
+	// step that re-states the same value without fixed="true" does not
+	// unfix it, and an earlier step that never set the facet has no say.
+	carry := func(kind FacetKind, f *FacetSet) {
+		if f.isFixed(kind) {
+			out.setFixed(kind)
+		}
+	}
 	for _, st := range facetChain(t) {
 		f := st.facets
 		if out.Length == nil {
 			out.Length = f.Length
+			carry(FacetLength, f)
 		}
 		if out.MinLength == nil {
 			out.MinLength = f.MinLength
+			carry(FacetMinLength, f)
 		}
 		if out.MaxLength == nil {
 			out.MaxLength = f.MaxLength
+			carry(FacetMaxLength, f)
 		}
 		if out.TotalDigits == nil {
 			out.TotalDigits = f.TotalDigits
+			carry(FacetTotalDigits, f)
 		}
 		if out.FractionDigits == nil {
 			out.FractionDigits = f.FractionDigits
+			carry(FacetFractionDigits, f)
 		}
 		if out.MinInclusive == nil {
 			out.MinInclusive = f.MinInclusive
+			carry(FacetMinInclusive, f)
 		}
 		if out.MaxInclusive == nil {
 			out.MaxInclusive = f.MaxInclusive
+			carry(FacetMaxInclusive, f)
 		}
 		if out.MinExclusive == nil {
 			out.MinExclusive = f.MinExclusive
+			carry(FacetMinExclusive, f)
 		}
 		if out.MaxExclusive == nil {
 			out.MaxExclusive = f.MaxExclusive
+			carry(FacetMaxExclusive, f)
 		}
 		if out.ExplicitTimezone == nil {
 			out.ExplicitTimezone = f.ExplicitTimezone
+			carry(FacetExplicitTimezone, f)
 		}
 	}
 	return out

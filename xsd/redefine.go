@@ -224,6 +224,18 @@ func selfGroupRefs(c *xdm.Node, doc *schemaDoc, p *parser, self xdm.QName, kind 
 // redefinition's own children are, which is the only window in which both the
 // original and the replacement exist.
 func (a *assembler) prepareRedefine(el *xdm.Node, doc *schemaDoc) *redefineHold {
+	return a.prepareReplacement(el, doc, nil)
+}
+
+// prepareOverride is prepareRedefine restricted to the children that actually
+// replace something, since the rest contribute nothing (see overridesSomething).
+func (a *assembler) prepareOverride(el *xdm.Node, doc *schemaDoc) *redefineHold {
+	return a.prepareReplacement(el, doc, func(c *xdm.Node) bool {
+		return a.overridesSomething(el, c)
+	})
+}
+
+func (a *assembler) prepareReplacement(el *xdm.Node, doc *schemaDoc, keep func(*xdm.Node) bool) *redefineHold {
 	hold := &redefineHold{
 		types:      map[xdm.QName]Type{},
 		groups:     map[xdm.QName]*ModelGroupDef{},
@@ -239,6 +251,9 @@ func (a *assembler) prepareRedefine(el *xdm.Node, doc *schemaDoc) *redefineHold 
 		}
 		name := c.AttrValue("name")
 		if name == "" {
+			continue
+		}
+		if keep != nil && !keep(c) {
 			continue
 		}
 		q := xdm.QName{URI: doc.targetNS, Local: name}
@@ -449,7 +464,8 @@ func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
 			if c.Name.Local == kind && c.AttrValue("name") == name {
 				return true
 			}
-			if c.Name.Local == "include" || c.Name.Local == "redefine" {
+			if c.Name.Local == "include" || c.Name.Local == "redefine" ||
+				c.Name.Local == "override" {
 				if look(a.redefined[c]) {
 					return true
 				}
@@ -458,6 +474,33 @@ func (a *assembler) definedIn(redefine *xdm.Node, kind, name string) bool {
 		return false
 	}
 	return look(root)
+}
+
+// overridesSomething reports whether a child of <xs:override> actually replaces
+// a global of the document the override names.
+//
+// §4.2.5 defines an override purely as a transformation of the overridden
+// document: each child of <xs:override> replaces the like-named global there.
+// A child that matches nothing transforms nothing, so it contributes no
+// component to the schema at all — it is not silently promoted to a global of
+// the overriding document. over026 pins the consequence: a type defined only
+// inside an override, and referred to from a sibling that *does* override
+// something, leaves that reference dangling and the schema invalid.
+//
+// Types live in one symbol space, so a <simpleType> child may replace a
+// <complexType> global and vice versa.
+func (a *assembler) overridesSomething(override, child *xdm.Node) bool {
+	name := child.AttrValue("name")
+	if name == "" {
+		return false
+	}
+	switch child.Name.Local {
+	case "simpleType", "complexType":
+		return a.definedIn(override, "simpleType", name) ||
+			a.definedIn(override, "complexType", name)
+	default:
+		return a.definedIn(override, child.Name.Local, name)
+	}
 }
 
 // checkRedefinedGroup enforces src-redefine clause 6.2.2 (§4.2.2).

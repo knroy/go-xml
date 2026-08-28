@@ -469,6 +469,23 @@ func detachedRootID(root *Node) int64 {
 	return id
 }
 
+// numberDetachedRoot stamps an identity number on the root of the untracked
+// tree n belongs to, if it has none yet.
+//
+// It exists so that the number can be assigned before any comparison, in the
+// order the caller holds the nodes in, rather than in the order a sort's
+// comparisons happen to reach them. See SortDocumentOrder.
+func numberDetachedRoot(n *Node) {
+	root := n
+	for root.Parent != nil {
+		root = root.Parent
+	}
+	if root.tree != nil {
+		return
+	}
+	detachedRootID(root)
+}
+
 // ancestorChain returns n's ancestors root-first, ending with n itself.
 func ancestorChain(n *Node) []*Node {
 	var up []*Node
@@ -489,16 +506,42 @@ func ancestorChain(n *Node) []*Node {
 // order Tree.assign lays down, so a detached subtree that is finalized later
 // does not change any answer this gave before.
 func siblingRank(p, n *Node) int {
-	for i, ns := range p.Namespaces {
-		if ns == n {
-			return i
+	// A namespace node is ranked by its kind, not by looking it up in
+	// p.Namespaces. The namespace axis synthesizes its nodes -- it exposes
+	// every in-scope binding, while p.Namespaces holds only those declared on
+	// p itself -- so the scan never matched an inherited binding, and the
+	// no-match fallback below then ranked it after every child. In a detached
+	// tree, where document order is decided here rather than by Tree.assign,
+	// that put the outermost element's own namespace node last:
+	// ($orphan//namespace::x)[1] answered the copy on the inner element.
+	//
+	// Ranking by kind is the data model's own rule, and the one Tree.assign
+	// lays down: an element's namespace nodes precede its attributes, which
+	// precede its children.
+	if n.Kind == KindNamespace {
+		for i, ns := range p.Namespaces {
+			if ns == n {
+				return i
+			}
 		}
+		// A synthesized node still has to be ordered against its siblings on
+		// the axis, and the axis emits them in sorted prefix order.
+		i := 0
+		for prefix := range p.InScopeNamespaces() {
+			if prefix < n.Name.Local {
+				i++
+			}
+		}
+		return i
 	}
-	base := len(p.Namespaces)
-	for i, a := range p.Attrs {
-		if a == n {
-			return base + i
+	base := nsRankBase(p)
+	if n.Kind == KindAttribute {
+		for i, a := range p.Attrs {
+			if a == n {
+				return base + i
+			}
 		}
+		return base + len(p.Attrs)
 	}
 	base += len(p.Attrs)
 	for i, c := range p.Children {
@@ -507,6 +550,17 @@ func siblingRank(p, n *Node) int {
 		}
 	}
 	return base + len(p.Children)
+}
+
+// nsRankBase is the rank the first non-namespace node of p takes, which is one
+// past every node on p's namespace axis rather than one past the declarations
+// p carries: an inherited binding is a node there too.
+func nsRankBase(p *Node) int {
+	n := len(p.Namespaces)
+	if m := len(p.InScopeNamespaces()); m > n {
+		n = m
+	}
+	return n
 }
 
 // StringValue returns the node's string value per XDM: the concatenation of
@@ -1060,10 +1114,38 @@ func (t *Tree) assign(n *Node) {
 	// Namespace nodes precede attribute nodes, which precede children. The
 	// relative order of namespace and attribute nodes is implementation
 	// defined; fixing it here keeps results reproducible across runs.
-	for _, ns := range n.Namespaces {
-		ns.tree = t
-		ns.order = t.counter
-		t.counter++
+	//
+	// The reservation is sized by the element's in-scope bindings, not by the
+	// ones it declares itself. The namespace axis reports every binding in
+	// scope, and the ones inherited from an ancestor have no node on this
+	// element to number: the axis synthesizes them and places them with
+	// SetSynthesizedOrder at owner.order+1 upwards. Reserving only the
+	// declared bindings left those synthesized nodes sitting on the slots
+	// already given to this element's attributes and first child, so
+	// generate-id() answered the same string for a namespace node and an
+	// unrelated attribute — which is what snapshot-0112 detects when it
+	// compares the count of distinct identities against the node count.
+	if n.Kind == KindElement {
+		reserved := len(n.InScopeNamespaces())
+		for _, ns := range n.Namespaces {
+			ns.tree = t
+			ns.order = t.counter
+			t.counter++
+			reserved--
+		}
+		// The declared bindings are a subset of the in-scope ones except
+		// where a declaration undeclares a prefix, which removes it from
+		// scope while still occupying a node; reserved can then go negative
+		// and no extra slots are due.
+		for ; reserved > 0; reserved-- {
+			t.counter++
+		}
+	} else {
+		for _, ns := range n.Namespaces {
+			ns.tree = t
+			ns.order = t.counter
+			t.counter++
+		}
 	}
 	for _, a := range n.Attrs {
 		a.tree = t

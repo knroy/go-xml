@@ -1221,7 +1221,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 	registerMergeFuncs(lib)
 	registerFormatNumber(lib, s)
 	registerPositionFuncs(lib)
-	rt.ctx.Funcs = lib
+	rt.ctx.Funcs = packageScopedLibrary{inner: lib, sheet: s}
 
 	// Global variables are evaluated in dependency order rather than
 	// declaration order. Section 9.5 puts no ordering constraint on
