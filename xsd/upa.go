@@ -149,6 +149,31 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 		})
 	}
 
+	// The two walks above reach a named type, and an anonymous type
+	// declared inline on a *global* element. An anonymous type on a
+	// **local** element is reachable through neither, so its content model
+	// went unchecked however ambiguous it was. particlesZ033_e nests one
+	// four levels down and puts two branches of a choice on the same
+	// substitution group inside it. allComplexTypes holds every complex
+	// type read, in document order, so appending it last both fills the
+	// gap and leaves the labels the first two walks produce in place for
+	// the types they already covered.
+	seenParticle := make(map[*Particle]bool, len(sites))
+	for _, site := range sites {
+		seenParticle[site.particle] = true
+	}
+	for _, ct := range s.allComplexTypes {
+		if ct.Particle == nil || seenParticle[ct.Particle] {
+			continue
+		}
+		seenParticle[ct.Particle] = true
+		where := ct.Name.Local
+		if where == "" {
+			where = "an anonymous type"
+		}
+		sites = append(sites, modelSite{ct.Particle, where})
+	}
+
 	for _, site := range sites {
 		m, err := compileContentModel(site.particle)
 		if err != nil {
@@ -211,11 +236,20 @@ func sortedErrors(msgs []string) []error {
 // every point where the automaton must choose, no two choices may accept the
 // same element.
 func checkUPA(m *contentModel, where string, opts CheckOptions) error {
-	states := make([][]int, 0, len(m.follow)+1)
-	states = append(states, m.first)
-	states = append(states, m.follow...)
+	type upaState struct {
+		positions []int
+		// initial marks the automaton's start set, where no counter
+		// has been entered yet.
+		initial bool
+	}
+	states := make([]upaState, 0, len(m.follow)+1)
+	states = append(states, upaState{m.first, true})
+	for _, f := range m.follow {
+		states = append(states, upaState{f, false})
+	}
 
-	for _, state := range states {
+	for _, st := range states {
+		state := st.positions
 		for i := 0; i < len(state); i++ {
 			for j := i + 1; j < len(state); j++ {
 				a, b := m.positions[state[i]], m.positions[state[j]]
@@ -228,12 +262,26 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 					// though the particle is not.
 					continue
 				}
-				if counterForces(m, a, b) {
+				if !st.initial && counterForces(m, a, b) {
 					// Not a free choice: a counter that
 					// has not reached its minimum has to
 					// keep going, so the automaton is
 					// still deterministic. See
 					// counterForces.
+					//
+					// Only away from the start set. The
+					// argument is that the automaton is
+					// already *inside* one position's
+					// counter scope and cannot leave it
+					// yet. In the initial state no counter
+					// has been entered, so nothing is
+					// holding it: two branches of a choice
+					// that happen to be counted compete
+					// exactly as uncounted ones would.
+					// particlesZ033_e writes that pair —
+					// a substitution group head and one of
+					// its members, both minOccurs="3" — and
+					// it was silently accepted.
 					continue
 				}
 				return fmt.Errorf(
