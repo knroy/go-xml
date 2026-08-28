@@ -71,6 +71,29 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 				return err
 			}
 			mergeSchema(c.sheet.schema, json)
+			return nil
+		}
+		// XSLT 3.0 §3.15 on the namespace attribute: "This information may
+		// be enough on its own to enable an implementation to locate the
+		// required schema components", and schema-location is only "a URI
+		// Reference that gives a hint". So a declaration naming a namespace
+		// and no location is not a declaration with nothing to load: it is a
+		// request the resolver may well be able to answer, and the host
+		// application is the one that knows. catalog-001 writes exactly that
+		// import and then asks "* instance of schema-element(cat:catalog)",
+		// which was a static error for want of a declaration the harness had
+		// on disk and would have handed over if asked.
+		//
+		// Failure stays silent. The same section: "it is not intrinsically an
+		// error if no schema document can be located for a namespace
+		// identified in an xsl:import-schema declaration. This will cause an
+		// error only if it results in the stylesheet containing references to
+		// names that have not been imported." A resolver that cannot answer
+		// therefore leaves the empty schema in place, exactly as before.
+		if ns != "" && c.opts.SchemaResolver != nil {
+			if loaded := c.tryResolveSchemaByNamespace(ns); loaded != nil {
+				mergeSchema(c.sheet.schema, loaded)
+			}
 		}
 		return nil
 	}
@@ -219,3 +242,34 @@ func mergeSchema(dst, src *xsd.Schema) {
 // same schema the stylesheet declares, rather than having to load it twice and
 // risk the two disagreeing.
 func (s *Stylesheet) Schema() *xsd.Schema { return s.schema }
+
+// tryResolveSchemaByNamespace asks the resolver for a schema for ns alone,
+// which is what an xsl:import-schema with no schema-location requests.
+//
+// Every failure returns nil rather than an error: §3.15 makes a namespace
+// whose schema cannot be located a non-error, reportable only later and only
+// if the stylesheet names a component the import did not supply. Raising here
+// would turn a stylesheet the spec says must compile into a static error.
+func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
+	rc, resolved, err := c.opts.SchemaResolver.Resolve(ns, "", c.opts.BaseURI)
+	if err != nil || rc == nil {
+		return nil
+	}
+	defer rc.Close()
+	tree, err := xdm.Parse(rc, xdm.ParseOptions{})
+	if err != nil || tree.Root == nil {
+		return nil
+	}
+	// The resolver is free to answer with whatever it has; a document whose
+	// target namespace is not the one asked for cannot supply the components
+	// the declaration wants, and merging it would import names under a header
+	// the stylesheet never wrote.
+	if checkImportedNamespace(nil, tree.Root, ns) != nil {
+		return nil
+	}
+	loaded, err := xsd.Load(tree.Root, resolved, xsd.Options{Resolver: c.opts.SchemaResolver})
+	if err != nil {
+		return nil
+	}
+	return loaded
+}
