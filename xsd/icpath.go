@@ -69,6 +69,9 @@ func (p *icPathParser) skipSpace() {
 // parseAlternative parses one "|"-separated branch.
 func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 	var alt ICPathAlternative
+	// selfStep records a "." step, which contributes no ICStep but does
+	// satisfy the grammar's demand for a step after ".//".
+	var selfStep bool
 	p.skipSpace()
 
 	// A leading ".//" is the only place a descendant step may appear. It is
@@ -138,7 +141,12 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 		}
 
 		if p.src[p.pos] == '.' {
-			// A "." step selects the context node itself.
+			// A "." step selects the context node itself. It adds
+			// no ICStep — nothing is narrowed — but it is a step
+			// all the same, and the grammar's requirement that
+			// ".//" be followed by one is satisfied by it. ".//."
+			// is written by twenty-six suite schemas.
+			selfStep = true
 			p.pos++
 			p.skipSpace()
 			if p.pos < len(p.src) && p.src[p.pos] == '/' {
@@ -173,6 +181,14 @@ func (p *icPathParser) parseAlternative() (ICPathAlternative, error) {
 		break
 	}
 
+	if len(alt.Steps) == 0 && alt.Attribute == nil && alt.DescendantOrSelf && !selfStep {
+		// The grammar is Path ::= ('.//')? Step ('/' Step)*: the
+		// descendant prefix anchors a step, it is not a path in
+		// itself. idI018 writes ".//" as a selector, idJ026 as a field.
+		return alt, fmt.Errorf(
+			"identity-constraint path %q: %q must be followed by a step",
+			p.src, ".//")
+	}
 	if len(alt.Steps) == 0 && alt.Attribute == nil && !alt.DescendantOrSelf {
 		// A bare "." is legal and selects the context node; anything
 		// that parsed to nothing at all is not.

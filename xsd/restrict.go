@@ -64,6 +64,38 @@ func (p *parser) checkParticleRestriction() error {
 		if base == ct || isUrType(base) {
 			continue
 		}
+		// derivation-ok-restriction clauses 4 and 5 split on the pair
+		// of *content kinds* before any particle is compared. A base
+		// with simple content admits character data, and neither an
+		// empty content type (clause 5.2) nor an element-only one
+		// (clause 5.4) is a subset of that: only simple content, or a
+		// mixed content type that is emptiable, may restrict it.
+		// particlesZ039 restricts a simpleContent base with
+		// <complexContent><restriction><sequence/></restriction>, an
+		// empty content type, which the base's character data is not a
+		// superset of.
+		// Clause 5.2.2.1: where both content types are simple, the
+		// derived one must be validly derived from the base's. Naming
+		// an inline <simpleType> inside a simpleContent restriction is
+		// otherwise unchecked, so particlesZ018 restricted a decimal
+		// content type with a list of xs:int — a type that shares no
+		// base with it at all.
+		if base.Content == ContentSimple && ct.Content == ContentSimple &&
+			ct.SimpleContent != nil && base.SimpleContent != nil &&
+			!typeRestricts(ct.SimpleContent, base.SimpleContent) {
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.5.2.2.1: %s gives its simple content "+
+					"a type that is not a restriction of base %s's",
+				typeLabel(name, ct), typeLabel(base.Name, base)))
+			continue
+		}
+		if base.Content == ContentSimple && ct.Content != ContentSimple {
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.5: %s has %s content but its base %s "+
+					"has simple content", typeLabel(name, ct), ct.Content,
+				typeLabel(base.Name, base)))
+			continue
+		}
 		// Only element-only and mixed content have a particle to
 		// check. A restriction to empty content is governed by
 		// Particle Emptiable instead: the base's particle must be able
@@ -147,6 +179,28 @@ func attributeTypeRestrictions(ct *ComplexType) []error {
 		}
 	}
 	var errs []error
+	// Clause 4: where both types have an attribute wildcard, the derived
+	// one must be an intensional subset of the base's, and — by errata
+	// E1-21 — may not weaken its processContents. The same two tests
+	// nsSubset applies to element wildcards, minus the occurrence range an
+	// attribute wildcard does not have. errC009 restricts a strict
+	// anyAttribute with a skip one, which lets through attributes the base
+	// insists on validating.
+	if rw, bw := ct.AttributeWildcard, base.AttributeWildcard; rw != nil && bw != nil {
+		switch {
+		case !wildcardSubset(rw, bw):
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.4: %s gives its attribute wildcard a "+
+					"namespace constraint that is not a subset of %s's",
+				typeLabel(ct.Name, ct), typeLabel(base.Name, base)))
+		case processStrength(rw.ProcessContents) < processStrength(bw.ProcessContents):
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.4: %s gives its attribute wildcard "+
+					"processContents %s, weaker than %s's %s",
+				typeLabel(ct.Name, ct), rw.ProcessContents,
+				typeLabel(base.Name, base), bw.ProcessContents))
+		}
+	}
 	for _, u := range ct.AttributeUses {
 		if u.Decl == nil || u.Decl.Type == nil || u.Prohibited {
 			continue
@@ -596,9 +650,20 @@ func typeRestricts(t, want Type) bool {
 	}
 	// The walk stops on self as well as nil: the ur-type is its own base
 	// and a chain testing only for nil would not terminate.
+	//
+	// Clause 3.2.5 names {extension, list, union} as the *disallowed*
+	// derivations, so an extension step anywhere on the way up breaks the
+	// chain: particlesIj008 restricts an element whose type in the base is
+	// "foo" with one whose type is "bar", and bar extends foo. Reaching foo
+	// from bar proves derivation, not derivation by restriction, and an
+	// extension may add content the base's element would reject.
 	for cur := t; cur != nil; {
 		if cur == want {
 			return true
+		}
+		if ct, ok := cur.(*ComplexType); ok &&
+			ct.DerivationMethod == DerivationExtension {
+			return false
 		}
 		next := cur.BaseType()
 		if next == cur {
@@ -1227,6 +1292,31 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		}
 	}
 
+	// Counting says nothing about *what* each occurrence may contain. The
+	// 1.1 inclusion is over sequences of typed elements, so a derived
+	// declaration keeping a base name while widening its type produces
+	// sequences the base rejects however well the counts fit.
+	// particlesS010 retypes an all-group member from "address" to
+	// "address1", which adds an element; particlesU009 retypes one from
+	// xs:NMTOKENS to xs:boolean. Both counted clean.
+	for _, rd := range allDerivedDecls(r) {
+		bud, ok := budget[rd.Name]
+		if !ok || bud.decl == nil {
+			continue
+		}
+		// A member of the head's substitution group is checked against
+		// the head, which is the declaration the base actually names.
+		if rd == bud.decl {
+			continue
+		}
+		if rd.Type != nil && bud.decl.Type != nil &&
+			!typeRestricts(rd.Type, bud.decl.Type) {
+			return fmt.Errorf(
+				"element %s's type is not derived from the base's",
+				rd.Name.Local), true
+		}
+	}
+
 	branches, ok := allBranchCounts(r)
 	if !ok {
 		return nil, false
@@ -1241,6 +1331,36 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// produced by every branch, which branchFitsBudget checks, since a
 	// name a branch never mentions has count zero.
 	return nil, true
+}
+
+// allDerivedDecls collects every element declaration reachable in a derived
+// particle, at any depth and through any compositor.
+//
+// Order and occurrence are irrelevant here — the caller only wants each
+// declaration once, to compare its type against the base's budget for the same
+// name.
+func allDerivedDecls(p *Particle) []*ElementDecl {
+	var out []*ElementDecl
+	seen := map[*ElementDecl]bool{}
+	var walk func(*Particle, int)
+	walk = func(p *Particle, depth int) {
+		if p == nil || depth > 64 {
+			return
+		}
+		switch t := p.Term.(type) {
+		case *ElementDecl:
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		case *ModelGroup:
+			for _, c := range t.Particles {
+				walk(c, depth+1)
+			}
+		}
+	}
+	walk(p, 0)
+	return out
 }
 
 // occBudget is one base all-group particle seen as an occurrence budget for a

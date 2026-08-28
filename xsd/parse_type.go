@@ -814,12 +814,27 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 		// the splice above rewrites t.Content from the base and would
 		// have already turned the derived type's ContentElementOnly
 		// into ContentSimple by the time this could look.
-		if ownParticle := own; ownParticle != nil {
+		//
+		// Under 1.1 the derived type need not add a content model for
+		// this to be an error. 1.0's clause 1.4.2.2 let an extension
+		// with an *empty* effective content simply inherit the base's
+		// simple content type, so <complexContent><extension> over a
+		// simpleContent base that adds only attributes was well-formed;
+		// 1.1 requires the derived declaration to say simpleContent
+		// too. particlesZ031 is exactly that pair, and the suite marks
+		// it valid under 1.0 and invalid under 1.1.
+		if own != nil || p.schema.Version >= Version11 {
 			body := body
 			p.postFixups = append(p.postFixups, func() error {
 				bt, ok := t.Base.(*ComplexType)
 				if !ok || bt.Content != ContentSimple {
 					return nil
+				}
+				if own == nil {
+					return errorAt(body, "cos-ct-extends.1.4.1",
+						"a complexContent extension may not derive from "+
+							"base type %q, whose content is simple",
+						base)
 				}
 				return errorAt(body, "cos-ct-extends.1.4.1",
 					"a complexContent extension may not add a content "+
@@ -873,6 +888,15 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 	// 0..0 under a wildcard) and mgH014 (a 0..0 alternative dropped from a
 	// choice) came to be rejected.
 	if max == 0 {
+		// All Group Limited is checked before the particle disappears.
+		// maxOccurs="0" is one of the values the clause forbids under
+		// 1.0, and "corresponds to no component at all" makes it
+		// unreachable from every later pass — mgO001 and mgO018 write
+		// <all minOccurs="0" maxOccurs="0"> and were accepted by a
+		// check written to name mgO001.
+		if el.Name.Local == "all" {
+			p.checkAllOccurs(el, max)
+		}
 		return nil
 	}
 	part := &Particle{MinOccurs: min, MaxOccurs: max}
@@ -896,6 +920,14 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 				return nil
 			})
 			return part
+		}
+		// src-element.2.1: "either the name or the ref attribute must
+		// be present, but not both". A local element with neither
+		// declares nothing at all; elemP005 is <xs:all><xs:element/>.
+		if el.AttrValue("name") == "" {
+			p.errs = append(p.errs, errorAt(el, "src-element.2.1",
+				"an element inside a content model must have a name or a ref"))
+			return nil
 		}
 		part.Term = p.readElementDecl(el, ScopeLocal)
 
@@ -957,6 +989,20 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 		if c.Name.URI != NSSchema {
 			continue
 		}
+		// The 1.0 schema for schemas gives <xs:all> the content model
+		// (annotation?, element*): only element declarations, and only
+		// the local spelling. 1.1 widened it to admit <xs:any> and
+		// <xs:group>, so the rule is version-gated.
+		// particles00104m1 writes <xs:all><xs:any/> inside a named
+		// group, where the checks that walk complex types never reach
+		// it.
+		if g.Compositor == CompositorAll && p.schema.Version < Version11 &&
+			c.Name.Local != "element" && c.Name.Local != "annotation" {
+			p.errs = append(p.errs, errorAt(c, "cos-all-limited.1",
+				"an xs:all group may only contain element declarations, "+
+					"but this one contains an xs:%s", c.Name.Local))
+			continue
+		}
 		if part := p.readParticle(c); part != nil {
 			g.Particles = append(g.Particles, part)
 		}
@@ -994,13 +1040,22 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 				"attribute %q is not allowed on a named group definition", attr))
 		}
 	}
-	if inner.Name.Local == "all" {
-		for _, attr := range []string{"minOccurs", "maxOccurs"} {
-			if inner.Attr("", attr) != nil {
-				p.errs = append(p.errs, errorAt(inner, "cos-all-limited.1.2",
-					"attribute %q is not allowed on the xs:all of a "+
-						"named group definition", attr))
+	// The prohibition is not special to <all>: xs:namedGroup gives every
+	// one of its three children a type — xs:simpleExplicitGroup for
+	// <choice> and <sequence>, xs:all for <all> — that prohibits both
+	// occurrence attributes. A definition has no occurrence range at all;
+	// only the <group ref> that uses it does. complex019 writes
+	// <sequence minOccurs="0"> and complex020 <sequence
+	// maxOccurs="unbounded"> inside a named group.
+	for _, attr := range []string{"minOccurs", "maxOccurs"} {
+		if inner.Attr("", attr) != nil {
+			code := "src-model_group_defn"
+			if inner.Name.Local == "all" {
+				code = "cos-all-limited.1.2"
 			}
+			p.errs = append(p.errs, errorAt(inner, code,
+				"attribute %q is not allowed on the xs:%s of a "+
+					"named group definition", attr, inner.Name.Local))
 		}
 	}
 	// The <choice> or <sequence> inside a definition still carries an
@@ -1101,6 +1156,7 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	p.checkMixedConsistency(t)
 	p.checkAttributeWildcardRestriction(t)
 	p.checkOpenContentRestriction(t)
+	p.checkOpenContentExtension(t)
 	p.inheritAttributesNow(t)
 
 	// A prohibited use is never one of the type's {attribute uses}, whether
@@ -1203,7 +1259,16 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 	if w := p.childElement(el, "any"); w != nil {
 		oc.Wildcard = p.readWildcard(w)
 	} else {
-		// An openContent with no wildcard defaults to ##any, lax.
+		// src-ct.5: an <openContent> whose mode is not "none" must
+		// carry an <any>. There is nothing for the element to say
+		// otherwise — mode describes where the wildcard applies, and
+		// with no wildcard there is nothing to place. Only mode="none"
+		// is meaningful alone, and that returned above. s3_4_1si01
+		// writes three such elements, one per mode spelling.
+		p.errs = append(p.errs, errorAt(el, "src-ct.5",
+			"an openContent with mode %q must have an any child", oc.Mode))
+		// The default keeps the component well-formed for whatever
+		// runs before the error is reported.
 		oc.Wildcard = &Wildcard{Kind: NSAny, ProcessContents: ProcessLax}
 	}
 	return oc
@@ -1831,7 +1896,23 @@ func (p *parser) checkTypeBaseCycles() {
 		// other chain, and the first version of this check omitted it
 		// and rejected 11,044 of 14,405 schemas with
 		// `type "anyType" is circular`.
-		if baseOf(t) == t {
+		//
+		// Tested by *name*, not by "is its own base": a type that names
+		// itself as its base is exactly the shortest cycle the clause
+		// forbids, and skipping every such type let addB101 — a
+		// complexType named sAddress whose extension names sAddress —
+		// through the check that was written for it.
+		if name.URI == NSSchema &&
+			(name.Local == "anyType" || name.Local == "anySimpleType") {
+			continue
+		}
+		if b := baseOf(t); b == t {
+			p.errs = append(p.errs, &ParseError{
+				Code: "ct-props-correct.3",
+				Message: fmt.Sprintf(
+					"type %q is circular: it is its own base type",
+					name.Local),
+			})
 			continue
 		}
 		// Walk the base chain looking for a return to t. The chain is

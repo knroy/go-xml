@@ -142,6 +142,21 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 // ctO002/ctO005 (final="restriction", restricted). All loaded clean before
 // this.
 func (p *parser) checkComplexDerivationFinal(t *ComplexType) {
+	// A <simpleContent> extension may name a *simple* type as its base,
+	// and clause 1.1 speaks of the base type definition without caring
+	// which kind it is. Casting straight to *ComplexType dropped that
+	// case, so simple004 (final="extension" on the simple type) and
+	// simple005 (the same by way of finalDefault) extended a type that
+	// forbids extension and loaded clean.
+	if st, ok := t.Base.(*SimpleType); ok {
+		if t.DerivationMethod == DerivationExtension &&
+			st.Final().Has(DerivationExtension) {
+			p.errs = append(p.errs, errorAt(nil, "cos-ct-extends.1.1",
+				"complex type %q may not extend simple type %q, whose final "+
+					"attribute forbids extension", t.Name, st.Name))
+		}
+		return
+	}
 	base, ok := t.Base.(*ComplexType)
 	if !ok || base == t {
 		return
@@ -496,6 +511,65 @@ func (p *parser) checkOpenContentRestriction(t *ComplexType) {
 			"the open content wildcard of complex type %q validates its "+
 				"matches less strictly than that of its base %q",
 			t.Name, base.Name))
+	}
+}
+
+// checkOpenContentExtension enforces cos-ct-extends.1.4.3.3: where both the
+// base and the extension have an {open content}, the extension's mode must be
+// interleave whenever the base's is.
+//
+// An extension is meant to be substitutable for its base: every document valid
+// against the base must stay valid against the extension. A base that
+// interleaves a wildcard through its content model admits that wildcard's
+// elements between its own children; an extension that only allows them as a
+// suffix rejects those documents.
+//
+// Only the mode is compared. The wildcards need no comparison at all, because
+// 3.4.2.3.3 clause 3 makes an extension's {open content} wildcard the *union*
+// of the base's and its own rather than a replacement, so it already admits
+// everything the base's did by construction. Testing for a superset anyway
+// rejects open047, whose derived wildcard is written as the complement of the
+// base's precisely so that the union is wider than either.
+//
+// The two cases the suite writes are not the same shape. open033 declares the
+// narrower open content on the extension itself. open030 and open046 declare
+// none, and take the document's <xs:defaultOpenContent> instead of inheriting
+// the base's — 3.4.2.3.3 prefers the default over the base when the document
+// has one — which is what makes an extension that looks innocent invalid.
+// Both arrive here as the derived type's {open content}, so neither needs
+// special handling.
+func (p *parser) checkOpenContentExtension(t *ComplexType) {
+	if t == nil || t.Name.URI == NSSchema || t.Content == ContentSimple ||
+		t.DerivationMethod != DerivationExtension {
+		return
+	}
+	base, ok := t.Base.(*ComplexType)
+	if !ok || base == t || isUrType(base) {
+		return
+	}
+	inherited := base.OpenContent
+	if inherited == nil || inherited.Mode == OpenNone || inherited.Wildcard == nil {
+		// A base that opens nothing constrains nothing: whatever the
+		// extension opens is new, and adding is what extension is for.
+		return
+	}
+	derived := t.OpenContent
+	if derived == nil || derived.Mode == OpenNone || derived.Wildcard == nil {
+		// Nothing to compare. A type with no {open content} of its own
+		// inherits the base's (3.4.2.3.3), so an absent one here is the
+		// base's own — open027, open031 and open047 are that shape and
+		// are valid. Only an explicit mode="none" closes the model, and
+		// the suite does not pin the extension case of that.
+		return
+	}
+	// The mode guard mirrors the restriction clause's: with a content model
+	// that matches only the empty sequence there is nothing to interleave
+	// among, so the two modes denote the same language.
+	if inherited.Mode == OpenInterleave && derived.Mode != OpenInterleave &&
+		!particleMatchesOnlyEmpty(base.Particle, 0) {
+		p.errs = append(p.errs, errorAt(nil, "cos-ct-extends.1.4.3.3",
+			"complex type %q opens its content only as a suffix, but its "+
+				"base %q interleaves it", t.Name, base.Name))
 	}
 }
 

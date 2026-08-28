@@ -62,6 +62,11 @@ type schemaDoc struct {
 	// every complex type in the document that does not declare its own.
 	defaultOpenContent *OpenContent
 
+	// sawDeclaration records that a declaration or definition has already
+	// been read from this document, which closes the window in which a
+	// <defaultOpenContent> may appear.
+	sawDeclaration bool
+
 	// appliesToEmpty records defaultOpenContent's appliesToEmpty, which
 	// decides whether a type with empty content is opened too. It defaults
 	// to false, so a type declaring no content model stays closed.
@@ -540,12 +545,92 @@ func (p *parser) checkIDs(root *xdm.Node) {
 					seen[a.Value] = true
 				}
 			}
+			// <xs:documentation> and <xs:appinfo> take xml:lang as
+			// xs:language in the schema for schemas, and xs:language
+			// admits neither the empty string nor whitespace. That
+			// is narrower than the *general* xml:lang attribute
+			// declaration, which is a union with the empty string
+			// because XML 1.0 §2.12 spells "no language stated"
+			// that way — but a schema document is validated against
+			// the schema for schemas, not against XML 1.0's own
+			// declaration. annotF001 writes xml:lang="" and
+			// annotF003 writes xml:lang=" ", which collapses to the
+			// same thing.
+			p.checkVersioningAttrs(n)
+			switch n.Name.Local {
+			case "documentation", "appinfo":
+				if a := n.Attr(NSXML, "lang"); a != nil {
+					if v := WhiteCollapse.Normalize(a.Value); !isLanguage(v) {
+						p.errs = append(p.errs, errorAt(n, "",
+							"xml:lang %q on <xs:%s> is not a valid "+
+								"xs:language", a.Value, n.Name.Local))
+					}
+				}
+			}
 		}
 		for _, c := range n.ChildElements() {
 			walk(c)
 		}
 	}
 	walk(root)
+}
+
+// checkVersioningAttrs validates the XSD 1.1 conditional-inclusion attributes
+// where they appear on an XSD element.
+//
+// includeElement reads them but cannot report anything: it answers a bool, and
+// by design an attribute it does not recognise leaves the element included. So
+// a malformed value simply changed which elements were read, silently. The
+// schema for schemas types them: vc:minVersion and vc:maxVersion are
+// xs:decimal, and the four availability attributes are lists of QNames.
+//
+// vc901 writes minVersion="1.1.3", which has two decimal points; vc902 writes
+// "10g"; vc904 writes typeUnavailable=" vx:list-of-QNames xs:integer " with vx
+// unbound.
+func (p *parser) checkVersioningAttrs(el *xdm.Node) {
+	// 1.1 only. To a 1.0 processor these are foreign attributes carrying no
+	// meaning, so a malformed value is not its business — vc902 is marked
+	// valid under 1.0 and invalid under 1.1 on exactly that reading.
+	if p.schema.Version < Version11 {
+		return
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != NSVersioning {
+			continue
+		}
+		// Matched case-insensitively for the same reason
+		// includeElement does: the suite spells minVersion both ways.
+		switch strings.ToLower(a.Name.Local) {
+		case "minversion", "maxversion":
+			if !isDecimalLexical(strings.TrimSpace(a.Value)) {
+				p.errs = append(p.errs, errorAt(el, "src-schema.1",
+					"vc:%s=%q is not an xs:decimal", a.Name.Local, a.Value))
+			}
+		case "typeavailable", "typeunavailable",
+			"facetavailable", "facetunavailable":
+			for _, word := range strings.Fields(a.Value) {
+				if _, err := p.resolveQName(el, "vc:"+a.Name.Local, word); err != nil {
+					p.errs = append(p.errs, err)
+					continue
+				}
+				// resolveQName is satisfied by any non-empty
+				// local part, because a name that will be
+				// looked up in a map is caught by the lookup
+				// failing. Nothing looks these up, so the
+				// lexical form is checked here: vc905 writes
+				// typeUnavailable=" xs:integer 23".
+				local := word
+				if i := strings.IndexByte(word, ':'); i >= 0 {
+					local = word[i+1:]
+				}
+				if !isNCName(local) {
+					p.errs = append(p.errs, errorAt(el, "src-schema.1",
+						"vc:%s names %q, which is not a QName",
+						a.Name.Local, word))
+				}
+			}
+		}
+	}
 }
 
 // readTopLevel dispatches one child of <xs:schema>.
@@ -578,6 +663,15 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	// through: the assembler reaches the top level here too, for included
 	// documents and for the replacements inside <redefine> and <override>.
 	p.checkSourceModel(el)
+
+	switch el.Name.Local {
+	case "annotation", "defaultOpenContent",
+		"override", "include", "import", "redefine":
+		// None of these is a declaration, so none of them closes the
+		// window a defaultOpenContent may appear in.
+	default:
+		p.doc.sawDeclaration = true
+	}
 
 	switch el.Name.Local {
 	case "annotation":
@@ -616,6 +710,20 @@ func (p *parser) readTopLevel(el *xdm.Node) {
 	case "defaultOpenContent":
 		// XSD 1.1: an open content that applies to every complex type
 		// in the document that does not declare its own.
+		//
+		// The schema for schemas orders <xs:schema>'s children:
+		//   (include|import|redefine|override|annotation)*,
+		//   (defaultOpenContent, annotation*)?,
+		//   ((simpleType|complexType|group|attributeGroup|element
+		//     |attribute|notation), annotation*)*
+		// so it may not follow a declaration. s3_4_1si02 puts one after
+		// an <xs:element>. The readers dispatch by name and are
+		// otherwise order-blind, so the position is tracked here.
+		if p.doc.sawDeclaration {
+			p.errs = append(p.errs, errorAt(el, "src-schema.1",
+				"defaultOpenContent must come before every declaration "+
+					"and definition"))
+		}
 		p.doc.defaultOpenContent = p.readOpenContent(el)
 		p.doc.appliesToEmpty = p.boolAttr(el, "appliesToEmpty", false)
 

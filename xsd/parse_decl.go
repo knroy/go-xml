@@ -371,6 +371,24 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 		}
 	}
 
+	// 1.1 adds the fixed half of the same idea: a prohibited use never
+	// contributes an attribute, so a value constraint on it can never
+	// apply, and 3.2.3 clause 1 makes {value constraint} absent whenever
+	// {required} is false and the use is prohibited. attKb009 and attP029
+	// write use="prohibited" fixed="...". Gated on the version because
+	// 1.0's clause names default alone, and both tests are scored under
+	// 1.1 adds the fixed half of the same idea: a prohibited use never
+	// contributes an attribute, so a value constraint on it can never
+	// apply, and §3.2.3 makes {value constraint} absent for one. attKb009
+	// and attP029 write use="prohibited" together with fixed. Gated on the
+	// version because 1.0's clause names default alone, and both tests are
+	// scored under 1.1 only.
+	if p.schema.Version >= Version11 && el.Attr("", "fixed") != nil &&
+		el.AttrValue("use") == "prohibited" {
+		p.errs = append(p.errs, errorAt(el, "src-attribute.2",
+			"an attribute use with use=%q may not have fixed", "prohibited"))
+	}
+
 	use.Constraint = p.valueConstraint(el)
 	use.Inheritable = p.boolAttr(el, "inheritable", false)
 
@@ -1538,16 +1556,25 @@ func (p *parser) checkSubstitutionGroupDerivation(el *xdm.Node, d *ElementDecl) 
 				continue
 			}
 			excl := head.SubstitutionGroupExclusions
-			if excl == 0 {
-				continue
-			}
 			used, reached := derivationMethodsTo(d.Type, head.Type)
 			if !reached {
-				// The member's type is not derived from the
-				// head's at all. That is its own violation of
-				// clause 4, but it is also what a schema looks
-				// like mid-edit, and the suite does not pin it
-				// here; leave it to validation.
+				// Clause 4 asks for derivation at all, not just
+				// for a permitted method. typeRestricts is
+				// consulted rather than the walk above because
+				// it also accepts naming one member of a union
+				// head — a member whose type *is* one of the
+				// head's alternatives satisfies the head.
+				// particlesZ014 gives a substitute for an
+				// xs:integer head a union type that shares no
+				// base with it.
+				if typeRestricts(d.Type, head.Type) {
+					continue
+				}
+				return errorAt(el, "e-props-correct.4",
+					"element %q may not substitute for %q: its type is "+
+						"not derived from the head's", d.Name.Local, head.Name.Local)
+			}
+			if excl == 0 {
 				continue
 			}
 			if excl.Has(DerivationExtension) && used.Has(DerivationExtension) {
