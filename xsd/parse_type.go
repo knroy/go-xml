@@ -1004,10 +1004,38 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 			continue
 		}
 		if part := p.readParticle(c); part != nil {
+			if g.Compositor == CompositorAll {
+				p.checkAllMemberOccurs(c, part)
+			}
 			g.Particles = append(g.Particles, part)
 		}
 	}
 	return g
+}
+
+// checkAllMemberOccurs enforces cos-all-limited.2 (§3.8.6): in XSD 1.0 every
+// particle *inside* an all group must have {max occurs} = 1.
+//
+// checkAllOccurs above bounds the group as a whole; this bounds its members.
+// The two are separate clauses because they fail for separate reasons. An all
+// group means "each of these once, in any order", and the order-free matching
+// that gives it meaning is defined member by member: a member allowed to
+// repeat has no single position to be matched at, so "any order" stops
+// denoting anything. 1.0 therefore pins each member to exactly one occurrence,
+// leaving minOccurs="0" free to mark it optional.
+//
+// XSD 1.1 lifted the ceiling — a member may repeat, and the matching is
+// redefined to count occurrences rather than tick members off — so the check
+// is version-gated. addB095 writes <xs:all> with maxOccurs="2" on one of two
+// members and is expected invalid under 1.0 and valid under 1.1.
+func (p *parser) checkAllMemberOccurs(el *xdm.Node, part *Particle) {
+	if p.schema.Version >= Version11 {
+		return
+	}
+	if part.MaxOccurs == Unbounded || part.MaxOccurs > 1 {
+		p.errs = append(p.errs, errorAt(el, "cos-all-limited.2",
+			"a particle inside an xs:all group must have maxOccurs=1"))
+	}
 }
 
 // readModelGroupDef reads a top-level <xs:group>.
