@@ -378,6 +378,21 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// F&O 3.0 section 14.8.2: "The encoding of the external resource is
+	// determined as follows: external encoding information is used if
+	// available, otherwise if the media type of the resource is text/xml or
+	// application/xml [...] then the encoding is recognized as specified in
+	// [XML 1.0], otherwise the value of the $encoding argument is used if
+	// present". A file read off the filesystem carries no external encoding
+	// information, so for an XML resource the declaration outranks the
+	// argument, and when the argument is absent it is the only thing that
+	// stands between the reader and a mis-decode. catalog-005b reads
+	// character-map-010.xsl, which declares iso-8859-1 and holds bytes that
+	// are not valid UTF-8; without this the read fails with FOUT1190 for a
+	// file whose own first line says how to decode it.
+	if declared := xmlDeclEncoding(data); declared != "" {
+		encoding = declared
+	}
 	switch strings.ToLower(strings.TrimSpace(encoding)) {
 	case "", "utf-8", "utf8", "us-ascii", "ascii":
 		// US-ASCII is a subset of UTF-8, so the same decode is correct for
@@ -442,4 +457,46 @@ func isXMLChar(c rune) bool {
 		return true
 	}
 	return false
+}
+
+// xmlDeclEncoding returns the encoding named by the XML declaration at the
+// start of data, or "" when there is no declaration or it names no encoding.
+//
+// Only the ASCII-compatible single-byte case is recognised, which is the case
+// the rule is for: a UTF-16 resource carries a BOM and is identified by that,
+// and a declaration written in an encoding that is not ASCII-compatible
+// cannot be read without already knowing the encoding. The scan is bounded by
+// the declaration's own terminator, so a file with no declaration costs a few
+// bytes of comparison.
+func xmlDeclEncoding(data []byte) string {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	if !bytes.HasPrefix(data, []byte("<?xml")) {
+		return ""
+	}
+	end := bytes.Index(data, []byte("?>"))
+	if end < 0 {
+		return ""
+	}
+	decl := string(data[:end])
+	i := strings.Index(decl, "encoding")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(decl[i+len("encoding"):])
+	if !strings.HasPrefix(rest, "=") {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[1:])
+	if rest == "" {
+		return ""
+	}
+	quote := rest[0]
+	if quote != '\'' && quote != '"' {
+		return ""
+	}
+	j := strings.IndexByte(rest[1:], quote)
+	if j < 0 {
+		return ""
+	}
+	return rest[1 : 1+j]
 }

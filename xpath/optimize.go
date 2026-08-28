@@ -205,14 +205,21 @@ func foldableFunction(name xdm.QName) bool {
 	}
 	switch name.Local {
 	case "abs", "ceiling", "floor", "round", "round-half-to-even",
-		"count", "sum", "min", "max", "avg",
+		"count", "sum", "avg",
 		"concat", "string-length", "upper-case", "lower-case",
-		"substring", "substring-before", "substring-after",
-		"contains", "starts-with", "ends-with", "translate",
+		"substring", "translate",
 		"not", "true", "false", "boolean", "number", "string",
-		"empty", "exists", "reverse", "distinct-values":
+		"empty", "exists", "reverse":
 		return true
 	}
+	// fn:contains, starts-with, ends-with, substring-before, substring-after,
+	// min, max, distinct-values and compare all read the default collation
+	// from the dynamic context, so folding a call on literal arguments here
+	// answers it under the codepoint collation and freezes that answer.
+	// collations-1006 sets default-collation to a UCA collation at
+	// strength=secondary and asks starts-with('abc', 'AB'), which is true
+	// under that collation and false under codepoint; folding gave the
+	// codepoint answer for an expression that never evaluates under it.
 	return false
 }
 
