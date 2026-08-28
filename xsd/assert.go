@@ -118,6 +118,52 @@ func (r assertResolver) DefaultFunctionNamespace() string {
 	return "http://www.w3.org/2005/xpath-functions"
 }
 
+// xpathVarRef finds the first variable reference in an XPath expression and
+// returns its name.
+//
+// This is a scan of the source rather than a walk of the compiled tree because
+// the question is asked before compiling and needs no more than the lexical
+// structure: a "$" begins a variable reference everywhere in the grammar except
+// inside a string literal or a comment, both of which this skips. A "$" that
+// starts no name — the expression is malformed — is left to the compiler, which
+// will report it far better than this could.
+func xpathVarRef(src string) (string, bool) {
+	depth := 0
+	for i := 0; i < len(src); i++ {
+		switch c := src[i]; {
+		case depth > 0:
+			// Inside a comment. They nest, so "(:" opens another and
+			// ":)" closes only the innermost.
+			if c == '(' && i+1 < len(src) && src[i+1] == ':' {
+				depth++
+				i++
+			} else if c == ':' && i+1 < len(src) && src[i+1] == ')' {
+				depth--
+				i++
+			}
+		case c == '(' && i+1 < len(src) && src[i+1] == ':':
+			depth++
+			i++
+		case c == '\'' || c == '"':
+			// A string literal, in which the delimiter is escaped by
+			// doubling it. Doubling is handled by simply not stopping:
+			// the closing quote of "" is immediately reopened by the
+			// next iteration, which lands on the second quote.
+			for i++; i < len(src) && src[i] != c; i++ {
+			}
+		case c == '$':
+			j := i + 1
+			for j < len(src) && (isNameChar(src[j]) || src[j] == ':') {
+				j++
+			}
+			if j > i+1 {
+				return src[i+1 : j], true
+			}
+		}
+	}
+	return "", false
+}
+
 // readAlternative reads an <xs:alternative>.
 func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	alt := &TypeAlternative{Source: el.AttrValue("test")}
@@ -126,6 +172,25 @@ func (p *parser) readAlternative(el *xdm.Node) *TypeAlternative {
 	}
 
 	if alt.Source != "" {
+		// §3.4.4.3 gives a type alternative's XPath an empty in-scope
+		// variables set: unlike a simple-type assertion, which binds
+		// $value, an alternative has nothing to refer to. Any variable
+		// reference in it is therefore a static error, and static
+		// errors in an alternative are errors of the schema.
+		//
+		// It has to be caught here rather than left to evaluation: a
+		// type alternative whose test raises is *skipped*, not failed
+		// (see selectAlternativeType), so an unbound $x would quietly
+		// make its branch unreachable instead of rejecting the schema.
+		// cta9002err pins it.
+		if v, ok := xpathVarRef(alt.Source); ok {
+			p.errs = append(p.errs, errorAt(el, "src-type-alternative",
+				"alternative test %q refers to the variable $%s; a type "+
+					"alternative has no variables in scope",
+				alt.Source, v))
+			return nil
+		}
+
 		// As for an assertion: the attribute may be inherited and takes
 		// keywords besides a URI.
 		def, _ := p.xpathDefaultNamespace(el)
