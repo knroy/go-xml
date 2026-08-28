@@ -764,8 +764,24 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	}
 	overridingSeen := map[string]bool{}
 	for _, u := range uses {
-		for key := range u.overriding {
+		for key, el := range u.overriding {
 			if ownByName[key] {
+				// A function clash is XTSE0770, the more specific rule:
+				// "a package must not contain two or more xsl:function
+				// declarations with the same expanded QName, the same arity
+				// and the same import precedence". 3.5.4 makes the overriding
+				// declaration a component of the using package, so both
+				// declarations are in one package and 0770 applies in its own
+				// right. The suite draws the line here: error-3055a is this
+				// shape with a template and wants XTSE3055, while
+				// override-f-020 is the same shape with a function and
+				// accepts only XTSE0770 or XTSE3050.
+				if isXSL(el, "function") {
+					return fmt.Errorf(
+						"XTSE0770: %s is declared as a child of xsl:override "+
+							"and also declared in the using package, at the "+
+							"same import precedence", key)
+				}
 				return fmt.Errorf(
 					"XTSE3055: %s is declared as a child of xsl:override and "+
 						"also declared in the using package", key)
@@ -946,6 +962,9 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			}
 			if err := checkOverrideSignature(oc.el, target.el); err != nil {
 				return nil, err
+			}
+			if prev, dup := overridden[key]; dup {
+				return nil, duplicateOverrideError(oc, prev)
 			}
 			overridden[key] = oc.el
 		}
@@ -2095,4 +2114,24 @@ func clarkToEQName(clark string) string {
 		}
 	}
 	return "Q{}" + clark
+}
+
+
+// duplicateOverrideError is the error for two declarations of one symbolic
+// name inside xsl:override.
+//
+// XTSE3055 covers it -- "homonymous with any other declaration in the using
+// package ... including any other overriding declaration in the package
+// manifest" -- but for a function XTSE0770 says the same thing more
+// specifically, and that is what the suite asks for: override-f-019 writes
+// two overriding declarations of p:f#2 and expects XTSE0770 alone.
+func duplicateOverrideError(oc *component, prev *xdm.Node) error {
+	if isXSL(oc.el, "function") || isXSL(prev, "function") {
+		return fmt.Errorf(
+			"XTSE0770: %s is declared twice as a child of xsl:override, at "+
+				"the same import precedence", oc.sym)
+	}
+	return fmt.Errorf(
+		"XTSE3055: %s is declared more than once as a child of xsl:override",
+		oc.sym)
 }
