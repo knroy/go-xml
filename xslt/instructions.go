@@ -734,6 +734,28 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		if doc.BaseURI == "" {
 			doc.BaseURI = node.BaseURI
+			// The body ran before the document node had a base URI of its
+			// own, so every element it built was parentless as far as
+			// stampConstructedBaseURI could tell and took the stylesheet's
+			// URI as its last resort. Now that the copy supplies one, XDM
+			// 3.0 §6.2 says the child inherits it: dm:base-uri of an element
+			// is its xml:base if it has one, "otherwise the base URI of its
+			// parent", and only a parentless element falls back to where it
+			// was constructed. Dropping the stamp is what lets the walk up
+			// the ancestors reach the document node.
+			//
+			// Only the stamp goes. An xml:base attribute written into the
+			// body still wins, because the accessor reads the attribute
+			// before this field. base-uri-053 shallow-copies two documents
+			// read with fn:doc, puts a <z/> in each, and requires
+			// base-uri() of that z to end in the copied document's name.
+			if doc.BaseURI != "" {
+				for _, ch := range doc.Children {
+					if ch.Kind == xdm.KindElement {
+						ch.BaseURI = ""
+					}
+				}
+			}
 		}
 		if err := i.validation.assess(rt, doc); err != nil {
 			return err
