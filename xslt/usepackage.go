@@ -1754,6 +1754,21 @@ var originalSerial int
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
 func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+	// The overriding declaration is about to be spliced into the used
+	// package's tree, which detaches it from the xsl:override it was written
+	// under. [xsl:]default-mode is resolved by walking ancestors, so a
+	// default-mode written on the xsl:override (or above it) would be lost by
+	// the move. It is materialised on the declaration itself first.
+	//
+	// override-m-012 writes <xsl:override default-mode="m3"> over a template
+	// that carries both a match and a name: the name makes it a component and
+	// so a candidate for the splice, and after the move its unprefixed @match
+	// named the unnamed mode instead of m3.
+	if overriding.Attr("", "default-mode") == nil {
+		if dm, err := defaultModeAt(overriding); err == nil && dm != "" {
+			setAttr(overriding, "default-mode", clarkToEQName(dm))
+		}
+	}
 	originalSerial++
 	uri := fmt.Sprintf("%s%d", originalNS, originalSerial)
 	// A mode is not reachable through xsl:original -- there is no syntax for
@@ -2067,4 +2082,17 @@ func overridingPackage(el *xdm.Node, current int) int {
 		}
 	}
 	return current
+}
+
+
+// clarkToEQName renders a Clark name as the EQName spelling, which needs no
+// prefix in scope. It is how a resolved mode name is written back onto an
+// attribute that will be re-resolved later.
+func clarkToEQName(clark string) string {
+	if strings.HasPrefix(clark, "{") {
+		if end := strings.IndexByte(clark, '}'); end > 0 {
+			return "Q{" + clark[1:end] + "}" + clark[end+1:]
+		}
+	}
+	return "Q{}" + clark
 }
