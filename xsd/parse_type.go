@@ -912,6 +912,14 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 			})
 			return part
 		}
+		// src-element.2.1: "either the name or the ref attribute must
+		// be present, but not both". A local element with neither
+		// declares nothing at all; elemP005 is <xs:all><xs:element/>.
+		if el.AttrValue("name") == "" {
+			p.errs = append(p.errs, errorAt(el, "src-element.2.1",
+				"an element inside a content model must have a name or a ref"))
+			return nil
+		}
 		part.Term = p.readElementDecl(el, ScopeLocal)
 
 	case "any":

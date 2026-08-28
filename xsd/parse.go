@@ -540,6 +540,27 @@ func (p *parser) checkIDs(root *xdm.Node) {
 					seen[a.Value] = true
 				}
 			}
+			// <xs:documentation> and <xs:appinfo> take xml:lang as
+			// xs:language in the schema for schemas, and xs:language
+			// admits neither the empty string nor whitespace. That
+			// is narrower than the *general* xml:lang attribute
+			// declaration, which is a union with the empty string
+			// because XML 1.0 §2.12 spells "no language stated"
+			// that way — but a schema document is validated against
+			// the schema for schemas, not against XML 1.0's own
+			// declaration. annotF001 writes xml:lang="" and
+			// annotF003 writes xml:lang=" ", which collapses to the
+			// same thing.
+			switch n.Name.Local {
+			case "documentation", "appinfo":
+				if a := n.Attr(NSXML, "lang"); a != nil {
+					if v := WhiteCollapse.Normalize(a.Value); !isLanguage(v) {
+						p.errs = append(p.errs, errorAt(n, "",
+							"xml:lang %q on <xs:%s> is not a valid "+
+								"xs:language", a.Value, n.Name.Local))
+					}
+				}
+			}
 		}
 		for _, c := range n.ChildElements() {
 			walk(c)
