@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -11,6 +12,10 @@ import (
 type nsAlias struct {
 	uri    string
 	prefix string
+	// pkg is the package whose xsl:namespace-alias declared it. 3.5.5 makes
+	// the declaration local to that package, so only a literal result element
+	// written in the same package is rewritten by it.
+	pkg int
 }
 
 // compileNamespaceAlias compiles xsl:namespace-alias.
@@ -65,7 +70,8 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 	// is not one either. The second escape is why the record is kept rather
 	// than the check being made against the alias map alone — the map holds
 	// only the winner, so it cannot say whether a loser conflicted.
-	if prev, ok := c.aliasDecls[from]; ok {
+	akey := aliasKey(compilePackage, from)
+	if prev, ok := c.aliasDecls[akey]; ok {
 		switch {
 		case prev.precedence > precedence, precedence > prev.precedence:
 			// A higher precedence declaration settles the question.
@@ -79,9 +85,10 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 	if c.aliasDecls == nil {
 		c.aliasDecls = map[string]aliasDecl{}
 	}
-	if prev, ok := c.aliasDecls[from]; !ok || precedence >= prev.precedence {
-		c.aliasDecls[from] = aliasDecl{uri: to, precedence: precedence}
-		c.sheet.namespaceAliases[from] = nsAlias{uri: to, prefix: outPrefix}
+	if prev, ok := c.aliasDecls[akey]; !ok || precedence >= prev.precedence {
+		c.aliasDecls[akey] = aliasDecl{uri: to, precedence: precedence}
+		c.sheet.namespaceAliases[akey] = nsAlias{
+			uri: to, prefix: outPrefix, pkg: compilePackage}
 	}
 	return nil
 }
@@ -93,14 +100,42 @@ type aliasDecl struct {
 	precedence int
 }
 
-// aliasFor rewrites a name through the declared namespace aliases, returning
-// the name unchanged when no alias applies.
-func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
-	a, ok := s.namespaceAliases[n.URI]
+// aliasKey scopes an alias to the package that declared it.
+//
+// Section 3.5.5: "Declarations of keys, accumulators, decimal formats,
+// namespace aliases, output definitions, and character maps within a package
+// have local scope within that package -- they are all effectively private."
+//
+// So two packages may each alias the same literal namespace URI onto a
+// different target, and neither answer may reach the other. The flat table
+// this replaces held one entry per literal URI, and the last package compiled
+// won: use-package-103 and its used package both alias the XSD namespace, and
+// the used package's function emitted the using package's target namespace.
+//
+// The top-level package keeps the bare URI as its key, so a stylesheet that
+// uses no packages is unaffected.
+func aliasKey(pkg int, uri string) string {
+	if pkg == 0 {
+		return uri
+	}
+	return strconv.Itoa(pkg) + " " + uri
+}
+
+// aliasFor rewrites a name through the namespace aliases in scope for a
+// literal result element written in pkg, returning the name unchanged when no
+// alias applies.
+func (s *Stylesheet) aliasFor(pkg int, n xdm.QName) xdm.QName {
+	a, ok := s.aliasIn(pkg, n.URI)
 	if !ok {
 		return n
 	}
 	return xdm.QName{Prefix: a.prefix, URI: a.uri, Local: n.Local}
+}
+
+// aliasIn answers the alias one package gives a literal namespace URI.
+func (s *Stylesheet) aliasIn(pkg int, uri string) (nsAlias, bool) {
+	a, ok := s.namespaceAliases[aliasKey(pkg, uri)]
+	return a, ok
 }
 
 // isAliasTarget reports whether a URI is the target namespace URI of any
@@ -109,9 +144,11 @@ func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
 // Section 11.1.4 makes a target namespace URI survive exclusion, so this is
 // the question the literal result element asks of each binding exclusion would
 // otherwise have dropped.
-func (s *Stylesheet) isAliasTarget(uri string) bool {
+func (s *Stylesheet) isAliasTarget(pkg int, uri string) bool {
 	for _, a := range s.namespaceAliases {
-		if a.uri == uri {
+		// Only an alias of the element's own package speaks for it, on the
+		// same package-local rule aliasKey states.
+		if a.uri == uri && a.pkg == pkg {
 			return true
 		}
 	}
@@ -188,7 +225,7 @@ func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 		return nil
 	}
 	c.charMapPrecedence[qn.Clark()] = precedence
-	c.sheet.characterMaps[qn.Clark()] = m
+	c.sheet.characterMaps[aliasKey(compilePackage, qn.Clark())] = m
 	return nil
 }
 
@@ -199,7 +236,8 @@ func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 // module has been compiled so that a map declared in an imported stylesheet is
 // visible to an xsl:output in the importing one.
 func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
-	merged, err := s.flattenCharacterMaps(names)
+	// The principal xsl:output is the top-level package's.
+	merged, err := s.flattenCharacterMaps(0, names)
 	if err != nil {
 		return err
 	}
@@ -216,13 +254,13 @@ func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
 // rather than left inside the xsl:output path: a secondary document that
 // names a character map must get the same substitutions the principal one
 // would, and resolving the name needs the stylesheet the caller no longer has.
-func (s *Stylesheet) flattenCharacterMaps(names []xdm.QName) (map[rune]string, error) {
+func (s *Stylesheet) flattenCharacterMaps(pkg int, names []xdm.QName) (map[rune]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
 	merged := map[rune]string{}
 	for _, n := range names {
-		m, ok := s.characterMaps[n.Clark()]
+		m, ok := s.charMapIn(pkg, n.Clark())
 		if !ok {
 			return nil, fmt.Errorf("XTSE1590: no xsl:character-map named %q", n.Lexical())
 		}
@@ -289,4 +327,31 @@ func (c *compiler) mergeCharMaps(dst map[rune]string, names []string, depth int)
 		}
 	}
 	return nil
+}
+
+// charMapIn answers the character map of one name as the given package sees
+// it, 3.5.5.
+//
+// A package's own declaration wins. Where it has none, the table is consulted
+// unscoped, which is what keeps a map declared in a used package reachable
+// from that package's own xsl:result-document -- use-package-108 calls the
+// used package's "go" template, which serialises through the map that package
+// declares -- while use-package-108b, where BOTH packages declare a "cm",
+// gives each its own.
+func (s *Stylesheet) charMapIn(pkg int, name string) (map[rune]string, bool) {
+	if m, ok := s.characterMaps[aliasKey(pkg, name)]; ok {
+		return m, true
+	}
+	m, ok := s.characterMaps[name]
+	return m, ok
+}
+
+// namedOutputIn answers the output definition of one name as the given package
+// sees it, on the same terms as charMapIn.
+func (s *Stylesheet) namedOutputIn(pkg int, name string) (*OutputSettings, bool) {
+	if o, ok := s.namedOutputs[aliasKey(pkg, name)]; ok {
+		return o, true
+	}
+	o, ok := s.namedOutputs[name]
+	return o, ok
 }
