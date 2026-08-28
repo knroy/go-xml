@@ -1,53 +1,62 @@
 # What reaching 100% would take
 
-Measured at commit `26f12b3`. The short answer: **100% is not reachable on any
-of these suites**, and roughly half the remaining disagreements are cases where
+Measured at commit `56543f9`. The short answer: **100% is not reachable on any
+of these suites**, and the great majority of what remains are cases where
 passing would mean shipping something *less* correct. What follows separates
 the work that exists from the work that does not.
 
 | | Failing | Fixable | Open | Cannot fix |
 |---|---:|---:|---:|---:|
-| XPath 3.1 | 4 | 1 | 0 | 3 |
+| XPath 3.1 | 3 | 0 | 0 | 3 |
 | XSLT 2.0 | 9 | 1 | 1 | 7 |
-| XSLT 3.0 | 52 | 33 | 1 | 18 |
-| XSD 1.0 | 73 | 21 | 0 | 52 |
-| XSD 1.1 | 104 | 50 | 0 | 54 |
-| **Total** | **242** | **106** | **2** | **134** |
+| XSLT 3.0 | 29 | 9 | 1 | 19 |
+| XSD 1.0 | 63 | 13 | 0 | 50 |
+| XSD 1.1 | 79 | 30 | 0 | 49 |
+| **Total** | **183** | **53** | **2** | **128** |
 
 XPath 2.0, XPath 3.0 and RELAX NG are already at 100%.
 
+For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
+own `status` field. A case marked `accepted` is a settled expectation and so is
+real work; one marked `queried` or `stable bugNNNN` is one the W3C has itself
+challenged, and 99 of the 142 XSD disagreements are of that kind — 44 of them
+(22 per version) are the single open bug 4113.
+
 ---
 
-## Part 1 — the 106 that are real work
+## Part 1 — the 53 that are real work
 
 This is the whole of what "reaching the ceiling" means. None of it is
 speculative; every case has a diagnosed shape.
 
-### XSD schema validity — 71 cases, the largest block
+### XSD schema validity — 43 cases, the largest block
 
-**21 on XSD 1.0, 50 on 1.1.** Two different problems wearing one label:
+**13 on XSD 1.0, 30 on 1.1**, counting only what the suite marks `accepted`.
+Two different problems wearing one label:
 
 | Kind | 1.0 | 1.1 | What it means |
 |---|---:|---:|---|
-| `SFALSEACCEPT` | 11 | 37 | A schema-validity rule that is not checked yet. Additive: write the rule, the case passes. |
-| `SFALSEREJECT` | 6 | 11 | The opposite — a rule applied too strictly. **Riskier**: loosening one can re-admit a false accept elsewhere. |
-| `IFALSEACCEPT` / `IFALSEREJECT` | 4 | 2 | Instance validation, both directions. |
+| `SFALSEACCEPT` | 5 | 22 | A schema-validity rule that is not checked yet. Additive: write the rule, the case passes. |
+| `SFALSEREJECT` | 6 | 7 | The opposite — a rule applied too strictly. **Riskier**: loosening one can re-admit a false accept elsewhere. |
+| `IFALSEREJECT` | 2 | 1 | Instance validation. |
 
-The false-accept half is tractable and was just demonstrated: an agent cleared
-80 of these in one pass by writing seventeen rules, with no agreement count
-falling. The remainder is thinner — `particlesZ001`, `Z028`, `Hb008` and
-`Hb011` need the content-model restriction table *loosened*, and four more
-(`simple006`, `idB005`, `over024`, `over026`) are unresolved type references
-that are structurally identical to `saxonData/Missing/missing001`, which the
-suite marks **valid** on the "error only if the declaration is needed for
-validation" reading. Separating those needs reachability analysis over the
-schema graph.
+The false-accept half is the tractable one, and two agent rounds have now
+demonstrated it: ~90 of these cleared by writing rules one at a time, with no
+agreement count falling. What is left is thinner and concentrated in 1.1 —
+the `All` group (`all009`, `all218`, `all237`, `all308`, `all313`), open
+content (`open036`, `open046`, `open048`) and wildcards (`wild049`, `wild050`,
+`wild057`, `wild069`).
+
+The `SFALSEREJECT` side is where the risk sits: `particlesZ001`,
+`s3_10_6ii01`/`ii02` and `s3_10_1ii08`/`ii09` need the content-model and
+wildcard restriction tables *loosened*, and each loosening has to be measured
+against both versions to show it has not re-admitted a false accept.
 
 **Effort:** the additive rules are days, one rule at a time, each measured
 against both versions. The over-strict four and the reachability four are
 genuinely harder and may not be worth their cost.
 
-### XSLT 3.0 long tail — 33 cases
+### XSLT 3.0 long tail — 9 cases
 
 No concentration left. Package composition was a third of the failures and is
 now 5, all unreachable. What remains is one or two cases across thirty test
@@ -77,28 +86,28 @@ the least of it by difficulty.
 - **`validation-0006`** — a parentless attribute: `XTTE1555` wanted,
   `XTTE1540` given.
 
-### If all 109 landed
+### If all 55 landed
 
 | Suite | Now | Ceiling |
 |---|---|---|
-| XPath 3.1 | 99.98% | **99.99%** |
+| XPath 3.1 | 99.99% | **99.99%** |
 | XSLT 2.0 | 99.85% | **99.89%** |
-| XSLT 3.0 | 99.40% | **99.79%** |
-| XSD 1.0 | 99.81% | **99.87%** |
-| XSD 1.1 | 99.75% | **99.87%** |
+| XSLT 3.0 | 99.66% | **99.79%** |
+| XSD 1.0 | 99.84% | **99.87%** |
+| XSD 1.1 | 99.81% | **99.88%** |
 
 ---
 
-## Part 2 — the 134 that are not work
+## Part 2 — the 128 that are not work
 
 Grouped by what would actually have to change.
 
-### 106 — the W3C disputes its own expected result
+### 99 — the W3C disputes its own expected result
 
-XSD 1.0 (52) and 1.1 (54). The suite records a `status` on each test:
+XSD 1.0 (50) and 1.1 (49). The suite records a `status` on each test:
 `accepted` means settled, **`queried` means the W3C has itself challenged the
-expectation**, usually with a bugzilla number. 30 are `queried` in each
-version, ~20 more are `stable` but carry an open bug.
+expectation**, usually with a bugzilla number. 27 are `queried` in each
+version, the rest are `stable` but carry an open bug.
 
 **All 44 `MS-Regex` disagreements — 22 in each version — are one bug, 4113.**
 
@@ -106,12 +115,11 @@ To pass these we would have to agree with results the working group does not
 stand behind. That is not conformance; it is bug-compatibility with a specific
 processor. **Nothing to do here, and doing it would be wrong.**
 
-*Caveat found while writing this:* six of the 106 are marginal —
-`wildZ013`, `stZ007`, `stZ047`, `stZ055` are `accepted` but carry an open bug,
-and `sg-abstract-edc` and `iri-001` have no status at all. `iri-001` is the
-DOCTYPE refusal (deliberate, security). The other five are arguably fixable and
-should be re-triaged; they would move the totals to roughly 114 fixable / 126
-unfixable.
+*Marginal cases:* six sit on the boundary. `wildZ013`, `stZ007`, `stZ047` and
+`stZ055` are `accepted` but carry an open bug, and `sg-abstract-edc` and
+`iri-001` have no status at all. `iri-001` is the DOCTYPE refusal (deliberate,
+security). They are counted as fixable here, which is the less flattering
+reading.
 
 ### 3 — no XQuery processor
 
@@ -223,8 +231,8 @@ doing on its own merits.
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** Of 242
-disagreements, 134 would require agreeing with a disputed result, shipping a
+**Reaching 100% is not a goal that survives contact with the suites.** Of 183
+disagreements, 128 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default.
 
@@ -237,7 +245,7 @@ What is achievable:
 4. **Two singles** — `json-to-xml-048`, `validation-0201`.
 5. **XSD over-strictness** — 17 cases, riskier, each can regress a false accept.
 
-That is **~106 cases and a ceiling of about 99.8% across the board**.
+That is **~53 cases and a ceiling of about 99.8% across the board**.
 
 Three larger items are defensible as *features* rather than conformance work,
 and should be judged that way: **`xsl:assert`** (cheapest), **XInclude**, and

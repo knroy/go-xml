@@ -7,13 +7,13 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,367 / 14,405 (99.74%) | 24,964 / 24,999 (99.86%) |
-| XSD 1.1 | 15,293 / 15,365 (99.53%) | 26,173 / 26,205 (99.88%) |
+| XSD 1.0 | 14,374 / 14,405 (99.78%) | 24,967 / 24,999 (99.87%) |
+| XSD 1.1 | 15,316 / 15,365 (99.68%) | 26,176 / 26,206 (99.89%) |
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,236 of 19,236 in scope |
-| XPath 3.1 | 99.98% — 21,782 of 21,786 in scope (4 failing) |
+| XPath 3.1 | 99.99% — 21,783 of 21,786 in scope (3 failing) |
 | XSLT 2.0 | 99.85% — 6,149 of 6,158 in scope (9 failing) |
-| XSLT 3.0 | 99.40% — 8,571 of 8,623 in scope (52 failing); streaming out of scope |
+| XSLT 3.0 | 99.66% — 8,594 of 8,623 in scope (29 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 671, clean under `-race` |

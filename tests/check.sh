@@ -65,11 +65,11 @@ abspath() {
 # whether every element/attribute pair the schema permits appears somewhere in
 # the suite's non-error stylesheets, which means parsing all of them inside the
 # runner's 10s per-case timeout. On an idle machine it passes and the 3.0 suite
-# reports 8571; under load -- a parallel build, or several agents sharing the
-# box -- it exceeds the deadline and the suite reports 8570. The mark is
+# reports 8594; under load -- a parallel build, or several agents sharing the
+# box -- it exceeds the deadline and the suite reports one fewer. The mark is
 # therefore the LOWER figure, so a busy machine cannot fail the check on an
-# unmodified tree. A run that reports 8571 is the same tree on a quieter
-# machine, not an improvement.
+# unmodified tree. A run one above the mark is the same tree on a quieter
+# machine, not an improvement -- do not record it with GOXSLT_RATCHET=update.
 #
 # Set GOXSLT_RATCHET=update to record a new high after a deliberate change,
 # or GOXSLT_RATCHET=off to skip the check entirely.

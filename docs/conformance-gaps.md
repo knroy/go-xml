@@ -1,35 +1,45 @@
 # W3C conformance: the remaining gaps
 
 Every figure here comes from a full run of the suite it names, measured at
-commit `dd377f4` with `tests/check.sh`. Nothing is estimated.
+commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | 99.98% | **4** | 1 | 0 | **3** | 99.99% |
+| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,783 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 1 | **7** | 99.89% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,571 | 99.40% | **52** | 33 | 1 | **18** | 99.79% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,331 | 99.81% | **73** | 21 | 0 | **52** | 99.87% |
-| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,466 | 99.75% | **104** | 50 | 0 | **54** | 99.87% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,594 | 99.66% | **29** | 9 | 1 | **19** | 99.79% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,341 | 99.84% | **63** | 13 | 0 | **50** | 99.87% |
+| **xsd** | W3C xsdtests 1.1 | 41,571 | 41,492 | 99.81% | **79** | 30 | 0 | **49** | 99.88% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **242** | **106** | **2** | **134** | |
+| | **Total** | | | | **183** | **53** | **2** | **128** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**242 disagreements in total**, of which **106 are ours to fix**, **134 cannot
+**183 disagreements in total**, of which **53 are ours to fix**, **128 cannot
 be fixed without shipping something less correct**, and **2 are open
 questions**.
 
-This is down from 345 at commit `69c53cf`. Four agents working in isolated
-worktrees cleared 103 cases: 10 of 10 in the `xsl:override` cluster, 9 of 12
-across `package`/`accept`/`expose`/`use-package`, and 80 XSD schema-validity
-disagreements. A fifth target — the regex and validation-ordering items —
-turned out not to be work at all, and moved seven cases into the "cannot be
-fixed" column instead.
+The XSD split is taken from the suite's own `status` field rather than from
+judgement: `accepted` marks a settled expectation, while `queried` and
+`stable bugNNNN` mark expectations the W3C has itself challenged. That is why
+only 13 of 63 XSD 1.0 disagreements and 30 of 79 in 1.1 count as work.
+
+This is down from 345 at commit `69c53cf`, in two rounds of agents working in
+isolated worktrees. The first cleared 103 cases: 10 of 10 in the
+`xsl:override` cluster, 9 of 12 across `package`/`accept`/`expose`/
+`use-package`, and 80 XSD schema-validity disagreements. The second cleared a
+further 59 — 23 XSLT 3.0, 10 XSD 1.0, 26 XSD 1.1 — and took XPath 2.0 and 3.0
+to a clean 100%.
+
+Both rounds also moved cases the other way, into "cannot be fixed": the regex
+and validation-ordering items in round 1, and `accumulator-038`,
+`json-to-xml-048`, `validation-0201` and `validation-0006` in round 2, each
+settled by reading the spec or the test rather than by changing the engine.
 
 ## How to read the verdicts
 
@@ -114,7 +124,7 @@ three failures involves `\w`, `\d` or `\c` membership. Only these three
 2012-era XSLT 2.0 cases disagree, each exactly where Unicode moved underneath
 them.
 
-## XSLT 3.0 — 52 failures
+## XSLT 3.0 — 29 failures
 
 ### Package composition — 5
 
@@ -133,7 +143,7 @@ them separate, and `override-t-003a` is the case.
 | `package-200` | **Not implementable** | `package-version="'1.0.0'"` wants XTSE3000, but `use-package-291`–`294` write four other malformed ranges and all want XTSE0020. One sentence — "an attribute contains a value that is not one of the permitted values" — covers all five identically, and nothing in the `PackageVersionRange` grammar separates a quoted version from any other malformed one. The current answer costs 1 case and saves 4. |
 | `use-package-003` | **Not implementable at this blast radius** | A private function of a used package must resolve inside it and not outside. Functions live in one flat `xpath.Library` resolved by name at runtime, and `FuncCall` carries only a QName. A lexical rename was implemented; it fixed this case and broke `override-f-026`, where `g:transitive-closure` exists at arity 1 (public) and arity 2 (private) — a name-based rewrite cannot separate arities. A real fix needs the package threaded through the XPath static context. |
 
-### Schema-aware validation — 6
+### Schema-aware validation — 5
 
 | Cases | Verdict | Why |
 |---|---|---|
@@ -141,7 +151,6 @@ them separate, and `override-t-003a` is the case.
 | `import-schema-137` | **Not implementable** | The one genuine ordering case, and §2.9 explicitly declines to settle it: "If more than one error arises, an implementation is not required to signal any errors other than the first one that it detects. **It is implementation-dependent which of the several errors is signaled.**" Both errors are real, so either choice conforms; the suite is testing one processor's order. |
 | `validation-0006` | **Open question** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. A distinct question from the three above. |
 | `validation-0201` | **Implementable** | XHTML serialisation, as above. |
-| `catalog-001` | **Implementable** | `schema-element()` in a `use-when` test with no schema imported. |
 
 ### Regex — 3
 
@@ -149,42 +158,46 @@ them separate, and `override-t-003a` is the case.
 |---|---|---|
 | `regex-syntax-0056`, `regex-syntax-0086`, `regex-syntax-0102` | **Not implementable** | Ambiguous-dash character classes such as `[^a-d-b-c]` and `[a-a-x-x]+`, which XSD 1.0 rejects and XSD 1.1 accepts. **The suite contradicts itself**: `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the *identical* pattern and the *identical* `XSD_1.1 satisfied="false"` dependency, yet the first asserts `FORX0002` and the second asserts a successful match. No engine can pass both. The XSD 1.0 rule was implemented and measured: it fixes these three (`984/3 → 987/0`) at a cost of −3 XSLT 2.0, −9 QT3 and −34 XSD 1.1, for a net loss. Reverted. |
 
-### Deliberately out of scope — 4
+### Deliberately out of scope — 5
 
 | Cases | Verdict | Why |
 |---|---|---|
 | `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,716 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
 | `base-uri-052` | **Not implementable** | The environment declares `xinclude="true"`; XInclude is not implemented. |
 | `docbook-001`, `docbook-004` | **Not implementable** | EXSLT `exsl:document`, as above. |
+| `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
 
-### Long tail — 34
+### Long tail — 11
 
-One or two cases each across 30 sets. All **implementable** unless noted; none
-shares a cause with another, so each is its own small investigation.
+Round 2 cleared 23 of the 34 that were here. What is left is one case per set,
+none sharing a cause with another, so each is its own small investigation.
 
-| Area | Cases | Note |
+| Case | Verdict | Note |
 |---|---|---|
-| Snapshots | `snapshot-0102a`, `snapshot-0112` | `fn:snapshot` typing and identity |
-| Higher-order functions | `higher-order-functions-007`, `higher-order-functions-034` | Named function references to undeclared names |
-| Copy | `copy-1221`, `copy-3002` | Namespace fixup; missing `XTDE3362` |
-| Errors | `error-0640e-2`, `error-3105a` | Two missing static checks |
-| Base URI | `base-uri-053` | Result-document base URI |
-| Catalog | `catalog-005b`, `catalog-006b`, `catalog-009` | `catalog-006b` needs `xsl:assert` — **not implementable** |
-| Numbering | `number-0111` | Integer overflow in `xsl:number` |
-| Functions | `function-0117`, `function-0303`, `function-lookup-005` | |
-| Misc | `static-032`, `accumulator-038`, `context-item-903`, `castable-006`, `math-3701`, `accessor-064`, `collection-006`, `copy-of-009`, `current-output-uri-902`, `outermost-002`, `type-available-0151`, `for-each-group-002`, `collations-1006`, `forwards-011`, `initial-template-004`, `seqtor-017`, `notation-0002`, `unparsed-text-2003` | `unparsed-text-2003` is the network case again — **not implementable** |
+| `error-0640e-2`, `error-3105a` | **Implementable** | Two missing static checks. An implementation of the XTSE3105 check exists but regressed two other cases and was not taken. |
+| `catalog-005b`, `catalog-009` | **Implementable** | Error reporting in `use-when`/static evaluation. |
+| `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
+| `castable-006` | **Implementable** | `castable as` against a union of a list type. |
+| `type-available-0151` | **Implementable** | `type-available` on a type that is declared but not imported. |
+| `collection-006` | **Implementable** | Package-scoped `fn:collection` result. |
+| `accumulator-038` | **Not implementable** | Suite defect: its `main` template lacks `visibility="public"`, so a transform cannot start at it. The sibling `accumulator-039` was patched for exactly this in 2019 and 038 was missed. |
+| `notation-0002` | **Implementable** | `xs:NOTATION` comparison. |
+| `unparsed-text-2003` | **Not implementable** | Network access. |
 
 **XSLT 3.0 ceiling: 8,605 / 8,623 = 99.79%.**
 
-The eighteen that cannot be fixed: `accept-913`, `package-200`,
+The nineteen that cannot be fixed: `accept-913`, `package-200`,
 `use-package-003`, `package-021err`, `package-022err`,
 `package-version-011`, `unparsed-text-2003`, `streamable-141`, `base-uri-052`,
 `docbook-001`, `docbook-004`, `catalog-006b`, the three `regex-syntax`
 ambiguous-dash cases, `si-copy-117`, `si-copy-of-117` and `import-schema-137`.
 
+`accumulator-038`, the last of them, was settled in round 2: its `main`
+template lacks `visibility="public"`, so a transform may not start at it.
+
 ---
 
-# xsd — 177 disagreements
+# xsd — 142 disagreements
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -203,8 +216,8 @@ them separately for that reason.
 
 | | Total | `accepted` (ours) | `queried`/`stable` (ceiling) |
 |---|---:|---:|---:|
-| XSD 1.0 | 73 | **21** | 52 |
-| XSD 1.1 | 104 | **50** | 54 |
+| XSD 1.0 | 63 | **13** | 50 |
+| XSD 1.1 | 79 | **30** | 49 |
 
 An agent cleared **80** of these — 26 on 1.0 and 54 on 1.1 — by implementing
 seventeen missing schema-validity rules, without a single agreement count
@@ -220,19 +233,21 @@ and substitution-group type derivation (5).
 | `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Schema`, `MS-SimpleType`, `MS-Element`, `MS-DataTypes`, others | ~31–33 | `queried`/`stable` + bug | Assorted challenged expectations across the Microsoft-contributed sets. |
 
-**Not implementable: 52 (XSD 1.0) and 54 (XSD 1.1).**
+**Not implementable: 50 (XSD 1.0) and 49 (XSD 1.1).**
 
 ## What is genuinely ours
 
 What remains is a different shape from what was cleared. The bulk of the
-`SFALSEACCEPT` backlog is gone; several of the stragglers are the *opposite*
-problem — `particlesZ001`, `Z028`, `Hb008` and `Hb011` are places where the
-content-model restriction table is too **strict**, and loosening it risks
-re-admitting a false accept elsewhere. Four more (`simple006`, `idB005`,
-`over024`, `over026`) are unresolved type references that are structurally
-identical to `saxonData/Missing/missing001`, which the suite marks **valid** on
-the "error only if the declaration is needed for validation" reading;
-separating them needs reachability analysis.
+`SFALSEACCEPT` backlog is gone; thirteen of the forty-three stragglers are the
+*opposite* problem — `particlesZ001`, `s3_10_6ii01`/`ii02` and
+`s3_10_1ii08`/`ii09` on 1.0, and `mgO029`, `all218`, `all237`, `wild049` and
+`wild050` on 1.1, are places where the content-model and wildcard restriction
+tables are too **strict**. Loosening one risks re-admitting a false accept
+elsewhere, so each has to be measured against both versions.
+
+The 1.1 `SFALSEACCEPT` remainder concentrates in three areas: the `All` group
+(`all009`, `all308`, `all313`), open content (`open036`, `open046`, `open048`)
+and wildcards (`wild057`, `wild069`).
 
 Concentrated by area:
 
@@ -285,12 +300,12 @@ would overstate it. They are reported separately for that reason.
 # Summary
 
 The per-suite counts and ceilings are in the table at the top. What that table
-cannot show is *why* the 126 unfixable cases are unfixable:
+cannot show is *why* the 128 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
-| **W3C has challenged its own expected result** | 106 | XSD 1.0 (52) and 1.1 (54). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
-| **Suite defect** | 3 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none. |
+| **W3C has challenged its own expected result** | 99 | XSD 1.0 (50) and 1.1 (49). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
+| **Suite defect** | 4 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling `accumulator-039` was patched to add in 2019. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
 | **Suite contradicts itself** | 3 | The `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
