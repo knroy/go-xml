@@ -475,6 +475,21 @@ func inheritNamespaces(dst, src *xdm.Node) {
 // copy-0627 ask exactly that question.
 func stripNamespaces(n *xdm.Node) {
 	n.Namespaces = nil
+	// An element does not acquire an in-scope namespace merely because that
+	// namespace is present on its parent: §5.8.3 permits fixup to add a
+	// namespace node only where one is "necessary either to satisfy these
+	// constraints, or to enable the tree to be serialized using the original
+	// namespace prefixes". The declarations n's ancestors kept are ones THEIR
+	// names needed, so n inherits them without needing them, and the only way
+	// the XDM has to say n does not have a binding -- in-scope namespaces are
+	// derived by walking ancestors -- is the undeclaration §5.8.1 points at.
+	//
+	// Undeclaring first and fixing up second is what makes the two agree:
+	// fixupNamespaces re-adds whatever n's own name and attribute names do
+	// need, overwriting the undeclaration where the two overlap. copy-1221 is
+	// the case -- an <a xmlns:a="..." a:att="A"> keeps the a prefix its
+	// attribute needs, and its <aa xmlns="..."> child must not inherit it.
+	undeclareInherited(n)
 	fixupNamespaces(n)
 	for _, c := range n.Children {
 		if c.Kind == xdm.KindElement {
@@ -482,6 +497,59 @@ func stripNamespaces(n *xdm.Node) {
 		}
 	}
 }
+
+// prefixUsedByNames reports whether el's own name or one of its attribute
+// names is written with this prefix -- whatever URI the prefix is currently
+// bound to. The URI does not enter into it: fixup rebinds the prefix to the
+// name's own namespace, so an undeclaration of the same prefix would be a
+// second namespace node with the same name either way.
+func prefixUsedByNames(el *xdm.Node, prefix string) bool {
+	if el.Name.Prefix == prefix {
+		return true
+	}
+	for _, a := range el.Attrs {
+		// An attribute in no namespace is never written with a prefix, and
+		// the default declaration never applies to an attribute name.
+		if a.Name.URI != "" && a.Name.Prefix == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// undeclareInherited adds an undeclaration to el for every prefix el can see
+// from an ancestor and does not declare itself.
+//
+// Callers clear el.Namespaces first, so "does not declare itself" means every
+// binding in scope; fixupNamespaces then puts back the ones el's own names
+// depend on.
+func undeclareInherited(el *xdm.Node) {
+	scope := el.InScopeNamespaces()
+	prefixes := make([]string, 0, len(scope))
+	for p := range scope {
+		prefixes = append(prefixes, p)
+	}
+	// A stable order, for the same reason copyNamespacesTo sorts.
+	sort.Strings(prefixes)
+	for _, p := range prefixes {
+		// The xml prefix is bound everywhere by the XML Namespaces
+		// specification and cannot be undeclared; an empty value is already
+		// an undeclaration.
+		if p == "xml" || scope[p] == "" {
+			continue
+		}
+		// A binding one of el's own names depends on is one fixup would put
+		// straight back. Undeclaring it as well would leave el with two
+		// namespace nodes of the same name, which §5.8.3 forbids outright:
+		// "Namespace fixup must not result in an element having multiple
+		// namespace nodes with the same name."
+		if prefixUsedByNames(el, p) {
+			continue
+		}
+		el.AddNamespace(p, "")
+	}
+}
+
 
 // fixupNamespaces declares on el whatever its own name and its attribute names
 // need and cannot already see, which is the part of §5.8.3 that applies to an
@@ -666,6 +734,28 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 		if doc.BaseURI == "" {
 			doc.BaseURI = node.BaseURI
+			// The body ran before the document node had a base URI of its
+			// own, so every element it built was parentless as far as
+			// stampConstructedBaseURI could tell and took the stylesheet's
+			// URI as its last resort. Now that the copy supplies one, XDM
+			// 3.0 §6.2 says the child inherits it: dm:base-uri of an element
+			// is its xml:base if it has one, "otherwise the base URI of its
+			// parent", and only a parentless element falls back to where it
+			// was constructed. Dropping the stamp is what lets the walk up
+			// the ancestors reach the document node.
+			//
+			// Only the stamp goes. An xml:base attribute written into the
+			// body still wins, because the accessor reads the attribute
+			// before this field. base-uri-053 shallow-copies two documents
+			// read with fn:doc, puts a <z/> in each, and requires
+			// base-uri() of that z to end in the copied document's name.
+			if doc.BaseURI != "" {
+				for _, ch := range doc.Children {
+					if ch.Kind == xdm.KindElement {
+						ch.BaseURI = ""
+					}
+				}
+			}
 		}
 		if err := i.validation.assess(rt, doc); err != nil {
 			return err

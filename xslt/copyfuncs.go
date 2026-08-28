@@ -39,9 +39,10 @@ func registerCopyFuncs(l *xpath.Library, rt *runtime) {
 			Name: xdm.QName{URI: xdm.NSFN, Local: "copy-of"}, Arity: arity,
 			Since: xpath.XPath31,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				return mapItems(ctx, args, func(it xdm.Item) xdm.Item {
-					return noteCopy(rt, it, copyItem(it))
-				})
+				return mapItemsChecked(ctx, args, checkParentlessQName,
+					func(it xdm.Item) xdm.Item {
+						return noteCopy(rt, it, copyItem(it))
+					})
 			},
 		})
 		l.Add(xpath.Function{
@@ -56,22 +57,59 @@ func registerCopyFuncs(l *xpath.Library, rt *runtime) {
 	}
 }
 
+// checkParentlessQName is XTTE0950 for fn:copy-of over an attribute node.
+//
+// 18.3 defines fn:copy-of($input) as an xsl:copy-of with
+// validation="preserve", and 11.9.2 makes that a type error over an attribute
+// whose content is namespace-sensitive "unless the parent element is also
+// copied". A function call copies the item it is handed and nothing above it,
+// so the exemption never applies here: the copy is parentless, and 5.8.3 says
+// why that is fatal -- "the rules of the XDM data model require that a
+// parentless attribute node cannot contain a namespace-sensitive typed value;
+// this means that it is an error to copy an attribute using
+// validation="preserve" if it contains namespace-sensitive content".
+//
+// copy-of-009 validates <cc:e a="cc:qname-value"/> against a schema that
+// declares a as xs:QName, then calls copy-of($e/@*).
+func checkParentlessQName(it xdm.Item) error {
+	n, ok := it.(*xdm.Node)
+	if !ok || n.Kind != xdm.KindAttribute {
+		return nil
+	}
+	if !isNamespaceSensitiveType(n.TypeAnnotation) {
+		return nil
+	}
+	return fmt.Errorf("XTTE0950: fn:copy-of cannot copy attribute %s on its "+
+		"own, because its content is namespace-sensitive and the copy has no "+
+		"parent element to keep the prefix bound", n.Name.Lexical())
+}
+
+// mapItemsChecked is mapItems with a per-item precondition applied first.
+func mapItemsChecked(ctx *xpath.Context, args []xdm.Sequence,
+	check func(xdm.Item) error, f func(xdm.Item) xdm.Item) (xdm.Sequence, error) {
+
+	in, err := inputItems(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	out := make(xdm.Sequence, 0, len(in))
+	for _, it := range in {
+		if err := check(it); err != nil {
+			return nil, err
+		}
+		out = append(out, f(it))
+	}
+	return out, nil
+}
+
 // mapItems applies f to each item of the argument, or to the context item when
 // the argument is absent.
 func mapItems(ctx *xpath.Context, args []xdm.Sequence,
 	f func(xdm.Item) xdm.Item) (xdm.Sequence, error) {
 
-	in := xdm.Sequence(nil)
-	if len(args) == 0 {
-		if ctx.Item == nil {
-			// Both functions are focus-dependent in their zero-argument
-			// form, so an absent context item is XPDY0002 exactly as it is
-			// for "." itself.
-			return nil, fmt.Errorf("XPDY0002: no context item")
-		}
-		in = xdm.One(ctx.Item)
-	} else {
-		in = args[0]
+	in, err := inputItems(ctx, args)
+	if err != nil {
+		return nil, err
 	}
 	out := make(xdm.Sequence, 0, len(in))
 	for _, it := range in {
@@ -249,4 +287,18 @@ func noteCopy(rt *runtime, orig, copied xdm.Item) xdm.Item {
 	}
 	rt.noteCopiedAccumulators(o, c)
 	return copied
+}
+
+// inputItems is the argument sequence, or the context item when the argument
+// is absent.
+func inputItems(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	if ctx.Item == nil {
+		// Both functions are focus-dependent in their zero-argument form, so
+		// an absent context item is XPDY0002 exactly as it is for "." itself.
+		return nil, fmt.Errorf("XPDY0002: no context item")
+	}
+	return xdm.One(ctx.Item), nil
 }
