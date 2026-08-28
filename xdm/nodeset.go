@@ -35,6 +35,18 @@ func SortDocumentOrder(seq Sequence) Sequence {
 		}
 		nodes = append(nodes, n)
 	}
+	// Nodes that belong to no Tree take their cross-tree order from an id
+	// handed out on first comparison. Left to the sort, the first comparison
+	// happens in whatever order the sort algorithm picks its pivots, so a
+	// sequence of freshly constructed roots — what fn:copy-of over a node
+	// sequence produces, one detached tree per item — came out in an order
+	// that depended on the sort's internals rather than on the sequence.
+	// Numbering them here, walking the input once, makes the answer the
+	// sequence order the caller supplied, which is the order those trees were
+	// built in. The spec leaves the relative order of nodes in different trees
+	// implementation-dependent but requires it to be stable; this is what
+	// makes it so.
+	numberDetachedRoots(nodes)
 	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Compare(nodes[j]) < 0
 	})
@@ -211,4 +223,24 @@ func IsXMLWhitespace(s string) bool {
 		}
 	}
 	return true
+}
+
+// numberDetachedRoots assigns cross-tree identities to the roots of any
+// treeless nodes in ns, in the order they appear.
+//
+// detachedRootID is idempotent: a root that already has an id keeps it, so
+// this only fixes the order in which previously unnumbered roots are first
+// seen. Roots inside a real Tree are skipped — their order comes from the
+// tree id, which the parser assigned.
+func numberDetachedRoots(ns []*Node) {
+	for _, n := range ns {
+		if n.tree != nil {
+			continue
+		}
+		root := n
+		for root.Parent != nil {
+			root = root.Parent
+		}
+		detachedRootID(root)
+	}
 }
