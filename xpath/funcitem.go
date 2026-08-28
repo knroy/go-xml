@@ -35,6 +35,9 @@ type invokeContext = *Context
 // because the function library lives on the context, exactly as it does for an
 // ordinary call.
 func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
+	if e.Cast != nil {
+		return xdm.One(schemaConstructorItem(e.Name, e.Cast)), nil
+	}
 	fn, ok := lookupFor(ctx, e.Name, e.Arity)
 	if !ok {
 		return nil, fmt.Errorf("XPST0017: unknown function %s with %d argument(s)",
@@ -58,6 +61,38 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 		item.Invoke = withRetainedFocus(ctx, item.Invoke)
 	}
 	return xdm.One(item), nil
+}
+
+// ConstructorArgVar is the name the argument of a schema constructor function
+// is bound to while the cast that defines the constructor is evaluated. It is
+// in a namespace no query or stylesheet can write, so nothing can collide with
+// it or observe it.
+var ConstructorArgVar = xdm.QName{
+	URI: "urn:go-xml:xpath:internal", Local: "constructor-arg",
+}
+
+// schemaConstructorItem builds the function item a reference to an imported
+// schema type's constructor function denotes.
+//
+// The constructor is defined as a cast, so the item binds its one argument and
+// evaluates the cast the parser built. See NamedFunctionRef.Cast.
+func schemaConstructorItem(name xdm.QName, cast Expr) *xdm.FunctionItem {
+	return &xdm.FunctionItem{
+		Name:  name,
+		Arity: 1,
+		Invoke: func(ctx any, args []xdm.Sequence) (xdm.Sequence, error) {
+			c, ok := ctx.(invokeContext)
+			if !ok || c == nil {
+				return nil, fmt.Errorf(
+					"XPTY0004: function item invoked without an evaluation context")
+			}
+			var arg xdm.Sequence
+			if len(args) > 0 {
+				arg = args[0]
+			}
+			return cast.Eval(c.WithVar(ConstructorArgVar, arg))
+		},
+	}
 }
 
 // withRetainedFocus wraps an invoke closure so the call runs under the focus
