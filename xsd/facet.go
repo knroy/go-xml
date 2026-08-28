@@ -225,6 +225,31 @@ type FacetSet struct {
 	// ExplicitTimezone is the XSD 1.1 facet constraining whether a date or
 	// time value carries a timezone.
 	ExplicitTimezone *Timezone
+
+	// Fixed records which facets this step wrote fixed="true" on. Part 2
+	// §4.3 gives every constraining facet but pattern, enumeration and
+	// assertion a {fixed} property, and "Facet Valid (Restriction)" then
+	// forbids a derived type from stating a *different* value for one the
+	// base fixed.
+	//
+	// whiteSpace keeps its own flag rather than joining this map: the
+	// built-in types fix it, and they are constructed directly rather than
+	// parsed, so the boolean predates any schema document.
+	Fixed map[FacetKind]bool
+}
+
+// isFixed reports whether the step wrote fixed="true" on a facet.
+func (f *FacetSet) isFixed(kind FacetKind) bool {
+	return f != nil && f.Fixed[kind]
+}
+
+// setFixed records fixed="true" for a facet, allocating on first use so that
+// the common unfixed case costs nothing.
+func (f *FacetSet) setFixed(kind FacetKind) {
+	if f.Fixed == nil {
+		f.Fixed = make(map[FacetKind]bool)
+	}
+	f.Fixed[kind] = true
 }
 
 // IsEmpty reports whether the set constrains nothing.

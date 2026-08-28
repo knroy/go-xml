@@ -289,10 +289,13 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 		switch c.Name.Local {
 		case "length":
 			f.Length = p.uintFacet(c, v)
+			p.noteFixed(c, f, FacetLength)
 		case "minLength":
 			f.MinLength = p.uintFacet(c, v)
+			p.noteFixed(c, f, FacetMinLength)
 		case "maxLength":
 			f.MaxLength = p.uintFacet(c, v)
+			p.noteFixed(c, f, FacetMaxLength)
 		case "totalDigits":
 			// totalDigits is a positiveInteger, not a
 			// nonNegativeInteger like the length facets: Part 2
@@ -301,8 +304,10 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 			// The suite writes totalDigits="0" against every
 			// integer type in turn.
 			f.TotalDigits = p.positiveUintFacet(c, v)
+			p.noteFixed(c, f, FacetTotalDigits)
 		case "fractionDigits":
 			f.FractionDigits = p.uintFacet(c, v)
+			p.noteFixed(c, f, FacetFractionDigits)
 
 		case "whiteSpace":
 			var w WhiteSpace
@@ -347,12 +352,16 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 
 		case "minInclusive":
 			f.MinInclusive = &v
+			p.noteFixed(c, f, FacetMinInclusive)
 		case "maxInclusive":
 			f.MaxInclusive = &v
+			p.noteFixed(c, f, FacetMaxInclusive)
 		case "minExclusive":
 			f.MinExclusive = &v
+			p.noteFixed(c, f, FacetMinExclusive)
 		case "maxExclusive":
 			f.MaxExclusive = &v
+			p.noteFixed(c, f, FacetMaxExclusive)
 
 		case "assertion":
 			// XSD 1.1: an assertion on a simple type is a facet
@@ -379,6 +388,7 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 					"explicitTimezone=%q is not one of required, "+
 						"prohibited or optional", v))
 			}
+			p.noteFixed(c, f, FacetExplicitTimezone)
 
 		case "simpleType", "annotation", "assert", "openContent",
 			"attribute", "attributeGroup", "anyAttribute",
@@ -393,6 +403,19 @@ func (p *parser) readFacets(el *xdm.Node, f *FacetSet) {
 			p.errs = append(p.errs, errorAt(c, "",
 				"xs:%s is not a constraining facet", c.Name.Local))
 		}
+	}
+}
+
+// noteFixed records a fixed="true" on a constraining facet.
+//
+// Part 2 §4.3 gives every facet but pattern, enumeration and assertion a
+// {fixed} property, and "Facet Valid (Restriction)" makes it an error for a
+// derived type to state a different value for a facet the base fixed. The
+// attribute used to be read only on whiteSpace, so fixed="true" was inert
+// everywhere else and a derivation freely overrode it.
+func (p *parser) noteFixed(el *xdm.Node, f *FacetSet, kind FacetKind) {
+	if p.boolAttr(el, "fixed", false) {
+		f.setFixed(kind)
 	}
 }
 
