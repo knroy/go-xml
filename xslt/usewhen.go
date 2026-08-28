@@ -55,9 +55,22 @@ func useWhenFuncs(bindings map[string]string) *xpath.Library {
 		}
 		return resolveIn(name)
 	}
+	// fn:element-available expands an unprefixed name with the default
+	// namespace (5.1), and a name in no namespace is simply false rather
+	// than unresolvable.
+	elemRes := func(name string) (uri, local string, ok bool) {
+		if u, l, found := resolveIn(name); found {
+			return u, l, true
+		}
+		if prefix, local := xdm.SplitQName(name); prefix == "" {
+			return "", local, true
+		}
+		_, local = xdm.SplitQName(name)
+		return "", local, false
+	}
 	// No schema: 3.12 makes the in-scope type definitions of a use-when
 	// those available "in the absence of any xsl:import-schema".
-	registerStaticFuncs(l, fnRes, typeRes, nil)
+	registerStaticFuncs(l, fnRes, typeRes, elemRes, nil)
 	return l
 }
 

@@ -1472,6 +1472,22 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			"XTSE0740: xsl:function name %q must be in a namespace", name)
 	}
 
+	// 10.3: "The override attribute is a deprecated synonym of
+	// override-extension-function, retained for compatibility with XSLT 2.0.
+	// If both attributes are present then they must have the same value."
+	// A disagreement is XTSE0020, the code for an attribute whose value is
+	// not one the element permits -- function-0117 writes
+	// override-extension-function="1" beside override="no".
+	if oef := el.Attr("", "override-extension-function"); oef != nil {
+		if ov := el.Attr("", "override"); ov != nil &&
+			isYes(oef.Value) != isYes(ov.Value) {
+			return fmt.Errorf(
+				"XTSE0020: xsl:function/@override-extension-function=%q and "+
+					"its deprecated synonym @override=%q must have the same "+
+					"value", oef.Value, ov.Value)
+		}
+	}
+
 	var params []*Variable
 	children := el.ChildElements()
 	i := 0
