@@ -1060,10 +1060,38 @@ func (t *Tree) assign(n *Node) {
 	// Namespace nodes precede attribute nodes, which precede children. The
 	// relative order of namespace and attribute nodes is implementation
 	// defined; fixing it here keeps results reproducible across runs.
-	for _, ns := range n.Namespaces {
-		ns.tree = t
-		ns.order = t.counter
-		t.counter++
+	//
+	// The reservation is sized by the element's in-scope bindings, not by the
+	// ones it declares itself. The namespace axis reports every binding in
+	// scope, and the ones inherited from an ancestor have no node on this
+	// element to number: the axis synthesizes them and places them with
+	// SetSynthesizedOrder at owner.order+1 upwards. Reserving only the
+	// declared bindings left those synthesized nodes sitting on the slots
+	// already given to this element's attributes and first child, so
+	// generate-id() answered the same string for a namespace node and an
+	// unrelated attribute — which is what snapshot-0112 detects when it
+	// compares the count of distinct identities against the node count.
+	if n.Kind == KindElement {
+		reserved := len(n.InScopeNamespaces())
+		for _, ns := range n.Namespaces {
+			ns.tree = t
+			ns.order = t.counter
+			t.counter++
+			reserved--
+		}
+		// The declared bindings are a subset of the in-scope ones except
+		// where a declaration undeclares a prefix, which removes it from
+		// scope while still occupying a node; reserved can then go negative
+		// and no extra slots are due.
+		for ; reserved > 0; reserved-- {
+			t.counter++
+		}
+	} else {
+		for _, ns := range n.Namespaces {
+			ns.tree = t
+			ns.order = t.counter
+			t.counter++
+		}
 	}
 	for _, a := range n.Attrs {
 		a.tree = t

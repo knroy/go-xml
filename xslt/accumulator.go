@@ -494,8 +494,16 @@ func (rt *runtime) convertAccum(def *accumulatorDef, seq xdm.Sequence) (xdm.Sequ
 	if def.asType == nil {
 		return seq, nil
 	}
+	// 18.2.1: the result of the initial-value and select expressions "is
+	// converted to the type declared in the as attribute by applying the
+	// function conversion rules. A type error occurs if conversion is not
+	// possible." A type error raised by the function conversion rules is
+	// XPTY0004; the spec gives this conversion no code of its own, and
+	// XTTE3350 — which this used to raise — appears in no version of the
+	// XSLT recommendation and in no test in the suite. accumulator-038
+	// expects XPTY0004.
 	return def.asType.convertAs(seq,
-		"the value of accumulator "+def.name.Lexical(), "XTTE3350")
+		"the value of accumulator "+def.name.Lexical(), "XPTY0004")
 }
 
 // fnAccumulator implements fn:accumulator-before and fn:accumulator-after.
