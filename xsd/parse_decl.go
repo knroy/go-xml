@@ -1348,7 +1348,7 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 		// 1.1-only: {inheritable} does not exist as a property in 1.0,
 		// where the attribute is not even allowed, so this must not
 		// fire under Version10.
-		if false && p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
+		if p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
 			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.2",
 				"restriction changes the inheritability of attribute %q "+
 					"from %t to %t", r.Decl.Name.Local,
