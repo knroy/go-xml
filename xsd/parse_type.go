@@ -1846,7 +1846,23 @@ func (p *parser) checkTypeBaseCycles() {
 		// other chain, and the first version of this check omitted it
 		// and rejected 11,044 of 14,405 schemas with
 		// `type "anyType" is circular`.
-		if baseOf(t) == t {
+		//
+		// Tested by *name*, not by "is its own base": a type that names
+		// itself as its base is exactly the shortest cycle the clause
+		// forbids, and skipping every such type let addB101 — a
+		// complexType named sAddress whose extension names sAddress —
+		// through the check that was written for it.
+		if name.URI == NSSchema &&
+			(name.Local == "anyType" || name.Local == "anySimpleType") {
+			continue
+		}
+		if b := baseOf(t); b == t {
+			p.errs = append(p.errs, &ParseError{
+				Code: "ct-props-correct.3",
+				Message: fmt.Sprintf(
+					"type %q is circular: it is its own base type",
+					name.Local),
+			})
 			continue
 		}
 		// Walk the base chain looking for a return to t. The chain is
