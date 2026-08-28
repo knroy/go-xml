@@ -1270,6 +1270,31 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		}
 	}
 
+	// Counting says nothing about *what* each occurrence may contain. The
+	// 1.1 inclusion is over sequences of typed elements, so a derived
+	// declaration keeping a base name while widening its type produces
+	// sequences the base rejects however well the counts fit.
+	// particlesS010 retypes an all-group member from "address" to
+	// "address1", which adds an element; particlesU009 retypes one from
+	// xs:NMTOKENS to xs:boolean. Both counted clean.
+	for _, rd := range allDerivedDecls(r) {
+		bud, ok := budget[rd.Name]
+		if !ok || bud.decl == nil {
+			continue
+		}
+		// A member of the head's substitution group is checked against
+		// the head, which is the declaration the base actually names.
+		if rd == bud.decl {
+			continue
+		}
+		if rd.Type != nil && bud.decl.Type != nil &&
+			!typeRestricts(rd.Type, bud.decl.Type) {
+			return fmt.Errorf(
+				"element %s's type is not derived from the base's",
+				rd.Name.Local), true
+		}
+	}
+
 	branches, ok := allBranchCounts(r)
 	if !ok {
 		return nil, false
@@ -1284,6 +1309,36 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// produced by every branch, which branchFitsBudget checks, since a
 	// name a branch never mentions has count zero.
 	return nil, true
+}
+
+// allDerivedDecls collects every element declaration reachable in a derived
+// particle, at any depth and through any compositor.
+//
+// Order and occurrence are irrelevant here — the caller only wants each
+// declaration once, to compare its type against the base's budget for the same
+// name.
+func allDerivedDecls(p *Particle) []*ElementDecl {
+	var out []*ElementDecl
+	seen := map[*ElementDecl]bool{}
+	var walk func(*Particle, int)
+	walk = func(p *Particle, depth int) {
+		if p == nil || depth > 64 {
+			return
+		}
+		switch t := p.Term.(type) {
+		case *ElementDecl:
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		case *ModelGroup:
+			for _, c := range t.Particles {
+				walk(c, depth+1)
+			}
+		}
+	}
+	walk(p, 0)
+	return out
 }
 
 // occBudget is one base all-group particle seen as an occurrence budget for a
