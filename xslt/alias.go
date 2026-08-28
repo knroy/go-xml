@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -11,6 +12,10 @@ import (
 type nsAlias struct {
 	uri    string
 	prefix string
+	// pkg is the package whose xsl:namespace-alias declared it. 3.5.5 makes
+	// the declaration local to that package, so only a literal result element
+	// written in the same package is rewritten by it.
+	pkg int
 }
 
 // compileNamespaceAlias compiles xsl:namespace-alias.
@@ -65,7 +70,8 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 	// is not one either. The second escape is why the record is kept rather
 	// than the check being made against the alias map alone — the map holds
 	// only the winner, so it cannot say whether a loser conflicted.
-	if prev, ok := c.aliasDecls[from]; ok {
+	akey := aliasKey(compilePackage, from)
+	if prev, ok := c.aliasDecls[akey]; ok {
 		switch {
 		case prev.precedence > precedence, precedence > prev.precedence:
 			// A higher precedence declaration settles the question.
@@ -79,9 +85,10 @@ func (c *compiler) compileNamespaceAlias(el *xdm.Node, precedence int) error {
 	if c.aliasDecls == nil {
 		c.aliasDecls = map[string]aliasDecl{}
 	}
-	if prev, ok := c.aliasDecls[from]; !ok || precedence >= prev.precedence {
-		c.aliasDecls[from] = aliasDecl{uri: to, precedence: precedence}
-		c.sheet.namespaceAliases[from] = nsAlias{uri: to, prefix: outPrefix}
+	if prev, ok := c.aliasDecls[akey]; !ok || precedence >= prev.precedence {
+		c.aliasDecls[akey] = aliasDecl{uri: to, precedence: precedence}
+		c.sheet.namespaceAliases[akey] = nsAlias{
+			uri: to, prefix: outPrefix, pkg: compilePackage}
 	}
 	return nil
 }
@@ -93,14 +100,42 @@ type aliasDecl struct {
 	precedence int
 }
 
-// aliasFor rewrites a name through the declared namespace aliases, returning
-// the name unchanged when no alias applies.
-func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
-	a, ok := s.namespaceAliases[n.URI]
+// aliasKey scopes an alias to the package that declared it.
+//
+// Section 3.5.5: "Declarations of keys, accumulators, decimal formats,
+// namespace aliases, output definitions, and character maps within a package
+// have local scope within that package -- they are all effectively private."
+//
+// So two packages may each alias the same literal namespace URI onto a
+// different target, and neither answer may reach the other. The flat table
+// this replaces held one entry per literal URI, and the last package compiled
+// won: use-package-103 and its used package both alias the XSD namespace, and
+// the used package's function emitted the using package's target namespace.
+//
+// The top-level package keeps the bare URI as its key, so a stylesheet that
+// uses no packages is unaffected.
+func aliasKey(pkg int, uri string) string {
+	if pkg == 0 {
+		return uri
+	}
+	return strconv.Itoa(pkg) + " " + uri
+}
+
+// aliasFor rewrites a name through the namespace aliases in scope for a
+// literal result element written in pkg, returning the name unchanged when no
+// alias applies.
+func (s *Stylesheet) aliasFor(pkg int, n xdm.QName) xdm.QName {
+	a, ok := s.aliasIn(pkg, n.URI)
 	if !ok {
 		return n
 	}
 	return xdm.QName{Prefix: a.prefix, URI: a.uri, Local: n.Local}
+}
+
+// aliasIn answers the alias one package gives a literal namespace URI.
+func (s *Stylesheet) aliasIn(pkg int, uri string) (nsAlias, bool) {
+	a, ok := s.namespaceAliases[aliasKey(pkg, uri)]
+	return a, ok
 }
 
 // isAliasTarget reports whether a URI is the target namespace URI of any
@@ -109,9 +144,11 @@ func (s *Stylesheet) aliasFor(n xdm.QName) xdm.QName {
 // Section 11.1.4 makes a target namespace URI survive exclusion, so this is
 // the question the literal result element asks of each binding exclusion would
 // otherwise have dropped.
-func (s *Stylesheet) isAliasTarget(uri string) bool {
+func (s *Stylesheet) isAliasTarget(pkg int, uri string) bool {
 	for _, a := range s.namespaceAliases {
-		if a.uri == uri {
+		// Only an alias of the element's own package speaks for it, on the
+		// same package-local rule aliasKey states.
+		if a.uri == uri && a.pkg == pkg {
 			return true
 		}
 	}

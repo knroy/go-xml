@@ -716,6 +716,10 @@ type literalElemInstr struct {
 	excludedNamespaces []nsBinding
 	attrSets           []xdm.QName
 	body               []Instruction
+	// pkg is the package the element was written in, which decides whose
+	// xsl:namespace-alias declarations rewrite it: 3.5.5 makes those local to
+	// the declaring package. See aliasKey.
+	pkg int
 	// validation carries xsl:validation and xsl:type, which a literal result
 	// element may have exactly as xsl:element may.
 	validation validationSpec
@@ -764,14 +768,14 @@ func stampConstructedBaseURI(el *xdm.Node, base string) {
 }
 
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := out.startElement(rt.sheet.aliasFor(i.name))
+	sub := out.startElement(rt.sheet.aliasFor(i.pkg, i.name))
 	stampConstructedBaseURI(sub.open, i.baseURI)
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
 		// unaliased left the placeholder URI in the result beside the
 		// namespace it was supposed to have been rewritten to.
-		if a, ok := rt.sheet.namespaceAliases[ns.uri]; ok {
+		if a, ok := rt.sheet.aliasIn(i.pkg, ns.uri); ok {
 			if a.uri == "" {
 				continue
 			}
@@ -788,7 +792,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// section 11.1.4 says so explicitly — the rules "guarantee that there will
 	// be a namespace node that binds the prefix xsl to the URI".
 	for _, ns := range i.excludedNamespaces {
-		if !rt.sheet.isAliasTarget(ns.uri) {
+		if !rt.sheet.isAliasTarget(i.pkg, ns.uri) {
 			continue
 		}
 		// A binding the aliasing loop above already produced is not repeated:
@@ -817,7 +821,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// namespace URI is null.
 		an := a.name
 		if an.URI != "" {
-			an = rt.sheet.aliasFor(an)
+			an = rt.sheet.aliasFor(i.pkg, an)
 		}
 		if err := sub.addAttribute(an, v); err != nil {
 			return err

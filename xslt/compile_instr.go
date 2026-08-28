@@ -220,7 +220,10 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	instr := &literalElemInstr{name: n.Name, attrSets: sets, baseURI: n.BaseURI}
+	instr := &literalElemInstr{
+		name: n.Name, attrSets: sets, baseURI: n.BaseURI,
+		pkg:  compilePackage,
+	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
