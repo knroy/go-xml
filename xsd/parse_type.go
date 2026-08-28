@@ -626,13 +626,33 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 					if base == nil {
 						return nil
 					}
-					t.SimpleContent = &SimpleType{
+					sc := &SimpleType{
 						Base:      base,
 						Variety:   base.Variety,
 						ItemType:  base.ItemType,
 						Primitive: base.Primitive,
 						Facets:    facets,
 					}
+					t.SimpleContent = sc
+					// Facets written bare inside a simpleContent
+					// restriction constrain a value space exactly
+					// as those inside an <xs:simpleType> do, so the
+					// Part 2 4.3 constraints apply to them
+					// identically -- applicable-facets above all.
+					// Only types read by readSimpleType were
+					// registered, so this anonymous one escaped
+					// every one of those checks: stZ010 restricts
+					// content whose type is xs:anySimpleType with
+					// minLength, a facet no ur-type admits, and
+					// loaded clean.
+					//
+					// Registered here rather than where the facets
+					// are read because the base is not known until
+					// this fixup runs, and every check consults it.
+					// checkFacetConstraints runs after the fixups
+					// drain, so a late append is still seen.
+					p.simpleTypes = append(p.simpleTypes,
+						simpleTypeSite{typ: sc, el: body})
 					return nil
 				})
 			}
@@ -975,6 +995,36 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 						"element ref %q names no element declaration", ref)
 				}
 				part.Term = d
+				// A global declaration whose type attribute matched
+				// nothing is carried with the miss recorded rather
+				// than reported, because §3.3.3 makes it an error
+				// only where the declaration is used -- missing001
+				// leaves such a declaration unreferenced and its
+				// schema is expected to load.
+				//
+				// A <element ref> *is* that use, and it is a use
+				// visible at schema time: the content model holding
+				// this particle can never be checked against
+				// anything, since the term it names has no type to
+				// check against. Deferring to instance validation
+				// would make the fault depend on whether an instance
+				// happens to reach the model, when the model itself
+				// is already unusable.
+				//
+				// This runs as a post-fixup because the fixup that
+				// resolves the declaration's own type may not have
+				// run yet, and unresolved is set there.
+				// idB005 references an element typed "keyinfo" where
+				// only "keyInfo" is defined.
+				p.postFixups = append(p.postFixups, func() error {
+					if d.unresolved != "" {
+						return errorAt(el, "src-resolve",
+							"element ref %q names a declaration whose "+
+								"type %q matches no definition",
+							ref, d.unresolved)
+					}
+					return nil
+				})
 				return nil
 			})
 			return part
@@ -1062,10 +1112,38 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 			continue
 		}
 		if part := p.readParticle(c); part != nil {
+			if g.Compositor == CompositorAll {
+				p.checkAllMemberOccurs(c, part)
+			}
 			g.Particles = append(g.Particles, part)
 		}
 	}
 	return g
+}
+
+// checkAllMemberOccurs enforces cos-all-limited.2 (§3.8.6): in XSD 1.0 every
+// particle *inside* an all group must have {max occurs} = 1.
+//
+// checkAllOccurs above bounds the group as a whole; this bounds its members.
+// The two are separate clauses because they fail for separate reasons. An all
+// group means "each of these once, in any order", and the order-free matching
+// that gives it meaning is defined member by member: a member allowed to
+// repeat has no single position to be matched at, so "any order" stops
+// denoting anything. 1.0 therefore pins each member to exactly one occurrence,
+// leaving minOccurs="0" free to mark it optional.
+//
+// XSD 1.1 lifted the ceiling — a member may repeat, and the matching is
+// redefined to count occurrences rather than tick members off — so the check
+// is version-gated. addB095 writes <xs:all> with maxOccurs="2" on one of two
+// members and is expected invalid under 1.0 and valid under 1.1.
+func (p *parser) checkAllMemberOccurs(el *xdm.Node, part *Particle) {
+	if p.schema.Version >= Version11 {
+		return
+	}
+	if part.MaxOccurs == Unbounded || part.MaxOccurs > 1 {
+		p.errs = append(p.errs, errorAt(el, "cos-all-limited.2",
+			"a particle inside an xs:all group must have maxOccurs=1"))
+	}
 }
 
 // readModelGroupDef reads a top-level <xs:group>.
