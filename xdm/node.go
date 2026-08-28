@@ -506,16 +506,42 @@ func ancestorChain(n *Node) []*Node {
 // order Tree.assign lays down, so a detached subtree that is finalized later
 // does not change any answer this gave before.
 func siblingRank(p, n *Node) int {
-	for i, ns := range p.Namespaces {
-		if ns == n {
-			return i
+	// A namespace node is ranked by its kind, not by looking it up in
+	// p.Namespaces. The namespace axis synthesizes its nodes -- it exposes
+	// every in-scope binding, while p.Namespaces holds only those declared on
+	// p itself -- so the scan never matched an inherited binding, and the
+	// no-match fallback below then ranked it after every child. In a detached
+	// tree, where document order is decided here rather than by Tree.assign,
+	// that put the outermost element's own namespace node last:
+	// ($orphan//namespace::x)[1] answered the copy on the inner element.
+	//
+	// Ranking by kind is the data model's own rule, and the one Tree.assign
+	// lays down: an element's namespace nodes precede its attributes, which
+	// precede its children.
+	if n.Kind == KindNamespace {
+		for i, ns := range p.Namespaces {
+			if ns == n {
+				return i
+			}
 		}
+		// A synthesized node still has to be ordered against its siblings on
+		// the axis, and the axis emits them in sorted prefix order.
+		i := 0
+		for prefix := range p.InScopeNamespaces() {
+			if prefix < n.Name.Local {
+				i++
+			}
+		}
+		return i
 	}
-	base := len(p.Namespaces)
-	for i, a := range p.Attrs {
-		if a == n {
-			return base + i
+	base := nsRankBase(p)
+	if n.Kind == KindAttribute {
+		for i, a := range p.Attrs {
+			if a == n {
+				return base + i
+			}
 		}
+		return base + len(p.Attrs)
 	}
 	base += len(p.Attrs)
 	for i, c := range p.Children {
@@ -524,6 +550,17 @@ func siblingRank(p, n *Node) int {
 		}
 	}
 	return base + len(p.Children)
+}
+
+// nsRankBase is the rank the first non-namespace node of p takes, which is one
+// past every node on p's namespace axis rather than one past the declarations
+// p carries: an inherited binding is a node there too.
+func nsRankBase(p *Node) int {
+	n := len(p.Namespaces)
+	if m := len(p.InScopeNamespaces()); m > n {
+		n = m
+	}
+	return n
 }
 
 // StringValue returns the node's string value per XDM: the concatenation of

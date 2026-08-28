@@ -3,6 +3,7 @@ package xslt
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -969,45 +970,27 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 				out.appendText("NaN")
 				return nil
 			}
-			out.appendText(formatNumberSeq([]int64{n}, format, opts))
+			out.appendText(formatNumberSeq([]*big.Int{big.NewInt(n)}, format, opts))
 			return nil
 		}
 
-		nums := make([]int64, 0, len(atoms))
+		nums := make([]*big.Int, 0, len(atoms))
 		for _, a := range atoms {
 			at, ok := a.(*xdm.Atomic)
 			if !ok {
 				continue
 			}
-			// Section 12.1 gives the conversion exactly:
-			// xs:integer(round(number($V))). Casting straight to integer
-			// does the number() and the xs:integer() but not the round(),
-			// so it truncates: 3.6 numbered as 3 and 99.5 as 99.
-			num, err := xpath.CastAtomic(at, xdm.TypeDouble)
+			n, err := numberValueOf(at)
 			if err != nil {
-				// "If any value in the sequence cannot be converted to an
-				// integer ... a dynamic error occurs": the failure to convert
-				// is XTDE0980 here, not the cast's own FORG0001.
-				return fmt.Errorf(
-					"XTDE0980: the value %q cannot be converted to an integer",
-					at.String())
+				return err
 			}
-			f := num.Float64()
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return fmt.Errorf(
-					"XTDE0980: the value %q cannot be converted to an integer",
-					at.String())
-			}
-			// round() is half-up towards positive infinity, which is not
-			// what math.Round does for a negative half.
-			n := int64(math.Floor(f + 0.5))
 			// The second half of XTDE0980: "or if the resulting integer is
 			// less than 0 (zero)". There is no numbering scheme for a
 			// negative position, and formatting one produced a plausible
 			// string rather than an error.
-			if n < 0 {
+			if n.Sign() < 0 {
 				return fmt.Errorf(
-					"XTDE0980: the value %q converts to %d, which is less "+
+					"XTDE0980: the value %q converts to %s, which is less "+
 						"than zero", at.String(), n)
 			}
 			nums = append(nums, n)
@@ -1053,8 +1036,83 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// literally, and that holds whether or not any number was found: the
 	// format "*1*" applied to nothing produces "**", not "". Returning early
 	// here dropped the prefix and suffix of every unnumbered node.
-	out.appendText(formatNumberSeq(rebaseNumbers(numbers, starts), format, opts))
+	out.appendText(formatNumberSeq(rebaseNumbers(intsToBig(numbers), starts), format, opts))
 	return nil
+}
+
+// numberValueOf converts one item of xsl:number/@value to the integer that is
+// numbered.
+//
+// Section 12.1 gives the conversion exactly: xs:integer(round(number($V))).
+// Doing that through a float64 is wrong for a value an xs:double cannot hold.
+// xs:integer is unbounded, and @value routinely carries a computed one --
+// 1234567890 cubed is 1881676371789154860897069003, which a double rounds to
+// 1.8816763717891548e27 and an int64 cannot hold at all, so the number came
+// out as the int64 limits rather than as itself.
+//
+// big.Rat is the exact value of every numeric type in the data model, so the
+// round is done there and the result kept as a big.Int.
+func numberValueOf(at *xdm.Atomic) (*big.Int, error) {
+	// The cast to xs:double is still what decides *convertibility*: it is the
+	// fn:number() of the specification's expression, and it is the step that
+	// rejects "apples". Its result is then discarded in favour of the exact
+	// value, except for the two doubles that have no exact value at all.
+	num, err := xpath.CastAtomic(at, xdm.TypeDouble)
+	if err != nil {
+		// "If any value in the sequence cannot be converted to an integer
+		// ... a dynamic error occurs": the failure to convert is XTDE0980
+		// here, not the cast's own FORG0001.
+		return nil, fmt.Errorf(
+			"XTDE0980: the value %q cannot be converted to an integer",
+			at.String())
+	}
+	if f := num.Float64(); math.IsNaN(f) || math.IsInf(f, 0) {
+		return nil, fmt.Errorf(
+			"XTDE0980: the value %q cannot be converted to an integer",
+			at.String())
+	}
+
+	// The value to round is the item's own exact one where it has one.
+	// Rat is non-nil exactly for xs:integer and xs:decimal, the two types
+	// that can hold a value no double can; for everything else -- a double,
+	// a float, a string, an untypedAtomic -- the double *is* the value, and
+	// SetFloat64 is exact over it.
+	r := at.Rat()
+	if r == nil {
+		r = new(big.Rat).SetFloat64(num.Float64())
+	}
+	if r == nil {
+		return nil, fmt.Errorf(
+			"XTDE0980: the value %q cannot be converted to an integer",
+			at.String())
+	}
+	return roundHalfUp(r), nil
+}
+
+// roundHalfUp is fn:round over an exact value: the nearest integer, and on a
+// tie the one closer to positive infinity.
+func roundHalfUp(r *big.Rat) *big.Int {
+	q, rem := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
+	if rem.Sign() == 0 {
+		return q
+	}
+	// Twice the remainder against the denominator says which side of the
+	// midpoint the value falls on; a tie goes up, which for a negative value
+	// means towards zero and so leaves the truncated quotient alone.
+	twice := new(big.Int).Abs(new(big.Int).Lsh(rem, 1))
+	switch cmp := twice.Cmp(r.Denom()); {
+	case cmp > 0:
+		if r.Sign() < 0 {
+			return q.Sub(q, big.NewInt(1))
+		}
+		return q.Add(q, big.NewInt(1))
+	case cmp == 0:
+		if r.Sign() > 0 {
+			return q.Add(q, big.NewInt(1))
+		}
+		return q
+	}
+	return q
 }
 
 // startValues evaluates @start-at, which is an attribute value template and
@@ -1426,7 +1484,7 @@ func (i *numberInstr) positionAmongSiblings(rt *runtime, n, target *xdm.Node) (i
 // A format like "1.1.1" gives "." as the separator; a single-token format like
 // "1" repeats that token for every level and joins with ".", which is what
 // makes "<xsl:number level='multiple' format='1'/>" produce "2.1.3".
-func formatNumberSeq(nums []int64, format string, opts numberOptions) string {
+func formatNumberSeq(nums []*big.Int, format string, opts numberOptions) string {
 	tokens, seps, prefix, suffix := splitFormat(format)
 	if len(tokens) == 0 {
 		// A picture with no format token at all still has to number
@@ -1660,22 +1718,29 @@ func spellNumberLang(n int64, opts numberOptions) string {
 	return spellNumber(n, ordinal)
 }
 
-func formatNumber(n int64, format string, opts numberOptions) string {
-	switch format {
-	case "a":
-		return alphaNumber(n, 'a')
-	case "A":
-		return alphaNumber(n, 'A')
-	case "i":
-		return strings.ToLower(romanNumber(n))
-	case "I":
-		return romanNumber(n)
-	case "w":
-		return spellNumberLang(n, opts)
-	case "W":
-		return strings.ToUpper(spellNumberLang(n, opts))
-	case "Ww":
-		return titleCaseWords(spellNumberLang(n, opts))
+func formatNumber(n *big.Int, format string, opts numberOptions) string {
+	// The alphabetic, roman and spelled-out schemes are defined over
+	// positions in a document, which no counting walk can push past an
+	// int64. A value large enough to need more has no roman numeral and no
+	// English name, so it falls through to the decimal rule below rather
+	// than being truncated to something that reads like an answer.
+	if small, ok := smallNumber(n); ok {
+		switch format {
+		case "a":
+			return alphaNumber(small, 'a')
+		case "A":
+			return alphaNumber(small, 'A')
+		case "i":
+			return strings.ToLower(romanNumber(small))
+		case "I":
+			return romanNumber(small)
+		case "w":
+			return spellNumberLang(small, opts)
+		case "W":
+			return strings.ToUpper(spellNumberLang(small, opts))
+		case "Ww":
+			return titleCaseWords(spellNumberLang(small, opts))
+		}
 	}
 	// The decimal rule, section 12.3: "any token where the last character has
 	// a decimal digit value of 1, and the Unicode value of preceding
@@ -1692,11 +1757,27 @@ func formatNumber(n int64, format string, opts numberOptions) string {
 			s = groupDigits(s, opts.groupingSep, opts.groupingSize)
 		}
 		if opts.ordinal != "" {
-			s += ordinalSuffix(n)
+			// The ordinal suffix is decided by the last one or two digits,
+			// which every value has however large it is.
+			s += ordinalSuffix(lastTwoDigits(n))
 		}
 		return s
 	}
-	return strconv.FormatInt(n, 10)
+	return n.String()
+}
+
+// smallNumber returns n as an int64 when it fits in one.
+func smallNumber(n *big.Int) (int64, bool) {
+	if !n.IsInt64() {
+		return 0, false
+	}
+	return n.Int64(), true
+}
+
+// lastTwoDigits returns n mod 100, which is all fn:ordinal-suffix looks at.
+func lastTwoDigits(n *big.Int) int64 {
+	m := new(big.Int).Mod(new(big.Int).Abs(n), big.NewInt(100))
+	return m.Int64()
 }
 
 // groupDigits inserts sep every size digits from the right.
@@ -1725,10 +1806,23 @@ func decimalToken(format string) (zero rune, width int, ok bool) {
 	if !unicode.IsDigit(last) {
 		return 0, 0, false
 	}
-	if digitValue(last) != 1 {
+	switch digitValue(last) {
+	case 1:
+		zero = last - 1
+	case 0:
+		// A token that is all zeros of one family names no numbering
+		// sequence of its own, and 12.3 says what to do then: "If an
+		// implementation does not support a numbering sequence represented
+		// by the given token, it must use a format token of 1." Taking that
+		// literally down to the ASCII "1" would also throw away the digit
+		// family the author wrote, so the substitution is made within the
+		// family the token names -- "0" numbers in ASCII digits and the
+		// Arabic-Indic zero in Arabic-Indic ones, each to the token's own
+		// width, which is the reading number-0111 asserts.
+		zero = last
+	default:
 		return 0, 0, false
 	}
-	zero = last - 1
 	// Every preceding character must be that family's zero, so that the
 	// token's own length is the width. "0100" fails here, which is why the
 	// specification's own example of it is not a decimal token.
@@ -1756,23 +1850,16 @@ func digitValue(r rune) int {
 
 // decimalIn renders n in the digit family whose zero is the given rune, padded
 // to at least width digits.
-func decimalIn(n int64, zero rune, width int) string {
-	neg := n < 0
-	if neg {
-		n = -n
+func decimalIn(n *big.Int, zero rune, width int) string {
+	digits := new(big.Int).Abs(n).String()
+	ds := make([]rune, 0, len(digits)+width)
+	for len(ds)+len(digits) < width {
+		ds = append(ds, zero)
 	}
-	var ds []rune
-	for {
-		ds = append([]rune{zero + rune(n%10)}, ds...)
-		n /= 10
-		if n == 0 {
-			break
-		}
+	for _, c := range digits {
+		ds = append(ds, zero+(c-'0'))
 	}
-	for len(ds) < width {
-		ds = append([]rune{zero}, ds...)
-	}
-	if neg {
+	if n.Sign() < 0 {
 		ds = append([]rune{'-'}, ds...)
 	}
 	return string(ds)

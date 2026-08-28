@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -48,17 +49,28 @@ func parseStartAt(v string) ([]int64, error) {
 // the last start value. A start sequence longer than the number sequence has
 // its surplus ignored, which falls out of iterating over values rather than
 // over starts.
-func rebaseNumbers(values, starts []int64) []int64 {
+func rebaseNumbers(values []*big.Int, starts []int64) []*big.Int {
 	if len(starts) == 0 {
 		return values
 	}
-	out := make([]int64, len(values))
+	out := make([]*big.Int, len(values))
 	for i, v := range values {
 		s := starts[len(starts)-1]
 		if i < len(starts) {
 			s = starts[i]
 		}
-		out[i] = v + s - 1
+		out[i] = new(big.Int).Add(v, big.NewInt(s-1))
+	}
+	return out
+}
+
+// intsToBig lifts a list of counted level numbers into the arbitrary-precision
+// values the formatter takes. Counting a tree cannot overflow an int64, but
+// @value can hold any xs:integer, so the two meet in one type.
+func intsToBig(ns []int64) []*big.Int {
+	out := make([]*big.Int, len(ns))
+	for i, n := range ns {
+		out[i] = big.NewInt(n)
 	}
 	return out
 }

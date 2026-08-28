@@ -151,44 +151,24 @@ func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, err
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return xdm.One(a), nil
 	}
-	// A double carries about 17 significant digits, so rounding to more places
-	// than that is the identity — and asking for many more overflows the
-	// shift: math.Pow(10, 300) is finite but f*shift is not, and Inf/Inf is
-	// NaN. That turned round-half-to-even(3.567812E+3, 4294967296) into NaN
-	// rather than leaving the value alone.
-	const floatDigits = 20
-	if places > floatDigits {
+	// 4.4.4: "the argument is cast to xs:decimal using an implementation of
+	// xs:decimal that imposes no limits on the number of digits that can be
+	// represented. The function is applied to this xs:decimal value, and the
+	// resulting xs:decimal is cast back to xs:float or xs:double."
+	//
+	// That is not a licence to compute in floating point. Scaling by
+	// math.Pow(10, places) rounds twice, and the intermediate rounding can
+	// invent a tie the value does not have: -1.365e1 is exactly
+	// -13.650000000000000355..., so round(-1.365e1, 1) is -13.7, but the
+	// double -13.65*10 is exactly -136.5 and floor(-136.5+0.5) answers -136.
+	// big.Rat.SetFloat64 is the spec's unlimited xs:decimal, and exactRound is
+	// already the spec's rule over it -- the same code the xs:decimal branch
+	// above uses.
+	exact := new(big.Rat).SetFloat64(f)
+	if exact == nil {
 		return xdm.One(a), nil
 	}
-	if places < -floatDigits {
-		return xdm.One(makeFloat(math.Copysign(0, f), a.Type)), nil
-	}
-	shift := math.Pow(10, float64(places))
-	scaled := f * shift
-	var rounded float64
-	if halfToEven {
-		rounded = math.RoundToEven(scaled)
-		// The multiplication can invent a tie that the value does not have.
-		// 250.0250e0 is a double strictly *above* 250.025, but multiplying by
-		// 100 lands exactly on 25002.5, and RoundToEven then picks the even
-		// 25002 — answering 250.02 where 250.03 is due. Only an exact
-		// comparison can tell a real tie from a manufactured one, so when the
-		// scaled value looks like a tie the question is asked again of the
-		// double's true binary value.
-		if scaled == math.Trunc(scaled)+0.5 || scaled == math.Trunc(scaled)-0.5 {
-			if exact := exactTieDirection(f, places); exact != 0 {
-				rounded = math.Trunc(scaled)
-				if exact > 0 {
-					rounded++
-				} else if scaled < 0 {
-					rounded--
-				}
-			}
-		}
-	} else {
-		rounded = math.Floor(scaled + 0.5)
-	}
-	result := rounded / shift
+	result, _ := exactRound(exact, places, halfToEven).Float64()
 	// Rounding a negative value to zero yields *negative* zero, which the
 	// arithmetic above loses: floor(-0.2 + 0.5) is floor(0.3), a positive
 	// zero. IEEE 754 keeps the two apart and so does the spec, and the sign
@@ -547,44 +527,4 @@ func clampPlaces(n int64) int {
 		return -maxRoundPlaces
 	}
 	return int(n)
-}
-
-// exactTieDirection reports which side of the halfway point f really falls on
-// when scaling it by 10^places produced an exact .5.
-//
-// It returns +1 when the value is above the midpoint, -1 when below, and 0
-// when it is a true tie that the caller should break by the even rule. The
-// question cannot be settled in floating point: the scaling multiplication is
-// itself rounded, so a value that is merely near the midpoint can land on it
-// exactly. big.Rat holds the double's real value, where the comparison is
-// decidable.
-func exactTieDirection(f float64, places int) int {
-	r := new(big.Rat).SetFloat64(f)
-	if r == nil {
-		return 0
-	}
-	pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(abs(places))), nil)
-	scale := new(big.Rat).SetInt(pow)
-	if places < 0 {
-		scale = new(big.Rat).Inv(scale)
-	}
-	scaled := new(big.Rat).Mul(r, scale)
-	// Twice the fractional part against the denominator: greater than means
-	// past the midpoint, equal means exactly on it.
-	num, den := scaled.Num(), scaled.Denom()
-	_, rem := new(big.Int).QuoRem(num, den, new(big.Int))
-	twice := new(big.Int).Abs(new(big.Int).Mul(rem, big.NewInt(2)))
-	switch twice.Cmp(den) {
-	case 1:
-		if scaled.Sign() < 0 {
-			return -1
-		}
-		return 1
-	case -1:
-		if scaled.Sign() < 0 {
-			return 1
-		}
-		return -1
-	}
-	return 0
 }
