@@ -1756,6 +1756,23 @@ func (c *compiler) compileIncludeImpl(el *xdm.Node, precedence int, forcePrecede
 			doc = sub
 		}
 	}
+	// XTSE0165: "It is a static error if the processor is not able to
+	// retrieve the resource identified by the URI reference, or if the
+	// resource that is retrieved does not contain a stylesheet module."
+	//
+	// 3.7 enumerates what a module other than a package's principal one may
+	// be: "A standard stylesheet module, which is a subtree rooted at an
+	// xsl:stylesheet or xsl:transform element" or "A simplified stylesheet,
+	// which is a subtree rooted at a literal result element". xsl:package is
+	// not among them -- a package is used, by xsl:use-package, not included --
+	// so a resource whose outermost element is one contains no stylesheet
+	// module and this is the error. package-910 imports a package.
+	if root := firstElement(doc); root != nil && isXSL(root, "package") {
+		return fmt.Errorf(
+			"XTSE0165: %s %q retrieved an xsl:package, which is not a "+
+				"stylesheet module; a package is referenced with "+
+				"xsl:use-package", el.Name.Lexical(), href)
+	}
 	if forcePrecedence {
 		// xsl:include: the module's declarations take the includer's
 		// precedence, so its own allocation is overridden afterwards. The
