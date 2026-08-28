@@ -9,19 +9,19 @@ commit `69c53cf` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | 99.98% | **4** | 1 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 2 | **6** | 99.90% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,548 | 99.13% | **75** | 62 | 4 | **9** | 99.90% |
+| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 1 | **7** | 99.89% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,548 | 99.13% | **75** | 59 | 1 | **15** | 99.83% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,305 | 99.75% | **99** | 46 | 0 | **53** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,412 | 99.62% | **158** | 103 | 0 | **55** | 99.87% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **345** | **213** | **6** | **126** | |
+| | **Total** | | | | **345** | **210** | **2** | **133** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**345 disagreements in total**, of which **213 are ours to fix**, **126 cannot
-be fixed without shipping something less correct**, and **6 are open
+**345 disagreements in total**, of which **210 are ours to fix**, **133 cannot
+be fixed without shipping something less correct**, and **2 are open
 questions**.
 
 ## How to read the verdicts
@@ -94,10 +94,10 @@ Six cannot be fixed; three are ours.
 | `regex-syntax-xslt20-0985` | `[\d]` does not match U+1369 `፩` | **Not implementable** | Same drift. ETHIOPIC DIGIT ONE is category **No**; `\d` is `\p{Nd}`. |
 | `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Same drift, inverted: the test asserts it must *not* match, but XML NameChar includes `#x0300-#x036F`. |
 | `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Open question** | `xsl:sequence` with content and no `@select`. Attempted and reverted: removing the `processorAtLeast30()` gate fixed this and broke `sequence-0137`. `0132` is scoped `XSLT20+`, `0137` is scoped `XSLT20` — same construct, deliberately different answers. Needs a rule that separates them. |
-| `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Open question** | Both errors are genuinely present. §19.2 defines XTTE1512 as strict validation with "no matching top-level declaration", XTTE1510 as "assessed and found invalid". `z:familyname` really is absent from `schema061.xsd` (only `surname` is declared), so our code is literally correct — but the enclosing `z:person` is also invalid, and the suite wants that. A validation-**ordering** question. |
+| `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
 | `validation-0201` | Serialisation differs at offset 46 | **Implementable** | XHTML output method: `<meta http-equiv>` placement in `<head>`. |
 
-**XSLT 2.0 ceiling: 6,152 / 6,158 = 99.90%.**
+**XSLT 2.0 ceiling: 6,151 / 6,158 = 99.89%.**
 
 ### Why the three regex cases are not ours
 
@@ -130,7 +130,9 @@ The largest concentration and the most tractable. This session took it from 34.
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `validation-0006`, `si-copy-117`, `si-copy-of-117`, `import-schema-137` | **Open question** | All report `XTTE1540`/`XTTE1512`/`XTTE1555` where `XTTE1510` is wanted. The same validation-**ordering** question: which of several genuine errors surfaces first. |
+| `si-copy-117`, `si-copy-of-117` | **Not implementable** | Not ordering cases at all. Both write `<xsl:copy select="/*/*/@version" type="xs:date"/>` — a `type` attribute and **no `validation` attribute**. §19.2 keys the codes to which attribute was written: XTTE1510 begins "If the **validation attribute** ... has the effective value `strict`", which is literally unmet, while XTTE1540 is "if an **[xsl:]type attribute** is defined ... and the outcome of schema validity assessment against that type is ... other than valid", which is exactly met. The suite's own description says "validate attribute **by type**". Our XTTE1540 is correct. |
+| `import-schema-137` | **Not implementable** | The one genuine ordering case, and §2.9 explicitly declines to settle it: "If more than one error arises, an implementation is not required to signal any errors other than the first one that it detects. **It is implementation-dependent which of the several errors is signaled.**" Both errors are real, so either choice conforms; the suite is testing one processor's order. |
+| `validation-0006` | **Open question** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. A distinct question from the three above. |
 | `validation-0201` | **Implementable** | XHTML serialisation, as above. |
 | `catalog-001` | **Implementable** | `schema-element()` in a `use-when` test with no schema imported. |
 
@@ -138,7 +140,7 @@ The largest concentration and the most tractable. This session took it from 34.
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `regex-syntax-0056`, `regex-syntax-0086`, `regex-syntax-0102` | **Implementable** | Patterns like `[^a-d-b-c]` and `[a-a-x-x]+` — nested character-class subtraction with an ambiguous `-`. These must raise `FORX0002` and we accept them silently. Found while auditing the XSLT 2.0 cases. |
+| `regex-syntax-0056`, `regex-syntax-0086`, `regex-syntax-0102` | **Not implementable** | Ambiguous-dash character classes such as `[^a-d-b-c]` and `[a-a-x-x]+`, which XSD 1.0 rejects and XSD 1.1 accepts. **The suite contradicts itself**: `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the *identical* pattern and the *identical* `XSD_1.1 satisfied="false"` dependency, yet the first asserts `FORX0002` and the second asserts a successful match. No engine can pass both. The XSD 1.0 rule was implemented and measured: it fixes these three (`984/3 → 987/0`) at a cost of −3 XSLT 2.0, −9 QT3 and −34 XSD 1.1, for a net loss. Reverted. |
 
 ### Deliberately out of scope — 4
 
@@ -165,11 +167,12 @@ shares a cause with another, so each is its own small investigation.
 | Functions | `function-0117`, `function-0303`, `function-lookup-005` | |
 | Misc | `static-032`, `accumulator-038`, `context-item-903`, `castable-006`, `math-3701`, `accessor-064`, `collection-006`, `copy-of-009`, `current-output-uri-902`, `outermost-002`, `type-available-0151`, `for-each-group-002`, `collations-1006`, `forwards-011`, `initial-template-004`, `seqtor-017`, `notation-0002`, `unparsed-text-2003` | `unparsed-text-2003` is the network case again — **not implementable** |
 
-**XSLT 3.0 ceiling: 8,614 / 8,623 = 99.90%.**
+**XSLT 3.0 ceiling: 8,608 / 8,623 = 99.83%.**
 
-The nine that cannot be fixed: `package-021err`, `package-022err`,
+The fifteen that cannot be fixed: `package-021err`, `package-022err`,
 `package-version-011`, `unparsed-text-2003`, `streamable-141`, `base-uri-052`,
-`docbook-001`, `docbook-004`, `catalog-006b`.
+`docbook-001`, `docbook-004`, `catalog-006b`, the three `regex-syntax`
+ambiguous-dash cases, `si-copy-117`, `si-copy-of-117` and `import-schema-137`.
 
 ---
 
@@ -271,6 +274,8 @@ cannot show is *why* the 126 unfixable cases are unfixable:
 | **W3C has challenged its own expected result** | 108 | XSD 1.0 (53) and 1.1 (55). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
 | **Suite defect** | 3 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
+| **Suite contradicts itself** | 3 | The `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. |
+| **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
 | **No XQuery processor** | 3 | The `fn:load-xquery-module` cases. Two of the suite's own cases cannot both pass. |
