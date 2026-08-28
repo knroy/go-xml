@@ -450,6 +450,21 @@ func (p *parser) checkFacetRestriction(t, base *SimpleType, el *xdm.Node) {
 				"xs:fractionDigits %d", *f.FractionDigits, *b.FractionDigits))
 	}
 
+	// "explicitTimezone valid restriction" (§4.3.13.4): where the base
+	// already fixes the facet to required or prohibited, a restriction may
+	// only repeat it. "optional" is the only value that leaves room to
+	// narrow, so relaxing back to it — or swapping required for prohibited
+	// — widens the value space rather than narrowing it. zone004 derives
+	// optional from required, zone005 optional from prohibited, and zone408
+	// required from prohibited.
+	if f.ExplicitTimezone != nil && b.ExplicitTimezone != nil &&
+		*b.ExplicitTimezone != TimezoneOptional &&
+		*f.ExplicitTimezone != *b.ExplicitTimezone {
+		p.errs = append(p.errs, errorAt(el, "explicitTimezone-valid-restriction",
+			"xs:explicitTimezone %s does not match the base's fixed %s",
+			*f.ExplicitTimezone, *b.ExplicitTimezone))
+	}
+
 	// "whiteSpace valid restriction" (§4.3.6.4). The modes are ordered by
 	// strength and a derivation may only strengthen, which the WhiteSpace
 	// constants are numbered to express, so the whole constraint is one
@@ -514,6 +529,9 @@ func (p *parser) checkFacetApplicable(t *SimpleType, el *xdm.Node) {
 	}
 	if f.WhiteSpace != nil {
 		report(FacetWhiteSpace)
+	}
+	if f.ExplicitTimezone != nil {
+		report(FacetExplicitTimezone)
 	}
 }
 
@@ -623,6 +641,9 @@ func mergedFacets(t *SimpleType) *FacetSet {
 		}
 		if out.MaxExclusive == nil {
 			out.MaxExclusive = f.MaxExclusive
+		}
+		if out.ExplicitTimezone == nil {
+			out.ExplicitTimezone = f.ExplicitTimezone
 		}
 	}
 	return out

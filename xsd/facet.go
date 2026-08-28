@@ -295,17 +295,31 @@ var applicable = map[string]map[FacetKind]bool{
 		FacetTotalDigits: true, FacetFractionDigits: true,
 	}),
 
-	"float":      orderedFacets(),
-	"double":     orderedFacets(),
-	"duration":   orderedFacets(),
-	"dateTime":   orderedFacets(),
-	"time":       orderedFacets(),
-	"date":       orderedFacets(),
-	"gYearMonth": orderedFacets(),
-	"gYear":      orderedFacets(),
-	"gMonthDay":  orderedFacets(),
-	"gDay":       orderedFacets(),
-	"gMonth":     orderedFacets(),
+	"float":    orderedFacets(),
+	"double":   orderedFacets(),
+	"duration": orderedFacets(),
+
+	// The eight primitives whose lexical space has an optional timezone
+	// are the eight that admit explicitTimezone (Part 2 §4.3.13).
+	// xs:duration is deliberately not among them, and neither is any
+	// numeric type: zone007 puts the facet on a restriction of xs:string,
+	// which is what the table is here to refuse.
+	"dateTime":   timezonedFacets(),
+	"time":       timezonedFacets(),
+	"date":       timezonedFacets(),
+	"gYearMonth": timezonedFacets(),
+	"gYear":      timezonedFacets(),
+	"gMonthDay":  timezonedFacets(),
+	"gDay":       timezonedFacets(),
+	"gMonth":     timezonedFacets(),
+}
+
+// timezonedFacets is orderedFacets plus explicitTimezone, for the date and
+// time primitives whose lexical space carries an optional timezone.
+func timezonedFacets() map[FacetKind]bool {
+	return mergeFacets(orderedFacets(), map[FacetKind]bool{
+		FacetExplicitTimezone: true,
+	})
 }
 
 // lengthFacets is the facet set of the string-like primitives.
