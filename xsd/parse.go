@@ -143,6 +143,19 @@ type parser struct {
 	// absentNamespace.
 	unresolvedImports map[string]bool
 
+	// importedNamespaces holds every namespace an <xs:import> named,
+	// whether or not its document was fetched. A reference into a
+	// namespace absent from this set names something no document in the
+	// assembly could ever have defined -- see deferrableMiss.
+	importedNamespaces map[string]bool
+
+	// assembled records that an assembler walked this schema's imports, so
+	// importedNamespaces is a complete account of them. ParseSchema reads a
+	// single document and never follows an <xs:import> at all, and on that
+	// path the set is empty for want of looking rather than for want of
+	// imports -- deferrableMiss must not read anything into it.
+	assembled bool
+
 	// postFixups run once the fixups have drained. A fixup may queue
 	// another, so a check that must see the *settled* component graph
 	// cannot be a fixup itself — it would run somewhere in the middle.

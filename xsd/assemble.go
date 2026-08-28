@@ -96,7 +96,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 		schema: s,
 		opts:   opts,
 		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}},
+		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 	// The root document is marked seen before anything else runs. Without
 	// it a schema that is imported back by one of its own imports — legal,
@@ -298,7 +298,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		schema: s,
 		opts:   opts,
 		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}},
+		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
 	for _, path := range paths {
@@ -628,6 +628,10 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 						"enclosing schema to have a targetNamespace"))
 				continue
 			}
+			if a.p.importedNamespaces == nil {
+				a.p.importedNamespaces = map[string]bool{}
+			}
+			a.p.importedNamespaces[ns] = true
 			a.queueRef(el, doc, ns, el.AttrValue("schemaLocation"), false, false)
 		}
 	}
