@@ -92,6 +92,37 @@ ratchet() {
 	fi
 }
 
+# ratchetXSD is ratchet for the XSD driver, which reports "TOTAL agree N
+# disagree M" rather than the "in-scope: N passed" the Go suites log. The
+# number that may not go down is the agreement count.
+ratchetXSD() {
+	_t=$1
+	_agree=$(printf '%s' "$2" | sed -n 's/^TOTAL[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+	[ -n "$_agree" ] || return 0
+	case "${GOXSLT_RATCHET:-on}" in
+	off) return 0 ;;
+	esac
+	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
+	if [ -n "$_best" ] && [ "$_agree" -lt "$_best" ]; then
+		fail "$_t: $_agree agreeing, down from $_best.
+    An agreement count that went down is a regression even where the suite
+    still reports totals. If this is deliberate, record it:
+        GOXSLT_RATCHET=update tests/check.sh"
+		return 0
+	fi
+	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
+		{ [ -n "$_agree" ] && [ -z "$_best" ]; } ||
+		{ [ -n "$_best" ] && [ "$_agree" -gt "$_best" ]; }; then
+		touch "$RATCHET_FILE"
+		_tmp="$RATCHET_FILE.tmp"
+		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
+		printf '%s %s\n' "$_t" "$_agree" >> "$_tmp"
+		sort -o "$RATCHET_FILE" "$_tmp"
+		rm -f "$_tmp"
+		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_agree"
+	fi
+}
+
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
 RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
@@ -151,6 +182,10 @@ if [ -f "$XSDTS/suite.xml" ]; then
 		out=$($GO run ./tests/xsdsuite "$XSDTS" $flag 2>&1) || true
 		if printf '%s' "$out" | grep -q '^TOTAL'; then
 			printf '%s\n' "$out" | grep -E '^(SCHEMA|INSTANCE|TOTAL)'
+			# The XSD driver reports agreement rather than a passing
+			# count, so it needs its own ratchet line; see ratchetXSD.
+			if [ -z "$flag" ]; then _n=XSD10; else _n=XSD11; fi
+			ratchetXSD "$_n" "$out"
 		else
 			fail "xsdtests produced no totals"
 			printf '%s\n' "$out" | tail -5
