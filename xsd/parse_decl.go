@@ -101,12 +101,24 @@ func (p *parser) readElementDecl(el *xdm.Node, scope Scope) *ElementDecl {
 		// declaration is needed for validation", and its schema is
 		// expected to load — so the reference is recorded and reported
 		// against the instance that reaches it.
+		//
+		// An <xs:override> child is the exception. §4.2.5 makes the
+		// override purely a transformation of the document it names, so
+		// a sibling that overrides nothing contributes no component;
+		// a name that resolves only to such a sibling therefore names
+		// nothing at all, and the spec calls that out as an error of
+		// the overriding document rather than of some instance that
+		// might later reach it. over024 and over026 pin it.
+		miss := func(ref string) { d.unresolved = ref }
+		if p.inOverride {
+			miss = nil
+		}
 		p.resolveTypeRefLazy(el, typeAttr.Value,
 			func(t Type) {
 				d.Type = t
 				p.rejectDirectNotation(el, t)
 			},
-			func(ref string) { d.unresolved = ref })
+			miss)
 	case inline != nil:
 		if inline.Name.Local == "simpleType" {
 			d.Type = p.readSimpleType(inline)
@@ -1400,7 +1412,7 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 		// 1.1-only: {inheritable} does not exist as a property in 1.0,
 		// where the attribute is not even allowed, so this must not
 		// fire under Version10.
-		if false && p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
+		if p.schema.Version >= Version11 && b.Inheritable != r.Inheritable {
 			p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.2",
 				"restriction changes the inheritability of attribute %q "+
 					"from %t to %t", r.Decl.Name.Local,
