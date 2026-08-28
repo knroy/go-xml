@@ -1219,6 +1219,20 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 		// and it may not introduce or drop one.
 		return checkTemplateParams(overriding, original)
 	}
+	if isXSL(overriding, "variable") || isXSL(overriding, "param") {
+		// 3.5.4: "Two variables (including parameters) with the same name are
+		// compatible if and only if ... their declared types are identical."
+		// A reference in the used package was compiled against the original
+		// type, so an override that changes it hands that reference a value
+		// its type check was not written for.
+		if a, b := overriding.AttrValue("as"), original.AttrValue("as"); !sameDeclaredTypeIn(overriding, original, a, b) {
+			return fmt.Errorf(
+				"XTSE3070: the overriding declaration of %s declares as=%q "+
+					"and the one it overrides declares as=%q",
+				overriding.AttrValue("name"), a, b)
+		}
+		return nil
+	}
 	if !isXSL(overriding, "function") {
 		return nil
 	}
@@ -1294,6 +1308,145 @@ func sameDeclaredType(a, b string) bool {
 		return true
 	}
 	return !builtinTypeName(a) || !builtinTypeName(b)
+}
+
+// sameDeclaredTypeIn is sameDeclaredType with the two type names resolved
+// against the elements they are written on, and with a user-declared simple
+// type compared by its definition rather than by its name.
+//
+// 3.5.4 requires the declared types of an overriding and an overridden
+// variable to be *identical*, and identity is of the type definition, not of
+// the name it is written under. Two packages that each import a schema
+// declaring the same union under different names declare the same type;
+// two that declare different unions do not, whatever they call them.
+//
+// override-v-005 and -v-006 are that pair. Both override a variable declared
+// as u1 = union(date, time, dateTime); -005 writes u2 = union(time, dateTime,
+// date), the same type spelled in another order, and must compile, while
+// -006 writes u6 = union(dateTime, date) and must be XTSE3070.
+//
+// The comparison is by the two declarations' own text, because the schemas
+// are not assembled yet when the manifest is read. Where either type cannot
+// be found and compared this falls back to the conservative answer, which is
+// "compatible": reporting a static error for a type this compiler cannot
+// compare would reject a legitimate override.
+func sameDeclaredTypeIn(elA, elB *xdm.Node, a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	if builtinTypeName(a) && builtinTypeName(b) {
+		return false
+	}
+	if !isBareTypeName(a) || !isBareTypeName(b) {
+		return true
+	}
+	qa, ea := resolveQNameAttr(elA, a)
+	qb, eb := resolveQNameAttr(elB, b)
+	if ea != nil || eb != nil {
+		return true
+	}
+	if qa.Clark() == qb.Clark() {
+		return true
+	}
+	da, db := importedSimpleType(elA, qa), importedSimpleType(elB, qb)
+	if da == nil || db == nil {
+		return true
+	}
+	return sameSimpleTypeDefinition(da, db)
+}
+
+// importedSimpleType finds the xs:simpleType an xsl:import-schema in el's
+// package declares under the given name.
+func importedSimpleType(el *xdm.Node, qn xdm.QName) *xdm.Node {
+	root := el
+	for root != nil && root.Parent != nil && root.Parent.Kind == xdm.KindElement {
+		root = root.Parent
+	}
+	if root == nil {
+		return nil
+	}
+	var found *xdm.Node
+	var walk func(*xdm.Node)
+	walk = func(n *xdm.Node) {
+		for _, ch := range n.ChildElements() {
+			if ch.Name.URI == xdm.NSXS && ch.Name.Local == "simpleType" &&
+				ch.AttrValue("name") == qn.Local {
+				if found == nil {
+					found = ch
+				}
+				return
+			}
+			walk(ch)
+		}
+	}
+	for _, ch := range root.ChildElements() {
+		if isXSL(ch, "import-schema") {
+			walk(ch)
+		}
+	}
+	return found
+}
+
+// sameSimpleTypeDefinition compares two xs:simpleType declarations for the
+// forms an override may reasonably write.
+//
+// Only a union of named member types is compared, which is the case the suite
+// exercises and the one that can be settled without assembling the schema. A
+// union is an unordered set of members, so the two lists are compared as
+// sets. Anything else answers false only when both are unions; other
+// varieties fall back to "not comparable", which the caller reads as
+// compatible.
+func sameSimpleTypeDefinition(a, b *xdm.Node) bool {
+	ma, oka := unionMemberSet(a)
+	mb, okb := unionMemberSet(b)
+	if !oka || !okb {
+		return true
+	}
+	if len(ma) != len(mb) {
+		return false
+	}
+	for k := range ma {
+		if !mb[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// unionMemberSet returns the expanded member type names of an xs:union child,
+// as a set, and whether the declaration is that shape at all.
+func unionMemberSet(t *xdm.Node) (map[string]bool, bool) {
+	for _, ch := range t.ChildElements() {
+		if ch.Name.URI != xdm.NSXS || ch.Name.Local != "union" {
+			continue
+		}
+		mt := ch.AttrValue("memberTypes")
+		if mt == "" {
+			// An anonymous inline member is not compared by name.
+			return nil, false
+		}
+		out := map[string]bool{}
+		for _, tok := range strings.Fields(mt) {
+			qn, err := resolveQNameAttr(ch, tok)
+			if err != nil {
+				return nil, false
+			}
+			out[qn.Clark()] = true
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// isBareTypeName reports whether a sequence type is a single QName with no
+// occurrence indicator, which is the only form sameDeclaredTypeIn resolves.
+func isBareTypeName(t string) bool {
+	if t == "" || strings.ContainsAny(t, "()?*+ \t\n") {
+		return false
+	}
+	prefix, local := xdm.SplitQName(t)
+	return xdm.IsNCName(local) && (prefix == "" || xdm.IsNCName(prefix))
 }
 
 // builtinTypeName reports whether a sequence type is written wholly in terms
