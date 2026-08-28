@@ -304,6 +304,13 @@ network fetch, a vendor extension, a missing XQuery processor, or a Unicode
 snapshot that has since moved. Those are not deferred work — passing them would
 mean shipping something less correct.
 
+## Related
+
+[known-gaps.md](known-gaps.md) is the reasoning behind the hard entries here:
+diagnosed causes, fixes that were attempted and measured and reverted, and what
+a real fix would cost where the answer is a rewrite rather than a patch. It also
+covers DTD and XDM, which have no public suite and so appear in no percentage.
+
 ## Caveat on confidence
 
 The verdicts are not uniformly deep. The package-composition, regex and XPath

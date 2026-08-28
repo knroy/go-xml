@@ -1,9 +1,9 @@
 # Known gaps
 
-Everything this implementation is measured to get wrong, and why each one is
-still open. Figures come from the W3C suites, re-run at the commit that added
-this file. Nothing here is aspirational: if a gap has no entry, it has not been
-measured.
+Why the hard gaps are hard. For the current figures and a case-by-case verdict
+on what is fixable, see [conformance-gaps.md](conformance-gaps.md); this file
+is the diagnosis behind the entries there. Nothing here is aspirational: if a
+gap has no entry, it has not been measured.
 
 Three categories run through the list:
 
@@ -21,185 +21,19 @@ kind — they break working documents — so they are listed first throughout.
 
 ## Where the numbers stand
 
-| | Suite | Result |
-|---|---|---|
-| XPath 2.0 | W3C QT3 (FOTS) | 99.99% — 15,182 of 15,183 in scope |
-| XSD 1.0 | W3C xsdtests | 99.88% instance · 99.56% schema-validity |
-| XSD 1.1 | W3C xsdtests | 99.89% instance · 99.18% schema-validity |
-| RELAX NG | James Clark's spectest | 100% — 965 of 965 assertions |
-| DTD | *no public suite* | unit tests only; see below |
-| XSLT 2.0 | W3C xslt30-test, filtered | 99.61% — 6,136 of 6,160 in scope |
-| XSLT 3.0 | W3C xslt30-test, filtered | 98.56% — 8,499 of 8,623 in scope; streaming out of scope |
-| XDM | *no public suite* | exercised through the three above |
+Current conformance figures live in **[conformance-gaps.md](conformance-gaps.md)**,
+which names every failing case and says whether it is fixable, and are re-measured
+by `tests/check.sh`. They are deliberately not repeated here: this file explains
+*why* the hard gaps are hard, and a percentage copied into two places drifts in one
+of them.
 
-XSLT and XDM have no percentage. That is not an oversight: there is no freely
-redistributable W3C XSLT 2.0 conformance suite, so XSLT is verified by
-comparing output against Saxon-HE 12.4 on two production corpora, and XDM is
-the parser and tree layer underneath the other three. Neither figure is
-comparable to a suite percentage, and neither should be quoted as one.
+What this file adds, and that one does not:
 
-### Failure counts
-
-Split by direction, and by whether the W3C's own metadata records a dispute
-about the expected result. Only the `accepted` column is work outstanding:
-
-| | 1.0 total | 1.0 addressable | 1.1 total | 1.1 addressable |
-|---|---:|---:|---:|---:|
-| schema false reject | 7 | **6** | 13 | **11** |
-| schema false accept | 57 | **36** | 113 | **90** |
-| instance false reject | 4 | **2** | 3 | **1** |
-| instance false accept | 27 | **2** | 25 | **1** |
-| **total** | **95** | **46** | **154** | **103** |
-
-The 49 disputed cases in 1.0 and 51 in 1.1 are `queried` or tied to an open
-bug — the suite disagreeing with itself, not necessarily defects here. Counted
-by scanning each test's `<current status=...>`. See *What 100% would take*
-below for why this sets the reachable ceiling below 100%.
-
-### RELAX NG
-
-No assertion fails. The last one to do so needed markup inside an entity's
-replacement text, which was a gap in `xdm`'s parser rather than in the
-validator; it is fixed, and the fix is described in
-[security.md](security.md#fixed-in-the-second-audit) because getting it wrong
-was a vulnerability.
-
-Two limits remain, neither measured by the suite:
-
-* **The compact syntax is not implemented.** Only the XML syntax is parsed. It
-  would be a second parser over the same model and nothing else, since the
-  compiler, restrictions and validator all work from the tree.
-* **A schema's names follow XML 1.0 fourth edition**, which is what RELAX NG
-  specifies, while `xdm` follows the fifth, which is what XML now is. The two
-  differ deliberately; `relaxng/ncname.go` says why.
-
-### XSLT
-
-XSLT 2.0 is at 99.61% and XSLT 3.0 at 98.56%. The 3.0 figure is the lowest
-measured here and the newest, so read it as a floor rather than a settled
-figure — though the spread between it, schema-validity (99.18%) and XSLT 2.0
-is now about a point rather than the six it was.
-
-The remaining 3.0 failures are not spread evenly. Package composition holds
-about a third of them: `xsl:use-package`, `xsl:override` and `xsl:accept`
-between them account for some forty cases, and a stylesheet that declares no
-packages meets none of that.
-
-There is no maintained XSLT 2.0 suite: the original XSLTS froze at 1.1.0 in
-2007 behind a click-through licence, with no repository. Both numbers come
-from the XSLT 3.0 suite filtered by each test's declared version dependency,
-which measures something different from running a suite written for the
-version under test. The same catalog is run twice, once per target, because
-the question a change has to answer is not "how much 3.0 works" but "how much
-3.0 works without costing 2.0".
-
-At the 2.0 target 6,160 of 14,601 cases are in scope, the largest exclusions
-being 6,115 needing XSLT 3.0, 1,580 depending on a Unicode version and 347
-needing packages. At the 3.0 target 8,623 are in scope, the largest exclusions
-being 2,716 needing streaming, 1,580 depending on a Unicode version and 1,098
-written for XSLT 2.0 only.
-
-**Streaming is not implemented and is the largest single gap**: 2,716 cases
-depend on it and are out of scope rather than failing. It is architectural
-rather than a matter of filling in instructions — a streaming processor wants
-a pull parser and a streamability static analysis — and `xsl:stream` and
-`xsl:fork` are absent for the same reason. What a streamable stylesheet
-*computes* is a separate question: XSLT 3.0 section 18.1 defines the result of
-`xsl:source-document` as "the same as the result of the following
-(non-streaming) process", so the `si-*` sets, which assert results rather than
-memory behaviour, are in scope and nearly all pass.
-
-`GOXSLT_XSLTS_BYSET=1` prints the result of each test-set separately, which is
-what shows where the work is. A set failing nearly everything is an
-unimplemented feature; one failing a handful is edge cases. The largest gaps
-by that measure:
-
-| set | failing | what is missing |
-|---|---|---|
-| `regex` | 7 | variable-width backreferences, off by default |
-| `regex-syntax-xslt20` | 6 | three suite defects, three that would cost XSD tests |
-| `analyze-string` | 2 | variable-width backreferences again |
-| `docbook` | 1 | needs the EXSLT `document` extension *element*; the stylesheet terminates itself when no chunking element is available |
-| `unparsed-text` | 1 | needs the network, which is refused |
-| `collection` | 1 | needs XSLT 3.0 packages, which a 2.0 run will not compile |
-| `validation` | 1 | Saxon-specific `indent="yes"` layout |
-| `format-number` | 1 | a suite defect, not an engine gap |
-| `import-schema` | 1 | nested strict validation attributes the error to the inner element, where the suite wants the outer one |
-| `sequence` | 1 | catalog metadata separates it from a passing twin |
-| `result-document` | 1 | `fn:current-output-uri` is XSLT 3.0 only, so the 2.0 run reports XPST0017 before reaching the error the case wants |
-| `function` | 1 | `fn:function-available` swept across the whole F+O list, where a handful of 3.0 functions must read as absent |
-
-**Not all 24 are open problems, and the table above does not say so on its own.**
-Nine of them — the `regex` and `analyze-string` rows — pass with
-`xpath.SetBacktrackingRegex(true)`; the engine for them is written, tested and
-shipped, and the failures are a consequence of a deliberate default rather than
-of missing work. Eight more are cases where this engine is right and the suite
-is not, or where matching the suite would cost XSD tests, which is a trade this
-project does not make. Five need XSLT 3.0 features, the network, or
-byte-identical reproduction of another processor's indentation. That leaves
-two genuinely open, and they are the ones worth reading this file for:
-`docbook-001` now compiles and runs — the EXSLT `node-set` function is
-implemented — but its stylesheet terminates itself with `xsl:message` because
-it also wants the EXSLT `document` *extension element*, which this processor
-does not have; and `import-schema-137` needs a nested strict validation to
-attribute its failure to the outermost validation root, where this reports the
-inner element that actually failed (XTTE1512 for a `z:familyname` with no
-top-level declaration, where the suite wants the enclosing `z:person`'s
-XTTE1510).
-
-Several of the remaining failures are errors the suite expects that the engine
-does not raise. That is the same shape as the XSD schema-validity gap: the
-engine accepts a stylesheet the specification says to reject. It is the
-lower-risk direction — a wrong stylesheet runs rather than being reported —
-but it is a real gap.
-
-Appendix E of the specification lists 79 static errors. The three commonest —
-XTSE0010, XTSE0020 and XTSE0090 — are now decided by the element grammar in
-`xslt/elementtable.go`, which was extracted mechanically from the
-specification's own element syntax summaries rather than typed: 49 elements
-and 170 attributes, with the required/optional flags and the closed value sets
-it states. Forwards-compatible processing (section 3.9) rides on the same
-table, since an unknown element or attribute is ignored rather than rejected
-wherever a version greater than 2.0 is in force.
-
-Appendix E defines 154 error codes. 143 are raised somewhere in the engine;
-11 are not. All 154 definitions were extracted from the specification's own
-markup rather than transcribed, which is also how the element grammar in
-`xslt/elementtable.go` and the content models behind XTSE0260 were built — a
-hand-written list of "elements that must be empty" wrongly included
-`xsl:value-of` and refused 65
-valid stylesheets before it was replaced with the specification's own.
-
-**Part of the remaining gap is structural, not a matter of effort.** Several
-of the failures are suite defects rather than engine defects, each verified
-against the normative text: three `regex-syntax` cases assert matches that
-contradict XML Schema Appendix F (U+2308 is category `Ps`, so `\w` must not
-match it; U+1369 is `No`, not `Nd`, so `\d` must not match it), and
-`format-number-070` names an initial template its own stylesheet does not
-declare. Two more are XSLT 3.0 tests whose catalog metadata claims 2.0.
-Matching them would mean breaking conformance elsewhere — the character-class
-definitions are shared with XSD's pattern facet.
-
-The `FORX0002` group is a deliberate default rather than a gap. By default this
-engine resolves a backreference exactly whenever the group it names *and the
-text between the group and the reference* are fixed-width, and refuses the rest
-rather than guessing; RE2 reports only the greedy submatch assignment, so a
-variable-width split cannot be reconstructed after the fact. The general case
-is implemented behind `xpath.SetBacktrackingRegex(true)`, which trades RE2's
-linear-time guarantee for it and is off unless a caller asks — see *Regular
-expression backreferences* below. With it enabled the nine tests in this group
-pass, so the reachable figure is 99.69% rather than 99.54%.
-
-### DTD
-
-There is no public DTD conformance suite comparable to the others, so the DTD
-validator's evidence is its own unit tests. It checks content models,
-attribute presence and defaults, enumerated values, and `ID`/`IDREF`, over the
-internal subset only — an external subset is never fetched, which is the
-attack `AllowDOCTYPE` exists to gate. `DTD.HasExternalSubset` records that one
-was named, so a caller knows a check was partial rather than clean.
-
----
+- the diagnosed cause behind a gap, rather than its error code;
+- fixes that were attempted, measured and reverted — recorded so the obvious
+  patch is not tried a second time;
+- what a real fix would cost, where the answer is a rewrite rather than a patch;
+- DTD and XDM, which have no public suite and so appear in no percentage.
 
 ## Won't fix
 
@@ -943,6 +777,10 @@ where passing means freezing a Unicode 3.1 table and being wrong about modern
 text.
 
 ## Related
+
+[conformance-gaps.md](conformance-gaps.md) is the ledger: every failing case in
+every suite, named, with the current numbers and a fixable / not-fixable
+verdict. This file is the reasoning behind the hard ones.
 
 [todo.md](todo.md) is the forward-looking half of this file: what to build next
 and what each item would cost. Several gaps here — XML 1.1 line ends, DTD
