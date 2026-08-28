@@ -109,11 +109,25 @@ func checkVarParamAttrs(el *xdm.Node) error {
 // stylesheet. static-015 writes version="1.0" on a static xsl:param of a
 // version="3.0" module and expects the parameter to work.
 func moduleAtLeast30(el *xdm.Node) bool {
+	var outermost *xdm.Node
 	for cur := el; cur != nil; cur = cur.Parent {
-		if cur.Kind == xdm.KindElement && cur.Name.URI == xdm.NSXSL &&
-			isStylesheetRootName(cur.Name.Local) {
+		if cur.Kind != xdm.KindElement {
+			continue
+		}
+		outermost = cur
+		if cur.Name.URI == xdm.NSXSL && isStylesheetRootName(cur.Name.Local) {
 			return versionAt(cur) >= 3.0
 		}
+	}
+	// A simplified stylesheet has no xsl:stylesheet element: the module is a
+	// literal result element carrying xsl:version, and section 3.7 says that
+	// attribute "has the same effect as the version attribute on
+	// xsl:stylesheet". Without this the walk found no module element and
+	// reported 2.0, so every attribute XSLT 3.0 added was rejected in a
+	// simplified stylesheet declaring xsl:version="3.0" --
+	// for-each-group-073 through -075 write composite there.
+	if outermost != nil {
+		return versionAt(outermost) >= 3.0
 	}
 	return false
 }
