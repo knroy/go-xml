@@ -994,6 +994,7 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 			return nil, fmt.Errorf("in %s/@select: %w", el.Name.Lexical(), err)
 		}
 		v.Select = comp
+		v.selectNS = el.InScopeNamespaces()
 		c.noteVariableFuncs(comp, el.Name.Lexical()+" $"+qn.Lexical())
 		if len(el.ChildElements()) > 0 {
 			return nil, fmt.Errorf("%s has both a select attribute and content",

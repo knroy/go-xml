@@ -1628,7 +1628,20 @@ func globalRefs(g *Variable) []string {
 			j++
 		}
 		if j > i+1 {
-			out = append(out, xdm.QName{Local: src[i+1 : j]}.Clark())
+			ref := src[i+1 : j]
+			if prefix, local, ok := strings.Cut(ref, ":"); ok {
+				// A prefixed reference is expanded through the bindings in
+				// force where it was written. Left unexpanded it matched no
+				// global and fell back to declaration order, which is wrong
+				// for $xsl:original: the renamed original is emitted after
+				// the overriding declaration that refers to it.
+				if uri, has := g.selectNS[prefix]; has {
+					out = append(out, xdm.QName{URI: uri, Local: local}.Clark())
+					i = j - 1
+					continue
+				}
+			}
+			out = append(out, xdm.QName{Local: ref}.Clark())
 		}
 		i = j - 1
 	}

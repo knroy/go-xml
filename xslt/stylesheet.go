@@ -291,6 +291,16 @@ type Variable struct {
 	// name-keyed scope the runtime binds into cannot hold both, so the name
 	// alone is not the identity: see use-package-175 and -176.
 	pkg int
+	// selectNS are the namespace bindings in force on the declaration, kept
+	// so that globalRefs can expand a *prefixed* variable reference in the
+	// select expression. Ordering globals by their dependencies is textual
+	// (see globalRefs), and a prefixed name means nothing without these.
+	//
+	// $xsl:original inside an xsl:override is the case that needs it: the
+	// prefix is rebound to a generated namespace, and the reference has to be
+	// ordered after the renamed original, which is emitted *after* the
+	// overriding declaration in the used package's tree.
+	selectNS map[string]string
 }
 
 // keyDef is a compiled xsl:key.
