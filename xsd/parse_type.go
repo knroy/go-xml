@@ -602,13 +602,33 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 					if base == nil {
 						return nil
 					}
-					t.SimpleContent = &SimpleType{
+					sc := &SimpleType{
 						Base:      base,
 						Variety:   base.Variety,
 						ItemType:  base.ItemType,
 						Primitive: base.Primitive,
 						Facets:    facets,
 					}
+					t.SimpleContent = sc
+					// Facets written bare inside a simpleContent
+					// restriction constrain a value space exactly
+					// as those inside an <xs:simpleType> do, so the
+					// Part 2 4.3 constraints apply to them
+					// identically -- applicable-facets above all.
+					// Only types read by readSimpleType were
+					// registered, so this anonymous one escaped
+					// every one of those checks: stZ010 restricts
+					// content whose type is xs:anySimpleType with
+					// minLength, a facet no ur-type admits, and
+					// loaded clean.
+					//
+					// Registered here rather than where the facets
+					// are read because the base is not known until
+					// this fixup runs, and every check consults it.
+					// checkFacetConstraints runs after the fixups
+					// drain, so a late append is still seen.
+					p.simpleTypes = append(p.simpleTypes,
+						simpleTypeSite{typ: sc, el: body})
 					return nil
 				})
 			}
