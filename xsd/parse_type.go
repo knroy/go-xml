@@ -917,6 +917,36 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 						"element ref %q names no element declaration", ref)
 				}
 				part.Term = d
+				// A global declaration whose type attribute matched
+				// nothing is carried with the miss recorded rather
+				// than reported, because §3.3.3 makes it an error
+				// only where the declaration is used -- missing001
+				// leaves such a declaration unreferenced and its
+				// schema is expected to load.
+				//
+				// A <element ref> *is* that use, and it is a use
+				// visible at schema time: the content model holding
+				// this particle can never be checked against
+				// anything, since the term it names has no type to
+				// check against. Deferring to instance validation
+				// would make the fault depend on whether an instance
+				// happens to reach the model, when the model itself
+				// is already unusable.
+				//
+				// This runs as a post-fixup because the fixup that
+				// resolves the declaration's own type may not have
+				// run yet, and unresolved is set there.
+				// idB005 references an element typed "keyinfo" where
+				// only "keyInfo" is defined.
+				p.postFixups = append(p.postFixups, func() error {
+					if d.unresolved != "" {
+						return errorAt(el, "src-resolve",
+							"element ref %q names a declaration whose "+
+								"type %q matches no definition",
+							ref, d.unresolved)
+					}
+					return nil
+				})
 				return nil
 			})
 			return part
