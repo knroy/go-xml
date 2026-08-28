@@ -1033,7 +1033,13 @@ func (c *compiler) compileOutput(el *xdm.Node, precedence int) error {
 		if err != nil {
 			return err
 		}
-		key := qn.Clark()
+		// 3.5.5 makes an output definition local to the package that
+		// declares it, so the name is scoped: use-package-108b has both the
+		// principal package and the package it uses declaring an
+		// xsl:output named "test", and merging them into one definition let
+		// the principal's omit-xml-declaration="no" govern a result document
+		// the used package writes.
+		key := aliasKey(compilePackage, qn.Clark())
 		if c.sheet.namedOutputs == nil {
 			c.sheet.namedOutputs = map[string]*OutputSettings{}
 		}

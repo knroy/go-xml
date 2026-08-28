@@ -1172,7 +1172,7 @@ func nonSortChildren(n *xdm.Node) []*xdm.Node {
 // attribute value template, since a stylesheet routinely computes one output
 // file per input node.
 func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &resultDocumentInstr{}
+	instr := &resultDocumentInstr{pkg: compilePackage}
 
 	// The output definition is selected when the instruction runs rather than
 	// here. xsl:output is a top-level declaration, and section 3.13 puts no

@@ -225,7 +225,7 @@ func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 		return nil
 	}
 	c.charMapPrecedence[qn.Clark()] = precedence
-	c.sheet.characterMaps[qn.Clark()] = m
+	c.sheet.characterMaps[aliasKey(compilePackage, qn.Clark())] = m
 	return nil
 }
 
@@ -236,7 +236,8 @@ func (c *compiler) compileCharacterMap(el *xdm.Node, precedence int) error {
 // module has been compiled so that a map declared in an imported stylesheet is
 // visible to an xsl:output in the importing one.
 func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
-	merged, err := s.flattenCharacterMaps(names)
+	// The principal xsl:output is the top-level package's.
+	merged, err := s.flattenCharacterMaps(0, names)
 	if err != nil {
 		return err
 	}
@@ -253,13 +254,13 @@ func (s *Stylesheet) resolveOutputCharacterMaps(names []xdm.QName) error {
 // rather than left inside the xsl:output path: a secondary document that
 // names a character map must get the same substitutions the principal one
 // would, and resolving the name needs the stylesheet the caller no longer has.
-func (s *Stylesheet) flattenCharacterMaps(names []xdm.QName) (map[rune]string, error) {
+func (s *Stylesheet) flattenCharacterMaps(pkg int, names []xdm.QName) (map[rune]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
 	merged := map[rune]string{}
 	for _, n := range names {
-		m, ok := s.characterMaps[n.Clark()]
+		m, ok := s.charMapIn(pkg, n.Clark())
 		if !ok {
 			return nil, fmt.Errorf("XTSE1590: no xsl:character-map named %q", n.Lexical())
 		}
@@ -326,4 +327,33 @@ func (c *compiler) mergeCharMaps(dst map[rune]string, names []string, depth int)
 		}
 	}
 	return nil
+}
+
+
+// charMapIn answers the character map of one name as the given package sees
+// it, 3.5.5.
+//
+// A package's own declaration wins. Where it has none, the table is consulted
+// unscoped, which is what keeps a map declared in a used package reachable
+// from that package's own xsl:result-document -- use-package-108 calls the
+// used package's "go" template, which serialises through the map that package
+// declares -- while use-package-108b, where BOTH packages declare a "cm",
+// gives each its own.
+func (s *Stylesheet) charMapIn(pkg int, name string) (map[rune]string, bool) {
+	if m, ok := s.characterMaps[aliasKey(pkg, name)]; ok {
+		return m, true
+	}
+	m, ok := s.characterMaps[name]
+	return m, ok
+}
+
+
+// namedOutputIn answers the output definition of one name as the given package
+// sees it, on the same terms as charMapIn.
+func (s *Stylesheet) namedOutputIn(pkg int, name string) (*OutputSettings, bool) {
+	if o, ok := s.namedOutputs[aliasKey(pkg, name)]; ok {
+		return o, true
+	}
+	o, ok := s.namedOutputs[name]
+	return o, ok
 }
