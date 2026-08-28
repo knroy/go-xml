@@ -79,7 +79,23 @@ func (c *compiler) recordTemplateVisibility(el *xdm.Node, name xdm.QName) {
 	}
 	vis := strings.TrimSpace(el.AttrValue("visibility"))
 	if vis == "" {
-		vis = "private"
+		// 3.5.2 gives the visibility of a component two sources: "the value
+		// of the visibility declaration on the declaration itself (if
+		// present), and the rules given in the xsl:expose declarations of the
+		// package manifest." The manifest half was missing here, so a
+		// template made public only by an xsl:expose was recorded private and
+		// refused as an entry point. expose-007 exposes every template with
+		// names="*" and starts at "main".
+		//
+		// Only a declaration with no visibility attribute of its own consults
+		// the manifest, which is what the sentence says: an explicit value on
+		// the declaration is the one that stands, and a manifest that
+		// disagrees with it is XTSE3010 rather than an override.
+		if v := exposedVisibility(el); v != "" {
+			vis = string(v)
+		} else {
+			vis = "private"
+		}
 	}
 	if c.sheet.templateVisibility == nil {
 		c.sheet.templateVisibility = map[string]string{}
@@ -157,4 +173,59 @@ func (s *Stylesheet) eligibleInitialTemplate(name xdm.QName) bool {
 		return true
 	}
 	return vis == "public" || vis == "final"
+}
+
+
+// exposedVisibility answers the visibility the containing package's xsl:expose
+// declarations give a component declaration, or "" where none matches.
+//
+// The declaration's own package is the one whose manifest governs it, so the
+// search starts at the module element the declaration is a child of. A module
+// reached by xsl:include is part of the including package and its manifest is
+// the includer's, but an xsl:expose may only appear as a child of xsl:package,
+// so a declaration in an included module simply finds no rules here -- which
+// is the same answer walking up to the package would give for a manifest that
+// listed it by a name it does not have.
+func exposedVisibility(el *xdm.Node) visibility {
+	root := el.Parent
+	if root == nil || !isXSL(root, "package") {
+		return ""
+	}
+	comps, err := packageComponents(root)
+	if err != nil {
+		return ""
+	}
+	var target *component
+	for _, comp := range comps {
+		if comp.el == el {
+			target = comp
+			break
+		}
+	}
+	if target == nil {
+		return ""
+	}
+	var exposes []*exposeRule
+	order := 0
+	for _, ch := range root.ChildElements() {
+		if !isXSL(ch, "expose") {
+			continue
+		}
+		r, err := parseExposeRule(ch, order)
+		if err != nil {
+			return ""
+		}
+		order++
+		exposes = append(exposes, r)
+	}
+	if len(exposes) == 0 {
+		return ""
+	}
+	if err := applyExpose(comps, exposes); err != nil {
+		return ""
+	}
+	// applyExpose leaves a component no rule matched at its declared
+	// visibility, which for a declaration with no attribute is the private
+	// default -- the same answer the caller falls back to.
+	return target.vis
 }
