@@ -543,7 +543,7 @@ type copyInstr struct {
 	// sel is the XSLT 3.0 select attribute, naming the item to copy. Nil
 	// means the context item, which is what 2.0 always copied.
 	sel      *xpath.Compiled
-	attrSets []xdm.QName
+	attrSets []attrSetRef
 	// noNamespaces records copy-namespaces="no", which copies the element
 	// without its namespace nodes. The default is to copy them all.
 	noNamespaces bool
@@ -714,7 +714,7 @@ type literalElemInstr struct {
 	// section 11.1.4 restores any of them whose URI turns out to be a target
 	// namespace URI of an xsl:namespace-alias.
 	excludedNamespaces []nsBinding
-	attrSets           []xdm.QName
+	attrSets           []attrSetRef
 	body               []Instruction
 	// validation carries xsl:validation and xsl:type, which a literal result
 	// element may have exactly as xsl:element may.
@@ -846,7 +846,7 @@ type elementInstr struct {
 	baseURI   string
 	namespace *avt
 	scope     *xdm.Node
-	attrSets  []xdm.QName
+	attrSets  []attrSetRef
 	body      []Instruction
 	// validation is the validation or type attribute, which asks for the
 	// constructed element to be assessed against the imported schema.

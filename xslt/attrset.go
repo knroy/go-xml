@@ -18,7 +18,7 @@ type attributeSet struct {
 	name xdm.QName
 	// uses names the sets applied before this one's own attributes, so that
 	// a later declaration of the same attribute replaces an earlier one.
-	uses []xdm.QName
+	uses []attrSetRef
 	body []Instruction
 	// importPrecedence orders declarations of the same name across modules.
 	importPrecedence int
@@ -49,7 +49,7 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		if err != nil {
 			return err
 		}
-		as.uses = append(as.uses, uq)
+		as.uses = append(as.uses, attrSetRef{name: uq, pkg: as.pkg})
 		c.usedAttributeSets = append(c.usedAttributeSets, uq)
 	}
 
@@ -83,14 +83,15 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 // Expansion is depth-first through "use-attribute-sets" so that a set's own
 // attributes are written after the ones it inherits and therefore replace
 // them. A cycle would recurse forever, so the chain being expanded is tracked.
-func applyAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder) error {
+func applyAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder) error {
 	return expandAttributeSets(rt, names, out, map[string]bool{})
 }
 
-func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
+func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 	active map[string]bool) error {
 
-	for _, n := range names {
+	for _, r := range names {
+		n := r.name
 		key := n.Clark()
 		if active[key] {
 			// A cycle within one package is XTSE0720 and was reported
@@ -106,7 +107,7 @@ func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
 				"XTDE0640: circular reference in xsl:attribute-set %q",
 				n.Lexical())
 		}
-		sets, ok := rt.sheet.attributeSets[key]
+		sets, ok := attributeSetsFor(rt.sheet, key, r.pkg)
 		if !ok {
 			return fmt.Errorf("XTSE0710: no xsl:attribute-set named %q", n.Lexical())
 		}
@@ -138,20 +139,60 @@ func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
 // parseUseAttributeSets reads a use-attribute-sets attribute in either the
 // no-namespace form (on xsl:element and xsl:copy) or the xsl: form (on a
 // literal result element).
-func parseUseAttributeSets(el *xdm.Node) ([]xdm.QName, error) {
+func parseUseAttributeSets(el *xdm.Node) ([]attrSetRef, error) {
 	raw := el.AttrValue("use-attribute-sets")
 	if a := el.Attr(xdm.NSXSL, "use-attribute-sets"); a != nil {
 		raw = a.Value
 	}
-	var out []xdm.QName
+	pkg := overridingPackage(el, compilePackage)
+	var out []attrSetRef
 	for _, n := range strings.Fields(raw) {
 		qn, err := resolveQNameAttr(el, n)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, qn)
+		out = append(out, attrSetRef{name: qn, pkg: pkg})
 	}
 	return out, nil
+}
+
+// attrSetRef is one name in a use-attribute-sets attribute, with the package
+// the reference was written in.
+//
+// 3.5.5 makes a component's identity belong to its package, and an attribute
+// set is a component. Two packages may each declare a private set of one
+// name, and both are live at once, so the name alone does not say which is
+// meant: override-as-005 writes an as-private in the using package and uses a
+// public set of the used package whose own body invokes the used package's
+// as-private. Resolved by name alone the two merged and the using package's
+// attributes leaked into the used package's set.
+type attrSetRef struct {
+	name xdm.QName
+	pkg  int
+}
+
+// attributeSetsFor answers the declarations a reference in package pkg binds
+// to.
+//
+// A reference binds first to the declarations of its own package. Falling
+// through to the ones declared elsewhere is what makes a set accepted from a
+// used package usable: 3.6.3.4 binds a symbolic reference to the component
+// the manifest supplied, which is a declaration of another package.
+func attributeSetsFor(s *Stylesheet, key string, pkg int) ([]*attributeSet, bool) {
+	all := s.attributeSets[key]
+	if len(all) == 0 {
+		return nil, false
+	}
+	var own []*attributeSet
+	for _, as := range all {
+		if as.pkg == pkg {
+			own = append(own, as)
+		}
+	}
+	if len(own) > 0 {
+		return own, true
+	}
+	return all, true
 }
 
 // namespaceInstr implements xsl:namespace, which adds a namespace node to the
@@ -409,7 +450,7 @@ func (c *compiler) checkAttributeSetCycles() error {
 				uses[as.pkg] = m
 			}
 			for _, u := range as.uses {
-				uk := u.Clark()
+				uk := u.name.Clark()
 				for _, target := range c.sheet.attributeSets[uk] {
 					if target.pkg == as.pkg {
 						m[key] = append(m[key], uk)
