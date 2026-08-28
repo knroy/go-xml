@@ -7,13 +7,13 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,341 / 14,405 (99.56%) | 24,968 / 24,999 (99.88%) |
-| XSD 1.1 | 15,239 / 15,365 (99.18%) | 26,177 / 26,205 (99.89%) |
+| XSD 1.0 | 14,367 / 14,405 (99.74%) | 24,964 / 24,999 (99.86%) |
+| XSD 1.1 | 15,293 / 15,365 (99.53%) | 26,173 / 26,205 (99.88%) |
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,236 of 19,236 in scope |
 | XPath 3.1 | 99.98% — 21,782 of 21,786 in scope (4 failing) |
-| XSLT 2.0 | 99.61% — 6,136 of 6,160 in scope (24 failing) |
-| XSLT 3.0 | 98.56% — 8,499 of 8,623 in scope (124 failing); streaming out of scope |
+| XSLT 2.0 | 99.85% — 6,149 of 6,158 in scope (9 failing) |
+| XSLT 3.0 | 99.40% — 8,571 of 8,623 in scope (52 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 671, clean under `-race` |
@@ -175,8 +175,10 @@ The general case *is* implemented, behind `xpath.SetBacktrackingRegex(true)`
 (`-backtracking-regex` on the command line) and off by default, because it has
 no linear-time guarantee and patterns can come from document data. A step
 budget bounds every match and exhausting it is an error, never a silent "no
-match". With it enabled the nine XSLT `regex`/`analyze-string` failures and
-`fn-matches-51` all pass — XSLT 2.0 99.69% and QT3 15,183 of 15,183.
+match". Both XSLT harnesses and the QT3 harness now enable it for their runs, where
+the suite's patterns are trusted input, so the nine XSLT
+`regex`/`analyze-string` failures and `fn-matches-51` all pass and the measured
+figures include them. It stays off by default in production.
 
 An earlier version of this file argued the whole thing was not worth doing,
 having reasoned about capture-and-compare in general and missed that the
