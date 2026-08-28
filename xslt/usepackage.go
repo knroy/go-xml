@@ -97,6 +97,11 @@ type component struct {
 	declared visibility
 	// vis is the effective visibility, after xsl:expose has been applied.
 	vis visibility
+	// reExported marks a component this package did not declare but accepted
+	// from a package it uses in turn; see reExportedComponents. Its el is a
+	// node of that inner package's tree, not of this one's, so the splice
+	// that substitutes an overriding declaration cannot replace it in place.
+	reExported bool
 }
 
 // packageDecl is a resolved package: its name, version and tree.
@@ -129,6 +134,15 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 	var out []*component
 	for _, el := range root.ChildElements() {
 		if el.Name.URI != xdm.NSXSL {
+			continue
+		}
+		// A declaration this package did not write, but that an enclosing
+		// package's xsl:override supplied for a component this one accepted
+		// from further down. It provides the accepted component's body; it
+		// does not declare a component of this package, and reading it as one
+		// made it collide with the very component it implements (XTSE3050).
+		// See reExportedComponents.
+		if el.AttrValue(spliced) == "yes" {
 			continue
 		}
 		var kind componentKind
@@ -924,8 +938,84 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err := applyExpose(comps, exposes); err != nil {
 		return nil, err
 	}
+	inherited, err := c.reExportedComponents(u.root, comps)
+	if err != nil {
+		return nil, err
+	}
+	comps = append(comps, inherited...)
 	u.comps = comps
 	return u, nil
+}
+
+// reExportedComponents are the components a package makes available to ITS
+// using package by accepting them from a package it uses in turn.
+//
+// 3.5.3 says an accepted component "becomes a component of the using package",
+// and the visibility an xsl:accept assigns is that component's visibility in
+// the using package -- which is what decides whether the next package up may
+// see it, accept it, or override it. So a package's component list is not
+// only its own top-level declarations: it is those plus whatever its own
+// manifest accepted with a visibility other than hidden or absent.
+//
+// override-t-003a is the case. Package -103 uses -base-101 and accepts its
+// abstract t-abstract with visibility="abstract"; -103a then uses -103 and
+// overrides t-abstract. Reading -103's components from its own declarations
+// alone left t-abstract unknown there, and the override failed as XTSE3058
+// for a component the composition does in fact provide.
+//
+// Only public, abstract and final come through. Hidden and absent are the two
+// visibilities 3.5.3 defines as withholding the component, and private is the
+// answer for a component the manifest does not mention, which likewise stops
+// here.
+//
+// Recursion is bounded by the package graph, which use-package cycles are
+// already rejected for elsewhere.
+func (c *compiler) reExportedComponents(root *xdm.Node, own []*component) ([]*component, error) {
+	haveOwn := map[string]bool{}
+	for _, comp := range own {
+		haveOwn[comp.sym.String()] = true
+	}
+	var out []*component
+	seen := map[string]bool{}
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "use-package") {
+			continue
+		}
+		inner, err := c.readUsePackage(el)
+		if err != nil {
+			// A manifest this package cannot resolve is not reported here.
+			// This pass only widens what the enclosing package can see, and
+			// the same manifest is read again -- with its errors -- when the
+			// package is actually compiled.
+			continue
+		}
+		for _, comp := range inner.comps {
+			key := comp.sym.String()
+			if haveOwn[key] || seen[key] {
+				continue
+			}
+			v, assigned := visAbsent, false
+			for _, r := range inner.accepts {
+				if ok, _, wild := r.matchRank(comp.sym); ok && !wild {
+					v, assigned = r.vis, true
+				}
+			}
+			if !assigned {
+				continue
+			}
+			switch v {
+			case visPublic, visAbstract, visFinal:
+			default:
+				continue
+			}
+			seen[key] = true
+			out = append(out, &component{
+				sym: comp.sym, el: comp.el, declared: v, vis: v,
+				reExported: true,
+			})
+		}
+	}
+	return out, nil
 }
 
 // acceptComponents applies the xsl:accept and xsl:override children of one
@@ -1472,6 +1562,24 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 			keep[comp.el] = true
 		}
 	}
+	// A re-exported component is declared in a package further down, so its
+	// element is not a child of this tree and the loop below cannot find it
+	// to substitute. The overriding declaration is added to this package's
+	// top level instead, where every reference within the package resolves
+	// against it -- which is what the composition asks for: 3.5.3 makes the
+	// accepted component a component of THIS package, and 3.5.4 replaces its
+	// implementation with the override's. override-t-003a.
+	var appended []*xdm.Node
+	for _, comp := range u.comps {
+		if !comp.reExported {
+			continue
+		}
+		if ov, ok := u.overriding[comp.sym.String()]; ok {
+			noteOverridingDecl(ov, compilePackage)
+			setAttr(ov, spliced, "yes")
+			appended = append(appended, rewriteOverride(ov, comp.el))
+		}
+	}
 	var kept []*xdm.Node
 	for _, ch := range u.root.Children {
 		if ch.Kind != xdm.KindElement {
@@ -1538,6 +1646,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		}
 		kept = append(kept, ch)
 	}
+	kept = append(kept, appended...)
 	u.root.Children = kept
 	for _, ch := range kept {
 		ch.Parent = u.root
@@ -1746,6 +1855,12 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 // It is a URI no stylesheet can write, so a generated name in it cannot
 // collide with one the source declared.
 const originalNS = "http://go-xml.invalid/xslt/original/"
+
+// spliced is the attribute marking a declaration that an enclosing package's
+// xsl:override put into this package's top level, rather than one this
+// package wrote. It is not a component of this package; see
+// reExportedComponents and packageComponents.
+const spliced = "go-xml-spliced-override"
 
 // originalSerial numbers the generated namespaces. Two overrides in one
 // stylesheet each keep a distinct original -- override-t-015 overrides a
