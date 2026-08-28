@@ -18,10 +18,15 @@ type attributeSet struct {
 	name xdm.QName
 	// uses names the sets applied before this one's own attributes, so that
 	// a later declaration of the same attribute replaces an earlier one.
-	uses []xdm.QName
+	uses []attrSetRef
 	body []Instruction
 	// importPrecedence orders declarations of the same name across modules.
 	importPrecedence int
+	// pkg is the package that WROTE this declaration, which for a declaration
+	// inside an xsl:override is the using package and not the used one whose
+	// tree it was spliced into. The static cycle check of 10.2.2 is scoped by
+	// it; see checkAttributeSetCycles.
+	pkg int
 }
 
 func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
@@ -34,13 +39,17 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		return err
 	}
 
-	as := &attributeSet{name: qn, importPrecedence: precedence}
+	as := &attributeSet{
+		name:             qn,
+		importPrecedence: precedence,
+		pkg:              overridingPackage(el, compilePackage),
+	}
 	for _, u := range strings.Fields(el.AttrValue("use-attribute-sets")) {
 		uq, err := resolveQNameAttr(el, u)
 		if err != nil {
 			return err
 		}
-		as.uses = append(as.uses, uq)
+		as.uses = append(as.uses, attrSetRef{name: uq, pkg: as.pkg})
 		c.usedAttributeSets = append(c.usedAttributeSets, uq)
 	}
 
@@ -74,20 +83,31 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 // Expansion is depth-first through "use-attribute-sets" so that a set's own
 // attributes are written after the ones it inherits and therefore replace
 // them. A cycle would recurse forever, so the chain being expanded is tracked.
-func applyAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder) error {
+func applyAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder) error {
 	return expandAttributeSets(rt, names, out, map[string]bool{})
 }
 
-func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
+func expandAttributeSets(rt *runtime, names []attrSetRef, out *outputBuilder,
 	active map[string]bool) error {
 
-	for _, n := range names {
+	for _, r := range names {
+		n := r.name
 		key := n.Clark()
 		if active[key] {
-			return fmt.Errorf("XTSE0720: circular reference in xsl:attribute-set %q",
+			// A cycle within one package is XTSE0720 and was reported
+			// statically, before anything ran; see
+			// checkAttributeSetCycles. What is left to be found here is a
+			// cycle that closes only across a package boundary, which
+			// 10.2.2 explicitly puts outside static analysis -- "it is
+			// possible to detect a cycle during the static analysis of a
+			// package" -- and which is therefore the general dynamic
+			// circularity error. override-as-003 closes such a cycle by
+			// overriding one member of it from the using package.
+			return fmt.Errorf(
+				"XTDE0640: circular reference in xsl:attribute-set %q",
 				n.Lexical())
 		}
-		sets, ok := rt.sheet.attributeSets[key]
+		sets, ok := attributeSetsFor(rt.sheet, key, r.pkg)
 		if !ok {
 			return fmt.Errorf("XTSE0710: no xsl:attribute-set named %q", n.Lexical())
 		}
@@ -119,20 +139,60 @@ func expandAttributeSets(rt *runtime, names []xdm.QName, out *outputBuilder,
 // parseUseAttributeSets reads a use-attribute-sets attribute in either the
 // no-namespace form (on xsl:element and xsl:copy) or the xsl: form (on a
 // literal result element).
-func parseUseAttributeSets(el *xdm.Node) ([]xdm.QName, error) {
+func parseUseAttributeSets(el *xdm.Node) ([]attrSetRef, error) {
 	raw := el.AttrValue("use-attribute-sets")
 	if a := el.Attr(xdm.NSXSL, "use-attribute-sets"); a != nil {
 		raw = a.Value
 	}
-	var out []xdm.QName
+	pkg := overridingPackage(el, compilePackage)
+	var out []attrSetRef
 	for _, n := range strings.Fields(raw) {
 		qn, err := resolveQNameAttr(el, n)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, qn)
+		out = append(out, attrSetRef{name: qn, pkg: pkg})
 	}
 	return out, nil
+}
+
+// attrSetRef is one name in a use-attribute-sets attribute, with the package
+// the reference was written in.
+//
+// 3.5.5 makes a component's identity belong to its package, and an attribute
+// set is a component. Two packages may each declare a private set of one
+// name, and both are live at once, so the name alone does not say which is
+// meant: override-as-005 writes an as-private in the using package and uses a
+// public set of the used package whose own body invokes the used package's
+// as-private. Resolved by name alone the two merged and the using package's
+// attributes leaked into the used package's set.
+type attrSetRef struct {
+	name xdm.QName
+	pkg  int
+}
+
+// attributeSetsFor answers the declarations a reference in package pkg binds
+// to.
+//
+// A reference binds first to the declarations of its own package. Falling
+// through to the ones declared elsewhere is what makes a set accepted from a
+// used package usable: 3.6.3.4 binds a symbolic reference to the component
+// the manifest supplied, which is a declaration of another package.
+func attributeSetsFor(s *Stylesheet, key string, pkg int) ([]*attributeSet, bool) {
+	all := s.attributeSets[key]
+	if len(all) == 0 {
+		return nil, false
+	}
+	var own []*attributeSet
+	for _, as := range all {
+		if as.pkg == pkg {
+			own = append(own, as)
+		}
+	}
+	if len(own) > 0 {
+		return own, true
+	}
+	return all, true
 }
 
 // namespaceInstr implements xsl:namespace, which adds a namespace node to the
@@ -363,6 +423,79 @@ func (c *compiler) compilePerformSort(n *xdm.Node, ns xpath.NamespaceResolver) (
 // check is deferred rather than made as each reference compiles, because
 // xsl:attribute-set is a top-level declaration and may name one written below
 // it or in a module imported afterwards.
+// checkAttributeSetCycles applies XTSE0720 once every module has compiled.
+//
+// 10.2.2: "An attribute set A is dependent on an attribute set B if A contains
+// an attribute set invocation that is bound to B, or ... to an attribute set C
+// that is dependent on B. A cycle exists if any attribute set is dependent on
+// itself. Such a cycle is an error even if the attribute set is never
+// invoked."
+//
+// The graph is walked per package, because that sentence is qualified: "it is
+// possible to detect a cycle during the static analysis of a PACKAGE, before
+// it is known how the package will be used". A cycle that closes only when an
+// override from a using package is composed in is not visible to either
+// package's static analysis, and is the dynamic XTDE0640 instead. A
+// declaration written inside an xsl:override counts as the using package's,
+// which is what keeps the two apart.
+func (c *compiler) checkAttributeSetCycles() error {
+	// Edges are collected per package: only a use that both ends of agree on
+	// is an edge the static analysis of that package can see.
+	uses := map[int]map[string][]string{}
+	for key, sets := range c.sheet.attributeSets {
+		for _, as := range sets {
+			m := uses[as.pkg]
+			if m == nil {
+				m = map[string][]string{}
+				uses[as.pkg] = m
+			}
+			for _, u := range as.uses {
+				uk := u.name.Clark()
+				for _, target := range c.sheet.attributeSets[uk] {
+					if target.pkg == as.pkg {
+						m[key] = append(m[key], uk)
+						break
+					}
+				}
+			}
+		}
+	}
+	const (
+		unvisited = 0
+		active    = 1
+		done      = 2
+	)
+	for pkg, m := range uses {
+		_ = pkg
+		state := map[string]int{}
+		var visit func(string) error
+		visit = func(n string) error {
+			switch state[n] {
+			case active:
+				return fmt.Errorf(
+					"XTSE0720: xsl:attribute-set %s is dependent on itself",
+					clarkToEQName(n))
+			case done:
+				return nil
+			}
+			state[n] = active
+			for _, next := range m[n] {
+				if err := visit(next); err != nil {
+					return err
+				}
+			}
+			state[n] = done
+			return nil
+		}
+		for n := range m {
+			if err := visit(n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *compiler) checkAttributeSetRefs() error {
 	for _, n := range c.usedAttributeSets {
 		if _, ok := c.sheet.attributeSets[n.Clark()]; !ok {

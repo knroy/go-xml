@@ -85,6 +85,26 @@ func (s symbolicName) String() string {
 	return fmt.Sprintf("%s %s", s.kind, s.name.Lexical())
 }
 
+// key is the symbolic identifier itself, for use as a map key.
+//
+// 3.5.1: "The symbolic identifier of a component ... comprises the kind of
+// component ..., the expanded QName of the component (namespace URI plus
+// local name), and in the case of stylesheet functions, the arity."
+//
+// The EXPANDED QName, which is what separates this from String. String spells
+// the name the way the stylesheet wrote it, prefix and all, and that is right
+// for an error message and wrong for identity: a prefix is bound per module,
+// so two packages may each declare p:v2 with p bound to their own namespace.
+// Those are two components with two symbolic identifiers, and keying on the
+// lexical form collapsed them into one. accept-021 and accept-022 use exactly
+// such a pair and were refused as XTSE3050, a name accepted twice.
+func (s symbolicName) key() string {
+	if s.kind == kindFunction && s.arity >= 0 {
+		return fmt.Sprintf("%s %s#%d", s.kind, s.name.Clark(), s.arity)
+	}
+	return fmt.Sprintf("%s %s", s.kind, s.name.Clark())
+}
+
 // component is one declaration in a package, with the visibility the package
 // gives it.
 type component struct {
@@ -97,6 +117,11 @@ type component struct {
 	declared visibility
 	// vis is the effective visibility, after xsl:expose has been applied.
 	vis visibility
+	// reExported marks a component this package did not declare but accepted
+	// from a package it uses in turn; see reExportedComponents. Its el is a
+	// node of that inner package's tree, not of this one's, so the splice
+	// that substitutes an overriding declaration cannot replace it in place.
+	reExported bool
 }
 
 // packageDecl is a resolved package: its name, version and tree.
@@ -131,6 +156,15 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 		if el.Name.URI != xdm.NSXSL {
 			continue
 		}
+		// A declaration this package did not write, but that an enclosing
+		// package's xsl:override supplied for a component this one accepted
+		// from further down. It provides the accepted component's body; it
+		// does not declare a component of this package, and reading it as one
+		// made it collide with the very component it implements (XTSE3050).
+		// See reExportedComponents.
+		if el.AttrValue(spliced) == "yes" {
+			continue
+		}
 		var kind componentKind
 		switch el.Name.Local {
 		case "template":
@@ -149,12 +183,22 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 		case "variable":
 			kind = kindVariable
 		case "param":
-			// A stylesheet parameter is not a component. 3.5.1 lists the
-			// component kinds and xsl:param is not among them: a parameter is
-			// supplied from outside the whole stylesheet, so a package has
-			// nothing to publish about it and an xsl:expose naming one names
+			// A stylesheet parameter is not published as a component of the
+			// package it is declared in: a package has nothing to say about
+			// one through xsl:expose, and a token naming one must match
 			// nothing -- which is what expose-908 asserts.
-			continue
+			//
+			// It is still overridable. 9.5 makes a stylesheet parameter "a
+			// global variable with the additional property that its value can
+			// be supplied by the caller", and fixes its visibility as "public
+			// if the parameter is non-static", so an xsl:override may supply
+			// one. Only a child of xsl:override is read as a component here,
+			// and the used package's matching declaration is found by name;
+			// see usedPackageParam. override-v-015.
+			if !isXSL(root, "override") {
+				continue
+			}
+			kind = kindVariable
 		case "mode":
 			kind = kindMode
 		default:
@@ -583,6 +627,18 @@ type usePackageDecl struct {
 	// comps are the used package's components, with the visibility the used
 	// package gives them.
 	comps []*component
+	// inherited are the components the used package does not declare itself
+	// but holds by virtue of the packages IT uses. 3.6.3.2: "When a package Q
+	// uses a package P ... then Q will contain a component corresponding to
+	// every component in P." A component P exposed and Q accepted is a
+	// component of Q, so an xsl:accept in a package that uses Q may name it,
+	// and XTSE3030 must not fire on a token that matches one.
+	//
+	// They are kept apart from comps because only comps are declared in this
+	// package's own tree: the pruning and override machinery in
+	// compileUsedPackage works on elements of u.root and would mishandle a
+	// node belonging to a package two levels down.
+	inherited []*component
 	// root is the used package's module element.
 	root *xdm.Node
 	doc  *xdm.Node
@@ -697,7 +753,7 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			return err
 		}
 		for _, comp := range u.comps {
-			v := vis[comp.sym.String()]
+			v := vis[comp.sym.key()]
 			// XTSE3080: "a top-level package ... contains symbolic
 			// references referring to components whose visibility is
 			// abstract". An abstract component has no body, so a package
@@ -716,9 +772,9 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			// visibility="abstract", which is what accept-904 and -912 do;
 			// accept-902 and -910 inherit it and want the dynamic XTDE3052
 			// when the component is actually invoked.
-			_, supplied := u.overriding[comp.sym.String()]
+			_, supplied := u.overriding[comp.sym.key()]
 			if v == visAbstract && topLevel && !supplied &&
-				u.assignedVis[comp.sym.String()] {
+				u.assignedVis[comp.sym.key()] {
 				return fmt.Errorf(
 					"XTSE3080: %s is accepted into the top-level package "+
 						"with visibility=\"abstract\", and nothing can "+
@@ -727,7 +783,7 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			if v == visHidden || v == visAbsent || v == "" {
 				continue
 			}
-			key := comp.sym.String()
+			key := comp.sym.key()
 			if prev, dup := accepted[key]; dup && prev != u {
 				return fmt.Errorf(
 					"XTSE3050: %s is accepted from both %s and %s with a "+
@@ -760,12 +816,28 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 	// declares a t-public of its own.
 	ownByName := map[string]bool{}
 	for _, comp := range own {
-		ownByName[comp.sym.String()] = true
+		ownByName[comp.sym.key()] = true
 	}
 	overridingSeen := map[string]bool{}
 	for _, u := range uses {
-		for key := range u.overriding {
+		for key, el := range u.overriding {
 			if ownByName[key] {
+				// A function clash is XTSE0770, the more specific rule:
+				// "a package must not contain two or more xsl:function
+				// declarations with the same expanded QName, the same arity
+				// and the same import precedence". 3.5.4 makes the overriding
+				// declaration a component of the using package, so both
+				// declarations are in one package and 0770 applies in its own
+				// right. The suite draws the line here: error-3055a is this
+				// shape with a template and wants XTSE3055, while
+				// override-f-020 is the same shape with a function and
+				// accepts only XTSE0770 or XTSE3050.
+				if isXSL(el, "function") {
+					return fmt.Errorf(
+						"XTSE0770: %s is declared as a child of xsl:override "+
+							"and also declared in the using package, at the "+
+							"same import precedence", key)
+				}
 				return fmt.Errorf(
 					"XTSE3055: %s is declared as a child of xsl:override and "+
 						"also declared in the using package", key)
@@ -779,7 +851,7 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 		}
 	}
 	for _, comp := range own {
-		if u, dup := accepted[comp.sym.String()]; dup {
+		if u, dup := accepted[comp.sym.key()]; dup {
 			return fmt.Errorf(
 				"XTSE3050: %s is declared in this package and also accepted "+
 					"from %s", comp.sym, u.name)
@@ -795,7 +867,7 @@ func (c *compiler) compileUsePackages(root *xdm.Node, precedence int) error {
 			continue
 		}
 		for _, m := range overriddenModes(el) {
-			if u, dup := accepted[m.String()]; dup {
+			if u, dup := accepted[m.key()]; dup {
 				return fmt.Errorf(
 					"XTSE3050: a template rule outside xsl:override names "+
 						"%s, which is accepted from %s", m, u.name)
@@ -908,8 +980,94 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err := applyExpose(comps, exposes); err != nil {
 		return nil, err
 	}
+	// 3.6.3.2: "When a package Q uses a package P ... Q will contain a
+	// component corresponding to every component in P." A package's component
+	// list is therefore not just its own top-level declarations -- it
+	// includes everything the package accepted, transitively.
+	//
+	// The inherited set is recorded separately as well as folded into comps,
+	// because the XTSE3030 check below has to be able to say that an accept
+	// token matched something the package holds by inheritance rather than by
+	// declaring it: use-package-171 accepts a mode declared two packages down.
+	inherited, err := c.reExportedComponents(u.root, comps)
+	if err != nil {
+		return nil, err
+	}
+	u.inherited = inherited
+	comps = append(comps, inherited...)
 	u.comps = comps
 	return u, nil
+}
+
+// reExportedComponents are the components a package makes available to ITS
+// using package by accepting them from a package it uses in turn.
+//
+// 3.5.3 says an accepted component "becomes a component of the using package",
+// and the visibility an xsl:accept assigns is that component's visibility in
+// the using package -- which is what decides whether the next package up may
+// see it, accept it, or override it. So a package's component list is not
+// only its own top-level declarations: it is those plus whatever its own
+// manifest accepted with a visibility other than hidden or absent.
+//
+// override-t-003a is the case. Package -103 uses -base-101 and accepts its
+// abstract t-abstract with visibility="abstract"; -103a then uses -103 and
+// overrides t-abstract. Reading -103's components from its own declarations
+// alone left t-abstract unknown there, and the override failed as XTSE3058
+// for a component the composition does in fact provide.
+//
+// Only public, abstract and final come through. Hidden and absent are the two
+// visibilities 3.5.3 defines as withholding the component, and private is the
+// answer for a component the manifest does not mention, which likewise stops
+// here.
+//
+// Recursion is bounded by the package graph, which use-package cycles are
+// already rejected for elsewhere.
+func (c *compiler) reExportedComponents(root *xdm.Node, own []*component) ([]*component, error) {
+	haveOwn := map[string]bool{}
+	for _, comp := range own {
+		haveOwn[comp.sym.String()] = true
+	}
+	var out []*component
+	seen := map[string]bool{}
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "use-package") {
+			continue
+		}
+		inner, err := c.readUsePackage(el)
+		if err != nil {
+			// A manifest this package cannot resolve is not reported here.
+			// This pass only widens what the enclosing package can see, and
+			// the same manifest is read again -- with its errors -- when the
+			// package is actually compiled.
+			continue
+		}
+		for _, comp := range inner.comps {
+			key := comp.sym.String()
+			if haveOwn[key] || seen[key] {
+				continue
+			}
+			v, assigned := visAbsent, false
+			for _, r := range inner.accepts {
+				if ok, _, wild := r.matchRank(comp.sym); ok && !wild {
+					v, assigned = r.vis, true
+				}
+			}
+			if !assigned {
+				continue
+			}
+			switch v {
+			case visPublic, visAbstract, visFinal:
+			default:
+				continue
+			}
+			seen[key] = true
+			out = append(out, &component{
+				sym: comp.sym, el: comp.el, declared: v, vis: v,
+				reExported: true,
+			})
+		}
+	}
+	return out, nil
 }
 
 // acceptComponents applies the xsl:accept and xsl:override children of one
@@ -918,7 +1076,7 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, error) {
 	byName := map[string]*component{}
 	for _, comp := range u.comps {
-		byName[comp.sym.String()] = comp
+		byName[comp.sym.key()] = comp
 	}
 	// The overriding declarations first: XTSE3051 makes a name that an
 	// xsl:accept lists explicitly *and* an xsl:override declares an error,
@@ -930,9 +1088,27 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			return nil, err
 		}
 		for _, oc := range comps {
-			key := oc.sym.String()
+			key := oc.sym.key()
 			target, ok := byName[key]
 			if !ok {
+				// A top-level xsl:param is left out of the component list,
+				// because xsl:expose has nothing to say about one and a
+				// token naming one must match nothing (expose-908). It is
+				// still a component for the purpose of an override: 9.5 makes
+				// a stylesheet parameter "a global variable with the
+				// additional property that its value can be supplied by the
+				// caller", and fixes its visibility as "public if the
+				// parameter is non-static". override-v-015 overrides one.
+				if el := usedPackageParam(u.root, oc.sym); el != nil {
+					target = &component{
+						sym: oc.sym, el: el,
+						declared: visPublic, vis: visPublic,
+					}
+					byName[key] = target
+					u.comps = append(u.comps, target)
+				}
+			}
+			if target == nil {
 				return nil, fmt.Errorf(
 					"XTSE3058: the %s declared in xsl:override is not "+
 						"homonymous with any component of package %s",
@@ -947,6 +1123,9 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			if err := checkOverrideSignature(oc.el, target.el); err != nil {
 				return nil, err
 			}
+			if prev, dup := overridden[key]; dup {
+				return nil, duplicateOverrideError(oc, prev)
+			}
 			overridden[key] = oc.el
 		}
 		// A template rule inside the override adds a rule to the mode it
@@ -959,7 +1138,7 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 				continue
 			}
 			for _, m := range overriddenModes(decl) {
-				target, ok := byName[m.String()]
+				target, ok := byName[m.key()]
 				if !ok {
 					continue
 				}
@@ -982,7 +1161,7 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 		if v == visPrivate {
 			v = visHidden
 		}
-		vis[comp.sym.String()] = v
+		vis[comp.sym.key()] = v
 	}
 	// The tier each component's winning xsl:accept matched at, so that a
 	// later but vaguer rule does not displace an earlier, more specific one.
@@ -995,7 +1174,7 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 				continue
 			}
 			if !wild {
-				if _, dup := overridden[comp.sym.String()]; dup {
+				if _, dup := overridden[comp.sym.key()]; dup {
 					return nil, fmt.Errorf(
 						"XTSE3051: the token %q in xsl:accept/@names names "+
 							"%s, which an xsl:override of the same "+
@@ -1014,13 +1193,13 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			}
 			// Within a tier the last element in document order wins, so a
 			// tie is taken; a strictly vaguer match is not.
-			if tier < bestTier[comp.sym.String()] {
+			if tier < bestTier[comp.sym.key()] {
 				continue
 			}
-			bestTier[comp.sym.String()] = tier
-			vis[comp.sym.String()] = r.vis
-			assigned[comp.sym.String()] = true
-			hidden[comp.sym.String()] = r.vis == visHidden || r.vis == visAbsent
+			bestTier[comp.sym.key()] = tier
+			vis[comp.sym.key()] = r.vis
+			assigned[comp.sym.key()] = true
+			hidden[comp.sym.key()] = r.vis == visHidden || r.vis == visAbsent
 		}
 	}
 	// XTSE3030: a non-wildcard xsl:accept token matching no component of the
@@ -1030,7 +1209,8 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			if t.wildcard {
 				continue
 			}
-			if !tokenMatchesAny(r, t, u.comps) {
+			if !tokenMatchesAny(r, t, u.comps) &&
+				!tokenMatchesAny(r, t, u.inherited) {
 				return nil, fmt.Errorf(
 					"XTSE3030: the token %q in xsl:accept/@names matches no "+
 						"component in package %s", t.lexical, u.name)
@@ -1110,6 +1290,20 @@ func checkOverrideSignature(overriding, original *xdm.Node) error {
 		// and it may not introduce or drop one.
 		return checkTemplateParams(overriding, original)
 	}
+	if isXSL(overriding, "variable") || isXSL(overriding, "param") {
+		// 3.5.4: "Two variables (including parameters) with the same name are
+		// compatible if and only if ... their declared types are identical."
+		// A reference in the used package was compiled against the original
+		// type, so an override that changes it hands that reference a value
+		// its type check was not written for.
+		if a, b := overriding.AttrValue("as"), original.AttrValue("as"); !sameDeclaredTypeIn(overriding, original, a, b) {
+			return fmt.Errorf(
+				"XTSE3070: the overriding declaration of %s declares as=%q "+
+					"and the one it overrides declares as=%q",
+				overriding.AttrValue("name"), a, b)
+		}
+		return nil
+	}
 	if !isXSL(overriding, "function") {
 		return nil
 	}
@@ -1185,6 +1379,145 @@ func sameDeclaredType(a, b string) bool {
 		return true
 	}
 	return !builtinTypeName(a) || !builtinTypeName(b)
+}
+
+// sameDeclaredTypeIn is sameDeclaredType with the two type names resolved
+// against the elements they are written on, and with a user-declared simple
+// type compared by its definition rather than by its name.
+//
+// 3.5.4 requires the declared types of an overriding and an overridden
+// variable to be *identical*, and identity is of the type definition, not of
+// the name it is written under. Two packages that each import a schema
+// declaring the same union under different names declare the same type;
+// two that declare different unions do not, whatever they call them.
+//
+// override-v-005 and -v-006 are that pair. Both override a variable declared
+// as u1 = union(date, time, dateTime); -005 writes u2 = union(time, dateTime,
+// date), the same type spelled in another order, and must compile, while
+// -006 writes u6 = union(dateTime, date) and must be XTSE3070.
+//
+// The comparison is by the two declarations' own text, because the schemas
+// are not assembled yet when the manifest is read. Where either type cannot
+// be found and compared this falls back to the conservative answer, which is
+// "compatible": reporting a static error for a type this compiler cannot
+// compare would reject a legitimate override.
+func sameDeclaredTypeIn(elA, elB *xdm.Node, a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	if builtinTypeName(a) && builtinTypeName(b) {
+		return false
+	}
+	if !isBareTypeName(a) || !isBareTypeName(b) {
+		return true
+	}
+	qa, ea := resolveQNameAttr(elA, a)
+	qb, eb := resolveQNameAttr(elB, b)
+	if ea != nil || eb != nil {
+		return true
+	}
+	if qa.Clark() == qb.Clark() {
+		return true
+	}
+	da, db := importedSimpleType(elA, qa), importedSimpleType(elB, qb)
+	if da == nil || db == nil {
+		return true
+	}
+	return sameSimpleTypeDefinition(da, db)
+}
+
+// importedSimpleType finds the xs:simpleType an xsl:import-schema in el's
+// package declares under the given name.
+func importedSimpleType(el *xdm.Node, qn xdm.QName) *xdm.Node {
+	root := el
+	for root != nil && root.Parent != nil && root.Parent.Kind == xdm.KindElement {
+		root = root.Parent
+	}
+	if root == nil {
+		return nil
+	}
+	var found *xdm.Node
+	var walk func(*xdm.Node)
+	walk = func(n *xdm.Node) {
+		for _, ch := range n.ChildElements() {
+			if ch.Name.URI == xdm.NSXS && ch.Name.Local == "simpleType" &&
+				ch.AttrValue("name") == qn.Local {
+				if found == nil {
+					found = ch
+				}
+				return
+			}
+			walk(ch)
+		}
+	}
+	for _, ch := range root.ChildElements() {
+		if isXSL(ch, "import-schema") {
+			walk(ch)
+		}
+	}
+	return found
+}
+
+// sameSimpleTypeDefinition compares two xs:simpleType declarations for the
+// forms an override may reasonably write.
+//
+// Only a union of named member types is compared, which is the case the suite
+// exercises and the one that can be settled without assembling the schema. A
+// union is an unordered set of members, so the two lists are compared as
+// sets. Anything else answers false only when both are unions; other
+// varieties fall back to "not comparable", which the caller reads as
+// compatible.
+func sameSimpleTypeDefinition(a, b *xdm.Node) bool {
+	ma, oka := unionMemberSet(a)
+	mb, okb := unionMemberSet(b)
+	if !oka || !okb {
+		return true
+	}
+	if len(ma) != len(mb) {
+		return false
+	}
+	for k := range ma {
+		if !mb[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// unionMemberSet returns the expanded member type names of an xs:union child,
+// as a set, and whether the declaration is that shape at all.
+func unionMemberSet(t *xdm.Node) (map[string]bool, bool) {
+	for _, ch := range t.ChildElements() {
+		if ch.Name.URI != xdm.NSXS || ch.Name.Local != "union" {
+			continue
+		}
+		mt := ch.AttrValue("memberTypes")
+		if mt == "" {
+			// An anonymous inline member is not compared by name.
+			return nil, false
+		}
+		out := map[string]bool{}
+		for _, tok := range strings.Fields(mt) {
+			qn, err := resolveQNameAttr(ch, tok)
+			if err != nil {
+				return nil, false
+			}
+			out[qn.Clark()] = true
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// isBareTypeName reports whether a sequence type is a single QName with no
+// occurrence indicator, which is the only form sameDeclaredTypeIn resolves.
+func isBareTypeName(t string) bool {
+	if t == "" || strings.ContainsAny(t, "()?*+ \t\n") {
+		return false
+	}
+	prefix, local := xdm.SplitQName(t)
+	return xdm.IsNCName(local) && (prefix == "" || xdm.IsNCName(prefix))
 }
 
 // builtinTypeName reports whether a sequence type is written wholly in terms
@@ -1335,7 +1668,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	keep := map[*xdm.Node]bool{}
 	for _, comp := range u.comps {
 		if comp.sym.kind == kindMode &&
-			!u.hiddenByAccept[comp.sym.String()] &&
+			!u.hiddenByAccept[comp.sym.key()] &&
 			!(comp.sym.name.Local == "" && c.principalHasUnnamedMode()) {
 			// A mode declaration survives the private-to-hidden default. It
 			// is a component, but what it holds is the mode's properties,
@@ -1367,7 +1700,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 			keep[comp.el] = true
 			continue
 		}
-		v := u.acceptedVis[comp.sym.String()]
+		v := u.acceptedVis[comp.sym.key()]
 		// A hidden component is not merely unexported. The note under 3.6.3.1
 		// singles it out: visibility "primarily affects how the component can
 		// be used in other packages... There is one exception: if the
@@ -1417,16 +1750,16 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		// a template that does not exist, rather than the dynamic error for
 		// one that exists and has no body.
 		if comp.declared == visAbstract &&
-			u.overriding[comp.sym.String()] == nil &&
-			!(u.hiddenByAccept[comp.sym.String()] &&
+			u.overriding[comp.sym.key()] == nil &&
+			!(u.hiddenByAccept[comp.sym.key()] &&
 				!referencedWithin(u.root, comp)) {
 			markAbstract(comp.el, comp.sym.String())
 			keep[comp.el] = true
 			continue
 		}
 		if (v == visHidden || v == visAbsent) &&
-			u.overriding[comp.sym.String()] == nil &&
-			(u.hiddenByAccept[comp.sym.String()] ||
+			u.overriding[comp.sym.key()] == nil &&
+			(u.hiddenByAccept[comp.sym.key()] ||
 				!referencedWithin(u.root, comp)) {
 			// A component the using package cannot see is deleted, so that a
 			// reference to it fails as XPST0017 or XTSE0650 rather than
@@ -1448,9 +1781,27 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 	// the override can still reach it; see rewriteOverride.
 	replaced := map[*xdm.Node]*xdm.Node{}
 	for _, comp := range u.comps {
-		if ov, ok := u.overriding[comp.sym.String()]; ok {
+		if ov, ok := u.overriding[comp.sym.key()]; ok {
 			replaced[comp.el] = ov
 			keep[comp.el] = true
+		}
+	}
+	// A re-exported component is declared in a package further down, so its
+	// element is not a child of this tree and the loop below cannot find it
+	// to substitute. The overriding declaration is added to this package's
+	// top level instead, where every reference within the package resolves
+	// against it -- which is what the composition asks for: 3.5.3 makes the
+	// accepted component a component of THIS package, and 3.5.4 replaces its
+	// implementation with the override's. override-t-003a.
+	var appended []*xdm.Node
+	for _, comp := range u.comps {
+		if !comp.reExported {
+			continue
+		}
+		if ov, ok := u.overriding[comp.sym.String()]; ok {
+			noteOverridingDecl(ov, compilePackage)
+			setAttr(ov, spliced, "yes")
+			appended = append(appended, rewriteOverride(ov, comp.el))
 		}
 	}
 	var kept []*xdm.Node
@@ -1519,6 +1870,7 @@ func (c *compiler) compileUsedPackage(u *usePackageDecl) error {
 		}
 		kept = append(kept, ch)
 	}
+	kept = append(kept, appended...)
 	u.root.Children = kept
 	for _, ch := range kept {
 		ch.Parent = u.root
@@ -1627,10 +1979,23 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		}
 		if n.Kind == xdm.KindElement {
 			for _, a := range n.Attrs {
-				if strings.Contains(a.Value, local) {
+				if mentionsComponent(n, a.Value, local, comp) {
 					return true
 				}
 			}
+		}
+		// Text content counts as much as an attribute value. A text value
+		// template -- xsl:expand-text="yes" and a {...} in element content --
+		// is an expression written in a text node, and a package that calls
+		// its own private function from one is referencing it just as surely
+		// as one that calls it from a select attribute. package-100's
+		// csv:parse-field rule calls the private csv:preprocess-field from
+		// inside a TVT, and scanning attributes alone judged the function
+		// unreferenced and deleted it, leaving the package's own call to
+		// fail as XPST0017.
+		if n.Kind == xdm.KindText &&
+			mentionsComponent(n.Parent, n.Value, local, comp) {
+			return true
 		}
 		for _, ch := range n.Children {
 			if walk(ch) {
@@ -1728,6 +2093,12 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 // collide with one the source declared.
 const originalNS = "http://go-xml.invalid/xslt/original/"
 
+// spliced is the attribute marking a declaration that an enclosing package's
+// xsl:override put into this package's top level, rather than one this
+// package wrote. It is not a component of this package; see
+// reExportedComponents and packageComponents.
+const spliced = "go-xml-spliced-override"
+
 // originalSerial numbers the generated namespaces. Two overrides in one
 // stylesheet each keep a distinct original -- override-t-015 overrides a
 // template in each of two used packages and calls xsl:original from both --
@@ -1754,6 +2125,21 @@ var originalSerial int
 // names are not affected: they were resolved when the tree was parsed, and
 // the compiler reads Node.Name rather than re-expanding the prefix.
 func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
+	// The overriding declaration is about to be spliced into the used
+	// package's tree, which detaches it from the xsl:override it was written
+	// under. [xsl:]default-mode is resolved by walking ancestors, so a
+	// default-mode written on the xsl:override (or above it) would be lost by
+	// the move. It is materialised on the declaration itself first.
+	//
+	// override-m-012 writes <xsl:override default-mode="m3"> over a template
+	// that carries both a match and a name: the name makes it a component and
+	// so a candidate for the splice, and after the move its unprefixed @match
+	// named the unnamed mode instead of m3.
+	if overriding.Attr("", "default-mode") == nil {
+		if dm, err := defaultModeAt(overriding); err == nil && dm != "" {
+			setAttr(overriding, "default-mode", clarkToEQName(dm))
+		}
+	}
 	originalSerial++
 	uri := fmt.Sprintf("%s%d", originalNS, originalSerial)
 	// A mode is not reachable through xsl:original -- there is no syntax for
@@ -1763,6 +2149,28 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		return overriding
 	}
 	setAttr(original, "name", "Q{"+uri+"}original")
+	if isXSL(original, "param") {
+		// The renamed original is no longer a stylesheet parameter. It is
+		// reachable only through xsl:original, under a name no caller can
+		// write, and the overriding declaration is what a supplied value now
+		// binds to. Left as an xsl:param it was a parameter that could never
+		// be supplied: override-v-010 overrides a required xs:NCName
+		// parameter with an optional one, and the renamed original failed the
+		// run as XTDE0050, then as XTDE0700, for a value nothing could give.
+		//
+		// So it becomes a global variable whose value is the parameter's
+		// default. Where the parameter had no default there is no value for
+		// xsl:original to read, and the declaration is marked abstract: that
+		// defers it, so only a stylesheet that actually reads xsl:original
+		// fails, and it fails as the XTDE3052 for a component with no body.
+		original.Name = xdm.QName{
+			Prefix: original.Name.Prefix, URI: xdm.NSXSL, Local: "variable",
+		}
+		setAttr(original, "required", "no")
+		if original.AttrValue("select") == "" && len(original.ChildElements()) == 0 {
+			markAbstract(original, "the overridden parameter's default")
+		}
+	}
 	if isXSL(original, "template") || isXSL(original, "function") {
 		// A renamed component must not stay visible under its old identity,
 		// and a named template renamed this way is no longer an eligible
@@ -2067,4 +2475,124 @@ func overridingPackage(el *xdm.Node, current int) int {
 		}
 	}
 	return current
+}
+
+// clarkToEQName renders a Clark name as the EQName spelling, which needs no
+// prefix in scope. It is how a resolved mode name is written back onto an
+// attribute that will be re-resolved later.
+func clarkToEQName(clark string) string {
+	if strings.HasPrefix(clark, "{") {
+		if end := strings.IndexByte(clark, '}'); end > 0 {
+			return "Q{" + clark[1:end] + "}" + clark[end+1:]
+		}
+	}
+	return "Q{}" + clark
+}
+
+// duplicateOverrideError is the error for two declarations of one symbolic
+// name inside xsl:override.
+//
+// XTSE3055 covers it -- "homonymous with any other declaration in the using
+// package ... including any other overriding declaration in the package
+// manifest" -- but for a function XTSE0770 says the same thing more
+// specifically, and that is what the suite asks for: override-f-019 writes
+// two overriding declarations of p:f#2 and expects XTSE0770 alone.
+func duplicateOverrideError(oc *component, prev *xdm.Node) error {
+	if isXSL(oc.el, "function") || isXSL(prev, "function") {
+		return fmt.Errorf(
+			"XTSE0770: %s is declared twice as a child of xsl:override, at "+
+				"the same import precedence", oc.sym)
+	}
+	return fmt.Errorf(
+		"XTSE3055: %s is declared more than once as a child of xsl:override",
+		oc.sym)
+}
+
+// usedPackageParam finds the top-level xsl:param a symbolic name refers to.
+//
+// Only a non-static parameter answers. 9.5 fixes a static parameter's
+// visibility as private, so it is not a component another package can see,
+// let alone override.
+func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
+	if sym.kind != kindVariable {
+		return nil
+	}
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "param") || yesAttr(el, "static") {
+			continue
+		}
+		qn, err := resolveQNameAttr(el, el.AttrValue("name"))
+		if err != nil {
+			continue
+		}
+		if qn.Clark() == sym.name.Clark() {
+			return el
+		}
+	}
+	return nil
+}
+
+// mentionsComponent reports whether a piece of stylesheet text names the
+// component, as against merely containing its local name.
+//
+// The bare substring test this replaces ignored namespaces, and a package that
+// declares p:f2 and q:f2 has two components whose local names are equal and
+// whose symbolic identifiers are not. expose-A is exactly that: q:f2 is
+// exposed private and must be pruned, and the unrelated p:f2 kept it alive,
+// so the using package's call to q:f2() bound instead of failing as XPST0017.
+//
+// Every occurrence of the local name is examined, and the prefix written in
+// front of it -- or the absence of one -- is resolved in the scope of the
+// element the text belongs to. Only an occurrence whose namespace is the
+// component's counts. That is still lexical, and deliberately so: it errs
+// towards keeping a declaration, and keeping one the package does not use
+// costs nothing while deleting one it does use breaks the package.
+func mentionsComponent(scope *xdm.Node, text, local string, comp *component) bool {
+	if scope == nil {
+		return false
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], local)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		i = at + len(local)
+		// A longer name that merely ends in this one is not this name.
+		if at > 0 && ncNameByte(text[at-1]) && text[at-1] != ':' {
+			continue
+		}
+		if i < len(text) && ncNameByte(text[i]) {
+			continue
+		}
+		prefix := ""
+		if at > 0 && text[at-1] == ':' {
+			k := at - 1
+			for k > 0 && ncNameByte(text[k-1]) {
+				k--
+			}
+			prefix = text[k : at-1]
+			if prefix == "" {
+				continue
+			}
+		}
+		if lookupPrefix(scope, prefix) == comp.sym.name.URI {
+			return true
+		}
+	}
+}
+
+// ncNameByte reports whether a byte may appear inside an NCName -- an
+// unprefixed name, so the colon is excluded, which is what separates it from
+// pattern30.go's isNameByte and is exactly what lets the prefix be cut off a
+// lexical QName here. Any non-ASCII byte is admitted, because a name may be
+// spelled in any script and this test only has to find the boundary.
+func ncNameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z',
+		b >= '0' && b <= '9',
+		b == '_', b == '-', b == '.', b >= 0x80:
+		return true
+	}
+	return false
 }

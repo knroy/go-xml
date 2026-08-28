@@ -1343,7 +1343,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			}
 		}
 
-		val, err := evalVariable(g, rt)
+		val, err := evalVariable(g, globalRuntimeFor(rt, g))
 		// globalRefs orders the obvious dependencies, but it only reads the
 		// select expression: a reference reached through a sequence
 		// constructor, a match pattern or the body of a stylesheet function
@@ -1372,7 +1372,7 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 			if berr := bind(dep); berr != nil {
 				return berr
 			}
-			val, err = evalVariable(g, rt)
+			val, err = evalVariable(g, globalRuntimeFor(rt, g))
 		}
 		if err != nil {
 			// A global xsl:param with an "as" type, no explicit default and
@@ -1628,9 +1628,49 @@ func globalRefs(g *Variable) []string {
 			j++
 		}
 		if j > i+1 {
-			out = append(out, xdm.QName{Local: src[i+1 : j]}.Clark())
+			ref := src[i+1 : j]
+			if prefix, local, ok := strings.Cut(ref, ":"); ok {
+				// A prefixed reference is expanded through the bindings in
+				// force where it was written. Left unexpanded it matched no
+				// global and fell back to declaration order, which is wrong
+				// for $xsl:original: the renamed original is emitted after
+				// the overriding declaration that refers to it.
+				if uri, has := g.selectNS[prefix]; has {
+					out = append(out, xdm.QName{URI: uri, Local: local}.Clark())
+					i = j - 1
+					continue
+				}
+			}
+			out = append(out, xdm.QName{Local: ref}.Clark())
 		}
 		i = j - 1
 	}
 	return out
+}
+
+
+// globalRuntimeFor is the runtime a global variable's initialiser is evaluated
+// in, which differs from the transform's only in its focus.
+//
+// 5.4.3: "For a global variable or the default value of a stylesheet
+// parameter, the expression or sequence constructor specifying the variable
+// value is evaluated with a singleton focus as follows: If the declaration
+// appears within the top-level package (including within an xsl:override
+// element in the top-level package), then the focus is based on the global
+// context item if supplied, or absent otherwise. If the declaration appears
+// within a library package, then the focus is absent."
+//
+// So the global context item reaches the top-level package's globals and
+// nothing else. package-912's library package initialises a public variable
+// with count(//*), which without this took the transform's source document as
+// its focus and quietly returned a number where XPDY0002 was due.
+func globalRuntimeFor(rt *runtime, g *Variable) *runtime {
+	if g.pkg == 0 {
+		return rt
+	}
+	// A declaration inside an xsl:override belongs to the package containing
+	// the xsl:override, which is what overridingPackage already records on
+	// the variable: a variable whose pkg is the top-level one reaches this
+	// function only through the arm above.
+	return rt.withFocus(nil, 0, 0)
 }

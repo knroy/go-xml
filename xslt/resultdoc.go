@@ -61,6 +61,11 @@ type resultDocumentInstr struct {
 	overrides    *xdm.Node
 	overrideAVTs map[string]*avt
 	body         []Instruction
+	// pkg is the package the instruction was written in, which decides whose
+	// xsl:output and xsl:character-map declarations its @format and
+	// @use-character-maps name: 3.5.5 makes both local to the declaring
+	// package. See aliasKey.
+	pkg int
 	// validation is @validation or @type, which asks for the result tree to
 	// be assessed as a document node before it is written.
 	validation validationSpec
@@ -87,7 +92,8 @@ func (i *resultDocumentInstr) settings(rt *runtime) (OutputSettings, error) {
 					"XTDE1460: xsl:result-document/@format=%q is not a usable "+
 						"QName: %w", lex, err)
 			}
-			named, ok := rt.sheet.namedOutputs[xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()]
+			named, ok := rt.sheet.namedOutputIn(
+				i.pkg, xdm.QName{URI: qn.URI, Local: qn.Local}.Clark())
 			if !ok {
 				return out, fmt.Errorf(
 					"XTDE1460: xsl:result-document/@format names no xsl:output "+
@@ -259,7 +265,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 		}
 	}
-	cm, err := rt.sheet.flattenCharacterMaps(settings.UseCharacterMaps)
+	cm, err := rt.sheet.flattenCharacterMaps(i.pkg, settings.UseCharacterMaps)
 	if err != nil {
 		return err
 	}

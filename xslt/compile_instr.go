@@ -220,7 +220,10 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	instr := &literalElemInstr{name: n.Name, attrSets: sets, baseURI: n.BaseURI}
+	instr := &literalElemInstr{
+		name: n.Name, attrSets: sets, baseURI: n.BaseURI,
+		pkg: compilePackage,
+	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
 	}
@@ -1169,7 +1172,7 @@ func nonSortChildren(n *xdm.Node) []*xdm.Node {
 // attribute value template, since a stylesheet routinely computes one output
 // file per input node.
 func (c *compiler) compileResultDocument(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &resultDocumentInstr{}
+	instr := &resultDocumentInstr{pkg: compilePackage}
 
 	// The output definition is selected when the instruction runs rather than
 	// here. xsl:output is a top-level declaration, and section 3.13 puts no
