@@ -1383,11 +1383,13 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,341 / 14,405 (99.56%) | 24,968 / 24,999 (99.88%) |
-| XSD 1.1 | 15,239 / 15,365 (99.18%) | 26,177 / 26,205 (99.89%) |
+| XSD 1.0 | 14,367 / 14,405 (99.74%) | 24,964 / 24,999 (99.86%) |
+| XSD 1.1 | 15,293 / 15,365 (99.53%) | 26,173 / 26,205 (99.88%) |
 
-Every failure and the reason it is open is catalogued in
-[docs/known-gaps.md](docs/known-gaps.md).
+Every failure is catalogued in
+[docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether
+it is fixable; [docs/known-gaps.md](docs/known-gaps.md) is the reasoning behind
+the hard ones.
 
 ### Production corpora
 

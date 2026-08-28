@@ -742,11 +742,11 @@ but each is questionable on the suite's own evidence:
 
 | | now | reachable | what stands in the way |
 |---|---|---|---|
-| XPath 2.0 | **99.99%** | 99.99% | the last case is refused on purpose |
-| XSD 1.0 instance | **99.88%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
-| XSD 1.1 instance | **99.89%** | ~99.9% | same |
-| XSD 1.0 schema | **99.56%** | **~99.6%** | 36 addressable false accepts, one at a time |
-| XSD 1.1 schema | **99.18%** | **~99.6%** | 90 addressable false accepts, one at a time |
+| XPath 2.0 | **100.00%** | 100.00% | reached |
+| XSD 1.0 instance | **99.86%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
+| XSD 1.1 instance | **99.88%** | ~99.9% | same |
+| XSD 1.0 schema | **99.74%** | **~99.87%** | 11 addressable false accepts and 6 false rejects |
+| XSD 1.1 schema | **99.53%** | **~99.87%** | 37 addressable false accepts and 11 false rejects |
 
 The two schema rows once read `~99.9%`, which contradicted the ceiling derived
 under *What 100% would take* above and could not be reached. The reachable
