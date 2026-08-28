@@ -284,6 +284,14 @@ type Binding struct {
 type NamedFunctionRef struct {
 	Name  xdm.QName
 	Arity int
+	// Cast is the cast a reference to the CONSTRUCTOR FUNCTION of an imported
+	// schema type stands for, with the argument reachable as
+	// ConstructorArgVar. Nothing registers such a function in the library --
+	// the set of them is not known until a schema is imported -- so the
+	// reference is resolved here, while the parser's schema hook is still in
+	// reach, exactly as foldSchemaConstructor resolves an ordinary call.
+	// nil for every other reference.
+	Cast Expr
 }
 
 // InlineFunctionExpr is "function($x as xs:integer) as xs:integer { $x + 1 }",

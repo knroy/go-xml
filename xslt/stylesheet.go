@@ -158,6 +158,20 @@ type Stylesheet struct {
 	// of xsl:evaluate which stylesheet functions it may call.
 	functionVisibility map[string]string
 
+	// pkgFuncs is the set of stylesheet functions each package DECLARES,
+	// keyed by package and then by Clark name plus arity, which is the set
+	// 3.6.3.5 makes available to a dynamic reference -- fn:function-lookup,
+	// fn:function-available and xsl:evaluate. The flat library the ordinary
+	// function call resolves against is deliberately not that set: it is the
+	// whole assembly, where a private function of a used package and a
+	// component the using package overrode are indistinguishable.
+	//
+	// A function declared inside an xsl:override is filed under the package
+	// that wrote the xsl:override, not the used package it substitutes into;
+	// see overridingPackage. An abstract declaration is filed nowhere at all,
+	// 3.6.3.5 excluding it explicitly.
+	pkgFuncs map[int]map[string]xpath.Function
+
 	// templateVisibility is xsl:template/@visibility per Clark name, which
 	// decides whether an invocation may start at the template; see
 	// entryvisibility.go.
@@ -599,6 +613,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// one compilation cannot answer a question about another's nodes.
 	overridingDecls = nil
 	defer func() { overridingDecls = nil }()
+	// So is the memo of which package trees make a dynamic component
+	// reference; see makesDynamicReference.
+	dynamicRefCache = nil
+	defer func() { dynamicRefCache = nil }()
 	// Which package used which is package state on the same terms; see
 	// packageParent.
 	packageParent = map[int]int{}

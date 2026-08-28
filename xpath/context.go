@@ -296,6 +296,26 @@ type FunctionLibrary interface {
 	Lookup(name xdm.QName, arity int) (Function, bool)
 }
 
+// DynamicFunctionLibrary is a FunctionLibrary that answers a DYNAMIC function
+// reference -- fn:function-lookup and fn:function-available, where the name is
+// a value rather than a literal -- differently from a call written out in the
+// source.
+//
+// A host language may scope the two differently. XSLT 3.0 3.6.3.5 does: a
+// dynamic reference sees only the functions declared in the package the call
+// is written in, where an ordinary call resolves against the whole assembled
+// stylesheet. The context is passed because the package is a property of the
+// expression, carried on Context.StaticHost.
+//
+// A library that does not implement this is scoped identically either way,
+// which is what XPath on its own means.
+type DynamicFunctionLibrary interface {
+	FunctionLibrary
+	// LookupDynamic returns the function a dynamic reference to this name and
+	// arity resolves to.
+	LookupDynamic(ctx *Context, name xdm.QName, arity int) (Function, bool)
+}
+
 // Function is a callable XPath function.
 type Function struct {
 	Name  xdm.QName
