@@ -10,17 +10,17 @@ commit `dd377f4` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | 99.98% | **4** | 1 | 0 | **3** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 1 | **7** | 99.89% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,571 | 99.40% | **52** | 36 | 1 | **15** | 99.83% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,571 | 99.40% | **52** | 33 | 1 | **18** | 99.79% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,331 | 99.81% | **73** | 21 | 0 | **52** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,466 | 99.75% | **104** | 50 | 0 | **54** | 99.87% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **242** | **109** | **2** | **131** | |
+| | **Total** | | | | **242** | **106** | **2** | **134** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**242 disagreements in total**, of which **109 are ours to fix**, **131 cannot
+**242 disagreements in total**, of which **106 are ours to fix**, **134 cannot
 be fixed without shipping something less correct**, and **2 are open
 questions**.
 
@@ -174,9 +174,10 @@ shares a cause with another, so each is its own small investigation.
 | Functions | `function-0117`, `function-0303`, `function-lookup-005` | |
 | Misc | `static-032`, `accumulator-038`, `context-item-903`, `castable-006`, `math-3701`, `accessor-064`, `collection-006`, `copy-of-009`, `current-output-uri-902`, `outermost-002`, `type-available-0151`, `for-each-group-002`, `collations-1006`, `forwards-011`, `initial-template-004`, `seqtor-017`, `notation-0002`, `unparsed-text-2003` | `unparsed-text-2003` is the network case again — **not implementable** |
 
-**XSLT 3.0 ceiling: 8,608 / 8,623 = 99.83%.**
+**XSLT 3.0 ceiling: 8,605 / 8,623 = 99.79%.**
 
-The fifteen that cannot be fixed: `package-021err`, `package-022err`,
+The eighteen that cannot be fixed: `accept-913`, `package-200`,
+`use-package-003`, `package-021err`, `package-022err`,
 `package-version-011`, `unparsed-text-2003`, `streamable-141`, `base-uri-052`,
 `docbook-001`, `docbook-004`, `catalog-006b`, the three `regex-syntax`
 ambiguous-dash cases, `si-copy-117`, `si-copy-of-117` and `import-schema-137`.
@@ -297,6 +298,7 @@ cannot show is *why* the 126 unfixable cases are unfixable:
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
 | **No XQuery processor** | 3 | The `fn:load-xquery-module` cases. Two of the suite's own cases cannot both pass. |
 | **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `base-uri-052` (XInclude), `catalog-006b` (`xsl:assert`). |
+| **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
 
 No suite reaches 100%, and the reason is consistent across all of them: a
 residue of cases encodes a suite defect, a W3C-challenged expectation, a
@@ -305,6 +307,10 @@ snapshot that has since moved. Those are not deferred work — passing them woul
 mean shipping something less correct.
 
 ## Related
+
+[reaching-100.md](reaching-100.md) answers the question this file's numbers
+raise: what it would actually take to close each gap, and which of them are not
+work at all.
 
 [known-gaps.md](known-gaps.md) is the reasoning behind the hard entries here:
 diagnosed causes, fixes that were attempted and measured and reverted, and what
