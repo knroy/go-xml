@@ -556,6 +556,7 @@ func (p *parser) checkIDs(root *xdm.Node) {
 			// declaration. annotF001 writes xml:lang="" and
 			// annotF003 writes xml:lang=" ", which collapses to the
 			// same thing.
+			p.checkVersioningAttrs(n)
 			switch n.Name.Local {
 			case "documentation", "appinfo":
 				if a := n.Attr(NSXML, "lang"); a != nil {
@@ -572,6 +573,64 @@ func (p *parser) checkIDs(root *xdm.Node) {
 		}
 	}
 	walk(root)
+}
+
+// checkVersioningAttrs validates the XSD 1.1 conditional-inclusion attributes
+// where they appear on an XSD element.
+//
+// includeElement reads them but cannot report anything: it answers a bool, and
+// by design an attribute it does not recognise leaves the element included. So
+// a malformed value simply changed which elements were read, silently. The
+// schema for schemas types them: vc:minVersion and vc:maxVersion are
+// xs:decimal, and the four availability attributes are lists of QNames.
+//
+// vc901 writes minVersion="1.1.3", which has two decimal points; vc902 writes
+// "10g"; vc904 writes typeUnavailable=" vx:list-of-QNames xs:integer " with vx
+// unbound.
+func (p *parser) checkVersioningAttrs(el *xdm.Node) {
+	// 1.1 only. To a 1.0 processor these are foreign attributes carrying no
+	// meaning, so a malformed value is not its business — vc902 is marked
+	// valid under 1.0 and invalid under 1.1 on exactly that reading.
+	if p.schema.Version < Version11 {
+		return
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != NSVersioning {
+			continue
+		}
+		// Matched case-insensitively for the same reason
+		// includeElement does: the suite spells minVersion both ways.
+		switch strings.ToLower(a.Name.Local) {
+		case "minversion", "maxversion":
+			if !isDecimalLexical(strings.TrimSpace(a.Value)) {
+				p.errs = append(p.errs, errorAt(el, "src-schema.1",
+					"vc:%s=%q is not an xs:decimal", a.Name.Local, a.Value))
+			}
+		case "typeavailable", "typeunavailable",
+			"facetavailable", "facetunavailable":
+			for _, word := range strings.Fields(a.Value) {
+				if _, err := p.resolveQName(el, "vc:"+a.Name.Local, word); err != nil {
+					p.errs = append(p.errs, err)
+					continue
+				}
+				// resolveQName is satisfied by any non-empty
+				// local part, because a name that will be
+				// looked up in a map is caught by the lookup
+				// failing. Nothing looks these up, so the
+				// lexical form is checked here: vc905 writes
+				// typeUnavailable=" xs:integer 23".
+				local := word
+				if i := strings.IndexByte(word, ':'); i >= 0 {
+					local = word[i+1:]
+				}
+				if !isNCName(local) {
+					p.errs = append(p.errs, errorAt(el, "src-schema.1",
+						"vc:%s names %q, which is not a QName",
+						a.Name.Local, word))
+				}
+			}
+		}
+	}
 }
 
 // readTopLevel dispatches one child of <xs:schema>.
