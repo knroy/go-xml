@@ -245,7 +245,8 @@ func (r *Runner) runCase(set *TestSet, tc *TestCase) Outcome {
 
 	// The schema the environment declares is part of the static context the
 	// assertions are evaluated in, exactly as it is for the stylesheet.
-	ok, why := r.judge(assert, res, terr, set, envSchema(set, r.environment(set, tc)))
+	ok, why := r.judge(assert, res, terr, set,
+		envSchema(set, r.environment(set, tc)), tc.Test.Output.rawResultVar())
 	out.Pass, out.Why = ok, why
 	return out
 }

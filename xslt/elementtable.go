@@ -65,6 +65,13 @@ type attrDef struct {
 	// writes terminate="true" there -- what decides is whether the processor
 	// implements 3.0, not what the module's @version happens to say.
 	processor30 bool
+	// removed30 marks a name a working draft of XSLT 3.0 proposed and the
+	// Recommendation removed. The summary does not define it, so it is
+	// XTSE0090 exactly as an invented name would be -- but listing it makes
+	// the error survive forwards-compatible leniency, which otherwise
+	// ignores every attribute the summary does not define and so cannot
+	// distinguish a withdrawn name from a future one.
+	removed30 bool
 }
 
 // xsltElements is the grammar, keyed by local name.
@@ -488,6 +495,17 @@ var xsltElements = map[string]elementDef{
 		// XSLT 3.0 only: a 2.0 stylesheet naming it must still be told so.
 		"composite": {since30: true,
 			values: []string{"yes", "no", "true", "false", "1", "0"}},
+		// bind-group and bind-grouping-key were proposed by a working draft
+		// and removed before the Recommendation, so a 3.0 stylesheet naming
+		// either is in error rather than merely using a name the summary
+		// never had. They are listed as removed so that the XTSE0090 is
+		// reported even where forwards-compatible leniency would otherwise
+		// ignore an unrecognised attribute -- for-each-group-002 writes
+		// bind-group="g" on a version="3.0" simplified stylesheet and
+		// expects XTSE0090, not the XPST0008 that the unbound $g produces
+		// once the attribute has been silently dropped.
+		"bind-group":        {removed30: true},
+		"bind-grouping-key": {removed30: true},
 	}},
 	"analyze-string": {attrs: map[string]attrDef{
 		"select": {required: true},

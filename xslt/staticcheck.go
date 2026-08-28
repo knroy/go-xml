@@ -132,6 +132,24 @@ func checkStaticGrammar(el *xdm.Node, forwards bool) error {
 		}
 
 		ad, ok := def.attrs[a.Name.Local]
+		if ok && ad.removed30 && processorAtLeast30() &&
+			moduleAtLeast30(el) && !effectiveForwards(el) {
+			// A name a working draft proposed and the Recommendation removed
+			// is not a name from the future, so section 3.11's leniency --
+			// which exists to let a stylesheet written for a later version
+			// run -- has nothing to be lenient about. Reporting it is what
+			// the suite asks for: for-each-group-002 writes bind-group="g"
+			// and expects XTSE0090 rather than the XPST0008 that the
+			// unbound $g raises once the attribute has been dropped.
+			return fmt.Errorf(
+				"attribute %q is not allowed on xsl:%s (XTSE0090)",
+				a.Name.Local, el.Name.Local)
+		}
+		if ok && ad.removed30 {
+			// Below 3.0, or within genuine forwards-compatible behavior, it
+			// is an unrecognised name like any other.
+			ok = false
+		}
 		if ok && ad.processor30 && !processorAtLeast30() {
 			// See attrDef.processor30: what decides is the processor, not
 			// the module's declared version.
