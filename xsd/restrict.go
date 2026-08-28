@@ -351,6 +351,13 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 		if err, ok := allSubsumes(r, b); ok {
 			return err
 		}
+		// The general form of the same 1.1 constraint, decided by
+		// language inclusion where the models can be unrolled exactly.
+		// It declines for an all group, a recursive model or a range
+		// too wide to unroll, and the table below then answers.
+		if err, ok := particleSubsumes(r, b); ok {
+			return err
+		}
 	}
 
 	switch rt := r.Term.(type) {
