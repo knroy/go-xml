@@ -187,6 +187,20 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		// An attribute's snapshot hangs off its own element rather than
 		// becoming a child of it: an attribute is not in the child axis, and
 		// appending it as one would put it where nothing looks for it.
+		//
+		// The spine copy above already carries every attribute of each
+		// ancestor it copied, and the attribute asked for is one of them --
+		// its parent is the innermost ancestor. So the one to return is
+		// found, not added: adding it left the element holding two
+		// attributes of the same name, which is not a well-formed element at
+		// all. snapshot-0102a compares fn:snapshot against the reference
+		// implementation in the spec and reports the duplicate.
+		for _, at := range parent.Attrs {
+			if at.Name == n.Name {
+				tree.Finalize()
+				return at
+			}
+		}
 		a := copyItem(n).(*xdm.Node)
 		parent.AddAttr(a)
 		tree.Finalize()
