@@ -878,6 +878,24 @@ func (r *Result) Tree() *xdm.Node {
 	for _, it := range joinAdjacentAtomics(insertItemSeparator(r.Nodes, r.output.ItemSeparator)) {
 		switch v := it.(type) {
 		case *xdm.Node:
+			// 5.7.1: "Any document node within the result sequence is
+			// replaced by a sequence containing each of its children, in
+			// document order." A result tree may not hold a document node
+			// below its root, and appending one anyway put the content out
+			// of reach of the tree's own string value -- xsl:document at the
+			// top of a template returns exactly such a node, and its text
+			// vanished from the result.
+			//
+			// The raw sequence in r.Nodes keeps the wrapper, because a
+			// caller reading the sequence must still see the document node
+			// it asked for; the flattening belongs to building the tree,
+			// which is the step this rule describes.
+			if v.Kind == xdm.KindDocument {
+				for _, ch := range append([]*xdm.Node(nil), v.Children...) {
+					tree.Root.AppendChild(ch)
+				}
+				continue
+			}
 			tree.Root.AppendChild(v)
 		case *xdm.Atomic:
 			tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: v.String()})
