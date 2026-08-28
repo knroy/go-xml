@@ -583,6 +583,18 @@ type usePackageDecl struct {
 	// comps are the used package's components, with the visibility the used
 	// package gives them.
 	comps []*component
+	// inherited are the components the used package does not declare itself
+	// but holds by virtue of the packages IT uses. 3.6.3.2: "When a package Q
+	// uses a package P ... then Q will contain a component corresponding to
+	// every component in P." A component P exposed and Q accepted is a
+	// component of Q, so an xsl:accept in a package that uses Q may name it,
+	// and XTSE3030 must not fire on a token that matches one.
+	//
+	// They are kept apart from comps because only comps are declared in this
+	// package's own tree: the pruning and override machinery in
+	// compileUsedPackage works on elements of u.root and would mishandle a
+	// node belonging to a package two levels down.
+	inherited []*component
 	// root is the used package's module element.
 	root *xdm.Node
 	doc  *xdm.Node
@@ -892,6 +904,11 @@ func (c *compiler) readUsePackage(el *xdm.Node) (*usePackageDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	inherited, err := c.inheritedComponents(u.root)
+	if err != nil {
+		return nil, err
+	}
+	u.inherited = inherited
 	var exposes []*exposeRule
 	eOrder := 0
 	for _, ch := range u.root.ChildElements() {
@@ -1030,7 +1047,8 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			if t.wildcard {
 				continue
 			}
-			if !tokenMatchesAny(r, t, u.comps) {
+			if !tokenMatchesAny(r, t, u.comps) &&
+				!tokenMatchesAny(r, t, u.inherited) {
 				return nil, fmt.Errorf(
 					"XTSE3030: the token %q in xsl:accept/@names matches no "+
 						"component in package %s", t.lexical, u.name)
@@ -2079,4 +2097,121 @@ func overridingPackage(el *xdm.Node, current int) int {
 		}
 	}
 	return current
+}
+
+
+// inheritedComponents reads the components a package holds by virtue of the
+// packages it uses, rather than by declaring them itself.
+//
+// 3.6.3.2: "When a package Q uses a package P, by virtue of an xsl:use-package
+// element in the package manifest of Q, then Q will contain a component
+// corresponding to every component in P." So the component list a using
+// package sees is not just Q's top-level declarations; it includes everything
+// Q accepted, transitively.
+//
+// Only components that are actually visible outside Q are collected. A private
+// component of P becomes hidden in Q, and a hidden component "cannot be
+// referenced or overridden within a using package", so it is not something an
+// xsl:accept one level further out may name.
+//
+// The recursion is bounded by the acyclicity 3.6.3 requires of the use
+// relation, and guarded anyway: a resolver that returned a cycle would
+// otherwise loop here rather than fail with the error the cycle deserves.
+func (c *compiler) inheritedComponents(root *xdm.Node) ([]*component, error) {
+	seen := map[string]bool{}
+	var walk func(root *xdm.Node) ([]*component, error)
+	walk = func(root *xdm.Node) ([]*component, error) {
+		var out []*component
+		for _, el := range root.ChildElements() {
+			if !isXSL(el, "use-package") {
+				continue
+			}
+			name := strings.TrimSpace(el.AttrValue("name"))
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			versions := strings.TrimSpace(el.AttrValue("package-version"))
+			if versions == "" {
+				versions = "*"
+			}
+			if c.opts.PackageResolver == nil {
+				continue
+			}
+			doc, err := c.opts.PackageResolver.ResolvePackage(name, versions)
+			if err != nil {
+				// The failure is not reported here. This walk exists only to
+				// widen the set of names an xsl:accept may legally mention,
+				// and the same use-package is resolved for real when the
+				// package is compiled, where the error belongs.
+				continue
+			}
+			inner := firstElement(doc)
+			if inner == nil {
+				continue
+			}
+			comps, err := packageComponents(inner)
+			if err != nil {
+				continue
+			}
+			var exposes []*exposeRule
+			order := 0
+			for _, ch := range inner.ChildElements() {
+				if !isXSL(ch, "expose") {
+					continue
+				}
+				r, err := parseExposeRule(ch, order)
+				if err != nil {
+					continue
+				}
+				order++
+				exposes = append(exposes, r)
+			}
+			if err := applyExpose(comps, exposes); err != nil {
+				continue
+			}
+			// The xsl:accept children of this xsl:use-package decide what
+			// survives into the package being examined. A component nothing
+			// accepts keeps the visibility the inner package gave it, except
+			// that private becomes hidden.
+			var accepts []*exposeRule
+			aOrder := 0
+			for _, ch := range el.ChildElements() {
+				if !isXSL(ch, "accept") {
+					continue
+				}
+				r, err := parseExposeRule(ch, aOrder)
+				if err != nil {
+					continue
+				}
+				aOrder++
+				accepts = append(accepts, r)
+			}
+			for _, comp := range comps {
+				v := comp.vis
+				if v == visPrivate {
+					v = visHidden
+				}
+				for _, r := range accepts {
+					if ok, _ := r.matches(comp.sym); ok {
+						v = r.vis
+					}
+				}
+				if v == visHidden || v == visAbsent || v == visPrivate {
+					continue
+				}
+				out = append(out, &component{
+					sym: comp.sym, el: comp.el, declared: comp.declared,
+					vis: v,
+				})
+			}
+			deeper, err := walk(inner)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, deeper...)
+		}
+		return out, nil
+	}
+	return walk(root)
 }
