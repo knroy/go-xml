@@ -1017,13 +1017,22 @@ func (p *parser) readModelGroupDef(el *xdm.Node) *ModelGroupDef {
 				"attribute %q is not allowed on a named group definition", attr))
 		}
 	}
-	if inner.Name.Local == "all" {
-		for _, attr := range []string{"minOccurs", "maxOccurs"} {
-			if inner.Attr("", attr) != nil {
-				p.errs = append(p.errs, errorAt(inner, "cos-all-limited.1.2",
-					"attribute %q is not allowed on the xs:all of a "+
-						"named group definition", attr))
+	// The prohibition is not special to <all>: xs:namedGroup gives every
+	// one of its three children a type — xs:simpleExplicitGroup for
+	// <choice> and <sequence>, xs:all for <all> — that prohibits both
+	// occurrence attributes. A definition has no occurrence range at all;
+	// only the <group ref> that uses it does. complex019 writes
+	// <sequence minOccurs="0"> and complex020 <sequence
+	// maxOccurs="unbounded"> inside a named group.
+	for _, attr := range []string{"minOccurs", "maxOccurs"} {
+		if inner.Attr("", attr) != nil {
+			code := "src-model_group_defn"
+			if inner.Name.Local == "all" {
+				code = "cos-all-limited.1.2"
 			}
+			p.errs = append(p.errs, errorAt(inner, code,
+				"attribute %q is not allowed on the xs:%s of a "+
+					"named group definition", attr, inner.Name.Local))
 		}
 	}
 	// The <choice> or <sequence> inside a definition still carries an
