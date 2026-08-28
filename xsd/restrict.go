@@ -179,6 +179,28 @@ func attributeTypeRestrictions(ct *ComplexType) []error {
 		}
 	}
 	var errs []error
+	// Clause 4: where both types have an attribute wildcard, the derived
+	// one must be an intensional subset of the base's, and — by errata
+	// E1-21 — may not weaken its processContents. The same two tests
+	// nsSubset applies to element wildcards, minus the occurrence range an
+	// attribute wildcard does not have. errC009 restricts a strict
+	// anyAttribute with a skip one, which lets through attributes the base
+	// insists on validating.
+	if rw, bw := ct.AttributeWildcard, base.AttributeWildcard; rw != nil && bw != nil {
+		switch {
+		case !wildcardSubset(rw, bw):
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.4: %s gives its attribute wildcard a "+
+					"namespace constraint that is not a subset of %s's",
+				typeLabel(ct.Name, ct), typeLabel(base.Name, base)))
+		case processStrength(rw.ProcessContents) < processStrength(bw.ProcessContents):
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.4: %s gives its attribute wildcard "+
+					"processContents %s, weaker than %s's %s",
+				typeLabel(ct.Name, ct), rw.ProcessContents,
+				typeLabel(base.Name, base), bw.ProcessContents))
+		}
+	}
 	for _, u := range ct.AttributeUses {
 		if u.Decl == nil || u.Decl.Type == nil || u.Prohibited {
 			continue
