@@ -61,6 +61,16 @@ abspath() {
 # flags it. That happened here, to commit 9843c44, and was found only by
 # accident. A number that may not go down is what catches it.
 #
+# One case is load-sensitive and the mark accounts for it. catalog-007 asks
+# whether every element/attribute pair the schema permits appears somewhere in
+# the suite's non-error stylesheets, which means parsing all of them inside the
+# runner's 10s per-case timeout. On an idle machine it passes and the 3.0 suite
+# reports 8571; under load -- a parallel build, or several agents sharing the
+# box -- it exceeds the deadline and the suite reports 8570. The mark is
+# therefore the LOWER figure, so a busy machine cannot fail the check on an
+# unmodified tree. A run that reports 8571 is the same tree on a quieter
+# machine, not an improvement.
+#
 # Set GOXSLT_RATCHET=update to record a new high after a deliberate change,
 # or GOXSLT_RATCHET=off to skip the check entirely.
 RATCHET_FILE="$ROOT/tests/ratchet.txt"
