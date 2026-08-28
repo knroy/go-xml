@@ -3,17 +3,22 @@
 Every figure here comes from a full run of the suite it names, measured at
 commit `69c53cf` with `tests/check.sh`. Nothing is estimated.
 
-| Component | Suite | In scope | Passing | Failing | |
-|---|---|---:|---:|---:|---|
-| **xdm** | *(no external suite)* | — | — | — | see below |
-| **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | **4** | 99.98% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,548 | **75** | 99.13% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,305 | **99** | 99.75% |
-| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,412 | **158** | 99.62% |
-| **relaxng** | Clark spectest | 965 | 965 | 0 | 100.00% |
+| Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
+|---|---|---:|---:|---|---:|---:|---:|---:|---|
+| **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
+| **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,782 | 99.98% | **4** | 1 | 0 | **3** | 99.99% |
+| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 2 | **6** | 99.90% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,548 | 99.13% | **75** | 62 | 4 | **9** | 99.90% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,305 | 99.75% | **99** | 46 | 0 | **53** | 99.87% |
+| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,412 | 99.62% | **158** | 103 | 0 | **55** | 99.87% |
+| **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| | **Total** | | | | **345** | **213** | **6** | **126** | |
+
+*Ceiling* is what the suite would report if every fixable case landed and every
+open question resolved our way; the "can't fix" column is what stands between
+that and 100%.
 
 **345 disagreements in total**, of which **213 are ours to fix**, **126 cannot
 be fixed without shipping something less correct**, and **6 are open
@@ -258,28 +263,18 @@ would overstate it. They are reported separately for that reason.
 
 # Summary
 
-| Component | Failing | Implementable | Not implementable | Open question |
-|---|---:|---:|---:|---:|
-| xdm | 0 | — | — | — |
-| xpath | 4 | 1 | 3 | 0 |
-| xslt 2.0 | 9 | 1 | 6 | 2 |
-| xslt 3.0 | 75 | 62 | 9 | 4 |
-| xsd 1.0 | 99 | 46 | 53 | 0 |
-| xsd 1.1 | 158 | 103 | 55 | 0 |
-| relaxng | 0 | — | — | — |
-| **Total** | **345** | **213** | **126** | **6** |
+The per-suite counts and ceilings are in the table at the top. What that table
+cannot show is *why* the 126 unfixable cases are unfixable:
 
-Ceilings if every implementable case lands and the open questions resolve our
-way:
-
-| Component | Now | Ceiling |
-|---|---|---|
-| XPath 3.1 | 99.98% | **99.99%** |
-| XSLT 2.0 | 99.85% | **99.90%** |
-| XSLT 3.0 | 99.13% | **99.90%** |
-| XSD 1.0 | 99.75% | **99.87%** |
-| XSD 1.1 | 99.62% | **99.87%** |
-| RELAX NG | 100.00% | 100.00% |
+| Reason | Cases | Where |
+|---|---:|---|
+| **W3C has challenged its own expected result** | 108 | XSD 1.0 (53) and 1.1 (55). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
+| **Suite defect** | 3 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none. |
+| **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
+| **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
+| **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
+| **No XQuery processor** | 3 | The `fn:load-xquery-module` cases. Two of the suite's own cases cannot both pass. |
+| **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `base-uri-052` (XInclude), `catalog-006b` (`xsl:assert`). |
 
 No suite reaches 100%, and the reason is consistent across all of them: a
 residue of cases encodes a suite defect, a W3C-challenged expectation, a
