@@ -142,6 +142,21 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 // ctO002/ctO005 (final="restriction", restricted). All loaded clean before
 // this.
 func (p *parser) checkComplexDerivationFinal(t *ComplexType) {
+	// A <simpleContent> extension may name a *simple* type as its base,
+	// and clause 1.1 speaks of the base type definition without caring
+	// which kind it is. Casting straight to *ComplexType dropped that
+	// case, so simple004 (final="extension" on the simple type) and
+	// simple005 (the same by way of finalDefault) extended a type that
+	// forbids extension and loaded clean.
+	if st, ok := t.Base.(*SimpleType); ok {
+		if t.DerivationMethod == DerivationExtension &&
+			st.Final().Has(DerivationExtension) {
+			p.errs = append(p.errs, errorAt(nil, "cos-ct-extends.1.1",
+				"complex type %q may not extend simple type %q, whose final "+
+					"attribute forbids extension", t.Name, st.Name))
+		}
+		return
+	}
 	base, ok := t.Base.(*ComplexType)
 	if !ok || base == t {
 		return
