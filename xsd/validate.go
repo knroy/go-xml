@@ -630,7 +630,15 @@ func (v *validator) derivedFrom(t, want Type) bool {
 	// A member of a union is validly derived from it (§3.14.6 clause 2.2.3),
 	// which is what lets xsi:type name one. The base chain alone does not
 	// reach it: a member's base is whatever it restricts, not the union.
-	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion {
+	//
+	// The member stands in for the union only while the union is pure. Once
+	// the union carries facets of its own, the member's value space is no
+	// longer a subset of the union's, and naming the member in xsi:type
+	// would let the instance escape the facets — which is what saxonData
+	// simple016.n01.xml does with xsi:type="xs:date" against a union whose
+	// member is a union restricted by a pattern.
+	if u, ok := want.(*SimpleType); ok && u.Variety == VarietyUnion &&
+		unionIsPure(u) {
 		for _, m := range u.MemberTypes {
 			if m != nil && v.derivedFrom(t, m) {
 				return true
