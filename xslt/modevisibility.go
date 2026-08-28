@@ -43,9 +43,84 @@ func (c *compiler) recordModeVisibility(el *xdm.Node, precedence int) {
 	}
 }
 
+// exposeImplicitModes applies the principal package's xsl:expose declarations
+// to modes that no xsl:mode declares.
+//
+// 6.6.1: "If a mode name is used (for example in an xsl:template declaration
+// or an xsl:apply-templates instruction) and no declaration of that mode
+// appears in the stylesheet, the mode is implicitly declared with default
+// properties." An implicitly declared mode is a component like any other, so
+// an xsl:expose naming it -- by name or by wildcard -- governs its visibility,
+// and 6.6.1 makes a mode that is not public or final ineligible as an entry
+// point.
+//
+// Without this the mode had no recorded visibility at all and
+// eligibleInitialMode let it through as undeclared. package-001j writes
+// xsl:expose component="mode" names="*" visibility="private" over a template
+// rule in mode "start" and expects XTDE0045 for a transform started there.
+//
+// Only a real xsl:package is considered, because only a package has a
+// manifest: xsl:expose is not allowed on xsl:stylesheet.
+func (c *compiler) exposeImplicitModes() {
+	if c.sheet.source == nil {
+		return
+	}
+	root := firstElement(c.sheet.source)
+	if root == nil || !isXSL(root, "package") {
+		return
+	}
+	var exposes []*exposeRule
+	order := 0
+	for _, ch := range root.ChildElements() {
+		if !isXSL(ch, "expose") {
+			continue
+		}
+		r, err := parseExposeRule(ch, order)
+		if err != nil {
+			return
+		}
+		order++
+		exposes = append(exposes, r)
+	}
+	if len(exposes) == 0 {
+		return
+	}
+	for _, t := range c.sheet.templates {
+		for _, m := range t.Mode {
+			if m == "" {
+				// The unnamed mode is always invocable, 6.6.1, and has no
+				// name for an xsl:expose to reach it by.
+				continue
+			}
+			if _, declared := c.modeVisibility[m]; declared {
+				// An explicit xsl:mode declaration has already been recorded,
+				// and applyExpose over the real components settles that one.
+				continue
+			}
+			sym := symbolicName{kind: kindMode, arity: -1,
+				name: clarkQName(m)}
+			var vis visibility
+			for _, r := range exposes {
+				if ok, _ := r.matches(sym); ok {
+					vis = r.vis
+				}
+			}
+			if vis == "" {
+				continue
+			}
+			if c.modeVisibility == nil {
+				c.modeVisibility = map[string]modeVisibility{}
+			}
+			c.modeVisibility[m] = modeVisibility{
+				visibility: string(vis), stated: true}
+		}
+	}
+}
+
 // publishModeVisibility flattens the precedence-resolved declarations onto the
 // stylesheet, which is what the invocation consults.
 func (c *compiler) publishModeVisibility() {
+	c.exposeImplicitModes()
 	if len(c.modeVisibility) == 0 {
 		return
 	}
@@ -101,4 +176,16 @@ func (s *Stylesheet) eligibleInitialMode(mode string) bool {
 		return true
 	}
 	return vis == "public" || vis == "final"
+}
+
+
+// clarkQName parses the Clark form the mode tables key on back into a QName,
+// which is what an exposeRule matches against.
+func clarkQName(s string) xdm.QName {
+	if strings.HasPrefix(s, "{") {
+		if i := strings.IndexByte(s, '}'); i >= 0 {
+			return xdm.QName{URI: s[1:i], Local: s[i+1:]}
+		}
+	}
+	return xdm.QName{Local: s}
 }
