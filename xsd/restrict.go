@@ -64,6 +64,23 @@ func (p *parser) checkParticleRestriction() error {
 		if base == ct || isUrType(base) {
 			continue
 		}
+		// derivation-ok-restriction clauses 4 and 5 split on the pair
+		// of *content kinds* before any particle is compared. A base
+		// with simple content admits character data, and neither an
+		// empty content type (clause 5.2) nor an element-only one
+		// (clause 5.4) is a subset of that: only simple content, or a
+		// mixed content type that is emptiable, may restrict it.
+		// particlesZ039 restricts a simpleContent base with
+		// <complexContent><restriction><sequence/></restriction>, an
+		// empty content type, which the base's character data is not a
+		// superset of.
+		if base.Content == ContentSimple && ct.Content != ContentSimple {
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.5: %s has %s content but its base %s "+
+					"has simple content", typeLabel(name, ct), ct.Content,
+				typeLabel(base.Name, base)))
+			continue
+		}
 		// Only element-only and mixed content have a particle to
 		// check. A restriction to empty content is governed by
 		// Particle Emptiable instead: the base's particle must be able

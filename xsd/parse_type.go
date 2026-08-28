@@ -814,12 +814,27 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 		// the splice above rewrites t.Content from the base and would
 		// have already turned the derived type's ContentElementOnly
 		// into ContentSimple by the time this could look.
-		if ownParticle := own; ownParticle != nil {
+		//
+		// Under 1.1 the derived type need not add a content model for
+		// this to be an error. 1.0's clause 1.4.2.2 let an extension
+		// with an *empty* effective content simply inherit the base's
+		// simple content type, so <complexContent><extension> over a
+		// simpleContent base that adds only attributes was well-formed;
+		// 1.1 requires the derived declaration to say simpleContent
+		// too. particlesZ031 is exactly that pair, and the suite marks
+		// it valid under 1.0 and invalid under 1.1.
+		if own != nil || p.schema.Version >= Version11 {
 			body := body
 			p.postFixups = append(p.postFixups, func() error {
 				bt, ok := t.Base.(*ComplexType)
 				if !ok || bt.Content != ContentSimple {
 					return nil
+				}
+				if own == nil {
+					return errorAt(body, "cos-ct-extends.1.4.1",
+						"a complexContent extension may not derive from "+
+							"base type %q, whose content is simple",
+						base)
 				}
 				return errorAt(body, "cos-ct-extends.1.4.1",
 					"a complexContent extension may not add a content "+
