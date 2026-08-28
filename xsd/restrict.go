@@ -74,6 +74,21 @@ func (p *parser) checkParticleRestriction() error {
 		// <complexContent><restriction><sequence/></restriction>, an
 		// empty content type, which the base's character data is not a
 		// superset of.
+		// Clause 5.2.2.1: where both content types are simple, the
+		// derived one must be validly derived from the base's. Naming
+		// an inline <simpleType> inside a simpleContent restriction is
+		// otherwise unchecked, so particlesZ018 restricted a decimal
+		// content type with a list of xs:int — a type that shares no
+		// base with it at all.
+		if base.Content == ContentSimple && ct.Content == ContentSimple &&
+			ct.SimpleContent != nil && base.SimpleContent != nil &&
+			!typeRestricts(ct.SimpleContent, base.SimpleContent) {
+			errs = append(errs, fmt.Errorf(
+				"derivation-ok-restriction.5.2.2.1: %s gives its simple content "+
+					"a type that is not a restriction of base %s's",
+				typeLabel(name, ct), typeLabel(base.Name, base)))
+			continue
+		}
 		if base.Content == ContentSimple && ct.Content != ContentSimple {
 			errs = append(errs, fmt.Errorf(
 				"derivation-ok-restriction.5: %s has %s content but its base %s "+
