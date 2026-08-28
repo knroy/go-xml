@@ -888,6 +888,15 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 	// 0..0 under a wildcard) and mgH014 (a 0..0 alternative dropped from a
 	// choice) came to be rejected.
 	if max == 0 {
+		// All Group Limited is checked before the particle disappears.
+		// maxOccurs="0" is one of the values the clause forbids under
+		// 1.0, and "corresponds to no component at all" makes it
+		// unreachable from every later pass — mgO001 and mgO018 write
+		// <all minOccurs="0" maxOccurs="0"> and were accepted by a
+		// check written to name mgO001.
+		if el.Name.Local == "all" {
+			p.checkAllOccurs(el, max)
+		}
 		return nil
 	}
 	part := &Particle{MinOccurs: min, MaxOccurs: max}
@@ -978,6 +987,20 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 	}
 	for _, c := range p.contentChildren(el) {
 		if c.Name.URI != NSSchema {
+			continue
+		}
+		// The 1.0 schema for schemas gives <xs:all> the content model
+		// (annotation?, element*): only element declarations, and only
+		// the local spelling. 1.1 widened it to admit <xs:any> and
+		// <xs:group>, so the rule is version-gated.
+		// particles00104m1 writes <xs:all><xs:any/> inside a named
+		// group, where the checks that walk complex types never reach
+		// it.
+		if g.Compositor == CompositorAll && p.schema.Version < Version11 &&
+			c.Name.Local != "element" && c.Name.Local != "annotation" {
+			p.errs = append(p.errs, errorAt(c, "cos-all-limited.1",
+				"an xs:all group may only contain element declarations, "+
+					"but this one contains an xs:%s", c.Name.Local))
 			continue
 		}
 		if part := p.readParticle(c); part != nil {
