@@ -51,6 +51,29 @@ func LookupVisible(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 	return lookupFor(ctx, name, arity)
 }
 
+// LookupDynamic resolves a DYNAMIC function reference -- one whose name is a
+// value rather than a literal, as in fn:function-lookup and
+// fn:function-available.
+//
+// It is LookupVisible except that a library implementing
+// DynamicFunctionLibrary gets to answer for itself; see there for why a host
+// language would scope the two differently.
+func LookupDynamic(ctx *Context, name xdm.QName, arity int) (Function, bool) {
+	if ctx != nil {
+		if dl, ok := ctx.Funcs.(DynamicFunctionLibrary); ok {
+			fn, found := dl.LookupDynamic(ctx, name, arity)
+			if !found {
+				return Function{}, false
+			}
+			if fn.Since > ctx.libraryVersion() {
+				return Function{}, false
+			}
+			return fn, true
+		}
+	}
+	return lookupFor(ctx, name, arity)
+}
+
 // lookupFor resolves a function call, hiding functions the context's version
 // does not have.
 //

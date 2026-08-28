@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // Which components a package will let an invocation start at, section 3.5.2
@@ -227,4 +228,66 @@ func exposedVisibility(el *xdm.Node) visibility {
 	// visibility, which for a declaration with no attribute is the private
 	// default -- the same answer the caller falls back to.
 	return target.vis
+}
+
+// packageScopedLibrary is the function library the runtime evaluates against.
+//
+// It resolves an ordinary call exactly as the flat library does -- 3.6.3.4
+// puts every non-hidden function of the assembled stylesheet in the static
+// context of every expression -- and answers a DYNAMIC reference by 3.6.3.5
+// instead: "the set of components that are available to be referenced are
+// those that are declared in the package where this function call appears,
+// including components declared within an xsl:override declaration in that
+// package, but excluding components declared with visibility='abstract'. If
+// the relevant component has been overridden in a different package, the
+// overriding declarations are not considered."
+//
+// The two answers genuinely differ, which is why the wrapper exists rather
+// than the flat library being narrowed: a call to f:add() written in a used
+// package resolves to whatever the assembly settled on, while
+// function-lookup(QName(...,'add'), 2) written in the same place resolves to
+// that package's own declaration.
+type packageScopedLibrary struct {
+	inner xpath.FunctionLibrary
+	sheet *Stylesheet
+}
+
+func (p packageScopedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bool) {
+	return p.inner.Lookup(name, arity)
+}
+
+// LookupDynamic implements xpath.DynamicFunctionLibrary.
+//
+// A name the stylesheet does not declare at any arity is not a stylesheet
+// function at all -- it is a builtin, which 3.6.3.5 says nothing about -- so
+// it falls through to the flat library. Only a name the stylesheet does
+// declare is subject to the package rule, and then the package's own map is
+// the whole answer: a declaration in another package is invisible whether it
+// is private, overridden, or merely elsewhere.
+func (p packageScopedLibrary) LookupDynamic(
+	ctx *xpath.Context, name xdm.QName, arity int,
+) (xpath.Function, bool) {
+	if p.sheet == nil || p.sheet.pkgFuncs == nil ||
+		!p.sheet.declaresFunction(name) {
+		return p.inner.Lookup(name, arity)
+	}
+	fn, ok := p.sheet.pkgFuncs[packageOf(ctx)][functionVisibilityKey(name, arity)]
+	return fn, ok
+}
+
+// declaresFunction reports whether any xsl:function in the stylesheet, in any
+// package and at any arity, declares this name.
+//
+// The question is asked to tell a stylesheet function from a builtin that
+// happens to share a name space with one; see LookupDynamic.
+func (s *Stylesheet) declaresFunction(name xdm.QName) bool {
+	prefix := name.Clark() + "#"
+	for _, byName := range s.pkgFuncs {
+		for k := range byName {
+			if strings.HasPrefix(k, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -1968,6 +1968,25 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 	if name == "" {
 		return false
 	}
+	// A DYNAMIC reference names its component with a computed QName, so no
+	// lexical scan can find it. 3.6.3.5 makes such a reference resolve
+	// against "those [components] that are declared in the package where
+	// this function call appears", private ones included, so a used package
+	// that makes one may reach any of its own components -- and pruning here
+	// would take the target away before the reference is ever evaluated.
+	//
+	// The conservative answer is the only sound one: where the package makes
+	// any dynamic reference at all, every component it declares is
+	// potentially referenced. function-lookup-005's used package calls
+	// function-lookup(QName('http://local/','multiply'), 2) and requires the
+	// private f:multiply to be found, where the name appears only inside a
+	// string literal that resolves against no prefix.
+	//
+	// Keeping a declaration nothing uses costs nothing, which is the same
+	// trade the lexical scan already makes.
+	if makesDynamicReference(root) {
+		return true
+	}
 	local := name
 	if i := strings.IndexByte(local, ':'); i >= 0 {
 		local = local[i+1:]
@@ -2005,6 +2024,48 @@ func referencedWithin(root *xdm.Node, comp *component) bool {
 		return false
 	}
 	return walk(root)
+}
+
+// makesDynamicReference reports whether a package's tree contains anything
+// that can name a component with a computed QName: fn:function-lookup,
+// fn:function-available or xsl:evaluate. See referencedWithin.
+//
+// The scan is lexical and deliberately loose -- a string mentioning
+// "function-lookup" counts -- because the only consequence of a false positive
+// is that a declaration nothing uses survives.
+func makesDynamicReference(root *xdm.Node) bool {
+	var walk func(n *xdm.Node) bool
+	walk = func(n *xdm.Node) bool {
+		switch n.Kind {
+		case xdm.KindElement:
+			if isXSL(n, "evaluate") {
+				return true
+			}
+			for _, a := range n.Attrs {
+				if namesDynamicFunction(a.Value) {
+					return true
+				}
+			}
+		case xdm.KindText:
+			if namesDynamicFunction(n.Value) {
+				return true
+			}
+		}
+		for _, ch := range n.Children {
+			if walk(ch) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
+}
+
+// namesDynamicFunction reports whether text mentions one of the functions that
+// take a component name as a value.
+func namesDynamicFunction(text string) bool {
+	return strings.Contains(text, "function-lookup") ||
+		strings.Contains(text, "function-available")
 }
 
 // isAbstractDecl reports whether a declaration declares itself abstract.
@@ -2093,6 +2154,20 @@ func (c *compiler) compileOverrideRules(root *xdm.Node, precedence int) error {
 // collide with one the source declared.
 const originalNS = "http://go-xml.invalid/xslt/original/"
 
+// overriddenMarkerNS is the namespace of the attribute that carries the name a
+// declaration had before an xsl:override renamed it out of the way. It is a
+// URI no stylesheet can write, so it cannot collide with a real attribute.
+const overriddenMarkerNS = "http://go-xml.invalid/xslt/overridden"
+
+// overriddenNameOf answers the name a declaration was written with before
+// rewriteOverride renamed it, or "" for a declaration that was not renamed.
+func overriddenNameOf(el *xdm.Node) string {
+	if a := el.Attr(overriddenMarkerNS, "name"); a != nil {
+		return a.Value
+	}
+	return ""
+}
+
 // spliced is the attribute marking a declaration that an enclosing package's
 // xsl:override put into this package's top level, rather than one this
 // package wrote. It is not a component of this package; see
@@ -2147,6 +2222,28 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 	// from the mode they name.
 	if isXSL(original, "mode") {
 		return overriding
+	}
+	// The name the used package's own dynamic references still know it by is
+	// kept, under a marker no stylesheet can write. 3.6.3.5 says a dynamic
+	// reference resolves against the declarations of the package it is
+	// written in and that "if the relevant component has been overridden in a
+	// different package, the overriding declarations are not considered" --
+	// so the used package's fn:function-lookup must reach THIS declaration,
+	// under THIS name, and the synthetic one about to be written over it
+	// would otherwise be all that survives. See compileFunction.
+	// An abstract original is excluded: 3.6.3.5 keeps a component declared
+	// visibility="abstract" out of the set a dynamic reference sees, whatever
+	// package overrode it. function-lookup-005's f:subtract is abstract in
+	// the used package and overridden in the using one, and must still be
+	// invisible to the used package's own function-lookup.
+	if realName := original.AttrValue("name"); realName != "" &&
+		!isAbstractDecl(original) {
+		original.Attrs = append(original.Attrs, &xdm.Node{
+			Kind:   xdm.KindAttribute,
+			Name:   xdm.QName{URI: overriddenMarkerNS, Local: "name"},
+			Value:  realName,
+			Parent: original,
+		})
 	}
 	setAttr(original, "name", "Q{"+uri+"}original")
 	if isXSL(original, "param") {

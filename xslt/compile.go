@@ -1516,7 +1516,8 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 
 	c.recordFunctionVisibility(el, qn, len(params))
 
-	if stub := abstractStubFor(el); stub != nil {
+	stub := abstractStubFor(el)
+	if stub != nil {
 		body = stub
 	}
 	fn := &userFunction{
@@ -1576,12 +1577,50 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	}
 	c.funcPrecedence[key] = precedence
 
-	c.sheet.funcs.Add(xpath.Function{
+	entry := xpath.Function{
 		Name:      qn,
 		Arity:     len(params),
 		Call:      fn.call,
 		Signature: declaredSignature(fn.returns, params),
-	})
+	}
+	c.sheet.funcs.Add(entry)
+	// 3.6.3.5: a dynamic reference -- fn:function-lookup, fn:function-available
+	// or xsl:evaluate -- sees "those [components] that are declared in the
+	// package where this function call appears, including components declared
+	// within an xsl:override declaration in that package, but excluding
+	// components declared with visibility='abstract'. If the relevant
+	// component has been overridden in a different package, the overriding
+	// declarations are not considered."
+	//
+	// So the per-package record is kept alongside the flat library, which
+	// cannot answer that question: it holds one entry per name and arity for
+	// the whole assembly. function-lookup-005 asks all four halves of the rule
+	// at once -- a private function of the calling package must be found, one
+	// declared only in the USING package must not, an overridden one must
+	// resolve to the calling package's own declaration, and an abstract one
+	// must not be found even though a using package overrode it.
+	if stub == nil {
+		pkg := overridingPackage(el, compilePackage)
+		if c.sheet.pkgFuncs == nil {
+			c.sheet.pkgFuncs = map[int]map[string]xpath.Function{}
+		}
+		if c.sheet.pkgFuncs[pkg] == nil {
+			c.sheet.pkgFuncs[pkg] = map[string]xpath.Function{}
+		}
+		key := functionVisibilityKey(qn, len(params))
+		// A declaration an xsl:override renamed out of the way is still the
+		// used package's own component under its own name, and its own
+		// dynamic references must reach it there; see rewriteOverride.
+		// function-lookup-005's used package overrides f:add in the using
+		// package and requires its own f:add -- the one giving 7 rather than
+		// the override's 8 -- from a function-lookup written inside it.
+		if real := overriddenNameOf(el); real != "" {
+			if rq, err := resolveQNameAttr(el, real); err == nil {
+				key = functionVisibilityKey(rq, len(params))
+			}
+		}
+		c.sheet.pkgFuncs[pkg][key] = entry
+	}
 	return nil
 }
 

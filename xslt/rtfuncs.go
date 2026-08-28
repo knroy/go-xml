@@ -555,7 +555,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 				return nil, unboundPrefixError("function-available", name)
 			}
 			for arity := 0; arity <= 4; arity++ {
-				if _, ok := xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity); ok {
+				if _, ok := xpath.LookupDynamic(ctx, xdm.QName{URI: uri, Local: local}, arity); ok {
 					return xdm.One(xdm.NewBoolean(true)), nil
 				}
 			}
@@ -599,7 +599,7 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 				}
 				arity = int(n.Int64())
 			}
-			_, ok = xpath.LookupVisible(ctx, xdm.QName{URI: uri, Local: local}, arity)
+			_, ok = xpath.LookupDynamic(ctx, xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
 		},
 	})
