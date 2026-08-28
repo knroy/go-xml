@@ -109,6 +109,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if err := a.run(); err != nil {
 		return nil, err
 	}
+	a.checkCompositionCycles()
 	a.runRedefines()
 	a.runOverrides()
 	if err := a.p.finish(); err != nil {
@@ -326,6 +327,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	if err := a.run(); err != nil {
 		return nil, err
 	}
+	a.checkCompositionCycles()
 	a.runRedefines()
 	a.runOverrides()
 	if err := a.p.finish(); err != nil {
@@ -469,6 +471,12 @@ type assembler struct {
 	// answered against that document rather than the whole schema.
 	redefined map[*xdm.Node]*xdm.Node
 
+	// compEdges is the schema-composition graph: one entry per
+	// <xs:include>, <xs:redefine> or <xs:override> that resolved to a
+	// document, in the order they were read. checkCompositionCycles walks
+	// it looking for circular redefinition.
+	compEdges []compEdge
+
 	// pendingRedefines are the <xs:redefine> elements whose children have
 	// still to be read. They are deferred to the end of assembly because a
 	// redefinition is defined in terms of the document it redefines, which
@@ -480,6 +488,164 @@ type assembler struct {
 type pendingRedefine struct {
 	el  *xdm.Node
 	doc *schemaDoc
+}
+
+// compEdge is one resolved schema-composition reference: the document that
+// carried the <xs:include>, <xs:redefine> or <xs:override>, and the document it
+// named.
+type compEdge struct {
+	el        *xdm.Node
+	from      docKey
+	to        docKey
+	redefines bool
+}
+
+// addCompositionEdge records one resolved include/redefine/override.
+//
+// The "from" end is the document holding the element. Its key must be built the
+// same way the "to" end of the edge that reached it was, or the two ends never
+// meet and no cycle ever closes: same canonicalLocation, same adopted
+// namespace.
+func (a *assembler) addCompositionEdge(el *xdm.Node, doc *schemaDoc, to docKey, redefining bool) {
+	from := docKey{location: canonicalLocation(doc.baseURI)}
+	if doc.chameleon {
+		from.adoptedNS = doc.targetNS
+	}
+	a.compEdges = append(a.compEdges, compEdge{
+		el: el, from: from, to: to, redefines: redefining,
+	})
+}
+
+// checkCompositionCycles refuses a schema whose documents redefine one
+// component in a circle (§4.2.2).
+//
+// Composition may be circular in general — two documents may include or import
+// each other, and schema families routinely do. So, more surprisingly, may
+// redefinition: msData's schU1 has two documents redefining each other, and the
+// suite expects it to load, because each redefines a component the other owns.
+// Nothing there is circular except the file references.
+//
+// What cannot be circular is the *definition of one component*. A redefinition
+// is written in terms of the component it replaces, so when the same name is
+// redefined at two points around a cycle each of those definitions is written
+// in terms of the other: in s4_2_4si01 two documents each redefine c1 by
+// extending c1, and the only way to read that is as a type extending itself.
+// Which of the two "wins" then depends on nothing but which document the
+// processor happened to start from — the same schema, entered by its other
+// door, is a different schema. That is the contradiction to refuse.
+//
+// The test is therefore not "is there a redefine cycle" but "does some
+// component get redefined twice around one cycle".
+func (a *assembler) checkCompositionCycles() {
+	if len(a.compEdges) == 0 {
+		return
+	}
+	out := map[docKey][]int{}
+	for i, e := range a.compEdges {
+		out[e.from] = append(out[e.from], i)
+	}
+
+	const (
+		white = 0
+		grey  = 1
+		black = 2
+	)
+	color := map[docKey]int{}
+	reported := map[*xdm.Node]bool{}
+
+	// Iterative depth-first search. The stack carries the edge index that
+	// entered each node, so that when a back edge closes a cycle the
+	// redefine edges on it can be read straight off the stack rather than
+	// recovered by a second search.
+	type frame struct {
+		node docKey
+		via  int // index into compEdges, or -1 for a root
+		next int // next position in out[node] to try
+	}
+
+	var starts []docKey
+	seenStart := map[docKey]bool{}
+	for _, e := range a.compEdges {
+		if !seenStart[e.from] {
+			seenStart[e.from] = true
+			starts = append(starts, e.from)
+		}
+	}
+
+	for _, root := range starts {
+		if color[root] != white {
+			continue
+		}
+		stack := []frame{{node: root, via: -1}}
+		color[root] = grey
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			edges := out[top.node]
+			if top.next >= len(edges) {
+				color[top.node] = black
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			ei := edges[top.next]
+			top.next++
+			e := a.compEdges[ei]
+			switch color[e.to] {
+			case grey:
+				// Back edge: the cycle is the stack from e.to
+				// to the top, plus this edge.
+				at := -1
+				for i := range stack {
+					if stack[i].node == e.to {
+						at = i
+						break
+					}
+				}
+				if at < 0 {
+					continue
+				}
+				// Collect the components redefined by the
+				// redefine edges around this cycle. A name that
+				// turns up twice is one whose definition
+				// depends on itself.
+				around := []*xdm.Node{}
+				if e.redefines {
+					around = append(around, e.el)
+				}
+				for i := at + 1; i < len(stack); i++ {
+					ce := a.compEdges[stack[i].via]
+					if ce.redefines {
+						around = append(around, ce.el)
+					}
+				}
+				var culprit *xdm.Node
+				seenComp := map[string]bool{}
+				for _, el := range around {
+					for _, k := range redefinedComponents(el) {
+						if seenComp[k] {
+							culprit = el
+							break
+						}
+						seenComp[k] = true
+					}
+					if culprit != nil {
+						break
+					}
+				}
+				if culprit != nil && !reported[culprit] {
+					reported[culprit] = true
+					a.p.errs = append(a.p.errs, errorAt(culprit, "src-redefine.1",
+						"circular redefinition: the redefine of %q "+
+							"is reached again around a chain of "+
+							"redefinitions, so the component would "+
+							"be defined in terms of itself",
+						culprit.AttrValue("schemaLocation")))
+				}
+			case white:
+				color[e.to] = grey
+				stack = append(stack, frame{node: e.to, via: ei})
+			}
+		}
+	}
 }
 
 func (a *assembler) push(root *xdm.Node, base, chameleonNS string, redefining bool) {
@@ -788,6 +954,13 @@ func (a *assembler) parseAndQueue(el *xdm.Node, rc io.Reader, resolved, namespac
 	// of one file whenever a schema set reaches it by different spellings;
 	// see docKey.
 	key := docKey{location: canonicalLocation(resolved), adoptedNS: chameleon}
+
+	// Record the composition edge before the dedup check, not after: a
+	// cycle is precisely the case where the far end has already been read,
+	// so an edge recorded only for freshly-read documents would never close
+	// one. See checkCompositionCycles.
+	a.addCompositionEdge(el, doc, key, redefining)
+
 	if a.seen[key] {
 		return
 	}
@@ -1030,4 +1203,27 @@ func substitutionBlockedBy(head, member *ElementDecl) bool {
 		}
 	}
 	return false
+}
+
+// redefinedComponents names the components one <xs:redefine> or <xs:override>
+// replaces, in the two symbol spaces that matter here: types share one, and
+// groups and attribute groups have their own.
+func redefinedComponents(el *xdm.Node) []string {
+	var out []string
+	for _, c := range el.ChildElements() {
+		if c.Name.URI != NSSchema {
+			continue
+		}
+		name := c.AttrValue("name")
+		if name == "" {
+			continue
+		}
+		switch c.Name.Local {
+		case "simpleType", "complexType":
+			out = append(out, "type "+name)
+		case "group", "attributeGroup", "element", "attribute", "notation":
+			out = append(out, c.Name.Local+" "+name)
+		}
+	}
+	return out
 }

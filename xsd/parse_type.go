@@ -493,6 +493,7 @@ func (p *parser) readComplexType(el *xdm.Node) *ComplexType {
 	}
 
 	mixed := p.boolAttr(el, "mixed", false)
+	t.mixedWritten = el.Attr("", "mixed") != nil
 
 	if sc := p.childElement(el, "simpleContent"); sc != nil {
 		p.readSimpleContent(sc, t)
@@ -697,8 +698,23 @@ func (p *parser) readAssertions(el *xdm.Node, t *ComplexType) {
 // readComplexContent reads <xs:complexContent>.
 func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 	// mixed on complexContent overrides mixed on the complexType.
-	if el.Attr("", "mixed") != nil {
-		mixed = p.boolAttr(el, "mixed", mixed)
+	if a := el.Attr("", "mixed"); a != nil {
+		inner := p.boolAttr(el, "mixed", mixed)
+		// XSD 1.1 §3.4.3 src-ct.4: where both the complexType and its
+		// complexContent carry mixed, the two must agree. 1.0 let the
+		// inner one win silently, which means a type written
+		// mixed="true" with mixed="false" beneath it said two opposite
+		// things about itself and only one of them was heard.
+		// saxonData's complex002 is that shape, and only under 1.1 —
+		// the test is marked version="1.1" — so the override stands
+		// unchanged for 1.0.
+		if p.schema.Version >= Version11 && t.mixedWritten && inner != mixed {
+			p.errs = append(p.errs, errorAt(el, "src-ct.4",
+				"complexType has mixed=%q but its complexContent has "+
+					"mixed=%q; where both are present they must agree",
+				boolLexical(mixed), a.Value))
+		}
+		mixed = inner
 	}
 
 	body := p.childElement(el, "restriction", "extension")
@@ -709,6 +725,25 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 	}
 	if body.Name.Local == "extension" {
 		t.DerivationMethod = DerivationExtension
+	} else if oc := p.childElement(body, "openContent"); oc != nil &&
+		p.childElement(body, "all", "choice", "sequence", "group") == nil {
+		// The schema for schemas puts <openContent> and the particle in
+		// one sequence inside xs:complexRestrictionType, with the
+		// particle required — so a complexContent restriction may write
+		// an <openContent> only alongside a particle. The two other
+		// places <openContent> can appear, an extension and the
+		// shorthand branch of a plain complexType, both make the
+		// particle optional, which is why this is checked here and not
+		// in readOpenContent.
+		//
+		// The rule is a representation constraint, so it holds whatever
+		// the version says about openContent's meaning: saxonData's
+		// complex018 is expected invalid under 1.0 as well, where the
+		// element is not understood at all.
+		p.errs = append(p.errs, errorAt(oc, "src-ct.1",
+			"an openContent in a complexContent restriction must be "+
+				"followed by a content model; the schema for schemas "+
+				"does not allow it alone"))
 	}
 
 	base := body.AttrValue("base")
@@ -2048,4 +2083,12 @@ func (p *parser) checkUnionMemberCycles() {
 			}
 		}
 	}
+}
+
+// boolLexical renders a boolean the way a schema document writes one.
+func boolLexical(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
