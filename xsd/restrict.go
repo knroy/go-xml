@@ -596,9 +596,20 @@ func typeRestricts(t, want Type) bool {
 	}
 	// The walk stops on self as well as nil: the ur-type is its own base
 	// and a chain testing only for nil would not terminate.
+	//
+	// Clause 3.2.5 names {extension, list, union} as the *disallowed*
+	// derivations, so an extension step anywhere on the way up breaks the
+	// chain: particlesIj008 restricts an element whose type in the base is
+	// "foo" with one whose type is "bar", and bar extends foo. Reaching foo
+	// from bar proves derivation, not derivation by restriction, and an
+	// extension may add content the base's element would reject.
 	for cur := t; cur != nil; {
 		if cur == want {
 			return true
+		}
+		if ct, ok := cur.(*ComplexType); ok &&
+			ct.DerivationMethod == DerivationExtension {
+			return false
 		}
 		next := cur.BaseType()
 		if next == cur {
