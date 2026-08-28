@@ -163,12 +163,22 @@ func packageComponents(root *xdm.Node) ([]*component, error) {
 		case "variable":
 			kind = kindVariable
 		case "param":
-			// A stylesheet parameter is not a component. 3.5.1 lists the
-			// component kinds and xsl:param is not among them: a parameter is
-			// supplied from outside the whole stylesheet, so a package has
-			// nothing to publish about it and an xsl:expose naming one names
+			// A stylesheet parameter is not published as a component of the
+			// package it is declared in: a package has nothing to say about
+			// one through xsl:expose, and a token naming one must match
 			// nothing -- which is what expose-908 asserts.
-			continue
+			//
+			// It is still overridable. 9.5 makes a stylesheet parameter "a
+			// global variable with the additional property that its value can
+			// be supplied by the caller", and fixes its visibility as "public
+			// if the parameter is non-static", so an xsl:override may supply
+			// one. Only a child of xsl:override is read as a component here,
+			// and the used package's matching declaration is found by name;
+			// see usedPackageParam. override-v-015.
+			if !isXSL(root, "override") {
+				continue
+			}
+			kind = kindVariable
 		case "mode":
 			kind = kindMode
 		default:
@@ -1039,6 +1049,24 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			key := oc.sym.String()
 			target, ok := byName[key]
 			if !ok {
+				// A top-level xsl:param is left out of the component list,
+				// because xsl:expose has nothing to say about one and a
+				// token naming one must match nothing (expose-908). It is
+				// still a component for the purpose of an override: 9.5 makes
+				// a stylesheet parameter "a global variable with the
+				// additional property that its value can be supplied by the
+				// caller", and fixes its visibility as "public if the
+				// parameter is non-static". override-v-015 overrides one.
+				if el := usedPackageParam(u.root, oc.sym); el != nil {
+					target = &component{
+						sym: oc.sym, el: el,
+						declared: visPublic, vis: visPublic,
+					}
+					byName[key] = target
+					u.comps = append(u.comps, target)
+				}
+			}
+			if target == nil {
 				return nil, fmt.Errorf(
 					"XTSE3058: the %s declared in xsl:override is not "+
 						"homonymous with any component of package %s",
@@ -2065,6 +2093,28 @@ func rewriteOverride(overriding, original *xdm.Node) *xdm.Node {
 		return overriding
 	}
 	setAttr(original, "name", "Q{"+uri+"}original")
+	if isXSL(original, "param") {
+		// The renamed original is no longer a stylesheet parameter. It is
+		// reachable only through xsl:original, under a name no caller can
+		// write, and the overriding declaration is what a supplied value now
+		// binds to. Left as an xsl:param it was a parameter that could never
+		// be supplied: override-v-010 overrides a required xs:NCName
+		// parameter with an optional one, and the renamed original failed the
+		// run as XTDE0050, then as XTDE0700, for a value nothing could give.
+		//
+		// So it becomes a global variable whose value is the parameter's
+		// default. Where the parameter had no default there is no value for
+		// xsl:original to read, and the declaration is marked abstract: that
+		// defers it, so only a stylesheet that actually reads xsl:original
+		// fails, and it fails as the XTDE3052 for a component with no body.
+		original.Name = xdm.QName{
+			Prefix: original.Name.Prefix, URI: xdm.NSXSL, Local: "variable",
+		}
+		setAttr(original, "required", "no")
+		if original.AttrValue("select") == "" && len(original.ChildElements()) == 0 {
+			markAbstract(original, "the overridden parameter's default")
+		}
+	}
 	if isXSL(original, "template") || isXSL(original, "function") {
 		// A renamed component must not stay visible under its old identity,
 		// and a named template renamed this way is no longer an eligible
@@ -2402,4 +2452,29 @@ func duplicateOverrideError(oc *component, prev *xdm.Node) error {
 	return fmt.Errorf(
 		"XTSE3055: %s is declared more than once as a child of xsl:override",
 		oc.sym)
+}
+
+
+// usedPackageParam finds the top-level xsl:param a symbolic name refers to.
+//
+// Only a non-static parameter answers. 9.5 fixes a static parameter's
+// visibility as private, so it is not a component another package can see,
+// let alone override.
+func usedPackageParam(root *xdm.Node, sym symbolicName) *xdm.Node {
+	if sym.kind != kindVariable {
+		return nil
+	}
+	for _, el := range root.ChildElements() {
+		if !isXSL(el, "param") || yesAttr(el, "static") {
+			continue
+		}
+		qn, err := resolveQNameAttr(el, el.AttrValue("name"))
+		if err != nil {
+			continue
+		}
+		if qn.Clark() == sym.name.Clark() {
+			return el
+		}
+	}
+	return nil
 }
