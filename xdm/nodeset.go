@@ -35,6 +35,26 @@ func SortDocumentOrder(seq Sequence) Sequence {
 		}
 		nodes = append(nodes, n)
 	}
+	// A detached root -- a parentless element built by a sequence constructor
+	// -- has no tree to order it, so Compare falls back to an identity number
+	// stamped on the root. That number is assigned on FIRST COMPARISON, which
+	// makes it a function of the order the sort happens to ask questions in
+	// rather than of the order the nodes were built in. sort.SliceStable runs
+	// insertion sort over a short slice and compares (1,0) before (0,1), so a
+	// variable declared as="element()*" holding four sibling elements came
+	// back with its first two transposed.
+	//
+	// Numbering every detached root here, walking the sequence forwards
+	// before any comparison is made, ties the number to the position the
+	// caller supplied. That is the order a sequence constructor built them
+	// in, which is the order the spec's "stable" leaves free but every
+	// stylesheet expects. A root already numbered keeps its number, so a
+	// sequence mixing nodes from earlier sorts still compares consistently.
+	for _, n := range nodes {
+		if n.tree == nil {
+			numberDetachedRoot(n)
+		}
+	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Compare(nodes[j]) < 0
 	})

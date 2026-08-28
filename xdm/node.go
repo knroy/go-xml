@@ -469,6 +469,23 @@ func detachedRootID(root *Node) int64 {
 	return id
 }
 
+// numberDetachedRoot stamps an identity number on the root of the untracked
+// tree n belongs to, if it has none yet.
+//
+// It exists so that the number can be assigned before any comparison, in the
+// order the caller holds the nodes in, rather than in the order a sort's
+// comparisons happen to reach them. See SortDocumentOrder.
+func numberDetachedRoot(n *Node) {
+	root := n
+	for root.Parent != nil {
+		root = root.Parent
+	}
+	if root.tree != nil {
+		return
+	}
+	detachedRootID(root)
+}
+
 // ancestorChain returns n's ancestors root-first, ending with n itself.
 func ancestorChain(n *Node) []*Node {
 	var up []*Node
