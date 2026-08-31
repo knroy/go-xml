@@ -378,6 +378,24 @@ type ComplexType struct {
 	// <xs:openContent>, so that a document-level <xs:defaultOpenContent>
 	// does not override it.
 	declaredOpenContent bool
+
+	// withheldOpenContent records that the document had a
+	// <xs:defaultOpenContent appliesToEmpty="false"> which was not applied
+	// because this type's own content model matches only the empty
+	// sequence.
+	//
+	// For an extension that verdict is provisional. The default applies to
+	// a type whose {content type} is not empty, and an extension's content
+	// type is the base's model spliced with its own — so an extension that
+	// writes <xs:sequence/> over a non-empty base is not an empty type at
+	// all, and appliesToEmpty="false" has no reason to withhold anything
+	// from it. The splice happens long after this decision is first made,
+	// so the flag lets it be revisited once the base is bound.
+	//
+	// The default itself is held here rather than looked up again later:
+	// the fixup that revisits this runs after the parser has moved past
+	// the schema document, and the default is a per-document property.
+	withheldOpenContent *OpenContent
 }
 
 // OpenContentMode says where an open content wildcard may match (XSD 1.1
