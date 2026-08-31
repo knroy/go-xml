@@ -1295,6 +1295,16 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// ambiguous rather than a count. all244 is the case that punishes
 	// guessing: a derived wildcard spanning two base buckets is invalid
 	// precisely because of how its occurrences may be split between them.
+	// The budget is the range over a whole match of B, not over one
+	// occurrence of B's group. When the group itself may be skipped — B's
+	// {min occurs} is 0 — the empty sequence is locally valid against B, so
+	// every member's floor is 0 however the member spells its own
+	// minOccurs. Reading the member's minOccurs as the budget's floor made
+	// an <all minOccurs="0"> require its content, and rejected mgO029,
+	// whose derived and base groups are textually identical. The derived
+	// side is already scaled this way by allBranchCounts, so this only
+	// restores the symmetry the two sides must share.
+	baseSkippable := b.MinOccurs == 0
 	budget := map[xdm.QName]*occBudget{}
 	for _, bp := range flattenAllGroups(bg.Particles) {
 		bd, ok := bp.Term.(*ElementDecl)
@@ -1304,7 +1314,11 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		if _, dup := budget[bd.Name]; dup {
 			return nil, false
 		}
-		b := &occBudget{decl: bd, min: bp.MinOccurs, max: bp.MaxOccurs}
+		bMin := bp.MinOccurs
+		if baseSkippable {
+			bMin = 0
+		}
+		b := &occBudget{decl: bd, min: bMin, max: bp.MaxOccurs}
 		budget[bd.Name] = b
 		// A base particle naming a substitution group head stands for a
 		// choice over the whole group (clause 2.1), so every member
