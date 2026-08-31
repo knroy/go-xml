@@ -1133,6 +1133,19 @@ func (r *nsResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
 	return out, true
 }
 
+// SchemaTypeIsList implements xpath.SchemaListTypes.
+//
+// It exists so that "castable as" against a schema-defined list type answers
+// true or false rather than raising the atomic-target static error. The
+// validity of a particular value is still ValidateSchemaValue's answer; this
+// only says which kind of type the name denotes.
+func (r *nsResolver) SchemaTypeIsList(name xdm.QName) (xdm.QName, bool) {
+	if r.schema == nil {
+		return xdm.QName{}, false
+	}
+	return r.schema.IsListSimpleType(name)
+}
+
 // SchemaUnionMemberTypes implements xpath.SchemaUnionTypes.
 //
 // XPath 3.1 2.5.5 makes union membership a clause of derives-from in its own

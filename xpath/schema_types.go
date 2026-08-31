@@ -110,6 +110,52 @@ type SchemaUnionTypes interface {
 	SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
 }
 
+// SchemaListTypes reports whether a named simple type is of variety list.
+//
+// It is separate from SchemaTypes for the same reason SchemaUnionTypes is:
+// optional, so an implementation that does not know about list types simply
+// does not implement it and nothing changes.
+//
+// A list type is a legal cast target -- F&O 3.0 18.3 covers "casting to types
+// derived by restriction, to union types, and to list types" -- but its value
+// is a whitespace-separated SEQUENCE rather than one atomic item, so it can
+// never satisfy the "cast target must be an atomic type" rule that guards the
+// ordinary path. Recognising it needs the schema: the built-in list types are
+// known by name, but a schema-defined one is not.
+type SchemaListTypes interface {
+	// SchemaTypeIsList reports whether name is a simple type of variety list,
+	// and the name of its item type when it is.
+	SchemaTypeIsList(name xdm.QName) (itemType xdm.QName, ok bool)
+}
+
+// schemaTypeIsList resolves a lexical type name and asks whether it is a list
+// type, through the same prefix bindings as everything else.
+func schemaTypeIsList(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
+	sl, ok := ns.(SchemaListTypes)
+	if !ok {
+		return 0, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return 0, false
+	}
+	item, ok := sl.SchemaTypeIsList(name)
+	if !ok {
+		return 0, false
+	}
+	// The item type's built-in code is what the tokens are cast to one by
+	// one. A list whose item type is itself schema-defined has no such code;
+	// it is still a list -- castability is decided by the schema in full
+	// through SchemaValueValid -- but the cast itself cannot be built here,
+	// which the zero code and true signal.
+	if item.URI == xdm.NSXS {
+		if code, ok := BuiltinAtomicTypeCode(item.Local); ok {
+			return code, true
+		}
+	}
+	return 0, true
+}
+
 // SchemaUnionMemberNames reports the annotation keys of a union type's member
 // types, transitively.
 //

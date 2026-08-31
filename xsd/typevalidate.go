@@ -309,3 +309,39 @@ func (s *Schema) ValidateExpandedQNameValue(typeName, value xdm.QName) (known bo
 	}
 	return true, nil
 }
+
+// IsListSimpleType reports whether a name is a simple type of variety list in
+// this schema.
+//
+// Casting to a list type is permitted by XPath 3.0 F&O 18.3 ("This section
+// defines how other casts to non-primitive types operate, including casting to
+// types derived by restriction, to union types, and to list types"), but a
+// list value is a SEQUENCE of item-type values rather than one atomic item, so
+// the caller has to know which it is dealing with before it can decide whether
+// a cast target is legal. The engine's built-in list types are recognised by
+// name; a schema-defined one can only be recognised by asking the schema.
+func (s *Schema) IsListSimpleType(typeName xdm.QName) (itemType xdm.QName, ok bool) {
+	t, found := s.Types[bareName(typeName)]
+	if !found {
+		return xdm.QName{}, false
+	}
+	st, isSimple := t.(*SimpleType)
+	if !isSimple || st.Variety != VarietyList || st.ItemType == nil {
+		return xdm.QName{}, false
+	}
+	// The nearest named ancestor of the item type, which is what a caller
+	// outside this package can map to a built-in code. An anonymous item type
+	// restricting a built-in has no name of its own, so its base is walked
+	// until one appears.
+	for cur := st.ItemType; cur != nil; {
+		if cur.Name.Local != "" {
+			return xdm.QName{URI: cur.Name.URI, Local: cur.Name.Local}, true
+		}
+		base, isSimple := cur.Base.(*SimpleType)
+		if !isSimple || base == cur {
+			break
+		}
+		cur = base
+	}
+	return xdm.QName{}, false
+}

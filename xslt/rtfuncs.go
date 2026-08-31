@@ -1145,10 +1145,27 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 	}
 
 	idx := map[string]xdm.Sequence{}
+	// A pattern that fails because it reads a global still being computed is
+	// a circularity, not a node-specific failure, and Matches has already
+	// recovered from it by the time it returns -- so the check is made here,
+	// where the set of globals under evaluation is in hand. See
+	// circularGlobalInPattern and error-0640e.
+	matches := func(n *xdm.Node, def *keyDef) (bool, error) {
+		ok, err, recovered := def.match.MatchesReporting(n, ctx)
+		if err != nil {
+			return false, err
+		}
+		if recovered != nil {
+			if cerr := circularGlobalInPattern(recovered, rt.globalActive); cerr != nil {
+				return false, cerr
+			}
+		}
+		return ok, nil
+	}
 	var walk func(*xdm.Node) error
 	walk = func(n *xdm.Node) error {
 		for _, def := range defs {
-			ok, err := def.match.Matches(n, ctx)
+			ok, err := matches(n, def)
 			if err != nil {
 				return err
 			}
@@ -1174,7 +1191,7 @@ func (rt *runtime) keyIndexFor(name string, defs []*keyDef, root *xdm.Node,
 		// Attributes can be key targets, so they are visited too.
 		for _, a := range n.Attrs {
 			for _, def := range defs {
-				ok, err := def.match.Matches(a, ctx)
+				ok, err := matches(a, def)
 				if err != nil {
 					return err
 				}

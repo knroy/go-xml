@@ -416,7 +416,30 @@ func convertStep(s *xpath.Step, allow30 bool) (patternStep, error) {
 // position derived from its position among its like-named siblings — which is
 // why "para[1]" as a pattern means "a para that is the first para child of its
 // parent" rather than "the first para in the document".
+// MatchesReporting is Matches, additionally reporting the error of the last
+// alternative that failed and was recovered from.
+//
+// Recovery is right for a pattern that cannot be evaluated against a
+// particular node -- see recoverPatternError -- but the caller sometimes has
+// context that turns the same failure into a stylesheet-level error. The key
+// index builder is the case: an XPST0008 naming a global that is itself being
+// computed is the circularity XTDE0640 describes, and only the builder knows
+// which globals those are.
+//
+// The recovered error is returned alongside a false match rather than instead
+// of it, so a caller that does not ask keeps the recovering behaviour.
+func (p *Pattern) MatchesReporting(node *xdm.Node, ctx *xpath.Context) (bool, error, error) {
+	var recovered error
+	ok, err := p.matches(node, ctx, &recovered)
+	return ok, err, recovered
+}
+
 func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
+	ok, err := p.matches(node, ctx, nil)
+	return ok, err
+}
+
+func (p *Pattern) matches(node *xdm.Node, ctx *xpath.Context, recovered *error) (bool, error) {
 	// Section 16.6.1 fixes what current() means inside a pattern: "its value
 	// is the node that is being matched against the pattern" — not whatever
 	// the enclosing instruction was processing. The distinction shows up in
@@ -434,6 +457,9 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 		ok, err := g.matches(node, ctx)
 		if err != nil {
 			if recoverPatternError(err) {
+				if recovered != nil && *recovered == nil {
+					*recovered = err
+				}
 				continue
 			}
 			return false, err
@@ -446,6 +472,9 @@ func (p *Pattern) Matches(node *xdm.Node, ctx *xpath.Context) (bool, error) {
 		ok, err := alt.matches(node, ctx)
 		if err != nil {
 			if recoverPatternError(err) {
+				if recovered != nil && *recovered == nil {
+					*recovered = err
+				}
 				continue
 			}
 			return false, err
@@ -484,6 +513,43 @@ func recoverPatternError(err error) bool {
 		}
 	}
 	return true
+}
+
+// circularGlobalInPattern reports the XTDE0640 due when a pattern failed
+// because it referred to a global variable whose own initialiser is what is
+// evaluating the pattern, and nil otherwise.
+//
+// A global is not in scope within its own binding, so the reference is
+// reported as XPST0008 -- an undeclared name. Reached indirectly that code is
+// wrong twice over: the name IS declared, and the reason it cannot be read is
+// that its value depends on itself. error-0640e is the case, and section 3.10
+// makes a circularity in a stylesheet XTDE0640.
+//
+// Left as XPST0008 it was also invisible: an undeclared name is exactly the
+// kind of node-specific failure pattern matching recovers from, so the key
+// index was built as if the pattern matched nothing and the transform ran to
+// completion with a total of 0.
+func circularGlobalInPattern(err error, active map[string]bool) error {
+	if len(active) == 0 {
+		return nil
+	}
+	const marker = "XPST0008: undeclared variable $"
+	msg := err.Error()
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return nil
+	}
+	name := msg[i+len(marker):]
+	if j := strings.IndexAny(name, " :\t\n"); j >= 0 {
+		name = name[:j]
+	}
+	if !active[name] {
+		return nil
+	}
+	return fmt.Errorf(
+		"XTDE0640: global variable $%s depends on itself: it is referred to "+
+			"by a pattern evaluated while its own value is being computed",
+		name)
 }
 
 // nonRecoverablePatternCodes are the errors a pattern may report that are
