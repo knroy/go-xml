@@ -440,6 +440,20 @@ type SequenceType struct {
 	// is decided entirely by the built-in the type derives from.
 	SchemaValueValid func(value string) error
 
+	// SchemaExpandQName resolves a lexical QName against the namespace
+	// bindings in scope where the type name was written, when the type's
+	// value space is the QName one.
+	//
+	// A cast to xs:QName or to a type derived from xs:NOTATION cannot be
+	// completed without it: the namespace comes from the static context, and
+	// by evaluation time that context is gone -- CastToDerived produces a
+	// QName with no URI, which is why the parser folds the literal case. A
+	// computed operand has no literal to fold, so the bindings are captured
+	// here instead, alongside SchemaValueValid and for the same reason.
+	//
+	// nil unless the type is QName-valued.
+	SchemaExpandQName func(lexical string) (xdm.QName, bool)
+
 	// SchemaUnionMembers are the built-in atomic types a *pure union type*
 	// from an imported schema admits, transitively.
 	//
