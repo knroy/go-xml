@@ -456,6 +456,27 @@ type SequenceType struct {
 	// carrying facets, or one with a list type anywhere in its transitive
 	// membership — matching nothing rather than matching too much.
 	SchemaUnionMembers []xdm.TypeCode
+
+	// SchemaListType marks a schema-defined simple type of variety list
+	// written in type position.
+	//
+	// It is the schema-defined counterpart of ListItemFacet, which covers
+	// only the three built-in list types the engine knows by name. Both say
+	// the same thing -- the value is a sequence of whitespace-separated
+	// tokens, not one atomic item -- and both exist so that a cast to such a
+	// type is not rejected by the atomic-target rule. The difference is how
+	// the tokens are checked: a built-in list applies a known item facet,
+	// while a schema-defined one is validated in full by the schema through
+	// SchemaValueValid, which already applies the item type AND the list's
+	// own facets.
+	SchemaListType bool
+
+	// SchemaListItemType is the built-in atomic type each whitespace-
+	// separated token of a SchemaListType value is cast to, or the zero code
+	// when the item type is itself schema-defined and has no built-in code.
+	// Castability does not depend on it -- the schema decides that through
+	// SchemaValueValid -- but the cast's result sequence does.
+	SchemaListItemType xdm.TypeCode
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string
 }

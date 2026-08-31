@@ -390,6 +390,45 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return xdm.One(out), nil
 	}
 
+	// A cast to a schema-defined list type is decided entirely by the schema:
+	// SchemaValueValid applies the item type to each whitespace-separated
+	// token and the list's own facets to the whole, which is exactly the
+	// validity question a cast asks. The cast itself is not implemented --
+	// only castability is -- because the resulting sequence has no place in
+	// the atomic-valued shape this expression returns.
+	if e.Type.SchemaListType {
+		var verr error
+		if e.Type.SchemaValueValid != nil {
+			verr = e.Type.SchemaValueValid(atoms[0].(*xdm.Atomic).String())
+		}
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(verr == nil)), nil
+		}
+		if verr != nil {
+			return nil, verr
+		}
+		// The value is valid, so the result is one item per whitespace-
+		// separated token, each cast to the item type -- the same shape
+		// castToListType produces for a built-in list type.
+		toks := collapseXMLSpaceFields(atoms[0].(*xdm.Atomic).String())
+		out := make(xdm.Sequence, 0, len(toks))
+		for _, tok := range toks {
+			if e.Type.SchemaListItemType == 0 {
+				// An item type with no built-in code: the tokens keep their
+				// lexical form, which is all that can be said about them
+				// without the schema's own value constructor.
+				out = append(out, xdm.NewString(tok))
+				continue
+			}
+			v, err := CastAtomic(xdm.NewString(tok), e.Type.SchemaListItemType)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		return out, nil
+	}
+
 	if !e.Type.HasAtomicType {
 		return nil, fmt.Errorf("XPST0080: cast target must be an atomic type, got %s", e.Type)
 	}

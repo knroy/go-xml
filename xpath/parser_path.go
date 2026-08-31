@@ -951,6 +951,30 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		// s:myUnionType1", which needs the inner constructor to exist at all.
 		members, pure := schemaUnionMembersOf(lex, p.ns)
 		if !pure {
+			// A list type has a constructor for the same reason: it is
+			// defined as a cast, and a cast to a list type is legal (F&O 3.0
+			// 18.3). Castable-ListType-10 is
+			// "s:intListType1('1 2 3') castable as s:intListType1", which
+			// needs the inner constructor to exist before the outer castable
+			// can be asked at all.
+			if item, isList := schemaTypeIsList(lex, p.ns); isList {
+				st := SequenceType{
+					SchemaType:         annotationKeyOf(lex, p.ns),
+					SchemaListType:     true,
+					SchemaListItemType: item,
+					Occurrence:         "?",
+				}
+				if lex, ns := lex, p.ns; true {
+					st.SchemaValueValid = func(value string) error {
+						known, err := schemaValueValid(lex, ns, value)
+						if !known {
+							return nil
+						}
+						return err
+					}
+				}
+				return &CastExpr{Operand: args[0], Type: st}, true
+			}
 			return nil, false
 		}
 		st := SequenceType{
@@ -1338,6 +1362,13 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 					// arrives here as "known but not atomic". Its members are
 					// what makes it matchable at all.
 					st.SchemaUnionMembers = members
+				} else if item, isList := schemaTypeIsList(t.Val, p.ns); isList {
+					// A list type has no single primitive either, for the
+					// other reason: its value is a sequence of tokens. Marking
+					// it keeps a cast to it off the atomic-target error, and
+					// SchemaValueValid above is what actually checks a value.
+					st.SchemaListType = true
+					st.SchemaListItemType = item
 				}
 				goto occurrence
 			}

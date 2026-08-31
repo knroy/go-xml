@@ -1087,6 +1087,15 @@ func checkCastTarget(st SequenceType) error {
 	if len(st.SchemaUnionMembers) > 0 {
 		return nil
 	}
+	// A schema-defined list type is a legal cast target for the same reason
+	// the built-in ones above are: F&O 3.0 18.3 defines casting "to types
+	// derived by restriction, to union types, and to list types". Its value
+	// is a sequence, so it has no atomic type code and would otherwise fall
+	// into the error below -- which made "castable as s:intListType1" a
+	// static error where the spec asks for false.
+	if st.SchemaListType {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)
