@@ -804,6 +804,9 @@ func processStrength(p ProcessContents) int {
 // wildcardSubset is Wildcard Subset (§3.10.6): is sub an intensional subset of
 // super?
 func wildcardSubset(sub, super *Wildcard) bool {
+	if !disallowedNamesSubset(sub, super) {
+		return false
+	}
 	// Clause 1: everything is a subset of ##any.
 	if super.Kind == NSAny {
 		return true
@@ -866,6 +869,62 @@ func wildcardSubset(sub, super *Wildcard) bool {
 func containsNamespace(set []string, ns string) bool {
 	for _, s := range set {
 		if s == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// disallowedNamesSubset is the {disallowed names} half of Wildcard Subset
+// (§3.10.6): every name the superset refuses must also be refused by the
+// subset.
+//
+// The namespace clauses above compare only {namespace constraint}, and until
+// this was added they decided the whole question — so a subset could quietly
+// re-admit a name the superset had excluded by notQName. That is the wrong
+// direction for a restriction, and it slipped through in the one case the
+// namespace clauses answer without looking: everything is a subset of ##any,
+// and a ##any base carrying notQName="##defined" is exactly wild057's base.
+//
+// A name in super's list need not appear in sub's list, though: it is enough
+// that sub cannot admit it at all. wild055 is the case — its base disallows
+// xml:space, its subset does not name it, and the subset's namespace
+// constraint is ##local, which excludes the xml namespace outright. So the
+// test is "disallowed by sub, or unreachable through sub's namespace", not
+// list containment. wild050 makes the same point twice over with a two-branch
+// restriction, and wild051 is wild050 plus one base-disallowed name that one
+// of those branches does admit, which is the only difference between the two
+// and the reason one is valid and the other is not.
+//
+// ##defined is not a set of names but a standing rule -- "whatever the schema
+// declares" -- and no finite notQName list implies it, since the schema may
+// always declare one more. So it transfers only to a subset that also writes
+// ##defined. wild057's subset replaces the base's ##defined with the two names
+// the schema happens to declare today, which does not restrict the base's
+// wildcard so much as freeze it, and is expected invalid; wild055 and wild056
+// keep ##defined and are expected valid. ##definedSibling is the same rule
+// scoped to one content model, and carries across the same way.
+func disallowedNamesSubset(sub, super *Wildcard) bool {
+	if super.DisallowDefined && !sub.DisallowDefined {
+		return false
+	}
+	if super.DisallowDefinedSibling && !sub.DisallowDefinedSibling {
+		return false
+	}
+	for _, name := range super.DisallowedNames {
+		if !sub.Allows(name.URI) {
+			continue
+		}
+		if !containsQName(sub.DisallowedNames, name) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsQName(set []xdm.QName, name xdm.QName) bool {
+	for _, n := range set {
+		if n == name {
 			return true
 		}
 	}
