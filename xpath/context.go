@@ -276,6 +276,30 @@ type CollectionResolver interface {
 	ResolveCollection(uri, base string) (xdm.Sequence, error)
 }
 
+// ContextCollectionResolver is a CollectionResolver that also sees the
+// evaluation context of the fn:collection call.
+//
+// It mirrors ContextDocumentResolver and exists for the same reason: XSLT 4.4
+// scopes xsl:strip-space to the package the call appears in LEXICALLY --
+// "Declarations within a library package only affect the handling of documents
+// loaded using a call on the document, doc, or collection functions ...
+// appearing lexically within the same package" -- and the context is what
+// carries the package. A resolver that does not implement this is called
+// through ResolveCollection as before.
+type ContextCollectionResolver interface {
+	CollectionResolver
+	ResolveCollectionIn(ctx *Context, uri, base string) (xdm.Sequence, error)
+}
+
+// resolveCollectionIn loads a collection through ContextCollectionResolver
+// where the resolver offers it, and through the plain interface otherwise.
+func resolveCollectionIn(ctx *Context, uri, base string) (xdm.Sequence, error) {
+	if cr, ok := ctx.Collections.(ContextCollectionResolver); ok {
+		return cr.ResolveCollectionIn(ctx, uri, base)
+	}
+	return ctx.Collections.ResolveCollection(uri, base)
+}
+
 // TextResolver reads a resource as text for fn:unparsed-text.
 //
 // It is deliberately separate from DocumentResolver rather than reusing it.

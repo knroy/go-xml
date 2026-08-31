@@ -271,6 +271,11 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	if len(s.strip) > 0 && opts.Documents != nil {
 		opts.Documents = &stripSpaceResolver{sheet: s, inner: opts.Documents}
 	}
+	// 4.4 names the collection function in the same sentence as doc and
+	// document, so the documents a collection yields are stripped too.
+	if len(s.strip) > 0 && opts.Collections != nil {
+		opts.Collections = &stripCollectionResolver{sheet: s, inner: opts.Collections}
+	}
 
 	// Every document the transformation reads is recorded, so that
 	// xsl:result-document can refuse to write over one. See readdocs.go. The
@@ -665,6 +670,81 @@ func (r *stripSpaceResolver) resolve(pkg int, uri, base string) (*xdm.Tree, erro
 	return out, nil
 }
 
+// stripCollectionResolver applies the stylesheet's xsl:strip-space and
+// xsl:preserve-space declarations to the documents fn:collection returns.
+//
+// Section 4.4 names the collection function alongside document and doc: "The
+// effect of xsl:strip-space and xsl:preserve-space is local to the package in
+// which they appear. Declarations within a library package only affect the
+// handling of documents loaded using a call on the document, doc, or
+// collection functions ... appearing lexically within the same package."
+// Collections were passed through unwrapped, so a stylesheet that stripped
+// whitespace saw it stripped in its input and in doc(), but not in
+// collection().
+//
+// It mirrors stripSpaceResolver in every respect, including the per-package
+// cache: collection-006 loads one file from two packages that declare
+// different stripping, and each must see its own tree.
+type stripCollectionResolver struct {
+	sheet *Stylesheet
+	inner xpath.CollectionResolver
+	done  map[strippedKey]*xdm.Tree
+}
+
+func (r *stripCollectionResolver) ResolveCollection(
+	uri, base string) (xdm.Sequence, error) {
+
+	return r.resolve(0, uri, base)
+}
+
+// ResolveCollectionIn implements xpath.ContextCollectionResolver.
+func (r *stripCollectionResolver) ResolveCollectionIn(
+	ctx *xpath.Context, uri, base string) (xdm.Sequence, error) {
+
+	return r.resolve(packageOf(ctx), uri, base)
+}
+
+func (r *stripCollectionResolver) resolve(
+	pkg int, uri, base string) (xdm.Sequence, error) {
+
+	seq, err := r.inner.ResolveCollection(uri, base)
+	if err != nil {
+		return seq, err
+	}
+	out := make(xdm.Sequence, 0, len(seq))
+	for _, it := range seq {
+		// A collection may hold items that are not document nodes, and only
+		// a document is a source document to be stripped.
+		n, ok := it.(*xdm.Node)
+		if !ok || n.Kind != xdm.KindDocument {
+			out = append(out, it)
+			continue
+		}
+		t := n.Tree()
+		if t == nil {
+			out = append(out, it)
+			continue
+		}
+		k := strippedKey{tree: t, pkg: pkg}
+		if c, hit := r.done[k]; hit {
+			out = append(out, c.Root)
+			continue
+		}
+		root := r.sheet.stripWhitespaceFor(pkg, n)
+		st := root.Tree()
+		if st == nil {
+			out = append(out, it)
+			continue
+		}
+		if r.done == nil {
+			r.done = map[strippedKey]*xdm.Tree{}
+		}
+		r.done[k] = st
+		out = append(out, st.Root)
+	}
+	return out, nil
+}
+
 // SourceDocumentResolver wraps a document resolver so that the trees it hands
 // back are whitespace-stripped by this stylesheet's xsl:strip-space and
 // xsl:preserve-space declarations, exactly as Transform strips the ones fn:doc
@@ -835,11 +915,19 @@ func (s *Stylesheet) stripsElement(pkg int, name xdm.QName) bool {
 // The flat lists remain the answer only for the top-level package, which also
 // strips the principal source document.
 func (s *Stylesheet) spaceDeclsFor(pkg int) (strip, preserve []xdm.QName) {
-	if pkg == 0 || s.pkgSpace == nil {
+	if s.pkgSpace == nil {
 		return s.strip, s.preserve
 	}
 	ps := s.pkgSpace[pkg]
 	if ps == nil {
+		// The top-level package is the one that may legitimately have no
+		// entry: a stylesheet with no xsl:strip-space at all records none,
+		// and the flat list is then the same thing. A LIBRARY package with no
+		// entry declared nothing, and 4.4 makes that mean nothing is
+		// stripped -- not that its user's declarations apply.
+		if pkg == 0 {
+			return s.strip, s.preserve
+		}
 		return nil, nil
 	}
 	return ps.strip, ps.preserve
