@@ -832,6 +832,31 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			// particlesFb002 is the same shape with an all
 			// extending a choice.
 			if p.schema.Version >= Version11 {
+				// Clause 2.2.1 admits the merge only when the
+				// two all groups "have the same {min occurs}".
+				// An all group's minOccurs is all-or-nothing
+				// for the group as a whole, so a base that must
+				// appear and an extension that need not are not
+				// two halves of one group: the result would
+				// have to say "child1 always, child2
+				// optionally", which is a single all group with
+				// per-member optionality, not the group-level
+				// optionality either side wrote. Rather than
+				// silently pick one reading, 1.1 requires the
+				// two to agree.
+				//
+				// all313 extends a required all group by an
+				// optional one and is expected invalid on
+				// exactly this ground; all314 is the same shape
+				// with minOccurs="0" on both and is expected
+				// valid.
+				if allGroupOf(base.Particle) != nil && allGroupOf(own) != nil &&
+					base.Particle.MinOccurs != own.MinOccurs {
+					p.errs = append(p.errs, errorAt(el, "cos-ct-extends.1.4.3.2.2.1",
+						"an xs:all group extending an xs:all group must have "+
+							"the same minOccurs as the base's"))
+					return
+				}
 				if merged := mergeAllExtension(base.Particle, own); merged != nil {
 					t.Particle = merged
 					return
