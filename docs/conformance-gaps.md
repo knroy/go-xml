@@ -11,23 +11,24 @@ commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 8,623 | 8,594 | 99.66% | **29** | 9 | 1 | **19** | 99.79% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,341 | 99.84% | **63** | 13 | 0 | **50** | 99.87% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,341 | 99.84% | **63** | 9 | 0 | **54** | 99.86% |
 | **xsd** | W3C xsdtests 1.1 | 41,571 | 41,492 | 99.81% | **79** | 30 | 0 | **49** | 99.88% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **180** | **53** | **1** | **126** | |
+| | **Total** | | | | **180** | **49** | **1** | **130** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**180 disagreements in total**, of which **53 are ours to fix**, **126 cannot
+**180 disagreements in total**, of which **49 are ours to fix**, **130 cannot
 be fixed without shipping something less correct**, and **1 is an open
 question**.
 
 The XSD split is taken from the suite's own `status` field rather than from
 judgement: `accepted` marks a settled expectation, while `queried` and
 `stable bugNNNN` mark expectations the W3C has itself challenged. That is why
-only 13 of 63 XSD 1.0 disagreements and 30 of 79 in 1.1 count as work.
+only 9 of 63 XSD 1.0 disagreements and 30 of 79 in 1.1 count as work. Four
+more that the field marks `accepted` are a suite omission proved below.
 
 This is down from 345 at commit `69c53cf`, in two rounds of agents working in
 isolated worktrees. The first cleared 103 cases: 10 of 10 in the
@@ -243,7 +244,35 @@ and substitution-group type derivation (5).
 | `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Schema`, `MS-SimpleType`, `MS-Element`, `MS-DataTypes`, others | ~31–33 | `queried`/`stable` + bug | Assorted challenged expectations across the Microsoft-contributed sets. |
 
-**Not implementable: 50 (XSD 1.0) and 49 (XSD 1.1).**
+**Not implementable: 54 (XSD 1.0) and 49 (XSD 1.1).**
+
+### The `notQName` cases are a suite omission, not a gap
+
+Four XSD 1.0 `SFALSEREJECT` cases — `wildcard/s3_10_1ii08`, `s3_10_1ii09`,
+`anyAttribute/s3_10_6ii01` and `s3_10_6ii02` — fail with "notQName requires
+XSD 1.1", and they are right to.
+
+`notQName` is **unprefixed** in all four schemas, so XSD 1.0's rule about
+ignoring attributes from other namespaces does not reach it: 1.0 declares
+`<xs:anyAttribute namespace="##other" processContents="lax"/>` on `xs:any`,
+which admits only *qualified* foreign attributes. `##definedSibling` has no
+XSD 1.0 meaning at all — 1.0's `xs:any` has no `notQName` in any form.
+Rejecting these schemas under 1.0 is correct.
+
+The cause is a missing attribute in the suite. Every one of these groups
+carries `<ts:documentationReference xlink:href="http://www.w3.org/TR/
+xmlschema11-1/#Wildcard_details"/>` and a reference into
+`XSD1_1TestCategories.xml`, whose root element is
+`t1_1:xmlSchema1_1TSExtensions` and which enumerates only 1.1 features — but
+no `version="1.1"`, so the runner scores them under 1.0 as well. In
+`ibmMeta/wildcard.testSet` alone, **8 of the 17 groups** referencing that file
+omit it, while `s3_10_1v01`, testing the same feature in the same file, has it.
+
+Teaching the harness to read a `XSD1_1TestCategories.xml#` reference as an
+implicit `version="1.1"` was implemented and measured: 1.0 disagreements fall
+63 → 56, but agreements fall **39,341 → 39,191**, because those same groups
+contribute many currently-agreeing 1.0 results. It is the right reading of the
+suite and still a net loss of 150, so it is not taken.
 
 ## What is genuinely ours
 
@@ -310,12 +339,12 @@ would overstate it. They are reported separately for that reason.
 # Summary
 
 The per-suite counts and ceilings are in the table at the top. What that table
-cannot show is *why* the 126 unfixable cases are unfixable:
+cannot show is *why* the 130 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
 | **W3C has challenged its own expected result** | 99 | XSD 1.0 (50) and 1.1 (49). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
-| **Suite defect** | 4 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling `accumulator-039` was patched to add in 2019. |
+| **Suite defect** | 8 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling `accumulator-039` was patched to add in 2019; and the four `notQName` cases are XSD 1.1 tests the suite forgot to mark `version="1.1"`. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
 | **Suite contradicts itself** | 4 | The three `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. `sequence-0132` (`XSLT20+`) needs content on `xsl:sequence` accepted at 2.0; `sequence-2401a` (`XSLT20`) needs it rejected. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
