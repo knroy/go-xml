@@ -857,9 +857,42 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 							"the same minOccurs as the base's"))
 					return
 				}
-				if merged := mergeAllExtension(base.Particle, own); merged != nil {
-					t.Particle = merged
-					return
+				// Clause 2.2 merges two all groups into one.
+				// It is the clause that lets an all group be
+				// extended at all, and it applies only when
+				// the base's content type really is an all
+				// group -- one with members.
+				//
+				// An empty <xs:all/> is not that. It matches
+				// only the empty sequence, so it contributes
+				// no members to merge with and the base's
+				// content type is empty in substance whatever
+				// its spelling. Clause 2.1 governs instead,
+				// and 2.1 builds a *sequence* of the base's
+				// particle and the extension's -- which puts
+				// an all group inside a sequence, and All
+				// Group Limited clause 1 forbids that. The
+				// fall-through below constructs exactly that
+				// sequence, so the rejection needs no rule of
+				// its own; it only needs the merge to decline.
+				//
+				// This is spec bug 6202, and all308 is the
+				// case: mixed="true" with <xs:all/> as the
+				// base, extended by a two-member all group,
+				// expected invalid. It is the same fault
+				// all309 and all311 are rejected for, reached
+				// by a base whose emptiness was spelled as an
+				// all group rather than as a sequence.
+				//
+				// A base that is mixed keeps ContentMixed
+				// rather than ContentEmpty, so the
+				// isEmptyContent shortcut below does not
+				// intercept it, and the sequence is built.
+				if !particleMatchesOnlyEmpty(base.Particle, 0) {
+					if merged := mergeAllExtension(base.Particle, own); merged != nil {
+						t.Particle = merged
+						return
+					}
 				}
 			}
 			// A base that matches only the empty sequence
