@@ -45,6 +45,20 @@ type runtime struct {
 	// first use rather than eagerly for every declared key.
 	keyIndex map[keyCacheKey]map[string]xdm.Sequence
 
+	// globalActive names the global variables whose initialiser is currently
+	// being evaluated, by declared local name.
+	//
+	// A global is not in scope within its own binding, so a reference to one
+	// from inside its own evaluation resolves to nothing and is reported as
+	// XPST0008. That is the right answer for a reference written in the
+	// variable's own select expression, but not for one reached indirectly:
+	// error-0640e's key match pattern reads $p while $p's initialiser is
+	// building that very key's index, which is a circularity -- XTDE0640 --
+	// rather than an undeclared name. Pattern matching recovers from an
+	// ordinary error, so without knowing which names are mid-evaluation the
+	// cycle was swallowed and the transform ran to completion.
+	globalActive map[string]bool
+
 	// keyBuilding marks the (key, document) pairs whose index is currently
 	// being built. keyIndex is only written once a build has *finished*, so
 	// a key whose match or use expression calls key() for a name already
@@ -1287,6 +1301,13 @@ func (rt *runtime) evalGlobals(s *Stylesheet, opts TransformOptions) error {
 		}
 		state[key] = active
 		defer func() { state[key] = done }()
+		// The DECLARED local name, which is what a reference inside a match
+		// pattern is written with and all recoverPatternError can compare.
+		if rt.globalActive == nil {
+			rt.globalActive = map[string]bool{}
+		}
+		rt.globalActive[g.Name.Local] = true
+		defer delete(rt.globalActive, g.Name.Local)
 
 		// A static declaration was bound before static analysis began. Its
 		// value cannot depend on anything the run supplies, and a static
