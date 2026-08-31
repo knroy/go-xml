@@ -71,6 +71,12 @@ type schemaDoc struct {
 	// decides whether a type with empty content is opened too. It defaults
 	// to false, so a type declaring no content model stays closed.
 	appliesToEmpty bool
+
+	// imports holds the namespaces this document's own <xs:import> elements
+	// name. §4.2.6.1 src-resolve scopes the licence an import grants to the
+	// document that wrote it, so this is per-document where
+	// parser.importedNamespaces is per-assembly.
+	imports map[string]bool
 }
 
 // ParseError reports a fault in a schema document.
@@ -846,6 +852,41 @@ func (p *parser) qnameFor(local string) xdm.QName {
 	return xdm.QName{URI: p.doc.targetNS, Local: local}
 }
 
+// checkReferenceImported enforces §4.2.6.1 src-resolve's requirement that a
+// QName reference into a namespace other than the referring document's own be
+// licensed by an <xs:import> in that same document.
+//
+// The licence an import grants is scoped to the document that wrote it: §4.2.6
+// says the import "allows reference to schema components from that namespace"
+// in the schema document containing it. parser.importedNamespaces is
+// per-assembly and so cannot answer this -- when two documents are loaded
+// together, one document's import (or, as in s4_2_6si01, the mere presence of
+// the other document in the assembly) made the reference resolve anyway.
+//
+// The XML namespace is exempt: xml:lang and friends are referenceable without
+// an import, and the schema for the XML namespace is supplied by the processor.
+func (p *parser) checkReferenceImported(el *xdm.Node, attr string, name xdm.QName) {
+	if !p.assembled || p.doc == nil {
+		return
+	}
+	ns := name.URI
+	switch ns {
+	case "", NSSchema, xdm.NSXML, NSInstance:
+		// The schema namespace, the XML namespace and the
+		// XMLSchema-instance namespace are supplied by the processor.
+		// §4.2.6.1 does not require an import for any of them, and
+		// complex003/009/010 write attribute ref="xsi:type" with no
+		// import at all and are valid.
+		return
+	}
+	if ns == p.doc.targetNS || p.doc.imports[ns] {
+		return
+	}
+	p.errs = append(p.errs, errorAt(el, "src-resolve.4.2",
+		"%s=%q refers to namespace %q, which this schema document does "+
+			"not import", attr, name.Local, ns))
+}
+
 // resolveQName expands a QName written in an attribute value, using the
 // namespace bindings in scope at the element that carries it.
 //
@@ -872,6 +913,13 @@ func (p *parser) resolveQName(el *xdm.Node, attr, value string) (xdm.QName, erro
 		}
 		return xdm.QName{}, errorAt(el, "src-resolve",
 			"%s=%q uses undeclared prefix %q", attr, value, prefix)
+	}
+	// Only the attributes that name a schema *component* are subject to the
+	// import rule. facet values, vc:* attributes and notQName tokens all go
+	// through this function too and name no component.
+	switch attr {
+	case "ref", "type", "base", "itemType", "memberTypes", "substitutionGroup", "refer":
+		p.checkReferenceImported(el, attr, xdm.QName{URI: uri, Local: local})
 	}
 	// The prefix is deliberately dropped. xdm.QName carries it so that
 	// serialisation can reproduce the source spelling, but it is a lexical

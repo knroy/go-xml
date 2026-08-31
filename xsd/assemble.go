@@ -798,6 +798,10 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 				a.p.importedNamespaces = map[string]bool{}
 			}
 			a.p.importedNamespaces[ns] = true
+			if doc.imports == nil {
+				doc.imports = map[string]bool{}
+			}
+			doc.imports[ns] = true
 			a.queueRef(el, doc, ns, el.AttrValue("schemaLocation"), false, false)
 		}
 	}
