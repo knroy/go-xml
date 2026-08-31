@@ -1194,6 +1194,52 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 				break
 			}
 		}
+		// A derived wildcard need not fit inside any *single* base
+		// wildcard. §3.4.6.4 asks only that every sequence R admits B
+		// admits too, and B admits a name if any of its buckets does —
+		// so what must cover the derived wildcard is the *union* of the
+		// base's wildcards, not one of them.
+		//
+		// wild049 is the case, and it is unreachable any other way: a
+		// base <all> of an element and two wildcards, one over ##local
+		// minus {a,b,c} and one over everything but ##local minus
+		// {x:c,x:d,x:e}, restricted by a single ##any wildcard minus
+		// {a,b,c,d,x:c,x:d,x:e,x:f}. The derived wildcard subsets
+		// neither base wildcard — it admits qualified names the first
+		// refuses and unqualified names the second refuses — yet every
+		// name it admits is admitted by one of them, so the base admits
+		// it.
+		//
+		// Occurrences spread across the covering buckets, so the
+		// derived range must fit their combined capacity. Charging the
+		// whole range to each would demand every bucket separately
+		// afford it; charging it to none would let a derived wildcard
+		// exceed what the base can supply. It is instead charged to the
+		// combined budget, and each bucket's own minimum is met by the
+		// clause 2.3 emptiability check below.
+		if !matched && v >= Version11 {
+			if cover := unionCovers(rp, bg.Particles); len(cover) > 1 {
+				var uMin, uMax int
+				for _, i := range cover {
+					uMin += bg.Particles[i].MinOccurs
+					if uMax == Unbounded || bg.Particles[i].MaxOccurs == Unbounded {
+						uMax = Unbounded
+						continue
+					}
+					uMax += bg.Particles[i].MaxOccurs
+				}
+				rMin, rMax := effectiveTotalRange(rp)
+				if rangeOK(rMin, rMax, uMin, uMax) == nil {
+					// The buckets are answered as a group, so
+					// none of them is left for clause 2.3 to
+					// call an omission.
+					for _, i := range cover {
+						used[i] = true
+					}
+					matched = true
+				}
+			}
+		}
 		if !matched {
 			return fmt.Errorf(
 				"sequence restricting an all group: %s has no unused corresponding particle",
@@ -1274,6 +1320,83 @@ func wildcardCovers(rp, bp *Particle) bool {
 		}
 	}
 	return processStrength(rw.ProcessContents) >= processStrength(bw.ProcessContents)
+}
+
+// unionCovers reports which of the base's wildcard particles are needed to
+// cover a derived wildcard's name set, or nil when they do not cover it.
+//
+// The name sets are infinite, so the containment is decided structurally
+// rather than by enumeration, and only for the shape that can be decided
+// exactly: the base's wildcards must between them admit every namespace, and
+// every name either of them refuses by notQName must be refused by the derived
+// wildcard too.
+//
+// Anything outside that shape returns nil, which sends the pair back to the
+// ordinary per-bucket test and, failing that, to the error. Declining is always
+// the safe direction here: it can only reject a schema, never admit one.
+func unionCovers(rp *Particle, bps []*Particle) []int {
+	rw, ok := rp.Term.(*Wildcard)
+	if !ok {
+		return nil
+	}
+	// Only the namespace-complementary pair is decided: one wildcard
+	// admitting exactly the absent namespace and one admitting exactly its
+	// complement. Together they admit every namespace there is, which is
+	// what makes the union's coverage certain without enumerating names.
+	// A general union of enumerated namespaces would have to be compared
+	// against the derived constraint namespace by namespace, and a
+	// derived ##any could never be covered by it anyway.
+	var local, nonLocal int = -1, -1
+	for i, bp := range bps {
+		bw, ok := bp.Term.(*Wildcard)
+		if !ok {
+			continue
+		}
+		if bw.DisallowDefined || bw.DisallowDefinedSibling {
+			return nil
+		}
+		switch {
+		case bw.Kind == NSEnumerated && len(bw.Namespace) == 1 && bw.Namespace[0] == "":
+			if local >= 0 {
+				return nil
+			}
+			local = i
+		// notNamespace="##local" records the absent namespace in
+		// ExcludesAbsent and leaves Namespace empty, so the complement
+		// of ##local is a negation excluding nothing *but* the absent
+		// namespace.
+		case bw.Kind == NSNot && len(bw.Namespace) == 0 && bw.ExcludesAbsent:
+			if nonLocal >= 0 {
+				return nil
+			}
+			nonLocal = i
+		}
+	}
+	if local < 0 || nonLocal < 0 {
+		return nil
+	}
+	cover := []int{local, nonLocal}
+	// processContents may only be tightened, whichever bucket ends up
+	// validating a given name.
+	for _, i := range cover {
+		bw := bps[i].Term.(*Wildcard)
+		if processStrength(rw.ProcessContents) < processStrength(bw.ProcessContents) {
+			return nil
+		}
+		// A name a base bucket refuses by notQName must be refused by
+		// the derived wildcard as well — the other bucket cannot take
+		// it, since the two partition the namespaces. This is the test
+		// that separates wild049 from a restriction that widens.
+		for _, n := range bw.DisallowedNames {
+			if !bps[i].Term.(*Wildcard).Allows(n.URI) {
+				continue
+			}
+			if rw.AllowsName(n, nil) {
+				return nil
+			}
+		}
+	}
+	return cover
 }
 
 // mapAndSum is Particle Derivation OK (Sequence:Choice) (§3.9.6).
