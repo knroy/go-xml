@@ -1477,6 +1477,33 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 			el.AttrValue("mode")))
 	}
 	if w := p.childElement(el, "any"); w != nil {
+		// The <xs:any> inside an <xs:openContent> is not the global
+		// xs:any element. The schema for schemas declares it as a local
+		//
+		//	<xs:element name="any" minOccurs="0" type="xs:wildcard"/>
+		//
+		// and xs:wildcard extends xs:annotated with xs:anyAttrGroup
+		// alone. It is the *global* xs:any that adds xs:occurs on top
+		// of xs:wildcard, and this local declaration does not reuse it.
+		// So minOccurs and maxOccurs are simply not among this
+		// element's permitted attributes.
+		//
+		// The design says why: an open content wildcard is not a
+		// particle in the content model, it is a rule about what may be
+		// interleaved with or appended to whatever the model already
+		// matches. "How many times" is not a question it answers --
+		// interleave admits the wildcard anywhere, any number of times,
+		// and suffix at the end -- so an occurrence range on it has
+		// nothing to constrain. open048 writes maxOccurs="unbounded"
+		// there and is expected invalid; it is the only place in the
+		// suite where either attribute appears on such a wildcard.
+		for _, attr := range []string{"minOccurs", "maxOccurs"} {
+			if w.AttrValue(attr) != "" {
+				p.errs = append(p.errs, errorAt(w, "src-open-content",
+					"the xs:any of an %s may not have %s",
+					el.Name.Local, attr))
+			}
+		}
 		oc.Wildcard = p.readWildcard(w)
 	} else {
 		// src-ct.5: an <openContent> whose mode is not "none" must
