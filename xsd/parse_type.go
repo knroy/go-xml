@@ -162,7 +162,22 @@ func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 			// and expects the schema to load, the error surfacing
 			// only where the list type is actually used. Making this
 			// a hard src-resolve error costs that test.
-		}, func(ref string) { t.unresolved = ref })
+		}, func(ref string) {
+			t.unresolved = ref
+			// Under 1.1 an itemType that names no definition is a
+			// hard error. §5.3's "missing components" licence, which
+			// lets a schema load with a dangling reference and report
+			// only where it is used, is what missing006 relies on --
+			// and every missing* test in the suite is version="1.0".
+			// simple006 carries no version and so is run against
+			// both, marked invalid; under 1.0 it and missing006 ask
+			// for opposite answers on the same construct, so only
+			// 1.1 can honour it.
+			if p.schema.Version >= Version11 {
+				p.errs = append(p.errs, errorAt(el, "src-resolve",
+					"list itemType %q names no type definition", ref))
+			}
+		})
 	case inline != nil:
 		t.ItemType = p.readSimpleType(inline)
 	default:
