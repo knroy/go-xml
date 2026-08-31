@@ -1056,14 +1056,79 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		return fmt.Errorf("sequence restricting an all group: %w", err)
 	}
 	used := make([]bool, len(bg.Particles))
+	// Under 1.1 several derived particles may draw on one base *wildcard*.
+	// spent accumulates what each such bucket has been charged, so the
+	// injectivity clause 1.0 needs can be replaced by a count.
+	spent := make([]occRange, len(bg.Particles))
 	for _, rp := range rg.Particles {
 		matched := false
 		for i, bp := range bg.Particles {
 			if used[i] {
 				continue
 			}
+			// A base wildcard's range is checked against the *sum* of
+			// everything charged to it, below, so the name test
+			// alone claims the bucket here. Asking particleRestricts
+			// would fold in Occurrence Range OK against this one
+			// derived particle and refuse a bucket the sum fits.
+			if v >= Version11 && wildcardCovers(rp, bp) {
+				used[i] = true
+				matched = true
+				rMin, rMax := effectiveTotalRange(rp)
+				spent[i] = occRange{min: rMin, max: rMax}
+				break
+			}
 			if particleRestricts(rp, bp, expanded, v) == nil {
 				used[i] = true
+				matched = true
+				rMin, rMax := effectiveTotalRange(rp)
+				spent[i] = occRange{min: rMin, max: rMax}
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		// Clause 2.1's injectivity is a 1.0 rule. 1.1 replaced the
+		// table with Content type restricts (Complex Content)
+		// (§3.4.6.4) — every sequence locally valid against R must be
+		// locally valid against B — and that asks nothing about how
+		// many derived particles a base particle answers. A base
+		// wildcard admitting n elements does not care whether the
+		// restriction spells them as one particle or as several whose
+		// name sets it covers; only the total count matters.
+		//
+		// wild050 is the case: a base <all> of an element and one
+		// wildcard {2,6}, restricted by a sequence of that element and
+		// *two* wildcards, {1,3} and {1,3}. Each derived wildcard's
+		// name set is a subset of the base's, and their totals sum to
+		// exactly 2..6. Read injectively the second wildcard has no
+		// unused partner and the schema is rejected.
+		//
+		// Only a base *wildcard* may be shared. Sharing an element
+		// declaration's bucket would be unsound: two derived particles
+		// naming the same element are already summed by the element
+		// path, and an all group's elements are distinct by Unique
+		// Particle Attribution, so there is nothing to share.
+		if v >= Version11 {
+			for i, bp := range bg.Particles {
+				if !used[i] {
+					continue
+				}
+				if _, ok := bp.Term.(*Wildcard); !ok {
+					continue
+				}
+				if particleRestricts(rp, bp, expanded, v) != nil &&
+					!wildcardCovers(rp, bp) {
+					continue
+				}
+				rMin, rMax := effectiveTotalRange(rp)
+				spent[i].min += rMin
+				if spent[i].max == Unbounded || rMax == Unbounded {
+					spent[i].max = Unbounded
+				} else {
+					spent[i].max += rMax
+				}
 				matched = true
 				break
 			}
@@ -1072,6 +1137,20 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			return fmt.Errorf(
 				"sequence restricting an all group: %s has no unused corresponding particle",
 				particleKind(rp))
+		}
+	}
+	// A shared bucket is only satisfied if the *total* drawn from it fits
+	// the base wildcard's own range, which is the counting clause 2.1's
+	// injectivity stood in for.
+	for i, bp := range bg.Particles {
+		if !used[i] {
+			continue
+		}
+		if _, ok := bp.Term.(*Wildcard); !ok {
+			continue
+		}
+		if err := rangeOK(spent[i].min, spent[i].max, bp.MinOccurs, bp.MaxOccurs); err != nil {
+			return fmt.Errorf("sequence restricting an all group: wildcard: %w", err)
 		}
 	}
 	// Clause 2.3: the particles of B left unmapped must be emptiable.
@@ -1083,6 +1162,57 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		}
 	}
 	return nil
+}
+
+// wildcardCovers reports whether a derived particle's term is a wildcard whose
+// name set and processContents the base particle's wildcard subsumes, ignoring
+// occurrence entirely.
+//
+// The occurrence question is asked separately, and must be: when several
+// derived particles share one base wildcard the range that matters is their
+// sum, not any one of them. particleRestricts folds Occurrence Range OK into
+// its answer, so it reports failure for a derived wildcard that fits the base's
+// name set but draws fewer occurrences than the base's minimum — which is
+// exactly the shape a shared bucket produces.
+func wildcardCovers(rp, bp *Particle) bool {
+	rw, ok := rp.Term.(*Wildcard)
+	if !ok {
+		return false
+	}
+	bw, ok := bp.Term.(*Wildcard)
+	if !ok {
+		return false
+	}
+	if !wildcardSubset(rw, bw) {
+		return false
+	}
+	// wildcardSubset compares namespace constraints only. {disallowed
+	// names} is an independent test (§3.10.1), and ignoring it here would
+	// call a derived wildcard a subset of a base that refuses names the
+	// derived one admits.
+	//
+	// wild051 is exactly that, and is the discriminating twin of wild050:
+	// the two schemas differ only in that wild051's base also excludes
+	// x:heres-the-rub, which its derived notNamespace="##local" wildcard
+	// still lets through. The suite marks wild050 valid and wild051
+	// invalid, so a rule that cannot tell them apart is not a rule.
+	//
+	// ##defined and ##definedSibling are not decidable from the two
+	// wildcards alone — they quantify over the schema and over the
+	// containing content model — so a base carrying either is declined
+	// rather than guessed at.
+	if bw.DisallowDefined || bw.DisallowDefinedSibling {
+		return false
+	}
+	for _, n := range bw.DisallowedNames {
+		// A name the base refuses is harmless if the derived wildcard
+		// cannot produce it either, whether because its namespace
+		// constraint excludes the name or because it names it too.
+		if rw.AllowsName(n, nil) {
+			return false
+		}
+	}
+	return processStrength(rw.ProcessContents) >= processStrength(bw.ProcessContents)
 }
 
 // mapAndSum is Particle Derivation OK (Sequence:Choice) (§3.9.6).
