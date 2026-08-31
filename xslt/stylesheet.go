@@ -643,6 +643,11 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkModeConflicts(); err != nil {
 		return nil, err
 	}
+	// XTSE3105 needs every xsl:mode and the whole imported schema in hand, so
+	// it runs here rather than while a template is being compiled.
+	if err := c.checkTypedStrictPatterns(); err != nil {
+		return nil, err
+	}
 	c.publishModeVisibility()
 	if err := checkStripPreserveConflict(
 		c.stripDecls, c.preserveDecls); err != nil {
