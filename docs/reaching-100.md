@@ -8,11 +8,11 @@ the work that exists from the work that does not.
 | | Failing | Fixable | Open | Cannot fix |
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
-| XSLT 2.0 | 9 | 1 | 0 | 8 |
-| XSLT 3.0 | 29 | 9 | 1 | 19 |
+| XSLT 2.0 | 9 | 0 | 0 | 9 |
+| XSLT 3.0 | 29 | 8 | 1 | 20 |
 | XSD 1.0 | 63 | 9 | 0 | 54 |
 | XSD 1.1 | 79 | 30 | 0 | 49 |
-| **Total** | **180** | **49** | **1** | **130** |
+| **Total** | **180** | **47** | **1** | **132** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -24,7 +24,7 @@ challenged, and 99 of the 142 XSD disagreements are of that kind — 44 of them
 
 ---
 
-## Part 1 — the 49 that are real work
+## Part 1 — the 47 that are real work
 
 This is the whole of what "reaching the ceiling" means. None of it is
 speculative; every case has a diagnosed shape.
@@ -57,7 +57,7 @@ against both versions to show it has not re-admitted a false accept.
 against both versions. The over-strict four and the reachability four are
 genuinely harder and may not be worth their cost.
 
-### XSLT 3.0 long tail — 9 cases
+### XSLT 3.0 long tail — 8 cases
 
 No concentration left. Package composition was a third of the failures and is
 now 5, all unreachable. What remains is one or two cases across thirty test
@@ -96,14 +96,14 @@ before 3.0.
 | Suite | Now | Ceiling |
 |---|---|---|
 | XPath 3.1 | 100.00% | **100.00%** |
-| XSLT 2.0 | 99.85% | **99.89%** |
-| XSLT 3.0 | 99.66% | **99.79%** |
+| XSLT 2.0 | 99.85% | **99.85%** |
+| XSLT 3.0 | 99.66% | **99.75%** |
 | XSD 1.0 | 99.84% | **99.87%** |
 | XSD 1.1 | 99.81% | **99.88%** |
 
 ---
 
-## Part 2 — the 130 that are not work
+## Part 2 — the 132 that are not work
 
 Grouped by what would actually have to change.
 
@@ -237,7 +237,7 @@ doing on its own merits.
 ## Part 3 — the honest bottom line
 
 **Reaching 100% is not a goal that survives contact with the suites.** Of 183
-disagreements, 130 would require agreeing with a disputed result, shipping a
+disagreements, 132 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default.
 
@@ -250,7 +250,7 @@ What is achievable:
 4. **Two singles** — `json-to-xml-048`, `validation-0201`.
 5. **XSD over-strictness** — 17 cases, riskier, each can regress a false accept.
 
-That is **~49 cases and a ceiling of about 99.8% across the board**.
+That is **~47 cases and a ceiling of about 99.8% across the board**.
 
 Three larger items are defensible as *features* rather than conformance work,
 and should be judged that way: **`xsl:assert`** (cheapest), **XInclude**, and

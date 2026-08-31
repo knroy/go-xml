@@ -9,18 +9,18 @@ commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 0 | **8** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,594 | 99.66% | **29** | 9 | 1 | **19** | 99.79% |
+| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,594 | 99.66% | **29** | 8 | 1 | **20** | 99.75% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,341 | 99.84% | **63** | 9 | 0 | **54** | 99.86% |
 | **xsd** | W3C xsdtests 1.1 | 41,571 | 41,492 | 99.81% | **79** | 30 | 0 | **49** | 99.88% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **180** | **49** | **1** | **130** | |
+| | **Total** | | | | **180** | **47** | **1** | **132** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**180 disagreements in total**, of which **49 are ours to fix**, **130 cannot
+**180 disagreements in total**, of which **47 are ours to fix**, **132 cannot
 be fixed without shipping something less correct**, and **1 is an open
 question**.
 
@@ -111,7 +111,7 @@ converts to LF on re-parse.
 
 ## XSLT 2.0 — 9 failures
 
-Eight cannot be fixed; one is ours.
+None of the nine can be fixed.
 
 | Case | What happens | Verdict | Why |
 |---|---|---|---|
@@ -123,7 +123,7 @@ Eight cannot be fixed; one is ours.
 | `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Same drift, inverted: the test asserts it must *not* match, but XML NameChar includes `#x0300-#x036F`. |
 | `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Not implementable** | `xsl:sequence` with content and no `@select`, scoped `XSLT20+`, so it has to pass at both versions; it passes at 3.0 and fails at 2.0. Reaching the type check at 2.0 means letting the content model accept the instruction, and the suite forbids exactly that: `sequence-2401a` is scoped `XSLT20` and wants `XTSE0010` for content on `xsl:sequence`, which is the check that has to fire first. Removing the `processorAtLeast30()` gate on the content model was measured — 2.0 goes 6149 → 6148, trading this case for that one, and `0132` still fails because the code it then reports is `XTSE3185`, which the 2.0 recommendation does not define. |
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
-| `validation-0201` | Serialisation differs at offset 46 | **Implementable** | XHTML output method: `<meta http-equiv>` placement in `<head>`. |
+| `validation-0201` | Serialisation differs at offset 46 | **Not implementable** | The expected file `schvalid001.out` is Saxon's output byte-for-byte, including its **3-space** indent where this serializer writes 2. Indent whitespace is implementation-defined, the case sets no `normalize-space`, and the assertion is a literal string comparison. Widening the indent to 3 was measured and changes nothing else in either target (2.0 stays 6149, 3.0 stays 8594), so it buys one case by hard-coding another processor's house style. The suite itself came to the same conclusion about the sibling case: `validation-0202` was rewritten in 2013 "to avoid serialization dependencies". |
 
 **XSLT 2.0 ceiling: 6,151 / 6,158 = 99.89%.**
 
@@ -339,7 +339,7 @@ would overstate it. They are reported separately for that reason.
 # Summary
 
 The per-suite counts and ceilings are in the table at the top. What that table
-cannot show is *why* the 130 unfixable cases are unfixable:
+cannot show is *why* the 132 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
@@ -352,6 +352,7 @@ cannot show is *why* the 130 unfixable cases are unfixable:
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
 | **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `base-uri-052` (XInclude), `catalog-006b` (`xsl:assert`). |
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
+| **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
 No suite reaches 100%, and the reason is consistent across all of them: a
 residue of cases encodes a suite defect, a W3C-challenged expectation, a
