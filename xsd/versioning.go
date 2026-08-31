@@ -22,6 +22,49 @@ import (
 // NSVersioning is the XSD 1.1 versioning namespace.
 const NSVersioning = "http://www.w3.org/2007/XMLSchema-versioning"
 
+// DocumentRequiresVersion reports the XSD version a schema document asks to be
+// read under, and whether it asks for one at all.
+//
+// A document whose <xs:schema> carries vc:minVersion="1.1" is telling a 1.0
+// processor to ignore it entirely -- includeElement drops the whole document,
+// which is exactly what the attribute means. That is the right answer for a
+// processor that only has 1.0, and the wrong one for a processor that has 1.1
+// and simply was not told to use it: the document then vanishes in silence,
+// contributing no declaration at all.
+//
+// A caller that supports both versions can use this to read the document under
+// the version it names. Only minVersion is consulted: maxVersion says the
+// document is for processors BELOW a version, which is not a request to
+// upgrade.
+func DocumentRequiresVersion(root *xdm.Node) (Version, bool) {
+	if root == nil {
+		return Version10, false
+	}
+	el := root
+	if el.Kind == xdm.KindDocument {
+		for _, c := range el.ChildElements() {
+			el = c
+			break
+		}
+	}
+	if el == nil || el.Kind != xdm.KindElement ||
+		el.Name.URI != NSSchema || el.Name.Local != "schema" {
+		return Version10, false
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != NSVersioning {
+			continue
+		}
+		if strings.ToLower(a.Name.Local) != "minversion" {
+			continue
+		}
+		if versionAtLeast(Version11, a.Value) && !versionAtLeast(Version10, a.Value) {
+			return Version11, true
+		}
+	}
+	return Version10, false
+}
+
 // includeElement reports whether an element survives conditional inclusion.
 //
 // All four kinds of condition must hold, and each names a list that must hold
