@@ -465,7 +465,7 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 			// the ref before nothing, but a schema is free to write
 			// it before the declaration it names.
 			if dv := decl.Constraint; dv != nil && dv.Fixed && use.Constraint != nil {
-				if !use.Constraint.Fixed || use.Constraint.Lexical != dv.Lexical {
+				if !fixedConstraintsAgree(dv, use.Constraint, decl.Type) {
 					return errorAt(el, "au-props-correct.2",
 						"attribute use %q gives %q where the "+
 							"declaration fixes %q", ref,
@@ -1087,7 +1087,20 @@ func (p *parser) deferrableMiss(ns string) bool {
 	// The schema's own namespaces are exempt -- a reference within them is
 	// resolved from the documents already assembled, and the absent
 	// namespace needs no import to be referenced.
-	if p.assembled && ns != "" && !p.importedNamespaces[ns] && !p.ownNamespace(ns) {
+	// The absent namespace needs no import to be referenced, so the
+	// import test does not apply to it — but the second half does. If this
+	// assembly contributes nothing to the absent namespace, no document it
+	// read declares the name and no import could introduce one, so the miss
+	// is as final as any other.
+	//
+	// missing001 keeps its deferral under exactly this rule: it has no
+	// targetNamespace, so its own `good` and `bad` are in the absent
+	// namespace and ownNamespace("") is true. addB009 does not — it targets
+	// urn:books and writes type="CatalogData" unprefixed with no default
+	// namespace in scope, so the reference names {}CatalogData, which
+	// nothing anywhere in the assembly defines. Deferring it accepted a
+	// schema whose only element declaration has no type.
+	if p.assembled && !p.importedNamespaces[ns] && !p.ownNamespace(ns) {
 		return false
 	}
 	return true
@@ -1429,7 +1442,9 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 		// something the base does not.
 		if bv := effectiveValueConstraint(b); bv != nil && bv.Fixed {
 			rv := effectiveValueConstraint(r)
-			if rv == nil || !rv.Fixed || rv.Lexical != bv.Lexical {
+			// Compared as values: the clause says "the same value",
+			// and a list or a token has many spellings per value.
+			if !fixedConstraintsAgree(bv, rv, r.Decl.Type) {
 				p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.3",
 					"restriction changes attribute %q, which the base "+
 						"fixes to %q", r.Decl.Name.Local, bv.Lexical))

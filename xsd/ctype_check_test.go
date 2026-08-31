@@ -73,16 +73,26 @@ func TestLocalTargetNamespaceRejected(t *testing.T) {
 	}
 }
 
-// The same documents must still load under 1.0, where targetNamespace on a
-// local declaration is merely an unknown attribute in no namespace.
-func TestLocalTargetNamespaceIgnoredIn10(t *testing.T) {
+// Under 1.0 the attribute is a fault rather than something to ignore.
+//
+// targetNamespace on a local declaration does not exist in XSD 1.0, and it is
+// not a foreign attribute either: it is unprefixed, so it is in no namespace,
+// and the wildcard that admits foreign attributes to the schema for schemas is
+// namespace="##other", which excludes the absent namespace.
+//
+// The suite settles it. This document is s3_2_3si05, the one member of the
+// ibmData S3_2_3 group that carries no version="1.1" gate -- its eight
+// siblings all do -- so it is the only one expected invalid under 1.0 as well,
+// and this attribute is the only thing wrong with it there.
+func TestLocalTargetNamespaceRejectedIn10(t *testing.T) {
 	doc := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 	 <xs:complexType name="ct"><xs:complexContent>
 	  <xs:restriction base="xs:anyType">
 	   <xs:attribute name="a1" type="xs:string" targetNamespace="b"/>
 	  </xs:restriction></xs:complexContent></xs:complexType></xs:schema>`
-	if err := loadVer(t, doc, Version10); err != nil {
-		t.Fatalf("1.0 must ignore targetNamespace on a local declaration: %v", err)
+	if err := loadVer(t, doc, Version10); err == nil {
+		t.Fatal("1.0 has no targetNamespace on a local declaration; " +
+			"the schema should have been rejected")
 	}
 }
 

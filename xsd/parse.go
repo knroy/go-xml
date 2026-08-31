@@ -518,6 +518,13 @@ func (p *parser) readDocument(root *xdm.Node, baseURI string) error {
 	// duplicate twice in two different wordings.
 	p.checkIDs(root)
 
+	// checkSourceModel runs from readTopLevel, which is called once per
+	// *child* of <xs:schema>, so the root's own attributes are the one set
+	// that walk never reaches. Checking them here is what catches
+	// xsd:targetNamespace on <xs:schema> (addB070a) — an attribute in the
+	// schema namespace, which the schema for schemas admits nowhere.
+	p.checkAttrs(root)
+
 	for _, el := range root.ChildElements() {
 		p.readTopLevel(el)
 	}

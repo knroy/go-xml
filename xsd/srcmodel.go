@@ -191,6 +191,51 @@ var srcAttrs = map[string][]string{
 	"assertion":          {"test", "xpathDefaultNamespace"},
 }
 
+// srcAnyURIAttrs names the attributes the schema for schemas types as
+// xs:anyURI, by the element that carries them.
+//
+// The schema for schemas is a schema, and the document being read is an
+// instance of it, so these values have to be in the lexical space of the type
+// declared for them like any other. Under XSD 1.0 that space is RFC 2396's,
+// which is narrower than "any string": a scheme must begin with a letter, and
+// a percent sign must introduce two hex digits.
+//
+// anyURI_a001 is the case (1336): source="9999...anyURI:" on an <xs:appinfo>
+// has a scheme of digits, which no 1.0 processor may accept. XSD 1.1 widened
+// anyURI to admit it, which is why the suite expects the same file to be
+// invalid under 1.0 and valid under 1.1 — isAnyURILexical already makes that
+// distinction, it was simply never asked about these attributes.
+var srcAnyURIAttrs = map[string][]string{
+	"appinfo":       {"source"},
+	"documentation": {"source"},
+	"include":       {"schemaLocation"},
+	"import":        {"namespace", "schemaLocation"},
+	"redefine":      {"schemaLocation"},
+	"override":      {"schemaLocation"},
+	"schema":        {"targetNamespace"},
+	"notation":      {"system"},
+	"element":       {"targetNamespace"},
+	"attribute":     {"targetNamespace"},
+}
+
+// checkAnyURIAttrs validates the xs:anyURI-typed attributes on one element of
+// a schema document.
+func (p *parser) checkAnyURIAttrs(el *xdm.Node) {
+	for _, name := range srcAnyURIAttrs[el.Name.Local] {
+		a := el.Attr("", name)
+		if a == nil {
+			continue
+		}
+		// anyURI collapses whitespace before the lexical test, like
+		// every type derived from xs:string with that facet.
+		if v := WhiteCollapse.Normalize(a.Value); v != "" &&
+			!isAnyURILexical(v, p.schema.Version) {
+			p.errs = append(p.errs, errorAt(el, "cvc-datatype-valid.1.2.1",
+				"%s=%q is not a valid xs:anyURI", name, a.Value))
+		}
+	}
+}
+
 // checkAttrs reports attributes el carries that the schema for schemas does
 // not allow on it.
 //
@@ -209,6 +254,24 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 	}
 	for _, a := range el.Attrs {
 		if a.Name.URI != "" && a.Name.URI != NSSchema {
+			continue
+		}
+		// Every attribute the schema for schemas declares is
+		// *unqualified*: the attribute declarations are local, and the
+		// document has no attributeFormDefault="qualified". So a
+		// name in the schema namespace matches no declaration, and the
+		// <anyAttribute namespace="##other"> that would otherwise take
+		// it explicitly excludes that namespace.
+		//
+		// Comparing only the local name let xsd:targetNamespace pass as
+		// the declared `targetNamespace` (addB070a): the prefix made it
+		// a different attribute, which nothing on <schema> permits, but
+		// the allowlist never saw the namespace.
+		if a.Name.URI == NSSchema {
+			p.errs = append(p.errs, errorAt(el, "",
+				"attribute %q is in the schema namespace, which "+
+					"xs:%s does not allow", a.Name.Local,
+				el.Name.Local))
 			continue
 		}
 		if a.Name.Local == "id" {
@@ -364,11 +427,16 @@ func (p *parser) checkSourceModel(el *xdm.Node) {
 	// An <appinfo> or <documentation> holds open content, so nothing under
 	// one is checked. The annotation itself still is: it admits only those
 	// two children (notatF003).
+	//
+	// Their own source= is checked, though: it is the one attribute the
+	// schema for schemas declares on them, and its type is xs:anyURI.
 	if el.Name.Local == "appinfo" || el.Name.Local == "documentation" {
+		p.checkAnyURIAttrs(el)
 		return
 	}
 
 	p.checkAttrs(el)
+	p.checkAnyURIAttrs(el)
 
 	if terms, ok := srcModelFor(el, el.Parent); ok {
 		p.matchSourceModel(el, terms)
