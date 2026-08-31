@@ -483,7 +483,35 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// The *source* lexical form is checked rather than the cast result,
 		// because a facet such as a pattern constrains the lexical space and
 		// the cast may have canonicalised it away.
-		if verr := e.Type.SchemaValueValid(src.String()); verr != nil {
+		//
+		// A QName-valued type is the exception, and has to be: xs:QName and
+		// xs:NOTATION have QNames rather than strings for their value space,
+		// so "n:wav" and "test:wav" are the SAME value whenever both prefixes
+		// bind the same namespace. Comparing lexical forms matched prefixes
+		// instead of namespaces, so notation-0002's "$q castable as n:nota"
+		// was false against an enumeration the schema wrote with test: --
+		// the very confusion ValidateExpandedQNameValue exists to avoid. The
+		// cast has already resolved the prefix, so its result is handed over
+		// in the Clark spelling no lexical QName can have. This mirrors what
+		// the constructor path does in qnamedyn.go.
+		lex := src.String()
+		if e.Type.AtomicType == xdm.TypeQName {
+			q := out.QName()
+			// A cast from a STRING produces a QName with no URI, because
+			// CastToDerived has no static context to resolve the prefix
+			// against. The bindings were captured where the type name was
+			// written, so the expansion happens here instead.
+			if e.Type.SchemaExpandQName != nil && src.Type != xdm.TypeQName {
+				if expanded, ok := e.Type.SchemaExpandQName(src.String()); ok {
+					q = &expanded
+					out = xdm.NewQNameValue(expanded)
+				}
+			}
+			if q != nil {
+				lex = "{" + q.URI + "}" + q.Local
+			}
+		}
+		if verr := e.Type.SchemaValueValid(lex); verr != nil {
 			err = verr
 			out = nil
 		}

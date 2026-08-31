@@ -1354,6 +1354,18 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 						}
 						return err
 					}
+					// A NOTATION-derived type has the QName value space, so a
+					// cast to it has to expand the operand's prefix here,
+					// where the bindings are. See SchemaExpandQName.
+					if prim == xdm.TypeQName {
+						st.SchemaExpandQName = func(lexical string) (xdm.QName, bool) {
+							q, err := resolveLexicalQName(lexical, ns)
+							if err != nil {
+								return xdm.QName{}, false
+							}
+							return q, true
+						}
+					}
 				}
 				if isAtomic {
 					st.AtomicType, st.HasAtomicType = prim, true
