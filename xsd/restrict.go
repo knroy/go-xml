@@ -410,8 +410,12 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, v)
 		case *ModelGroup:
 			switch {
-			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll,
-				rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
+			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll:
+				if err := allWildcardShadow(rt, bt, v); err != nil {
+					return err
+				}
+				return recurse(r, rt, b, bt, expanded, v)
+			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
 				return recurse(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorChoice && bt.Compositor == CompositorChoice:
 				return recurseLax(r, rt, b, bt, expanded, v)
@@ -1604,6 +1608,77 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// produced by every branch, which branchFitsBudget checks, since a
 	// name a branch never mentions has count zero.
 	return nil, true
+}
+
+// allWildcardShadow enforces the wildcard half of Particle Derivation OK
+// (All:All) for XSD 1.1: a wildcard in the restriction may not admit a name
+// the base declares as an element and the restriction has dropped.
+//
+// In a *sequence* the position of a particle protects it. wild068 is that
+// case: the base is <e?> <f> <any ##local lax>, the restriction is <f> <any>,
+// and an <e> can only appear after the <f>, where the base too matches it
+// against its wildcard. The restriction retypes nothing, and the schema is
+// valid.
+//
+// An all group has no positions. wild069 is wild068 with xs:all in place of
+// xs:sequence, and there <e/><f/> is a document the restriction accepts by
+// matching <e> against its wildcard -- lax, so <e> takes the global
+// declaration, xs:duration -- while the base matches the same <e> against its
+// own element particle, whose type is a union of xs:date and xs:time. The
+// restriction therefore admits content its base rejects, which is the one
+// thing a restriction may not do. The suite expects wild068 valid and wild069
+// invalid, and the two files differ in nothing else.
+//
+// notQName is how a restriction says it means to drop such an element, and
+// wild030 -- the worked example from the spec itself, carrying the comment
+// "to restrict away an element that overlaps a wildcard, use notQName" -- is
+// the valid shape: it drops <speaker> from the base's all group and writes
+// notQName="speaker" on the wildcard that would otherwise re-admit it. So the
+// test is not "the base declared this name" but "the base declared it and R's
+// wildcard still reaches it".
+//
+// A name R still declares itself is not shadowed: it is matched by R's own
+// element particle, and recurse compares that against the base's in the
+// ordinary way. Only a name R has dropped falls through to R's wildcard.
+//
+// This is 1.1-only because 1.0 has neither notQName nor wildcards in xs:all,
+// so no 1.0 schema can be in the shape the rule describes.
+func allWildcardShadow(rg, bg *ModelGroup, v Version) error {
+	if v < Version11 {
+		return nil
+	}
+	var wildcards []*Wildcard
+	kept := map[xdm.QName]bool{}
+	for _, rp := range flattenAllGroups(rg.Particles) {
+		switch t := rp.Term.(type) {
+		case *Wildcard:
+			wildcards = append(wildcards, t)
+		case *ElementDecl:
+			kept[t.Name] = true
+		}
+	}
+	if len(wildcards) == 0 {
+		return nil
+	}
+	for _, bp := range flattenAllGroups(bg.Particles) {
+		bd, ok := bp.Term.(*ElementDecl)
+		if !ok || kept[bd.Name] {
+			continue
+		}
+		for _, w := range wildcards {
+			// Disallows is asked without a ##defined resolver:
+			// that keyword is about what the schema declares
+			// globally, and the question here is only whether this
+			// wildcard's own notQName names this element.
+			if w.Allows(bd.Name.URI) && !w.Disallows(bd.Name, nil) {
+				return fmt.Errorf(
+					"the base declares element %s, which this restriction drops "+
+						"but leaves matchable by its wildcard; exclude it with "+
+						"notQName", bd.Name.Local)
+			}
+		}
+	}
+	return nil
 }
 
 // allDerivedDecls collects every element declaration reachable in a derived
