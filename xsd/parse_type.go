@@ -1358,6 +1358,7 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	p.checkMixedConsistency(t)
 	p.checkAttributeWildcardRestriction(t)
 	p.checkOpenContentRestriction(t)
+	p.applyWithheldOpenContent(t, base)
 	p.checkOpenContentExtension(t)
 	p.inheritAttributesNow(t)
 
@@ -1594,6 +1595,11 @@ func (p *parser) applyDefaultOpenContent(t *ComplexType) {
 		return
 	}
 	if !p.doc.appliesToEmpty && isEmptyContent(t) {
+		// Provisional for an extension: see withheldOpenContent. The
+		// particle examined here is the type's own, and an extension's
+		// content type is not its own particle but the base's spliced
+		// with it.
+		t.withheldOpenContent = p.doc.defaultOpenContent
 		return
 	}
 	if t.Content == ContentSimple {
@@ -1601,6 +1607,49 @@ func (p *parser) applyDefaultOpenContent(t *ComplexType) {
 		return
 	}
 	t.OpenContent = p.doc.defaultOpenContent
+}
+
+// applyWithheldOpenContent gives an extension the document's
+// <xs:defaultOpenContent> that applyDefaultOpenContent held back.
+//
+// applyDefaultOpenContent runs while the type is being read, when the only
+// content model in hand is the one the type wrote for itself. A default
+// declared appliesToEmpty="false" is withheld there from a type whose own
+// particle matches nothing but the empty sequence.
+//
+// For an extension that verdict is premature. §3.4.2.5 applies the default to
+// a complex type whose {content type} is not empty, and an extension's content
+// type is not its own particle: it is the base's content model spliced with
+// it. An extension that writes <xs:sequence/> over a base with children is not
+// an empty type in any sense appliesToEmpty is about -- it accepts everything
+// the base accepts. So once the base is resolved, the withheld default is due.
+//
+// Whether it arrives decides the schema, because §3.4.2.3.3 prefers the
+// default over the base's open content when the document has one. A default
+// narrower than the base's -- mode="suffix" over an interleaving base -- is
+// then an extension that admits less than its base among its own children,
+// which is what checkOpenContentExtension rejects.
+//
+// The suite pins this on a single character of difference. open046 is a suffix
+// default over an interleave base with the extension writing <xs:sequence/>,
+// and is expected invalid. open031 is the same schema with an explicit
+// <xs:openContent mode="none"/> on the extension, which sets
+// declaredOpenContent so the default never applies at all, and is expected
+// valid. open030 is open046 with one element in the extension's sequence,
+// making it non-empty so that the default was never withheld in the first
+// place, and it was already rejected.
+//
+// This runs before checkOpenContentExtension rather than alongside the
+// combineOpenContent fixup, which is later: the check compares the type's own
+// {open content} against the base's, and combineOpenContent replaces it with
+// the union of the two, after which the narrower mode is no longer visible.
+func (p *parser) applyWithheldOpenContent(t *ComplexType, base *ComplexType) {
+	if t.withheldOpenContent == nil || base == nil || base == t ||
+		t.DerivationMethod != DerivationExtension ||
+		t.Content == ContentSimple || isEmptyContent(base) {
+		return
+	}
+	t.OpenContent = t.withheldOpenContent
 }
 
 // mergeAllExtension combines an all-group base with an all-group extension into
