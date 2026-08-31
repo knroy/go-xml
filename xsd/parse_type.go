@@ -1565,7 +1565,15 @@ func (p *parser) applyDefaultAttributes(el *xdm.Node, t *ComplexType) {
 				own[u.Decl.Name] = true
 			}
 		}
-		for _, u := range g.AttributeUses {
+		// The closure, not the group's own list. §3.6.2 makes an
+		// attribute group's {attribute uses} the union of those it
+		// declares and those of the groups it references, and the
+		// fixup that flattens a group's refs into its own list has not
+		// necessarily run when this one does. Reading the raw list
+		// contributed nothing at all for a defaultAttributes group
+		// whose whole content is a reference to another group --
+		// s3_4_2_4si03 is that shape.
+		for _, u := range groupUses(g, nil) {
 			if u.Decl != nil && !own[u.Decl.Name] {
 				t.AttributeUses = append(t.AttributeUses, u)
 			}

@@ -189,6 +189,9 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 		if err := checkWildcardEDC(s, m, where); err != nil {
 			errs = append(errs, err)
 		}
+		if err := checkSubstitutionEDC(s, m, where); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	// Conditional type assignment is 1.1 only, and its two schema-level
 	// constraints are checked here rather than at parse time because an
@@ -454,6 +457,97 @@ func checkElementDeclarationsConsistent(m *contentModel, where string, v Version
 			return fmt.Errorf(
 				"cos-element-consistent: %s declares %s with two different "+
 					"type tables", where, describeTerm(&position{term: d}))
+		}
+	}
+	return nil
+}
+
+// checkSubstitutionEDC extends Element Declarations Consistent (§3.8.6) to the
+// substitution groups of the declarations a content model names.
+//
+// cos-element-consistent is stated over "the element declarations in the
+// {particles} ... together with the members of their substitution groups": a
+// particle referring to a head stands for every element that may substitute
+// for it, so each member is in the content model as surely as the head is. Two
+// declarations of one name still have to agree on their type.
+//
+// XSD 1.1 is where this bites, and deliberately so. Under 1.0 a head's *actual*
+// substitution group excludes its abstract members, so a schema whose only
+// conflict comes through an abstract element is legal; 1.1 settled bug 4337 the
+// other way, making the abstract element a member and the schema
+// non-conforming. wgData's sg-abstract-edc carries both answers explicitly --
+// valid for 1.0, invalid for 1.1 -- and saxon's subsgroup901, whose testSet is
+// 1.1 throughout, is the non-abstract shape of the same fault: a local "n" of
+// type xs:date beside a ref to a head one of whose members is a global "n" of
+// type xs:string.
+//
+// A member is skipped when the head's {disallowed substitutions} keep it out,
+// since a blocked member can never appear where the head does and so brings no
+// second meaning with it.
+func checkSubstitutionEDC(s *Schema, m *contentModel, where string) error {
+	if s.Version < Version11 {
+		return nil
+	}
+	// byName holds one declaration per name, whether it reached the model
+	// as a particle of its own or through a head's substitution group. The
+	// particles are seeded first so that a conflict is reported against the
+	// declaration the author actually wrote.
+	byName := map[xdm.QName]*ElementDecl{}
+	var heads []*ElementDecl
+	for _, p := range m.positions {
+		d, ok := p.term.(*ElementDecl)
+		if !ok {
+			continue
+		}
+		if _, seen := byName[d.Name]; !seen {
+			byName[d.Name] = d
+		}
+		if len(d.Substitutable()) > 0 {
+			heads = append(heads, d)
+		}
+	}
+	if len(heads) == 0 {
+		return nil
+	}
+	// Sorted so a schema with two faults reports the same one every run:
+	// substitutable order is stable, but which head is visited first is
+	// not enough on its own to fix the choice of message.
+	sort.Slice(heads, func(i, j int) bool {
+		if heads[i].Name.URI != heads[j].Name.URI {
+			return heads[i].Name.URI < heads[j].Name.URI
+		}
+		return heads[i].Name.Local < heads[j].Name.Local
+	})
+	for _, head := range heads {
+		for _, mem := range head.Substitutable() {
+			if mem == nil || mem == head {
+				continue
+			}
+			if substitutionBlockedBy(head, mem) {
+				continue
+			}
+			prev, seen := byName[mem.Name]
+			if !seen {
+				byName[mem.Name] = mem
+				continue
+			}
+			if prev == mem {
+				continue
+			}
+			if prev.Type != mem.Type {
+				return fmt.Errorf(
+					"cos-element-consistent: %s declares %q with two "+
+						"different types: once directly and once as a "+
+						"member of the substitution group of %q",
+					where, mem.Name.Local, head.Name.Local)
+			}
+			if !sameTypeTable(prev, mem) {
+				return fmt.Errorf(
+					"cos-element-consistent: %s declares %q with two "+
+						"different type tables: once directly and once "+
+						"as a member of the substitution group of %q",
+					where, mem.Name.Local, head.Name.Local)
+			}
 		}
 	}
 	return nil
