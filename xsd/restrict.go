@@ -410,8 +410,40 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 			return nsRecurseCheckCardinality(r, rt, b, bt, expanded, v)
 		case *ModelGroup:
 			switch {
-			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll,
-				rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
+			case rt.Compositor == CompositorAll && bt.Compositor == CompositorAll:
+				err := recurse(r, rt, b, bt, expanded, v)
+				// Recurse walks B's members in order and never
+				// reconsiders one it has passed. For a sequence
+				// that is the point; for an all group, whose
+				// members are unordered and whose language is
+				// order-blind, the order-preserving walk is an
+				// artefact of the 1.0 table rather than a
+				// property of the language 1.1 asks about
+				// (§3.4.6.4).
+				//
+				// RecurseUnordered decides the same question
+				// without the ordering, and with the
+				// shared-bucket counting a base wildcard needs.
+				// all237 is the case: a base <all> of a wildcard
+				// {5,unbounded} over two namespaces and another
+				// {0,2}, restricted by an <all> of three
+				// wildcards, the first two of which both draw on
+				// the first bucket and together supply exactly
+				// its 5..unbounded. Walked in order the second
+				// derived wildcard cannot revisit that bucket,
+				// and the base's own minimum of 5 then reads as
+				// a requirement the restriction dropped.
+				//
+				// Only tried when the ordered walk has already
+				// failed, so no derivation Recurse accepts can
+				// change its answer here.
+				if err != nil && v >= Version11 {
+					if err2 := recurseUnordered(r, rt, b, bt, expanded, v); err2 == nil {
+						return nil
+					}
+				}
+				return err
+			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorSequence:
 				return recurse(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorChoice && bt.Compositor == CompositorChoice:
 				return recurseLax(r, rt, b, bt, expanded, v)
