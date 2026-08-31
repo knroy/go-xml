@@ -119,6 +119,22 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 	var schemaRoot *xdm.Node
 	switch {
 	case inline != nil:
+		// A schema document may declare, with vc:minVersion, that it is
+		// written for XSD 1.1. Read under 1.0 the whole document is
+		// conditionally excluded and contributes nothing -- silently, since
+		// that exclusion is what the attribute asks a 1.0 processor to do.
+		// This processor has XSD 1.1, so it reads the document under the
+		// version the document names.
+		//
+		// XSLT 3.0 2.5.1 allows it in as many words: "XSLT 3.0 processors may
+		// optionally include types defined in XSD 1.1". The spec's own schema
+		// for XSLT stylesheets (appendix H, "The following XSD 1.1 schema
+		// describes the structure of an XSLT stylesheet module") is the case:
+		// catalog-005b and catalog-009 import it, and every one of its 81
+		// element declarations was being dropped.
+		if v, ok := xsd.DocumentRequiresVersion(inline); ok {
+			opts.Version = v
+		}
 		// The namespace check below does not apply to an inline schema:
 		// checkImportSchemaInline already requires the namespace attribute
 		// to be absent when the declaration carries an <xs:schema> child,
@@ -139,6 +155,9 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 			return fmt.Errorf("xsl:import-schema %q: %w", location, perr)
 		}
 		schemaRoot = tree.Root
+		if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
+			opts.Version = v
+		}
 		loaded, err = xsd.Load(tree.Root, resolved, opts)
 	}
 	if err == nil {
