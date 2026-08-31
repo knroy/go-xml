@@ -52,6 +52,7 @@ func (p *parser) checkParticleRestriction() error {
 			continue
 		}
 		errs = append(errs, attributeTypeRestrictions(ct)...)
+		errs = append(errs, typeTableRestrictions(ct)...)
 		name := ct.Name
 		base, ok := ct.Base.(*ComplexType)
 		if !ok {
@@ -617,6 +618,73 @@ func nameAndTypeOK(r *Particle, rd *ElementDecl, b *Particle, bd *ElementDecl) e
 			rd.Name.Local)
 	}
 	return nil
+}
+
+// typeTableRestrictions requires the {type table} of each element in a
+// restriction's content model to be equivalent to the one the base gives the
+// same name.
+//
+// This is the resolution of spec bug 12185. The suite records it on cta0043
+// itself, which was reclassified from valid to invalid "reflecting resolution
+// of spec bug 12185 requiring the type tables of the elements in base type and
+// derived type content models to be equivalent".
+//
+// The structural clauses compare only the *declared* {type definition}, and
+// under conditional type assignment that is no longer what an element
+// validates as. Two declarations may name the same type and still assign
+// unrelated types at validation time, because each carries its own table of
+// <xs:alternative>s and the table is consulted first.
+//
+// cta0043 is exactly that. chapType and its restriction appendixType both
+// declare <stamp>, and both map @type='dateTime' to some type -- but the base
+// maps it to xs:dateTimeStamp, which requires a timezone, and the restriction
+// to xs:dateTime, which does not. A timezone-less dateTime then satisfies the
+// restriction and fails the base, so appendixType does not restrict chapType
+// at all. Nothing about the declared types shows it: <stamp>'s declared type
+// is the same on both sides, and the two content models have identical element
+// names in identical positions, so the structural comparison sees two
+// identical sequences and the language-inclusion path -- which reasons over
+// names -- sees two identical languages.
+//
+// Equivalence is component identity: same alternatives, in order, same test
+// source, same type. That is what sameTypeTable already means for Element
+// Declarations Consistent, and the spec asks the same question of the same
+// components here. It is deliberately not a looser "narrows the base's" test:
+// that would require proving each branch a restriction of whichever branch the
+// base would have taken for the same instance, which the spec declined to
+// define, demanding equivalence instead.
+//
+// Pairing is by name, over every declaration reachable in either content
+// model. A name the base does not declare has no table to be equivalent to and
+// is left to the structural clauses, which are what decide whether it may be
+// there at all.
+func typeTableRestrictions(ct *ComplexType) []error {
+	base, ok := ct.Base.(*ComplexType)
+	if !ok || base == ct || isUrType(base) ||
+		ct.Particle == nil || base.Particle == nil {
+		return nil
+	}
+	baseDecls := map[xdm.QName]*ElementDecl{}
+	for _, bd := range allDerivedDecls(base.Particle) {
+		// Element Declarations Consistent has already established that
+		// one name in one content model means one declaration, so the
+		// first is the only one.
+		if _, dup := baseDecls[bd.Name]; !dup {
+			baseDecls[bd.Name] = bd
+		}
+	}
+	var errs []error
+	for _, rd := range allDerivedDecls(ct.Particle) {
+		bd, ok := baseDecls[rd.Name]
+		if !ok || rd == bd || sameTypeTable(rd, bd) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf(
+			"derivation-ok-restriction.5.4.2: %s gives element %s a type table "+
+				"that is not equivalent to the one base %s gives it",
+			typeLabel(ct.Name, ct), rd.Name.Local, typeLabel(base.Name, base)))
+	}
+	return errs
 }
 
 // blockSet narrows a {disallowed substitutions} value to the three derivations
