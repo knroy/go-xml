@@ -832,6 +832,31 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 			// particlesFb002 is the same shape with an all
 			// extending a choice.
 			if p.schema.Version >= Version11 {
+				// Clause 2.2.1 admits the merge only when the
+				// two all groups "have the same {min occurs}".
+				// An all group's minOccurs is all-or-nothing
+				// for the group as a whole, so a base that must
+				// appear and an extension that need not are not
+				// two halves of one group: the result would
+				// have to say "child1 always, child2
+				// optionally", which is a single all group with
+				// per-member optionality, not the group-level
+				// optionality either side wrote. Rather than
+				// silently pick one reading, 1.1 requires the
+				// two to agree.
+				//
+				// all313 extends a required all group by an
+				// optional one and is expected invalid on
+				// exactly this ground; all314 is the same shape
+				// with minOccurs="0" on both and is expected
+				// valid.
+				if allGroupOf(base.Particle) != nil && allGroupOf(own) != nil &&
+					base.Particle.MinOccurs != own.MinOccurs {
+					p.errs = append(p.errs, errorAt(el, "cos-ct-extends.1.4.3.2.2.1",
+						"an xs:all group extending an xs:all group must have "+
+							"the same minOccurs as the base's"))
+					return
+				}
 				if merged := mergeAllExtension(base.Particle, own); merged != nil {
 					t.Particle = merged
 					return
@@ -1114,6 +1139,7 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 		if part := p.readParticle(c); part != nil {
 			if g.Compositor == CompositorAll {
 				p.checkAllMemberOccurs(c, part)
+				p.checkAllGroupRefOccurs(c)
 			}
 			g.Particles = append(g.Particles, part)
 		}
@@ -1143,6 +1169,46 @@ func (p *parser) checkAllMemberOccurs(el *xdm.Node, part *Particle) {
 	if part.MaxOccurs == Unbounded || part.MaxOccurs > 1 {
 		p.errs = append(p.errs, errorAt(el, "cos-all-limited.2",
 			"a particle inside an xs:all group must have maxOccurs=1"))
+	}
+}
+
+// checkAllGroupRefOccurs enforces the occurrence bounds the XSD 1.1 schema for
+// schemas puts on a <xs:group ref> written inside an <xs:all>.
+//
+// The group xs:allModel — the content model of <xs:all> in 1.1 — spells the
+// <xs:group> branch out itself rather than reusing xs:groupRef, and pins both
+// occurrence attributes:
+//
+//	<xs:attribute name="minOccurs" fixed="1" type="xs:nonNegativeInteger"/>
+//	<xs:attribute name="maxOccurs" fixed="1" type="xs:nonNegativeInteger"/>
+//
+// "fixed" means the attribute may be omitted, but if written it must be "1".
+// A group reference inside an all group therefore occurs exactly once. That is
+// stricter than the rule for an element or wildcard member, which 1.1 lets
+// repeat and lets go missing, and it is stricter on *both* ends: all009 makes
+// the reference minOccurs="0" and all010 makes it maxOccurs="3", and both are
+// expected invalid.
+//
+// This is checked here, against the source element, rather than in
+// checkAllGroupLimited over the settled component graph, because the graph
+// cannot tell the two ways a nested all group arises apart. A group reference
+// produces one, and so does §3.4.2.3.3 clause 2.2 when an all group extends an
+// all group — and that merge legitimately carries minOccurs="0" through, which
+// all314 does and is expected valid. Only the parser can see which of the two
+// it is looking at, because only the parser still has the <xs:group> element.
+//
+// The occurrence attributes are read off the element rather than the particle
+// because readParticle has already resolved the group reference, and the
+// particle it returns may carry the referenced definition's own bounds.
+func (p *parser) checkAllGroupRefOccurs(el *xdm.Node) {
+	if p.schema.Version < Version11 || el.Name.Local != "group" {
+		return
+	}
+	for _, attr := range []string{"minOccurs", "maxOccurs"} {
+		if v := el.AttrValue(attr); v != "" && strings.TrimSpace(v) != "1" {
+			p.errs = append(p.errs, errorAt(el, "cos-all-limited.1",
+				"a group reference inside an xs:all group must have %s=1", attr))
+		}
 	}
 }
 
@@ -1386,6 +1452,24 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 	case "none":
 		// An explicit "none" closes a content model that a
 		// defaultOpenContent would otherwise have opened.
+		//
+		// src-ct.5 is an if-and-only-if, which is the resolution of
+		// spec bug 7069: an <openContent> carries an <xs:any> exactly
+		// when its mode is not "none". The wildcard branch below
+		// enforces the forward half -- interleave and suffix need one,
+		// because mode says where the wildcard applies and there is
+		// nothing to place without it. This is the converse half:
+		// mode="none" says the content model admits nothing beyond what
+		// it declares, so a wildcard here has no reading at all. It
+		// cannot mean "allow this", which is what a wildcard says, and
+		// it cannot mean "allow nothing", which is what the mode says.
+		// open036 restricts an open base with mode="none" and a
+		// wildcard child; s3_4_1si01 writes the same contradiction at
+		// the top level of a complex type. Both are expected invalid.
+		if w := p.childElement(el, "any"); w != nil {
+			p.errs = append(p.errs, errorAt(el, "src-ct.5",
+				"an openContent with mode \"none\" must not have an any child"))
+		}
 		return nil
 	default:
 		p.errs = append(p.errs, errorAt(el, "src-open-content",
@@ -1393,6 +1477,33 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 			el.AttrValue("mode")))
 	}
 	if w := p.childElement(el, "any"); w != nil {
+		// The <xs:any> inside an <xs:openContent> is not the global
+		// xs:any element. The schema for schemas declares it as a local
+		//
+		//	<xs:element name="any" minOccurs="0" type="xs:wildcard"/>
+		//
+		// and xs:wildcard extends xs:annotated with xs:anyAttrGroup
+		// alone. It is the *global* xs:any that adds xs:occurs on top
+		// of xs:wildcard, and this local declaration does not reuse it.
+		// So minOccurs and maxOccurs are simply not among this
+		// element's permitted attributes.
+		//
+		// The design says why: an open content wildcard is not a
+		// particle in the content model, it is a rule about what may be
+		// interleaved with or appended to whatever the model already
+		// matches. "How many times" is not a question it answers --
+		// interleave admits the wildcard anywhere, any number of times,
+		// and suffix at the end -- so an occurrence range on it has
+		// nothing to constrain. open048 writes maxOccurs="unbounded"
+		// there and is expected invalid; it is the only place in the
+		// suite where either attribute appears on such a wildcard.
+		for _, attr := range []string{"minOccurs", "maxOccurs"} {
+			if w.AttrValue(attr) != "" {
+				p.errs = append(p.errs, errorAt(w, "src-open-content",
+					"the xs:any of an %s may not have %s",
+					el.Name.Local, attr))
+			}
+		}
 		oc.Wildcard = p.readWildcard(w)
 	} else {
 		// src-ct.5: an <openContent> whose mode is not "none" must
