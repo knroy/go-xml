@@ -162,7 +162,22 @@ func (p *parser) readSimpleList(el *xdm.Node, t *SimpleType) {
 			// and expects the schema to load, the error surfacing
 			// only where the list type is actually used. Making this
 			// a hard src-resolve error costs that test.
-		}, func(ref string) { t.unresolved = ref })
+		}, func(ref string) {
+			t.unresolved = ref
+			// Under 1.1 an itemType that names no definition is a
+			// hard error. §5.3's "missing components" licence, which
+			// lets a schema load with a dangling reference and report
+			// only where it is used, is what missing006 relies on --
+			// and every missing* test in the suite is version="1.0".
+			// simple006 carries no version and so is run against
+			// both, marked invalid; under 1.0 it and missing006 ask
+			// for opposite answers on the same construct, so only
+			// 1.1 can honour it.
+			if p.schema.Version >= Version11 {
+				p.errs = append(p.errs, errorAt(el, "src-resolve",
+					"list itemType %q names no type definition", ref))
+			}
+		})
 	case inline != nil:
 		t.ItemType = p.readSimpleType(inline)
 	default:
@@ -607,6 +622,33 @@ func (p *parser) readSimpleContent(el *xdm.Node, t *ComplexType) {
 				t.SimpleContent = b
 			case *ComplexType:
 				t.SimpleContent = b.SimpleContent
+				// §3.4.6 derivation-ok-restriction clause 5.1
+				// requires a simpleContent restriction's content
+				// type to be a valid restriction of the base's.
+				// xs:anySimpleType is the simple ur-type, which
+				// §3.16.7.2 excludes from being the base of any
+				// restriction -- for the same reason
+				// xs:anyAtomicType is excluded (see
+				// checkSpecialBase): it exists so that every simple
+				// type has a common ancestor, not as a type a
+				// schema may derive from. A complex type whose
+				// content is xs:anySimpleType therefore offers
+				// nothing a restriction can narrow.
+				//
+				// 1.1 only: this is the resolution of spec bug
+				// 14559, which is why stZ007 and stZ047/stZ055 each
+				// carry <expected validity="valid" version="1.0"/>
+				// beside <expected validity="invalid"
+				// version="1.1"/>, superseding a prior expectation
+				// that had them valid throughout.
+				if t.DerivationMethod == DerivationRestriction &&
+					p.schema.Version >= Version11 &&
+					isAnySimpleType(b.SimpleContent) {
+					p.errs = append(p.errs, errorAt(body, "derivation-ok-restriction.5.1",
+						"the content type of %q is xs:anySimpleType, "+
+							"the simple ur-type, which may not be "+
+							"restricted", base))
+				}
 			}
 		})
 		if inline == nil {
