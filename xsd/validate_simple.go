@@ -527,6 +527,28 @@ func fixedValueEqual(want, got string, t *SimpleType) bool {
 			return c == d
 		}
 	}
+	// A list's value is a *sequence* of item values, so two lists are equal
+	// when they have the same length and agree item by item. Whitespace
+	// between items is a separator, not part of any value, which is why
+	// "1 2 3" and "1  2   3" denote the same xs:int list.
+	//
+	// Falling through to the atomic path instead asked whether the whole
+	// literal "1  2   3" canonicalises as a single int; it does not, so
+	// every list comparison but the byte-identical one came back false.
+	// addB183 is the case the spec names outright: fixed values are
+	// compared as values, not as strings.
+	if t != nil && t.Variety == VarietyList && t.ItemType != nil {
+		wf, gf := splitFields(want), splitFields(got)
+		if len(wf) != len(gf) {
+			return false
+		}
+		for i := range wf {
+			if !fixedValueEqual(wf[i], gf[i], t.ItemType) {
+				return false
+			}
+		}
+		return true
+	}
 	// A union takes the primitive of whichever member validated, and
 	// §3.14.4 selects that member per *value*: the first member whose
 	// lexical space the literal belongs to. Each side is therefore
@@ -553,6 +575,55 @@ func fixedValueEqual(want, got string, t *SimpleType) bool {
 		return fixedValueEqual(want, got, mw)
 	}
 	return false
+}
+
+// valueConstraintType returns the simple type a declaration's value constraint
+// is written in, or nil when there is none to compare against.
+//
+// A value constraint is only ever a simple value, so the type that governs it
+// is the declaration's own simple type, or a complex type's {simple content}.
+// Mixed and element-only content carry no simple type, and a comparison there
+// has nothing to canonicalise with, so it falls back to the lexical form.
+func valueConstraintType(t Type) *SimpleType {
+	switch t := t.(type) {
+	case *SimpleType:
+		return t
+	case *ComplexType:
+		if t.Content == ContentSimple {
+			return t.SimpleContent
+		}
+	}
+	return nil
+}
+
+// fixedConstraintsAgree reports whether a restriction preserves a fixed value
+// its base imposes.
+//
+// §3.4.6 derivation-ok-restriction 2.1.3 and 3.2.2 both say "with the same
+// *value*", not the same spelling. Two literals that denote one value —
+// "1 2 3" and "1  2   3" for a list of int, " akfhaf afkhaf  " and
+// "akfhaf afkhaf" for a token, "  -1" and "-1" for an int — satisfy the
+// clause, and comparing the strings rejected all three (addB183).
+func fixedConstraintsAgree(base, restriction *ValueConstraint, t Type) bool {
+	if base == nil || !base.Fixed {
+		return true
+	}
+	if restriction == nil || !restriction.Fixed {
+		return false
+	}
+	if restriction.Lexical == base.Lexical {
+		return true
+	}
+	st := valueConstraintType(t)
+	if st == nil {
+		return false
+	}
+	// The literals are compared after the type's own whitespace
+	// normalisation, which is what turns a fixed xs:token written with
+	// leading spaces into the value it denotes.
+	ws := EffectiveWhiteSpace(st)
+	return fixedValueEqual(ws.Normalize(base.Lexical),
+		ws.Normalize(restriction.Lexical), st)
 }
 
 // unionMemberFor returns the member type of a union that validates a value.

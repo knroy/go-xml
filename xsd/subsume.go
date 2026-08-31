@@ -510,11 +510,8 @@ func declCompatible(rd, bd *ElementDecl) error {
 	if rd.Nillable && !bd.Nillable {
 		return errSubsumeCounterexample
 	}
-	if bd.Constraint != nil && bd.Constraint.Fixed {
-		if rd.Constraint == nil || !rd.Constraint.Fixed ||
-			rd.Constraint.Lexical != bd.Constraint.Lexical {
-			return errSubsumeCounterexample
-		}
+	if !fixedConstraintsAgree(bd.Constraint, rd.Constraint, rd.Type) {
+		return errSubsumeCounterexample
 	}
 	if blockSet(bd.DisallowedSubstitutions)&^blockSet(rd.DisallowedSubstitutions) != 0 {
 		return errSubsumeCounterexample

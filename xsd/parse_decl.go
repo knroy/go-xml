@@ -465,7 +465,7 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 			// the ref before nothing, but a schema is free to write
 			// it before the declaration it names.
 			if dv := decl.Constraint; dv != nil && dv.Fixed && use.Constraint != nil {
-				if !use.Constraint.Fixed || use.Constraint.Lexical != dv.Lexical {
+				if !fixedConstraintsAgree(dv, use.Constraint, decl.Type) {
 					return errorAt(el, "au-props-correct.2",
 						"attribute use %q gives %q where the "+
 							"declaration fixes %q", ref,
@@ -1429,7 +1429,9 @@ func (p *parser) checkAttributeRestriction(t, base *ComplexType) {
 		// something the base does not.
 		if bv := effectiveValueConstraint(b); bv != nil && bv.Fixed {
 			rv := effectiveValueConstraint(r)
-			if rv == nil || !rv.Fixed || rv.Lexical != bv.Lexical {
+			// Compared as values: the clause says "the same value",
+			// and a list or a token has many spellings per value.
+			if !fixedConstraintsAgree(bv, rv, r.Decl.Type) {
 				p.errs = append(p.errs, errorAt(nil, "derivation-ok-restriction.2.1.3",
 					"restriction changes attribute %q, which the base "+
 						"fixes to %q", r.Decl.Name.Local, bv.Lexical))

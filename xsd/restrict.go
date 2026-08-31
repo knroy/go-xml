@@ -583,8 +583,7 @@ func nameAndTypeOK(r *Particle, rd *ElementDecl, b *Particle, bd *ElementDecl) e
 	// restriction that dropped it, or changed it, would admit values the
 	// base rejects.
 	if bd.Constraint != nil && bd.Constraint.Fixed {
-		if rd.Constraint == nil || !rd.Constraint.Fixed ||
-			rd.Constraint.Lexical != bd.Constraint.Lexical {
+		if !fixedConstraintsAgree(bd.Constraint, rd.Constraint, rd.Type) {
 			return fmt.Errorf(
 				"element %s must keep the base's fixed value %q",
 				rd.Name.Local, bd.Constraint.Lexical)

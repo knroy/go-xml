@@ -589,7 +589,7 @@ func (a *assembler) checkRedefinedAttrGroup(el *xdm.Node, q xdm.QName, repl, ori
 		// Clause 2.1.3: a value the original fixes may not change.
 		if bv := effectiveValueConstraint(bu); bv != nil && bv.Fixed {
 			rv := effectiveValueConstraint(r)
-			if rv == nil || !rv.Fixed || rv.Lexical != bv.Lexical {
+			if !fixedConstraintsAgree(bv, rv, r.Decl.Type) {
 				bad("it changes attribute %q, which the replaced group "+
 					"fixes to %q", r.Decl.Name.Local, bv.Lexical)
 			}
