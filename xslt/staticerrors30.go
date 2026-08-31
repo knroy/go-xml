@@ -454,3 +454,109 @@ func sequenceTypePermitsEmpty(as string) bool {
 	}
 	return as == "empty-sequence()"
 }
+
+// checkTypedStrictPatterns applies XTSE3105.
+//
+// "It is a static error if a template rule applicable to a mode that is
+// defined with typed="strict" uses a match pattern that contains a
+// RelativePathExprP whose first StepExprP is an AxisStepP whose ForwardStepP
+// uses an axis whose principal node kind is Element and whose NodeTest is an
+// EQName that does not correspond to the name of any global element
+// declaration in the in-scope schema components."
+//
+// Every clause of that sentence narrows it, and the narrowing is the whole
+// point -- section 6.6.2 says what the rule is FOR: under typed="strict" a
+// name test in the first step "is interpreted as schema-element(E)", so a name
+// with no global declaration could never be interpreted at all. A name in any
+// LATER step keeps its ordinary meaning, and match-224 is written to prove it:
+// "my:userNode/total-garbage" names an undeclared element in its second step
+// and is documented in the test as "not an error, but could generate a
+// warning".
+//
+// So the check applies only to:
+//
+//   - the FIRST step of the pattern, never a later one;
+//   - a step on an axis whose principal node kind is Element, which excludes
+//     the attribute and namespace axes;
+//   - a NodeTest that is an EQName, which excludes every wildcard -- "*",
+//     "prefix:*" and "*:local" all fall to the spec's "Otherwise" branch,
+//     along with the kind tests;
+//   - a mode the stylesheet declares typed="strict", and only that value:
+//     "lax" and "yes" have their own, weaker rules.
+func (c *compiler) checkTypedStrictPatterns() error {
+	if c.sheet.schema == nil || len(c.sheet.modeTyped) == 0 {
+		return nil
+	}
+	strict := false
+	for _, v := range c.sheet.modeTyped {
+		if v == "strict" {
+			strict = true
+			break
+		}
+	}
+	if !strict {
+		return nil
+	}
+	for _, t := range c.sheet.templates {
+		if t.Match == nil {
+			continue
+		}
+		for _, mode := range templateModes(t) {
+			if c.sheet.modeTyped[mode] != "strict" {
+				continue
+			}
+			if name, ok := t.Match.firstStepElementName(); ok {
+				if _, declared := c.sheet.schema.Elements[name]; !declared {
+					return fmt.Errorf(
+						"XTSE3105: mode %s is declared typed=\"strict\", so "+
+							"the name %s in the first step of match=%q is "+
+							"interpreted as schema-element(%s), but no global "+
+							"element declaration has that name",
+						modeLabel(mode), name.Lexical(), t.Match.src,
+						name.Lexical())
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// templateModes returns the modes a template rule applies to, with the
+// unnamed mode spelled as the empty string.
+func templateModes(t *Template) []string {
+	if len(t.Mode) == 0 {
+		return []string{""}
+	}
+	return t.Mode
+}
+
+// firstStepElementName returns the expanded name of the pattern's first step
+// when that step is an EQName test on an element axis, which is the only shape
+// XTSE3105 speaks about.
+//
+// It answers for a pattern with exactly one alternative. A union is split into
+// one rule per branch before this runs, so each branch arrives here on its
+// own.
+func (p *Pattern) firstStepElementName() (xdm.QName, bool) {
+	if len(p.alts) != 1 || len(p.general) != 0 {
+		return xdm.QName{}, false
+	}
+	a := p.alts[0]
+	// An id() or key() pattern has no first AxisStepP at all.
+	if a.call != nil || len(a.steps) == 0 {
+		return xdm.QName{}, false
+	}
+	s := a.steps[0]
+	// The attribute and namespace axes have a principal node kind other than
+	// Element, which the spec's own "Otherwise" branch excludes.
+	if s.attribute || s.namespace {
+		return xdm.QName{}, false
+	}
+	nt, ok := s.nodeTest.(*xpath.NameTest)
+	// A wildcard is not an EQName: "*", "prefix:*" and "*:local" are all
+	// excluded, as is every kind test, which is not a NameTest at all.
+	if !ok || nt.AnyURI || nt.AnyLocal {
+		return xdm.QName{}, false
+	}
+	return xdm.QName{URI: nt.Name.URI, Local: nt.Name.Local}, true
+}
