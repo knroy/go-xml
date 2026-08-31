@@ -152,6 +152,15 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 				"staticTyping", "moduleImport",
 				"namespace-axis", "infoset-dtd", "xpath-1.0-compatibility",
 				"fn-transform-XSLT", "fn-transform-XSLT30", "fn-format-integer-CLDR",
+				// fn:load-xquery-module compiles an XQuery library module,
+				// which needs an XQuery processor this engine does not have.
+				// The set declares the feature satisfied="true" and then
+				// overrides fourteen cases to satisfied="false" -- those
+				// fourteen are the ones written for a processor without it,
+				// and they pass. The rest describe what a processor that has
+				// one would do, and are out of scope for the same reason the
+				// XQuery specs above are.
+				"fn-load-xquery-module",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",
 				"advanced-uca-fallback", "olson-timezone", "remote_http":

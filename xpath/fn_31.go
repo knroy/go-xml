@@ -91,37 +91,28 @@ func registerDefaultLanguage(l *Library) {
 // "the implementation does not support the load-xquery-module function", and
 // raising it is the conforming answer rather than a gap.
 //
-// The argument checks still happen first, because they are errors in the call
-// itself rather than in what the call would have done. An empty module URI is
-// FOQM0001 whether or not a processor exists — the suite pins that with a pair
-// of cases accepting either code for the empty string, and a pair accepting
-// only FOQM0001.
+// Every code this can raise describes the missing processor, so it reports
+// that and nothing else. The suite's apparent contradictions all dissolve once
+// the feature dependency is read: the set declares
+// fn-load-xquery-module satisfied="true" and overrides fourteen cases to
+// satisfied="false", and only those fourteen describe a processor without one.
 //
-// Two cases cannot both pass: load-xquery-module-003 requires FOQM0002 for a
-// module that cannot be located, and -903 requires FOQM0006 for the same
-// expression. Locating a module is something only a processor could do, so
-// FOQM0006 is the honest answer and -003/-004 are left failing rather than
-// pretending to have looked.
+// So -001/-002 want FOQM0001 for an empty URI and -003/-004 want FOQM0002 for
+// a module that cannot be located, but all four are written for an
+// implementation that has a processor and are out of scope here. The cases
+// that do apply — -901, -902, -903 and function-lookup-764 — accept FOQM0006
+// throughout, and -901/-902 accept either that or FOQM0001. Reporting the
+// absent processor uniformly satisfies all of them, and it is the only claim
+// this function can make truthfully: it never looked for the module, so it
+// cannot say the module was not found.
 func registerLoadXQueryModule(l *Library) {
 	l.registerFnSince(XPath31, "load-xquery-module", []int{1, 2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		// An empty module URI is FOQM0001, which is a fact about the call
-		// rather than about a processor that is not there. Everything after
-		// it — locating the module, converting the arguments — describes a
-		// step only a processor could take, so the absence of one is reported
-		// ahead of those: function-lookup-761 calls this with an integer
-		// where a string is declared and still wants FOQM0006.
-		//
-		// The suite contradicts itself in two places and cannot be fully
-		// satisfied. load-xquery-module-003 wants FOQM0002, "the module could
-		// not be located", for the expression -903 wants FOQM0006 for; and
-		// function-lookup-764 wants FOQM0006 for the empty URI that -001
-		// wants FOQM0001 for. This order costs those two and -004, and is the
-		// one that leaves the most cases passing while every code it reports
-		// is true of this implementation.
-		if uri, err := argStringRequired(args, 0); err == nil && uri == "" {
-			return nil, xdm.Errorf("FOQM0001",
-				"fn:load-xquery-module: the module URI may not be a zero-length string")
-		}
+		// Not even the empty-URI check runs first. Rejecting the argument
+		// would claim the call got far enough to inspect it, and
+		// function-lookup-761 passes an integer where a string is declared
+		// and still wants FOQM0006 — the absent processor outranks the
+		// argument. -901 and -902 accept FOQM0001 here as well, so nothing
+		// is lost by reporting the one true thing.
 		return nil, xdm.Errorf("FOQM0006",
 			"fn:load-xquery-module: this implementation has no XQuery processor")
 	})
