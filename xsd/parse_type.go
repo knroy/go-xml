@@ -1114,6 +1114,7 @@ func (p *parser) readModelGroup(el *xdm.Node) *ModelGroup {
 		if part := p.readParticle(c); part != nil {
 			if g.Compositor == CompositorAll {
 				p.checkAllMemberOccurs(c, part)
+				p.checkAllGroupRefOccurs(c)
 			}
 			g.Particles = append(g.Particles, part)
 		}
@@ -1143,6 +1144,46 @@ func (p *parser) checkAllMemberOccurs(el *xdm.Node, part *Particle) {
 	if part.MaxOccurs == Unbounded || part.MaxOccurs > 1 {
 		p.errs = append(p.errs, errorAt(el, "cos-all-limited.2",
 			"a particle inside an xs:all group must have maxOccurs=1"))
+	}
+}
+
+// checkAllGroupRefOccurs enforces the occurrence bounds the XSD 1.1 schema for
+// schemas puts on a <xs:group ref> written inside an <xs:all>.
+//
+// The group xs:allModel — the content model of <xs:all> in 1.1 — spells the
+// <xs:group> branch out itself rather than reusing xs:groupRef, and pins both
+// occurrence attributes:
+//
+//	<xs:attribute name="minOccurs" fixed="1" type="xs:nonNegativeInteger"/>
+//	<xs:attribute name="maxOccurs" fixed="1" type="xs:nonNegativeInteger"/>
+//
+// "fixed" means the attribute may be omitted, but if written it must be "1".
+// A group reference inside an all group therefore occurs exactly once. That is
+// stricter than the rule for an element or wildcard member, which 1.1 lets
+// repeat and lets go missing, and it is stricter on *both* ends: all009 makes
+// the reference minOccurs="0" and all010 makes it maxOccurs="3", and both are
+// expected invalid.
+//
+// This is checked here, against the source element, rather than in
+// checkAllGroupLimited over the settled component graph, because the graph
+// cannot tell the two ways a nested all group arises apart. A group reference
+// produces one, and so does §3.4.2.3.3 clause 2.2 when an all group extends an
+// all group — and that merge legitimately carries minOccurs="0" through, which
+// all314 does and is expected valid. Only the parser can see which of the two
+// it is looking at, because only the parser still has the <xs:group> element.
+//
+// The occurrence attributes are read off the element rather than the particle
+// because readParticle has already resolved the group reference, and the
+// particle it returns may carry the referenced definition's own bounds.
+func (p *parser) checkAllGroupRefOccurs(el *xdm.Node) {
+	if p.schema.Version < Version11 || el.Name.Local != "group" {
+		return
+	}
+	for _, attr := range []string{"minOccurs", "maxOccurs"} {
+		if v := el.AttrValue(attr); v != "" && strings.TrimSpace(v) != "1" {
+			p.errs = append(p.errs, errorAt(el, "cos-all-limited.1",
+				"a group reference inside an xs:all group must have %s=1", attr))
+		}
 	}
 }
 
