@@ -1452,6 +1452,24 @@ func (p *parser) readOpenContent(el *xdm.Node) *OpenContent {
 	case "none":
 		// An explicit "none" closes a content model that a
 		// defaultOpenContent would otherwise have opened.
+		//
+		// src-ct.5 is an if-and-only-if, which is the resolution of
+		// spec bug 7069: an <openContent> carries an <xs:any> exactly
+		// when its mode is not "none". The wildcard branch below
+		// enforces the forward half -- interleave and suffix need one,
+		// because mode says where the wildcard applies and there is
+		// nothing to place without it. This is the converse half:
+		// mode="none" says the content model admits nothing beyond what
+		// it declares, so a wildcard here has no reading at all. It
+		// cannot mean "allow this", which is what a wildcard says, and
+		// it cannot mean "allow nothing", which is what the mode says.
+		// open036 restricts an open base with mode="none" and a
+		// wildcard child; s3_4_1si01 writes the same contradiction at
+		// the top level of a complex type. Both are expected invalid.
+		if w := p.childElement(el, "any"); w != nil {
+			p.errs = append(p.errs, errorAt(el, "src-ct.5",
+				"an openContent with mode \"none\" must not have an any child"))
+		}
 		return nil
 	default:
 		p.errs = append(p.errs, errorAt(el, "src-open-content",
