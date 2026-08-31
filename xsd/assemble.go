@@ -806,6 +806,10 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 				a.p.importedNamespaces = map[string]bool{}
 			}
 			a.p.importedNamespaces[ns] = true
+			if doc.imports == nil {
+				doc.imports = map[string]bool{}
+			}
+			doc.imports[ns] = true
 			a.queueRef(el, doc, ns, el.AttrValue("schemaLocation"), false, false)
 		}
 	}
@@ -1152,12 +1156,139 @@ func (a *assembler) runRedefines() {
 	}
 }
 
+// checkOverrideConflicts reports one schema document overridden twice with
+// different replacements for the same global.
+//
+// §4.2.5 defines <xs:override> as a *transformation* of the document it names:
+// the result is a new schema document in which each like-named global has been
+// replaced by the override's child. Two <xs:override> elements naming the same
+// document therefore yield two transformed documents, and both are schema
+// documents of the assembled schema. When they replace the same global with
+// different definitions, the schema ends up with two definitions of that
+// component, which sch-props-correct.2 (§3.17.6) forbids: no two schema
+// components of the same kind may share an expanded name.
+//
+// over022 pins this — one document overridden twice, once giving element "doc"
+// type xs:date and once xs:time. Overriding the same global with the *same*
+// definition is not a conflict, so the comparison is on what the children say,
+// not merely on the names they carry: over019 legitimately overrides one
+// document from two places in a schema whose composition graph is a diamond.
+func (a *assembler) checkOverrideConflicts() {
+	// Keyed on the overridden document and the component being replaced.
+	// The document is identified by the root node the assembler recorded
+	// for the <xs:override>, so two overrides that resolved to the same
+	// file compare equal however their schemaLocation was spelled.
+	type key struct {
+		doc  docKey
+		kind string
+		name string
+	}
+	first := map[key]*xdm.Node{}
+
+	// The resolved location of each override's target, as recorded when the
+	// reference was followed. Two overrides naming one document by different
+	// spellings share a docKey; each has a schemaDoc tree of its own, so the
+	// parsed roots cannot be compared instead.
+	target := map[*xdm.Node]docKey{}
+	for _, e := range a.compEdges {
+		if e.el.IsElement(NSSchema, "override") {
+			target[e.el] = e.to
+		}
+	}
+
+	for _, o := range a.pendingOverrides {
+		root, ok := target[o.el]
+		if !ok {
+			// The location never resolved, so nothing is known about
+			// what it declares and no conflict can be asserted.
+			continue
+		}
+		for _, c := range o.el.ChildElements() {
+			if c.Name.URI != NSSchema {
+				continue
+			}
+			name := c.AttrValue("name")
+			if name == "" {
+				continue
+			}
+			kind := c.Name.Local
+			switch kind {
+			case "simpleType", "complexType":
+				// Types share one symbol space, so a <simpleType>
+				// and a <complexType> of the same name collide.
+				kind = "type"
+			case "group", "attributeGroup", "element", "attribute", "notation":
+			default:
+				continue
+			}
+			// A child that overrides nothing contributes nothing at
+			// all (see overridesSomething), so it cannot collide.
+			if !a.overridesSomething(o.el, c) {
+				continue
+			}
+			k := key{doc: root, kind: kind, name: name}
+			prev, seen := first[k]
+			if !seen {
+				first[k] = c
+				continue
+			}
+			if sameOverrideChild(prev, c) {
+				continue
+			}
+			a.p.errs = append(a.p.errs, errorAt(c, "sch-props-correct.2",
+				"the document overridden here is overridden again with a "+
+					"different definition of %s %q; the two transformed "+
+					"documents supply conflicting components", kind, name))
+		}
+	}
+}
+
+// sameOverrideChild reports whether two <xs:override> children are the same
+// replacement, so that overriding one document twice in identical terms is not
+// counted as a conflict.
+//
+// The comparison is structural over the elements and their attributes rather
+// than over the components they would build, because the components are what
+// this check exists to keep from being built twice.
+func sameOverrideChild(a, b *xdm.Node) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Name != b.Name {
+		return false
+	}
+	aa, ba := a.Attrs, b.Attrs
+	if len(aa) != len(ba) {
+		return false
+	}
+	for _, x := range aa {
+		v := b.Attr(x.Name.URI, x.Name.Local)
+		if v == nil || v.Value != x.Value {
+			return false
+		}
+	}
+	ac, bc := a.ChildElements(), b.ChildElements()
+	if len(ac) != len(bc) {
+		return false
+	}
+	for i := range ac {
+		if !sameOverrideChild(ac[i], bc[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // runOverrides applies the deferred XSD 1.1 overrides.
 //
 // An override replaces a component outright: unlike a redefine, the new
 // definition does not derive from the old one, so there is no self-reference to
 // bind and the originals are simply displaced and dropped.
 func (a *assembler) runOverrides() {
+	a.checkOverrideConflicts()
 	for i := len(a.pendingOverrides) - 1; i >= 0; i-- {
 		o := a.pendingOverrides[i]
 		// Only children that actually override something are read below,
