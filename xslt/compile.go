@@ -1626,6 +1626,20 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 
 func (c *compiler) compileSpaceControl(el *xdm.Node, precedence int) error {
 	elems := el.AttrValue("elements")
+	// The package entry is created for the DECLARATION, not for the names it
+	// happens to carry. An xsl:strip-space with elements="" declares that this
+	// package strips nothing, which is a different statement from declaring
+	// nothing at all -- and only the entry's existence records it: without one,
+	// spaceDeclsFor falls back to the flat cross-package list and the package
+	// inherits stripping some other package asked for. collection-006 is the
+	// case: package B writes elements="" over a collection package A strips
+	// with elements="*", and saw A's declaration applied to its own documents.
+	if c.sheet.pkgSpace == nil {
+		c.sheet.pkgSpace = map[int]*packageSpace{}
+	}
+	if c.sheet.pkgSpace[compilePackage] == nil {
+		c.sheet.pkgSpace[compilePackage] = &packageSpace{}
+	}
 	for _, n := range strings.Fields(elems) {
 		var qn xdm.QName
 		switch {

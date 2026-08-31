@@ -1906,7 +1906,7 @@ func fnCollection(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			base = n.BaseURI
 		}
 	}
-	seq, err := ctx.Collections.ResolveCollection(uri, base)
+	seq, err := resolveCollectionIn(ctx, uri, base)
 	if err != nil {
 		return nil, fmt.Errorf("FODC0002: cannot retrieve collection %q: %w", uri, err)
 	}
