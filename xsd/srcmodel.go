@@ -211,6 +211,24 @@ func (p *parser) checkAttrs(el *xdm.Node) {
 		if a.Name.URI != "" && a.Name.URI != NSSchema {
 			continue
 		}
+		// Every attribute the schema for schemas declares is
+		// *unqualified*: the attribute declarations are local, and the
+		// document has no attributeFormDefault="qualified". So a
+		// name in the schema namespace matches no declaration, and the
+		// <anyAttribute namespace="##other"> that would otherwise take
+		// it explicitly excludes that namespace.
+		//
+		// Comparing only the local name let xsd:targetNamespace pass as
+		// the declared `targetNamespace` (addB070a): the prefix made it
+		// a different attribute, which nothing on <schema> permits, but
+		// the allowlist never saw the namespace.
+		if a.Name.URI == NSSchema {
+			p.errs = append(p.errs, errorAt(el, "",
+				"attribute %q is in the schema namespace, which "+
+					"xs:%s does not allow", a.Name.Local,
+				el.Name.Local))
+			continue
+		}
 		if a.Name.Local == "id" {
 			continue
 		}

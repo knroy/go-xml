@@ -745,6 +745,14 @@ func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	// attgA009 live.
 	a.p.checkIDs(root)
 
+	// And its own attributes. checkSourceModel runs from readTopLevel,
+	// which is called once per *child* of <xs:schema>, so the root's
+	// attributes are the one set that walk never reaches — which is how
+	// xsd:targetNamespace on <xs:schema> (addB070a) was read as the
+	// declared targetNamespace instead of the attribute in the schema
+	// namespace that the schema for schemas admits nowhere.
+	a.p.checkAttrs(root)
+
 	for _, el := range root.ChildElements() {
 		if el.Name.URI != NSSchema || !includeElement(el, a.schema.Version) {
 			continue
