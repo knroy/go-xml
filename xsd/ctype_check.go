@@ -39,9 +39,23 @@ func (p *parser) checkLocalTargetNamespace(el *xdm.Node, kind string) {
 	if tns == nil {
 		return
 	}
-	// The attribute is not in the 1.1 schema-for-schemas equivalent for 1.0,
-	// where it is simply a foreign attribute in no namespace and ignored.
+	// XSD 1.0 has no targetNamespace on a local declaration at all, and it
+	// is not a foreign attribute either: it is unprefixed, so it is in *no*
+	// namespace, and the "{any attributes with non-schema namespace}"
+	// wildcard that admits foreign attributes is namespace="##other",
+	// which excludes the absent namespace along with the schema's own. An
+	// unprefixed name the 1.0 schema for schemas does not declare is
+	// therefore a representation fault, not something to ignore.
+	//
+	// s3_2_3si05 is the case the suite pins: it is the one member of the
+	// S3_2_3 group carrying no version="1.1" gate, so it is expected
+	// invalid under both versions -- and under 1.0 the only thing wrong
+	// with it is this attribute. Its eight siblings all carry the gate
+	// and so are 1.1-only, which is why they say nothing about 1.0.
 	if p.schema.Version < Version11 {
+		p.errs = append(p.errs, errorAt(el, "src-"+kind,
+			"targetNamespace is not permitted on a local %s declaration "+
+				"in XSD 1.0", kind))
 		return
 	}
 
