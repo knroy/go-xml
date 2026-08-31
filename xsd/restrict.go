@@ -374,6 +374,35 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 		switch bt := b.Term.(type) {
 		case *Wildcard:
 			return nsSubset(r, rt, b, bt)
+		case *ModelGroup:
+			// The 1.0 table has no cell for a wildcard restricting a
+			// group, and under 1.0 that is right: Particle
+			// Derivation OK offers no rule pairing them. Under 1.1
+			// the question is Content type restricts (Complex
+			// Content) (§3.4.6.4) — is every sequence R admits one B
+			// admits — and for an all group of wildcards that has a
+			// perfectly good answer.
+			//
+			// A lone wildcard is the same language as a one-member
+			// sequence holding it, so wrapping it lands the pair in
+			// Sequence:All, where the shared-bucket counting above
+			// already decides it. all218 is the case: a base <all>
+			// of two wildcards, each 0..5, restricted by a single
+			// wildcard 2..4 whose namespace is one of the two. The
+			// wrap costs nothing — recurseUnordered re-derives the
+			// range from the wrapped particle — and the base's other
+			// bucket is emptiable, which clause 2.3 still checks.
+			if v >= Version11 && bt.Compositor == CompositorAll {
+				wrapped := &Particle{
+					MinOccurs: 1, MaxOccurs: 1,
+					Term: &ModelGroup{
+						Compositor: CompositorSequence,
+						Particles:  []*Particle{r},
+					},
+				}
+				return recurseUnordered(wrapped,
+					wrapped.Term.(*ModelGroup), b, bt, expanded, v)
+			}
 		}
 	case *ModelGroup:
 		switch bt := b.Term.(type) {
