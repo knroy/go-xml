@@ -11,7 +11,7 @@ Current position:
 | XSD 1.1 | 15,316 / 15,365 (99.68%) | 26,176 / 26,206 (99.89%) |
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,236 of 19,236 in scope |
-| XPath 3.1 | 99.99% — 21,783 of 21,786 in scope (3 failing) |
+| XPath 3.1 | 100.00% — 21,778 of 21,778 in scope (0 failing) |
 | XSLT 2.0 | 99.85% — 6,149 of 6,158 in scope (9 failing) |
 | XSLT 3.0 | 99.66% — 8,594 of 8,623 in scope (29 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |

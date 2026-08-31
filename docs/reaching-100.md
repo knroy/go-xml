@@ -7,14 +7,14 @@ the work that exists from the work that does not.
 
 | | Failing | Fixable | Open | Cannot fix |
 |---|---:|---:|---:|---:|
-| XPath 3.1 | 3 | 0 | 0 | 3 |
-| XSLT 2.0 | 9 | 1 | 1 | 7 |
+| XPath 3.1 | 0 | 0 | 0 | 0 |
+| XSLT 2.0 | 9 | 1 | 0 | 8 |
 | XSLT 3.0 | 29 | 9 | 1 | 19 |
 | XSD 1.0 | 63 | 13 | 0 | 50 |
 | XSD 1.1 | 79 | 30 | 0 | 49 |
-| **Total** | **183** | **53** | **2** | **128** |
+| **Total** | **180** | **53** | **1** | **126** |
 
-XPath 2.0, XPath 3.0 and RELAX NG are already at 100%.
+XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
@@ -76,21 +76,25 @@ the least of it by difficulty.
 - **`validation-0201`** (XSLT 2.0 and 3.0) — XHTML output method, `<meta
   http-equiv>` placement in `<head>`. One case, cosmetic but real.
 
-### The two open questions
+### The one open question
 
-- **`sequence-0132`** — `xsl:sequence` with content and no `@select`. A fix was
-  implemented and reverted: it fixed this and broke `sequence-0137`, because
-  `0132` is scoped `XSLT20+` and `0137` is `XSLT20`-only and they want opposite
-  answers for the same construct. Needs a rule that separates them, which may
-  not exist.
 - **`validation-0006`** — a parentless attribute: `XTTE1555` wanted,
   `XTTE1540` given.
+
+`sequence-0132` was the other, and has been settled as not implementable. It
+is scoped `XSLT20+` so it must pass at both versions; it passes at 3.0 and
+fails at 2.0. Reaching the type check at 2.0 requires the content model to
+accept content on `xsl:sequence`, and `sequence-2401a` — scoped `XSLT20` —
+requires it to reject exactly that with `XTSE0010`. Measured: removing the
+gate takes 2.0 from 6149 to 6148, trading one case for the other, and `0132`
+still fails because the code reported then is `XTSE3185`, which does not exist
+before 3.0.
 
 ### If all 55 landed
 
 | Suite | Now | Ceiling |
 |---|---|---|
-| XPath 3.1 | 99.99% | **99.99%** |
+| XPath 3.1 | 100.00% | **100.00%** |
 | XSLT 2.0 | 99.85% | **99.89%** |
 | XSLT 3.0 | 99.66% | **99.79%** |
 | XSD 1.0 | 99.84% | **99.87%** |
@@ -98,7 +102,7 @@ the least of it by difficulty.
 
 ---
 
-## Part 2 — the 128 that are not work
+## Part 2 — the 126 that are not work
 
 Grouped by what would actually have to change.
 
@@ -232,7 +236,7 @@ doing on its own merits.
 ## Part 3 — the honest bottom line
 
 **Reaching 100% is not a goal that survives contact with the suites.** Of 183
-disagreements, 128 would require agreeing with a disputed result, shipping a
+disagreements, 126 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default.
 

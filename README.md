@@ -70,7 +70,7 @@ Requires Go 1.26 or later.
 |---|---|
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
-| **XPath 3.1** | 99.99% of the W3C QT3 suite (21,783 of 21,786 in scope); maps, arrays, the lookup operator, the JSON family |
+| **XPath 3.1** | 100% of the W3C QT3 suite (21,778 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.66% of the W3C XSLT suite filtered to 3.0 (8,594 of 8,623 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.87% of the W3C xsdtests *instance* tests (24,967 of 24,999); **99.78%** of its *schema-validity* tests (14,374 of 14,405) |
@@ -1304,7 +1304,7 @@ Together with the four crashes and hangs above, that took the in-scope pass
 rate from **92.42% to 98.16%** — measured with the harness's original loose
 error check, which accepted any error where a specific code was expected.
 Tightening that check later dropped the honest figure to 96.22%, and grinding
-the tail down from there brought it to **99.99%**; see below.
+the tail down from there brought it to **100%**; see below.
 
 **What the one remaining failure is** is covered under *Where it fails* above:
 a backreference to a group whose width can vary, which RE2 cannot resolve and

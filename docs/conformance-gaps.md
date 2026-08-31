@@ -8,21 +8,21 @@ commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,783 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 1 | **7** | 99.89% |
+| **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 1 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 8,623 | 8,594 | 99.66% | **29** | 9 | 1 | **19** | 99.79% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,341 | 99.84% | **63** | 13 | 0 | **50** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,571 | 41,492 | 99.81% | **79** | 30 | 0 | **49** | 99.88% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **183** | **53** | **2** | **128** | |
+| | **Total** | | | | **180** | **53** | **1** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**183 disagreements in total**, of which **53 are ours to fix**, **128 cannot
-be fixed without shipping something less correct**, and **2 are open
-questions**.
+**180 disagreements in total**, of which **53 are ours to fix**, **126 cannot
+be fixed without shipping something less correct**, and **1 is an open
+question**.
 
 The XSD split is taken from the suite's own `status` field rather than from
 judgement: `accepted` marks a settled expectation, while `queried` and
@@ -75,32 +75,42 @@ and type-annotation stripping — which is the mechanism working as intended.
 
 ---
 
-# xpath — 4 failures, none implementable
+# xpath — no failures
 
-All four are XPath 3.1; XPath 2.0 and 3.0 are at 100%.
+All three XPath versions now agree with the suite on every case in scope.
 
-| Case | What happens | Verdict | Why |
-|---|---|---|---|
-| `fn-load-xquery-module-003` | We raise `FOQM0006`, suite wants `FOQM0002` | **Not implementable** | `fn:load-xquery-module` compiles an XQuery library module. This engine implements XPath and XSLT and has no XQuery processor. F&O 3.1 defines **FOQM0006** as "the implementation does not support the load-xquery-module function", which is the conforming answer. |
-| `fn-load-xquery-module-004` | Same | **Not implementable** | Same. |
-| `fn-function-lookup-764` | `FOQM0001` where `FOQM0006` is wanted | **Not implementable** | Reaches the same function through `function-lookup`. The argument check (empty module URI → FOQM0001) is a fact about the *call* and fires before the absence of a processor is reported. |
-| `json-to-xml-048` | Control characters serialised literally rather than as `&#13;` | **Implementable, but disputed** | `json-to-xml('"\\\/\"\r\t "')`. We emit the raw characters; the suite wants numeric character references. A serialisation-escaping question. |
+The last three disagreements were both halves of one thing:
+`fn:load-xquery-module` compiles an XQuery library module, and this engine has
+no XQuery processor.
 
-**These three cannot all pass at once.** `load-xquery-module-003` requires
-`FOQM0002` ("module cannot be located") for an expression that `-903` requires
-`FOQM0006` for. Locating a module is something only a processor could do, so
-FOQM0006 is the honest answer and `-003`/`-004` fail rather than pretending to
-have looked. That reasoning is recorded in `xpath/fn_31.go`.
+The suite settles it with a feature dependency that the harness was not
+reading. The set declares `fn-load-xquery-module` `satisfied="true"` and then
+overrides fourteen cases to `satisfied="false"`; those fourteen are the ones
+written for a processor that lacks the feature. Because `unsupportedSpec` did
+not list the feature, `-001` through `-004` ran and failed — they want
+`FOQM0001` for an empty URI and `FOQM0002` for a module that cannot be located,
+neither of which an engine that never looked can honestly report.
 
-**XPath ceiling: 21,783 / 21,786 = 99.99%.**
+With those out of scope the apparent contradiction goes with them. The cases
+that do apply — `-901`, `-902`, `-903` and `function-lookup-764` — accept
+**FOQM0006** ("the implementation does not support the load-xquery-module
+function") throughout, and `-901`/`-902` accept either it or `FOQM0001`. The
+function now reports the absent processor uniformly, which is the only claim it
+can make truthfully. The reasoning is recorded in `xpath/fn_31.go`.
+
+`json-to-xml-048` was the fourth and is fixed: it was never an engine bug, but
+the harness's own comparison serializer writing a literal CR, which XML §2.11
+converts to LF on re-parse.
+
+**XPath: 21,778 / 21,778 = 100.00%, on all three versions.**
 
 ---
 
-# xslt — 61 failures
+# xslt — 38 failures
 
 ## XSLT 2.0 — 9 failures
 
-Six cannot be fixed; three are ours.
+Eight cannot be fixed; one is ours.
 
 | Case | What happens | Verdict | Why |
 |---|---|---|---|
@@ -110,7 +120,7 @@ Six cannot be fixed; three are ours.
 | `regex-syntax-xslt20-0984` | `[\w]` does not match U+2308 `⌈` | **Not implementable** | Unicode drift. U+2308 LEFT CEILING is category **Ps**, and XSD Appendix F defines `\w` by subtracting `\p{P}`, so excluding it is correct. The 2012 test predates Unicode 6.1, which recategorised it from `Sm`. Go and Python's independent Unicode 14 tables agree with us. |
 | `regex-syntax-xslt20-0985` | `[\d]` does not match U+1369 `፩` | **Not implementable** | Same drift. ETHIOPIC DIGIT ONE is category **No**; `\d` is `\p{Nd}`. |
 | `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Same drift, inverted: the test asserts it must *not* match, but XML NameChar includes `#x0300-#x036F`. |
-| `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Open question** | `xsl:sequence` with content and no `@select`. Attempted and reverted: removing the `processorAtLeast30()` gate fixed this and broke `sequence-0137`. `0132` is scoped `XSLT20+`, `0137` is scoped `XSLT20` — same construct, deliberately different answers. Needs a rule that separates them. |
+| `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Not implementable** | `xsl:sequence` with content and no `@select`, scoped `XSLT20+`, so it has to pass at both versions; it passes at 3.0 and fails at 2.0. Reaching the type check at 2.0 means letting the content model accept the instruction, and the suite forbids exactly that: `sequence-2401a` is scoped `XSLT20` and wants `XTSE0010` for content on `xsl:sequence`, which is the check that has to fire first. Removing the `processorAtLeast30()` gate on the content model was measured — 2.0 goes 6149 → 6148, trading this case for that one, and `0132` still fails because the code it then reports is `XTSE3185`, which the 2.0 recommendation does not define. |
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
 | `validation-0201` | Serialisation differs at offset 46 | **Implementable** | XHTML output method: `<meta http-equiv>` placement in `<head>`. |
 
@@ -300,18 +310,17 @@ would overstate it. They are reported separately for that reason.
 # Summary
 
 The per-suite counts and ceilings are in the table at the top. What that table
-cannot show is *why* the 128 unfixable cases are unfixable:
+cannot show is *why* the 126 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
 | **W3C has challenged its own expected result** | 99 | XSD 1.0 (50) and 1.1 (49). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
 | **Suite defect** | 4 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err` and `package-022err` carry a half-applied erratum that puts an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling `accumulator-039` was patched to add in 2019. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
-| **Suite contradicts itself** | 3 | The `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. |
+| **Suite contradicts itself** | 4 | The three `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. `sequence-0132` (`XSLT20+`) needs content on `xsl:sequence` accepted at 2.0; `sequence-2401a` (`XSLT20`) needs it rejected. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
-| **No XQuery processor** | 3 | The `fn:load-xquery-module` cases. Two of the suite's own cases cannot both pass. |
 | **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `base-uri-052` (XInclude), `catalog-006b` (`xsl:assert`). |
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
 
