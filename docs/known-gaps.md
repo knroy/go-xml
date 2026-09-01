@@ -168,10 +168,20 @@ present at `06e8a75`, before the bracket existed, so this is long-standing
 rather than a regression — the bracket's commit message documents the
 false-reject half and not the false-accept half.
 
-Fixing it means tracking the set of reachable count-vectors, bounded by
-`maxOccurs` so it stays small, and accepting only if some vector satisfies
-every bound — the "searched together rather than bracketed apart" the third
-attempt named and did not do. `TestNestedOccursBoundsAreWrong` in
+Fixing it means tracking the set of reachable count-**vectors**, and the
+emphasis is the point. A fourth attempt replaced the low/high pair with a set
+of reachable counts *per scope* and measured it: the false accept of five `c`
+disappeared, and so did the odd counts under an unbounded outer scope. But
+every valid document stayed refused, because a per-scope set still loses the
+correlation between scopes — when the outer sequence restarts, the inner
+element's count must restart *with it*, and two independent sets cannot say
+which inner count belongs to which outer reading. Resetting nested counters on
+an outer restart fires on the same transition that set them, and took
+`TestRepeatedOptionalSequence` and the substitution-group cases down with it.
+
+So the unit of tracking has to be a vector over all scopes at once — a set of
+whole readings, not a set per scope. That is a subset construction over the
+counter state, which is a different matcher rather than a patch to this one. `TestNestedOccursBoundsAreWrong` in
 `xsd/occurs_nested_test.go` records the case and is skipped.
 
 Fixing the matcher properly means replacing it — a deliberate project weighed
