@@ -282,9 +282,16 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		}
 	}
 	switch {
-	case s.html && opts.DocTypeSystem == "" && (opts.DocTypePublic == "" || s.html5):
+	case s.html && opts.DocTypeSystem == "" && (opts.DocTypePublic == "" || s.html5 || html):
 		// HTML5 asks for a bare doctype; earlier HTML versions get one only
 		// when the stylesheet names a public or system identifier.
+		//
+		// The html method also gets one from a public identifier alone,
+		// which no XML-based method can write: HTML's grammar does not
+		// require the system literal that XML's puts after PUBLIC. So an
+		// explicit public identifier schedules a declaration under that
+		// method whatever the version, and writeDoctypeFor decides its
+		// spelling.
 		//
 		// s.html rather than html: XHTML5 wants the declaration too. It is
 		// deferred like every other doctype rather than written now, because
@@ -292,7 +299,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		// is XML, where the DOCTYPE name must match the root element exactly,
 		// so <HtMl> takes "<!DOCTYPE HtMl>". Writing it here would have to
 		// guess the name before the element is in hand.
-		if s.html5 {
+		if s.html5 || (html && opts.DocTypePublic != "") {
 			s.pendingDoctype = true
 		}
 	case opts.DocTypeSystem != "":
@@ -396,6 +403,19 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 	// system literal after PUBLIC and makes it required -- but under HTML5 it
 	// does not suppress the declaration either: the ruling on bug 20264 is
 	// that the bare form is still output, which output-0229 asserts.
+	// A public identifier with no system identifier is writable under the
+	// html method and not under any of the XML-based ones. XML's grammar puts
+	// the system literal after PUBLIC and makes it required; HTML's does not,
+	// and "<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0//EN">" is the standard
+	// HTML 4 declaration. Serialization-html-25 and -27 ask for exactly that,
+	// under version 4 and version 5 alike -- an explicit identifier overrides
+	// HTML 5's bare form rather than being ignored in favour of it.
+	if s.html && !s.xhtml && s.opts.DocTypeSystem == "" &&
+		s.opts.DocTypePublic != "" {
+		s.writeString("<!DOCTYPE " + s.elementName(n) +
+			" PUBLIC " + quoteLiteral(s.opts.DocTypePublic) + ">\n")
+		return
+	}
 	if s.html5 && s.opts.DocTypeSystem == "" {
 		if s.xhtml {
 			// The declaration is written only for a document element that
@@ -585,12 +605,22 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
 	}
 
-	if len(n.Children) == 0 {
+	// An empty element still has to be opened when the method is going to put
+	// something inside it: an empty <head/> under the html or xhtml method
+	// gets the content-type meta, and writing "<head></head>" from the
+	// no-children branch below would have dropped it. Serialization-html-33
+	// and -xhtml-33 build exactly that document.
+	emptyHead := len(n.Children) == 0 && s.html &&
+		strings.EqualFold(n.Name.Local, "head") &&
+		(!s.xhtml || n.Name.URI == nsXHTML) &&
+		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
+
+	if len(n.Children) == 0 && !emptyHead {
 		if s.html && !s.xhtml {
 			// HTML has no self-closing syntax. A void element takes no end
 			// tag; every other empty element takes an explicit one, because
 			// "<div/>" is parsed by HTML parsers as an unclosed "<div>".
-			if isVoidElement(n.Name.Local) {
+			if s.isVoidElement(n.Name.Local) {
 				s.writeString(">")
 			} else {
 				s.writeString("></" + name + ">")
@@ -611,7 +641,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// do with the name is the whole of the rule, and requiring the
 			// XHTML namespace for it sent every no-namespace element down
 			// the wrong half.
-			if isVoidElement(n.Name.Local) {
+			if s.isVoidElement(n.Name.Local) {
 				s.writeString(" />")
 			} else {
 				s.writeString("></" + name + ">")
@@ -674,6 +704,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// the spec says." Only the value is mapped; the element and
 			// attribute names are markup the map never touches.
 			content := s.mapChars(media + `; charset=` + enc)
+			// The injected element is indented like a child of <head>,
+			// because that is what it is. Writing it flush against the start
+			// tag while the head's real children were each on their own line
+			// put the document's own markup and the serialiser's on different
+			// footings, which validation-0201 asserts against.
+			if s.opts.Indent && !hasTextChild(n) {
+				s.indent(depth + 1)
+			}
 			tag := `<meta http-equiv="Content-Type" content="` + content + `">`
 			if s.xhtml {
 				// XHTML is XML: an empty element must be closed. The space
@@ -686,7 +724,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		}
 	}
 
-	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] &&
+		!s.htmlNativeElement(n) {
 		saved := s.inCData
 		s.inCData = true
 		defer func() { s.inCData = saved }()
@@ -723,7 +762,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			s.nodeNoIndent(c)
 		}
 	}
-	if indentChildren {
+	if indentChildren || (emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
 	s.writeString("</" + name + ">")
@@ -807,6 +846,26 @@ func (s *serializer) indent(depth int) {
 // own vocabulary, that its whitespace is data. Ignoring it while writing the
 // attribute out would produce a document that contradicts itself: it would
 // tell a reader to preserve whitespace the serialiser had just invented.
+// htmlNativeElement reports whether an element is one the html output method
+// writes as HTML rather than as foreign markup, which for that method means
+// one in no namespace.
+//
+// It exists for cdata-section-elements, which the html method honours only
+// for elements outside that set. HTML has no CDATA section: the sequence
+// "<![CDATA[" inside a <p> is nine characters of text and an HTML parser
+// reads it as such, so writing one there would change the document rather
+// than only how its text was escaped. Serialization 3.1 §9.4 restricts the
+// parameter to foreign content for that reason, and Serialization-html-18
+// pins it down by naming "p em ex:isle1" together and asking for a CDATA
+// section around exactly one of the three.
+//
+// The xhtml method is deliberately excluded: it produces XML, where a CDATA
+// section is a CDATA section whatever the namespace, and output-0114 and
+// -0138 ask for one around XHTML's own <example> and <h1>.
+func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
+	return s.html && !s.xhtml && n.Name.URI == ""
+}
+
 func (s *serializer) suppressed(n *xdm.Node) bool {
 	if s.noIndentElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
 		return true
@@ -1361,15 +1420,46 @@ const nsXHTML = "http://www.w3.org/1999/xhtml"
 // voidElements are the HTML elements that take no end tag. Writing one with a
 // closing tag, or self-closing a non-void element, both produce a tree that
 // an HTML parser reads differently from the one the stylesheet built.
+// voidElements are the names with an empty content model in every HTML
+// version this serialiser writes. Three more are version-specific and live in
+// the two maps below.
 var voidElements = map[string]bool{
 	"area": true, "base": true, "br": true, "col": true, "embed": true,
 	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true, "source": true, "track": true, "wbr": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+var html4VoidElements = map[string]bool{
 	"basefont": true, "frame": true, "isindex": true,
 }
 
-func isVoidElement(local string) bool {
-	return voidElements[strings.ToLower(local)]
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}
+
+// isVoidElement reports whether an element takes no end tag.
+//
+// The version decides for six of the names, which is what
+// Serialization-html-1 and -2 are for: the first writes the HTML 4 list under
+// version="4.0" and the second the HTML 5 list under version="5.0", and each
+// asks for exactly its own set minimised. A serialiser with one combined list
+// passes both only by accident and fails the moment a case names an element
+// from the other version.
+func (s *serializer) isVoidElement(local string) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if s.html5 {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
 }
 
 // isRawTextElement reports whether an HTML element's content is CDATA, and so
