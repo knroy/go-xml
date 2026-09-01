@@ -72,9 +72,9 @@ Requires Go 1.26 or later.
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,778 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,600 of 8,623 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
-| **XSD 1.0** | 99.87% of the W3C xsdtests *instance* tests (24,967 of 24,999); **99.85%** of its *schema-validity* tests (14,384 of 14,405) |
-| **XSD 1.1** | 99.89% instance (26,177 of 26,207); **99.88%** schema-validity (15,346 of 15,365); opt-in via `Version11` |
+| **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
+| **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
+| **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
@@ -84,12 +84,12 @@ Requires Go 1.26 or later.
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Schema-validity is the weaker half of the XSD numbers**, at 99.85% (1.0)
+1. **Schema-validity is the weaker half of the XSD numbers**, at 99.86% (1.0)
    and 99.88% (1.1) — a schema invalid in one of the remaining ways is
    accepted rather than reported. Instance validation, which is what most
    callers actually do, is 99.87% and 99.89%. The remaining disagreements are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 89 of 102 — are cases the W3C itself has queried**, including
+   of them — 89 of 98 — are cases the W3C itself has queried**, including
    every one of the 44 `MS-Regex` disagreements, which are a single open bug.
 2. **A backreference to a variable-width group is refused, by design.** RE2
    has no backreferences, which is also why no pattern can hang this engine.
@@ -99,7 +99,7 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.73%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.78%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
    now 5 of 52, all five documented as unreachable rather than outstanding.
@@ -788,8 +788,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,384 / 14,405 (99.85%) | 24,967 / 24,999 (99.87%) |
-| XSD 1.1 | 15,346 / 15,365 (99.88%) | 26,177 / 26,207 (99.89%) |
+| XSD 1.0 | 14,385 / 14,405 (99.86%) | 24,968 / 24,999 (99.88%) |
+| XSD 1.1 | 15,347 / 15,365 (99.88%) | 26,178 / 26,207 (99.89%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough

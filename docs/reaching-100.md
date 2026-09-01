@@ -9,10 +9,10 @@ the work that exists from the work that does not.
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XSLT 2.0 | 9 | 0 | 0 | 9 |
-| XSLT 3.0 | 23 | 2 | 1 | 20 |
-| XSD 1.0 | 53 | 3 | 0 | 50 |
-| XSD 1.1 | 49 | 2 | 0 | 47 |
-| **Total** | **134** | **7** | **1** | **126** |
+| XSLT 3.0 | 19 | 0 | 2 | 17 |
+| XSD 1.0 | 51 | 0 | 0 | 51 |
+| XSD 1.1 | 47 | 0 | 0 | 47 |
+| **Total** | **126** | **0** | **2** | **124** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -24,7 +24,7 @@ challenged, and 99 of the 142 XSD disagreements are of that kind — 44 of them
 
 ---
 
-## Part 1 — the 7 that are real work
+## Part 1 — what is left
 
 This is the whole of what "reaching the ceiling" means. None of it is
 speculative; every case has a diagnosed shape.
@@ -97,13 +97,13 @@ before 3.0.
 |---|---|---|
 | XPath 3.1 | 100.00% | **100.00%** |
 | XSLT 2.0 | 99.85% | **99.85%** |
-| XSLT 3.0 | 99.73% | **99.77%** |
-| XSD 1.0 | 99.87% | **99.88%** |
-| XSD 1.1 | 99.88% | **99.89%** |
+| XSLT 3.0 | 99.78% | **99.80%** |
+| XSD 1.0 | 99.87% | **99.87%** |
+| XSD 1.1 | 99.89% | **99.89%** |
 
 ---
 
-## Part 2 — the 126 that are not work
+## Part 2 — the 124 that are not work
 
 Grouped by what would actually have to change.
 
@@ -237,7 +237,7 @@ doing on its own merits.
 ## Part 3 — the honest bottom line
 
 **Reaching 100% is not a goal that survives contact with the suites.** Of 183
-disagreements, 126 would require agreeing with a disputed result, shipping a
+disagreements, 124 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default.
 

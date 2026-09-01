@@ -10,25 +10,25 @@ commit `6c036b5` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,600 | 99.73% | **23** | 2 | 1 | **20** | 99.77% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,351 | 99.87% | **53** | 3 | 0 | **50** | 99.88% |
-| **xsd** | W3C xsdtests 1.1 | 41,572 | 41,523 | 99.88% | **49** | 2 | 0 | **47** | 99.89% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 2 | **17** | 99.80% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
+| **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **134** | **7** | **1** | **126** | |
+| | **Total** | | | | **126** | **0** | **2** | **124** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**134 disagreements in total**, of which **7 are ours to fix**, **126 cannot
-be fixed without shipping something less correct**, and **1 is an open
-question**.
+**126 disagreements in total**, of which **none is a known engine defect**,
+**124 cannot be fixed without shipping something less correct**, and **2 are
+open questions**.
 
 The XSD split is taken from the suite's own `status` field rather than from
 judgement: `accepted` marks a settled expectation, while `queried` and
 `stable bugNNNN` mark expectations the W3C has itself challenged. That is why
-only 3 of 53 XSD 1.0 disagreements and 2 of 49 in 1.1 count as work. The
-remainder that the field marks `accepted` are suite defects proved below.
+no XSD disagreement now counts as work: the nine the field still marks
+`accepted` are each proved a suite defect or a deliberate refusal below.
 
 This is down from 345 at commit `69c53cf`, in three rounds of agents working
 in isolated worktrees. The first cleared 103 cases: 10 of 10 in the
@@ -118,7 +118,7 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 32 failures
+# xslt — 28 failures
 
 ## XSLT 2.0 — 9 failures
 
@@ -146,7 +146,7 @@ three failures involves `\w`, `\d` or `\c` membership. Only these three
 2012-era XSLT 2.0 cases disagree, each exactly where Unicode moved underneath
 them.
 
-## XSLT 3.0 — 23 failures
+## XSLT 3.0 — 19 failures
 
 ### Package composition — 5
 
@@ -213,7 +213,7 @@ The twenty that cannot be fixed: `accept-913`, `package-200`,
 
 ---
 
-# xsd — 102 disagreements
+# xsd — 98 disagreements
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -349,14 +349,14 @@ would overstate it. They are reported separately for that reason.
 # Summary
 
 The per-suite counts and ceilings are in the table at the top. What that table
-cannot show is *why* the 126 unfixable cases are unfixable:
+cannot show is *why* the 124 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
 | **W3C has challenged its own expected result** | 89 | XSD 1.0 (45) and 1.1 (44). All 44 `MS-Regex` cases across both versions are one open bug, 4113. |
-| **Suite defect** | 10 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err`/`022err` carry a half-applied erratum putting an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling was patched to add in 2019; the four `notQName` cases are XSD 1.1 tests the suite forgot to mark `version="1.1"`; `particlesZ001` splits its instanceTest by version and never propagated the split to its schemaTest, which `particlesZ023`/`Z024` do; and `particlesZ033_g` applies a 2006 expectation to 1.1 unchanged, though 1.1 explicitly relaxed the UPA rule it rests on. |
+| **Suite defect** | 11 | `format-number-070` invokes a template the stylesheet does not declare; `package-021err`/`022err` carry a half-applied erratum putting an arity where the grammar admits none; `accumulator-038` omits the `visibility="public"` its sibling was patched to add in 2019; the four `notQName` cases are XSD 1.1 tests the suite forgot to mark `version="1.1"`; `particlesZ001` never propagated its instanceTest's version split to its schemaTest, which `particlesZ023`/`Z024` do; `particlesZ033_g` applies a 2006 expectation to 1.1 unchanged though 1.1 relaxed the UPA rule it rests on; and `attP031` names its instance test `.i` and says in its own prose that the attribute *does* appear, yet expects valid — its sibling `attP029`, byte-identical but for the instance, is consistent. |
 | **Unicode moved** | 3 | The 2012 `regex-syntax-xslt20` cases assert `\w`/`\d`/`\c` membership that Unicode 6.1 changed. |
-| **Suite contradicts itself** | 5 | The three `regex-syntax` ambiguous-dash cases. `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the same pattern and the same dependency and demand opposite outcomes. `sequence-0132` (`XSLT20+`) needs content on `xsl:sequence` accepted at 2.0; `sequence-2401a` (`XSLT20`) needs it rejected. `simple093` calls a union of `xs:QName` and `xs:NOTATION` invalid, while `particlesZ007.xsd` writes the same union and is expected valid in both versions. |
+| **Suite contradicts itself** | 2 | `sequence-0132` (`XSLT20+`) needs content on `xsl:sequence` accepted at 2.0; `sequence-2401a` (`XSLT20`) needs it rejected. `simple093` calls a union of `xs:QName` and `xs:NOTATION` invalid, while `particlesZ007.xsd` writes the same union and is expected valid in both versions. The three `regex-syntax` ambiguous-dash cases were here too and now pass: they are scoped by the `XSD_1.1` feature, which is a property of the XSLT version being measured rather than of the engine. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
