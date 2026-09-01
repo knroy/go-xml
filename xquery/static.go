@@ -115,8 +115,13 @@ const (
 //
 // The defaults are the specification's: boundary whitespace is stripped,
 // construction preserves types, unprefixed elements are in no namespace, and
-// unprefixed functions are in the fn: namespace. The five predeclared prefixes
-// of §4.1 are bound.
+// unprefixed functions are in the fn: namespace. The predeclared prefixes of
+// §4.1 are bound.
+//
+// There are eight of them, not five. 3.1 added math, map and array along with
+// the functions in those namespaces, and a query is entitled to write
+// "math:pi()" or "array:size($a)" with no declaration of its own — which is
+// how nearly every example in the function specification is written.
 func newStaticContext() *staticContext {
 	return &staticContext{
 		ns: map[string]string{
@@ -125,6 +130,9 @@ func newStaticContext() *staticContext {
 			"xsi":   xdm.NSXSI,
 			"fn":    xdm.NSFN,
 			"local": nsLocal,
+			"math":  xdm.NSMath,
+			"map":   xdm.NSMap,
+			"array": xdm.NSArray,
 		},
 		defaultFunctionNS: xdm.NSFN,
 		boundarySpace:     StripSpace,
