@@ -52,6 +52,10 @@ func (p *parser) parseOperandSubst() ([]node, bool, error) {
 	if err != nil || len(ops) == 0 {
 		return nil, false, err
 	}
+	// compileExpr substitutes again where xpath still refuses the source,
+	// and its numbering restarts at zero. Here that would rebind the
+	// variables this pass just chose, so the source it is given must have
+	// nothing left to lift; substituteOperands scans to the end, so it does.
 	c, err := p.compileExpr(rewritten)
 	if err != nil {
 		// The rewrite is only worth attempting; where it produces something
@@ -230,7 +234,10 @@ type operandExpr struct {
 }
 
 func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
+	xp, err := n.rest.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i, op := range n.ops {
 		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
 		if err != nil {

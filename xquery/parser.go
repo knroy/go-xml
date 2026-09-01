@@ -81,6 +81,27 @@ type compiledExpr struct {
 	// check is a declared type applied to the value items produced, for the
 	// case where there is no source text to fold a "treat as" into.
 	check *compiledExpr
+	// ops are XQuery-only primaries lifted out of src so that xpath could
+	// compile the rest. Each one's value is bound to "$local:xq-opN" before
+	// compiled is evaluated. See substituteOperands.
+	ops []node
+}
+
+// bind returns the context compiled must be evaluated in, with every lifted
+// operand's value bound to the variable that replaced it.
+//
+// It is the ordinary context wherever nothing was lifted, which is the common
+// case; the loop only runs for an expression compileExpr had to rewrite.
+func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
+	xp := ctx.xp
+	for i, op := range e.ops {
+		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: opVar(i)}, v)
+	}
+	return xp, nil
 }
 
 // eval evaluates the expression, whichever half of it is set.
@@ -92,7 +113,11 @@ func (e *compiledExpr) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 		return applyCheck(e.check, seq, ctx)
 	}
-	seq, err := e.compiled.Eval(ctx.xp)
+	xp, err := e.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seq, err := e.compiled.Eval(xp)
 	if e.typed {
 		err = retypeError(err)
 	}
@@ -428,9 +453,27 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err != nil {
 		return nil, err
 	}
+	var opsOut []node
 	c, err := xpath.CompileVersion(expanded, p.sc, p.version)
 	if err != nil {
-		return nil, err
+		// The source handed here is XQuery this parser has already rewritten
+		// around — the trailing half of "(...)/S", a call's rewritten
+		// argument list — and the rewriting only lifted out the primary it
+		// was aimed at. An XQuery-only primary further in is still there:
+		// "<e/>/(a union text {()})" leaves a computed constructor as the
+		// operand of "union", which is exactly the shape operand.go lifts.
+		// Substituting those and recompiling is the same split applied once
+		// more, so it is tried before the error is reported. Failing that,
+		// xpath's own error stands, because it names the construct.
+		ops, rewritten, serr := p.substituteOperands(expanded)
+		if serr != nil || len(ops) == 0 {
+			return nil, err
+		}
+		sub, serr := xpath.CompileVersion(rewritten, p.sc, p.version)
+		if serr != nil {
+			return nil, err
+		}
+		c, opsOut = sub, ops
 	}
 	// The static base URI and the default collation are properties of the
 	// expression, not of the evaluation, and xpath models them that way. They
@@ -448,7 +491,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		}
 		c = c.WithDefaultCollation(coll)
 	}
-	return &compiledExpr{src: src, compiled: c}, nil
+	return &compiledExpr{src: src, compiled: c, ops: opsOut}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.
