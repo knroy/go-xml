@@ -1411,7 +1411,16 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	//
 	// Nothing is lost. A built-in carries no attribute uses a schema
 	// document wrote, which is what this walk exists to resolve.
-	if t.Name.URI == NSSchema {
+	// The guard is against the shared singletons, not against the
+	// namespace. A document may legitimately define its own types in the
+	// schema namespace -- the schema for schemas does, and every type in
+	// it lands here -- and those are this parser's own values, safe to
+	// resolve and needing it. Skipping them left xs:annotated and
+	// xs:facet without the attribute wildcard they inherit from
+	// xs:openAttrs, so every restriction of them was reported as adding a
+	// wildcard its base did not have, and the schema for schemas would
+	// not load at all.
+	if builtinTypes()[t.Name] == t {
 		return
 	}
 	if seen == nil {
