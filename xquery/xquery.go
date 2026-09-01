@@ -148,6 +148,13 @@ func (p *parser) parseQueryBody() ([]node, error) {
 // parseItem parses one item of a query body: a constructor, or an expression
 // handed to xpath.
 func (p *parser) parseItem() (node, error) {
+	// The XQuery-only expression forms are checked first, because each begins
+	// with a keyword or a delimiter that the expression parser beneath would
+	// read as something else: "try" as a function call, "``[" as two empty
+	// string literals and a predicate.
+	if n, ok, err := p.parseXQueryOnly(); ok || err != nil {
+		return n, err
+	}
 	switch {
 	case p.lookingAt("<!--"):
 		return p.parseDirComment()
@@ -249,8 +256,7 @@ func (p *parser) refuseUnimplemented() error {
 				strings.TrimSpace(kw))
 		}
 	}
-	for _, kw := range []string{"for ", "let ", "some ", "every ",
-		"switch", "typeswitch", "try ", "validate", "ordered", "unordered"} {
+	for _, kw := range []string{"for ", "let ", "some ", "every "} {
 		if hasKeywordPrefix(p.src[p.pos:], kw) {
 			return p.errorf(
 				"XPST0003: %q is not implemented yet",

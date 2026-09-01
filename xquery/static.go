@@ -82,6 +82,14 @@ func newStaticContext() *staticContext {
 			"xsi":   xdm.NSXSI,
 			"fn":    xdm.NSFN,
 			"local": nsLocal,
+			// err is not in §4.1's list of predeclared prefixes, but §3.16
+			// binds it: "The err prefix is bound to the namespace
+			// http://www.w3.org/2005/xqt-errors in the static context of
+			// every module", which is what makes "catch err:FODC0002" and
+			// "$err:code" work without the query declaring anything. A
+			// prolog may rebind it, which is why it sits in the map rather
+			// than being special-cased at lookup.
+			"err": xdm.NSErr,
 		},
 		defaultFunctionNS: xdm.NSFN,
 		boundarySpace:     StripSpace,
