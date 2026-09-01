@@ -158,7 +158,11 @@ func (p *parser) parseQName() (prefix, local string, err error) {
 	if first == "" {
 		return "", "", p.errorf("XPST0003: expected a name")
 	}
-	if !p.lookingAt(":") || p.lookingAt("::") {
+	// "::" is the axis separator and ":=" is the assignment operator, and
+	// both are single tokens the lexical rules match before QName's colon.
+	// A "let $array:= ..." binds $array and assigns; without the second test
+	// the name eats the colon and the "=" is asked to be a local name.
+	if !p.lookingAt(":") || p.lookingAt("::") || p.lookingAt(":=") {
 		return "", first, nil
 	}
 	p.pos++

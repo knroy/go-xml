@@ -100,7 +100,7 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 		}
 
 		start := i
-		if !startsOperand(src, i, prev) {
+		if !p.startsOperand(src, i, prev) {
 			if isNameStartByte(c) {
 				// Step over the whole name, so that a keyword's tail is not
 				// rescanned as though it began a word of its own.
@@ -176,7 +176,7 @@ var wordOperators = map[string]bool{
 // grammar does not have. prev == 0 — nothing before it — is the head of the
 // expression, which parseNestedExpr already handles; it is still accepted
 // here so that "<a/> = <b/>" substitutes both operands rather than one.
-func startsOperand(src string, i int, prev byte) bool {
+func (p *parser) startsOperand(src string, i int, prev byte) bool {
 	if src[i] == '<' {
 		return startsMarkup(src, i, prev)
 	}
@@ -208,8 +208,13 @@ func startsOperand(src string, i int, prev byte) bool {
 		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
-		// only be the construct — the same test parseXQueryOnly makes.
-		sub := &parser{src: src, pos: i}
+		// only be the construct — the same test parseXQueryOnly makes. The
+		// lookahead parses the construct for real, so it needs this parser's
+		// static context and version: the enclosed expressions inside it are
+		// compiled during the trial parse, and a sub-parser without an sc
+		// dereferences nil the moment one of them is reached.
+		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
+			depth: p.depth + 1}
 		_, ok, _ := sub.parseXQueryOnly()
 		return ok
 	}
