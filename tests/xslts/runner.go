@@ -461,6 +461,28 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The environment's schemas join the stylesheet's static context.
+	//
+	// A schema-aware processor holds one schema cache, and every schema the
+	// harness has loaded for the environment is in it; XSLT 2.0 section 3.14
+	// says as much, an xsl:import-schema being satisfiable "using a schema
+	// that is already known to the processor" whatever it names. The suite
+	// relies on that: catalog-005 imports the catalog namespace alone and
+	// then copies stylesheet documents under validation="strict", which needs
+	// the declarations for the XSLT namespace -- and its environment supplies
+	// exactly those, as schema-for-xslt30.xsd. Without this the components
+	// were loaded, used to annotate the source, and then thrown away before
+	// the transform that needed them ran, so every stylesheet it validated
+	// was reported XTTE1512, no top-level declaration.
+	//
+	// mergeInto keeps what xsl:import-schema already put there: a declaration
+	// the stylesheet imported by name is the one it asked for, and an
+	// environment schema for the same name must not displace it.
+	if sch := ss.Schema(); sch != nil {
+		if es := envSchema(set, r.environment(set, tc)); es != nil {
+			mergeInto(sch, es)
+		}
+	}
 
 	src, srcPath, err := r.principalSource(set, tc)
 	if err != nil {
@@ -982,11 +1004,25 @@ func envSchema(set *TestSet, env *Environment) *xsd.Schema {
 		if err != nil {
 			continue
 		}
-		tree, err := xdm.ParseString(string(stripBOM(data)), xdm.ParseOptions{})
+		tree, err := xdm.ParseString(string(stripBOM(data)),
+			xdm.ParseOptions{AllowDOCTYPE: true})
 		if err != nil {
 			continue
 		}
-		loaded, err := xsd.Load(tree.Root, p, xsd.Options{Resolver: &xsd.FileResolver{}})
+		// A schema document may declare with vc:minVersion that it is
+		// written for XSD 1.1, and read under 1.0 every one of its
+		// components is conditionally excluded -- silently, because that
+		// exclusion is exactly what the attribute asks a 1.0 processor to
+		// do. xsl:import-schema already reads the version off the document
+		// it is given; the environment's own schemas have the same claim on
+		// it, and the suite states it twice over by writing xsd-version="1.1"
+		// on the <schema> elements as well.
+		opts := xsd.Options{Resolver: &xsd.FileResolver{},
+			ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}}
+		if v, ok := xsd.DocumentRequiresVersion(tree.Root); ok {
+			opts.Version = v
+		}
+		loaded, err := xsd.Load(tree.Root, p, opts)
 		if err != nil || loaded == nil {
 			continue
 		}
