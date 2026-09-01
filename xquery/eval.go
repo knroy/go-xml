@@ -100,6 +100,17 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if n.items == nil {
 		return nil, nil
 	}
+	// A node that has a value of its own answers with it directly. Routing it
+	// through a builder would be lossy in exactly the way that matters here:
+	// the builder's job is to turn a sequence into content, so it converts an
+	// atomic value to text and merges it with its neighbours. "{ switch (1)
+	// case 1 return 2 default return 3 }" is the xs:integer 2, not the text
+	// node "2", and "instance of xs:integer" in the suite asks the question.
+	if len(n.items) == 1 {
+		if v, ok := n.items[0].(valueNode); ok {
+			return v.sequence(ctx)
+		}
+	}
 	inner := xdmbuild.New(policy{sc: ctx.sc})
 	ref := &builderRef{b: inner}
 	for _, it := range n.items {
@@ -108,6 +119,19 @@ func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	return inner.Sequence(), nil
+}
+
+// valueNode is a node whose value is a sequence rather than a contribution to
+// a tree.
+//
+// The XQuery-only expression forms are all of this kind: a switch returns
+// whatever its chosen clause returns, which may be an atomic value, a
+// function item or a map — none of which survives a round trip through the
+// content builder. A constructor is deliberately not one of these: its value
+// really is the node it builds, and the builder is how it is built.
+type valueNode interface {
+	node
+	sequence(ctx *evalContext) (xdm.Sequence, error)
 }
 
 func appendSequence(out *builderRef, seq xdm.Sequence) error {

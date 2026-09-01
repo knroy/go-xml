@@ -603,20 +603,6 @@ func (p *parser) parseURILiteral() (string, error) {
 	}
 }
 
-// consumeKeyword consumes a keyword only when it is a whole one: "instance"
-// does not begin with "in" for this purpose.
-func (p *parser) consumeKeyword(kw string) bool {
-	if !p.lookingAt(kw) {
-		return false
-	}
-	rest := p.src[p.pos+len(kw):]
-	if rest != "" && isNameByte(rest[0]) {
-		return false
-	}
-	p.pos += len(kw)
-	return true
-}
-
 // scanDeclExpr takes the source of an ExprSingle up to the ";" that ends the
 // declaration.
 //

@@ -71,12 +71,14 @@ type Query struct {
 
 // Compile compiles a query.
 //
-// What is implemented is the prolog and the constructor half of XQuery 3.1:
-// direct and computed constructors, with expressions inside them handled by
-// the xpath package. A query that is only an expression compiles too, since
-// every XPath 3.1 expression is an XQuery expression. FLWOR and the
-// XQuery-only expressions are not yet implemented and are reported as such
-// rather than mis-parsed.
+// What is implemented is the prolog, the constructors and the XQuery-only
+// expression forms: direct and computed constructors, try/catch, switch,
+// typeswitch, ordered and unordered, the extension expression, the string
+// constructor, and validate, which parses and then refuses because the
+// in-scope schema definitions are empty until schema import exists. A query
+// that is only an expression compiles too, since every XPath 3.1 expression
+// is an XQuery expression. FLWOR and the two imports are not yet implemented
+// and are reported as such rather than mis-parsed.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
@@ -277,6 +279,13 @@ func (p *parser) parseQueryBody() ([]node, error) {
 // parseItem parses one item of a query body: a constructor, or an expression
 // handed to xpath.
 func (p *parser) parseItem() (node, error) {
+	// The XQuery-only expression forms are checked first, because each begins
+	// with a keyword or a delimiter that the expression parser beneath would
+	// read as something else: "try" as a function call, "``[" as two empty
+	// string literals and a predicate.
+	if n, ok, err := p.parseXQueryOnly(); ok || err != nil {
+		return n, err
+	}
 	switch {
 	case p.lookingAt("<!--"):
 		return p.parseDirComment()
@@ -337,11 +346,7 @@ done:
 	if src == "" {
 		return nil, p.errorf("XPST0003: expected an expression")
 	}
-	c, err := p.compileExpr(src)
-	if err != nil {
-		return nil, err
-	}
-	return &enclosed{expr: c}, nil
+	return p.compileMaybeLifting(src)
 }
 
 // skipSpaceAndComments consumes whitespace and XQuery comments, which may
@@ -380,8 +385,7 @@ func (p *parser) refuseUnimplemented() error {
 			"XQST0059: a library module needs module resolution, " +
 				"which is not implemented yet")
 	}
-	for _, kw := range []string{"for ", "let ", "some ", "every ",
-		"switch", "typeswitch", "try ", "validate", "ordered", "unordered"} {
+	for _, kw := range []string{"for ", "let ", "some ", "every "} {
 		if hasKeywordPrefix(p.src[p.pos:], kw) {
 			return p.errorf(
 				"XPST0003: %q is not implemented yet",

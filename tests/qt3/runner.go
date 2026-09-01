@@ -256,6 +256,7 @@ func xpathVersion(v TargetVersion) xpath.Version {
 //
 // An XQuery run is scoped by the "XQ" alternatives instead, and admits the
 // "XP" ones too: every XPath 3.1 expression is a legal XQuery.
+
 func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
 		if target == XQuery31 {
@@ -430,8 +431,9 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		}
 	}()
 
-	if why := unsupportedSpec(append(append([]Dependency{}, ts.Dependencies...),
-		tc.Dependencies...), r.Target); why != "" {
+	deps := append(append([]Dependency{}, ts.Dependencies...),
+		tc.Dependencies...)
+	if why := unsupportedSpec(deps, r.Target); why != "" {
 		rep.Outcome, rep.Reason = Skip, why
 		return rep
 	}
