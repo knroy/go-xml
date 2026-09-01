@@ -192,9 +192,17 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			if el := out.b.Open(); el != nil {
 				before = len(el.Children)
 			}
+			// The namespaces in scope at the *source* have to be read before
+			// the node is appended: appending re-parents a copy of it, and
+			// from there the ancestors that supplied most of those bindings
+			// are no longer reachable.
+			var srcScope map[string]string
+			if v.Kind == xdm.KindElement && out.b.Open() != nil {
+				srcScope = v.InScopeNamespaces()
+			}
 			out.b.AppendNode(v)
 			if el := out.b.Open(); el != nil && len(el.Children) > before {
-				applyCopyNamespaces(el.Children[len(el.Children)-1], sc)
+				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
@@ -211,17 +219,23 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 // applyCopyNamespaces enforces the two halves of copy-namespaces on a subtree
 // that has just been copied into the element being constructed (§3.9.1.3).
 //
-// Both halves default to the permissive answer — preserve and inherit — and
-// under those defaults a re-parented copy is already right: it kept the
-// namespace nodes it carried, and it sees the destination's through its new
-// parent. So this only has work to do when the prolog asked for the other
-// answer, and it is written to walk the subtree at all only then.
+// Neither half is free, and the defaults are not the do-nothing case they
+// look like. Re-parenting a copy loses the bindings its ancestors supplied and
+// silently grants it the destination's, so preserve and inherit are as much
+// work as their opposites — they are the work of putting back what the copy
+// should have kept.
 //
-// no-preserve drops the namespace nodes the copied element carried, keeping
-// the ones its own name and its attributes' names still need — a copy whose
-// name became unresolvable would not be a node at all. copynamespace-16 is
-// the case: three nested constructors each declaring a prefix, and only the
+// preserve restores the in-scope namespaces the original had. They are read
+// before the append, because afterwards the ancestors that supplied most of
+// them are no longer reachable from the copy.
+//
+// no-preserve instead drops the namespace nodes the copied element carried,
+// keeping the ones its own name and its attributes' names still need — a copy
+// whose name became unresolvable would not be a node at all. copynamespace-16
+// is the case: three nested constructors each declaring a prefix, and only the
 // innermost element's own bindings survive to the innermost copy.
+//
+// The two are exclusive; inherit and no-inherit then apply on top of either.
 //
 // no-inherit stops the copy from picking up what is in scope at the
 // destination, which re-parenting otherwise gives it for free. There is no way
@@ -229,35 +243,76 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 // copy's root instead, which is what the namespace axis then reports.
 // copynamespace-17 asks for both and expects the copy to be left with the xml
 // binding alone.
-func applyCopyNamespaces(n *xdm.Node, sc *staticContext) {
+func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticContext) {
 	if n == nil || n.Kind != xdm.KindElement {
 		return
 	}
 	preserve := sc == nil || sc.preserveNS
 	inherit := sc == nil || sc.inheritNS
-	if preserve && inherit {
-		return
-	}
-	if !preserve {
+	if preserve {
+		preserveScope(n, srcScope)
+	} else {
 		stripNamespaces(n)
 	}
-	if !inherit {
-		// The bindings to undeclare are the ones the *parent* supplies; the
-		// copy's own, whether original or just rebuilt by stripNamespaces,
-		// are not inherited and must survive. An undeclaration is written as
-		// an empty URI, which InScopeNamespaces and LookupPrefix both read as
-		// "not in scope here".
-		own := map[string]bool{}
-		for _, ns := range n.Namespaces {
-			own[ns.Name.Local] = true
-		}
-		if n.Parent != nil {
-			for prefix := range n.Parent.InScopeNamespaces() {
-				if prefix == "xml" || own[prefix] {
-					continue
-				}
-				n.AddNamespace(prefix, "")
+	if inherit {
+		return
+	}
+	// The bindings to undeclare are the ones the *parent* supplies; the
+	// copy's own, whether original or just rebuilt above, are not inherited
+	// and must survive. An undeclaration is written as an empty URI, which
+	// InScopeNamespaces and LookupPrefix both read as "not in scope here".
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	if n.Parent != nil {
+		for prefix := range n.Parent.InScopeNamespaces() {
+			if prefix == "xml" || own[prefix] {
+				continue
 			}
+			n.AddNamespace(prefix, "")
+		}
+	}
+}
+
+// preserveScope gives a copied element the namespace nodes it had at the
+// source but that its new position no longer supplies.
+//
+// copy-namespaces preserve means the copy keeps "all the in-scope namespaces
+// of the original element", and most of those are usually not on the element
+// itself — they are on ancestors the copy has left behind. Re-parenting alone
+// therefore loses them: Constr-inscope-7 copies <foo:child3/> out of a parent
+// that declared foo, and the copy arrived with the right namespace URI on its
+// name and no binding for it anywhere.
+//
+// Only the bindings the destination does not already agree with are written,
+// so a copy landing where the same prefix means the same thing stays clean.
+// A binding the copy declares itself wins over the source scope, which is
+// what an undeclaration on the copied element means.
+func preserveScope(n *xdm.Node, srcScope map[string]string) {
+	if len(srcScope) == 0 {
+		return
+	}
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	for prefix, uri := range srcScope {
+		if prefix == "xml" || own[prefix] {
+			continue
+		}
+		if cur, ok := n.LookupPrefix(prefix); ok && cur == uri {
+			continue
+		}
+		n.AddNamespace(prefix, uri)
+	}
+	// A default namespace the source did not have, but the destination
+	// supplies, would silently move the copy into it. Constr-inscope-10 is
+	// the case: <child2> in no namespace copied under a <new> that declares
+	// one, and the expected result carries the xmlns="" that keeps it out.
+	if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
+		if uri, ok := n.LookupPrefix(""); ok && uri != "" {
+			n.AddNamespace("", "")
 		}
 	}
 }
