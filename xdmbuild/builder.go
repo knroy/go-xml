@@ -256,6 +256,23 @@ func (b *Builder) AppendValue(a *xdm.Atomic) {
 	b.lastAtomic = true
 }
 
+// EndAtomicRun declares that the values appended so far form a complete run,
+// so that the next atomic value starts a new one and takes no separator.
+//
+// Both languages separate a run of adjacent atomic values with single spaces,
+// and both scope the run to one sequence — XSLT §5.7.1 to the sequence an
+// instruction returns, XQuery §3.9.1.3 to the value of one enclosed
+// expression. The builder cannot see either boundary, because a caller
+// appends a sequence item by item and nothing in the calls says where one
+// ended and the next began.
+//
+// XSLT does not call this: it appends the whole of an instruction's sequence
+// before anything else can intervene, so its runs already end where they
+// should. XQuery needs it because "<e>{1}{2}</e>" is two enclosed
+// expressions, each a one-item sequence, and the two items must abut rather
+// than be separated.
+func (b *Builder) EndAtomicRun() { b.lastAtomic = false }
+
 // AddAttribute attaches an attribute to the element under construction.
 func (b *Builder) AddAttribute(name xdm.QName, value string) error {
 	return b.AddAttributeTyped(name, value, "")
@@ -649,7 +666,6 @@ func (b *Builder) ToTree() *xdm.Node {
 	tree.Finalize()
 	return tree.Root
 }
-
 
 // Open returns the element currently being built, or nil at the top level.
 //

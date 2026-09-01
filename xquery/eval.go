@@ -100,6 +100,15 @@ func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 // by single spaces. The builder does the separating, because only it knows
 // what was appended last.
 func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
+	// §3.9.1.3 separates adjacent atomic values within the value of *one*
+	// enclosed expression, so the run ends where the braces do: the items of
+	// "{1,2,3}" are one value and are separated, while "<e>{1}{2}</e>" is two
+	// values whose text abuts. Only the node standing for a whole "{ ... }"
+	// closes the run — doing it per item would separate nothing, and not
+	// doing it at all would run "{1}{2}" together into one separated pair.
+	if n.braced {
+		defer out.b.EndAtomicRun()
+	}
 	if n.items != nil {
 		for _, it := range n.items {
 			if err := it.eval(out, ctx); err != nil {
@@ -196,6 +205,16 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// Namespace declarations are applied before anything else, so that they
 	// are in scope for the attributes and the content.
 	for _, ns := range n.namespaces {
+		if ns.prefix == "" && ns.uri == "" {
+			// xmlns="" undeclares the default namespace rather than binding
+			// one. There is no namespace node to add — the element is in no
+			// namespace and its unprefixed children resolve to none either,
+			// which is what having no default binding already means. Handing
+			// it to AddNamespace would hit the rule against declaring a
+			// default namespace on an element that is in none, and report as
+			// an error the one case where writing it is exactly right.
+			continue
+		}
 		if err := sub.b.AddNamespace(ns.prefix, ns.uri); err != nil {
 			return err
 		}
