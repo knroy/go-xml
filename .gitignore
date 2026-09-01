@@ -13,4 +13,4 @@
 # so they are not redistributed here. The tests that use them skip cleanly
 # when the directory is absent; see "Testing" in the README for how to point
 # the suite at your own corpus.
-/testdata/
+/testdata
