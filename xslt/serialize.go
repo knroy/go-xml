@@ -524,13 +524,29 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		}
 		s.writeString("?>")
 
-	case xdm.KindAttribute:
-		// An attribute reaching the top level of a result is an error the
-		// spec calls out; serialising it as markup would produce something
-		// that is not well-formed.
+	case xdm.KindAttribute, xdm.KindNamespace:
+		// An attribute or namespace node reaching the top level of a result
+		// has no serialisation: it is markup that only exists inside a start
+		// tag, and writing it on its own would produce something that is not
+		// well-formed.
+		//
+		// SENR0001, the serialization error, rather than XTDE0420. XTDE0420
+		// is XSLT's error for *constructing* a document node whose content
+		// holds such a node, which the tree builder raises before a
+		// serialiser is ever reached (see outputpolicy.go); this is the
+		// other half of the same situation, where the sequence was never
+		// normalised into a tree and the attribute arrives here instead.
+		// K2-Serialization-1 through -4 send one straight to the serialiser
+		// and ask for SENR0001, which is the code Serialization 3.1 §2
+		// assigns.
+		kind := "attribute"
+		if n.Kind == xdm.KindNamespace {
+			kind = "namespace"
+		}
 		if s.err == nil {
-			s.err = fmt.Errorf("XTDE0420: attribute %q cannot be serialised outside an element",
-				n.Name.Lexical())
+			s.err = fmt.Errorf(
+				"SENR0001: %s node %q cannot be serialised outside an element",
+				kind, n.Name.Lexical())
 		}
 	}
 }

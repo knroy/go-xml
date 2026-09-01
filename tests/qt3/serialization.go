@@ -66,22 +66,28 @@ func serialized(res *outcome) (string, error) {
 // serializationSettings turns a prolog's "declare option output:*" set into
 // the output settings the serialiser reads.
 //
-// The defaults are the ones XQuery 3.1 §2.2.4 gives a main module rather than
-// the ones a stylesheet gets. Two differ and both matter here:
-//
-// omit-xml-declaration defaults to "no" in the specification, which is why
-// the method-xml cases that assert on a bare element write it explicitly; but
-// the suite compares against a fragment in nearly every case and the ser/
-// sets that do want a declaration say so, so the declaration is omitted
-// unless asked for. That is what serialization-matches means by matching a
-// substring of the output.
+// The defaults are the specification's own: omit-xml-declaration is "no", so
+// the declaration is written unless the query asks for it to be left out.
+// That is what the method-xml cases assume -- K2-Serialization-22 declares
+// only standalone="yes" and asks to see it, which it can only do in a
+// declaration nobody asked for explicitly.
 //
 // Method is deliberately left empty when unstated, so that the serialiser
 // chooses it from the result — a document whose element is <html> is written
 // as HTML — which is the specification's rule and not a default that can be
 // filled in ahead of the result existing.
 func serializationSettings(params map[string]string, paramDoc *xdm.Node) (xslt.OutputSettings, error) {
-	o := xslt.OutputSettings{Encoding: "UTF-8", OmitXMLDecl: true}
+	o := xslt.OutputSettings{Encoding: "UTF-8"}
+	// The adaptive method's default is the other way round. Serialization
+	// 3.1 §10 renders a node by handing it to the XML output method, so the
+	// declaration is something it *can* write, but a debugger's view of a
+	// sequence is not a document and the method defaults to leaving it out;
+	// every method-adaptive case anchors its pattern with ^ and $ around the
+	// items alone. output-0721 is the case that shows the parameter still
+	// works when a query asks for it.
+	if strings.EqualFold(params["method"], "adaptive") {
+		o.OmitXMLDecl = true
+	}
 	for name, val := range params {
 		switch name {
 		case "parameter-document":
@@ -96,11 +102,6 @@ func serializationSettings(params map[string]string, paramDoc *xdm.Node) (xslt.O
 			// document; there is no syntax for one in a prolog option, whose
 			// value is a string literal. No case declares it.
 			continue
-		case "omit-xml-declaration":
-			// Handled through the same setter, but the harness's default is
-			// the opposite of the specification's, so an explicit "no" has
-			// to be able to turn the declaration back on.
-			fallthrough
 		default:
 			if err := xslt.SetSerializationParam(&o, name, val); err != nil {
 				return o, err

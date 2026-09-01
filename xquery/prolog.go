@@ -788,7 +788,6 @@ done:
 	return src, nil
 }
 
-
 // parseEQName reads an EQName: a QName or a braced URI literal with a local
 // name, "Q{http://example.com/}local".
 //
