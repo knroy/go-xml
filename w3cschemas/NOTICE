@@ -1,0 +1,42 @@
+This module bundles schema documents published by the W3C. They are third-party
+documents, redistributed verbatim, and they are NOT covered by the MIT licence
+that applies to the rest of github.com/knroy/go-xml. That is why they live in a
+module of their own: depending on them is a choice a user makes explicitly
+rather than one inherited from the core library.
+
+Bundled documents
+-----------------
+
+  schemas/xml.xsd
+      The schema for the xml: namespace (xml:lang, xml:space, xml:base,
+      xml:id).
+      Source:    https://www.w3.org/2001/xml.xsd
+      Namespace: http://www.w3.org/XML/1998/namespace
+
+  schemas/XMLSchema.xsd
+      The XSD 1.1 schema for schemas.
+      Namespace: http://www.w3.org/2001/XMLSchema
+
+Terms
+-----
+
+W3C documents are published under the W3C Software and Document License:
+
+  https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document
+
+That licence permits redistribution of a document, with or without
+modification, provided the copyright notice, the licence, and a notice of any
+changes are retained. These files are redistributed unmodified.
+
+Verifying and updating
+----------------------
+
+The files can be re-fetched from their source URLs above. `go test ./...` in
+this module checks that each one still parses and still loads as a schema, but
+it deliberately does not fetch: a test that reaches the network would fail for
+reasons that have nothing to do with this code, which is the very problem this
+module exists to avoid.
+
+If your organisation requires a specific reviewed copy of these schemas, do not
+use this module: build the catalog yourself from your own files, which is a few
+lines and is what xsd.CatalogResolver, xsd.W3CEntries and AddFromFS are for.
