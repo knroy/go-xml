@@ -102,7 +102,10 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		c.sheet.schema = xsd.NewSchema()
 	}
 
-	opts := xsd.Options{Resolver: c.opts.SchemaResolver}
+	opts := xsd.Options{
+		Resolver:     c.opts.SchemaResolver,
+		ParseOptions: c.opts.SchemaParseOptions,
+	}
 	if opts.Resolver == nil {
 		// Without a resolver the stylesheet cannot name a location, for
 		// the same reason xsl:include cannot: following one means

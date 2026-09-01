@@ -743,6 +743,18 @@ type CompileOptions struct {
 	// the stylesheet names. An inline <xs:schema> child needs no resolver.
 	SchemaResolver xsd.Resolver
 
+	// SchemaParseOptions are passed to the XML parser for each schema
+	// document xsl:import-schema loads, including the ones those documents
+	// import in turn.
+	//
+	// The zero value refuses a DOCTYPE, which is the right default for the
+	// same reason it is in xsd.Options: a schema has no use for one, and it
+	// is the entry point for entity expansion attacks. A host that must
+	// read a schema carrying one -- the W3C's own schema for schemas
+	// declares its entities that way -- sets AllowDOCTYPE here, and thereby
+	// says so deliberately rather than having it decided for it.
+	SchemaParseOptions xdm.ParseOptions
+
 	// PackageResolver loads the packages named by xsl:use-package. Nil
 	// disables package composition, for the same reason a nil Resolver
 	// disables xsl:include: resolving a package name means fetching whatever
