@@ -1441,6 +1441,7 @@ func (p *parser) resolveAttributes(t *ComplexType, seen map[*ComplexType]bool) {
 	p.checkContentDerivationForm(t)
 	p.checkMixedConsistency(t)
 	p.checkAttributeWildcardRestriction(t)
+	p.checkAttributeWildcardExtension(t)
 	p.checkOpenContentRestriction(t)
 	p.applyWithheldOpenContent(t, base)
 	p.checkOpenContentExtension(t)

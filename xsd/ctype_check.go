@@ -413,6 +413,73 @@ func (p *parser) checkAttributeWildcardRestriction(t *ComplexType) {
 	}
 }
 
+// checkAttributeWildcardExtension enforces the expressibility half of
+// src-ct.4 as revised by errata E1-10: the attribute wildcard of an extension
+// is the union (§3.10.6 "Attribute Wildcard Union") of the base's and the
+// extension's own, and E1-10 makes it a schema error when that union has no
+// value — when no single namespace constraint denotes the set of names the
+// union admits.
+//
+// In XSD 1.0 a negation carries exactly one namespace and always excludes the
+// absent namespace too: ##other in a schema with target namespace "a" means
+// "not a and not absent". So 1.0 can write "not a and not absent", and it can
+// write "anything at all", but it cannot write "not a, absent allowed" —
+// there is no syntax for a negation that readmits the absent namespace. That
+// is the one shape the union can produce and 1.0 cannot name.
+//
+// XSD 1.1 can name it — there a negation excludes only the namespaces it
+// lists, and the absent namespace is spelled separately — which is why
+// wildZ013 expects invalid in 1.0 and valid in 1.1, and why this check is
+// gated on the version rather than applied to both.
+//
+// The gate has to be this narrow. wildZ013's two schemas are nearly the same
+// document, and the suite calls test328873.xsd valid while calling
+// test328873i.xsd invalid, so the rule that separates them cannot be "the
+// union came out inexpressible" in any looser sense:
+//
+//   - Both files define a type whose union is not(absent) — NSNot with an
+//     empty namespace list, absent excluded. In test328873.xsd that is
+//     derived5, whose own source comments it as "resultant wildcard is
+//     not(absent)", and that file is expected valid. So not(absent) is
+//     expressible in 1.0 and must not be flagged; it is what ##other means in
+//     a schema with no target namespace.
+//   - Both files define a type whose union is everything. That is ##any, and
+//     it is expressible.
+//
+// The only construct that differs between the two files is the second
+// operand of derived2's union: "b c" in the valid file, giving not(a) with
+// absent still excluded, against "##local b c" in the invalid one, where the
+// ##local member readmits the absent namespace and leaves not(a) with absent
+// allowed. That single difference is the whole of the error, so the condition
+// below is exactly it — a negation that still names a namespace and no longer
+// excludes absent — and nothing wider.
+func (p *parser) checkAttributeWildcardExtension(t *ComplexType) {
+	if t == nil || t.Name.URI == NSSchema || p.schema.Version >= Version11 ||
+		t.DerivationMethod != DerivationExtension {
+		return
+	}
+	base, ok := t.Base.(*ComplexType)
+	if !ok || base == t || isUrType(base) {
+		return
+	}
+	// The union is computed here rather than read off the type because
+	// inheritAttributesNow has not run yet: t.AttributeWildcard is still
+	// the extension's own. Computing it twice is cheap and keeps this
+	// check from depending on the order of the two.
+	if base.AttributeWildcard == nil || t.AttributeWildcard == nil {
+		return
+	}
+	u := unionWildcards(base.AttributeWildcard, t.AttributeWildcard)
+	if u == nil || u.Kind != NSNot || len(u.Namespace) == 0 || u.ExcludesAbsent {
+		return
+	}
+	p.errs = append(p.errs, errorAt(nil, "src-ct.4",
+		"the attribute wildcard of complex type %q is the union of its own "+
+			"and that of its base %q, and that union admits every namespace "+
+			"but %q including the absent namespace, which XSD 1.0 has no "+
+			"namespace constraint for", t.Name, base.Name, u.Namespace[0]))
+}
+
 // checkOpenContentRestriction enforces the open-content half of Content Type
 // Restricts (§3.4.6.2, clause 2).
 //
