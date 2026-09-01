@@ -203,12 +203,45 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 	}
+	// §3.9.1.3: the base URI of a constructed element is the static base URI
+	// of the constructor *unless* the element carries an xml:base attribute,
+	// in which case it is that attribute resolved against the base URI in
+	// force at the parent. The attribute is only known once the attributes
+	// have been evaluated — a computed one is not even a constant — so the
+	// stamp above is a provisional answer and this is the final one. Without
+	// it base-uri(<e xml:base="http://example.com/"/>) answered the query's
+	// own base URI, or nothing, which is wrong in both directions.
+	if el := sub.b.Open(); el != nil {
+		parent := n.baseURI
+		if el.Parent != nil {
+			// A nested constructor resolves against the base URI its
+			// enclosing element ended up with, not against the static one:
+			// <e xml:base="http://a.example/x/"><b xml:base="y"/></e> makes
+			// b's base http://a.example/x/y.
+			if pb := inheritedBase(el.Parent); pb != "" {
+				parent = pb
+			}
+		}
+		xdmbuild.Rebase(el, parent)
+	}
 	for _, c := range n.content {
 		if err := c.eval(sub, ctx); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// inheritedBase returns the base URI in force at a node, which is the nearest
+// one stamped on it or on an ancestor. A node the builder has not stamped —
+// every node without an xml:base of its own — takes its parent's.
+func inheritedBase(n *xdm.Node) string {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.BaseURI != "" {
+			return cur.BaseURI
+		}
+	}
+	return ""
 }
 
 // eval for an attribute joins its parts into one string.
@@ -337,6 +370,13 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 	doc, err := inner.ToDocument()
 	if err != nil {
 		return err
+	}
+	// §3.9.3.1: a constructed document node takes the base URI of the
+	// constructor. ToDocument may already have lifted a base URI off the
+	// document element (builder.go), and that one wins, being the resolved
+	// xml:base of the content rather than the constructor's own.
+	if doc != nil && doc.BaseURI == "" && n.baseURI != "" {
+		doc.BaseURI = n.baseURI
 	}
 	out.b.AppendNode(doc)
 	return nil

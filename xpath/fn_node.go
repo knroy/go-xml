@@ -269,7 +269,18 @@ func registerNodeFuncs(l *Library) {
 			// namespace axis must yield nothing, not the document URI.
 			return xdm.Empty(), nil
 		}
-		return xdm.One(xdm.NewAnyURI(inheritedBaseURI(n))), nil
+		// F&O 14.1.3: dm:base-uri is "an empty sequence" for a node with no
+		// base URI in force, and fn:base-uri returns the accessor's value
+		// unchanged. Answering xs:anyURI("") instead made a one-item sequence
+		// that empty() called non-empty and that string() rendered as "" — so
+		// base-uri(comment {"c"}) reported a base URI the node does not have.
+		// Comments, PIs, text and attributes constructed on their own have
+		// none at all, and that is the whole of what these cases check.
+		base := inheritedBaseURI(n)
+		if base == "" {
+			return xdm.Empty(), nil
+		}
+		return xdm.One(xdm.NewAnyURI(base)), nil
 	})
 
 	l.registerFn("lang", []int{1, 2}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {

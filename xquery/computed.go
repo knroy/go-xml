@@ -36,7 +36,7 @@ func (p *parser) parseComputed() (node, bool, error) {
 		}
 		switch kw {
 		case "document":
-			return &document{content: content}, true, nil
+			return &document{content: content, baseURI: p.sc.baseURI}, true, nil
 		case "text":
 			return &textNode{content: content}, true, nil
 		default:
