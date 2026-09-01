@@ -779,6 +779,26 @@ func (p *parser) declareType(el *xdm.Node, t Type) {
 		return
 	}
 	if prev, ok := p.schema.Types[name]; ok {
+		// The schema for schemas writes xs:anyType out, and says in a
+		// comment what it is doing: "Not the real urType, but as close
+		// an approximation as we can get in the XML representation".
+		// §3.4.7 makes the ur-type definition a component of every
+		// schema whether or not anything writes it down, so this
+		// declaration describes the built-in rather than defining
+		// anything, and the built-in keeps its place.
+		//
+		// Only the ur-type. Every other built-in is a simple type whose
+		// XML form the schema for schemas also writes, but those go
+		// through the branch below and are still refused, which is what
+		// TestParseRejectsRedefiningBuiltin pins: a schema declaring
+		// xs:string as a restriction of xs:int is redefining it, not
+		// describing it, and the difference matters. The ur-type is
+		// exempt because it is the one whose declaration cannot mean
+		// anything else -- it is its own base, so there is no narrowing
+		// for the XML to express.
+		if name == xsName("anyType") && builtinTypes()[name] == prev {
+			return
+		}
 		if st, isBuiltin := prev.(*SimpleType); isBuiltin && st.builtin {
 			p.errs = append(p.errs, errorAt(el, "sch-props-correct.2",
 				"%s redefines the built-in type xs:%s", name.Local, name.Local))
