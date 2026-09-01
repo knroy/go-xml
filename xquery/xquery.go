@@ -48,18 +48,37 @@ type Query struct {
 	body []node
 	sc   *staticContext
 	src  string
+
+	// vars and funcs are the prolog's variable and function declarations, in
+	// source order. Both are order-independent by §4.14 and §4.15, so the
+	// order here is for error reporting rather than for evaluation.
+	vars  []*varDecl
+	funcs []*funcDecl
+
+	// contextItem is "declare context item", when the prolog made one.
+	contextItem *contextItemDecl
+
+	// formats are the decimal formats the prolog declared, keyed by Clark
+	// name with the empty key for the default.
+	formats map[string]*xpath.DecimalFormat
+
+	// lib is the function library the query's own declared functions live in,
+	// built once at compile time and chained to the builtins. It is built
+	// here rather than per evaluation because a Query is immutable and safe
+	// for concurrent use, and building it once is what keeps it so.
+	lib *xpath.Library
 }
 
 // Compile compiles a query.
 //
-// What is implemented so far is the constructor half of XQuery 3.1 — direct
-// and computed constructors, with expressions inside them handled by the
-// xpath package — together with the XQuery-only expression forms: try/catch,
-// switch, typeswitch, ordered and unordered, the extension expression, the
-// string constructor, and validate, which parses and then refuses. A query
+// What is implemented is the prolog, the constructors and the XQuery-only
+// expression forms: direct and computed constructors, try/catch, switch,
+// typeswitch, ordered and unordered, the extension expression, the string
+// constructor, and validate, which parses and then refuses because the
+// in-scope schema definitions are empty until schema import exists. A query
 // that is only an expression compiles too, since every XPath 3.1 expression
-// is an XQuery expression. FLWOR and the prolog are not yet implemented and
-// are reported as such rather than mis-parsed.
+// is an XQuery expression. FLWOR and the two imports are not yet implemented
+// and are reported as such rather than mis-parsed.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
@@ -72,12 +91,26 @@ func Compile(src string, opts Options) (*Query, error) {
 		}
 	}
 
-	p := &parser{src: src, sc: sc, version: xpath.XPath31}
+	p := &parser{src: src, sc: sc, version: xpath.XPath31,
+		declaredNS: map[string]bool{}}
+	// The version declaration, the prolog and the body are read in that order
+	// because each changes how the next is read: a version declaration can
+	// refuse the whole query, and every prolog declaration is applied to the
+	// static context that the body's names then resolve against.
+	if err := p.parseVersionDecl(); err != nil {
+		return nil, err
+	}
+	if err := p.parseProlog(); err != nil {
+		return nil, err
+	}
 	body, err := p.parseQueryBody()
 	if err != nil {
 		return nil, err
 	}
-	return &Query{body: body, sc: sc, src: src}, nil
+	q := &Query{body: body, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
+		contextItem: p.contextItem, formats: p.formats}
+	q.lib = q.registerFunctions(nil)
+	return q, nil
 }
 
 // Eval compiles and runs a query in one step.
@@ -98,6 +131,10 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
 	}
+	ctx, err := q.prepare(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := xdmbuild.New(policy{sc: q.sc})
 	ref := &builderRef{b: out}
 	ec := &evalContext{xp: ctx, sc: q.sc}
@@ -109,15 +146,107 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	return out.Sequence(), nil
 }
 
+// prepare installs the module's static context on the evaluation context:
+// the declared functions, the declared global variables and the declared
+// context item.
+//
+// It runs per evaluation rather than per compilation because the values are
+// dynamic — a global's initialiser may call fn:current-dateTime, or read a
+// document, or depend on an external variable the caller bound differently
+// this time — while the plan that produces them is not.
+//
+// The function library is chained onto whatever the caller supplied rather
+// than replacing it, so a host that registered extension functions keeps them
+// and the query's own declarations sit in front.
+func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
+	sub := *ctx
+	if len(q.funcs) > 0 || len(q.formats) > 0 {
+		if ctx.Funcs == nil || ctx.Funcs == xpath.FunctionLibrary(q.lib.Parent) {
+			sub.Funcs = q.lib
+		} else {
+			// The caller's library is not the one the query was compiled
+			// against, so a fresh chain is built over theirs. This is the
+			// only per-evaluation allocation the prolog costs, and only for a
+			// query that declares functions and a caller that supplied a
+			// library of their own.
+			sub.Funcs = q.registerFunctions(ctx.Funcs)
+		}
+	}
+	// The base URI and the default collation are stamped on each compiled
+	// expression by compileExpr, because xpath models both as static
+	// properties of an expression. Setting the context's base URI as well is
+	// what fn:static-base-uri and fn:doc's relative resolution read.
+	if q.sc.baseURI != "" {
+		sub.StaticBaseURI = q.sc.baseURI
+	}
+	out := &sub
+	if q.contextItem != nil {
+		var err error
+		if out, err = q.bindContextItem(out); err != nil {
+			return nil, err
+		}
+	}
+	return q.bindVariables(out)
+}
+
+// bindContextItem applies "declare context item" (§4.16).
+//
+// An external declaration takes the caller's item when there is one and falls
+// back to its default when there is not. A non-external one replaces the
+// caller's item outright, which is what a query that computes its own context
+// is asking for. XPDY0002 is the error when neither supplies one.
+func (q *Query) bindContextItem(ctx *xpath.Context) (*xpath.Context, error) {
+	d := q.contextItem
+	sub := *ctx
+	if d.external && ctx.Item != nil {
+		// Only the type check applies: the value is the caller's.
+		if _, err := d.typ.convert(xdm.Sequence{ctx.Item},
+			"the context item"); err != nil {
+			return nil, err
+		}
+		return ctx, nil
+	}
+	if d.init == nil {
+		if ctx.Item != nil {
+			return ctx, nil
+		}
+		return nil, fmt.Errorf(
+			"XPDY0002: no value was supplied for the declared context item")
+	}
+	// The initialiser is evaluated with the globals already in scope, so a
+	// "declare context item := $doc" can name one. bindVariables runs after
+	// this, so the initialiser sees only what the caller bound — which is the
+	// dependency order §4.16 gives, since the context item is part of the
+	// dynamic context the variables are initialised against.
+	seq, err := d.init.compiled.Eval(&sub)
+	if err != nil {
+		return nil, err
+	}
+	seq, err = d.typ.convert(seq, "the context item")
+	if err != nil {
+		return nil, err
+	}
+	switch len(seq) {
+	case 0:
+		sub.Item = nil
+	case 1:
+		sub.Item = seq[0]
+	default:
+		return nil, fmt.Errorf(
+			"XPTY0004: the context item must be a single item, not %d", len(seq))
+	}
+	sub.Position, sub.Size = 1, 1
+	return &sub, nil
+}
+
 // String returns the query's source.
 func (q *Query) String() string { return q.src }
 
 // parseQueryBody parses the body of a main module.
 //
 // A query body is one expression, but an expression may be a comma-separated
-// sequence and may be a constructor, so this reads whichever it finds. The
-// prolog is not implemented yet; a query that has one is refused by name
-// rather than parsed as though the declarations were an expression.
+// sequence and may be a constructor, so this reads whichever it finds. It is
+// reached with the prolog already consumed and applied.
 func (p *parser) parseQueryBody() ([]node, error) {
 	p.skipSpaceAndComments()
 	if err := p.refuseUnimplemented(); err != nil {
@@ -222,16 +351,22 @@ done:
 
 // skipSpaceAndComments consumes whitespace and XQuery comments, which may
 // appear anywhere whitespace may and which nest.
-func (p *parser) skipSpaceAndComments() {
+//
+// It reports whether anything was consumed, which the prolog needs: "declare
+// namespace" and "declarenamespace" differ only in that a separator was
+// there, and a comment is a legal separator — "declare(:x:)namespace" is a
+// namespace declaration.
+func (p *parser) skipSpaceAndComments() bool {
+	start := p.pos
 	for {
 		p.skipSpace()
 		if !p.lookingAt("(:") {
-			return
+			return p.pos > start
 		}
 		end, err := skipComment(p.src, p.pos)
 		if err != nil {
 			// Leave it: the expression parser will report it in context.
-			return
+			return p.pos > start
 		}
 		p.pos = end + 1
 	}
@@ -245,14 +380,10 @@ func (p *parser) skipSpaceAndComments() {
 // mistake that is not there. Naming the feature is the more useful failure
 // while the implementation is incomplete.
 func (p *parser) refuseUnimplemented() error {
-	for _, kw := range []string{
-		"xquery version", "module namespace", "declare ", "import ",
-	} {
-		if hasKeywordPrefix(p.src[p.pos:], kw) {
-			return p.errorf(
-				"XQST0031: the XQuery prolog is not implemented yet (%q)",
-				strings.TrimSpace(kw))
-		}
+	if hasKeywordPrefix(p.src[p.pos:], "module namespace") {
+		return p.errorf(
+			"XQST0059: a library module needs module resolution, " +
+				"which is not implemented yet")
 	}
 	for _, kw := range []string{"for ", "let ", "some ", "every "} {
 		if hasKeywordPrefix(p.src[p.pos:], kw) {
