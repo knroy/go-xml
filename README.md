@@ -72,7 +72,7 @@ Requires Go 1.26 or later.
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,778 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.72% of the W3C XSLT suite filtered to 3.0 (8,599 of 8,623 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
+| **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,600 of 8,623 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.87% of the W3C xsdtests *instance* tests (24,967 of 24,999); **99.85%** of its *schema-validity* tests (14,384 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,177 of 26,207); **99.88%** schema-validity (15,346 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -99,7 +99,7 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.72%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.73%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
    now 5 of 52, all five documented as unreachable rather than outstanding.

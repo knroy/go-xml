@@ -10,17 +10,17 @@ commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,599 | 99.72% | **24** | 3 | 1 | **20** | 99.76% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,600 | 99.73% | **23** | 2 | 1 | **20** | 99.76% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,351 | 99.87% | **53** | 3 | 0 | **50** | 99.88% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,523 | 99.88% | **49** | 2 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **135** | **8** | **1** | **126** | |
+| | **Total** | | | | **134** | **7** | **1** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**135 disagreements in total**, of which **8 are ours to fix**, **126 cannot
+**134 disagreements in total**, of which **7 are ours to fix**, **126 cannot
 be fixed without shipping something less correct**, and **1 is an open
 question**.
 
@@ -107,7 +107,7 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 33 failures
+# xslt — 32 failures
 
 ## XSLT 2.0 — 9 failures
 
@@ -178,21 +178,17 @@ them separate, and `override-t-003a` is the case.
 | `docbook-001`, `docbook-004` | **Not implementable** | EXSLT `exsl:document`, as above. |
 | `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
 
-### Long tail — 11
+### Long tail — 5
 
-Round 2 cleared 23 of the 34 that were here. What is left is one case per set,
-none sharing a cause with another, so each is its own small investigation.
+Rounds two and three cleared the rest. What is left shares no cause, so each
+is its own investigation.
 
 | Case | Verdict | Note |
 |---|---|---|
-| `error-0640e-2`, `error-3105a` | **Implementable** | Two missing static checks. An implementation of the XTSE3105 check exists but regressed two other cases and was not taken. |
-| `catalog-005b`, `catalog-009` | **Implementable** | Error reporting in `use-when`/static evaluation. |
+| `catalog-005b` | **Implementable** | Reports `XTTE1512` for `as-3102.xsl` where the suite wants a clean result. `catalog-009`, which shared this row, now passes: loading the schema for schemas needed three fixes — a DOCTYPE the host may now permit, `resolveAttributes` skipping the document's own types because their names are in the schema namespace, and no `Choice:Sequence` cell in the derivation table. |
+| `type-available-0151` | **Implementable** | Wants XSD 1.1 *absent*; this engine has it. Both ways of scoping that were measured and both cost more than the case is worth: excluding every `satisfied="false"` case drops 7 passing regex cases with it, and claiming `XSD_1.1` outright regresses XSLT 2.0 by 4. |
+| `accumulator-038` | **Not implementable** | Suite defect: its `main` template lacks `visibility="public"`, so a transform may not start at it. The sibling `accumulator-039` was patched for exactly this in 2019 and 038 was missed. |
 | `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
-| `castable-006` | **Implementable** | `castable as` against a union of a list type. |
-| `type-available-0151` | **Implementable** | `type-available` on a type that is declared but not imported. |
-| `collection-006` | **Implementable** | Package-scoped `fn:collection` result. |
-| `accumulator-038` | **Not implementable** | Suite defect: its `main` template lacks `visibility="public"`, so a transform cannot start at it. The sibling `accumulator-039` was patched for exactly this in 2019 and 038 was missed. |
-| `notation-0002` | **Implementable** | `xs:NOTATION` comparison. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
 **XSLT 3.0 ceiling: 8,605 / 8,623 = 99.79%.**

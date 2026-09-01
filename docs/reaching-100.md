@@ -9,10 +9,10 @@ the work that exists from the work that does not.
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XSLT 2.0 | 9 | 0 | 0 | 9 |
-| XSLT 3.0 | 24 | 3 | 1 | 20 |
+| XSLT 3.0 | 23 | 2 | 1 | 20 |
 | XSD 1.0 | 53 | 3 | 0 | 50 |
 | XSD 1.1 | 49 | 2 | 0 | 47 |
-| **Total** | **135** | **8** | **1** | **126** |
+| **Total** | **134** | **7** | **1** | **126** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -24,7 +24,7 @@ challenged, and 99 of the 142 XSD disagreements are of that kind — 44 of them
 
 ---
 
-## Part 1 — the 8 that are real work
+## Part 1 — the 7 that are real work
 
 This is the whole of what "reaching the ceiling" means. None of it is
 speculative; every case has a diagnosed shape.
@@ -97,7 +97,7 @@ before 3.0.
 |---|---|---|
 | XPath 3.1 | 100.00% | **100.00%** |
 | XSLT 2.0 | 99.85% | **99.85%** |
-| XSLT 3.0 | 99.72% | **99.76%** |
+| XSLT 3.0 | 99.73% | **99.76%** |
 | XSD 1.0 | 99.87% | **99.88%** |
 | XSD 1.1 | 99.88% | **99.89%** |
 
@@ -250,7 +250,7 @@ What is achievable:
 4. **Two singles** — `json-to-xml-048`, `validation-0201`.
 5. **XSD over-strictness** — 17 cases, riskier, each can regress a false accept.
 
-That is **~8 cases and a ceiling of about 99.9% across the board**.
+That is **~7 cases and a ceiling of about 99.9% across the board**.
 
 Three larger items are defensible as *features* rather than conformance work,
 and should be judged that way: **`xsl:assert`** (cheapest), **XInclude**, and
