@@ -41,7 +41,15 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 		if err != nil {
 			return nil, err
 		}
-		return p.oneItem(n)
+		p.skipSpaceAndComments()
+		if p.eof() {
+			return []node{n}, nil
+		}
+		// A path or a predicate over the construct: "<e/>/(for $i in
+		// self::node() return $i)" is the mirror of the parenthesised case,
+		// with the syntax xpath cannot read on the left of the "/" rather
+		// than inside brackets, and it is rewritten the same way.
+		return p.pathOver([]node{n})
 	}
 	if p.lookingAt("(") {
 		p.pos++
@@ -61,39 +69,13 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 		// idiom the suite leans on hardest, and it cannot be read any other
 		// way: the parenthesised half needs this parser and the half after it
 		// needs the other one.
-		rest := p.src[p.pos:]
-		if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "[") {
-			// Only a step or a predicate binds tightly enough for the
-			// rewrite to preserve precedence. An operator would not: in
-			// "(...) + 1 * 2" the substitution is still correct, but in
-			// "-(...)" and in anything where the parenthesis is not the
-			// whole left operand it is not obviously so, and guessing wrong
-			// here changes the answer silently.
-			return nil, p.errorf("XPST0003: unexpected %q",
-				firstToken(rest))
-		}
-		c, err := p.compileExpr("$local:" + parenVar + rest)
-		if err != nil {
-			return nil, err
-		}
-		p.pos = len(p.src)
-		return []node{&parenPath{value: items, rest: c}}, nil
+		return p.pathOver(items)
 	}
 	if items, ok, err := p.parseNestedCall(); ok || err != nil {
 		return items, err
 	}
 	return nil, p.errorf(
 		"XPST0003: a constructor or FLWOR expression cannot appear here")
-}
-
-// oneItem returns n as the whole expression, checking that nothing follows it.
-func (p *parser) oneItem(n node) ([]node, error) {
-	p.skipSpaceAndComments()
-	if !p.eof() {
-		return nil, p.errorf("XPST0003: unexpected %q",
-			firstToken(p.src[p.pos:]))
-	}
-	return []node{n}, nil
 }
 
 // parseParenBody reads the comma-separated items of a parenthesised
@@ -215,6 +197,69 @@ func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 		return err
 	}
 	return appendSequence(out, seq)
+}
+
+// pathOver rewrites "E S" — a value this parser had to read, followed by a
+// path step or a predicate — so that xpath evaluates the step.
+//
+// The value is computed here and the rest of the expression compiled over a
+// variable bound to it, which keeps the path semantics, the predicates and
+// the document ordering where they belong. "(for $x in E return F)/g" is the
+// idiom the suite leans on hardest, and it cannot be read any other way: the
+// left half needs this parser and the right half needs the other one.
+func (p *parser) pathOver(value []node) ([]node, error) {
+	rest := p.src[p.pos:]
+	if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "[") {
+		// Only a step or a predicate binds tightly enough for the rewrite to
+		// preserve precedence. An operator would not: in "(...) + 1 * 2" the
+		// substitution is still correct, and in "-(...)" and wherever the
+		// left operand is not the whole of what was parsed it is not
+		// obviously so. Guessing wrong there changes an answer silently,
+		// which is worse than refusing.
+		return nil, p.errorf("XPST0003: unexpected %q", firstToken(rest))
+	}
+	c, err := p.compileExpr("$local:" + parenVar + rest)
+	if err != nil {
+		return nil, err
+	}
+	p.pos = len(p.src)
+	return []node{&parenPath{value: value, rest: c}}, nil
+}
+
+// withTrailingPath wraps n in the path step or predicate that follows it,
+// when one does.
+//
+// It is a no-op wherever nothing follows, which is the ordinary case: an item
+// of a query body, an argument of a call, an element of a parenthesised
+// sequence. Where something does follow, only a step or a predicate is taken
+// — see pathOver for why an operator is not — and anything else is left for
+// the caller to report against its own expectations.
+func (p *parser) withTrailingPath(n node) (node, error) {
+	save := p.pos
+	p.skipSpaceAndComments()
+	if p.eof() || (p.src[p.pos] != '/' && p.src[p.pos] != '[') {
+		p.pos = save
+		return n, nil
+	}
+	src, err := p.scanTrailingPath()
+	if err != nil {
+		return nil, err
+	}
+	c, err := p.compileExpr("$local:" + parenVar + src)
+	if err != nil {
+		return nil, err
+	}
+	return &parenPath{value: []node{n}, rest: c}, nil
+}
+
+// scanTrailingPath returns the source of the steps and predicates following
+// the cursor, stopping where the expression they are part of does.
+//
+// It is the same scan an ExprSingle gets, restricted to what may follow a
+// primary: it stops at a comma or a closing bracket it did not open, and at
+// a clause keyword, because a path may be the last thing in a clause.
+func (p *parser) scanTrailingPath() (string, error) {
+	return p.scanExprSingle()
 }
 
 // parenVar names the variable a parenthesised expression's value is bound to

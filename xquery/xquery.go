@@ -153,6 +153,19 @@ func (p *parser) parseItem() (node, error) {
 	// clause but "for" and "let", and a type declaration on a bound variable.
 	// A plain "for $x in E return F" would compile either way; taking it here
 	// keeps one implementation rather than two that must agree.
+	n, err := p.parseBareItem()
+	if err != nil {
+		return nil, err
+	}
+	// A path step or a predicate may follow the construct — "<e/>/name()",
+	// "(for $x in E return F)[1]". The construct is parsed here and the step
+	// compiled by xpath over its value, because the two halves need different
+	// parsers and neither can read the other's.
+	return p.withTrailingPath(n)
+}
+
+// parseBareItem parses one item without the path that may follow it.
+func (p *parser) parseBareItem() (node, error) {
 	if p.looksLikeFLWOR() {
 		f, err := p.parseFLWOR()
 		if err != nil {
