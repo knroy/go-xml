@@ -86,7 +86,7 @@ func (i *wherePopulatedInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 		return err
 	}
-	for _, it := range sub.sequence() {
+	for _, it := range sub.Sequence() {
 		if deemedEmpty(it) {
 			continue
 		}
@@ -245,7 +245,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 			if err := p.instr.Execute(p.rt, sub); err != nil {
 				return err
 			}
-			items := sub.sequence()
+			items := sub.Sequence()
 			if len(items) == 0 {
 				continue
 			}
@@ -282,7 +282,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 				if err := ci.Execute(rt, sub); err != nil {
 					return err
 				}
-				r = append(r, sub.sequence()...)
+				r = append(r, sub.Sequence()...)
 			} else {
 				l = append(l, pending{instr: ci, at: len(r), rt: rt})
 			}
@@ -304,7 +304,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		if err := instr.Execute(rt, sub); err != nil {
 			return stampPosition(err, instr)
 		}
-		for _, it := range sub.sequence() {
+		for _, it := range sub.Sequence() {
 			if !f && !vacuous(it) {
 				// The transition to "non-empty" happens before the item that
 				// caused it is appended, so a deferred header lands in front
@@ -327,7 +327,7 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 		if err := onEmpty.Execute(rt, sub); err != nil {
 			return err
 		}
-		r = append(r, sub.sequence()...)
+		r = append(r, sub.Sequence()...)
 	} else if !f {
 		// No xsl:on-empty and nothing non-vacuous: the pending
 		// xsl:on-non-empty instructions never fire, and 8.4.3 says their
@@ -347,11 +347,15 @@ func execConditionalSequence(body []Instruction, rt *runtime, out *outputBuilder
 func appendItem(out *outputBuilder, it xdm.Item) {
 	switch v := it.(type) {
 	case *xdm.Node:
-		out.appendNode(v)
+		out.AppendNode(v)
 	case *xdm.Atomic:
-		out.appendValue(v)
+		out.AppendValue(v)
 	default:
-		out.items = append(out.items, it)
+		// A map, array or function item: legal in a sequence, refused inside
+		// element content. The error is ignored here because this path is
+		// reached only where the caller has already established there is no
+		// open element.
+		_ = out.AppendOpaque(it)
 	}
 }
 
@@ -365,7 +369,7 @@ func appendItem(out *outputBuilder, it xdm.Item) {
 // construction, which is not a thing an attribute may be.
 func appendItemChecked(out *outputBuilder, it xdm.Item) error {
 	if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindAttribute {
-		return out.addAttributeTyped(n.Name, n.Value, n.TypeAnnotation)
+		return out.AddAttributeTyped(n.Name, n.Value, n.TypeAnnotation)
 	}
 	appendItem(out, it)
 	return nil

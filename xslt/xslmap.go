@@ -38,7 +38,7 @@ func (i *mapInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 
 	b := xdm.NewMapBuilder()
-	for _, it := range sub.sequence() {
+	for _, it := range sub.Sequence() {
 		m, ok := it.(*xdm.MapItem)
 		if !ok {
 			// "A type error occurs if the result of evaluating the sequence
@@ -78,13 +78,7 @@ func (i *mapInstr) Execute(rt *runtime, out *outputBuilder) error {
 // exactly this reason and expects XTDE0450. At the top of a sequence the map
 // is an ordinary item, which is what makes xsl:variable over an xsl:map work.
 func appendMap(out *outputBuilder, m *xdm.MapItem) error {
-	if out.open != nil {
-		return fmt.Errorf(
-			"XTDE0450: a map cannot be added to the content of element %s",
-			out.open.Name.Lexical())
-	}
-	out.items = append(out.items, m)
-	return nil
+	return out.AppendOpaque(m)
 }
 
 // mapEntryInstr implements xsl:map-entry, which returns a singleton map.
@@ -135,7 +129,7 @@ func (i *mapEntryInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutput(), sub); err != nil {
 			return err
 		}
-		value = sub.sequence()
+		value = sub.Sequence()
 	}
 
 	b := xdm.NewMapBuilder()

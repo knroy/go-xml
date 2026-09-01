@@ -460,7 +460,7 @@ func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 				item.TypeName(), mode)
 		}
 		if a, ok := item.(*xdm.Atomic); ok {
-			out.appendValue(a)
+			out.AppendValue(a)
 		}
 		return nil
 	}
@@ -631,7 +631,7 @@ func (i *nextMatchInstr) nextMatchAtomic(rt *runtime, out *outputBuilder,
 	}
 	if t == nil {
 		if a, ok := item.(*xdm.Atomic); ok {
-			out.appendValue(a)
+			out.AppendValue(a)
 		}
 		return nil
 	}

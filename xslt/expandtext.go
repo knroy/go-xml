@@ -132,7 +132,7 @@ func (i *textValueTemplateInstr) Execute(rt *runtime, out *outputBuilder) error 
 	if err != nil {
 		return err
 	}
-	out.appendText(s)
+	out.AppendText(s)
 	return nil
 }
 

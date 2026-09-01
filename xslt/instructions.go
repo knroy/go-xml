@@ -14,7 +14,7 @@ import (
 type textInstr struct{ text string }
 
 func (i *textInstr) Execute(rt *runtime, out *outputBuilder) error {
-	out.appendText(i.text)
+	out.AppendText(i.text)
 	return nil
 }
 
@@ -62,7 +62,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		seq = sub.sequence()
+		seq = sub.Sequence()
 	}
 
 	// 3.8: in backwards-compatible mode xsl:value-of takes the string value
@@ -104,7 +104,7 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := checkAtomizable(seq); err != nil {
 		return err
 	}
-	out.appendText(constructedText(seq, sep))
+	out.AppendText(constructedText(seq, sep))
 	return nil
 }
 
@@ -132,9 +132,9 @@ func (i *sequenceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			out.appendNode(v)
+			out.AppendNode(v)
 		case *xdm.Atomic:
-			out.appendValue(v)
+			out.AppendValue(v)
 		default:
 			// A function item, a map or an array. xsl:sequence returns
 			// whatever its select produced, so all three reach here.
@@ -206,7 +206,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				if err := i.validation.assess(rt, c); err != nil {
 					return err
 				}
-				out.appendNode(c)
+				out.AppendNode(c)
 				continue
 			}
 			if v.Kind == xdm.KindAttribute {
@@ -245,7 +245,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
-				if err := out.addAttributeTyped(a.Name, a.Value, a.TypeAnnotation); err != nil {
+				if err := out.AddAttributeTyped(a.Name, a.Value, a.TypeAnnotation); err != nil {
 					return err
 				}
 				continue
@@ -254,7 +254,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// A namespace node joins the element's bindings rather than
 				// its children. Appending it as a child put it nowhere the
 				// namespace axis or the serialiser would ever look.
-				if err := out.addNamespaceNode(v.Name.Local, v.Value); err != nil {
+				if err := out.AddNamespace(v.Name.Local, v.Value); err != nil {
 					return err
 				}
 				continue
@@ -275,7 +275,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if i.copyAccumulators {
 				rt.noteCopiedAccumulators(v, c)
 			}
-			if out.open == nil {
+			if out.Open() == nil {
 				// A parentless copy keeps its own xml:base, resolved against
 				// the instruction's base URI rather than against the document
 				// it came from. appendNode only rebases when there is a
@@ -303,7 +303,7 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if err := i.validation.assess(rt, c); err != nil {
 				return err
 			}
-			out.appendNode(c)
+			out.AppendNode(c)
 			// After the copy has a parent, because the repair §5.8.3 needs
 			// depends on what the destination declares: an element in no
 			// namespace landing under one that declares a default has to
@@ -314,51 +314,12 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				fixupNamespaces(c)
 			}
 		case *xdm.Atomic:
-			out.appendValue(v)
+			out.AppendValue(v)
 		}
 	}
 	return nil
 }
 
-// deepCopy clones a subtree, detached from its original parent.
-//
-// The type annotation travels with the copy. validation="preserve" is defined
-// as keeping the types the source carried, and dropping them here left a
-// preserved copy untyped, so "$v instance of element(e, xs:anyURI)" answered
-// false for a node that had just been copied from a validated document.
-// Stripping is done by the validation spec, which is the thing that knows
-// whether the instruction asked for it.
-func deepCopy(n *xdm.Node) *xdm.Node {
-	c := &xdm.Node{
-		Kind:           n.Kind,
-		Name:           n.Name,
-		Value:          n.Value,
-		BaseURI:        n.BaseURI,
-		TypeAnnotation: n.TypeAnnotation,
-		IsID:           n.IsID,
-		IsIDREFS:       n.IsIDREFS,
-		// dm:nilled travels with the annotation on a COPY. A copy of an
-		// assessed element is an element that was assessed: validation-1202
-		// copies a nilled element with validation="preserve" and requires
-		// nilled() to stay true, and fn:copy-of and fn:snapshot in
-		// validation-1203 require the same. Only a NEWLY CONSTRUCTED element
-		// starts unnilled, which is xsl:copy's case in validation-1204 —
-		// there the annotation is preserved but the element itself is new.
-		IsNilled: n.IsNilled,
-	}
-	for _, ns := range n.Namespaces {
-		c.AddNamespace(ns.Name.Local, ns.Value)
-	}
-	for _, a := range n.Attrs {
-		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
-			Value: a.Value, TypeAnnotation: a.TypeAnnotation,
-			IsID: a.IsID, IsIDREFS: a.IsIDREFS})
-	}
-	for _, ch := range n.Children {
-		c.AppendChild(deepCopy(ch))
-	}
-	return c
-}
 
 // isNamespaceSensitiveType reports whether a type annotation names a type
 // whose values carry a namespace prefix that must stay bound.
@@ -602,7 +563,7 @@ func copyNamespacesTo(sub *outputBuilder, src *xdm.Node) {
 			// would be redundant and is in fact forbidden in the output.
 			continue
 		}
-		_ = sub.addNamespaceNode(p, scope[p])
+		_ = sub.AddNamespace(p, scope[p])
 	}
 }
 
@@ -665,7 +626,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 				"XTDE0450: xsl:copy cannot copy a function item into a " +
 					"result tree")
 		}
-		out.appendValue(v)
+		out.AppendValue(v)
 		return nil
 	}
 
@@ -674,14 +635,14 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// Shallow: the element and its namespaces are copied, attributes and
 		// children come from the body. That is the distinction from
 		// xsl:copy-of, and it is what makes the identity-transform idiom work.
-		sub := out.startElement(node.Name)
-		if out.open == nil && sub.open.BaseURI == "" {
+		sub := out.StartElement(node.Name)
+		if out.Open() == nil && sub.Open().BaseURI == "" {
 			// Section 11.9.1: "the base URI of a node is copied". With no
 			// parent to inherit from there is nothing else to take it from,
 			// so the source node's base URI travels with the shallow copy.
 			// An xml:base written into the body overrides it later, via the
 			// same path any other attribute takes.
-			sub.open.BaseURI = node.BaseURI
+			sub.Open().BaseURI = node.BaseURI
 		}
 		if !i.noNamespaces {
 			// Section 11.9.1 copies "the namespace nodes of the element",
@@ -697,11 +658,11 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 			return err
 		}
 		if i.noInherit {
-			blockNamespaceInheritance(sub.open)
+			blockNamespaceInheritance(sub.Open())
 		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
-		return i.validation.assess(rt, sub.open)
+		return i.validation.assess(rt, sub.Open())
 
 	case xdm.KindDocument:
 		// Section 11.9.1: the result of xsl:copy over a document node is "a
@@ -715,7 +676,7 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt, sub); err != nil {
 			return err
 		}
-		doc, err := sub.toDocument()
+		doc, err := sub.ToDocument()
 		if err != nil {
 			return err
 		}
@@ -760,31 +721,31 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := i.validation.assess(rt, doc); err != nil {
 			return err
 		}
-		out.appendNode(doc)
+		out.AppendNode(doc)
 		return nil
 
 	case xdm.KindText:
-		out.appendText(node.Value)
+		out.AppendText(node.Value)
 		return nil
 
 	case xdm.KindAttribute:
 		if err := i.validation.assess(rt, node); err != nil {
 			return err
 		}
-		return out.addAttribute(node.Name, node.Value)
+		return out.AddAttribute(node.Name, node.Value)
 
 	case xdm.KindComment:
-		out.appendNode(&xdm.Node{Kind: xdm.KindComment, Value: node.Value})
+		out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: node.Value})
 		return nil
 
 	case xdm.KindPI:
-		out.appendNode(&xdm.Node{Kind: xdm.KindPI, Name: node.Name, Value: node.Value})
+		out.AppendNode(&xdm.Node{Kind: xdm.KindPI, Name: node.Name, Value: node.Value})
 		return nil
 
 	case xdm.KindNamespace:
 		// A namespace node joins the element's bindings rather than its
 		// children, exactly as it does for xsl:copy-of.
-		return out.addNamespaceNode(node.Name.Local, node.Value)
+		return out.AddNamespace(node.Name.Local, node.Value)
 	}
 	return nil
 }
@@ -858,8 +819,8 @@ func stampConstructedBaseURI(el *xdm.Node, base string) {
 }
 
 func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
-	sub := out.startElement(rt.sheet.aliasFor(i.pkg, i.name))
-	stampConstructedBaseURI(sub.open, i.baseURI)
+	sub := out.StartElement(rt.sheet.aliasFor(i.pkg, i.name))
+	stampConstructedBaseURI(sub.Open(), i.baseURI)
 	for _, ns := range i.namespaces {
 		// Section 11.1.4: aliasing rewrites the namespace nodes copied from
 		// the literal result element, not only its name. Copying them
@@ -869,12 +830,12 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if a.uri == "" {
 				continue
 			}
-			sub.open.AddNamespace(a.prefix, a.uri)
-			sub.noteDeclared(a.prefix, a.uri)
+			sub.Open().AddNamespace(a.prefix, a.uri)
+			sub.NoteDeclared(a.prefix, a.uri)
 			continue
 		}
-		sub.open.AddNamespace(ns.prefix, ns.uri)
-		sub.noteDeclared(ns.prefix, ns.uri)
+		sub.Open().AddNamespace(ns.prefix, ns.uri)
+		sub.NoteDeclared(ns.prefix, ns.uri)
 	}
 	// A namespace that exclusion would have dropped comes back if it is the
 	// target of an alias: the point of aliasing onto, say, the XSLT namespace
@@ -889,10 +850,10 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the result-prefix of the alias and an excluded declaration of the
 		// same prefix name one namespace node, and emitting both would write
 		// the same xmlns declaration twice on one element.
-		if bound, ok := sub.open.LookupPrefix(ns.prefix); ok && bound == ns.uri {
+		if bound, ok := sub.Open().LookupPrefix(ns.prefix); ok && bound == ns.uri {
 			continue
 		}
-		sub.open.AddNamespace(ns.prefix, ns.uri)
+		sub.Open().AddNamespace(ns.prefix, ns.uri)
 	}
 	// Attribute sets are applied before the element's own attributes, so a
 	// literal attribute overrides one inherited from a set.
@@ -913,7 +874,7 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if an.URI != "" {
 			an = rt.sheet.aliasFor(i.pkg, an)
 		}
-		if err := sub.addAttribute(an, v); err != nil {
+		if err := sub.AddAttribute(an, v); err != nil {
 			return err
 		}
 	}
@@ -926,10 +887,10 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// then cannot resolve the prefix in an xsi:type value against the tree.
 	// The serialiser wrote the declaration anyway, so nothing about the
 	// output changed; only the namespace axis was short.
-	fixupNamespaces(sub.open)
+	fixupNamespaces(sub.Open())
 	// Assessed once the element is complete, since validity is a property of
 	// its content as well as its name.
-	return i.validation.assess(rt, sub.open)
+	return i.validation.assess(rt, sub.Open())
 }
 
 // elementInstr implements xsl:element, whose name is computed at run time.
@@ -963,10 +924,10 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
-	sub := out.startElement(qn)
-	stampConstructedBaseURI(sub.open, i.baseURI)
+	sub := out.StartElement(qn)
+	stampConstructedBaseURI(sub.Open(), i.baseURI)
 	if qn.URI != "" {
-		sub.open.AddNamespace(qn.Prefix, qn.URI)
+		sub.Open().AddNamespace(qn.Prefix, qn.URI)
 	} else if qn.Prefix == "" {
 		// An unprefixed name in no namespace UNDECLARES the default
 		// namespace when one is in scope. The serialiser worked this out
@@ -974,8 +935,8 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// the namespace axis kept reporting the inherited default binding.
 		// InScopeNamespaces already honours an empty-valued entry as an
 		// undeclaration; the constructor simply has to write one.
-		if sub.open.Parent != nil && sub.open.Parent.InScopeNamespaces()[""] != "" {
-			sub.open.AddNamespace("", "")
+		if sub.Open().Parent != nil && sub.Open().Parent.InScopeNamespaces()[""] != "" {
+			sub.Open().AddNamespace("", "")
 		}
 	}
 	if err := applyAttributeSets(rt, i.attrSets, sub); err != nil {
@@ -985,12 +946,12 @@ func (i *elementInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	if i.noInherit {
-		blockNamespaceInheritance(sub.open)
+		blockNamespaceInheritance(sub.Open())
 	}
 	// The element is complete only now, so validity is assessed here rather
 	// than at construction: a content model cannot be checked against
 	// content that has not been built yet.
-	return i.validation.assess(rt, sub.open)
+	return i.validation.assess(rt, sub.Open())
 }
 
 // resolveName turns a computed lexical name into an expanded QName, using the
@@ -1111,7 +1072,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		value = constructedText(sub.sequence(), sep)
+		value = constructedText(sub.Sequence(), sep)
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
@@ -1123,7 +1084,7 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := i.validation.assess(rt, assessed); err != nil {
 		return err
 	}
-	return out.addAttributeTyped(qn, value, assessed.TypeAnnotation)
+	return out.AddAttributeTyped(qn, value, assessed.TypeAnnotation)
 }
 
 // resolveName turns a computed attribute name into an expanded QName.
@@ -1194,14 +1155,14 @@ func (i *commentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		text = constructedText(sub.sequence(), " ")
+		text = constructedText(sub.Sequence(), " ")
 	}
 	// Section 11.8: the processor "must insert a space after any occurrence of
 	// - that is followed by another - or that ends the comment". This is a
 	// repair the specification requires, not an error — rejecting the
 	// stylesheet refused output XML can perfectly well represent.
 	text = repairCommentText(text)
-	out.appendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
+	out.AppendNode(&xdm.Node{Kind: xdm.KindComment, Value: text})
 	return nil
 }
 
@@ -1256,7 +1217,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		text = constructedText(sub.sequence(), " ")
+		text = constructedText(sub.Sequence(), " ")
 	}
 	// Leading whitespace is not part of the content: the serialised form puts
 	// a space after the target, so keeping it would double.
@@ -1265,7 +1226,7 @@ func (i *piInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// inserting a space between the "?" and the ">", which is what keeps a
 	// computed processing instruction from closing itself early.
 	text = strings.ReplaceAll(text, "?>", "? >")
-	out.appendNode(&xdm.Node{
+	out.AppendNode(&xdm.Node{
 		Kind:  xdm.KindPI,
 		Name:  xdm.QName{Local: target},
 		Value: text,
@@ -1389,7 +1350,7 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			return nil
 		}
-		value, text = sub.sequence(), constructedText(sub.sequence(), " ")
+		value, text = sub.Sequence(), constructedText(sub.Sequence(), " ")
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
@@ -1964,14 +1925,14 @@ func (i *documentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
 	}
-	doc, err := sub.toDocument()
+	doc, err := sub.ToDocument()
 	if err != nil {
 		return err
 	}
 	if err := i.validation.assess(rt, doc); err != nil {
 		return err
 	}
-	out.appendNode(doc)
+	out.AppendNode(doc)
 	return nil
 }
 

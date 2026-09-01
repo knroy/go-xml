@@ -493,7 +493,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// here rather than in the instruction because the ordering is not fixed:
 	// the implicit content may be written either side of the instruction, and
 	// only at the end is it known that both happened.
-	if *rt.baseURIUsed && len(out.sequence()) > 0 {
+	if *rt.baseURIUsed && len(out.Sequence()) > 0 {
 		return nil, fmt.Errorf(
 			"XTDE1490: two result documents were written to the base output " +
 				"URI: the principal result tree and an xsl:result-document " +
@@ -530,7 +530,7 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	}
 
 	return &Result{
-		Nodes:     out.sequence(),
+		Nodes:     out.Sequence(),
 		Messages:  *rt.messages,
 		Warnings:  *rt.warnings,
 		Secondary: *rt.secondary,

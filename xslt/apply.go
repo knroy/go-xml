@@ -348,7 +348,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		// The whole subtree is copied, so there is no recursion: the copy
 		// already carries the descendants a shallow rule would have
 		// processed.
-		out.appendNode(node)
+		out.AppendNode(node)
 		return nil
 	case "shallow-copy", "copy":
 		// "copy" is the XSLT 3.0 working-draft spelling that the suite still
@@ -374,7 +374,7 @@ func applyBuiltInRule(rt *runtime, node *xdm.Node, mode string,
 		return nil
 
 	case xdm.KindText, xdm.KindAttribute:
-		out.appendText(node.StringValue())
+		out.AppendText(node.StringValue())
 		return nil
 
 	case xdm.KindComment, xdm.KindPI:
@@ -526,7 +526,7 @@ func runTemplate(rt *runtime, t *Template,
 	if err := execSequence(t.Body, sub, tmp); err != nil {
 		return err
 	}
-	converted, err := t.asType.convertAs(tmp.sequence(),
+	converted, err := t.asType.convertAs(tmp.Sequence(),
 		"result of template "+templateLabel(t), "XTTE0505")
 	if err != nil {
 		return err
@@ -698,7 +698,7 @@ func (f *userFunction) call(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequen
 	}
 	// A stylesheet function whose result will not convert to its declared
 	// type is XTTE0780.
-	res, err := f.returns.convertAs(out.sequence(), "result of "+f.name.Lexical(),
+	res, err := f.returns.convertAs(out.Sequence(), "result of "+f.name.Lexical(),
 		"XTTE0780")
 	if err != nil {
 		return nil, err
@@ -877,7 +877,7 @@ func builtInDescend(rt *runtime, node *xdm.Node, mode string,
 		return nil
 	case xdm.KindText, xdm.KindAttribute:
 		if copyText {
-			out.appendText(node.StringValue())
+			out.AppendText(node.StringValue())
 		}
 		return nil
 	}
@@ -946,7 +946,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if err := builtInDescend(rt, node, mode, params, tunnels, sub, false); err != nil {
 			return err
 		}
-		doc, err := sub.toDocument()
+		doc, err := sub.ToDocument()
 		if err != nil {
 			return err
 		}
@@ -961,12 +961,12 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 		if doc.BaseURI == "" {
 			doc.BaseURI = node.BaseURI
 		}
-		out.appendNode(doc)
+		out.AppendNode(doc)
 		return nil
 	case xdm.KindElement:
-		sub := out.startElement(node.Name)
-		if out.open == nil && sub.open.BaseURI == "" {
-			sub.open.BaseURI = node.BaseURI
+		sub := out.StartElement(node.Name)
+		if out.Open() == nil && sub.Open().BaseURI == "" {
+			sub.Open().BaseURI = node.BaseURI
 		}
 		copyNamespacesTo(sub, node)
 		// The attributes are processed first so that they reach the element
@@ -993,7 +993,7 @@ func builtInShallowCopy(rt *runtime, node *xdm.Node, mode string,
 	default:
 		// Text, comments, processing instructions and attributes have no
 		// content to descend into, so a shallow copy is the whole node.
-		out.appendNode(node)
+		out.AppendNode(node)
 		return nil
 	}
 }

@@ -1,7 +1,6 @@
 package xslt
 
 import (
-	"fmt"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -20,12 +19,5 @@ import (
 // sequence, and the declared type then rejected the function the body had just
 // built.
 func appendOpaqueItem(out *outputBuilder, it xdm.Item) error {
-	if out.open != nil {
-		return fmt.Errorf(
-			"XTDE0450: a %s cannot be added to the content of element %s",
-			it.TypeName(), out.open.Name.Lexical())
-	}
-	out.lastAtomic = false
-	out.items = append(out.items, it)
-	return nil
+	return out.AppendOpaque(it)
 }

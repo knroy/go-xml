@@ -1735,9 +1735,9 @@ func (i *evaluateInstr) Execute(rt *runtime, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			out.appendNode(v)
+			out.AppendNode(v)
 		case *xdm.Atomic:
-			out.appendValue(v)
+			out.AppendValue(v)
 		default:
 			// A function item, a map or an array. The result of xsl:evaluate
 			// is whatever the target expression produced, exactly as
@@ -1850,9 +1850,9 @@ func appendSequence(seq xdm.Sequence, out *outputBuilder) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
-			out.appendNode(v)
+			out.AppendNode(v)
 		case *xdm.Atomic:
-			out.appendValue(v)
+			out.AppendValue(v)
 		default:
 			if err := appendOpaqueItem(out, it); err != nil {
 				return err

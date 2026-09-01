@@ -2,7 +2,6 @@ package xslt
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -1090,10 +1089,10 @@ func (rt *runtime) keyValues(def *keyDef, ctx *xpath.Context, n *xdm.Node) ([]*x
 	//
 	// A constructor that produced nodes or text has no atomic value of its
 	// own, so the tree's string value remains the answer for those.
-	items := out.sequence()
+	items := out.Sequence()
 	atoms := xdm.Atomize(items)
 	if len(atoms) == 0 {
-		return []*xdm.Atomic{xdm.NewString(out.toTree().StringValue())}, nil
+		return []*xdm.Atomic{xdm.NewString(out.ToTree().StringValue())}, nil
 	}
 	vals := make([]*xdm.Atomic, 0, len(atoms))
 	for _, it := range atoms {
@@ -1343,45 +1342,6 @@ func onlyEmptyURIs(seq xdm.Sequence) bool {
 	return true
 }
 
-// resolveAgainst resolves a possibly-relative reference against a base URI,
-// returning the reference unchanged when the base is unusable.
-func resolveAgainst(base, ref string) string {
-	if ref == "" || base == "" {
-		return ref
-	}
-	b, err := url.Parse(base)
-	if err != nil || !b.IsAbs() {
-		return ref
-	}
-	r, err := url.Parse(ref)
-	if err != nil {
-		return ref
-	}
-	resolved := b.ResolveReference(r)
-	if resolved.RawPath != "" {
-		resolved.Path, resolved.RawPath = resolved.RawPath, ""
-	}
-	out := resolved.String()
-	// net/url percent-escapes on the way out anything it does not consider
-	// legal in a path, and a system identifier is a URI reference the
-	// document author wrote, not text to be escaped. The case that matters
-	// is the backslash: a DTD naming "images\repository\pic.jpg" came back
-	// as "images%5Crepository%5Cpic.jpg", and unparsed-entity-50 is a
-	// stylesheet that splits the returned path on "\" to get the filename —
-	// after escaping there is no separator left to split on, so it keeps the
-	// whole directory chain.
-	//
-	// Setting RawPath does not help: EscapedPath validates it against Path
-	// and discards any RawPath it would itself have escaped, so the value
-	// has to be put back after String() has run. Only escapes this function
-	// introduced are undone — a %5C the author wrote survives, because it
-	// was never a literal backslash in ref to begin with.
-	if strings.ContainsAny(ref, "\\") && !strings.Contains(ref, "%5C") &&
-		!strings.Contains(ref, "%5c") {
-		out = strings.ReplaceAll(out, "%5C", "\\")
-	}
-	return out
-}
 
 // isLexicalQName reports whether s has the form of a QName: an NCName, or two
 // separated by one colon.

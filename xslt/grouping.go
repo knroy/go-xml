@@ -607,7 +607,7 @@ func (s *sortKey) evalKey(rt *runtime) (xdm.Sequence, error) {
 	if err := execSequence(s.body, sub, out); err != nil {
 		return nil, err
 	}
-	return out.sequence(), nil
+	return out.Sequence(), nil
 }
 
 // --- xsl:analyze-string -----------------------------------------------------
@@ -951,26 +951,26 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// backwards-016 numbers "apples"; both want NaN.
 		if i.value.CompatMode() {
 			if len(atoms) == 0 {
-				out.appendText("NaN")
+				out.AppendText("NaN")
 				return nil
 			}
 			at, ok := atoms[0].(*xdm.Atomic)
 			if !ok {
-				out.appendText("NaN")
+				out.AppendText("NaN")
 				return nil
 			}
 			num, cerr := xpath.CastAtomic(at, xdm.TypeDouble)
 			if cerr != nil || math.IsNaN(num.Float64()) ||
 				math.IsInf(num.Float64(), 0) {
-				out.appendText("NaN")
+				out.AppendText("NaN")
 				return nil
 			}
 			n := int64(math.Floor(num.Float64() + 0.5))
 			if n < 0 {
-				out.appendText("NaN")
+				out.AppendText("NaN")
 				return nil
 			}
-			out.appendText(formatNumberSeq([]*big.Int{big.NewInt(n)}, format, opts))
+			out.AppendText(formatNumberSeq([]*big.Int{big.NewInt(n)}, format, opts))
 			return nil
 		}
 
@@ -995,7 +995,7 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 			nums = append(nums, n)
 		}
-		out.appendText(formatNumberSeq(rebaseNumbers(nums, starts), format, opts))
+		out.AppendText(formatNumberSeq(rebaseNumbers(nums, starts), format, opts))
 		return nil
 	}
 
@@ -1036,7 +1036,7 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// literally, and that holds whether or not any number was found: the
 	// format "*1*" applied to nothing produces "**", not "". Returning early
 	// here dropped the prefix and suffix of every unnumbered node.
-	out.appendText(formatNumberSeq(rebaseNumbers(intsToBig(numbers), starts), format, opts))
+	out.AppendText(formatNumberSeq(rebaseNumbers(intsToBig(numbers), starts), format, opts))
 	return nil
 }
 

@@ -221,7 +221,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	sub := newOutputBuilder()
 	err := i.run(rt, sub)
 	if err == nil {
-		return appendSequence(sub.sequence(), out)
+		return appendSequence(sub.Sequence(), out)
 	}
 
 	if !catchable(err) {
@@ -235,7 +235,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// propagated: this path exists to preserve the output the body
 			// had already produced, and the signal is what the caller is
 			// waiting for.
-			_ = appendSequence(sub.sequence(), out)
+			_ = appendSequence(sub.Sequence(), out)
 		}
 		return err
 	}
@@ -243,7 +243,7 @@ func (i *tryInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if !ok {
 		return err
 	}
-	if i.noRollback && len(sub.sequence()) > 0 {
+	if i.noRollback && len(sub.Sequence()) > 0 {
 		// rollback-output="no" waives the guarantee that the failed body's
 		// output is discarded. This engine could discard it anyway, but the
 		// stylesheet has declared it does not need to be able to, and 8.3.1

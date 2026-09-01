@@ -226,7 +226,7 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		uri = constructedText(sub.sequence(), " ")
+		uri = constructedText(sub.Sequence(), " ")
 	}
 	// XTDE0930 is "results in a zero-length string", so the test is made on
 	// the value the instruction actually produced. Trimming first turned a
@@ -299,7 +299,7 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// xsl:namespace body is the ordinary way to write one. XTDE0410 is about
 	// ordering within element content, which the builder checks where there
 	// is an element to check it against.
-	return out.addNamespaceNode(prefix, uri)
+	return out.AddNamespace(prefix, uri)
 }
 
 // isLexicalAnyURI reports whether s is in the lexical space of xs:anyURI.
@@ -394,7 +394,7 @@ func (i *performSortInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		seq = sub.sequence()
+		seq = sub.Sequence()
 	}
 
 	sorted, err := applySorts(rt, seq, i.sorts)

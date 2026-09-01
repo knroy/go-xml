@@ -482,7 +482,7 @@ func (rt *runtime) applyAccumRules(def *accumulatorDef, n *xdm.Node,
 		if err := execSequence(best.body, r2, ob); err != nil {
 			return nil, err
 		}
-		out = ob.sequence()
+		out = ob.Sequence()
 	default:
 		out = xdm.Empty()
 	}

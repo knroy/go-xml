@@ -183,7 +183,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if serr != nil {
 		return serr
 	}
-	sub.setItemSeparator(sepSettings.ItemSeparator)
+	sub.SetItemSeparator(sepSettings.ItemSeparator)
 	// execSequence rather than a bare loop: the body is a sequence
 	// constructor, so an xsl:variable inside it is in scope for the
 	// instructions that follow, and a plain Execute loop never binds it —
@@ -202,7 +202,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// sequence is delivered as it stands, and forming a document node from it
 	// is the very step 2.3.6 says is not taken. See buildsTree.
 	if sepSettings.buildsTree() {
-		doc, derr := sub.toDocument()
+		doc, derr := sub.ToDocument()
 		if derr != nil {
 			return derr
 		}
@@ -223,7 +223,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		// document being recorded in place of the sequence, because the
 		// recorded sequence has to keep the item separators the document
 		// node does not carry -- see the comment on nodes below.
-		carryAnnotations(doc, sub.sequence())
+		carryAnnotations(doc, sub.Sequence())
 	}
 
 	if href == "" {
@@ -257,7 +257,7 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// its assertions against these nodes, not against the serialised text,
 	// so a separator that existed only in the document node toDocument built
 	// would be invisible to /text() = '+++'.
-	nodes := insertItemSeparator(sub.sequence(), settings.ItemSeparator)
+	nodes := insertItemSeparator(sub.Sequence(), settings.ItemSeparator)
 	if resolvedHref != "" {
 		for _, it := range nodes {
 			if n, ok := it.(*xdm.Node); ok {
