@@ -1091,8 +1091,11 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 
 	var tables []icTables
 
-	// counts tracks the repetitions of each counter scope.
+	// counts and high bracket the repetitions of each counter scope: the
+	// fewest the content so far can be read as, and the most. See
+	// advanceCounters for why one number will not do.
 	counts := make([]int, len(m.counters))
+	high := make([]int, len(m.counters))
 	current := m.first
 	var prev *position
 	prevIdx := -1
@@ -1114,7 +1117,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			if !p.matches(name, v.elementDefined) {
 				continue
 			}
-			if !counterAllows(m, counts, prevIdx, idx) {
+			if !counterAllows(m, counts, high, prevIdx, idx) {
 				continue
 			}
 			if _, isWildcard := p.term.(*Wildcard); isWildcard {
@@ -1171,7 +1174,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		}
 
 		p := m.positions[next]
-		advanceCounters(m, counts, prevIdx, next)
+		advanceCounters(m, counts, high, prevIdx, next)
 		if t := v.validateChild(kid, p); t != nil {
 			tables = append(tables, t)
 		}
@@ -1191,7 +1194,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		}
 		return tables
 	}
-	if !contains(m.last, prevIdx) || !countersSatisfied(m, counts, prevIdx) {
+	if !contains(m.last, prevIdx) || !countersSatisfied(m, high, prevIdx) {
 		v.fail(el, "cvc-complex-type.2.4.b",
 			"element content is incomplete%s", expected(m, m.follow[prevIdx]))
 	}
@@ -1200,7 +1203,7 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 
 // counterAllows reports whether taking a transition to a position is permitted
 // by the repetition bounds.
-func counterAllows(m *contentModel, counts []int, from, to int) bool {
+func counterAllows(m *contentModel, counts, high []int, from, to int) bool {
 	p := m.positions[to]
 	for _, c := range p.counters {
 		if from < 0 || !sharesScope(m.positions[from], c) {
@@ -1232,7 +1235,7 @@ func counterAllows(m *contentModel, counts []int, from, to int) bool {
 			// foo is not a sixth repetition of the inner counter
 			// but the first of a second choice, and refusing it
 			// treated the inner bound as a total.
-			if outerRestarts(m, counts, c, from, to) {
+			if outerRestarts(m, counts, high, c, from, to) {
 				continue
 			}
 			return false
@@ -1249,7 +1252,7 @@ func counterAllows(m *contentModel, counts []int, from, to int) bool {
 // it so the inner is starting over. Both exist because a position at the
 // boundary of one scope is at the boundary of every scope around it, and only
 // one of them is actually repeating.
-func outerRestarts(m *contentModel, counts []int, inner, from, to int) bool {
+func outerRestarts(m *contentModel, counts, high []int, inner, from, to int) bool {
 	for _, c := range m.positions[to].counters {
 		if c == inner || !sharesScope(m.positions[from], c) {
 			continue
@@ -1263,7 +1266,16 @@ func outerRestarts(m *contentModel, counts []int, inner, from, to int) bool {
 		// The enclosing scope has to have a repetition left to give,
 		// and the inner one has to have met its minimum before it can
 		// be abandoned for a new round.
-		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
+		// The *most* repetitions c can be read as is what bounds this.
+		// counts is deliberately the fewest, and on a transition whose
+		// two readings the automaton cannot separate the fewest is one
+		// that has not restarted c at all — so consulting it here would
+		// offer a repetition of c that the reading now being taken has
+		// already spent. <sequence maxOccurs="2"> over <element
+		// minOccurs="2" maxOccurs="2"/> admits two b or four, and a
+		// third b was let through as the start of a second sequence
+		// that the first two b had already used up.
+		if m.counters[c].max != Unbounded && high[c] >= m.counters[c].max {
 			continue
 		}
 		if counts[inner] < m.counters[inner].min {
@@ -1284,17 +1296,42 @@ func sharesScope(p *position, c int) bool {
 }
 
 // advanceCounters updates the repetition counts for a transition.
-func advanceCounters(m *contentModel, counts []int, from, to int) {
-	p := m.positions[to]
-	for _, c := range p.counters {
+//
+// Two counts are kept per scope, because how many repetitions a sequence of
+// elements represents is not always a single number. Once every member of a
+// repeated group is optional, every position in it can both begin and end a
+// repetition, so a step from one member to the next is a legal reading *and*
+// so is a wraparound into a fresh repetition — the automaton cannot tell them
+// apart from the positions alone, and both readings are attributions the spec
+// allows. counts is the fewest repetitions the content can be read as, high
+// the most.
+//
+// The two are consulted in opposite directions, which is what makes the pair
+// worth keeping. maxOccurs asks whether *some* reading fits inside the bound,
+// so it consults the low count; minOccurs asks whether *some* reading reaches
+// it, so it consults the high one. Conflating them into one number forces a
+// single reading on both questions and loses whichever the other needed:
+// counting every ambiguous step as a restart spends <sequence maxOccurs="3">
+// of three optional particles inside its first iteration, and counting none of
+// them leaves <sequence minOccurs="2"> over a repeating element short.
+func advanceCounters(m *contentModel, counts, high []int, from, to int) {
+	for _, c := range m.positions[to].counters {
 		if from < 0 || !sharesScope(m.positions[from], c) {
 			// Entering the scope: this is the first repetition.
-			counts[c] = 1
+			counts[c], high[c] = 1, 1
 			continue
 		}
-		if isScopeRestart(m, c, from, to) {
-			counts[c]++
+		if !isScopeRestart(m, c, from, to) {
+			continue
 		}
+		high[c]++
+		// A transition the compiler also laid down as a step *within*
+		// one repetition of c has a reading that is not a restart, so
+		// the fewest-repetitions count does not charge it.
+		if m.scopeInner[c][[2]int{from, to}] {
+			continue
+		}
+		counts[c]++
 	}
 }
 
@@ -1328,9 +1365,9 @@ func scopeCanEndAt(m *contentModel, scope, at int) bool {
 
 // countersSatisfied reports whether every counter containing a position has met
 // its minimum.
-func countersSatisfied(m *contentModel, counts []int, at int) bool {
+func countersSatisfied(m *contentModel, high []int, at int) bool {
 	for _, c := range m.positions[at].counters {
-		if counts[c] < m.counters[c].min {
+		if high[c] < m.counters[c].min {
 			return false
 		}
 	}
@@ -1344,7 +1381,7 @@ func countersSatisfied(m *contentModel, counts []int, at int) bool {
 	// that is not a shortfall: an optional repetition that did not occur is
 	// satisfied by the surrounding model accepting its absence, which the
 	// automaton has already decided by reaching an accepting position.
-	for c, n := range counts {
+	for c, n := range high {
 		if n > 0 && n < m.counters[c].min {
 			return false
 		}

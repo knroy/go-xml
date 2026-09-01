@@ -57,6 +57,25 @@ type contentModel struct {
 	scopeFirst []map[int]bool
 	scopeLast  []map[int]bool
 
+	// scopeInner[c] are the follow edges that lie *inside* one repetition
+	// of counter c: every edge the compiler added while building c's
+	// subtree, before it added c's own loop-back edges.
+	//
+	// scopeFirst and scopeLast alone cannot tell a restart from a
+	// continuation once every member of a repeated group is optional. A
+	// <sequence maxOccurs="3"> of three optional particles has all three
+	// positions in both sets, so the plain forward step a -> any inside
+	// one iteration reads as a restart and charges the outer counter.
+	// The edge that carries a step forward through the sequence is a
+	// different edge from the one that wraps around, even though the two
+	// can join the same pair of positions, so the edges are what has to be
+	// recorded.
+	scopeInner []map[[2]int]bool
+
+	// edges is the append-only log of follow edges, so that build can tell
+	// which ones a subtree contributed: the ones added since it started.
+	edges [][2]int
+
 	// active is the set of model groups on the path currently being built,
 	// used to detect a group that reaches itself.
 	active map[*ModelGroup]bool
@@ -101,6 +120,9 @@ func compileContentModel(p *Particle) (*contentModel, error) {
 	m.last = f.last
 	m.nullable = f.nullable
 	m.bindSiblings()
+	// The log has served its purpose; scopeInner holds what the runtime
+	// needs, and a model is kept for the lifetime of the schema.
+	m.edges = nil
 	return m, nil
 }
 
@@ -176,8 +198,12 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		})
 		m.scopeFirst = append(m.scopeFirst, map[int]bool{})
 		m.scopeLast = append(m.scopeLast, map[int]bool{})
+		m.scopeInner = append(m.scopeInner, map[[2]int]bool{})
 		scope = len(m.counters) - 1
 	}
+	// Every edge added from here until the loop-back edges below lies
+	// within one repetition of scope.
+	mark := len(m.edges)
 
 	var inner frag
 	var err error
@@ -239,6 +265,9 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 		}
 		for _, l := range inner.last {
 			m.scopeLast[scope][l] = true
+		}
+		for _, e := range m.edges[mark:] {
+			m.scopeInner[scope][e] = true
 		}
 	}
 	if p.MaxOccurs == Unbounded || p.MaxOccurs > 1 {
@@ -381,6 +410,7 @@ func (m *contentModel) addFollow(from int, to []int) {
 		if !dup {
 			existing = append(existing, t)
 		}
+		m.edges = append(m.edges, [2]int{from, t})
 	}
 	m.follow[from] = existing
 }

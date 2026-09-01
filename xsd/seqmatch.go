@@ -47,6 +47,7 @@ func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
 	// The model is deterministic — Unique Particle Attribution guarantees at
 	// most one position can match — so there is nothing to backtrack over.
 	counts := make([]int, len(m.counters))
+	high := make([]int, len(m.counters))
 	current := m.first
 	prevIdx := -1
 
@@ -56,7 +57,7 @@ func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
 			if !m.positions[idx].matches(name, nil) {
 				continue
 			}
-			if !counterAllows(m, counts, prevIdx, idx) {
+			if !counterAllows(m, counts, high, prevIdx, idx) {
 				continue
 			}
 			next = idx
@@ -65,7 +66,7 @@ func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
 		if next < 0 {
 			return false, i
 		}
-		advanceCounters(m, counts, prevIdx, next)
+		advanceCounters(m, counts, high, prevIdx, next)
 		prevIdx = next
 		current = m.follow[next]
 	}
@@ -76,7 +77,7 @@ func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
 	if prevIdx < 0 {
 		return m.nullable, 0
 	}
-	if !contains(m.last, prevIdx) || !countersSatisfied(m, counts, prevIdx) {
+	if !contains(m.last, prevIdx) || !countersSatisfied(m, high, prevIdx) {
 		return false, len(names)
 	}
 	return true, 0
