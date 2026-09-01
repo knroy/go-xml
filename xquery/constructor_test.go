@@ -99,9 +99,9 @@ func TestNamespaceDeclarationsResolveTheElementsOwnName(t *testing.T) {
 // from a reference or a CDATA section, or that sits next to real text, stays.
 func TestBoundaryWhitespace(t *testing.T) {
 	for _, c := range []struct {
-		src        string
-		strip      string
-		preserve   string
+		src      string
+		strip    string
+		preserve string
 	}{
 		{`<a> {1} </a>`, `<a>1</a>`, `<a> 1 </a>`},
 		{`<a>   </a>`, `<a/>`, `<a>   </a>`},

@@ -124,8 +124,8 @@ func isSpaceByte(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-// stringConstructor is [177] "``[ StringConstructorContent ]``", XQuery 3.1
-// §3.11.6.
+// stringConstructor is [177] StringConstructor, XQuery 3.1 §3.11.6: content
+// between a doubled-backtick-bracket opener and its mirror.
 //
 // It is a string, not a tree: the literal runs and the interpolations are
 // concatenated, each interpolation being atomised and its values joined with
@@ -138,8 +138,8 @@ type stringConstructor struct{ parts []node }
 // deliberately minimal: §3.11.6 exists precisely so that a query can carry
 // text with braces, quotes and ampersands in it without escaping any of them.
 // So there are no entity references here, no doubled braces, and no character
-// references — the only thing that ends a literal run is "]``" or the
-// interpolation opener "`{".
+// references — the only thing that ends a literal run is the closing
+// bracket-backtick-backtick, or the interpolation opener.
 func (p *parser) parseStringConstructor() (node, error) {
 	start := p.pos
 	if !p.consume("``[") {

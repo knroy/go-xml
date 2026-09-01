@@ -237,6 +237,53 @@ func (v TargetVersion) String() string {
 // They are separate types because they answer different questions: the target
 // decides which cases are in scope, the engine's version decides how an
 // expression is compiled. They happen to correspond one-to-one today.
+// xpathOnlyQuestion reports whether a case is asking a question about XPath
+// that an XQuery run must not try to answer.
+//
+// A case whose spec dependency names only the XP alternatives, and whose query
+// uses a construct XQuery has and XPath does not, is asserting that XPath
+// rejects it. misc-CombinedErrorCodes/typeswitch-in-xpath is the whole of the
+// population: it writes a typeswitch, depends on "XP20+", and expects
+// XPST0003. Under XQuery the typeswitch is correct and the case fails, which
+// is a fact about the harness rather than about the engine.
+//
+// The test is deliberately narrow, in two ways. It reads the case's *own*
+// dependency rather than the inherited one: misc-CombinedErrorCodes declares
+// XQ10+ for the whole set, so the inherited list always mentions XQuery and
+// the question of what this particular case is asking is answered only by
+// what the case itself says. And it fires only on the constructs the two
+// grammars actually differ over, so a case in scope for both languages is
+// untouched.
+func xpathOnlyQuestion(deps []Dependency, query string, target TargetVersion) string {
+	if target != XQuery31 {
+		return ""
+	}
+	sawSpec := false
+	for _, d := range deps {
+		if d.Type != "spec" {
+			continue
+		}
+		for _, alt := range strings.Fields(d.Value) {
+			if strings.HasPrefix(alt, "XQ") {
+				return ""
+			}
+			if strings.HasPrefix(alt, "XP") {
+				sawSpec = true
+			}
+		}
+	}
+	if !sawSpec {
+		return ""
+	}
+	for _, kw := range []string{"typeswitch", "switch", "try", "validate",
+		"ordered", "unordered"} {
+		if strings.Contains(query, kw) {
+			return "XPath-only question about an XQuery-only construct"
+		}
+	}
+	return ""
+}
+
 func xpathVersion(v TargetVersion) xpath.Version {
 	switch {
 	case v >= XPath31:
@@ -256,6 +303,15 @@ func xpathVersion(v TargetVersion) xpath.Version {
 //
 // An XQuery run is scoped by the "XQ" alternatives instead, and admits the
 // "XP" ones too: every XPath 3.1 expression is a legal XQuery.
+//
+// Admitting the XP alternatives has one exception, and it is not a subtlety
+// of versions. A handful of cases assert that XPath *rejects* something
+// XQuery accepts — misc-CombinedErrorCodes/typeswitch-in-xpath writes a
+// typeswitch and expects XPST0003 — and they carry an XP dependency alone
+// precisely to say "this is a question about XPath". Running one under XQuery
+// asserts XPath's answer against an XQuery processor, which is guaranteed to
+// fail and says nothing about conformance. xqueryOnlySyntax names the
+// constructs that make a case one of these.
 func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
 		if target == XQuery31 {
@@ -430,8 +486,13 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		}
 	}()
 
-	if why := unsupportedSpec(append(append([]Dependency{}, ts.Dependencies...),
-		tc.Dependencies...), r.Target); why != "" {
+	deps := append(append([]Dependency{}, ts.Dependencies...),
+		tc.Dependencies...)
+	if why := unsupportedSpec(deps, r.Target); why != "" {
+		rep.Outcome, rep.Reason = Skip, why
+		return rep
+	}
+	if why := xpathOnlyQuestion(tc.Dependencies, tc.Test, r.Target); why != "" {
 		rep.Outcome, rep.Reason = Skip, why
 		return rep
 	}
