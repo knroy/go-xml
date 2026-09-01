@@ -16,6 +16,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xquery"
 )
 
 // SuiteClock is the fixed value fn:current-dateTime returns during a run.
@@ -139,7 +140,7 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// rather than an optional extra, so they are out of scope only
 			// for a 2.0 run.
 			if d.Value == "higherOrderFunctions" {
-				if target >= XPath30 {
+				if target >= XPath30 || target == XQuery31 {
 					continue
 				}
 				if d.Satisfied != "false" {
@@ -209,9 +210,19 @@ const (
 	XPath30
 	// XPath31 scopes the run to cases that apply to 2.0, 3.0 or 3.1.
 	XPath31
+	// XQuery31 scopes the run to XQuery cases rather than XPath ones.
+	//
+	// It is not a fourth point on the same scale: an XQuery case holds a whole
+	// query where an XPath case holds an expression, and the two are evaluated
+	// by different packages. Every XPath 3.1 expression is an XQuery
+	// expression, so the XQuery run also admits the cases written for XP31.
+	XQuery31
 )
 
 func (v TargetVersion) String() string {
+	if v == XQuery31 {
+		return "XQuery 3.1"
+	}
 	switch v {
 	case XPath31:
 		return "XPath 3.1"
@@ -241,10 +252,20 @@ func xpathVersion(v TargetVersion) xpath.Version {
 // A value is a space-separated list of alternatives and the case is in scope
 // if any alternative names a version at or below the target. "XP20+" means 2.0
 // and later, so it is in scope for both targets; "XP30" and "XP30+" are in
-// scope only for a 3.0 run. "XQ..." is XQuery, which this engine does not
-// implement at any version.
+// scope only for a 3.0 run.
+//
+// An XQuery run is scoped by the "XQ" alternatives instead, and admits the
+// "XP" ones too: every XPath 3.1 expression is a legal XQuery.
 func specInScope(v string, target TargetVersion) bool {
 	for _, alt := range strings.Fields(v) {
+		if target == XQuery31 {
+			switch alt {
+			case "XQ10", "XQ10+", "XQ30", "XQ30+", "XQ31", "XQ31+",
+				"XP20", "XP20+", "XP30", "XP30+", "XP31", "XP31+":
+				return true
+			}
+			continue
+		}
 		switch alt {
 		case "XP20":
 			// Exactly 2.0, with no "+". A handful of cases are written this
@@ -548,7 +569,15 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// unbounded round() precision was found, after it consumed twenty minutes
 	// and all available memory before the harness could report anything.
 	ctx.Ctx = runCtx
-	got, evalErr := xpath.Eval(tc.Test, ctx, ns)
+	var got xdm.Sequence
+	var evalErr error
+	if r.Target == XQuery31 {
+		// An XQuery case holds a whole query, not an expression, and the
+		// namespaces the environment declared are its static context.
+		got, evalErr = xquery.Eval(tc.Test, ctx, xqueryOptions(ns))
+	} else {
+		got, evalErr = xpath.Eval(tc.Test, ctx, ns)
+	}
 
 	want, err := ParseAssert(tc.Result.Raw)
 	// An assert-xml may hold its expected value in a separate file, named
@@ -1901,4 +1930,22 @@ func significantChildren(n *xdm.Node) []*xdm.Node {
 // name alone. They are one name written two ways.
 func sameErrorCode(got, want string) bool {
 	return strings.TrimPrefix(got, "Q{}") == strings.TrimPrefix(want, "Q{}")
+}
+
+// xqueryOptions turns the namespaces an environment declared into the static
+// context a query is compiled under.
+//
+// An XPath case is given a NamespaceResolver; an XQuery case needs the same
+// bindings as prolog-equivalent options, because XQuery resolves names while
+// parsing rather than after it.
+func xqueryOptions(ns xpath.NamespaceResolver) xquery.Options {
+	opts := xquery.Options{}
+	if ns == nil {
+		return opts
+	}
+	opts.DefaultElementNamespace = ns.DefaultElementNamespace()
+	if m, ok := ns.(interface{ Bindings() map[string]string }); ok {
+		opts.Namespaces = m.Bindings()
+	}
+	return opts
 }
