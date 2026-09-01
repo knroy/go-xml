@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -160,16 +161,30 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 		return
 	}
 	name := use.Decl.Name
-	// A defaulted attribute in a namespace needs a prefix to serialize. The
-	// element's in-scope declarations are the only bindings certain to be in
-	// scope here, so an unbound namespace is left alone rather than guessed
-	// at: an attribute serialized with an undeclared prefix is worse than one
-	// that is missing.
+	// A defaulted attribute in a namespace needs a prefix to serialize, and a
+	// prefix already bound to that namespace is the one to use: it is the
+	// author's own spelling, and inventing a second binding for a namespace
+	// the element already names would be gratuitous.
 	prefix := ""
 	if name.URI != "" {
 		prefix = prefixInScopeFor(el, name.URI)
 		if prefix == "" {
-			return
+			// Nothing is bound. XSD 1.0 says nothing about what to do here,
+			// so 1.0 leaves the attribute off rather than guessing: one
+			// serialized with an undeclared prefix is worse than one that is
+			// missing.
+			//
+			// XSD 1.1 3.4.5.1 does say, under "namespace fixup": the
+			// processor supplies a prefix and declares it on the element. The
+			// attribute is part of the PSVI either way, and dropping it made
+			// the difference visible to the XSLT layer -- import-schema-164
+			// validates <doc><e/>...</doc> under strict validation and asks
+			// for @p:foo on every <e>, prefixed and declared, whatever
+			// bindings the instance happened to carry.
+			if v.schema.Version < Version11 {
+				return
+			}
+			prefix = declareFixupPrefix(el, name.URI)
 		}
 	}
 	attr := &xdm.Node{
@@ -183,6 +198,23 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 		}
 	}
 	el.AddAttr(attr)
+}
+
+// declareFixupPrefix binds a namespace on el and returns the prefix it chose.
+//
+// This is XSD 1.1 3.4.5.1's namespace fixup. The prefix is arbitrary -- the
+// spec leaves the choice to the processor -- so it is generated rather than
+// derived from the URI, and checked against what is already in scope so that
+// the new binding cannot shadow one the element or an ancestor relies on.
+func declareFixupPrefix(el *xdm.Node, uri string) string {
+	for i := 0; ; i++ {
+		prefix := "ns" + strconv.Itoa(i)
+		if _, taken := el.LookupPrefix(prefix); taken {
+			continue
+		}
+		el.AddNamespace(prefix, uri)
+		return prefix
+	}
 }
 
 // prefixInScopeFor finds a prefix bound to a namespace at an element, or ""
