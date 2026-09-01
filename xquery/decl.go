@@ -865,7 +865,7 @@ func collectNodeCalls(n node, set map[string]bool) {
 func (q *Query) evalVar(d *varDecl, ctx *xpath.Context) (xdm.Sequence, error) {
 	if d.external {
 		if v, ok := ctx.LookupVar(d.name); ok {
-			return d.typ.convert(v, "the external variable $"+d.name.Lexical())
+			return d.typ.match(v, "the external variable $"+d.name.Lexical())
 		}
 		if d.init == nil && d.body == nil {
 			return nil, fmt.Errorf(
@@ -877,9 +877,9 @@ func (q *Query) evalVar(d *varDecl, ctx *xpath.Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	// XPTY0004 for a value that does not match "as"; the conversion rules
-	// apply, so an untypedAtomic is cast rather than refused.
-	return d.typ.convert(v, "the variable $"+d.name.Lexical())
+	// XPTY0004 for a value that does not match "as". A variable declaration
+	// matches rather than converts; see sequenceType.match.
+	return d.typ.match(v, "the variable $"+d.name.Lexical())
 }
 
 // references returns the Clark names of the variables an initialiser mentions.

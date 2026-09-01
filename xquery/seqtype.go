@@ -140,6 +140,29 @@ func (p *parser) compileSequenceType(src string) (*sequenceType, error) {
 // so an xs:untypedAtomic bound to "as xs:integer" is cast rather than refused,
 // and a node bound to "as xs:string" is atomised.
 func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, error) {
+	return t.convertWith(seq, what, true)
+}
+
+// match is convert without the xs:untypedAtomic cast, which is what §4.14
+// requires of a variable declaration.
+//
+// The two rules genuinely differ, and the suite is explicit about it.
+// K2-ExternalVariablesWith-12 asserts that "declare variable $i as xs:integer
+// := xs:untypedAtomic('1')" is XPTY0004 -- its description is "Variable
+// declarations doesn't cause type conversion" -- where the identical value
+// returned from a function declared "as xs:integer" is converted and returned
+// as 1. §4.15 invokes the function conversion rules by name for a function's
+// parameters and result; §4.14 says only that the value must *match* the
+// declared type.
+//
+// Promotion is not affected: subtype substitution and numeric promotion apply
+// to a variable binding as they do everywhere, so "as xs:double := 1" is a
+// double. Only the cast from untypedAtomic is withheld.
+func (t *sequenceType) match(seq xdm.Sequence, what string) (xdm.Sequence, error) {
+	return t.convertWith(seq, what, false)
+}
+
+func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xdm.Sequence, error) {
 	if t == nil {
 		return seq, nil
 	}
@@ -175,6 +198,12 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 		if t.stype.MatchesItem(a) {
 			out = append(out, a)
 			continue
+		}
+		if a.Type == xdm.TypeUntypedAtomic && !cast {
+			return nil, fmt.Errorf(
+				"XPTY0004: %s does not match its declared type %s: "+
+					"a variable declaration does not convert %s",
+				what, t.src, a.TypeName())
 		}
 		conv, err := t.castOne(a)
 		if err != nil {

@@ -130,9 +130,16 @@ func (p *parser) parseProlog() error {
 				err = p.parseFunctionDecl()
 				break
 			}
-			return p.errorf("XPST0003: expected a declaration after %q", "declare")
+			p.pos = save
+			return nil
 		default:
-			return p.errorf("XPST0003: %q is not a declaration", what)
+			// "declare" is not a reserved word: "declare ne gt" is the value
+			// comparison of two path expressions, and K2-ExternalVariables-
+			// Without-16 asserts it reaches evaluation as one. So a word that
+			// begins no declaration ends the prolog rather than failing it,
+			// and the body parser gets the whole thing.
+			p.pos = save
+			return nil
 		}
 		if err != nil {
 			return err
