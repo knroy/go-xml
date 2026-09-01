@@ -705,3 +705,72 @@ func TestElementWildcardNotNamespaceSubset(t *testing.T) {
 		}
 	})
 }
+
+// An <all> group with {min occurs} 0 may be skipped, so its members' floors
+// are zeroed when the budget is built. That is only sound when the derived
+// side is itself a group that can take the same skip branch; for a bare
+// element declaration the base member's own minOccurs is what binds, and the
+// 1.0 structural table (RecurseAsIfGroup) decides the pair.
+//
+// particlesK006 and particlesK005 are the discriminating pair: both restrict
+// <all minOccurs="0"> requiring a1, and they differ in nothing but the
+// derived a1's minOccurs — 0 in K006, which the suite scores invalid, and 1
+// in K005, which it scores valid. mgO029, whose derived and base groups are
+// textually identical <all minOccurs="0"> groups, must keep loading.
+func TestAllGroupSkippableFloorsNeedSkippableRestriction(t *testing.T) {
+	load11 := func(t *testing.T, src string) error {
+		t.Helper()
+		tree, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parsing the test schema as XML: %v", err)
+		}
+		_, err = Load(tree.Root, "s.xsd", Options{Version: Version11})
+		return err
+	}
+
+	t.Run("bare element may not relax a required member's floor", func(t *testing.T) {
+		if err := load11(t, `
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    targetNamespace="http://xsdtesting" xmlns:x="http://xsdtesting">
+  <xsd:complexType name="B">
+    <xsd:all minOccurs="0">
+      <xsd:element name="a1" minOccurs="1" maxOccurs="1"/>
+    </xsd:all>
+  </xsd:complexType>
+  <xsd:complexType name="R">
+    <xsd:complexContent>
+      <xsd:restriction base="x:B">
+        <xsd:sequence>
+          <xsd:element name="a1" minOccurs="0" maxOccurs="1"/>
+        </xsd:sequence>
+      </xsd:restriction>
+    </xsd:complexContent>
+  </xsd:complexType>
+</xsd:schema>`); err == nil {
+			t.Fatal("an element at 0..1 restricting a required 1..1 member must be rejected")
+		}
+	})
+
+	t.Run("group restriction keeps the zeroed floors", func(t *testing.T) {
+		if err := load11(t, `
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    targetNamespace="http://xsdtesting" xmlns:x="http://xsdtesting">
+  <xsd:complexType name="B">
+    <xsd:all minOccurs="0" maxOccurs="1">
+      <xsd:element name="e1"/>
+    </xsd:all>
+  </xsd:complexType>
+  <xsd:complexType name="R">
+    <xsd:complexContent>
+      <xsd:restriction base="x:B">
+        <xsd:all minOccurs="0" maxOccurs="1">
+          <xsd:element name="e1"/>
+        </xsd:all>
+      </xsd:restriction>
+    </xsd:complexContent>
+  </xsd:complexType>
+</xsd:schema>`); err != nil {
+			t.Fatalf("identical skippable all groups must remain a valid restriction: %v", err)
+		}
+	})
+}
