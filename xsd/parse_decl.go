@@ -385,12 +385,6 @@ func (p *parser) readAttributeUse(el *xdm.Node) *AttributeUse {
 
 	// 1.1 adds the fixed half of the same idea: a prohibited use never
 	// contributes an attribute, so a value constraint on it can never
-	// apply, and 3.2.3 clause 1 makes {value constraint} absent whenever
-	// {required} is false and the use is prohibited. attKb009 and attP029
-	// write use="prohibited" fixed="...". Gated on the version because
-	// 1.0's clause names default alone, and both tests are scored under
-	// 1.1 adds the fixed half of the same idea: a prohibited use never
-	// contributes an attribute, so a value constraint on it can never
 	// apply, and §3.2.3 makes {value constraint} absent for one. attKb009
 	// and attP029 write use="prohibited" together with fixed. Gated on the
 	// version because 1.0's clause names default alone, and both tests are
