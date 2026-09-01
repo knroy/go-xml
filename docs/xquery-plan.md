@@ -48,9 +48,33 @@ risk is; see below.
 variable and function declarations, imports, options.
 
 **Other expressions** — `typeswitch`, `switch`, `try`/`catch`, `validate`,
-`ordered`/`unordered`, pragmas. Verified absent: the only occurrence of
-"typeswitch" in the tree is in the reserved-function-name list at
-`xpath/parser_path.go:1745`.
+`ordered`/`unordered`, pragmas, and the string constructor `` `[...]` ``.
+Verified absent: the only occurrence of "typeswitch" in the tree is in the
+reserved-function-name list at `xpath/parser_path.go:1745`.
+
+### XQuery is not a superset of XPath
+
+A mechanical diff of the two grammars' Appendix A.1 — 239 productions against
+126 — puts **120** in XQuery that XPath lacks, and **7** the other way. Six of
+those seven are XPath's cut-down `for` and `let`, which XQuery replaces with
+FLWOR. The seventh is not a replacement:
+
+**XQuery has no `namespace::` axis.** XPath 3.1 has eight forward axes and
+XQuery seven. We implement it — `AxisNamespace` in `xpath/ast.go:78`,
+`xpath/nsaxis.go` — so the XQuery parser has to *refuse* a construct the
+expression parser beneath it accepts. That is the one place where handing a
+substring to `xpath` is not enough on its own.
+
+Nine further productions share a name and differ in content: `ExprSingle`
+(gains the FLWOR and try/catch alternatives), `QuantifiedExpr` (gains type
+declarations), `ValueExpr` (gains validate and extension), `PrimaryExpr`
+(gains constructors and ordered/unordered), `InlineFunctionExpr` and
+`FunctionTest` (gain annotations), `StringLiteral` and `BracedURILiteral`
+(admit entity and character references), and `ForwardAxis` above. Everything
+else with a shared name is byte-identical.
+
+Note that `EnclosedExpr` is *not* XQuery-only: XPath has it too, as an inline
+function's body.
 
 ## The risk is the lexer, and it is architectural
 
@@ -78,10 +102,29 @@ around it are delicately balanced.
 
 **So: do not write a mode-switching lexer, and do not touch `xpath/lexer.go`.**
 
-Instead, follow BaseX rather than Saxon. Saxon uses a genuine mode-switching
-tokeniser with an explicit state field; BaseX parses the source directly with
-no separate token stream. BaseX's shape fits here because our parser is
-already hand-written recursive descent:
+Instead, follow BaseX. Five implementations were read at source level, and
+they divide by *where the lexical state lives* rather than by whether they
+have one:
+
+| Engine | Approach | States |
+|---|---|---|
+| BaseX | scannerless recursive descent, no token stream at all | 0 — the call stack is the state |
+| Saxon | hand-written tokeniser, plus raw character reading for constructors | 4, plus a scannerless escape |
+| Zorba | generated (Flex/Bison), explicit state stack | 20 |
+| XQilla | generated (Flex/Bison), explicit state stack | 17 |
+| Galax | generated (ocamllex), one lexer file per state | 26 |
+
+The generated-parser projects reproduce the state table nearly name-for-name
+because Flex start conditions map onto it directly. The hand-written ones
+collapse it — and both of those escape to character-level reading for direct
+constructors, because that is the part a finite state set cannot cover:
+constructors nest with enclosed expressions arbitrarily deeply, which is not a
+regular language. Saxon's own source carries the comment *"we may need to make
+this a stack at some time"* beside its scalar state field.
+
+BaseX's shape fits here because our parser is already hand-written recursive
+descent, and because a recursive-descent parser's call stack *is* the
+push-down automaton the nesting requires:
 
 - The `xquery` package parses constructor syntax **scannerlessly**, over the
   raw source, reusing `xpath.Token` and `xpath.TokenKind` (both exported).
@@ -93,15 +136,31 @@ XML syntax stays confined to the constructor parser. The conformant
 expression lexer is never modified. `Compiled.Expr()` is exported
 (`xpath/xpath.go:137`), so an external package can compose XPath ASTs.
 
+The W3C published a note on precisely this problem — *Building a Tokenizer for
+XPath or XQuery*, a 2005 Working Draft from a joint XML Query and XSL task
+force — which enumerates four strategies and develops the state-driven one. It
+never advanced past Working Draft, and carries its own admission that the
+tables "have not... been exhaustively verified"; a 2004 comment thread records
+real bugs in them. Its "scan-while-parse" strategy is what this package does.
+
 If that constraint has to be broken, the estimate is wrong, and Phase 1 is
 designed to find that out in week one rather than month three.
 
 ### Boundary whitespace
 
 XQuery 3.1 §3.9.1.4: within a direct constructor's content, a run of text that
-is entirely whitespace and is not adjacent to a character reference, entity
-reference or CDATA section is *boundary whitespace*, discarded under the
-default `strip` and kept under `preserve`. `<a> {1} </a>` yields `<a>1</a>`.
+is entirely whitespace and delimited at each end by the start or end of the
+content, another constructor, or an enclosed expression is *boundary
+whitespace*, discarded under the default `strip` and kept under `preserve`.
+`<a> {1} </a>` yields `<a>1</a>`.
+
+Characters that came from a character reference or a CDATA section "are not
+considered to be whitespace characters" for this purpose, so
+`<a>&#x20;{"abc"}</a>` keeps its space under either policy. Both BaseX and
+Saxon implement exactly that sentence as a single boolean tracked while
+reading the content — BaseX's `strip &= !entity(tb)`, Saxon's
+`containsEntities`. §3.9.1.3 puts stripping in step 1a, *before* reference
+expansion, which is another reason it cannot wait for the builder.
 
 This belongs at **parse time**, before `xdmbuild` sees the content, and our
 own code forces that: `Builder.AppendText` merges adjacent text nodes
@@ -110,6 +169,27 @@ unconditionally, so once text reaches the builder the boundaries are gone.
 constructor, so the policy is always known in time.
 
 Nothing in the tree implements this today.
+
+### Namespace declaration attributes force a two-pass start tag
+
+An `xmlns` or `xmlns:p` attribute in a direct constructor's attribute list is
+not an attribute node. It joins the *statically known namespaces of the
+constructor*, which means it affects how the element's **own** name resolves,
+and its **sibling attributes'** names, and everything nested inside it.
+
+So the whole attribute list has to be scanned for `xmlns*` before any QName in
+that start tag can be resolved — including the element name, which appears
+first in the source. BaseX does this by saving the position, running the
+attribute loop twice, and restoring the namespace stack afterwards.
+
+Its value must also be a compile-time constant: an enclosed expression in a
+namespace declaration's value is the static error XQST0022, which is the
+reason the whole thing has to happen at parse time rather than at evaluation.
+
+A related asymmetry to design for: a direct constructor resolves its names
+statically, while a computed constructor given a *name expression* resolves
+them at run time — so XQDY0074 and XQDY0096 are dynamic errors with no direct
+equivalent.
 
 ## What the test suite would give
 
