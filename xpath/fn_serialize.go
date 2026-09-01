@@ -899,8 +899,15 @@ func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) 
 		sb.WriteString("]")
 	case *xdm.FunctionItem:
 		// A function is shown by name and arity, which is all of it that can
-		// be written down.
-		fmt.Fprintf(sb, "%s#%d", v.Name.Lexical(), v.Arity)
+		// be written down. An inline function has no name at all, and the
+		// arity alone would render as a bare "#1"; Serialization 3.1 §10
+		// gives it the placeholder "(anonymous-function)", which cannot
+		// collide with a real name because it is not a lexical QName.
+		name := v.Name.Lexical()
+		if name == "" {
+			name = "(anonymous-function)"
+		}
+		fmt.Fprintf(sb, "%s#%d", name, v.Arity)
 	case *xdm.Node:
 		// An attribute has no XML serialization of its own, so adaptive gives
 		// it the name="value" form it has inside a start tag
@@ -948,15 +955,87 @@ func writeAdaptiveAtomic(sb *strings.Builder, a *xdm.Atomic) {
 		} else {
 			sb.WriteString("false()")
 		}
-	case a.Type.IsNumeric():
+	case a.Type == xdm.TypeQName:
+		// Serialization 3.1 §10: an xs:QName is written in EQName notation.
+		// The lexical form would not do: a prefix is meaningless away from
+		// the namespace bindings it was resolved under, and adaptive output
+		// carries none. Serialization-adaptive-78 constructs
+		// xs:QName("xs:integer") and asks for
+		// "Q{http://www.w3.org/2001/XMLSchema}integer" -- the value, not the
+		// spelling it happened to be written with.
+		if q := a.QName(); q != nil {
+			fmt.Fprintf(sb, "Q{%s}%s", q.URI, q.Local)
+			return
+		}
+		sb.WriteString(a.String())
+	case a.Type == xdm.TypeDouble:
+		// A double is written in its canonical XML Schema form, where an
+		// exponent is always present: "1.0e0" rather than the "1" that
+		// fn:string gives. The distinction is the point of the method -- an
+		// adaptive rendering is meant to show what a value *is*, and "1"
+		// alone would not say whether it was an integer or a double.
+		sb.WriteString(canonicalDouble(a))
+	case a.Type == xdm.TypeDecimal || a.Type == xdm.TypeInteger:
+		// A decimal and an integer are written bare. They are the two
+		// numeric types whose lexical form is unambiguous on its own.
 		sb.WriteString(a.String())
 	case isStringLike(a.Type):
 		// The doubled quote is how an XPath string literal escapes one, so
 		// the output re-parses to the value it came from.
 		sb.WriteString(`"` + strings.ReplaceAll(a.String(), `"`, `""`) + `"`)
 	default:
-		fmt.Fprintf(sb, "%s(%q)", a.TypeName(), a.String())
+		// Everything else is written as a constructor call naming the type,
+		// so that the output says which of several types with overlapping
+		// lexical forms this value has. The *primitive* type is named, not
+		// the derived one: §10 asks for a form that can be read back, and
+		// xs:yearMonthDuration("P1Y2M") names a constructor whose argument
+		// is a duration, so xs:duration("P1Y2M") is what the rule produces.
+		fmt.Fprintf(sb, "%s(%q)", primitiveTypeName(a.Type), a.String())
 	}
+}
+
+// canonicalDouble renders an xs:double in the canonical lexical form of XML
+// Schema, which always carries an exponent.
+//
+// fn:string gives XPath's own form, which drops the exponent for values in
+// the ordinary range: string(xs:double(1)) is "1". That is right for
+// fn:string and wrong here, where the whole purpose is to distinguish a value
+// from one of another type that would print the same.
+func canonicalDouble(a *xdm.Atomic) string {
+	s := a.String()
+	switch s {
+	case "NaN", "INF", "-INF":
+		// These three have no exponent to give them and are already
+		// unambiguous: no other type spells a value this way.
+		return s
+	}
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant, exp := s[:i], s[i+1:]
+		if !strings.Contains(mant, ".") {
+			mant += ".0"
+		}
+		return mant + "e" + exp
+	}
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s + "e0"
+}
+
+// primitiveTypeName is the name of the primitive type a derived one is based
+// on, for the constructor an adaptive rendering writes.
+//
+// Only the three derived types this engine carries as distinct codes need an
+// entry: the two duration subtypes, whose primitive is xs:duration, and
+// xs:untypedAtomic, which is not derived from anything but has no constructor
+// function of its own and is written as the string it is. Every other code in
+// the enumeration is already primitive.
+func primitiveTypeName(t xdm.TypeCode) string {
+	switch t {
+	case xdm.TypeYearMonthDuration, xdm.TypeDayTimeDuration:
+		return "xs:duration"
+	}
+	return t.String()
 }
 
 // readCharacterMapsFromMap reads use-character-maps given in the map form,
