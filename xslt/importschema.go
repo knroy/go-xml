@@ -106,6 +106,24 @@ func (c *compiler) compileImportSchema(el *xdm.Node) error {
 		Resolver:     c.opts.SchemaResolver,
 		ParseOptions: c.opts.SchemaParseOptions,
 	}
+	// An XSLT 3.0 processor reads a schema as XSD 1.1 unless the document
+	// says otherwise.
+	//
+	// XSLT 3.0 3.2 makes the version an option -- "XSLT 3.0 processors may
+	// optionally include types defined in XSD 1.1" -- and this engine takes
+	// it, so 1.1 is what its schema processor is. A schema document written
+	// for 1.1 is not obliged to announce the fact: vc:minVersion exists so a
+	// 1.0 processor knows to SKIP what it cannot handle, and a document that
+	// expects to be read by a 1.1 processor has no reason to carry one.
+	// validation-1301's inline schema is exactly that -- an <xs:alternative>
+	// and no versioning attribute anywhere -- and read as 1.0 its conditional
+	// type assignment was parsed and then never applied.
+	//
+	// DocumentRequiresVersion still runs below and can only raise this, never
+	// lower it.
+	if processorAtLeast30() {
+		opts.Version = xsd.Version11
+	}
 	if opts.Resolver == nil {
 		// Without a resolver the stylesheet cannot name a location, for
 		// the same reason xsl:include cannot: following one means
@@ -240,6 +258,24 @@ func checkImportedNamespace(el, schemaRoot *xdm.Node, ns string) error {
 // rather than overwritten: the first declaration wins, which matches how
 // import precedence works everywhere else in a stylesheet.
 func mergeSchema(dst, src *xsd.Schema) {
+	// The version travels with the components.
+	//
+	// dst is the stylesheet's aggregate schema, built by xsd.NewSchema, which
+	// has no document to read a version off and so starts at 1.0. The
+	// validator asks *that* schema which version is in force -- it is the one
+	// holding the declarations by the time a node is assessed -- so a
+	// document read as XSD 1.1 had its 1.1 components merged into a schema
+	// that then declined to apply 1.1 rules to them. Conditional type
+	// assignment is the visible case: the alternatives were parsed, stored on
+	// the declaration, and never consulted, so validation-1301 assessed its
+	// <element> against type1 when @type='type2' selects type2.
+	//
+	// 1.1 wins over 1.0 rather than the last import winning, because the
+	// versions are not symmetric: 1.1 is a superset, and a schema holding any
+	// component that needs 1.1 rules needs them applied.
+	if src != nil && src.Version > dst.Version {
+		dst.Version = src.Version
+	}
 	for name, t := range src.Types {
 		if _, ok := dst.Types[name]; !ok {
 			dst.Types[name] = t

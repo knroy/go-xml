@@ -343,10 +343,19 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 		Value:          n.Value,
 		BaseURI:        n.BaseURI,
 		TypeAnnotation: n.TypeAnnotation,
+		// UnionMember travels with the annotation. It is the second half of
+		// the same PSVI fact -- which member of a union accepted this value
+		// -- and the copy is what the assertion actually evaluates over, so
+		// dropping it left the assertion looking at a node the validator had
+		// annotated and the clone had not. It matters most where the winning
+		// member is a LIST: the union's own name carries no item type, so
+		// without the member the typed value collapsed from a sequence of
+		// tokens to one string holding all of them.
+		UnionMember: n.UnionMember,
 	}
 	for _, a := range n.Attrs {
 		out.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value,
-			TypeAnnotation: a.TypeAnnotation})
+			TypeAnnotation: a.TypeAnnotation, UnionMember: a.UnionMember})
 	}
 	for _, ns := range n.Namespaces {
 		out.AddNamespace(ns.Name.Local, ns.Value)

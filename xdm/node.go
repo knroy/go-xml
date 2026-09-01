@@ -683,7 +683,22 @@ func (n *Node) Atomize() *Atomic {
 func (n *Node) AtomizeList() (Sequence, bool) {
 	item := listItemType(n.TypeAnnotation)
 	if item == "" {
-		return nil, false
+		// A union whose selected member is a LIST has a sequence for its
+		// typed value, and the union's own name says nothing about it: a
+		// union derives from xs:anySimpleType, so listItemType walking the
+		// annotation stops immediately. Which member accepted the value is
+		// exactly the fact validation recorded on the node, so the list-ness
+		// is looked for there too.
+		//
+		// The XSLT 3.0 schema's exclude-result-prefixes is this shape --
+		// union(list of prefix-or-default, "#all") -- and its own
+		// XTSE0808 assertion iterates the attribute expecting one item per
+		// prefix. Given the whole literal as a single item, "xs ul" is not a
+		// prefix in scope and every stylesheet excluding two prefixes was
+		// reported invalid.
+		if item = listItemType(n.UnionMember); item == "" {
+			return nil, false
+		}
 	}
 	fields := strings.Fields(n.StringValue())
 	out := make(Sequence, 0, len(fields))
