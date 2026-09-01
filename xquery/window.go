@@ -50,8 +50,8 @@ func (v *windowVars) bind(t tuple, seq xdm.Sequence, i int) tuple {
 	return t
 }
 
-// names returns every variable this condition binds, so that the clause can
-// bind them to the empty sequence when the condition never fired.
+// names returns every variable this condition binds, which is what the
+// distinctness rule of XQST0103 is checked over.
 func (v *windowVars) names() []xdm.QName {
 	var out []xdm.QName
 	if v.hasItem {
@@ -140,11 +140,14 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 			return nil, err
 		}
 		if !closed && c.only {
-			// An unclosed window under "only" is not a window. There can be
-			// no later one either, since every subsequent start would run to
-			// the same unclosed end, so the search stops rather than
-			// continuing to find nothing.
-			break
+			// §3.10.4: "only" discards a window whose end condition never
+			// became true. Later starts are still tried, because whether a
+			// window closes depends on where it started — "only end $e when
+			// $e eq $s + 10" over (0, 1, 2, 3, 4, 14, 13, 12, 11) closes for
+			// every start but the first, whose 10 is not in the sequence.
+			// Stopping at the first unclosed window would return one window
+			// where the specification asks for four.
+			continue
 		}
 		w := c.emit(st, seq, s, end, closed)
 		if c.typeCheck != nil {
@@ -203,19 +206,17 @@ func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 func (c *windowClause) emit(st tuple, seq xdm.Sequence, s, e int,
 	closed bool) tuple {
 	t := st
-	if c.hasEnd || !c.sliding {
-		if closed {
-			t = c.end.bind(t, seq, e)
-		} else {
-			// §3.10.4: the end variables of a window that reached the end of
-			// the sequence without its condition firing are bound to the
-			// empty sequence, not to the last item. Binding them to the last
-			// item would make an unclosed window indistinguishable from one
-			// that closed on it.
-			for _, n := range c.end.names() {
-				t = t.bind(n, nil)
-			}
-		}
+	// §3.10.4 binds the end variables to the window's last item whether the
+	// end condition fired there or the window simply ran out of sequence.
+	// The unclosed case is not an exception: "$e" is the last item either
+	// way, and "next $en" is then the empty sequence, because there is no
+	// item after the end of the sequence. That is what distinguishes the two
+	// — the "next" variable, not the end variable.
+	//
+	// An empty window has no last item, so there is nothing to bind and the
+	// variables stay unbound rather than being bound to nothing.
+	if (c.hasEnd || !c.sliding) && e >= s {
+		t = c.end.bind(t, seq, e)
 	}
 	return t.bind(c.name, append(xdm.Sequence(nil), seq[s-1:e]...))
 }

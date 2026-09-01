@@ -1,5 +1,11 @@
 package xquery
 
+import (
+	"fmt"
+
+	"github.com/knroy/go-xml/xdm"
+)
+
 // forIsWindow reports whether the "for" at the cursor begins a window clause
 // rather than an ordinary one, which the word after it decides.
 func (p *parser) forIsWindow() bool {
@@ -90,7 +96,33 @@ func (p *parser) parseWindowClause() ([]clause, error) {
 		return nil, p.errorf(
 			"XPST0003: a sliding window requires an %q condition", "end")
 	}
+	if err := c.checkDistinct(); err != nil {
+		return nil, p.errorf("%v", err)
+	}
 	return []clause{c}, nil
+}
+
+// checkDistinct enforces XQST0103: the variables a window clause binds must
+// all differ.
+//
+// The rule exists because a window clause's variables are bound together
+// rather than in sequence, so a repeated name has no reading — unlike two
+// "for" clauses, where the second shadows the first and the query is
+// well-defined. Saxon and BaseX both raise this statically, and so does this,
+// because nothing about it depends on the data.
+func (c *windowClause) checkDistinct() error {
+	seen := map[xdm.QName]bool{c.name: true}
+	for _, v := range []*windowVars{&c.start, &c.end} {
+		for _, n := range v.names() {
+			if seen[n] {
+				return fmt.Errorf(
+					"XQST0103: the window clause binds $%s more than once",
+					n.Lexical())
+			}
+			seen[n] = true
+		}
+	}
+	return nil
 }
 
 // parseWindowVars parses one boundary condition's variables and its "when".

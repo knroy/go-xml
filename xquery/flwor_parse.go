@@ -269,31 +269,67 @@ func canStartClause(prev byte) bool {
 // wordIsName reports whether the word just scanned is being used as a name
 // rather than as a keyword, judged by what follows it.
 //
+// The test is per word, because the words differ in what may follow them.
 // "count(" is a function call and "count#1" a function reference, neither of
-// which is a CountClause; a CountClause is always "count $v". The cursor is
-// left where the caller put it.
+// which is a CountClause, and "count" as a clause is always "count $v" — so
+// for that word a following "(" settles it. "return" is not like that: it is
+// followed by an expression, and "return (1, 2)" is the ordinary case, so a
+// following "(" proves nothing at all. Treating every word alike is what made
+// "for $i in (1,2), $j in (3,4) return ($i, $j)" fail, the second binding
+// running past its "return" because the parenthesis after it looked like a
+// call.
+//
+// The cursor is left where the caller put it.
 func (p *parser) wordIsName(w string) bool {
 	save := p.pos
 	defer func() { p.pos = save }()
 	p.skipSpaceAndComments()
 	if p.eof() {
-		return false
-	}
-	switch p.src[p.pos] {
-	case '(', '#':
+		// A word at the very end binds nothing and tests nothing, so it can
+		// only be a name.
 		return true
 	}
-	// "count" and "let" and "for" introduce a variable; a word not followed
-	// by one is being used as something else. The two-word clauses are
-	// checked on their second word instead.
 	switch w {
 	case "count", "for", "let":
-		return !p.lookingAt("$") && p.peekWord() != "sliding" &&
-			p.peekWord() != "tumbling"
+		// Each introduces a variable, or — for "for" — a window.
+		if p.lookingAt("$") {
+			return false
+		}
+		if w == "for" {
+			nw := p.peekWord()
+			return nw != "sliding" && nw != "tumbling"
+		}
+		return true
 	case "group", "order":
 		return p.peekWord() != "by"
 	case "stable":
 		return p.peekWord() != "order"
+	case "only":
+		return p.peekWord() != "end"
+	case "start", "end":
+		// A window condition begins with a variable, "at", "previous",
+		// "next" or "when"; anything else means the word is a name.
+		if p.lookingAt("$") {
+			return false
+		}
+		switch p.peekWord() {
+		case "at", "previous", "next", "when":
+			return false
+		}
+		return true
+	case "return", "satisfies", "where", "when":
+		// Each is followed by an expression, so nothing about the next
+		// character distinguishes a keyword from a name. What does is that
+		// a name here would have to be a function call or a reference, and
+		// both are ruled out by the caller having found the word bare.
+		return false
+	}
+	// The order-by modifiers. Each ends a clause or is followed by another
+	// modifier, so a "(" or "#" after one makes it a call rather than a
+	// keyword.
+	switch p.src[p.pos] {
+	case '(', '#':
+		return true
 	}
 	return false
 }
