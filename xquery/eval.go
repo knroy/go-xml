@@ -100,6 +100,15 @@ func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 // by single spaces. The builder does the separating, because only it knows
 // what was appended last.
 func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
+	// §3.9.1.3 separates adjacent atomic values within the value of *one*
+	// enclosed expression, so the run ends where the braces do: the items of
+	// "{1,2,3}" are one value and are separated, while "<e>{1}{2}</e>" is two
+	// values whose text abuts. Only the node standing for a whole "{ ... }"
+	// closes the run — doing it per item would separate nothing, and not
+	// doing it at all would run "{1}{2}" together into one separated pair.
+	if n.braced {
+		defer out.b.EndAtomicRun()
+	}
 	if n.items != nil {
 		for _, it := range n.items {
 			if err := it.eval(out, ctx); err != nil {
@@ -165,6 +174,20 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
+			// XQTY0024: an attribute node in element content must come before
+			// any child that is not one. The builder routes an attribute in a
+			// sequence to the element's attributes and, for XSLT, deliberately
+			// ignores the ordering complaint — §5.7.1 prepends such nodes to
+			// the content rather than refusing them. XQuery does refuse them,
+			// and the check has to happen here because AppendNode reports
+			// nothing to a caller.
+			if v.Kind == xdm.KindAttribute {
+				if el := out.b.Open(); el != nil && len(el.Children) > 0 {
+					return fmt.Errorf("XQTY0024: the attribute %s follows a "+
+						"node that is not an attribute in the content of "+
+						"element %s", v.Name.Lexical(), el.Name.Lexical())
+				}
+			}
 			out.b.AppendNode(v)
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
@@ -185,6 +208,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		if err != nil {
 			return err
 		}
+		if err := checkElementName(name); err != nil {
+			return err
+		}
 	}
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
@@ -193,6 +219,16 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// Namespace declarations are applied before anything else, so that they
 	// are in scope for the attributes and the content.
 	for _, ns := range n.namespaces {
+		if ns.prefix == "" && ns.uri == "" {
+			// xmlns="" undeclares the default namespace rather than binding
+			// one. There is no namespace node to add — the element is in no
+			// namespace and its unprefixed children resolve to none either,
+			// which is what having no default binding already means. Handing
+			// it to AddNamespace would hit the rule against declaring a
+			// default namespace on an element that is in none, and report as
+			// an error the one case where writing it is exactly right.
+			continue
+		}
 		if err := sub.b.AddNamespace(ns.prefix, ns.uri); err != nil {
 			return err
 		}
@@ -259,16 +295,59 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 	}
+	if err := checkAttributeName(name); err != nil {
+		return err
+	}
 	var sb strings.Builder
+	if a.computed {
+		// A computed constructor's content is one enclosed expression, and
+		// parseBracedContent hands it over already split at the top-level
+		// commas. §3.9.3.3 atomises the whole of it as a single sequence and
+		// separates the values with single spaces, so the items are gathered
+		// and joined once — joining each on its own would drop the separator
+		// between them, and drop an empty or node-valued item entirely.
+		var seq xdm.Sequence
+		for _, part := range a.value {
+			switch v := part.(type) {
+			case *literalText:
+				seq = append(seq, xdm.NewString(v.text))
+			case *enclosed:
+				s, err := v.sequence(ctx)
+				if err != nil {
+					return err
+				}
+				seq = append(seq, s...)
+			default:
+				// A constructor among the items: "attribute a {1,<b/>,2}" is
+				// three values, and the middle one is a node. It atomises to
+				// the empty string but is still a value, so it takes a
+				// separator on each side and must not be skipped — which is
+				// what ignoring the unrecognised part did, giving "1 2" where
+				// the answer is "1  2".
+				inner := xdmbuild.New(policy{sc: ctx.sc})
+				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
+					return err
+				}
+				seq = append(seq, inner.Sequence()...)
+			}
+		}
+		s, err := joinAtomized(seq)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+		return out.b.AddAttribute(name, sb.String())
+	}
+	// A direct constructor's value alternates literal runs and enclosed
+	// expressions — id="a{$x}b" is three parts — and §3.9.1.1 concatenates
+	// the parts with no separator while separating the values *within* each
+	// enclosed expression. So each part is joined on its own here.
 	for _, part := range a.value {
 		switch v := part.(type) {
 		case *literalText:
 			sb.WriteString(v.text)
 		case *enclosed:
-			if v.expr == nil {
-				continue
-			}
-			seq, err := v.expr.compiled.Eval(ctx.xp)
+			seq, err := v.sequence(ctx)
 			if err != nil {
 				return err
 			}
@@ -446,7 +525,17 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 		return xdm.QName{}, fmt.Errorf(
 			"XPTY0004: the name of a constructed node must be a QName or a string")
 	}
-	lex := a.String()
+	// §3.9.3.1 admits either spelling, and either may be surrounded by
+	// whitespace: the value came from an expression, not from the query text,
+	// so nothing has trimmed it yet.
+	lex := strings.TrimSpace(a.String())
+	if uri, local, ok := splitBracedName(lex); ok {
+		if !xdm.IsNCName(local) {
+			return xdm.QName{}, fmt.Errorf(
+				"XQDY0074: %q is not a lexical QName", lex)
+		}
+		return xdm.QName{URI: uri, Local: local}, nil
+	}
 	prefix, local := "", lex
 	if i := strings.IndexByte(lex, ':'); i >= 0 {
 		prefix, local = lex[:i], lex[i+1:]
@@ -466,4 +555,185 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 	}
 	return q, nil
+}
+
+// splitBracedName takes apart a name written as "Q{uri}local".
+//
+// The URI is normalised the way a braced URI literal in the query text is, so
+// that a name computed as a string and one written in the source resolve
+// alike: attribute { " Q{ }x " } and attribute Q{}x are the same attribute.
+func splitBracedName(lex string) (uri, local string, ok bool) {
+	if !strings.HasPrefix(lex, "Q{") {
+		return "", "", false
+	}
+	end := strings.IndexByte(lex, '}')
+	if end < 0 {
+		return "", "", false
+	}
+	inner := lex[2:end]
+	// A brace inside the URI is not something the literal form can spell, so
+	// a second one means this is not a braced name after all.
+	if strings.ContainsAny(inner, "{") {
+		return "", "", false
+	}
+	return normalizeURILiteral(inner), lex[end+1:], true
+}
+
+// checkAttributeName refuses the names §3.9.3.3 reserves for namespace
+// declarations, which an attribute node may not carry.
+//
+// XQDY0044 covers four cases, and they are four spellings of one rule: an
+// attribute may not say anything about namespace bindings. "xmlns" and any
+// name in the xmlns namespace are declarations rather than attributes. The
+// xml prefix and the XML namespace are bound to each other permanently, so a
+// name that pairs either with anything else would be asserting a binding that
+// is not the processor's to change.
+//
+// The check is here rather than at parse time because a computed name is not
+// known until the constructor runs, and a direct constructor cannot produce
+// any of these anyway: scanAttributes routes xmlns and xmlns:p to the
+// namespace-declaration path before a name is ever resolved.
+func checkAttributeName(name xdm.QName) error {
+	switch {
+	case name.URI == "" && name.Local == "xmlns":
+		return fmt.Errorf(
+			"XQDY0044: an attribute may not be named %q", "xmlns")
+	case name.URI == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0044: an attribute may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xml" && name.URI != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0044: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case name.Prefix != "" && name.Prefix != "xml" && name.URI == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0044: the namespace %q may only be named by the prefix %q",
+			xdm.NSXML, "xml")
+	}
+	return nil
+}
+
+// checkElementName is the same rule for an element name, which §3.9.3.1
+// reports as XQDY0096.
+//
+// An element differs from an attribute in one place: it has no unprefixed
+// "xmlns" case, because an element named xmlns in no namespace is a legal
+// element. What is reserved is the namespace, not the local name.
+func checkElementName(name xdm.QName) error {
+	switch {
+	case name.URI == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0096: an element may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xml" && name.URI != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0096: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case name.Prefix != "" && name.Prefix != "xml" && name.URI == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0096: the namespace %q may only be named by the prefix %q",
+			xdm.NSXML, "xml")
+	}
+	return nil
+}
+
+// eval for a namespace constructor adds a binding to the element being built.
+//
+// §3.9.3.7. The prefix may be empty, which binds the default namespace, and
+// the URI is the constructor's content joined the way a text constructor's
+// is. A namespace node with no element to attach to is a legal item, which is
+// what AddNamespace does with it when nothing is open.
+func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
+	prefix := n.prefix
+	if n.prefixExpr != nil {
+		seq, err := n.prefixExpr.compiled.Eval(ctx.xp)
+		if err != nil {
+			return err
+		}
+		atoms, err := xdm.AtomizeChecked(seq)
+		if err != nil {
+			return err
+		}
+		if len(atoms) > 1 {
+			return fmt.Errorf(
+				"XPTY0004: a namespace prefix must be a single value")
+		}
+		// The prefix is cast to xs:NCName, and §3.9.3.7 splits the two ways
+		// that can fail. A value of a type the cast does not accept at all —
+		// a number, an xs:anyURI, a duration — is XPTY0004, a static type
+		// mismatch. A string or untypedAtomic that is simply not an NCName is
+		// XQDY0074, the same code a computed node name gets for the same
+		// reason: it is a name that will not parse.
+		if len(atoms) == 1 {
+			a, ok := atoms[0].(*xdm.Atomic)
+			if !ok {
+				return fmt.Errorf(
+					"XPTY0004: a namespace prefix must be a string")
+			}
+			switch a.Type {
+			case xdm.TypeString, xdm.TypeUntypedAtomic:
+			default:
+				return fmt.Errorf(
+					"XPTY0004: a %s cannot be used as a namespace prefix",
+					a.TypeName())
+			}
+			prefix = a.String()
+			if prefix != "" && !xdm.IsNCName(prefix) {
+				return fmt.Errorf(
+					"XQDY0074: %q is not a valid namespace prefix", prefix)
+			}
+		}
+	}
+	uri, err := contentString(n.content, ctx)
+	if err != nil {
+		return err
+	}
+	if err := checkNamespaceBinding(prefix, uri); err != nil {
+		return err
+	}
+	// A binding this element already has is not a conflict when it agrees, and
+	// AddNamespace decides that; what it cannot see is a second constructor
+	// binding the same prefix differently, which NoteDeclared records for it.
+	if err := out.b.AddNamespace(prefix, uri); err != nil {
+		return err
+	}
+	out.b.NoteDeclared(prefix, uri)
+	return nil
+}
+
+// checkNamespaceBinding refuses the bindings §3.9.3.7 reserves, all XQDY0101.
+//
+// The xml prefix and the XML namespace are bound to each other permanently:
+// binding either to anything else would assert a binding the processor does
+// not get to change, and binding them to each other is a no-op the rule
+// allows. The xmlns prefix and the xmlns namespace may not be bound at all,
+// in either direction, because a namespace node is not how a declaration is
+// spelled. And no prefix may be bound to the empty URI: that is an
+// undeclaration, which a constructor has no way to mean.
+func checkNamespaceBinding(prefix, uri string) error {
+	switch {
+	case prefix == "xmlns" || uri == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0101: neither the prefix %q nor the namespace %q may be "+
+				"bound by a namespace constructor", "xmlns", xdm.NSXMLNS)
+	case prefix == "xml" && uri != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0101: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case prefix != "xml" && uri == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0101: the namespace %q may only be bound to the prefix %q",
+			xdm.NSXML, "xml")
+	case uri == "":
+		return fmt.Errorf(
+			"XQDY0101: a namespace constructor may not bind %s to no namespace",
+			describePrefix(prefix))
+	}
+	return nil
+}
+
+func describePrefix(prefix string) string {
+	if prefix == "" {
+		return "the default namespace"
+	}
+	return fmt.Sprintf("the prefix %q", prefix)
 }

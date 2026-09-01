@@ -140,7 +140,7 @@ func (p *parser) parseDeclBody() (*compiledExpr, []node, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if !mayConstruct(src) {
+	if !needsXQueryParser(src) {
 		c, err := p.compileExpr(src)
 		return c, nil, err
 	}
@@ -151,35 +151,6 @@ func (p *parser) parseDeclBody() (*compiledExpr, []node, error) {
 		return nil, nil, err
 	}
 	return nil, body, nil
-}
-
-// mayConstruct reports whether src might contain a constructor, so that it is
-// parsed here rather than handed straight to xpath.
-//
-// It is deliberately conservative in the direction that costs nothing: a false
-// positive sends the text through this package's own body parser, which falls
-// back to xpath for every item that is not a constructor, so the only cost is
-// one extra pass. A false negative would hand a constructor to a parser that
-// cannot read it, so the test errs towards yes.
-func mayConstruct(src string) bool {
-	if strings.ContainsAny(src, "<") {
-		return true
-	}
-	for _, kw := range []string{"element", "attribute", "document", "text",
-		"comment", "processing-instruction", "namespace"} {
-		if i := strings.Index(src, kw); i >= 0 {
-			rest := strings.TrimLeft(src[i+len(kw):], " \t\r\n")
-			if strings.HasPrefix(rest, "{") {
-				return true
-			}
-			// "element foo {": a name between the keyword and the brace.
-			if j := strings.IndexAny(rest, "{("); j >= 0 && rest[j] == '{' &&
-				strings.TrimSpace(rest[:j]) != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // parseFunctionDecl reads "declare [annotations] function name(params) [as
@@ -264,7 +235,7 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 			d.expr = nil
 			break
 		}
-		if !mayConstruct(src) {
+		if !needsXQueryParser(src) {
 			if d.expr, err = p.compileExpr(src); err != nil {
 				return err
 			}

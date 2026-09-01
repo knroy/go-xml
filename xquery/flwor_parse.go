@@ -870,6 +870,22 @@ func needsXQueryParser(src string) bool {
 					(src[k] == '{' || isNameStartByte(src[k])) {
 					return true
 				}
+			case "try":
+				// "try" commits only on a brace: it is not a reserved word,
+				// so "try" alone is a name and "try(1)" is a function call.
+				if k := skipSpaceFrom(src, j); k < len(src) && src[k] == '{' {
+					return true
+				}
+			case "switch", "typeswitch":
+				// Both take a parenthesised operand, and neither name is
+				// reserved, so a following "(" is what distinguishes the
+				// expression from a call to a function of that name. That is
+				// ambiguous on its own, but a function named switch or
+				// typeswitch would have to be declared to be called, and
+				// parseXQueryOnly rejects the reading that does not parse.
+				if k := skipSpaceFrom(src, j); k < len(src) && src[k] == '(' {
+					return true
+				}
 			}
 			i = j - 1
 		}
