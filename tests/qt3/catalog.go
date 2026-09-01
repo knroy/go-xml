@@ -186,6 +186,12 @@ type Assertion struct {
 	Value string
 	// Code is the @code of an <error>, and @type of an assert-type.
 	Code string
+	// Flags is the @flags of a serialization-matches: the regular expression
+	// flags fn:matches would be given. It is a field of its own rather than
+	// another use of Code because a serialization-matches carries both — the
+	// suite writes flags="q" beside no code at all, and folding them together
+	// would make a literal-match assertion look like an error assertion.
+	Flags string
 	// File is the @file of an assert-xml whose expected value is held in a
 	// separate document rather than inline. Without it the comparison ran
 	// against an empty string, which reported every such case as a mismatch
@@ -217,6 +223,8 @@ func ParseAssert(raw []byte) (Assertion, error) {
 					a.Code = at.Value
 				case "file":
 					a.File = at.Value
+				case "flags":
+					a.Flags = at.Value
 				}
 			}
 			parent := stack[len(stack)-1]
