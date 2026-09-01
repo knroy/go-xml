@@ -28,6 +28,11 @@ type varDecl struct {
 	body []node
 }
 
+// nsXQueryOptions is the namespace §4.16 reserves for option declarations and
+// for the annotations the specification may define in future revisions. It has
+// no constant in xdm because nothing outside the prolog names it.
+const nsXQueryOptions = "http://www.w3.org/2012/xquery"
+
 // funcDecl is one "declare function" (§4.15).
 type funcDecl struct {
 	name    xdm.QName
@@ -184,6 +189,14 @@ func (p *parser) parseFunctionDecl() error {
 	if err != nil {
 		return err
 	}
+	return p.parseFunctionDeclBody(private)
+}
+
+// parseFunctionDeclBody reads a function declaration whose annotations have
+// already been consumed, which is how the prolog handles an AnnotatedDecl: it
+// must read the annotations before it can tell a variable declaration from a
+// function one, and cannot then hand them back.
+func (p *parser) parseFunctionDeclBody(private bool) error {
 	p.skipSpaceAndComments()
 	if !p.consumeKeyword("function") {
 		return p.errorf("XPST0003: expected %q", "function")
@@ -299,40 +312,98 @@ func (p *parser) parseAnnotations() (private bool, err error) {
 		if err != nil {
 			return false, err
 		}
-		name, err := p.resolveDeclaredName(prefix, local, true)
+		name, err := p.resolveDeclaredName(prefix, local, false)
 		if err != nil {
 			return false, err
+		}
+		if prefix == "" && !strings.HasPrefix(local, "Q{") {
+			// §4.15: "if the QName is unprefixed, it is in the namespace
+			// http://www.w3.org/2005/xpath-functions" — the *default function
+			// namespace does not apply*, which annotation-28 is written to
+			// prove: under "declare default function namespace
+			// 'http://example.com'", %x is still fn:x and so XQST0045, not a
+			// vendor annotation in example.com that would be ignored.
+			name = xdm.QName{URI: xdm.NSFN, Local: local}
 		}
 		switch {
 		case name.URI == xdm.NSFN && (name.Local == "private" || name.Local == "public"):
 			private = name.Local == "private"
 		case name.URI == xdm.NSFN, name.URI == xdm.NSXS, name.URI == xdm.NSXSI,
-			name.URI == xdm.NSXML:
+			name.URI == xdm.NSXML, name.URI == xdm.NSMath,
+			name.URI == xdm.NSArray, name.URI == xdm.NSMap,
+			name.URI == nsXQueryOptions:
+			// §4.15 reserves every predefined namespace for annotations, not
+			// just the four the XPath data model needs: math, array, map and
+			// the option namespace http://www.w3.org/2012/xquery stand on the
+			// same footing as fn, xs, xsi and xml, so %math:x is XQST0045
+			// rather than a vendor annotation that is legal and ignored.
 			return false, p.errorf(
 				"XQST0045: %q is a reserved namespace for an annotation", name.URI)
 		}
 		p.skipSpaceAndComments()
-		// An annotation may carry a parenthesised list of literals, which
-		// nothing here interprets.
+		// Annotation ::= "%" EQName ("(" Literal ("," Literal)* ")")?
+		//
+		// Nothing here interprets the values, but the list is parsed rather
+		// than skipped because the grammar admits only literals: %eg:x(1+2)
+		// is XPST0003, and bracket-counting accepted it along with any other
+		// expression, which annotation-8 is written to catch.
 		if p.consume("(") {
-			depth := 1
-			for !p.eof() && depth > 0 {
-				switch p.src[p.pos] {
-				case '\'', '"':
-					end, err := skipString(p.src, p.pos)
-					if err != nil {
-						return false, err
-					}
-					p.pos = end
-				case '(':
-					depth++
-				case ')':
-					depth--
+			for {
+				p.skipSpaceAndComments()
+				if err := p.skipAnnotationLiteral(); err != nil {
+					return false, err
 				}
-				p.pos++
+				p.skipSpaceAndComments()
+				if p.consume(",") {
+					continue
+				}
+				if !p.consume(")") {
+					return false, p.errorf(
+						"XPST0003: expected %q or %q in an annotation", ",", ")")
+				}
+				break
 			}
 		}
 	}
+}
+
+// skipAnnotationLiteral consumes one Literal — a string, or a number with an
+// optional sign — and refuses anything else. It only has to recognise them,
+// since an annotation's values are not interpreted.
+func (p *parser) skipAnnotationLiteral() error {
+	if p.eof() {
+		return p.errorf("XPST0003: expected a literal in an annotation")
+	}
+	if c := p.src[p.pos]; c == '\'' || c == '"' {
+		end, err := skipString(p.src, p.pos)
+		if err != nil {
+			return err
+		}
+		// skipString reports the index *of* the closing quote, not the one
+		// past it.
+		p.pos = end + 1
+		return nil
+	}
+	start := p.pos
+	if !p.eof() && (p.src[p.pos] == '-' || p.src[p.pos] == '+') {
+		p.pos++
+	}
+	for !p.eof() {
+		c := p.src[p.pos]
+		// One pass takes the digits, the decimal point and an exponent with
+		// its own sign, which together spell every numeric literal.
+		if c >= '0' && c <= '9' || c == '.' || c == 'e' || c == 'E' ||
+			((c == '-' || c == '+') && p.pos > start &&
+				(p.src[p.pos-1] == 'e' || p.src[p.pos-1] == 'E')) {
+			p.pos++
+			continue
+		}
+		break
+	}
+	if p.pos == start {
+		return p.errorf("XPST0003: expected a literal in an annotation")
+	}
+	return nil
 }
 
 // parseParamList reads a function's parameter list, with p.pos just past the
