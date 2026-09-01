@@ -595,3 +595,105 @@ func checkElementName(name xdm.QName) error {
 	}
 	return nil
 }
+
+// eval for a namespace constructor adds a binding to the element being built.
+//
+// §3.9.3.7. The prefix may be empty, which binds the default namespace, and
+// the URI is the constructor's content joined the way a text constructor's
+// is. A namespace node with no element to attach to is a legal item, which is
+// what AddNamespace does with it when nothing is open.
+func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
+	prefix := n.prefix
+	if n.prefixExpr != nil {
+		seq, err := n.prefixExpr.compiled.Eval(ctx.xp)
+		if err != nil {
+			return err
+		}
+		atoms, err := xdm.AtomizeChecked(seq)
+		if err != nil {
+			return err
+		}
+		if len(atoms) > 1 {
+			return fmt.Errorf(
+				"XPTY0004: a namespace prefix must be a single value")
+		}
+		// The prefix is cast to xs:NCName, and §3.9.3.7 splits the two ways
+		// that can fail. A value of a type the cast does not accept at all —
+		// a number, an xs:anyURI, a duration — is XPTY0004, a static type
+		// mismatch. A string or untypedAtomic that is simply not an NCName is
+		// XQDY0074, the same code a computed node name gets for the same
+		// reason: it is a name that will not parse.
+		if len(atoms) == 1 {
+			a, ok := atoms[0].(*xdm.Atomic)
+			if !ok {
+				return fmt.Errorf(
+					"XPTY0004: a namespace prefix must be a string")
+			}
+			switch a.Type {
+			case xdm.TypeString, xdm.TypeUntypedAtomic:
+			default:
+				return fmt.Errorf(
+					"XPTY0004: a %s cannot be used as a namespace prefix",
+					a.TypeName())
+			}
+			prefix = a.String()
+			if prefix != "" && !xdm.IsNCName(prefix) {
+				return fmt.Errorf(
+					"XQDY0074: %q is not a valid namespace prefix", prefix)
+			}
+		}
+	}
+	uri, err := contentString(n.content, ctx)
+	if err != nil {
+		return err
+	}
+	if err := checkNamespaceBinding(prefix, uri); err != nil {
+		return err
+	}
+	// A binding this element already has is not a conflict when it agrees, and
+	// AddNamespace decides that; what it cannot see is a second constructor
+	// binding the same prefix differently, which NoteDeclared records for it.
+	if err := out.b.AddNamespace(prefix, uri); err != nil {
+		return err
+	}
+	out.b.NoteDeclared(prefix, uri)
+	return nil
+}
+
+// checkNamespaceBinding refuses the bindings §3.9.3.7 reserves, all XQDY0101.
+//
+// The xml prefix and the XML namespace are bound to each other permanently:
+// binding either to anything else would assert a binding the processor does
+// not get to change, and binding them to each other is a no-op the rule
+// allows. The xmlns prefix and the xmlns namespace may not be bound at all,
+// in either direction, because a namespace node is not how a declaration is
+// spelled. And no prefix may be bound to the empty URI: that is an
+// undeclaration, which a constructor has no way to mean.
+func checkNamespaceBinding(prefix, uri string) error {
+	switch {
+	case prefix == "xmlns" || uri == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0101: neither the prefix %q nor the namespace %q may be "+
+				"bound by a namespace constructor", "xmlns", xdm.NSXMLNS)
+	case prefix == "xml" && uri != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0101: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case prefix != "xml" && uri == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0101: the namespace %q may only be bound to the prefix %q",
+			xdm.NSXML, "xml")
+	case uri == "":
+		return fmt.Errorf(
+			"XQDY0101: a namespace constructor may not bind %s to no namespace",
+			describePrefix(prefix))
+	}
+	return nil
+}
+
+func describePrefix(prefix string) string {
+	if prefix == "" {
+		return "the default namespace"
+	}
+	return fmt.Sprintf("the prefix %q", prefix)
+}

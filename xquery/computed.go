@@ -130,7 +130,21 @@ func (p *parser) parseComputed() (node, bool, error) {
 			content: content}, true, nil
 
 	case "namespace":
-		return nil, true, unimplemented("a computed namespace constructor")
+		// The prefix is written as an NCName or computed in braces, and the
+		// content is the URI. Unlike an element or an attribute the name here
+		// is a prefix rather than a QName, so it does not go through
+		// parseEQNameParts: "namespace Q{...}x" is not a spelling the grammar
+		// has.
+		ns := &namespaceNode{prefixExpr: nameExpr, content: content}
+		if nameExpr == nil {
+			if namePrefix != "" {
+				return nil, true, p.errorAt(start,
+					"XPST0003: a namespace constructor takes a prefix, "+
+						"not the QName %q", qnameText(namePrefix, nameLocal))
+			}
+			ns.prefix = nameLocal
+		}
+		return ns, true, nil
 	}
 	return nil, false, nil
 }

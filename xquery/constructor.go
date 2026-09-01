@@ -94,6 +94,17 @@ type textNode struct{ content []node }
 // document is "document { ... }".
 type document struct{ content []node }
 
+// namespaceNode is "namespace prefix { uri }", §3.9.3.7.
+//
+// Its name is a prefix rather than a QName — the empty one binds the default
+// namespace — so it holds a bare string where the other constructors hold an
+// xdm.QName.
+type namespaceNode struct {
+	prefix     string
+	prefixExpr *compiledExpr
+	content    []node
+}
+
 // parseDirElement parses a direct element constructor, with p.pos on the "<".
 //
 // The two passes over the attribute list are not an optimisation gone wrong.

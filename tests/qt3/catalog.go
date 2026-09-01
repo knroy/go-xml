@@ -173,7 +173,7 @@ type TestCase struct {
 		Query string `xml:",chardata"`
 		File  string `xml:"file,attr"`
 	} `xml:"test"`
-	Modules      []struct {
+	Modules []struct {
 		URI  string `xml:"uri,attr"`
 		File string `xml:"file,attr"`
 	} `xml:"module"`
