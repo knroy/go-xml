@@ -245,10 +245,20 @@ func (p *parser) parseNamespaceDecl(once map[string]*seenDecl, inSecond *bool) e
 	// call to the constructor. It is a removal rather than a binding to "",
 	// because a name resolved against the empty URI would silently be in no
 	// namespace instead of being an error.
+	// §4.2 forbids a prolog from saying anything at all about xml or xmlns:
+	// "it is a static error if the prefix is xml or xmlns". That is stricter
+	// than the rule bind applies, which allows xml to be bound to its own
+	// namespace because a constructor's xmlns:xml="…/XML/1998/namespace" is
+	// legal — an XML parser would have accepted it. A prolog has no such
+	// excuse, so both prefixes are refused here whatever the URI, including
+	// the zero-length one that would otherwise be read as an undeclaration.
+	// namespaceDecl-3 declares xml to its own correct URI and K2-Namespace-
+	// Prolog-7 undeclares xmlns; both are XQST0070.
+	if prefix == "xml" || prefix == "xmlns" {
+		return p.errorf("XQST0070: the prefix %q may not be declared in a "+
+			"prolog", prefix)
+	}
 	if uri == "" {
-		if prefix == "xml" {
-			return p.errorf("XQST0070: the prefix %q may not be undeclared", "xml")
-		}
 		delete(p.sc.ns, prefix)
 		p.declaredNS[prefix] = true
 		return nil
