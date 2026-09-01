@@ -50,10 +50,11 @@ func (p policy) Err(f xdmbuild.Fault, detail string) error {
 }
 
 // InheritNamespaces and PreserveNamespaces are the two halves of
-// copy-namespaces, which vary independently. Phase 1 has no prolog to set
-// them, so both take the specification's default.
-func (p policy) InheritNamespaces() bool  { return true }
-func (p policy) PreserveNamespaces() bool { return true }
+// copy-namespaces, which vary independently and which "declare
+// copy-namespaces" sets. A nil static context is the specification's default,
+// which is preserve and inherit.
+func (p policy) InheritNamespaces() bool  { return p.sc == nil || p.sc.inheritNS }
+func (p policy) PreserveNamespaces() bool { return p.sc == nil || p.sc.preserveNS }
 
 // PreserveTypes follows the construction mode, which "declare construction"
 // sets and which defaults to preserve.

@@ -65,7 +65,50 @@ type staticContext struct {
 	// baseURI is the static base URI, used to resolve relative references
 	// and stamped on constructed elements.
 	baseURI string
+
+	// defaultCollation is what a comparison uses when the call names none.
+	// The empty string means the codepoint collation, which is the default
+	// everywhere and what xpath uses for the zero value.
+	defaultCollation string
+
+	// ordering is the ordering mode of §4.6. It is recorded and not acted on:
+	// unordered mode *permits* a processor to return a sequence in any order,
+	// and document order is one of the orders it permits.
+	ordering Ordering
+
+	// emptyOrder decides where the empty sequence sorts in an "order by"
+	// without its own "empty greatest|least". It is here rather than on the
+	// FLWOR clause because the prolog sets a module-wide default.
+	emptyOrder EmptyOrder
+
+	// preserveNS and inheritNS are the two independent halves of
+	// copy-namespaces (§4.8), which xdmbuild's Policy models the same way.
+	// Both default to the specification's preserve/inherit.
+	preserveNS, inheritNS bool
 }
+
+// Ordering is the ordering mode of §4.6.
+type Ordering int
+
+const (
+	// Ordered requires the document order a path expression would give. It
+	// is the default.
+	Ordered Ordering = iota
+	// Unordered permits any order.
+	Unordered
+)
+
+// EmptyOrder decides where the empty sequence sorts in an "order by" that
+// does not say (§4.7).
+type EmptyOrder int
+
+const (
+	// EmptyGreatest sorts the empty sequence last ascending. It is this
+	// implementation's default, which the specification leaves open.
+	EmptyGreatest EmptyOrder = iota
+	// EmptyLeast sorts it first.
+	EmptyLeast
+)
 
 // newStaticContext returns the context a query starts with, before its prolog
 // has said anything.
@@ -86,6 +129,8 @@ func newStaticContext() *staticContext {
 		defaultFunctionNS: xdm.NSFN,
 		boundarySpace:     StripSpace,
 		construction:      PreserveTypes,
+		preserveNS:        true,
+		inheritNS:         true,
 	}
 }
 

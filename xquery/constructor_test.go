@@ -252,8 +252,7 @@ func TestUnimplementedIsNamed(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
 		{`for $x in 1 return $x`, "for"},
 		{`let $x := 1 return $x`, "let"},
-		{`declare namespace p = "urn:x"; 1`, "prolog"},
-		{`xquery version "3.1"; 1`, "prolog"},
+		{`import module namespace m = "urn:x"; 1`, "import"},
 		{`typeswitch(1) case xs:integer return 1 default return 2`, "typeswitch"},
 		{`try { 1 } catch * { 2 }`, "try"},
 	} {
@@ -265,6 +264,23 @@ func TestUnimplementedIsNamed(t *testing.T) {
 		if !strings.Contains(err.Error(), c.want) ||
 			!strings.Contains(err.Error(), "not implemented") {
 			t.Errorf("%s: want a clear %q error, got %v", c.src, c.want, err)
+		}
+	}
+}
+
+// The prolog was refused by name until it was implemented. These two are what
+// that refusal used to cover, kept as a check that the boundary moved rather
+// than as a regression test for a message.
+func TestPrologIsAccepted(t *testing.T) {
+	for _, src := range []string{
+		`declare namespace p = "urn:x"; <p:a/>`,
+		`xquery version "3.1"; 1`,
+		`declare variable $x := 2; $x`,
+		`declare function local:f($n as xs:integer) as xs:integer { $n * 2 };
+		 local:f(21)`,
+	} {
+		if _, err := run(t, src, xquery.Options{}); err != nil {
+			t.Errorf("%s: %v", src, err)
 		}
 	}
 }
