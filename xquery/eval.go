@@ -174,6 +174,20 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
+			// XQTY0024: an attribute node in element content must come before
+			// any child that is not one. The builder routes an attribute in a
+			// sequence to the element's attributes and, for XSLT, deliberately
+			// ignores the ordering complaint — §5.7.1 prepends such nodes to
+			// the content rather than refusing them. XQuery does refuse them,
+			// and the check has to happen here because AppendNode reports
+			// nothing to a caller.
+			if v.Kind == xdm.KindAttribute {
+				if el := out.b.Open(); el != nil && len(el.Children) > 0 {
+					return fmt.Errorf("XQTY0024: the attribute %s follows a "+
+						"node that is not an attribute in the content of "+
+						"element %s", v.Name.Lexical(), el.Name.Lexical())
+				}
+			}
 			out.b.AppendNode(v)
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
