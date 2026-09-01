@@ -16,7 +16,7 @@ Current position:
 | XSLT 3.0 | 99.78% — 8,607 of 8,626 in scope (19 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
-| Tests | 671, clean under `-race` |
+| Tests | 944, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -45,24 +45,23 @@ It is not a version-string rewrite. XML 1.1 changes what the *language* is:
 Cost: substantial. Buys: 38 tests and correctness for documents that really
 are 1.1.
 
-### 1.2 DTD validation
+### 1.2 DTD validation — done, internal subset only
 
-Today a `DOCTYPE` is parsed past rather than applied — see
-[validation.md](validation.md#dtd-and-relax-ng). Making it real means a DTD
-syntax parser (`<!ELEMENT>`, `<!ATTLIST>`, `<!ENTITY>`, parameter entities)
-and entity expansion.
+**Implemented.** The `dtd` package parses `<!ELEMENT>`, `<!ATTLIST>` and
+`<!ENTITY>` and validates against them: content models, attribute defaults,
+enumerations, and `ID`/`IDREF`. Content models reuse nothing from
+`xsd/automaton.go` in the end — DTD's are simple enough to decide directly.
 
-The content models are the easy half: DTD's `(a, b*, (c|d)?)` is a strict
-subset of what the Glushkov automaton in `xsd/automaton.go` already compiles,
-and ID/IDREF and attribute defaulting are already there for XSD.
+The security posture was the design rather than a footnote on it, as this
+entry argued it had to be: **entity expansion is the attack surface
+`AllowDOCTYPE` exists to refuse**, so expansion is bounded by count and by
+total expanded size, and nothing external is fetched without a resolver the
+caller supplies. Both are exercised — a billion-laughs bomb is refused in
+microseconds.
 
-The hard half is that **entity expansion is the attack surface `AllowDOCTYPE`
-exists to refuse**. Billion-laughs and XXE both enter here, so this has to be
-built with expansion limits and no external fetches by default — the security
-posture is the design, not a footnote on it.
-
-Cost: ~1,500–2,500 lines plus a corpus. Buys: a format still common in the
-wild, with real reuse of what is here.
+What is *not* implemented is the external subset, and parameter entities only
+work within the internal one. A document whose DTD lives in a separate file
+validates against whatever it declares inline and no more.
 
 ### 1.3 RELAX NG — done, XML syntax only
 
@@ -99,40 +98,36 @@ schemas are marked invalid-by-design and skipped either way". That was true of
 the test driver, not of the suite: skipping them was a measurement bug, and
 they are roughly 14,000 real tests. See the correction in [xsd.md](xsd.md).
 
-What is left, in rough order of size:
-
-| area | schema false-accepts (1.0) |
-|---|---:|
-| attribute declarations and attribute groups | ~106 |
-| wildcards, element declarations, model group definitions | ~215 |
-| identity constraints | ~38 |
-| notations | ~21 |
-| schema-level and assorted | ~90 |
+What is left: **nothing measurable.** Schema-validity agreement is now 99.86%
+on 1.0 and 99.88% on 1.1, and none of the remaining disagreements is a fixable
+defect — see [conformance-gaps.md](conformance-gaps.md). The area table that
+stood here counted roughly 470 false accepts across attribute declarations,
+wildcards, identity constraints and notations; all of it has since landed.
 
 ---
 
 ## 2. Bugs
 
-### 2.1 XSD 1.0: 786 disagreements, 27 of them disputed
+### 2.1 XSD: 51 disagreements on 1.0, 47 on 1.1 — none of them a defect
 
-Split by direction, because they are different kinds of work:
+Both directions are closed. The ~700 schema false accepts this entry used to
+count are implemented, and the false rejects with them; schema-validity
+agreement is 99.86% on 1.0 and 99.88% on 1.1.
 
-**~700 schema false accepts** — an invalid schema loads without complaint.
-These are Schema Component Constraints not yet applied; see 1.4 for where they
-sit.
+What is left is not work: 89 of the 98 are cases where the suite's own
+`status` records that the W3C challenged the expected result, 44 of those (22
+per version) being the single open bug 4113 — the regex general-category tests
+written against Unicode 3.1, where passing means freezing a Unicode 3.1 table
+and being wrong about modern text. Check the metadata before assuming a
+disagreement is ours, and note the status is on the `<current>` element, not
+on `<expected>`.
 
-**~25 schema false rejects and ~15 instance false rejects** — valid input we
-refuse. **Work these first.** A false reject breaks a caller outright, while a
-false accept only fails to catch someone else's mistake; the two are not
-symmetric, and a single percentage treats them as though they were. An error
-naming a code and a path is also a far shorter route to a cause.
+The principle this entry argued for still holds and is worth keeping: **a
+false reject breaks a caller outright, a false accept only fails to catch
+someone else's mistake.** They are not symmetric, and a single percentage
+treats them as though they were. That is why the tables above split them.
 
-**27 are disputed** — `status="queried"` against an open W3C bug. Nineteen of
-those are one cause: bug 4113, the regex general-category tests, written
-against Unicode 3.1 before characters moved between categories. Passing them
-would mean freezing a Unicode 3.1 table and being wrong about modern text.
-Check the metadata before assuming a disagreement is ours — and note the status
-is on the `<current>` element, not on `<expected>`.
+It also holds that a suite at its ceiling is not proof of exactness — see 3.1.
 
 ### 2.2 QName values do not resolve their prefix
 
@@ -146,12 +141,11 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: 1 in-scope failure
+### 2.3 XPath: no in-scope failures
 
-Mostly not fixable, and worth stating why so nobody re-litigates it:
-
-**One case remains**, `fn-matches-51`, and it is the one shape this
-deliberately refuses.
+XPath 2.0, 3.0 and 3.1 are all at 100%. The last case to fall was
+`fn-matches-51`, the one shape this deliberately refuses by default, and it is
+worth stating why so nobody re-litigates it:
 
 Backreferences are now resolved where doing so is exact. RE2 has none, but it
 returns capture positions, and a backreference is only hard when the group it
@@ -196,6 +190,24 @@ There is one fuzz target in the tree, `FuzzCompileNoPanic` over the XPath
 expression compiler. Neither the XML parser, the schema assembler, nor the
 content-model compiler has one, and all three consume adversarial input — a
 `.xsd` is as untrusted as a `.xml` when it arrives over the wire.
+
+**This is now the highest-value item in this file, and it is no longer a
+hypothesis.** With every suite at its ceiling, fuzzing is the only method still
+finding defects, and a round of it found three the suites cannot see:
+
+- a nil dereference on a named function reference with no function library,
+  where the equivalent call correctly raised `XPST0017`;
+- two unbounded recursions — sequence types and XSD pattern facets — each of
+  which killed the *process*, since a stack overflow is fatal in Go and
+  `recover()` cannot catch it;
+- and, by differential fuzzing against a brute-force reference, a
+  content-model bug that decides a whole class of schemas wrongly in both
+  directions ([known-gaps.md](known-gaps.md)).
+
+The first three are fixed. The differential technique — generate a model,
+generate documents, compare against an independent oracle — is what found the
+one that matters most, and it should be a standing target rather than a
+one-off.
 
 ### 3.2 Deep-nesting and pathological schemas
 

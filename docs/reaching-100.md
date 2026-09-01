@@ -1,6 +1,6 @@
 # What reaching 100% would take
 
-Measured at commit `56543f9`. The short answer: **100% is not reachable on any
+Measured at commit `6fa4150`. The short answer: **100% is not reachable on any
 of these suites**, and the great majority of what remains are cases where
 passing would mean shipping something *less* correct. What follows separates
 the work that exists from the work that does not.
@@ -19,87 +19,45 @@ XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
 real work; one marked `queried` or `stable bugNNNN` is one the W3C has itself
-challenged, and 99 of the 142 XSD disagreements are of that kind — 44 of them
+challenged, and 89 of the 98 XSD disagreements are of that kind — 44 of them
 (22 per version) are the single open bug 4113.
 
 ---
 
 ## Part 1 — what is left
 
-This is the whole of what "reaching the ceiling" means. None of it is
-speculative; every case has a diagnosed shape.
+**Nothing that is fixable.** Every case in the fixable column reached zero over
+three rounds of work; what stands between here and 100% is the 124 in Part 2
+plus two open questions.
 
-### XSD schema validity — 39 cases, the largest block
+The last four to fall are worth recording, because they are the shape of what
+"fixable" meant:
 
-**9 on XSD 1.0, 30 on 1.1**, counting only what the suite marks `accepted`
-and setting aside four `notQName` cases the suite omitted a `version="1.1"` on.
-Two different problems wearing one label:
-
-| Kind | 1.0 | 1.1 | What it means |
-|---|---:|---:|---|
-| `SFALSEACCEPT` | 5 | 22 | A schema-validity rule that is not checked yet. Additive: write the rule, the case passes. |
-| `SFALSEREJECT` | 6 | 7 | The opposite — a rule applied too strictly. **Riskier**: loosening one can re-admit a false accept elsewhere. |
-| `IFALSEREJECT` | 2 | 1 | Instance validation. |
-
-The false-accept half is the tractable one, and two agent rounds have now
-demonstrated it: ~90 of these cleared by writing rules one at a time, with no
-agreement count falling. What is left is thinner and concentrated in 1.1 —
-the `All` group (`all009`, `all218`, `all237`, `all308`, `all313`), open
-content (`open036`, `open046`, `open048`) and wildcards (`wild049`, `wild050`,
-`wild057`, `wild069`).
-
-The `SFALSEREJECT` side is where the risk sits: `particlesZ001`,
-`s3_10_6ii01`/`ii02` and `s3_10_1ii08`/`ii09` need the content-model and
-wildcard restriction tables *loosened*, and each loosening has to be measured
-against both versions to show it has not re-admitted a false accept.
-
-**Effort:** the additive rules are days, one rule at a time, each measured
-against both versions. The over-strict four and the reachability four are
-genuinely harder and may not be worth their cost.
-
-### XSLT 3.0 long tail — 8 cases
-
-No concentration left. Package composition was a third of the failures and is
-now 5, all unreachable. What remains is one or two cases across thirty test
-sets: snapshots, higher-order functions, namespace fixup on copy, two missing
-static checks, `xsl:number` integer overflow, result-document base URI,
-`schema-element()` in a `use-when` test.
-
-**Effort:** each is its own small investigation with no shared cause. Steady,
-unglamorous, low-risk. This is the bulk of the remaining XSLT work by count and
-the least of it by difficulty.
-
-### The two singles
-
-- **`json-to-xml-048`** (XPath 3.1) — `\r`, `\t` and an escaped space must
-  serialise as numeric character references; we emit them literally. A real
-  escaping bug, one case, small.
-- **`validation-0201`** (XSLT 2.0 and 3.0) — XHTML output method, `<meta
-  http-equiv>` placement in `<head>`. One case, cosmetic but real.
-
-### The one open question
-
-- **`validation-0006`** — a parentless attribute: `XTTE1555` wanted,
-  `XTTE1540` given.
-
-`sequence-0132` was the other, and has been settled as not implementable. It
-is scoped `XSLT20+` so it must pass at both versions; it passes at 3.0 and
-fails at 2.0. Reaching the type check at 2.0 requires the content model to
-accept content on `xsl:sequence`, and `sequence-2401a` — scoped `XSLT20` —
-requires it to reject exactly that with `XTSE0010`. Measured: removing the
-gate takes 2.0 from 6149 to 6148, trading one case for the other, and `0132`
-still fails because the code reported then is `XTSE3185`, which does not exist
-before 3.0.
-
-### If all 55 landed
-
-| Suite | Now | Ceiling |
+| Case | Suite | Outcome |
 |---|---|---|
-| XPath 3.1 | 100.00% | **100.00%** |
-| XSLT 2.0 | 99.85% | **99.85%** |
-| XSLT 3.0 | 99.78% | **99.80%** |
-| XSD 1.0 | 99.87% | **99.87%** |
-| XSD 1.1 | 99.89% | **99.89%** |
+| `particlesZ040` | XSD, both | Fixed by bracketing a repetition count into a low and a high reading. |
+| `wildZ013` | XSD 1.0 | Fixed: attribute-wildcard intersection under errata E1-10. |
+| `particlesK006` | XSD 1.1 | Fixed: particle derivation. |
+| `catalog-005b` | XSLT 3.0 | Fixed, and `catalog-009` came with it. |
+| `type-available-0151` | XSLT 3.0 | Fixed by scoping `XSD_1.1` to the version being measured, which brought three `regex-syntax` cases too. |
+
+`attP031` left the column the other way: it is a suite defect, not work.
+
+### The two open questions
+
+`validation-0006` and `strip-space-009`. Both ask for behaviour the checked-in
+spec text does not settle, so neither is counted as a pass or as a defect.
+
+### What a zero here does not mean
+
+It does not mean the engine is exact. It means the suites have no more to say.
+The content-model matcher is provably wrong on a shape neither suite covers —
+a repeated group whose only child is itself repeating is decided wrongly in
+both directions, found by differential fuzzing and recorded in
+[known-gaps.md](known-gaps.md). Every W3C case of that form uses two or more
+distinct child names, so 80,878 agreements step around it.
+
+A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
@@ -107,9 +65,9 @@ before 3.0.
 
 Grouped by what would actually have to change.
 
-### 99 — the W3C disputes its own expected result
+### 89 — the W3C disputes its own expected result
 
-XSD 1.0 (50) and 1.1 (49). The suite records a `status` on each test:
+XSD 1.0 (45) and 1.1 (44). The suite records a `status` on each test:
 `accepted` means settled, **`queried` means the W3C has itself challenged the
 expectation**, usually with a bugzilla number. 27 are `queried` in each
 version, the rest are `stable` but carry an open bug.
@@ -126,9 +84,15 @@ processor. **Nothing to do here, and doing it would be wrong.**
 security). They are counted as fixable here, which is the less flattering
 reading.
 
-### 3 — no XQuery processor
+### 0 — no XQuery processor (now out of scope, not failing)
 
 `fn-load-xquery-module-003`, `-004`, `fn-function-lookup-764`.
+
+These no longer count against anything: the set declares the feature
+`satisfied="true"` and then overrides fourteen cases to `satisfied="false"`, so
+the harness treats `fn-load-xquery-module` as an unsupported feature and the
+cases fall out of scope. That is what took XPath 3.1 to 100%. The reasoning
+below is why they are out of scope rather than a gap.
 
 `fn:load-xquery-module` compiles an XQuery library module. This engine
 implements XPath and XSLT. F&O 3.1 anticipates exactly this: **FOQM0006 is
@@ -142,7 +106,7 @@ something only a processor could do.
 **To fix: write an XQuery engine.** That is a second language implementation,
 not a conformance fix.
 
-### 3 — the suite contradicts itself
+### 2 — the suite contradicts itself
 
 `regex-syntax-0056`, `-0086`, `-0102`. Ambiguous-dash character classes that
 XSD 1.0 rejects and 1.1 accepts.
@@ -183,7 +147,7 @@ cases disagree.
 
 **To fix: freeze a 2012 Unicode table.** That would make every other case wrong.
 
-### 3 — suite defects
+### 11 — suite defects
 
 - **`format-number-070`** — the catalog invokes `<initial-template
   name="main"/>`; the stylesheet has one template, `match="root"`, and zero
@@ -211,7 +175,7 @@ uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
 
 **To fix: implement EXSLT.** Defensible as a feature; not a conformance fix.
 
-### 3 — features deliberately not implemented
+### 4 — features deliberately not implemented
 
 - **`streamable-141`** — needs streamability analysis.
 - **`base-uri-052`** — needs XInclude.
@@ -220,7 +184,7 @@ uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
 Of these, **`xsl:assert` is the cheapest real feature on the list** and worth
 doing on its own merits.
 
-### 3 — package composition, at a cost
+### 3 — costs more than it gains
 
 - `accept-913` — the case's own comment states a premise §3.6.3.2 contradicts.
   Built, instrumented, reverted.
@@ -234,23 +198,34 @@ doing on its own merits.
 
 ---
 
+### 2 — implementation-defined
+
+`validation-0201`, on both targets.
+
+It asserts Saxon's three-space indent byte-for-byte. Indentation is
+implementation-defined by §10 of the serialization spec, and this serializer
+writes a different amount of it. The suite's own `validation-0202` was
+rewritten in 2013 "to avoid serialization dependencies"; `0201` was not.
+
+**To fix: match another processor's whitespace.** That is not conformance.
+
+---
+
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** Of 183
+**Reaching 100% is not a goal that survives contact with the suites.** Of 126
 disagreements, 124 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
-invalid input, or weakening a security default.
+invalid input, or weakening a security default. The other two are open
+questions the spec does not settle.
 
-What is achievable:
+**There is no conformance work left to schedule.** The ceiling and the measured
+state are the same number on every suite, which is what a zero in the fixable
+column means.
 
-1. **XSD false-accept rules** — 48 cases, additive, demonstrated at scale.
-2. **XSLT 3.0 long tail** — 36 cases, no shared cause, low risk.
-3. **Re-triage the six marginal XSD rows** — cheap, and the totals are wrong
-   without it.
-4. **Two singles** — `json-to-xml-048`, `validation-0201`.
-5. **XSD over-strictness** — 17 cases, riskier, each can regress a false accept.
-
-That is **~7 cases and a ceiling of about 99.9% across the board**.
+What remains is not conformance work but engineering the suites cannot see:
+the content-model matcher's nested-occurrence bug above, and whatever else
+fuzzing turns up. That is the better use of the next round.
 
 Three larger items are defensible as *features* rather than conformance work,
 and should be judged that way: **`xsl:assert`** (cheapest), **XInclude**, and

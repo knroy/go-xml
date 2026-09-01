@@ -77,9 +77,9 @@ Requires Go 1.26 or later.
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 776, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 944, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
-| **API** | 1.0; the exported surface is stable, and a breaking change means 2.0 with a new module path |
+| **API** | 1.1; the exported surface is stable, and a breaking change means 2.0 with a new module path |
 
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
@@ -102,7 +102,7 @@ true here:
 3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.78%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
-   now 5 of 52, all five documented as unreachable rather than outstanding.
+   now 5 of 19, all five documented as unreachable rather than outstanding.
    What is left is a long tail of one or two cases across thirty test sets,
    which is harder to summarise but easier to live with — no single feature is
    systematically weak. The corpus differential against Saxon remains stronger
@@ -758,14 +758,15 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**1 of 15,183 in-scope cases fails (0.01%).**
+**It does not: 15,183 of 15,183 in-scope cases pass, and so do 19,236 on 3.0
+and 21,778 on 3.1.**
 
-`fn-matches-51`:
+The last case to fall was `fn-matches-51`:
 `fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
 `([)(]*)`, a group whose width can vary, *and* places the backreference in the
-middle of the pattern. Both are refused by the default engine — see *The hard
-floor* below. It passes with `xpath.SetBacktrackingRegex(true)`, which takes
-QT3 to 15,183 of 15,183; the figure above reports the default configuration.
+middle of the pattern. Both are refused by RE2 — see *The hard floor* below —
+so it passes only under `xpath.SetBacktrackingRegex(true)`, which the
+conformance harnesses enable and which stays off in production.
 
 Two things about how that number was reached are worth more than the number
 itself.
@@ -1277,8 +1278,8 @@ later checkout can move the denominator — see
 by 461 in one step.
 
 **Skips are reported separately and are never counted as passes.** The suite is
-FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1; this is an XPath 2.0
-processor, so 16,640 cases are out of scope — 15,545 of them requiring XQuery
+FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1; XQuery is out of scope
+here, so 10,043 cases are out of scope — 15,545 of them requiring XQuery
 or a later XPath. Failing a test for a language the engine does not claim to
 implement would say nothing about conformance, and counting those as passes is
 how a conformance number becomes meaningless.

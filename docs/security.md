@@ -61,8 +61,28 @@ cannot catch it, so a server does not fail the request, it dies. The XML
 parser's element-nesting limit is no help, because the whole expression lives
 inside one attribute value. Under a hardened `SetMaxStack`, 14 KB was enough.
 
-Expression nesting is now bounded at 1000 levels, counted at the single point
-every nesting construct passes through, and reported as `XPST0003`.
+Expression nesting is now bounded at 1000 levels and reported as `XPST0003`.
+
+That bound was first described here as "counted at the single point every
+nesting construct passes through". It was not: two constructs did not pass
+through it, and a fourth audit found both still crashing the process.
+
+- **Sequence types.** `parseSequenceType` recurses into itself for a
+  parenthesised item type, for a function test's argument and return types,
+  and for the member types of `map()` and `array()` — none through
+  `parseExprSingle`. `1 instance of ((((…item()…))))` at 400 KB was enough at
+  Go's default 1 GB stack. Reachable through any `@select`, `@test` or `@as`,
+  and through `xs:assert/@test`.
+- **XSD pattern facets.** The XSD-flavour regex parser recurses once per
+  group and counted nothing; a 6 MB schema was enough. Hostile-schema only —
+  the XPath-flavour checker is an iterative scanner, so a pattern arriving as
+  document data never reached it.
+
+Both are now bounded at 1000 levels, counted at their own recursion points.
+The lesson is that "every construct passes through here" is a claim about a
+grammar, and it needs a test per construct rather than one test and an
+argument: `TestDeepTypeIsRefusedNotFatal` and
+`TestDeepSchemaPatternIsRefusedNotFatal` now stand alongside the original.
 
 ### RELAX NG: nested `oneOrMore` is exponential in document *width*
 

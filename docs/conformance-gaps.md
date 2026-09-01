@@ -1,7 +1,7 @@
 # W3C conformance: the remaining gaps
 
 Every figure here comes from a full run of the suite it names, measured at
-commit `6c036b5` with `tests/check.sh`. Nothing is estimated.
+commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
@@ -196,20 +196,24 @@ is its own investigation.
 
 | Case | Verdict | Note |
 |---|---|---|
-| `catalog-005b` | **Implementable** | Reports `XTTE1512` for `as-3102.xsl` where the suite wants a clean result. `catalog-009`, which shared this row, now passes: loading the schema for schemas needed three fixes — a DOCTYPE the host may now permit, `resolveAttributes` skipping the document's own types because their names are in the schema namespace, and no `Choice:Sequence` cell in the derivation table. |
-| `type-available-0151` | **Implementable** | Wants XSD 1.1 *absent*; this engine has it. Both ways of scoping that were measured and both cost more than the case is worth: excluding every `satisfied="false"` case drops 7 passing regex cases with it, and claiming `XSD_1.1` outright regresses XSLT 2.0 by 4. |
+| `catalog-005b` | **Fixed** | Reported `XTTE1512` for `as-3102.xsl` where the suite wants a clean result. Loading the schema for schemas needed a DOCTYPE the host may now permit, `resolveAttributes` no longer skipping the document's own types because their names sit in the schema namespace, and a `Choice:Sequence` cell in the derivation table; merging the environment schema and atomising a union of lists finished it. `catalog-009` came with it. |
+| `type-available-0151` | **Fixed** | Wants XSD 1.1 *absent*. Scoping `XSD_1.1` to the XSLT version being measured — present for 3.0, absent for 2.0 — settles it without the cost either earlier attempt carried, and brought the three `regex-syntax` cases with it. |
 | `accumulator-038` | **Not implementable** | Suite defect: its `main` template lacks `visibility="public"`, so a transform may not start at it. The sibling `accumulator-039` was patched for exactly this in 2019 and 038 was missed. |
 | `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
-**XSLT 3.0 ceiling: 8,603 / 8,623 = 99.77%.**
+**XSLT 3.0 ceiling: 8,609 / 8,626 = 99.80%**, the 8,607 that pass now plus the
+two open questions.
 
-The twenty that cannot be fixed: `accept-913`, `package-200`,
+The seventeen that cannot be fixed: `accept-913`, `package-200`,
 `use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
 `unparsed-text-2003`, `streamable-141`, `base-uri-052`, `docbook-001`,
-`docbook-004`, `catalog-006b`, the three `regex-syntax` ambiguous-dash cases,
-`si-copy-117`, `si-copy-of-117`, `import-schema-137`, `accumulator-038` and
-`validation-0201`.
+`docbook-004`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
+`import-schema-137`, `accumulator-038` and `validation-0201`.
+
+The three `regex-syntax` ambiguous-dash cases are no longer among them: they
+pass now that `XSD_1.1` is scoped to the version being measured rather than to
+the engine.
 
 ---
 
@@ -261,7 +265,7 @@ for instance validation.
 | `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Schema`, `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, others | 22–23 | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
 
-**Not implementable: 50 (XSD 1.0) and 47 (XSD 1.1).**
+**Not implementable: 51 (XSD 1.0) and 47 (XSD 1.1).**
 
 ### The `notQName` cases are a suite omission, not a gap
 
@@ -293,26 +297,30 @@ suite and still a net loss of 150, so it is not taken.
 
 ## What is genuinely ours
 
-Five cases, and they are the residue rather than a cluster.
+Nothing, on either version — every case above is a suite defect, a challenged
+expectation, or a deliberate choice.
 
-| Case | Version | Kind | What it needs |
-|---|---|---|---|
-| `MS-Attribute2006-07-15/attP031` | 1.0 | `IFALSEREJECT` | A `use="prohibited"` attribute carrying `fixed`. Under 1.0 a prohibited use is absent from `{attribute uses}`, so `cvc-complex-type.3.2.2` rejects the instance — which is the letter of the spec and what Xerces does. The suite expects valid. |
-| `MS-Particles2006-07-15/particlesZ040` | both | `IFALSEREJECT` | A `<sequence maxOccurs="3">` of three *optional* particles. Because every member is optional, every position is both a first and a last, so an ordinary forward step reads as a restart and the outer counter exhausts inside the first iteration. Diagnosed precisely; the obvious fix gains this and loses six. |
-| `MS-Wildcards2006-07-15/wildZ013` | 1.0 | `SFALSEACCEPT` | Attribute-wildcard intersection under errata E1-10. The expectation carries `bug15629` and a prior entry citing a different bug, so it has been revised twice — worth confirming before the work. |
-| `MS-Particles2006-07-15/particlesK006` | 1.1 | `SFALSEACCEPT` | Particle derivation. |
+Four cases stood here until recently, and what happened to them is the useful
+part:
 
-`particlesZ040` is the one worth attention: it is a real bug in the
-content-model automaton, it fails on **both** versions, and its cause is
-understood. `counterAllows` suppresses outer-counter charging through
-`innerRepeats` while `advanceCounters` uses a bare `isScopeRestart` and has no
-such guard, so the two disagree about what a restart is. Reconciling them
-gets closer but not all the way; the structural fix — recording forward
-sequence edges as continuations — also suppresses restarts that legitimately
-must happen when a sequence wraps, which under-counts `minOccurs` and costs
-six other cases. A correct fix needs to separate those at runtime.
+| Case | Version | Outcome |
+|---|---|---|
+| `MS-Particles2006-07-15/particlesZ040` | both | **Fixed.** Bracketing a repetition count into a low and a high reading, since one number cannot answer both bounds. |
+| `MS-Wildcards2006-07-15/wildZ013` | 1.0 | **Fixed.** Attribute-wildcard intersection under errata E1-10. |
+| `MS-Particles2006-07-15/particlesK006` | 1.1 | **Fixed.** Particle derivation. |
+| `MS-Attribute2006-07-15/attP031` | 1.0 | **Suite defect.** It names its instance test `.i`, says in its own prose that the attribute *does* appear, and still expects valid; its sibling `attP029`, byte-identical but for the instance, is consistent. |
 
-**XSD ceilings: 1.0 — 39,354 / 39,404 = 99.87%. 1.1 — 41,525 / 41,572 = 99.89%.**
+That the list is empty is not the same as the engine being exact. The
+content-model matcher is still not, and the case that shows it was found by
+fuzzing rather than by either suite — see *Nested occurrence bounds are wrong
+in both directions* in [known-gaps.md](known-gaps.md). A repeated group whose
+only child is itself repeating is decided wrongly in both directions, which no
+W3C case covers because they all use two or more distinct child names. A
+suite reaching its ceiling bounds what the suite asks, not what the code does.
+
+**XSD ceilings: 1.0 — 39,353 / 39,404 = 99.87%. 1.1 — 41,525 / 41,572 = 99.89%.**
+Both are the measured state: nothing here is fixable, so the ceiling is where
+the engine already stands.
 
 ---
 
@@ -324,7 +332,7 @@ six other cases. A correct fix needs to separate those at runtime.
 
 # What is skipped, and why that is not a gap
 
-The XSLT 3.0 suite has 14,601 cases; 8,623 are in scope. The 5,978 skipped are
+The XSLT 3.0 suite has 14,601 cases; 8,626 are in scope. The 5,975 skipped are
 excluded by *declared dependency*, not by failure:
 
 | Skipped | Reason |
