@@ -423,7 +423,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 // the run: a crash is the most severe kind of conformance failure, and losing
 // the other 28,000 results to it would hide everything behind the first one.
 func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
-	rep = Report{Set: ts.Name, Case: tc.Name, Expr: strings.TrimSpace(tc.Test)}
+	rep = Report{Set: ts.Name, Case: tc.Name, Expr: strings.TrimSpace(tc.Test.Query)}
 	defer func() {
 		if p := recover(); p != nil {
 			rep.Outcome = Fail
@@ -576,9 +576,9 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	if r.Target == XQuery31 {
 		// An XQuery case holds a whole query, not an expression, and the
 		// namespaces the environment declared are its static context.
-		got, evalErr = xquery.Eval(tc.Test, ctx, xqueryOptions(ns))
+		got, evalErr = xquery.Eval(tc.Test.Query, ctx, xqueryOptions(ns))
 	} else {
-		got, evalErr = xpath.Eval(tc.Test, ctx, ns)
+		got, evalErr = xpath.Eval(tc.Test.Query, ctx, ns)
 	}
 
 	want, err := ParseAssert(tc.Result.Raw)
