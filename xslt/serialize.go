@@ -21,6 +21,7 @@ func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializePar
 		AllowDuplicateNames:  opts.AllowDuplicateNames,
 		JSONNodeOutputMethod: opts.JSONNodeOutputMethod,
 		CharMap:              charMap,
+		Encoding:             opts.Encoding,
 	}
 	if opts.ItemSeparator != nil {
 		p.ItemSeparator, p.HasItemSeparator = *opts.ItemSeparator, true
@@ -28,18 +29,41 @@ func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializePar
 	return p
 }
 
+// Serialize writes a sequence with the serialization methods of the XSLT and
+// XQuery Serialization 3.1 specification.
+//
+// The rules it applies are the specification's, not XSLT's: sequence
+// normalisation, the xml, xhtml, html, text, json and adaptive output
+// methods, and the parameters that steer each. Nothing in it is peculiar to a
+// stylesheet. It lives in this package because this is where the serialiser
+// was written, and moving it would be a change to the packages of every
+// existing caller for no gain; but a host other than XSLT — an XQuery main
+// module stating its parameters with "declare option output:*", which is the
+// same specification's other binding — serialises its result through this
+// same function, so that the two agree by construction rather than by
+// maintenance.
+//
+// charMap is the character map applied to the finished text, or nil. An
+// OutputSettings with an empty Method asks for the default method to be
+// chosen from the sequence itself, which is what a host that stated no method
+// wants; see defaultMethod.
+func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	return serialize(w, seq, opts, charMap)
+}
+
 // serialize writes a result sequence using the given output settings.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
-	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
-	// when an item separator is in force it is inserted between every pair
-	// of adjacent items in the sequence, in place of the default rules. It
-	// is done here, before anything looks at the sequence, so that the
-	// default method chosen from the result and the string joining below
-	// both see the normalised form.
-	seq = insertItemSeparator(seq, opts.ItemSeparator)
-
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
+	if len(opts.SuppressIndentation) > 0 {
+		s.noIndentElems = make(map[xdm.QName]bool, len(opts.SuppressIndentation))
+		for _, q := range opts.SuppressIndentation {
+			// URI and Local only, for the same reason as cdataElems below:
+			// a QName compares as a whole struct, and the prefix a result
+			// element happens to carry is not part of its identity.
+			s.noIndentElems[xdm.QName{URI: q.URI, Local: q.Local}] = true
+		}
+	}
 	if len(opts.CDataElements) > 0 {
 		s.cdataElems = make(map[xdm.QName]bool, len(opts.CDataElements))
 		for _, q := range opts.CDataElements {
@@ -82,13 +106,22 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if err != nil {
 			return err
 		}
-		s.writeString(out)
+		// Unicode normalisation is the last step of the pipeline for every
+		// method, this one included (Serialization 3.1 §7). It is applied to
+		// the finished text rather than to each string as it is written,
+		// because a form like NFC composes across a boundary: a base
+		// character at the end of one value and a combining mark at the
+		// start of the next are one character after normalisation, and
+		// normalising them apart would leave them two. JSON's own escapes
+		// are all ASCII and no normalisation form touches those.
+		s.writeString(s.normalized(out))
 		return s.err
 	case "adaptive":
 		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
 		if err != nil {
 			return err
 		}
+		out = s.normalized(out)
 		// The adaptive method renders a node by handing it to the XML output
 		// method (Serialization 3.1 §10), so the XML declaration is part of
 		// what it produces and omit-xml-declaration is a parameter it
@@ -118,6 +151,38 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		s.writeString(out)
 		return s.err
 	}
+
+	// Sequence normalisation, step 1: an array is replaced by its members,
+	// recursively, so that the XML-family methods see the sequence the array
+	// was holding rather than an item they have no rendering for. Only an
+	// array is flattened; a map and a function item still have no
+	// serialisation and are SENR0001 below, which is why this is a
+	// substitution rather than a general unwrapping.
+	//
+	// It happens before checkOutputSettings, since that check exists to
+	// refuse what cannot be written and an array's members can be. It also
+	// happens before the item separator is inserted, because the members are
+	// items of the sequence being separated: [1,2] with item-separator="-"
+	// is "1-2", not one item.
+	seq = flattenArrays(seq)
+
+	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
+	// when an item separator is in force it is inserted between every pair
+	// of adjacent items in the sequence, in place of the default rules.
+	//
+	// It happens after the json and adaptive methods have been dispatched
+	// above, because sequence normalisation does not apply to either of them
+	// -- §2 applies it to "the XML, XHTML, HTML and Text output methods"
+	// only. Both of those methods separate items themselves, adaptive with
+	// this very parameter (§10, defaulting to a newline), so inserting the
+	// separator here as well wrote it twice: the sequence (1,2,3) with
+	// item-separator="-" came out as "1---2---3", the separator once as an
+	// inserted text item and once again as the join between items.
+	//
+	// The default method is chosen above this rather than below it for the
+	// same reason it is chosen at all: it depends on the first item of the
+	// result, which separator insertion does not change.
+	seq = insertItemSeparator(seq, opts.ItemSeparator)
 
 	// Parameter conflicts are diagnosed before a byte is written. The
 	// alternative — discovering halfway through that the requested encoding
@@ -218,9 +283,16 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		}
 	}
 	switch {
-	case s.html && opts.DocTypeSystem == "" && (opts.DocTypePublic == "" || s.html5):
+	case s.html && opts.DocTypeSystem == "" && (opts.DocTypePublic == "" || s.html5 || html):
 		// HTML5 asks for a bare doctype; earlier HTML versions get one only
 		// when the stylesheet names a public or system identifier.
+		//
+		// The html method also gets one from a public identifier alone,
+		// which no XML-based method can write: HTML's grammar does not
+		// require the system literal that XML's puts after PUBLIC. So an
+		// explicit public identifier schedules a declaration under that
+		// method whatever the version, and writeDoctypeFor decides its
+		// spelling.
 		//
 		// s.html rather than html: XHTML5 wants the declaration too. It is
 		// deferred like every other doctype rather than written now, because
@@ -228,7 +300,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		// is XML, where the DOCTYPE name must match the root element exactly,
 		// so <HtMl> takes "<!DOCTYPE HtMl>". Writing it here would have to
 		// guess the name before the element is in hand.
-		if s.html5 {
+		if s.html5 || (html && opts.DocTypePublic != "") {
 			s.pendingDoctype = true
 		}
 	case opts.DocTypeSystem != "":
@@ -298,6 +370,10 @@ type serializer struct {
 	inCData bool
 	// cdataElems is that list, as a set keyed by expanded name.
 	cdataElems map[xdm.QName]bool
+	// noIndentElems is suppress-indentation as a set keyed by expanded name:
+	// the elements whose content is written exactly as it stands even when
+	// indent is yes.
+	noIndentElems map[xdm.QName]bool
 	// normalize applies the Unicode normalisation named by
 	// normalization-form, or is nil when none was asked for.
 	normalize func(string) string
@@ -328,6 +404,19 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 	// system literal after PUBLIC and makes it required -- but under HTML5 it
 	// does not suppress the declaration either: the ruling on bug 20264 is
 	// that the bare form is still output, which output-0229 asserts.
+	// A public identifier with no system identifier is writable under the
+	// html method and not under any of the XML-based ones. XML's grammar puts
+	// the system literal after PUBLIC and makes it required; HTML's does not,
+	// and "<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0//EN">" is the standard
+	// HTML 4 declaration. Serialization-html-25 and -27 ask for exactly that,
+	// under version 4 and version 5 alike -- an explicit identifier overrides
+	// HTML 5's bare form rather than being ignored in favour of it.
+	if s.html && !s.xhtml && s.opts.DocTypeSystem == "" &&
+		s.opts.DocTypePublic != "" {
+		s.writeString("<!DOCTYPE " + s.elementName(n) +
+			" PUBLIC " + quoteLiteral(s.opts.DocTypePublic) + ">\n")
+		return
+	}
 	if s.html5 && s.opts.DocTypeSystem == "" {
 		if s.xhtml {
 			// The declaration is written only for a document element that
@@ -436,13 +525,29 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		}
 		s.writeString("?>")
 
-	case xdm.KindAttribute:
-		// An attribute reaching the top level of a result is an error the
-		// spec calls out; serialising it as markup would produce something
-		// that is not well-formed.
+	case xdm.KindAttribute, xdm.KindNamespace:
+		// An attribute or namespace node reaching the top level of a result
+		// has no serialisation: it is markup that only exists inside a start
+		// tag, and writing it on its own would produce something that is not
+		// well-formed.
+		//
+		// SENR0001, the serialization error, rather than XTDE0420. XTDE0420
+		// is XSLT's error for *constructing* a document node whose content
+		// holds such a node, which the tree builder raises before a
+		// serialiser is ever reached (see outputpolicy.go); this is the
+		// other half of the same situation, where the sequence was never
+		// normalised into a tree and the attribute arrives here instead.
+		// K2-Serialization-1 through -4 send one straight to the serialiser
+		// and ask for SENR0001, which is the code Serialization 3.1 §2
+		// assigns.
+		kind := "attribute"
+		if n.Kind == xdm.KindNamespace {
+			kind = "namespace"
+		}
 		if s.err == nil {
-			s.err = fmt.Errorf("XTDE0420: attribute %q cannot be serialised outside an element",
-				n.Name.Lexical())
+			s.err = fmt.Errorf(
+				"SENR0001: %s node %q cannot be serialised outside an element",
+				kind, n.Name.Lexical())
 		}
 	}
 }
@@ -517,12 +622,22 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		s.writeString(" " + s.attrName(a) + s.attrValue(a, n))
 	}
 
-	if len(n.Children) == 0 {
+	// An empty element still has to be opened when the method is going to put
+	// something inside it: an empty <head/> under the html or xhtml method
+	// gets the content-type meta, and writing "<head></head>" from the
+	// no-children branch below would have dropped it. Serialization-html-33
+	// and -xhtml-33 build exactly that document.
+	emptyHead := len(n.Children) == 0 && s.html &&
+		strings.EqualFold(n.Name.Local, "head") &&
+		(!s.xhtml || n.Name.URI == nsXHTML) &&
+		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
+
+	if len(n.Children) == 0 && !emptyHead {
 		if s.html && !s.xhtml {
 			// HTML has no self-closing syntax. A void element takes no end
 			// tag; every other empty element takes an explicit one, because
 			// "<div/>" is parsed by HTML parsers as an unclosed "<div>".
-			if isVoidElement(n.Name.Local) {
+			if s.isVoidElement(n.Name.Local) {
 				s.writeString(">")
 			} else {
 				s.writeString("></" + name + ">")
@@ -543,7 +658,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// do with the name is the whole of the rule, and requiring the
 			// XHTML namespace for it sent every no-namespace element down
 			// the wrong half.
-			if isVoidElement(n.Name.Local) {
+			if s.isVoidElement(n.Name.Local) {
 				s.writeString(" />")
 			} else {
 				s.writeString("></" + name + ">")
@@ -606,6 +721,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// the spec says." Only the value is mapped; the element and
 			// attribute names are markup the map never touches.
 			content := s.mapChars(media + `; charset=` + enc)
+			// The injected element is indented like a child of <head>,
+			// because that is what it is. Writing it flush against the start
+			// tag while the head's real children were each on their own line
+			// put the document's own markup and the serialiser's on different
+			// footings, which validation-0201 asserts against.
+			if s.opts.Indent && !hasTextChild(n) {
+				s.indent(depth + 1)
+			}
 			tag := `<meta http-equiv="Content-Type" content="` + content + `">`
 			if s.xhtml {
 				// XHTML is XML: an empty element must be closed. The space
@@ -618,7 +741,8 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		}
 	}
 
-	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+	if s.cdataElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] &&
+		!s.htmlNativeElement(n) {
 		saved := s.inCData
 		s.inCData = true
 		defer func() { s.inCData = saved }()
@@ -633,7 +757,21 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Indentation is suppressed for mixed content: adding whitespace around
 	// text would change the element's string value, which for a validator's
 	// output is a correctness issue rather than a cosmetic one.
-	indentChildren := s.opts.Indent && !hasTextChild(n)
+	//
+	// It is suppressed for the same reason, said explicitly rather than
+	// inferred, when the element is named by suppress-indentation or carries
+	// xml:space="preserve". Both are a statement that this element's content
+	// is significant to the character: Serialization 3.1 §5 gives the
+	// serialiser licence to add whitespace "only where the effect is not
+	// significant", and these two are how a caller says where that is. An
+	// <li> full of <p> elements has no text child at all, so the mixed-content
+	// rule alone would have re-indented it and the suppress-indentation
+	// parameter would have meant nothing.
+	//
+	// Suppression covers the whole subtree, not this element alone: the
+	// point is that the content comes out as it went in, and re-indenting a
+	// grandchild disturbs it exactly as much as re-indenting a child.
+	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n)
 	for _, c := range n.Children {
 		if indentChildren {
 			s.node(c, depth+1)
@@ -641,7 +779,7 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			s.nodeNoIndent(c)
 		}
 	}
-	if indentChildren {
+	if indentChildren || (emptyHead && s.opts.Indent) {
 		s.indent(depth)
 	}
 	s.writeString("</" + name + ">")
@@ -715,6 +853,44 @@ func (s *serializer) indent(depth int) {
 		return
 	}
 	s.writeString("\n" + strings.Repeat("  ", depth))
+}
+
+// suppressed reports whether an element's content is written with no added
+// whitespace: either it is named by suppress-indentation, or it declares
+// xml:space="preserve".
+//
+// xml:space is honoured because a result carrying it says, in the document's
+// own vocabulary, that its whitespace is data. Ignoring it while writing the
+// attribute out would produce a document that contradicts itself: it would
+// tell a reader to preserve whitespace the serialiser had just invented.
+// htmlNativeElement reports whether an element is one the html output method
+// writes as HTML rather than as foreign markup, which for that method means
+// one in no namespace.
+//
+// It exists for cdata-section-elements, which the html method honours only
+// for elements outside that set. HTML has no CDATA section: the sequence
+// "<![CDATA[" inside a <p> is nine characters of text and an HTML parser
+// reads it as such, so writing one there would change the document rather
+// than only how its text was escaped. Serialization 3.1 §9.4 restricts the
+// parameter to foreign content for that reason, and Serialization-html-18
+// pins it down by naming "p em ex:isle1" together and asking for a CDATA
+// section around exactly one of the three.
+//
+// The xhtml method is deliberately excluded: it produces XML, where a CDATA
+// section is a CDATA section whatever the namespace, and output-0114 and
+// -0138 ask for one around XHTML's own <example> and <h1>.
+func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
+	return s.html && !s.xhtml && n.Name.URI == ""
+}
+
+func (s *serializer) suppressed(n *xdm.Node) bool {
+	if s.noIndentElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+		return true
+	}
+	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
+		return true
+	}
+	return false
 }
 
 func hasTextChild(n *xdm.Node) bool {
@@ -1261,15 +1437,46 @@ const nsXHTML = "http://www.w3.org/1999/xhtml"
 // voidElements are the HTML elements that take no end tag. Writing one with a
 // closing tag, or self-closing a non-void element, both produce a tree that
 // an HTML parser reads differently from the one the stylesheet built.
+// voidElements are the names with an empty content model in every HTML
+// version this serialiser writes. Three more are version-specific and live in
+// the two maps below.
 var voidElements = map[string]bool{
 	"area": true, "base": true, "br": true, "col": true, "embed": true,
 	"hr": true, "img": true, "input": true, "link": true, "meta": true,
-	"param": true, "source": true, "track": true, "wbr": true,
+	"param": true,
+}
+
+// html4VoidElements are void in HTML 4 and gone from HTML 5, which has no
+// frameset and no isindex at all. Writing "<frame>" unclosed under HTML 5
+// leaves an element an HTML 5 parser reads as open, swallowing what follows.
+var html4VoidElements = map[string]bool{
 	"basefont": true, "frame": true, "isindex": true,
 }
 
-func isVoidElement(local string) bool {
-	return voidElements[strings.ToLower(local)]
+// html5VoidElements are void in HTML 5 and unknown to HTML 4, where an
+// unclosed one would be an unrecognised start tag rather than an empty
+// element.
+var html5VoidElements = map[string]bool{
+	"keygen": true, "source": true, "track": true, "wbr": true,
+}
+
+// isVoidElement reports whether an element takes no end tag.
+//
+// The version decides for six of the names, which is what
+// Serialization-html-1 and -2 are for: the first writes the HTML 4 list under
+// version="4.0" and the second the HTML 5 list under version="5.0", and each
+// asks for exactly its own set minimised. A serialiser with one combined list
+// passes both only by accident and fails the moment a case names an element
+// from the other version.
+func (s *serializer) isVoidElement(local string) bool {
+	local = strings.ToLower(local)
+	if voidElements[local] {
+		return true
+	}
+	if s.html5 {
+		return html5VoidElements[local]
+	}
+	return html4VoidElements[local]
 }
 
 // isRawTextElement reports whether an HTML element's content is CDATA, and so
@@ -1586,6 +1793,43 @@ func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
 	for i, it := range seq {
 		if i > 0 {
 			out = append(out, &xdm.Node{Kind: xdm.KindText, Value: *sep})
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// flattenArrays replaces every array in a sequence by its members, and does
+// so to any depth.
+//
+// Sequence normalisation calls for it because an array is not a thing the
+// XML, XHTML, HTML or text output methods can write, but its members usually
+// are: serialising [<a/>] and <a/> to different results -- one a document,
+// the other an error -- would make the brackets change what the document
+// says rather than only how the value was assembled. The json and adaptive
+// methods do not go through normalisation at all and keep their arrays,
+// which is the whole difference between "[1,2]" and "12".
+//
+// The common case is a sequence with no array in it, which is returned as it
+// stands rather than copied.
+func flattenArrays(seq xdm.Sequence) xdm.Sequence {
+	has := false
+	for _, it := range seq {
+		if _, ok := it.(*xdm.ArrayItem); ok {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return seq
+	}
+	out := make(xdm.Sequence, 0, len(seq))
+	for _, it := range seq {
+		if a, ok := it.(*xdm.ArrayItem); ok {
+			for _, m := range a.Members() {
+				out = append(out, flattenArrays(m)...)
+			}
+			continue
 		}
 		out = append(out, it)
 	}

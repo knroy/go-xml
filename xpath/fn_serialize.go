@@ -108,6 +108,11 @@ type serializeOptions struct {
 	standalone string
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
+	// encoding is the output encoding. Nothing is transcoded -- everything
+	// is written as UTF-8 -- but the JSON method needs to know when a
+	// character has to be escaped because the encoding could not have held
+	// it, which is what serialize-json-114 asks about.
+	encoding string
 	// allowDuplicateNames permits a JSON object to be written with two keys
 	// that render to the same string; without it that is SERE0022.
 	allowDuplicateNames bool
@@ -240,7 +245,13 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 				opts.indent = val == "yes"
 			case "item-separator":
 				opts.itemSeparator, opts.hasItemSep = val, true
-			case "encoding", "version", "media-type",
+			case "encoding":
+				// Nothing is transcoded here -- the result is a string, and
+				// a string has no encoding -- but the JSON method escapes a
+				// character the named encoding could not have held, so the
+				// name is kept rather than dropped.
+				opts.encoding = val
+			case "version", "media-type",
 				"doctype-public", "doctype-system", "cdata-section-elements",
 				"normalization-form", "undeclare-prefixes",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
@@ -669,7 +680,14 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 					opts.cdataElements[xdm.QName{URI: qn.URI, Local: qn.Local}] = true
 				}
 			}
-		case "encoding", "version", "media-type", "doctype-public",
+		case "encoding":
+			// See the element-form reader above for why this one is kept.
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.encoding = v
+		case "version", "media-type", "doctype-public",
 			"doctype-system", "normalization-form",
 			"undeclare-prefixes", "byte-order-mark", "escape-uri-attributes",
 			"include-content-type", "suppress-indentation",
@@ -757,7 +775,7 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 				sb.WriteString(",")
 			}
 			first = false
-			writeJSONString(sb, name)
+			writeJSONString(sb, name, opts)
 			sb.WriteString(":")
 			return writeJSONValue(sb, val, opts)
 		})
@@ -778,7 +796,7 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 			nodeOpts.method = "xml"
 		}
 		serializeNode(&inner, v, nodeOpts)
-		writeJSONString(sb, inner.String())
+		writeJSONString(sb, inner.String(), opts)
 		return nil
 	case *xdm.Atomic:
 		switch {
@@ -799,7 +817,7 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 		default:
 			// Everything else — dates, URIs, untyped values — becomes its
 			// lexical form as a JSON string (serialize-json-125, -128).
-			writeJSONString(sb, v.String())
+			writeJSONString(sb, v.String(), opts)
 		}
 		return nil
 	}
@@ -811,9 +829,26 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 // The solidus is escaped as "\/" even though JSON does not require it: the
 // spec's rule for this method escapes it, and the suite compares the output
 // literally (serialize-json-128).
-func writeJSONString(sb *strings.Builder, s string) {
+//
+// A character map applies here rather than to the finished document, because
+// only the characters *inside* a string are the method's own text -- the
+// braces, brackets, commas and colons around them are structure, and a map
+// naming one of those would rewrite the JSON rather than its content.
+// Serialization-json-39 settles it by mapping "1" to "one" and asking for
+// [123,"one23","---oneone"]: the number keeps its digits and the two strings
+// do not.
+//
+// The replacement is written through unescaped. That is the point of a
+// character map -- a stylesheet declares one to put a specific sequence in
+// the output -- and escaping it would defeat exactly the substitution it
+// asked for.
+func writeJSONString(sb *strings.Builder, s string, opts serializeOptions) {
 	sb.WriteString(`"`)
 	for _, r := range s {
+		if repl, ok := opts.charMap[r]; ok {
+			sb.WriteString(repl)
+			continue
+		}
 		switch r {
 		case '"':
 			sb.WriteString(`\"`)
@@ -836,10 +871,15 @@ func writeJSONString(sb *strings.Builder, s string) {
 				fmt.Fprintf(sb, `\u%04X`, r)
 				continue
 			}
-			// A character outside the BMP is written as the surrogate pair
-			// JSON's \u escape can express, since \u names a single UTF-16
-			// code unit (serialize-json-114).
-			if r > 0xFFFF {
+			// A character the requested encoding cannot represent is written
+			// as the surrogate pair JSON's \u escape can express, since \u
+			// names a single UTF-16 code unit (serialize-json-114, which asks
+			// for encoding="ISO-8859-1"). A character the encoding *can*
+			// represent is written as itself: escaping every astral
+			// character regardless would have made "-𐌰-" come back as
+			// "-\uD800\uDF30-" from a UTF-8 serialisation that had no
+			// reason to avoid it (Serialization-json-33).
+			if r > 0xFFFF && !jsonEncodingHolds(opts.encoding, r) {
 				r -= 0x10000
 				fmt.Fprintf(sb, `\u%04X\u%04X`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
 				continue
@@ -899,8 +939,15 @@ func writeAdaptiveItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) 
 		sb.WriteString("]")
 	case *xdm.FunctionItem:
 		// A function is shown by name and arity, which is all of it that can
-		// be written down.
-		fmt.Fprintf(sb, "%s#%d", v.Name.Lexical(), v.Arity)
+		// be written down. An inline function has no name at all, and the
+		// arity alone would render as a bare "#1"; Serialization 3.1 §10
+		// gives it the placeholder "(anonymous-function)", which cannot
+		// collide with a real name because it is not a lexical QName.
+		name := v.Name.Lexical()
+		if name == "" {
+			name = "(anonymous-function)"
+		}
+		fmt.Fprintf(sb, "%s#%d", name, v.Arity)
 	case *xdm.Node:
 		// An attribute has no XML serialization of its own, so adaptive gives
 		// it the name="value" form it has inside a start tag
@@ -948,15 +995,87 @@ func writeAdaptiveAtomic(sb *strings.Builder, a *xdm.Atomic) {
 		} else {
 			sb.WriteString("false()")
 		}
-	case a.Type.IsNumeric():
+	case a.Type == xdm.TypeQName:
+		// Serialization 3.1 §10: an xs:QName is written in EQName notation.
+		// The lexical form would not do: a prefix is meaningless away from
+		// the namespace bindings it was resolved under, and adaptive output
+		// carries none. Serialization-adaptive-78 constructs
+		// xs:QName("xs:integer") and asks for
+		// "Q{http://www.w3.org/2001/XMLSchema}integer" -- the value, not the
+		// spelling it happened to be written with.
+		if q := a.QName(); q != nil {
+			fmt.Fprintf(sb, "Q{%s}%s", q.URI, q.Local)
+			return
+		}
+		sb.WriteString(a.String())
+	case a.Type == xdm.TypeDouble:
+		// A double is written in its canonical XML Schema form, where an
+		// exponent is always present: "1.0e0" rather than the "1" that
+		// fn:string gives. The distinction is the point of the method -- an
+		// adaptive rendering is meant to show what a value *is*, and "1"
+		// alone would not say whether it was an integer or a double.
+		sb.WriteString(canonicalDouble(a))
+	case a.Type == xdm.TypeDecimal || a.Type == xdm.TypeInteger:
+		// A decimal and an integer are written bare. They are the two
+		// numeric types whose lexical form is unambiguous on its own.
 		sb.WriteString(a.String())
 	case isStringLike(a.Type):
 		// The doubled quote is how an XPath string literal escapes one, so
 		// the output re-parses to the value it came from.
 		sb.WriteString(`"` + strings.ReplaceAll(a.String(), `"`, `""`) + `"`)
 	default:
-		fmt.Fprintf(sb, "%s(%q)", a.TypeName(), a.String())
+		// Everything else is written as a constructor call naming the type,
+		// so that the output says which of several types with overlapping
+		// lexical forms this value has. The *primitive* type is named, not
+		// the derived one: §10 asks for a form that can be read back, and
+		// xs:yearMonthDuration("P1Y2M") names a constructor whose argument
+		// is a duration, so xs:duration("P1Y2M") is what the rule produces.
+		fmt.Fprintf(sb, "%s(%q)", primitiveTypeName(a.Type), a.String())
 	}
+}
+
+// canonicalDouble renders an xs:double in the canonical lexical form of XML
+// Schema, which always carries an exponent.
+//
+// fn:string gives XPath's own form, which drops the exponent for values in
+// the ordinary range: string(xs:double(1)) is "1". That is right for
+// fn:string and wrong here, where the whole purpose is to distinguish a value
+// from one of another type that would print the same.
+func canonicalDouble(a *xdm.Atomic) string {
+	s := a.String()
+	switch s {
+	case "NaN", "INF", "-INF":
+		// These three have no exponent to give them and are already
+		// unambiguous: no other type spells a value this way.
+		return s
+	}
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant, exp := s[:i], s[i+1:]
+		if !strings.Contains(mant, ".") {
+			mant += ".0"
+		}
+		return mant + "e" + exp
+	}
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s + "e0"
+}
+
+// primitiveTypeName is the name of the primitive type a derived one is based
+// on, for the constructor an adaptive rendering writes.
+//
+// Only the three derived types this engine carries as distinct codes need an
+// entry: the two duration subtypes, whose primitive is xs:duration, and
+// xs:untypedAtomic, which is not derived from anything but has no constructor
+// function of its own and is written as the string it is. Every other code in
+// the enumeration is already primitive.
+func primitiveTypeName(t xdm.TypeCode) string {
+	switch t {
+	case xdm.TypeYearMonthDuration, xdm.TypeDayTimeDuration:
+		return "xs:duration"
+	}
+	return t.String()
 }
 
 // readCharacterMapsFromMap reads use-character-maps given in the map form,
@@ -1034,9 +1153,13 @@ type SerializeParams struct {
 	ItemSeparator    string
 	HasItemSeparator bool
 	// CharMap maps a character to the string that replaces it on output, as
-	// xsl:character-map defines. It is applied to the finished text, which is
-	// where the serialization spec puts it for these methods too.
+	// xsl:character-map defines.
 	CharMap map[rune]string
+	// Encoding is the output encoding. Nothing is transcoded -- both methods
+	// return a string -- but the JSON method escapes a character the named
+	// encoding could not have held, and only the caller knows which was
+	// asked for.
+	Encoding string
 }
 
 func (p SerializeParams) opts() serializeOptions {
@@ -1048,6 +1171,7 @@ func (p SerializeParams) opts() serializeOptions {
 		itemSeparator:        p.ItemSeparator,
 		hasItemSep:           p.HasItemSeparator,
 		charMap:              p.CharMap,
+		encoding:             p.Encoding,
 	}
 	if o.jsonNodeOutputMethod == "" {
 		o.jsonNodeOutputMethod = "xml"
@@ -1064,15 +1188,12 @@ func (p SerializeParams) opts() serializeOptions {
 // import xslt — and the two renderings must agree, since result-document-1401
 // and serialize-json-010 describe the same output by different routes.
 func SerializeJSON(seq xdm.Sequence, p SerializeParams) (string, error) {
-	opts := p.opts()
-	out, err := serializeJSON(seq, opts)
-	if err != nil {
-		return "", err
-	}
-	if len(opts.charMap) > 0 {
-		out = applyCharacterMap(out, opts.charMap)
-	}
-	return out, nil
+	// The character map is not applied here. It belongs inside each JSON
+	// string, which is where writeJSONString applies it: the braces, commas
+	// and digits between the strings are structure, not the method's text,
+	// and a map naming one of those over the finished document would rewrite
+	// the JSON rather than its content.
+	return serializeJSON(seq, p.opts())
 }
 
 // SerializeAdaptive renders a sequence with the adaptive output method of the
@@ -1088,4 +1209,22 @@ func SerializeAdaptive(seq xdm.Sequence, p SerializeParams) (string, error) {
 		out = applyCharacterMap(out, opts.charMap)
 	}
 	return out, nil
+}
+
+// jsonEncodingHolds reports whether the named output encoding can represent a
+// character directly.
+//
+// Only the Unicode encodings can hold every character, and they are the only
+// ones this serialiser writes; anything else is treated as unable to hold
+// what is outside its range, which for the astral planes is every non-Unicode
+// encoding there is. An unnamed encoding is UTF-8, the default.
+func jsonEncodingHolds(encoding string, r rune) bool {
+	if encoding == "" {
+		return true
+	}
+	switch strings.ToUpper(encoding) {
+	case "UTF-8", "UTF8", "UTF-16", "UTF16", "UTF-16LE", "UTF-16BE", "UTF-32":
+		return true
+	}
+	return r < 0x80
 }

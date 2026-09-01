@@ -1362,6 +1362,17 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 			o.CDataElements = append(o.CDataElements, qn)
 		}
 	}
+	if v := value("suppress-indentation"); v != "" {
+		// The same resolution rule as cdata-section-elements, and for the
+		// same reason: these names refer to elements of the result document.
+		for _, n := range strings.Fields(v) {
+			qn, err := resolveResultQNameAttr(el, n)
+			if err != nil {
+				return err
+			}
+			o.SuppressIndentation = append(o.SuppressIndentation, qn)
+		}
+	}
 	return nil
 }
 

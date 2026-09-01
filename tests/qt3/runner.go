@@ -589,14 +589,34 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// unbounded round() precision was found, after it consumed twenty minutes
 	// and all available memory before the harness could report anything.
 	ctx.Ctx = runCtx
-	var got xdm.Sequence
-	var evalErr error
+	res := outcome{}
 	if r.Target == XQuery31 {
 		// An XQuery case holds a whole query, not an expression, and the
 		// namespaces the environment declared are its static context.
-		got, evalErr = xquery.Eval(tc.Test.Query, ctx, xqueryOptions(ns))
+		//
+		// It is compiled rather than evaluated in one step so that the
+		// prolog's "declare option output:*" declarations are reachable: a
+		// serialization assertion is checked against the result written with
+		// the parameters the query itself stated, and Eval hands back only
+		// the sequence.
+		var q *xquery.Query
+		q, res.err = xquery.Compile(tc.Test.Query, xqueryOptions(ns))
+		if res.err == nil {
+			res.serialParams = q.SerializationOptions()
+			// §25.1: "if no document can be found at the specified location,
+			// the attribute should be ignored". A missing one is therefore
+			// not a failure, and neither is one this harness declines to
+			// resolve; what is read is applied.
+			if href := res.serialParams["parameter-document"]; href != "" {
+				if doc, err := r.loadDoc(
+					filepath.Join(ts.Dir, filepath.FromSlash(href))); err == nil {
+					res.paramDoc = paramDocElement(doc)
+				}
+			}
+			res.seq, res.err = q.Eval(ctx)
+		}
 	} else {
-		got, evalErr = xpath.Eval(tc.Test.Query, ctx, ns)
+		res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
 	}
 
 	want, err := ParseAssert(tc.Result.Raw)
@@ -610,7 +630,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		rep.Outcome, rep.Reason = Skip, "unparsable result: "+err.Error()
 		return rep
 	}
-	ok, why := check(want, got, evalErr)
+	ok, why := check(want, &res)
 	if ok {
 		rep.Outcome = Pass
 		return rep
@@ -619,12 +639,45 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	return rep
 }
 
+// outcome is everything running one case produced, which is what an assertion
+// is checked against.
+//
+// It is a struct rather than three parameters threaded through check's
+// recursion because the serialization assertions need a third thing — the
+// parameters the query asked to be serialised with — and the tree walk should
+// not have to grow a parameter every time an assertion kind needs more
+// context.
+type outcome struct {
+	// seq is the result sequence, and err the error the case raised instead.
+	seq xdm.Sequence
+	err error
+	// paramDoc is the output:serialization-parameters element of the document
+	// "declare option output:parameter-document" named, when the prolog named
+	// one and it could be read. It is fetched by the caller rather than by
+	// the serialising code, because only the caller knows where a test-set's
+	// files live.
+	paramDoc *xdm.Node
+	// serialParams are the "declare option output:*" declarations of an
+	// XQuery main module, keyed by the serialization parameter's local name.
+	// An XPath case has none: XPath has no prolog to state them in, and its
+	// result is serialised with the defaults.
+	serialParams map[string]string
+	// serialized caches the serialised form and the error producing it
+	// raised, because a case may carry several serialization assertions over
+	// one result — the JSON set writes half a dozen serialization-matches
+	// under an all-of — and serialising is not free.
+	serialized string
+	serialErr  error
+	haveSerial bool
+}
+
 // check evaluates an assertion tree against a result.
-func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
+func check(a Assertion, res *outcome) (bool, string) {
+	got, evalErr := res.seq, res.err
 	switch a.Kind {
 	case "all-of":
 		for _, c := range a.Children {
-			if ok, why := check(c, got, evalErr); !ok {
+			if ok, why := check(c, res); !ok {
 				return false, why
 			}
 		}
@@ -632,7 +685,7 @@ func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
 	case "any-of":
 		var reasons []string
 		for _, c := range a.Children {
-			if ok, _ := check(c, got, evalErr); ok {
+			if ok, _ := check(c, res); ok {
 				return true, ""
 			}
 			reasons = append(reasons, c.Kind)
@@ -640,7 +693,7 @@ func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
 		return false, "none of {" + strings.Join(reasons, ",") + "} held"
 	case "not":
 		for _, c := range a.Children {
-			if ok, _ := check(c, got, evalErr); ok {
+			if ok, _ := check(c, res); ok {
 				return false, "not: inner assertion held"
 			}
 		}
@@ -668,6 +721,20 @@ func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
 		}
 		return false, fmt.Sprintf("error %s, want %s", got, a.Code)
 	}
+	// The serialization assertions are decided before the general "an error
+	// is a failure" rule, because for them an error may be the expected
+	// answer and may equally be raised by serialisation rather than by
+	// evaluation: SERE0020 for a double that has no JSON spelling is
+	// discovered only when the result is written.
+	switch a.Kind {
+	case "serialization-matches":
+		return serializationMatches(res, a)
+	case "assert-serialization":
+		return serializationEquals(res, a)
+	case "assert-serialization-error":
+		return serializationErrorIs(res, a)
+	}
+
 	if evalErr != nil {
 		return false, "unexpected error: " + evalErr.Error()
 	}
@@ -712,8 +779,6 @@ func check(a Assertion, got xdm.Sequence, evalErr error) (bool, string) {
 		return assertExpression(got, a.Value)
 	case "assert-xml":
 		return xmlMatches(got, a.Value)
-	case "serialization-matches", "assert-serialization-error":
-		return false, "unsupported assertion " + a.Kind
 	}
 	return false, "unknown assertion " + a.Kind
 }

@@ -56,6 +56,14 @@ type parser struct {
 	// formats are the declared decimal formats, keyed by Clark name; the
 	// empty key is the default format.
 	formats map[string]*xpath.DecimalFormat
+
+	// serialization holds the "declare option output:*" declarations, keyed
+	// by the parameter's local name and carrying its value verbatim. It is
+	// nil until one is seen, which is how a query that declares none is
+	// distinguished from one that declares an empty set — the two mean the
+	// same to a serialiser, but the map is only allocated when there is
+	// something to put in it.
+	serialization map[string]string
 }
 
 // compiledExpr is an expression compiled by xpath, kept with the source it
