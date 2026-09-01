@@ -208,6 +208,17 @@ func (p *parser) parseFunctionDecl() error {
 	if err := checkReservedNamespace(name, "function"); err != nil {
 		return err
 	}
+	// XPST0003: a function may not be *declared* under a name the grammar
+	// reserves, for the same reason it may not be *called* under one. The
+	// declaration is not merely unreachable — "declare function element() {}"
+	// cannot be parsed as a declaration at all, because "element(" begins a
+	// kind test wherever it appears. The check is here rather than left to
+	// xpath because a declared name never passes through the expression
+	// parser, which is the only place that knows the list.
+	if prefix == "" && isReservedFunctionName(local) {
+		return p.errorf(
+			"XPST0003: %q is reserved and may not name a function", local)
+	}
 	d := &funcDecl{name: name, private: private}
 	p.skipSpaceAndComments()
 	if !p.consume("(") {
@@ -232,9 +243,10 @@ func (p *parser) parseFunctionDecl() error {
 		}
 		src := p.src[p.pos+1 : end]
 		p.pos = end + 1
-		if strings.TrimSpace(src) == "" {
-			// An empty body is the empty sequence, which is legal and which
-			// the expression parser has no spelling for.
+		if isBlank(src) {
+			// 3.1 made "{}" a legal function body meaning the empty sequence,
+			// which the expression parser has no spelling for. A body holding
+			// only a comment is the same thing — the comment is not content.
 			d.body = nil
 			d.expr = nil
 			break
@@ -373,6 +385,24 @@ func (p *parser) parseParamList() ([]funcParam, error) {
 	}
 }
 
+// isReservedFunctionName reports whether an unprefixed name is one the
+// grammar reserves, at any version.
+//
+// These are the kind tests, the sequence-type keywords and the three
+// expressions whose keyword is followed by a parenthesis. All of them are
+// unprefixed by construction: "my:element" is an ordinary name, because a
+// prefix puts it somewhere the grammar's own keywords cannot be.
+func isReservedFunctionName(name string) bool {
+	switch name {
+	case "attribute", "comment", "document-node", "element", "empty-sequence",
+		"function", "if", "item", "map", "array", "namespace-node", "node",
+		"processing-instruction", "schema-attribute", "schema-element",
+		"switch", "text", "typeswitch":
+		return true
+	}
+	return false
+}
+
 // checkReservedNamespace refuses a declaration in a namespace §4.15 reserves.
 //
 // Declaring fn:count or xs:integer would shadow a builtin or a constructor
@@ -388,6 +418,14 @@ func checkReservedNamespace(name xdm.QName, what string) error {
 			what, name.URI)
 	}
 	return nil
+}
+
+// isBlank reports whether src holds nothing but whitespace and comments,
+// which is the empty sequence rather than a missing expression.
+func isBlank(src string) bool {
+	p := &parser{src: src}
+	p.skipSpaceAndComments()
+	return p.eof()
 }
 
 // parseBodyItems parses a whole expression body — the comma-separated items a
@@ -553,9 +591,20 @@ func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
 	if len(q.vars) == 0 {
 		return ctx, nil
 	}
+	// Keyed by the name *as it would be written*, because the dependency scan
+	// is lexical and has no static context to resolve a prefix with. Within
+	// one module the prefix identifies the namespace exactly — XQST0033
+	// forbids binding one twice — so this is as precise as the Clark name
+	// would be, and it is what the scan can produce.
 	byName := make(map[string]*varDecl, len(q.vars))
 	for _, d := range q.vars {
-		byName[d.name.Clark()] = d
+		byName[d.name.Lexical()] = d
+		if d.name.Prefix == "" && d.name.URI != "" {
+			// A name written "Q{uri}local" has no prefix to be found under,
+			// so its local name is registered as well: a reference to it must
+			// carry that prefix, and there is none to carry.
+			byName[d.name.Local] = d
+		}
 	}
 
 	// state is per-variable: 0 unvisited, 1 in progress, 2 done. The
@@ -581,15 +630,22 @@ func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
 				"XQST0054: the variable %s depends on itself", d.name.Lexical())
 		}
 		state[key] = inProgress
-		for _, ref := range d.references() {
-			if dep, ok := byName[ref]; ok && dep != d {
+		// The dependency graph runs through functions as well as variables:
+		// "declare variable $v := f(); declare function f() { $v };" is
+		// XQST0054 even though no variable names another. Every variable a
+		// declared function can *transitively* reach is therefore a
+		// dependency of anything that calls it, which is what reachableVars
+		// computes.
+		for _, ref := range q.reachableVars(d.references(), d.calls()) {
+			if dep, ok := byName[ref]; ok {
+				if dep == d {
+					return fmt.Errorf(
+						"XQST0054: the variable %s depends on itself",
+						d.name.Lexical())
+				}
 				if err := visit(dep); err != nil {
 					return err
 				}
-			} else if ok {
-				return fmt.Errorf(
-					"XQST0054: the variable %s depends on itself",
-					d.name.Lexical())
 			}
 		}
 		v, err := q.evalVar(d, out)
@@ -609,6 +665,195 @@ func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
 		}
 	}
 	return out, nil
+}
+
+// reachableVars closes the dependency set over the declared functions.
+//
+// A variable's initialiser names some variables directly and calls some
+// functions; each of those functions names further variables and calls
+// further functions, and so on. The specification's rule is the transitive
+// one — XQST0054 fires on a cycle in the graph of variables *and* functions
+// together — so the closure is taken rather than only the direct edges.
+//
+// Function recursion is not itself an error, so a function already visited is
+// simply not re-entered: only a variable that reaches itself is a cycle worth
+// reporting, and bindVariables makes that judgement.
+func (q *Query) reachableVars(vars, calls []string) []string {
+	seenFn := map[string]bool{}
+	out := map[string]bool{}
+	for _, v := range vars {
+		out[v] = true
+	}
+	queue := append([]string(nil), calls...)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if seenFn[name] {
+			continue
+		}
+		seenFn[name] = true
+		for _, fd := range q.funcs {
+			if fd.name.Local != localOf(name) || !sameFuncName(fd.name, name) {
+				continue
+			}
+			for _, v := range fd.references() {
+				out[v] = true
+			}
+			queue = append(queue, fd.calls()...)
+		}
+	}
+	res := make([]string, 0, len(out))
+	for k := range out {
+		res = append(res, k)
+	}
+	sort.Strings(res)
+	return res
+}
+
+// sameFuncName matches a declared function against a call written in the
+// source, which carries the prefix rather than the resolved URI.
+//
+// Comparing on the lexical prefix is deliberate: the scan that produced the
+// call names has no static context to resolve them with, and a module's own
+// prefixes are one-to-one with its URIs by XQST0033, so the prefix identifies
+// the namespace exactly as well within one module.
+func sameFuncName(declared xdm.QName, called string) bool {
+	if i := strings.IndexByte(called, ':'); i >= 0 {
+		return declared.Prefix == called[:i] && declared.Local == called[i+1:]
+	}
+	return declared.Prefix == "" && declared.Local == called
+}
+
+func localOf(name string) string {
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// calls returns the names of the functions an initialiser or body calls, as
+// written.
+//
+// Like references, this is lexical, and for the same reason: it feeds a graph
+// whose only question is which of *this module's* declarations are reachable,
+// and a name that matches none of them is discarded.
+func (d *varDecl) calls() []string {
+	set := map[string]bool{}
+	if d.init != nil {
+		scanCalls(d.init.src, set)
+	}
+	for _, n := range d.body {
+		collectNodeCalls(n, set)
+	}
+	return sortedKeys(set)
+}
+
+func (d *funcDecl) references() []string {
+	set := map[string]bool{}
+	if d.expr != nil {
+		scanVarRefs(d.expr.src, set)
+	}
+	for _, n := range d.body {
+		collectNodeSources(n, set)
+	}
+	// A parameter shadows a global of the same name, so a body that only
+	// names its own parameters depends on nothing.
+	for _, pm := range d.params {
+		delete(set, pm.name.Lexical())
+		delete(set, pm.name.Local)
+	}
+	return sortedKeys(set)
+}
+
+func (d *funcDecl) calls() []string {
+	set := map[string]bool{}
+	if d.expr != nil {
+		scanCalls(d.expr.src, set)
+	}
+	for _, n := range d.body {
+		collectNodeCalls(n, set)
+	}
+	return sortedKeys(set)
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// scanCalls adds the name of every function call in src to set.
+//
+// A call is a name immediately followed by "(", with strings and comments
+// skipped as everywhere else. The space before the parenthesis is not
+// permitted by the grammar for a function call, which is what keeps "if (" and
+// the kind tests out of the set without listing them.
+func scanCalls(src string, set map[string]bool) {
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return
+			}
+			i = end
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return
+				}
+				i = end
+				continue
+			}
+			j := i
+			for j > 0 && (isNameByte(src[j-1]) || src[j-1] == ':') {
+				j--
+			}
+			if j < i {
+				set[src[j:i]] = true
+			}
+		}
+	}
+}
+
+// collectNodeCalls is collectNodeSources for function calls.
+func collectNodeCalls(n node, set map[string]bool) {
+	each := func(exprs []*compiledExpr, kids ...[]node) {
+		for _, e := range exprs {
+			if e != nil {
+				scanCalls(e.src, set)
+			}
+		}
+		for _, ks := range kids {
+			for _, k := range ks {
+				collectNodeCalls(k, set)
+			}
+		}
+	}
+	switch v := n.(type) {
+	case *enclosed:
+		each([]*compiledExpr{v.expr}, v.items)
+	case *element:
+		exprs := []*compiledExpr{v.nameExpr}
+		kids := [][]node{v.content}
+		for i := range v.attrs {
+			exprs = append(exprs, v.attrs[i].nameExpr)
+			kids = append(kids, v.attrs[i].value)
+		}
+		each(exprs, kids...)
+	case *comment:
+		each(nil, v.content)
+	case *pi:
+		each([]*compiledExpr{v.targetExpr}, v.content)
+	case *textNode:
+		each(nil, v.content)
+	case *document:
+		each(nil, v.content)
+	}
 }
 
 // evalVar produces one global variable's value.
@@ -660,22 +905,24 @@ func (d *varDecl) references() []string {
 	for _, n := range d.body {
 		collectNodeSources(n, set)
 	}
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
 	// Sorted so that a query with a cycle reports the same variable every
 	// run: map iteration order would otherwise make the message vary.
-	sort.Strings(out)
-	return out
+	return sortedKeys(set)
 }
 
-// scanVarRefs adds the Clark name of every variable reference in src to set.
+// scanVarRefs adds the name of every variable reference in src to set.
 //
-// Names are recorded unresolved-then-resolved through the module's own
-// prefixes at the call site, because a dependency only matters when it names
-// a variable this module declares, and those are the only names in the map
-// this feeds.
+// A name in *binding* position is deliberately excluded. "declare variable
+// $x := let $x := 1 return 1;" is legal and has no cycle: the inner $x is a
+// new variable that shadows the global, and the initialiser does not depend
+// on the global at all. Counting it would turn a legal query into XQST0054,
+// which is the one direction over-approximation is not free in — so the scan
+// looks back at the keyword before each "$" and skips the ones that introduce
+// a binding rather than read one.
+//
+// Over-approximating the other way stays harmless: a "$x" that is a genuine
+// reference but shadowed produces an ordering constraint that was already
+// satisfiable.
 func scanVarRefs(src string, set map[string]bool) {
 	for i := 0; i < len(src); i++ {
 		switch src[i] {
@@ -698,12 +945,57 @@ func scanVarRefs(src string, set map[string]bool) {
 			for j < len(src) && (isNameByte(src[j]) || src[j] == ':') {
 				j++
 			}
-			if j > i+1 {
+			if j > i+1 && !bindsVariable(src[:i]) {
 				set[src[i+1:j]] = true
 			}
 			i = j - 1
 		}
 	}
+}
+
+// bindsVariable reports whether the text immediately before a "$" is a
+// keyword that introduces a binding for the name that follows.
+//
+// These are the six places XQuery and XPath bind a variable by name: "for",
+// "let", "some", "every", "count" and "group by"'s "by". A "$" after any
+// other token — after "return", after an operator, at the start of an
+// expression — is a reference.
+func bindsVariable(before string) bool {
+	before = strings.TrimRight(before, " \t\r\n")
+	for _, kw := range []string{"for", "let", "some", "every", "count", "by"} {
+		if !strings.HasSuffix(before, kw) {
+			continue
+		}
+		// The keyword must be a whole one: "myfor $x" binds nothing, and
+		// neither does a name ending in "by".
+		rest := before[:len(before)-len(kw)]
+		if rest == "" {
+			return true
+		}
+		if r := rest[len(rest)-1]; !isNameByte(r) {
+			return true
+		}
+	}
+	// A comma continues a binding list: "for $a in x, $b in y" binds $b too.
+	// Only inside one, which this cannot see — so it is admitted whenever
+	// some binding keyword appears anywhere earlier, which over-excludes only
+	// names that are also bound somewhere in the same expression.
+	if strings.HasSuffix(before, ",") {
+		return bindsSomewhere(before)
+	}
+	return false
+}
+
+// bindsSomewhere reports whether src contains a binding keyword at all,
+// which is what makes a "," before a "$" possibly a binding-list separator.
+func bindsSomewhere(src string) bool {
+	for _, kw := range []string{"for ", "let ", "for$", "let$",
+		"some ", "every ", "count "} {
+		if strings.Contains(src, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectNodeSources gathers the variable references of every expression

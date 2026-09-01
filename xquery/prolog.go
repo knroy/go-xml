@@ -208,6 +208,20 @@ func (p *parser) parseNamespaceDecl(once map[string]*seenDecl, inSecond *bool) e
 		return p.errorf("XQST0033: the prefix %q is already bound in this prolog",
 			prefix)
 	}
+	// §4.2: binding a prefix to the zero-length URI *undeclares* it, so the
+	// prefix is no longer available — including a predeclared one.
+	// "declare namespace xs = ''" makes xs:integer(1) XPST0081 rather than a
+	// call to the constructor. It is a removal rather than a binding to "",
+	// because a name resolved against the empty URI would silently be in no
+	// namespace instead of being an error.
+	if uri == "" {
+		if prefix == "xml" {
+			return p.errorf("XQST0070: the prefix %q may not be undeclared", "xml")
+		}
+		delete(p.sc.ns, prefix)
+		p.declaredNS[prefix] = true
+		return nil
+	}
 	if err := p.sc.bind(prefix, uri); err != nil {
 		return err
 	}

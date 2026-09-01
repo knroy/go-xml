@@ -193,23 +193,54 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 
 // castOne applies the single-item half of the conversion rules.
 //
-// Only two conversions are permitted and neither is a general cast: an
-// xs:untypedAtomic is cast to the declared type, and a numeric or anyURI value
-// is *promoted* — xs:integer to xs:double, xs:anyURI to xs:string. Casting
-// anything else would admit "as xs:integer" against the string "3", which the
-// rules deliberately do not.
+// Only two conversions are permitted and neither is a general cast. An
+// xs:untypedAtomic is cast to the declared type — which is what makes
+// "declare function f() as xs:integer { <e>1</e> }" return the integer 1
+// rather than raise, since atomising the element gives an untypedAtomic. And a
+// numeric or xs:anyURI value is *promoted*: xs:integer to xs:double,
+// xs:decimal to xs:float, xs:anyURI to xs:string. Casting anything else would
+// admit "as xs:integer" against the string "3", which the rules deliberately
+// do not.
 func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
+	// A pure union type is converted by trying its members in order, which is
+	// a different rule from the single-target cast below.
+	if c, ok := xpath.CastToUnion(a, t.stype); ok {
+		return c, nil
+	}
 	switch a.Type {
 	case xdm.TypeUntypedAtomic:
-		if c, ok := xpath.CastToUnion(a, t.stype); ok {
-			return c, nil
-		}
-		return nil, fmt.Errorf("%s cannot be cast to %s", a.TypeName(), t.src)
 	case xdm.TypeInteger, xdm.TypeDecimal, xdm.TypeFloat, xdm.TypeDouble,
 		xdm.TypeAnyURI:
-		if c, ok := xpath.CastToUnion(a, t.stype); ok {
-			return c, nil
+		// Promotion, not conversion: only to a type the rules name. Anything
+		// else keeps the value it had and fails the match below.
+		if !promotes(a.Type, t.stype.AtomicType) {
+			return nil, fmt.Errorf("%s is not %s", a.TypeName(), t.src)
 		}
+	default:
+		return nil, fmt.Errorf("%s is not %s", a.TypeName(), t.src)
 	}
-	return nil, fmt.Errorf("%s is not %s", a.TypeName(), t.src)
+	c, err := xpath.CastToDerived(a, t.stype.AtomicType, t.stype.FacetName)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// promotes reports whether the conversion rules promote from to to.
+//
+// XPath 3.1 §3.1.5 names exactly three promotions and no more: a numeric type
+// to xs:float or xs:double, and xs:anyURI to xs:string. In particular
+// xs:double does not promote to xs:integer, which is why a function declared
+// "as xs:integer" that returns 1.5 must fail rather than truncate.
+func promotes(from, to xdm.TypeCode) bool {
+	switch to {
+	case xdm.TypeFloat, xdm.TypeDouble:
+		switch from {
+		case xdm.TypeInteger, xdm.TypeDecimal, xdm.TypeFloat, xdm.TypeDouble:
+			return true
+		}
+	case xdm.TypeString:
+		return from == xdm.TypeAnyURI
+	}
+	return false
 }
