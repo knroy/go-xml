@@ -23,11 +23,13 @@ const maxNestDepth = 200
 // parser can find, and the items inside are parsed by the ordinary item
 // parser, which recurses back here for anything nested further.
 //
-// Anything else is a construct this package does not take apart — an operator
-// with a constructor as an operand, say — and is refused by name rather than
-// mis-parsed. Refusing rather than guessing is also what makes the recursion
-// terminate: every path that recurses does so on a strictly shorter
-// substring.
+// Anything else — an operator with a constructor as an operand, "10000 =
+// <a>10000</a>" — is handled by the operand substitution in operand.go, which
+// lifts every XQuery-only primary in the expression into a variable and lets
+// xpath compile the operators over those. Where even that finds nothing it can
+// lift out, the expression is refused by name rather than mis-parsed. Refusing
+// rather than guessing is also what makes the recursion terminate: every path
+// that recurses does so on a strictly shorter substring.
 func (p *parser) parseNestedExpr() ([]node, error) {
 	if p.depth++; p.depth > maxNestDepth {
 		return nil, p.errorf(
@@ -36,6 +38,11 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 	defer func() { p.depth-- }()
 
 	p.skipSpaceAndComments()
+	// start is where the whole expression begins. Both unwrappings below may
+	// reach an operator they cannot rewrite around, and the substitution that
+	// handles that case has to see the expression from here rather than from
+	// wherever the unwrapping stopped.
+	start := p.pos
 	if p.startsConstructor() || p.looksLikeFLWOR() || p.looksLikeQuantified() {
 		n, err := p.parseItem()
 		if err != nil {
@@ -49,7 +56,7 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 		// self::node() return $i)" is the mirror of the parenthesised case,
 		// with the syntax xpath cannot read on the left of the "/" rather
 		// than inside brackets, and it is rewritten the same way.
-		return p.pathOver([]node{n})
+		return p.pathOverOrSubstitute([]node{n}, start)
 	}
 	if p.lookingAt("(") {
 		p.pos++
@@ -69,13 +76,45 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 		// idiom the suite leans on hardest, and it cannot be read any other
 		// way: the parenthesised half needs this parser and the half after it
 		// needs the other one.
-		return p.pathOver(items)
+		return p.pathOverOrSubstitute(items, start)
 	}
 	if items, ok, err := p.parseNestedCall(); ok || err != nil {
 		return items, err
 	}
+	// The construct is an operand of an operator this parser does not read —
+	// "10000 = <a>10000</a>". Every such operand is lifted into a variable
+	// and the rest of the expression compiled by xpath over it; see
+	// operand.go for why substituting at primary position keeps precedence.
+	if items, ok, err := p.parseOperandSubst(); ok || err != nil {
+		return items, err
+	}
 	return nil, p.errorf(
 		"XPST0003: a constructor or FLWOR expression cannot appear here")
+}
+
+// pathOverOrSubstitute applies pathOver, falling back to the operand
+// substitution when what follows binds too loosely for the rewrite.
+//
+// pathOver may only take a step or a predicate, because those are the only
+// things that bind tightly enough for substituting the value on their left to
+// preserve precedence. An operator does not — "(<a/>, <b/>) = 1" would be
+// rewritten wrongly — so where one follows, the expression is re-read from
+// its start and every XQuery-only primary in it is lifted to a variable
+// instead. That rewrite substitutes at primary position, where precedence is
+// preserved by construction.
+func (p *parser) pathOverOrSubstitute(value []node, start int) ([]node, error) {
+	save := p.pos
+	items, err := p.pathOver(value)
+	if err == nil {
+		return items, nil
+	}
+	p.pos = start
+	if items, ok, serr := p.parseOperandSubst(); ok || serr != nil {
+		return items, serr
+	}
+	// Report pathOver's error, which names the operator that stopped it.
+	p.pos = save
+	return nil, err
 }
 
 // parseParenBody reads the comma-separated items of a parenthesised

@@ -350,8 +350,14 @@ func (p *parser) parseReference() (string, error) {
 		if digits == "" || !p.consume(";") {
 			return "", p.errorAt(start, "XPST0003: malformed character reference")
 		}
+		// The value is read into an int64 and range-checked before the
+		// conversion to rune, which is an int32: "&#4294967542;" and its hex
+		// spelling are codepoints XML does not have, and truncating them to
+		// 32 bits would turn each into a character it is not. Overflowing
+		// even the int64 is the same answer, so a parse error joins the
+		// range failure rather than being reported apart from it.
 		n, err := strconv.ParseInt(digits, base, 64)
-		if err != nil || !isXMLChar(rune(n)) {
+		if err != nil || n > 0x10FFFF || !isXMLChar(rune(n)) {
 			return "", p.errorAt(start,
 				"XQST0090: %q is not a valid XML character", "&#"+digits+";")
 		}
@@ -400,15 +406,21 @@ func isXMLChar(r rune) bool {
 
 // compileExpr hands an expression to xpath.
 //
-// The one thing that cannot simply be delegated is the namespace axis: XPath
-// has it and XQuery does not, so a query using it must be refused even though
-// the expression parser beneath would accept it. Everything else about the
-// expression language is shared, which is why this is the only such check.
+// Two things cannot simply be delegated. The namespace axis: XPath has it and
+// XQuery does not, so a query using it must be refused even though the
+// expression parser beneath would accept it. And the references XQuery's
+// StringLiteral admits and XPath's does not, which are expanded into the
+// source first — see literal.go. Everything else about the expression language
+// is shared, which is why these are the only two.
 func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
-	c, err := xpath.CompileVersion(src, p.sc, p.version)
+	expanded, err := p.expandStringLiterals(src)
+	if err != nil {
+		return nil, err
+	}
+	c, err := xpath.CompileVersion(expanded, p.sc, p.version)
 	if err != nil {
 		return nil, err
 	}
