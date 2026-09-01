@@ -72,6 +72,12 @@ type attribute struct {
 	name     xdm.QName
 	nameExpr *compiledExpr
 	value    []node
+
+	// computed marks an attribute written as "attribute a { ... }", whose
+	// value is one enclosed expression, rather than a direct constructor's
+	// a="..." whose value is a run of alternating parts. The two join their
+	// pieces differently, and only the spelling says which rule applies.
+	computed bool
 }
 
 // comment, pi and text are the remaining node kinds a constructor can make.

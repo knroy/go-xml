@@ -111,7 +111,7 @@ func (p *parser) parseComputed() (node, bool, error) {
 		return el, true, nil
 
 	case "attribute":
-		at := &attribute{nameExpr: nameExpr, value: content}
+		at := &attribute{nameExpr: nameExpr, value: content, computed: true}
 		if nameExpr == nil {
 			if nameBraced {
 				at.name = xdm.QName{URI: nameURI, Local: nameLocal}

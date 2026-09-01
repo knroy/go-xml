@@ -252,15 +252,55 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 		return err
 	}
 	var sb strings.Builder
+	if a.computed {
+		// A computed constructor's content is one enclosed expression, and
+		// parseBracedContent hands it over already split at the top-level
+		// commas. §3.9.3.3 atomises the whole of it as a single sequence and
+		// separates the values with single spaces, so the items are gathered
+		// and joined once — joining each on its own would drop the separator
+		// between them, and drop an empty or node-valued item entirely.
+		var seq xdm.Sequence
+		for _, part := range a.value {
+			switch v := part.(type) {
+			case *literalText:
+				seq = append(seq, xdm.NewString(v.text))
+			case *enclosed:
+				s, err := v.sequence(ctx)
+				if err != nil {
+					return err
+				}
+				seq = append(seq, s...)
+			default:
+				// A constructor among the items: "attribute a {1,<b/>,2}" is
+				// three values, and the middle one is a node. It atomises to
+				// the empty string but is still a value, so it takes a
+				// separator on each side and must not be skipped — which is
+				// what ignoring the unrecognised part did, giving "1 2" where
+				// the answer is "1  2".
+				inner := xdmbuild.New(policy{sc: ctx.sc})
+				if err := v.eval(&builderRef{b: inner}, ctx); err != nil {
+					return err
+				}
+				seq = append(seq, inner.Sequence()...)
+			}
+		}
+		s, err := joinAtomized(seq)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+		return out.b.AddAttribute(name, sb.String())
+	}
+	// A direct constructor's value alternates literal runs and enclosed
+	// expressions — id="a{$x}b" is three parts — and §3.9.1.1 concatenates
+	// the parts with no separator while separating the values *within* each
+	// enclosed expression. So each part is joined on its own here.
 	for _, part := range a.value {
 		switch v := part.(type) {
 		case *literalText:
 			sb.WriteString(v.text)
 		case *enclosed:
-			if v.expr == nil {
-				continue
-			}
-			seq, err := v.expr.compiled.Eval(ctx.xp)
+			seq, err := v.sequence(ctx)
 			if err != nil {
 				return err
 			}
