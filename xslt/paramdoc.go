@@ -62,7 +62,7 @@ func applyParameterDocument(rt *runtime, o *OutputSettings, baseURI string) erro
 			"SEPM0017: the parameter document %q is not an "+
 				"output:serialization-parameters document", href)
 	}
-	return applySerializationParams(root, o)
+	return ApplyParameterDocument(root, o)
 }
 
 // docElement returns a document node's element child, or n itself when n is
@@ -82,19 +82,26 @@ func docElement(n *xdm.Node) *xdm.Node {
 	return nil
 }
 
-// applySerializationParams reads the children of an
+// ApplyParameterDocument reads the children of an
 // output:serialization-parameters element into output settings.
 //
-// The element form is the same one fn:serialize accepts as its second
-// argument, and each child names one parameter: its local name is the
+// root is that element. Each child names one parameter: its local name is the
 // parameter, and a "value" attribute carries the value -- except
 // use-character-maps, which spells its entries out as children because it has
-// no xsl:character-map declaration to point at.
+// no xsl:character-map declaration to point at. The element form is the same
+// one fn:serialize accepts as its second argument.
 //
 // A parameter in another namespace is an implementation-defined extension the
 // spec allows and this ignores; one in no namespace is a malformed document
 // rather than an extension, since an extension must name its own namespace.
-func applySerializationParams(root *xdm.Node, o *OutputSettings) error {
+//
+// It is exported for the sake of an XQuery main module, whose prolog names
+// this document with "declare option output:parameter-document" (XQuery 3.1
+// §2.2.4) and gets the same parameters by the same route. The fetching stays
+// with the caller: XSLT resolves the URI against the element that wrote it
+// and XQuery against the query's static base URI, and neither rule belongs to
+// the reading of a document already in hand.
+func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 	for _, p := range root.Children {
 		if p.Kind != xdm.KindElement {
 			continue

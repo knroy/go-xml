@@ -105,13 +105,22 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if err != nil {
 			return err
 		}
-		s.writeString(out)
+		// Unicode normalisation is the last step of the pipeline for every
+		// method, this one included (Serialization 3.1 §7). It is applied to
+		// the finished text rather than to each string as it is written,
+		// because a form like NFC composes across a boundary: a base
+		// character at the end of one value and a combining mark at the
+		// start of the next are one character after normalisation, and
+		// normalising them apart would leave them two. JSON's own escapes
+		// are all ASCII and no normalisation form touches those.
+		s.writeString(s.normalized(out))
 		return s.err
 	case "adaptive":
 		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
 		if err != nil {
 			return err
 		}
+		out = s.normalized(out)
 		// The adaptive method renders a node by handing it to the XML output
 		// method (Serialization 3.1 §10), so the XML declaration is part of
 		// what it produces and omit-xml-declaration is a parameter it
@@ -141,6 +150,20 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		s.writeString(out)
 		return s.err
 	}
+
+	// Sequence normalisation, step 1: an array is replaced by its members,
+	// recursively, so that the XML-family methods see the sequence the array
+	// was holding rather than an item they have no rendering for. Only an
+	// array is flattened; a map and a function item still have no
+	// serialisation and are SENR0001 below, which is why this is a
+	// substitution rather than a general unwrapping.
+	//
+	// It happens before checkOutputSettings, since that check exists to
+	// refuse what cannot be written and an array's members can be. It also
+	// happens before the item separator is inserted, because the members are
+	// items of the sequence being separated: [1,2] with item-separator="-"
+	// is "1-2", not one item.
+	seq = flattenArrays(seq)
 
 	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
 	// when an item separator is in force it is inserted between every pair
@@ -1663,6 +1686,43 @@ func insertItemSeparator(seq xdm.Sequence, sep *string) xdm.Sequence {
 	for i, it := range seq {
 		if i > 0 {
 			out = append(out, &xdm.Node{Kind: xdm.KindText, Value: *sep})
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// flattenArrays replaces every array in a sequence by its members, and does
+// so to any depth.
+//
+// Sequence normalisation calls for it because an array is not a thing the
+// XML, XHTML, HTML or text output methods can write, but its members usually
+// are: serialising [<a/>] and <a/> to different results -- one a document,
+// the other an error -- would make the brackets change what the document
+// says rather than only how the value was assembled. The json and adaptive
+// methods do not go through normalisation at all and keep their arrays,
+// which is the whole difference between "[1,2]" and "12".
+//
+// The common case is a sequence with no array in it, which is returned as it
+// stands rather than copied.
+func flattenArrays(seq xdm.Sequence) xdm.Sequence {
+	has := false
+	for _, it := range seq {
+		if _, ok := it.(*xdm.ArrayItem); ok {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return seq
+	}
+	out := make(xdm.Sequence, 0, len(seq))
+	for _, it := range seq {
+		if a, ok := it.(*xdm.ArrayItem); ok {
+			for _, m := range a.Members() {
+				out = append(out, flattenArrays(m)...)
+			}
+			continue
 		}
 		out = append(out, it)
 	}

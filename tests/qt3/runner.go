@@ -585,6 +585,16 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		q, res.err = xquery.Compile(tc.Test, xqueryOptions(ns))
 		if res.err == nil {
 			res.serialParams = q.SerializationOptions()
+			// §25.1: "if no document can be found at the specified location,
+			// the attribute should be ignored". A missing one is therefore
+			// not a failure, and neither is one this harness declines to
+			// resolve; what is read is applied.
+			if href := res.serialParams["parameter-document"]; href != "" {
+				if doc, err := r.loadDoc(
+					filepath.Join(ts.Dir, filepath.FromSlash(href))); err == nil {
+					res.paramDoc = paramDocElement(doc)
+				}
+			}
 			res.seq, res.err = q.Eval(ctx)
 		}
 	} else {
@@ -623,6 +633,12 @@ type outcome struct {
 	// seq is the result sequence, and err the error the case raised instead.
 	seq xdm.Sequence
 	err error
+	// paramDoc is the output:serialization-parameters element of the document
+	// "declare option output:parameter-document" named, when the prolog named
+	// one and it could be read. It is fetched by the caller rather than by
+	// the serialising code, because only the caller knows where a test-set's
+	// files live.
+	paramDoc *xdm.Node
 	// serialParams are the "declare option output:*" declarations of an
 	// XQuery main module, keyed by the serialization parameter's local name.
 	// An XPath case has none: XPath has no prolog to state them in, and its

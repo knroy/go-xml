@@ -49,7 +49,7 @@ func serialized(res *outcome) (string, error) {
 		res.serialErr = res.err
 		return "", res.serialErr
 	}
-	opts, err := serializationSettings(res.serialParams)
+	opts, err := serializationSettings(res.serialParams, res.paramDoc)
 	if err != nil {
 		res.serialErr = err
 		return "", err
@@ -80,17 +80,16 @@ func serialized(res *outcome) (string, error) {
 // chooses it from the result — a document whose element is <html> is written
 // as HTML — which is the specification's rule and not a default that can be
 // filled in ahead of the result existing.
-func serializationSettings(params map[string]string) (xslt.OutputSettings, error) {
+func serializationSettings(params map[string]string, paramDoc *xdm.Node) (xslt.OutputSettings, error) {
 	o := xslt.OutputSettings{Encoding: "UTF-8", OmitXMLDecl: true}
 	for name, val := range params {
 		switch name {
 		case "parameter-document":
-			// XQST0119 is raised when a processor performing serialization
-			// cannot process the document. This harness does not fetch it:
-			// the two cases that declare one accept either the parameters or
-			// the unmodified result, and reading a document relative to a
-			// test-set to satisfy an assertion about it would be measuring
-			// the harness's file resolution.
+			// The document itself is fetched by the caller, which is the
+			// only place that knows where a test-set's files live, and
+			// applied below. Its parameters win over the ones declared
+			// beside it, which is the precedence §25.1 gives a parameter
+			// document, so it cannot be folded in here in map order.
 			continue
 		case "use-character-maps":
 			// A character map is spelled out as markup in a parameter
@@ -106,6 +105,15 @@ func serializationSettings(params map[string]string) (xslt.OutputSettings, error
 			if err := xslt.SetSerializationParam(&o, name, val); err != nil {
 				return o, err
 			}
+		}
+	}
+	// Last, so that it overrides what was declared beside it: "a
+	// serialization parameter specified in the parameter-document takes
+	// precedence over a value supplied ... in the selected output
+	// definition".
+	if paramDoc != nil {
+		if err := xslt.ApplyParameterDocument(paramDoc, &o); err != nil {
+			return o, err
 		}
 	}
 	return o, nil
@@ -195,3 +203,33 @@ func elide(s string) string {
 	}
 	return s[:max] + "..."
 }
+
+// paramDocElement returns a parsed parameter document's
+// output:serialization-parameters element.
+//
+// A document whose element is something else is not a parameter document, and
+// nil is returned rather than an error: the option that named it is then
+// ignored, which is the same outcome as the document not being there at all.
+func paramDocElement(doc *xdm.Node) *xdm.Node {
+	if doc == nil {
+		return nil
+	}
+	el := doc
+	if el.Kind != xdm.KindElement {
+		el = nil
+		for _, c := range doc.Children {
+			if c.Kind == xdm.KindElement {
+				el = c
+				break
+			}
+		}
+	}
+	if el == nil || el.Name.URI != nsSerialization ||
+		el.Name.Local != "serialization-parameters" {
+		return nil
+	}
+	return el
+}
+
+// nsSerialization is the namespace a serialization parameter document uses.
+const nsSerialization = "http://www.w3.org/2010/xslt-xquery-serialization"
