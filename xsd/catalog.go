@@ -31,17 +31,33 @@ import (
 // The zero value is not usable; call NewCatalogResolver.
 type CatalogResolver struct {
 	mu       sync.RWMutex
-	byAlias  map[string][]byte
-	byNS     map[string][]byte
+	byAlias  map[string]*catalogDoc
+	byNS     map[string]*catalogDoc
 	fallback Resolver
-	strictNS bool
+}
+
+// A catalogDoc is one bundled document and the name resolution reports for it.
+//
+// The name matters as much as the bytes. The assembler keys the documents it
+// has read on the location the resolver returned, so a catalog answering with
+// whatever spelling the reference happened to use would make two documents of
+// one file the moment a schema set reached it two ways. The XSLT 3.0 schema
+// does that immediately: it imports the xml: namespace with no location at
+// all, and the schema for schemas it also imports names
+// http://www.w3.org/2001/xml.xsd for the same document -- which without this
+// produced "duplicate attribute declaration space" and three more like it.
+// Reporting one canonical name per entry, whatever spelling found it, is what
+// makes those the same document again.
+type catalogDoc struct {
+	src  []byte
+	name string
 }
 
 // NewCatalogResolver returns an empty catalog.
 func NewCatalogResolver() *CatalogResolver {
 	return &CatalogResolver{
-		byAlias: map[string][]byte{},
-		byNS:    map[string][]byte{},
+		byAlias: map[string]*catalogDoc{},
+		byNS:    map[string]*catalogDoc{},
 	}
 }
 
@@ -58,18 +74,37 @@ func NewCatalogResolver() *CatalogResolver {
 func (r *CatalogResolver) Add(namespace string, src []byte, aliases ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// The canonical name is the first absolute alias, falling back to the
+	// first alias of any kind and then to the namespace. Every lookup that
+	// finds this entry reports that one name, so the assembler sees one
+	// document however the reference was spelled.
+	doc := &catalogDoc{src: src}
+	for _, a := range aliases {
+		if strings.Contains(a, ":") {
+			doc.name = a
+			break
+		}
+	}
+	if doc.name == "" && len(aliases) > 0 {
+		doc.name = aliases[0]
+	}
+	if doc.name == "" {
+		doc.name = namespace
+	}
+
 	if namespace != "" {
-		r.byNS[namespace] = src
+		r.byNS[namespace] = doc
 	}
 	for _, a := range aliases {
-		r.byAlias[a] = src
+		r.byAlias[a] = doc
 		// A reference is resolved against its base before it reaches a
 		// resolver, so an absolute alias is also matched by its last
 		// path segment -- which is how a relative "XMLSchema.xsd"
 		// beside the referring document finds the canonical entry.
 		if seg := lastSegment(a); seg != "" && seg != a {
 			if _, taken := r.byAlias[seg]; !taken {
-				r.byAlias[seg] = src
+				r.byAlias[seg] = doc
 			}
 		}
 	}
@@ -90,13 +125,9 @@ func (r *CatalogResolver) SetFallback(f Resolver) {
 // Resolve implements Resolver.
 func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
 	r.mu.RLock()
-	if src, ok := r.lookup(namespace, location, base); ok {
+	if doc, ok := r.lookup(namespace, location, base); ok {
 		r.mu.RUnlock()
-		name := location
-		if name == "" {
-			name = namespace
-		}
-		return io.NopCloser(strings.NewReader(string(src))), name, nil
+		return io.NopCloser(strings.NewReader(string(doc.src))), doc.name, nil
 	}
 	f := r.fallback
 	r.mu.RUnlock()
@@ -119,19 +150,19 @@ func (r *CatalogResolver) Resolve(namespace, location, base string) (io.ReadClos
 
 // lookup runs the three lookups in order of how specific they are. The caller
 // holds at least a read lock.
-func (r *CatalogResolver) lookup(namespace, location, base string) ([]byte, bool) {
+func (r *CatalogResolver) lookup(namespace, location, base string) (*catalogDoc, bool) {
 	if location != "" {
-		if src, ok := r.byAlias[location]; ok {
-			return src, true
+		if doc, ok := r.byAlias[location]; ok {
+			return doc, true
 		}
 		if abs := resolveAgainst(base, location); abs != "" && abs != location {
-			if src, ok := r.byAlias[abs]; ok {
-				return src, true
+			if doc, ok := r.byAlias[abs]; ok {
+				return doc, true
 			}
 		}
 		if seg := lastSegment(location); seg != "" && seg != location {
-			if src, ok := r.byAlias[seg]; ok {
-				return src, true
+			if doc, ok := r.byAlias[seg]; ok {
+				return doc, true
 			}
 		}
 	}
@@ -140,8 +171,8 @@ func (r *CatalogResolver) lookup(namespace, location, base string) ([]byte, bool
 	// should define. An xs:import naming a namespace and no location has
 	// nothing else to go on, which is the case this exists for.
 	if namespace != "" {
-		if src, ok := r.byNS[namespace]; ok {
-			return src, true
+		if doc, ok := r.byNS[namespace]; ok {
+			return doc, true
 		}
 	}
 	return nil, false

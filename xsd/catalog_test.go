@@ -195,3 +195,41 @@ func xsdLoadForTest(root *xdm.Node, r Resolver) (*Schema, error) {
 		ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true},
 	})
 }
+
+// One entry must report one name however it was found.
+//
+// The assembler keys the documents it has read on the location the resolver
+// returned, so an entry answering with the caller's spelling makes two
+// documents of one file the moment a schema set reaches it two ways. That is
+// not hypothetical: the XSLT 3.0 schema imports the xml: namespace with no
+// location, and the schema for schemas it also imports names
+// http://www.w3.org/2001/xml.xsd for the same document. Before this, loading
+// it reported "duplicate attribute declaration space" and three more like it.
+func TestCatalogReportsOneNamePerEntry(t *testing.T) {
+	r := NewCatalogResolver()
+	r.Add(NSXML, []byte("<x/>"),
+		"http://www.w3.org/2001/xml.xsd", "xml.xsd")
+
+	var names []string
+	for _, look := range []struct{ ns, loc string }{
+		{"", "http://www.w3.org/2001/xml.xsd"},
+		{"", "xml.xsd"},
+		{NSXML, ""},
+	} {
+		rc, name, err := r.Resolve(look.ns, look.loc, "")
+		if err != nil || rc == nil {
+			t.Fatalf("resolve(%q, %q): %v", look.ns, look.loc, err)
+		}
+		rc.Close()
+		names = append(names, name)
+	}
+	for _, n := range names[1:] {
+		if n != names[0] {
+			t.Errorf("one entry reported several names: %q", names)
+			break
+		}
+	}
+	if names[0] != "http://www.w3.org/2001/xml.xsd" {
+		t.Errorf("canonical name is %q, want the absolute alias", names[0])
+	}
+}
