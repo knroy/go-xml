@@ -459,6 +459,31 @@ func particleRestricts(r, b *Particle, expanded bool, v Version) error {
 				return recurseUnordered(r, rt, b, bt, expanded, v)
 			case rt.Compositor == CompositorSequence && bt.Compositor == CompositorChoice:
 				return mapAndSum(r, rt, b, bt, expanded, v)
+			case v >= Version11 && rt.Compositor == CompositorChoice &&
+				bt.Compositor == CompositorSequence:
+				// The 1.0 table has no Choice:Sequence cell, so this
+				// pair had no answer at all. Under 1.1 the question is
+				// language inclusion (§3.4.6.4), and a choice is the
+				// same language as a one-member sequence holding it,
+				// which lands the pair in Sequence:Sequence.
+				//
+				// It arises whenever an extension's content is
+				// restricted back down. An extension wraps the base's
+				// particle and its own in a sequence, so a type whose
+				// content is one group reference becomes
+				// sequence(..., group), and a restriction naming that
+				// same group is a bare choice. The XSLT 3.0 schema is
+				// exactly this: sequence-constructor-or-select
+				// restricts sequence-constructor-and-select by
+				// referring to the very group its base refers to.
+				wrapped := &Particle{
+					MinOccurs: 1, MaxOccurs: 1,
+					Term: &ModelGroup{
+						Compositor: CompositorSequence,
+						Particles:  []*Particle{r},
+					},
+				}
+				return recurse(wrapped, wrapped.Term.(*ModelGroup), b, bt, expanded, v)
 			}
 		}
 	}
