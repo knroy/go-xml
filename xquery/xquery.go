@@ -62,6 +62,10 @@ type Query struct {
 	// name with the empty key for the default.
 	formats map[string]*xpath.DecimalFormat
 
+	// serialization is the prolog's "declare option output:*" set, keyed by
+	// the serialization parameter's local name. See SerializationOptions.
+	serialization map[string]string
+
 	// lib is the function library the query's own declared functions live in,
 	// built once at compile time and chained to the builtins. It is built
 	// here rather than per evaluation because a Query is immutable and safe
@@ -108,7 +112,8 @@ func Compile(src string, opts Options) (*Query, error) {
 		return nil, err
 	}
 	q := &Query{body: body, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
-		contextItem: p.contextItem, formats: p.formats}
+		contextItem: p.contextItem, formats: p.formats,
+		serialization: p.serialization}
 	q.lib = q.registerFunctions(nil)
 	return q, nil
 }
@@ -241,6 +246,37 @@ func (q *Query) bindContextItem(ctx *xpath.Context) (*xpath.Context, error) {
 
 // String returns the query's source.
 func (q *Query) String() string { return q.src }
+
+// SerializationOptions returns the serialization parameters the prolog
+// declared, keyed by the parameter's local name and carrying its lexical
+// value.
+//
+// Evaluating a query and serialising its result are two steps, and only the
+// first belongs here: Eval hands back a sequence, and what a caller does with
+// it — write it as XML, as JSON, as nothing at all — is the caller's
+// decision. But the *parameters* for that second step are stated in the
+// query, by "declare option output:method" and its siblings (XQuery 3.1
+// §2.2.4), and a caller that never sees them would have to re-parse the
+// prolog to find out what the query asked for. This is how it asks instead.
+//
+// The values are unvalidated lexical forms. Whether "indent" says "yes" or
+// something meaningless is the serialiser's judgement to make, since only it
+// knows which parameters it honours; the names, however, are checked at
+// compile time, an unknown one being XQST0109.
+//
+// The returned map is a copy, so a caller may keep or modify it without
+// disturbing the Query, which is otherwise immutable and safe for concurrent
+// use. Nil is returned when the prolog declared none.
+func (q *Query) SerializationOptions() map[string]string {
+	if len(q.serialization) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(q.serialization))
+	for k, v := range q.serialization {
+		out[k] = v
+	}
+	return out
+}
 
 // parseQueryBody parses the body of a main module.
 //

@@ -532,12 +532,54 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 	return nil
 }
 
+// nsSerialization is the namespace whose options are serialization
+// parameters. §4.19 leaves every other option namespace to the processor;
+// this one is given a meaning by the Serialization specification, which
+// XQuery 3.1 §2.3.4 adopts by name.
+const nsSerialization = "http://www.w3.org/2010/xslt-xquery-serialization"
+
+// serializationParams is the set of names the serialization namespace
+// defines, from Serialization 3.1 §3. build-tree is absent deliberately: it
+// is an XSLT parameter, and XQuery has no raw result tree for it to describe.
+var serializationParams = map[string]bool{
+	"allow-duplicate-names":   true,
+	"byte-order-mark":         true,
+	"cdata-section-elements":  true,
+	"doctype-public":          true,
+	"doctype-system":          true,
+	"encoding":                true,
+	"escape-uri-attributes":   true,
+	"html-version":            true,
+	"include-content-type":    true,
+	"indent":                  true,
+	"item-separator":          true,
+	"json-node-output-method": true,
+	"media-type":              true,
+	"method":                  true,
+	"normalization-form":      true,
+	"omit-xml-declaration":    true,
+	"parameter-document":      true,
+	"standalone":              true,
+	"suppress-indentation":    true,
+	"undeclare-prefixes":      true,
+	"use-character-maps":      true,
+	"version":                 true,
+}
+
 // parseOptionDecl reads "declare option p:name 'value'" (§4.19).
 //
 // An option in a namespace the processor does not recognise must be ignored,
-// which is the whole of the required behaviour. The name is still resolved,
-// because an option with an unbound prefix is XPST0081 whether or not the
-// option itself means anything.
+// which is the whole of the required behaviour for those. The name is still
+// resolved, because an option with an unbound prefix is XPST0081 whether or
+// not the option itself means anything.
+//
+// An option in the serialization namespace is kept rather than dropped: it is
+// how a main module states the serialization parameters its result is to be
+// written with, and a host that serialises the result has nowhere else to
+// read them from. Nothing here interprets them — the value is the parameter's
+// lexical form and stays that way until a serialiser asks for it — so an
+// option naming a parameter this engine does not implement costs nothing at
+// compile time and is reported by whoever tries to use it.
 func (p *parser) parseOptionDecl() error {
 	p.pos += len("option")
 	p.skipSpaceAndComments()
@@ -550,14 +592,90 @@ func (p *parser) parseOptionDecl() error {
 	if prefix == "" && !strings.HasPrefix(local, "Q{") {
 		return p.errorf("XPST0081: an option name must have a prefix")
 	}
-	if _, err := p.sc.resolveElementName(prefix, local); err != nil && prefix != "" {
+	name, err := p.sc.resolveElementName(prefix, local)
+	if err != nil && prefix != "" {
 		return err
 	}
 	p.skipSpaceAndComments()
-	if _, err := p.parseURILiteral(); err != nil {
+	val, err := p.parseURILiteral()
+	if err != nil {
 		return err
 	}
+	if name.URI == nsSerialization {
+		// §2.2.4: "It is a static error [err:XQST0109] if the local name of
+		// an output declaration in the ... serialization namespace is not
+		// one of the serialization parameter names." An unknown name here is
+		// not an extension the way an unknown *namespace* is: the namespace
+		// is the Serialization specification's own, and every name in it is
+		// spoken for.
+		if !serializationParams[name.Local] {
+			return p.errorf(
+				"XQST0109: %q is not a serialization parameter", name.Local)
+		}
+		if p.serialization == nil {
+			p.serialization = map[string]string{}
+		}
+		// A repeated parameter is XQST0110. The rule is worth enforcing
+		// rather than letting the last one win: two "declare option
+		// output:method" lines in one prolog are a query that does not know
+		// what it wants, and silently honouring the second hides that.
+		if _, dup := p.serialization[name.Local]; dup {
+			return p.errorf(
+				"XQST0110: the serialization parameter %q is declared twice",
+				name.Local)
+		}
+		switch name.Local {
+		case "cdata-section-elements", "suppress-indentation":
+			// These two carry a list of lexical QNames, and a lexical QName
+			// means nothing away from the namespace bindings it was written
+			// under. The prolog is the only place those bindings exist — the
+			// value is a string literal, not markup, so it carries no
+			// namespace nodes of its own and a consumer handed the raw text
+			// would have to be handed the prolog's namespaces with it.
+			// Expanding here, where the static context is already in hand,
+			// is what makes the value self-describing.
+			expanded, err := p.expandNameList(val)
+			if err != nil {
+				return err
+			}
+			val = expanded
+		}
+		p.serialization[name.Local] = val
+	}
 	return nil
+}
+
+// expandNameList rewrites a whitespace-separated list of lexical QNames into
+// the same list in EQName notation, resolving each prefix against the
+// prolog's in-scope namespaces.
+//
+// An unprefixed name in these two parameters takes the default element
+// namespace, as an element name does: both name elements, and
+// cdata-section-elements="para" in a query whose default element namespace is
+// the DocBook one means that namespace's para. §2.2.4 says the value is
+// interpreted "as if it were an attribute of the same name on an xsl:output
+// declaration", and that is the xsl:output rule.
+func (p *parser) expandNameList(val string) (string, error) {
+	names := strings.Fields(val)
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		// An EQName is already expanded; it is a legal spelling here and
+		// resolving it again would try to read "Q{...}local" as a prefix.
+		if strings.HasPrefix(n, "Q{") {
+			out = append(out, n)
+			continue
+		}
+		prefix, local := "", n
+		if i := strings.IndexByte(n, ':'); i >= 0 {
+			prefix, local = n[:i], n[i+1:]
+		}
+		q, err := p.sc.resolveElementName(prefix, local)
+		if err != nil {
+			return "", err
+		}
+		out = append(out, "Q{"+q.URI+"}"+q.Local)
+	}
+	return strings.Join(out, " "), nil
 }
 
 // parseURILiteral reads a string literal and applies the escapes a URI
