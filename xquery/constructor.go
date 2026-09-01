@@ -76,7 +76,14 @@ type pi struct {
 type textNode struct{ content []node }
 
 // document is "document { ... }".
-type document struct{ content []node }
+// document is "document { ... }". Its baseURI is the static base URI in
+// force where the constructor was written: §3.9.3.1 gives a constructed
+// document node the constructor's base URI, unlike a comment, PI or text
+// node, which get none at all.
+type document struct {
+	content []node
+	baseURI string
+}
 
 // parseDirElement parses a direct element constructor, with p.pos on the "<".
 //
