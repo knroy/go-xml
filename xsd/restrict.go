@@ -1777,7 +1777,24 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// whose derived and base groups are textually identical. The derived
 	// side is already scaled this way by allBranchCounts, so this only
 	// restores the symmetry the two sides must share.
-	baseSkippable := b.MinOccurs == 0
+	// ...but zeroing the floors is only sound when the *derived* side is a
+	// group that can be skipped in its own right. particlesK006 is the case
+	// the unconditional reading admits wrongly: B is <all minOccurs="0">
+	// requiring a1, and R is a lone element a1 at 0..1 (its mandatory
+	// one-member <sequence> having been stripped as pointless). Counting
+	// with a zeroed floor, R's 0..1 sits inside a 0..1 budget and the
+	// derivation is accepted — but the suite scores K006 invalid, and its
+	// sibling K005, identical but for a1's minOccurs="1", valid. The two
+	// differ in nothing else, so the floor is what the rule turns on.
+	//
+	// Deferring to the 1.0 structural table for this shape is what restores
+	// the distinction: RecurseAsIfGroup wraps R as a one-member group of
+	// B's variety, and occurrenceRangeOK then asks whether R's range sits
+	// inside the base member's 1..1 — which 1..1 does and 0..1 does not.
+	// mgO029 keeps its zeroing because R is there a *group*, not a bare
+	// element, and so can take B's skip branch itself.
+	_, rIsGroup := r.Term.(*ModelGroup)
+	baseSkippable := b.MinOccurs == 0 && rIsGroup
 	budget := map[xdm.QName]*occBudget{}
 	for _, bp := range flattenAllGroups(bg.Particles) {
 		bd, ok := bp.Term.(*ElementDecl)
