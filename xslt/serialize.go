@@ -21,6 +21,7 @@ func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializePar
 		AllowDuplicateNames:  opts.AllowDuplicateNames,
 		JSONNodeOutputMethod: opts.JSONNodeOutputMethod,
 		CharMap:              charMap,
+		Encoding:             opts.Encoding,
 	}
 	if opts.ItemSeparator != nil {
 		p.ItemSeparator, p.HasItemSeparator = *opts.ItemSeparator, true
