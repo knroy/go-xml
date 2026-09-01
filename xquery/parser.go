@@ -158,7 +158,11 @@ func (p *parser) parseQName() (prefix, local string, err error) {
 	if first == "" {
 		return "", "", p.errorf("XPST0003: expected a name")
 	}
-	if !p.lookingAt(":") || p.lookingAt("::") {
+	// A ":" that begins "::" is the axis separator and a ":" that begins ":="
+	// is the assignment token; neither can be a QName's, because an NCName
+	// starts with neither ":" nor "=". Without the second test "let $f:= ..."
+	// read "f:" as a prefix and then failed for want of a local name.
+	if !p.lookingAt(":") || p.lookingAt("::") || p.lookingAt(":=") {
 		return "", first, nil
 	}
 	p.pos++

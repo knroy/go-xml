@@ -92,7 +92,7 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 			// depth zero it may equally be the space before ":=", "external"
 			// or "{". Look past it: if what follows can continue a type, it
 			// is part of one.
-			if depth == 0 && !p.continuesType() {
+			if depth == 0 && !p.continuesType(start) {
 				goto done
 			}
 		}
@@ -112,7 +112,17 @@ done:
 // The types that carry an internal space are the function tests — "function(A)
 // as B" — and the occurrence indicators, which may be written detached. Every
 // other spelling of a type is one token.
-func (p *parser) continuesType() bool {
+//
+// start is where the type began, so that the text already scanned can be
+// consulted. The one thing it is asked is whether the whitespace follows a
+// bare "as": that "as" is a function test's, its return type has not been read
+// yet, and whatever comes next belongs to the type whatever it looks like.
+// Without that, "as function(xs:string) as xs:string" ended at the second
+// "as" and left a return type that would not compile.
+func (p *parser) continuesType(start int) bool {
+	if endsWithBareWord(p.src[start:p.pos], "as") {
+		return true
+	}
 	i := p.pos
 	for i < len(p.src) && (p.src[i] == ' ' || p.src[i] == '\t' ||
 		p.src[i] == '\r' || p.src[i] == '\n') {
@@ -126,6 +136,17 @@ func (p *parser) continuesType() bool {
 		return true
 	}
 	return strings.HasPrefix(p.src[i:], "as ") || strings.HasPrefix(p.src[i:], "as\t")
+}
+
+// endsWithBareWord reports whether src ends with word as a whole name rather
+// than as the tail of a longer one, so that "as" is found in "function(x) as"
+// and not in "xs:gas".
+func endsWithBareWord(src, word string) bool {
+	if !strings.HasSuffix(src, word) {
+		return false
+	}
+	i := len(src) - len(word)
+	return i == 0 || !isNameByte(src[i-1]) && src[i-1] != ':'
 }
 
 // compileSequenceType resolves a type against the query's static context.
