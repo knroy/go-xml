@@ -472,3 +472,75 @@ func rejectNamespaceAxis(src string) error {
 	}
 	return nil
 }
+
+// parseBracedURI reads the "Q{uri}" of an EQName, with p.pos on the "Q".
+//
+// The URI is a BracedURILiteral [117]: everything up to the closing brace,
+// with character and predefined entity references expanded, and then
+// whitespace-normalised the way §2.4.1 normalises any URI literal — leading
+// and trailing space removed and internal runs collapsed to one. So
+// "Q{ }x" and "Q{&#x20;}x" both name x in no namespace, which is what the
+// suite's eqname and eqname-entities cases assert.
+//
+// "{" and "}" may not appear in the URI unescaped: a brace would end the
+// literal, so one that is meant literally has to be written as a reference,
+// and one that arrives here any other way is a syntax error.
+func (p *parser) parseBracedURI() (string, bool, error) {
+	if !p.lookingAt("Q{") {
+		return "", false, nil
+	}
+	start := p.pos
+	p.pos += 2
+	var sb strings.Builder
+	for {
+		if p.eof() {
+			return "", true, p.errorAt(start,
+				"XPST0003: unterminated %q", "Q{")
+		}
+		switch {
+		case p.consume("}"):
+			return normalizeURILiteral(sb.String()), true, nil
+		case p.lookingAt("{"):
+			return "", true, p.errorAt(start,
+				"XQST0090: %q may not appear in a braced URI literal", "{")
+		case p.lookingAt("&"):
+			text, err := p.parseReference()
+			if err != nil {
+				return "", true, err
+			}
+			sb.WriteString(text)
+		default:
+			sb.WriteByte(p.src[p.pos])
+			p.pos++
+		}
+	}
+}
+
+// normalizeURILiteral applies the whitespace normalisation §2.4.1 gives a URI
+// literal: the value is trimmed and every internal run of whitespace becomes a
+// single space.
+func normalizeURILiteral(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// parseEQNameParts reads an EQName [112]: either "Q{uri}local" or a lexical
+// QName.
+//
+// It returns the URI directly when the name was written in braced form, so a
+// caller can skip prefix resolution for a name that has no prefix to resolve.
+// The two forms are otherwise interchangeable wherever the grammar admits an
+// EQName, which since 3.0 is everywhere a QName was admitted before.
+func (p *parser) parseEQNameParts() (prefix, local, uri string, braced bool, err error) {
+	if u, ok, err := p.parseBracedURI(); err != nil {
+		return "", "", "", true, err
+	} else if ok {
+		local = p.scanNCName()
+		if local == "" {
+			return "", "", "", true, p.errorf(
+				"XPST0003: expected a local name after %q", "Q{"+u+"}")
+		}
+		return "", local, u, true, nil
+	}
+	prefix, local, err = p.parseQName()
+	return prefix, local, "", false, err
+}

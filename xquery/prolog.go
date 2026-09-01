@@ -679,20 +679,16 @@ done:
 // as written rather than splitting here means one place decides what a name
 // in each position resolves to.
 func (p *parser) parseEQName() (prefix, local string, err error) {
-	if p.lookingAt("Q{") {
-		start := p.pos
-		end := strings.IndexByte(p.src[p.pos:], '}')
-		if end < 0 {
-			return "", "", p.errorf("XPST0003: unterminated %q", "Q{")
-		}
-		p.pos += end + 1
-		name := p.scanNCName()
-		if name == "" {
-			return "", "", p.errorf("XPST0003: expected a local name after %q", "}")
-		}
-		return "", p.src[start:p.pos], nil
+	prefix, local, uri, braced, err := p.parseEQNameParts()
+	if err != nil || !braced {
+		return prefix, local, err
 	}
-	return p.parseQName()
+	// Re-spell the scanned name in the "Q{uri}local" form resolveDeclaredName
+	// unpacks. The URI it carries is the scanned one — references expanded
+	// and whitespace normalised — rather than the source text, so a declared
+	// name written with an entity in its URI resolves to the same namespace a
+	// constructor's would.
+	return "", "Q{" + uri + "}" + local, nil
 }
 
 // resolveDeclaredName resolves the name of a declared variable or function.

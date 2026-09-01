@@ -1,6 +1,10 @@
 package xquery
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/knroy/go-xml/xdm"
+)
 
 // parseComputed parses a computed constructor if one starts here.
 //
@@ -46,7 +50,8 @@ func (p *parser) parseComputed() (node, bool, error) {
 
 	// The rest take a name, written either as a QName or as an expression in
 	// braces, and then their content in braces.
-	var namePrefix, nameLocal string
+	var namePrefix, nameLocal, nameURI string
+	var nameBraced bool
 	var nameExpr *compiledExpr
 	if p.lookingAt("{") {
 		end, err := findEnclosed(p.src, p.pos)
@@ -65,7 +70,7 @@ func (p *parser) parseComputed() (node, bool, error) {
 		}
 	} else {
 		var err error
-		namePrefix, nameLocal, err = p.parseQName()
+		namePrefix, nameLocal, nameURI, nameBraced, err = p.parseEQNameParts()
 		if err != nil {
 			// Not a computed constructor after all — "element" used as a
 			// name or a function call.
@@ -89,22 +94,34 @@ func (p *parser) parseComputed() (node, bool, error) {
 		el := &element{nameExpr: nameExpr, baseURI: p.sc.baseURI,
 			content: content}
 		if nameExpr == nil {
-			q, err := p.sc.resolveElementName(namePrefix, nameLocal)
-			if err != nil {
-				return nil, true, p.errorAt(start, "%v", err)
+			// A braced URI names the namespace outright, so there is no
+			// prefix to look up and the default element namespace does not
+			// apply: "Q{}x" is x in no namespace even under a default
+			// declaration.
+			if nameBraced {
+				el.name = xdm.QName{URI: nameURI, Local: nameLocal}
+			} else {
+				q, err := p.sc.resolveElementName(namePrefix, nameLocal)
+				if err != nil {
+					return nil, true, p.errorAt(start, "%v", err)
+				}
+				el.name = q
 			}
-			el.name = q
 		}
 		return el, true, nil
 
 	case "attribute":
 		at := &attribute{nameExpr: nameExpr, value: content}
 		if nameExpr == nil {
-			q, err := p.sc.resolveAttributeName(namePrefix, nameLocal)
-			if err != nil {
-				return nil, true, p.errorAt(start, "%v", err)
+			if nameBraced {
+				at.name = xdm.QName{URI: nameURI, Local: nameLocal}
+			} else {
+				q, err := p.sc.resolveAttributeName(namePrefix, nameLocal)
+				if err != nil {
+					return nil, true, p.errorAt(start, "%v", err)
+				}
+				at.name = q
 			}
-			at.name = q
 		}
 		return &computedAttr{attr: at}, true, nil
 

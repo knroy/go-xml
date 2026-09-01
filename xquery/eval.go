@@ -406,7 +406,17 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 		return xdm.QName{}, fmt.Errorf(
 			"XPTY0004: the name of a constructed node must be a QName or a string")
 	}
-	lex := a.String()
+	// §3.9.3.1 admits either spelling, and either may be surrounded by
+	// whitespace: the value came from an expression, not from the query text,
+	// so nothing has trimmed it yet.
+	lex := strings.TrimSpace(a.String())
+	if uri, local, ok := splitBracedName(lex); ok {
+		if !xdm.IsNCName(local) {
+			return xdm.QName{}, fmt.Errorf(
+				"XQDY0074: %q is not a lexical QName", lex)
+		}
+		return xdm.QName{URI: uri, Local: local}, nil
+	}
 	prefix, local := "", lex
 	if i := strings.IndexByte(lex, ':'); i >= 0 {
 		prefix, local = lex[:i], lex[i+1:]
@@ -426,4 +436,26 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 	}
 	return q, nil
+}
+
+// splitBracedName takes apart a name written as "Q{uri}local".
+//
+// The URI is normalised the way a braced URI literal in the query text is, so
+// that a name computed as a string and one written in the source resolve
+// alike: attribute { " Q{ }x " } and attribute Q{}x are the same attribute.
+func splitBracedName(lex string) (uri, local string, ok bool) {
+	if !strings.HasPrefix(lex, "Q{") {
+		return "", "", false
+	}
+	end := strings.IndexByte(lex, '}')
+	if end < 0 {
+		return "", "", false
+	}
+	inner := lex[2:end]
+	// A brace inside the URI is not something the literal form can spell, so
+	// a second one means this is not a braced name after all.
+	if strings.ContainsAny(inner, "{") {
+		return "", "", false
+	}
+	return normalizeURILiteral(inner), lex[end+1:], true
 }
