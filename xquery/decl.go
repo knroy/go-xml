@@ -279,6 +279,10 @@ func (p *parser) parseAnnotations() (private bool, err error) {
 		if !p.consume("%") {
 			return private, nil
 		}
+		// Annotation ::= "%" EQName ... — the grammar's whitespace rules let
+		// anything separate the two, so "% Q{...}x" is one annotation and not
+		// a syntax error.
+		p.skipSpaceAndComments()
 		prefix, local, err := p.parseEQName()
 		if err != nil {
 			return false, err
@@ -1087,4 +1091,73 @@ func collectNodeSources(n node, set map[string]bool) {
 			collectNodeSources(c, set)
 		}
 	}
+}
+
+// stripAnnotations removes the annotations an expression may carry, having
+// first checked each one.
+//
+// §3.1.7 admits an Annotation before an InlineFunctionExpr's "function", and
+// §2.5.5.4 admits a list of them before a FunctionTest's — "%eg:x function(*)"
+// is a function test that further narrows what it matches. Neither is XPath
+// syntax: XPath has no annotations at all, so an expression carrying one
+// cannot be handed over as it stands.
+//
+// They are removed rather than passed on because their only effect is the one
+// this processor does not have. §4.15 leaves the meaning of every annotation
+// but %public and %private implementation-defined, and the specification says
+// of an annotation assertion only that it "can only further restrict the set
+// of functions matched"; restricting nothing is a conforming choice, and it is
+// the one the suite's annotation-assertion cases are written to allow (they
+// assert false, which the arity and type parts of the test already give).
+// %public and %private are scoping, which a main module has no use for, and
+// mixing them in an assertion list is explicitly permitted.
+//
+// What is not implementation-defined is which names may be used at all, so
+// each annotation is still parsed and checked: a reserved namespace is
+// XQST0045 and a non-literal argument is XPST0003, exactly as in the prolog.
+func (p *parser) stripAnnotations(src string) (string, error) {
+	if !strings.Contains(src, "%") {
+		return src, nil
+	}
+	var out strings.Builder
+	copied := 0
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					// Let the expression parser report it in its own words.
+					return src, nil
+				}
+				i = end
+			}
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return src, nil
+			}
+			i = end
+		case '%':
+			// A sub-parser gives the annotation grammar, the name resolution
+			// and the reserved-namespace check from the one implementation
+			// that already has them. It reads the whole run of annotations,
+			// so "%eg:x %eg:y function(*)" costs one call.
+			sub := &parser{src: src, pos: i, sc: p.sc, version: p.version}
+			if _, err := sub.parseAnnotations(); err != nil {
+				return "", err
+			}
+			out.WriteString(src[copied:i])
+			// A space stands in for what was removed: "%eg:x(1)function(*)"
+			// is legal and the two names must not run together.
+			out.WriteByte(' ')
+			copied = sub.pos
+			i = sub.pos - 1
+		}
+	}
+	if copied == 0 {
+		return src, nil
+	}
+	out.WriteString(src[copied:])
+	return out.String(), nil
 }

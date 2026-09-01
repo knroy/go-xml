@@ -414,17 +414,23 @@ func isXMLChar(r rune) bool {
 
 // compileExpr hands an expression to xpath.
 //
-// Two things cannot simply be delegated. The namespace axis: XPath has it and
-// XQuery does not, so a query using it must be refused even though the
-// expression parser beneath would accept it. And the references XQuery's
+// Three things cannot simply be delegated. The namespace axis: XPath has it
+// and XQuery does not, so a query using it must be refused even though the
+// expression parser beneath would accept it. The annotations XQuery admits
+// before an inline function and inside a function test, which XPath has no
+// syntax for at all — see stripAnnotations. And the references XQuery's
 // StringLiteral admits and XPath's does not, which are expanded into the
 // source first — see literal.go. Everything else about the expression language
-// is shared, which is why these are the only two.
+// is shared, which is why these are the only three.
 func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
-	expanded, err := p.expandStringLiterals(src)
+	stripped, err := p.stripAnnotations(src)
+	if err != nil {
+		return nil, err
+	}
+	expanded, err := p.expandStringLiterals(stripped)
 	if err != nil {
 		return nil, err
 	}

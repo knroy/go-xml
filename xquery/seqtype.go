@@ -47,7 +47,17 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 				continue
 			}
 			depth++
-		case '[', '{':
+		case '[':
+			depth++
+		case '{':
+			// The only "{" a type contains is the one opening a braced URI
+			// literal, which is always written directly after its "Q". A bare
+			// one at depth zero is the function body that follows the return
+			// type — "as item()*{ () }" is legal, with no space to end the
+			// type on.
+			if depth == 0 && (p.pos == start || p.src[p.pos-1] != 'Q') {
+				goto done
+			}
 			depth++
 		case ')', ']':
 			if depth == 0 {
