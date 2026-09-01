@@ -95,13 +95,6 @@ func docElement(n *xdm.Node) *xdm.Node {
 // spec allows and this ignores; one in no namespace is a malformed document
 // rather than an extension, since an extension must name its own namespace.
 func applySerializationParams(root *xdm.Node, o *OutputSettings) error {
-	yes := func(v string) bool {
-		v = strings.TrimSpace(v)
-		if alias, ok := boolAliases[v]; ok {
-			v = alias
-		}
-		return v == "yes"
-	}
 	for _, p := range root.Children {
 		if p.Kind != xdm.KindElement {
 			continue
@@ -129,68 +122,110 @@ func applySerializationParams(root *xdm.Node, o *OutputSettings) error {
 		if err != nil {
 			return err
 		}
-		switch p.Name.Local {
-		case "method":
-			o.Method = strings.TrimSpace(val)
-		case "indent":
-			o.Indent = yes(val)
-		case "encoding":
-			o.Encoding = val
-		case "media-type":
-			o.MediaType = val
-		case "doctype-public":
-			o.DocTypePublic = val
-		case "doctype-system":
-			o.DocTypeSystem = val
-		case "omit-xml-declaration":
-			o.OmitXMLDecl = yes(val)
-		case "byte-order-mark":
-			o.ByteOrderMark = yes(val)
-		case "undeclare-prefixes":
-			o.UndeclarePrefixes = yes(val)
-		case "escape-uri-attributes":
-			b := yes(val)
-			o.EscapeURIAttributes = &b
-		case "include-content-type":
-			b := yes(val)
-			o.IncludeContentType = &b
-		case "allow-duplicate-names":
-			o.AllowDuplicateNames = yes(val)
-		case "json-node-output-method":
-			o.JSONNodeOutputMethod = strings.TrimSpace(val)
-		case "build-tree":
-			b := yes(val)
-			o.BuildTree = &b
-		case "item-separator":
-			v := val
-			o.ItemSeparator = &v
-		case "normalization-form":
-			o.NormalizationForm = strings.TrimSpace(val)
-		case "standalone":
-			v := strings.TrimSpace(val)
-			if v == "omit" {
-				v = ""
-			} else if alias, ok := boolAliases[v]; ok {
-				v = alias
-			}
-			o.Standalone = v
-		case "version":
-			o.Version = strings.TrimSpace(val)
-		case "html-version":
-			o.HTMLVersion = strings.TrimSpace(val)
-		case "cdata-section-elements", "suppress-indentation":
-			// Recognised. Both take a list of EQNames, which this reader has
-			// no in-scope namespaces to expand them against -- the parameter
-			// document is not the stylesheet -- so they are accepted and left
-			// to the setting the stylesheet gave rather than half-applied.
-		default:
-			// An unsupported parameter is an error rather than something to
-			// ignore: accepting one silently would let a stylesheet believe
-			// it had asked for something it did not get.
-			return fmt.Errorf(
-				"SEPM0017: serialization parameter %q is not supported",
-				p.Name.Local)
+		if err := SetSerializationParam(o, p.Name.Local, val); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// SetSerializationParam applies one serialization parameter, named by its
+// local name in the serialization namespace and carrying its lexical value,
+// to a set of output settings.
+//
+// It is the single place the parameter names of Serialization 3.1 §3 are
+// turned into fields, so that every source of them agrees: an external
+// parameter document read by applyParameterDocument, and an XQuery prolog's
+// "declare option output:*", which states the same parameters in a different
+// syntax and must not acquire a second, subtly different reading of them.
+// xsl:output is not routed through here, because its values arrive already
+// separated into attributes with their own AVT and QName-expansion rules.
+//
+// An unsupported parameter is SEPM0017 rather than something to ignore:
+// accepting one silently would let a caller believe it had asked for
+// something it did not get.
+func SetSerializationParam(o *OutputSettings, name, val string) error {
+	yes := func(v string) bool {
+		v = strings.TrimSpace(v)
+		if alias, ok := boolAliases[v]; ok {
+			v = alias
+		}
+		return v == "yes"
+	}
+	switch name {
+	case "method":
+		o.Method = strings.TrimSpace(val)
+	case "indent":
+		o.Indent = yes(val)
+	case "encoding":
+		o.Encoding = val
+	case "media-type":
+		o.MediaType = val
+	case "doctype-public":
+		o.DocTypePublic = val
+	case "doctype-system":
+		o.DocTypeSystem = val
+	case "omit-xml-declaration":
+		o.OmitXMLDecl = yes(val)
+	case "byte-order-mark":
+		o.ByteOrderMark = yes(val)
+	case "undeclare-prefixes":
+		o.UndeclarePrefixes = yes(val)
+	case "escape-uri-attributes":
+		b := yes(val)
+		o.EscapeURIAttributes = &b
+	case "include-content-type":
+		b := yes(val)
+		o.IncludeContentType = &b
+	case "allow-duplicate-names":
+		o.AllowDuplicateNames = yes(val)
+	case "json-node-output-method":
+		o.JSONNodeOutputMethod = strings.TrimSpace(val)
+	case "build-tree":
+		b := yes(val)
+		o.BuildTree = &b
+	case "item-separator":
+		v := val
+		o.ItemSeparator = &v
+	case "normalization-form":
+		o.NormalizationForm = strings.TrimSpace(val)
+	case "standalone":
+		v := strings.TrimSpace(val)
+		if v == "omit" {
+			v = ""
+		} else if alias, ok := boolAliases[v]; ok {
+			v = alias
+		}
+		o.Standalone = v
+	case "version":
+		o.Version = strings.TrimSpace(val)
+	case "html-version":
+		o.HTMLVersion = strings.TrimSpace(val)
+	case "cdata-section-elements", "suppress-indentation":
+		// Both take a list of names, and only names already in EQName
+		// notation can be read here: a lexical QName means nothing without
+		// the namespace bindings it was written under, and neither source
+		// that reaches this function carries them. A parameter document is
+		// not the stylesheet, and an XQuery prolog option is a string
+		// literal rather than markup -- so the prolog expands its list
+		// before handing it over, which is where the bindings are, and a
+		// parameter document's lexical name is left to the setting the
+		// stylesheet gave rather than half-applied.
+		names, err := parseEQNameList(val)
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			break
+		}
+		if name == "cdata-section-elements" {
+			o.CDataElements = names
+		} else {
+			o.SuppressIndentation = names
+		}
+	default:
+		return fmt.Errorf(
+			"SEPM0017: serialization parameter %q is not supported", name)
 	}
 	return nil
 }
@@ -259,6 +294,34 @@ func readParamCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 				"SEPM0018: character %q is mapped more than once", ch)
 		}
 		out[r[0]] = to
+	}
+	return out, nil
+}
+
+// parseEQNameList reads a whitespace-separated list of names in EQName
+// notation, "Q{uri}local" or a bare local name for one in no namespace.
+//
+// A lexical QName -- one with a prefix -- is skipped rather than refused. It
+// is not an error for a caller to write one; it is simply a name this reader
+// has no bindings to resolve, and the parameter is then left to whatever set
+// it before. Refusing the whole document over it would turn an unresolvable
+// name into a failure of everything around it.
+func parseEQNameList(val string) ([]xdm.QName, error) {
+	var out []xdm.QName
+	for _, n := range strings.Fields(val) {
+		if !strings.HasPrefix(n, "Q{") {
+			if strings.Contains(n, ":") {
+				continue
+			}
+			out = append(out, xdm.QName{Local: n})
+			continue
+		}
+		end := strings.IndexByte(n, '}')
+		if end < 0 {
+			return nil, fmt.Errorf(
+				"SEPM0017: %q is not a well-formed EQName", n)
+		}
+		out = append(out, xdm.QName{URI: n[2:end], Local: n[end+1:]})
 	}
 	return out, nil
 }

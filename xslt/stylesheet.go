@@ -428,7 +428,13 @@ type OutputSettings struct {
 	DocTypePublic string
 	DocTypeSystem string
 	CDataElements []xdm.QName
-	Standalone    string
+	// SuppressIndentation names the elements whose content is written with
+	// no added whitespace even when indent is yes. It is separate from
+	// CDataElements despite taking the same kind of list, because the two
+	// name elements for opposite reasons: one because their text needs no
+	// escaping, the other because their text must not be disturbed.
+	SuppressIndentation []xdm.QName
+	Standalone          string
 	// Version is xsl:output/@version. For the html method it selects the
 	// HTML version; for xml and xhtml it is the XML version.
 	Version string

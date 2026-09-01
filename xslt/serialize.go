@@ -28,18 +28,41 @@ func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializePar
 	return p
 }
 
+// Serialize writes a sequence with the serialization methods of the XSLT and
+// XQuery Serialization 3.1 specification.
+//
+// The rules it applies are the specification's, not XSLT's: sequence
+// normalisation, the xml, xhtml, html, text, json and adaptive output
+// methods, and the parameters that steer each. Nothing in it is peculiar to a
+// stylesheet. It lives in this package because this is where the serialiser
+// was written, and moving it would be a change to the packages of every
+// existing caller for no gain; but a host other than XSLT — an XQuery main
+// module stating its parameters with "declare option output:*", which is the
+// same specification's other binding — serialises its result through this
+// same function, so that the two agree by construction rather than by
+// maintenance.
+//
+// charMap is the character map applied to the finished text, or nil. An
+// OutputSettings with an empty Method asks for the default method to be
+// chosen from the sequence itself, which is what a host that stated no method
+// wants; see defaultMethod.
+func Serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
+	return serialize(w, seq, opts, charMap)
+}
+
 // serialize writes a result sequence using the given output settings.
 func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[rune]string) error {
-	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
-	// when an item separator is in force it is inserted between every pair
-	// of adjacent items in the sequence, in place of the default rules. It
-	// is done here, before anything looks at the sequence, so that the
-	// default method chosen from the result and the string joining below
-	// both see the normalised form.
-	seq = insertItemSeparator(seq, opts.ItemSeparator)
-
 	s := &serializer{w: w, opts: opts, charMap: charMap}
 	s.normalize = normalizerFor(opts.NormalizationForm)
+	if len(opts.SuppressIndentation) > 0 {
+		s.noIndentElems = make(map[xdm.QName]bool, len(opts.SuppressIndentation))
+		for _, q := range opts.SuppressIndentation {
+			// URI and Local only, for the same reason as cdataElems below:
+			// a QName compares as a whole struct, and the prefix a result
+			// element happens to carry is not part of its identity.
+			s.noIndentElems[xdm.QName{URI: q.URI, Local: q.Local}] = true
+		}
+	}
 	if len(opts.CDataElements) > 0 {
 		s.cdataElems = make(map[xdm.QName]bool, len(opts.CDataElements))
 		for _, q := range opts.CDataElements {
@@ -118,6 +141,24 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		s.writeString(out)
 		return s.err
 	}
+
+	// Sequence normalisation, step 3 (XSLT/XQuery Serialization 3.1, 2):
+	// when an item separator is in force it is inserted between every pair
+	// of adjacent items in the sequence, in place of the default rules.
+	//
+	// It happens after the json and adaptive methods have been dispatched
+	// above, because sequence normalisation does not apply to either of them
+	// -- §2 applies it to "the XML, XHTML, HTML and Text output methods"
+	// only. Both of those methods separate items themselves, adaptive with
+	// this very parameter (§10, defaulting to a newline), so inserting the
+	// separator here as well wrote it twice: the sequence (1,2,3) with
+	// item-separator="-" came out as "1---2---3", the separator once as an
+	// inserted text item and once again as the join between items.
+	//
+	// The default method is chosen above this rather than below it for the
+	// same reason it is chosen at all: it depends on the first item of the
+	// result, which separator insertion does not change.
+	seq = insertItemSeparator(seq, opts.ItemSeparator)
 
 	// Parameter conflicts are diagnosed before a byte is written. The
 	// alternative — discovering halfway through that the requested encoding
@@ -298,6 +339,10 @@ type serializer struct {
 	inCData bool
 	// cdataElems is that list, as a set keyed by expanded name.
 	cdataElems map[xdm.QName]bool
+	// noIndentElems is suppress-indentation as a set keyed by expanded name:
+	// the elements whose content is written exactly as it stands even when
+	// indent is yes.
+	noIndentElems map[xdm.QName]bool
 	// normalize applies the Unicode normalisation named by
 	// normalization-form, or is nil when none was asked for.
 	normalize func(string) string
@@ -633,7 +678,21 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// Indentation is suppressed for mixed content: adding whitespace around
 	// text would change the element's string value, which for a validator's
 	// output is a correctness issue rather than a cosmetic one.
-	indentChildren := s.opts.Indent && !hasTextChild(n)
+	//
+	// It is suppressed for the same reason, said explicitly rather than
+	// inferred, when the element is named by suppress-indentation or carries
+	// xml:space="preserve". Both are a statement that this element's content
+	// is significant to the character: Serialization 3.1 §5 gives the
+	// serialiser licence to add whitespace "only where the effect is not
+	// significant", and these two are how a caller says where that is. An
+	// <li> full of <p> elements has no text child at all, so the mixed-content
+	// rule alone would have re-indented it and the suppress-indentation
+	// parameter would have meant nothing.
+	//
+	// Suppression covers the whole subtree, not this element alone: the
+	// point is that the content comes out as it went in, and re-indenting a
+	// grandchild disturbs it exactly as much as re-indenting a child.
+	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n)
 	for _, c := range n.Children {
 		if indentChildren {
 			s.node(c, depth+1)
@@ -715,6 +774,24 @@ func (s *serializer) indent(depth int) {
 		return
 	}
 	s.writeString("\n" + strings.Repeat("  ", depth))
+}
+
+// suppressed reports whether an element's content is written with no added
+// whitespace: either it is named by suppress-indentation, or it declares
+// xml:space="preserve".
+//
+// xml:space is honoured because a result carrying it says, in the document's
+// own vocabulary, that its whitespace is data. Ignoring it while writing the
+// attribute out would produce a document that contradicts itself: it would
+// tell a reader to preserve whitespace the serialiser had just invented.
+func (s *serializer) suppressed(n *xdm.Node) bool {
+	if s.noIndentElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
+		return true
+	}
+	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
+		return true
+	}
+	return false
 }
 
 func hasTextChild(n *xdm.Node) bool {
