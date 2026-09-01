@@ -4,6 +4,72 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## v1.1.0 — 2026-09-01
+
+Additive throughout: nothing exported by v1.0.0 was removed or changed shape,
+so a v1.0 program compiles and behaves the same.
+
+### Conformance
+
+|  | v1.0.0 | v1.1.0 |
+|---|---|---|
+| XPath 2.0 (QT3) | 99.99% | **100%** |
+| XPath 3.0 (QT3) | — | **100%** |
+| XPath 3.1 (QT3) | — | **100%** |
+| XSLT 2.0 | 99.63% | **99.85%** |
+| XSLT 3.0 | — | **99.78%** |
+| XSD 1.0 schema / instance | 99.56% / 99.88% | **99.86% / 99.88%** |
+| XSD 1.1 schema / instance | 99.18% / 99.89% | **99.88% / 99.89%** |
+| RELAX NG (spectest) | 100% | **100%** |
+
+**XSLT 3.0 is the headline.** v1.0.0 shipped XSLT 2.0; this release adds
+packages (`xsl:package`, `use-package`, `accept`, `expose`, `override`),
+accumulators, `xsl:evaluate`, `xsl:iterate`, `xsl:merge`, `xsl:try`, maps and
+arrays, higher-order functions, JSON, and the 3.0 serialization methods.
+Streaming is not implemented, and its 2,716 cases are out of scope rather than
+failing.
+
+**Schema validity was the weak half and is no longer.** XSD 1.1 went from
+99.18% to 99.88% — roughly a hundred and thirty missing schema-validity rules,
+written one at a time and each measured against both versions so that no
+agreement count ever fell.
+
+**126 disagreements remain and none is a known defect in this engine.** Every
+one is a suite defect, an expectation the W3C has itself challenged, a network
+fetch, a vendor extension, or a Unicode snapshot that has moved.
+[docs/conformance-gaps.md](docs/conformance-gaps.md) names each case and says
+which; two open questions are recorded there as open rather than settled.
+
+### Resolving schemaLocation without the network
+
+Schemas name their imports as absolute URLs, and those fetches are unreliable
+by design — the W3C throttles them. The W3C's own copy of the XSLT 3.0 schema
+in the XSLT test suite was edited in 2021 to use a relative path, the comment
+there giving the reason as "W3C web site throttling".
+
+`xsd.CatalogResolver` answers a `schemaLocation` from memory, keyed by what a
+reference *means* rather than how it is spelled: one entry answers the `TR/`
+URL, the `2001/` URL, a bare relative path, and an `xs:import` that gives only
+a namespace. A miss is an error rather than a request, which is what makes it
+usable in a server. `xsd.W3CEntries` states the aliasing as data.
+
+The schemas themselves are in a companion module, `w3cschemas`, because they
+are W3C documents under W3C terms rather than MIT.
+
+### Also
+
+* **`xsl:import-schema` can now read a schema carrying a `DOCTYPE`**, via
+  `CompileOptions.SchemaParseOptions`. It still refuses one by default. The
+  W3C's schema for schemas declares its entities that way, so without this the
+  XSLT 3.0 schema could not be loaded at all.
+* **An imported schema is read under the XSD version it declares.** A document
+  carrying `vc:minVersion="1.1"` read as 1.0 is conditionally excluded in its
+  entirety — silently, since that is what the attribute asks a 1.0 processor to
+  do. The XSLT 3.0 schema is such a document, and all 81 of its element
+  declarations were being dropped without an error.
+* **`fn:load-xquery-module` reports the absent XQuery processor uniformly.**
+  It has no processor to defer to, so every code it can raise describes that.
+
 ## v1.0.0 — 2026-08-24
 
 ### Security: three bounds that were not bounding
