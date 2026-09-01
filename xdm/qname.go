@@ -164,3 +164,15 @@ const (
 	// that a stylesheet using them is visibly engine-specific.
 	NSGoxslt = "https://github.com/knroy/go-xml"
 )
+
+// IsNameStartChar reports whether r may begin an XML Name.
+//
+// Exported for the sibling packages that parse names out of source rather than
+// out of markup: an XQuery direct element constructor spells a QName in the
+// query text, and needs the same production the XML parser uses rather than an
+// approximation of it.
+func IsNameStartChar(r rune) bool { return isNameStartRune(r) }
+
+// IsNameChar reports whether r may appear in an XML Name after the first
+// character. See IsNameStartChar for why this is exported.
+func IsNameChar(r rune) bool { return isNameRune(r) }
