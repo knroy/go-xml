@@ -87,6 +87,14 @@ func LookupDynamic(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 // was, which matters because the XSLT layer implements it: a library supplying
 // xsl:function declarations neither knows nor needs to know about versions.
 func lookupFor(ctx *Context, name xdm.QName, arity int) (Function, bool) {
+	// A context may legitimately carry no library at all — NewContext takes a
+	// nil one. FuncCall.Eval tests for that before it gets here, but a named
+	// function reference reaches this directly, so the test has to be here
+	// too: "not found" turns into the XPST0017 every caller already raises,
+	// where the dereference would be a panic in a library call.
+	if ctx == nil || ctx.Funcs == nil {
+		return Function{}, false
+	}
 	fn, ok := ctx.Funcs.Lookup(name, arity)
 	if !ok {
 		// fn:concat is the one genuinely variadic function in the library.
