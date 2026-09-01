@@ -848,10 +848,15 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			// components may already be present, or the resolver may
 			// know the namespace.
 			rc, resolved, err := a.opts.Resolver.Resolve(namespace, "", doc.baseURI)
+			// The interface does not forbid returning a reader alongside an
+			// error, so close before testing rather than after, the way
+			// LoadFile does.
+			if rc != nil {
+				defer rc.Close()
+			}
 			if err != nil || rc == nil {
 				return
 			}
-			defer rc.Close()
 			a.parseAndQueue(el, rc, resolved, namespace, doc, isInclude, redefining)
 			return
 		}
@@ -861,6 +866,10 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 	}
 
 	rc, resolved, err := a.opts.Resolver.Resolve(namespace, location, doc.baseURI)
+	// As above: a reader returned alongside an error still has to be closed.
+	if rc != nil {
+		defer rc.Close()
+	}
 	if err != nil || rc == nil {
 		// A redefine that redefines nothing costs nothing when its
 		// location cannot be resolved — anyURI_a001 says of exactly
@@ -909,7 +918,6 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 			"cannot resolve schemaLocation %q: %v", location, err))
 		return
 	}
-	defer rc.Close()
 
 	a.parseAndQueue(el, rc, resolved, namespace, doc, isInclude, redefining)
 }

@@ -132,8 +132,50 @@ Two fixes were tried and both reverted:
 The two pull in opposite directions because the ambiguity is real. Which scope
 repeats is only knowable from the rest of the input, which is a backtracking or
 subset-construction question, not something a per-edge compile-time label can
-answer. Fixing it properly means replacing the matcher — a deliberate project
-weighed against the 99.8% that already holds.
+answer.
+
+A third attempt did land: bracketing the repetition count into a low and a
+high reading, which carries `particlesZ040` in both versions and costs
+nothing elsewhere. It does not make the matcher exact, and the section below
+is the part it does not reach.
+
+### Nested occurrence bounds are wrong in both directions
+
+Not a suite case — found by differential fuzzing against a brute-force
+reference, and invisible to both W3C suites.
+
+A repeated group whose *only* child is itself repeating is decided wrongly in
+both directions. For `<sequence minOccurs="5" maxOccurs="5">` over
+`<element c minOccurs="2" maxOccurs="2"/>`, the only valid document is ten
+`c`, and it is **refused**; five `c`, which no reading admits, is **accepted**.
+For `<sequence 2..2>` over `c{2,4}` the valid range is four to eight, and the
+answers are inverted across the whole sweep.
+
+The cause is the bracket itself: `counterAllows` consults the low count and
+`countersSatisfied` the high one, so a document is admitted when *different*
+readings satisfy each bound though no single consistent reading satisfies
+both. When the group holds one particle its FIRST and LAST positions coincide,
+which is what makes the wraparound edge indistinguishable from the inner
+element's own repeat edge, so the bracket cannot be narrowed locally.
+
+The false-accept direction matters more than the arithmetic: a `minOccurs`
+floor is silently not enforced, so a schema believed to require a minimum
+count does not require it.
+
+A group with two or more distinct child names is decided correctly, which is
+why 39,353 XSD 1.0 agreements and 41,525 on 1.1 do not cover it. Verified
+present at `06e8a75`, before the bracket existed, so this is long-standing
+rather than a regression — the bracket's commit message documents the
+false-reject half and not the false-accept half.
+
+Fixing it means tracking the set of reachable count-vectors, bounded by
+`maxOccurs` so it stays small, and accepting only if some vector satisfies
+every bound — the "searched together rather than bracketed apart" the third
+attempt named and did not do. `TestNestedOccursBoundsAreWrong` in
+`xsd/occurs_nested_test.go` records the case and is skipped.
+
+Fixing the matcher properly means replacing it — a deliberate project weighed
+against the 99.8% that already holds.
 
 ### An optional all group is a disjunction, not a scaled budget
 
@@ -594,16 +636,16 @@ in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
 
 ## What 100% would take
 
-Measured 2026-08-21 with both suites present. The short answer: **XPath can
-reach 100% only by leaving RE2, and XSD cannot reach 100% at all** — part of
-the remaining gap is the suite disagreeing with itself.
+Measured at `6fa4150` with both suites present. The short answer: **XPath now
+reaches 100% at all three versions, and XSD cannot reach 100% at all** — part
+of the remaining gap is the suite disagreeing with itself.
 
 ### The ceiling that is not ours
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
-| disagreements | 251 | 374 |
-| of those, W3C-flagged `queried` or tied to an open bug | 48 | 47 |
+| disagreements | 51 | 47 |
+| of those, W3C-flagged `queried` or tied to an open bug | 45 | 44 |
 
 Those are cases where the W3C's own metadata records a dispute about the
 expected result. Nineteen of them are one cause: bug 4113, the `\p{Lu}`,
@@ -612,9 +654,10 @@ as U+1D7A8 moved between general categories. Passing them means freezing a
 Unicode 3.1 table and being wrong about modern text. **They are a reason to
 stop short of 100%, not a defect to fix.**
 
-So the reachable ceiling is roughly **99.5% on 1.0 and 99.1% on 1.1**, not 100.
+So the ceiling is **99.87% on 1.0 and 99.89% on 1.1**, not 100 — and both are
+where the engine already stands, since none of what remains is fixable.
 
-### XPath: one case, refused by default
+### XPath: no failures; one case refused by default until the harness enabled it
 
 `fn-matches-51` names a group whose width can vary *and* places the
 backreference mid-pattern. Under the default engine both are refused: RE2
