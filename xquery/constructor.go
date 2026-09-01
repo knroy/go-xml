@@ -30,6 +30,16 @@ type literalText struct{ text string }
 type enclosed struct {
 	expr  *compiledExpr
 	items []node
+
+	// braced records that this node is a whole "{ ... }" written in element
+	// content, rather than one comma-separated item of one.
+	//
+	// The two are the same type because "{1,2,3}" parses to a wrapper holding
+	// three item nodes, each of which is also an enclosed. Only the wrapper
+	// ends an atomic run: the three items are one value and are separated
+	// from each other, while the wrapper's value is separated from whatever
+	// the next pair of braces yields by nothing at all.
+	braced bool
 }
 
 // element is a direct or computed element constructor.
@@ -62,6 +72,12 @@ type attribute struct {
 	name     xdm.QName
 	nameExpr *compiledExpr
 	value    []node
+
+	// computed marks an attribute written as "attribute a { ... }", whose
+	// value is one enclosed expression, rather than a direct constructor's
+	// a="..." whose value is a run of alternating parts. The two join their
+	// pieces differently, and only the spelling says which rule applies.
+	computed bool
 }
 
 // comment, pi and text are the remaining node kinds a constructor can make.
@@ -76,7 +92,25 @@ type pi struct {
 type textNode struct{ content []node }
 
 // document is "document { ... }".
-type document struct{ content []node }
+// document is "document { ... }". Its baseURI is the static base URI in
+// force where the constructor was written: §3.9.3.1 gives a constructed
+// document node the constructor's base URI, unlike a comment, PI or text
+// node, which get none at all.
+type document struct {
+	content []node
+	baseURI string
+}
+
+// namespaceNode is "namespace prefix { uri }", §3.9.3.7.
+//
+// Its name is a prefix rather than a QName — the empty one binds the default
+// namespace — so it holds a bare string where the other constructors hold an
+// xdm.QName.
+type namespaceNode struct {
+	prefix     string
+	prefixExpr *compiledExpr
+	content    []node
+}
 
 // parseDirElement parses a direct element constructor, with p.pos on the "<".
 //
@@ -464,7 +498,7 @@ func (p *parser) parseEnclosed() (node, error) {
 	p.pos = end + 1
 	if strings.TrimSpace(body) == "" {
 		// "{}" is an empty sequence, which contributes nothing.
-		return &enclosed{}, nil
+		return &enclosed{braced: true}, nil
 	}
 	// The body is a query body rather than a bare expression: it may itself
 	// hold constructors, as in <a>{<b/>}</a>.
@@ -473,7 +507,7 @@ func (p *parser) parseEnclosed() (node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &enclosed{items: items}, nil
+	return &enclosed{items: items, braced: true}, nil
 }
 
 // compileContent compiles the parts of an attribute value into nodes.

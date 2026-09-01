@@ -114,6 +114,22 @@ func (p *parser) parseErrorNameTest() (errorNameTest, error) {
 		}
 		return errorNameTest{anyURI: true, local: local}, nil
 	}
+	// "Q{uri}local" and "Q{uri}*" name the namespace outright, which is the
+	// only way to write a catch for an error in a namespace the query has
+	// bound no prefix to.
+	if uri, ok, err := p.parseBracedURI(); err != nil {
+		return errorNameTest{}, err
+	} else if ok {
+		if p.consume("*") {
+			return errorNameTest{uri: uri, anyLocal: true}, nil
+		}
+		local := p.scanNCName()
+		if local == "" {
+			return errorNameTest{}, p.errorf(
+				"XPST0003: expected a local name or %q after %q", "*", "Q{"+uri+"}")
+		}
+		return errorNameTest{uri: uri, local: local}, nil
+	}
 	prefix := p.scanNCName()
 	if prefix == "" {
 		return errorNameTest{}, p.errorf(

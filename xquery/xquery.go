@@ -320,6 +320,8 @@ func (p *parser) parseItem() (node, error) {
 	// clause but "for" and "let", and a type declaration on a bound variable.
 	// A plain "for $x in E return F" would compile either way; taking it here
 	// keeps one implementation rather than two that must agree.
+	p.skipSpaceAndComments()
+	start := p.pos
 	n, err := p.parseBareItem()
 	if err != nil {
 		return nil, err
@@ -328,7 +330,56 @@ func (p *parser) parseItem() (node, error) {
 	// "(for $x in E return F)[1]". The construct is parsed here and the step
 	// compiled by xpath over its value, because the two halves need different
 	// parsers and neither can read the other's.
-	return p.withTrailingPath(n)
+	n, err = p.withTrailingPath(n)
+	if err != nil {
+		return nil, err
+	}
+	// An operator may follow it instead — "<a>10000</a> = 10000". That does
+	// not bind tightly enough for withTrailingPath's rewrite, so the item is
+	// re-read from its start with every XQuery-only primary in it lifted into
+	// a variable, and xpath compiles the operators over those. See operand.go.
+	if op, ok, err := p.retryAsOperandSubst(start); ok || err != nil {
+		return op, err
+	}
+	return n, nil
+}
+
+// retryAsOperandSubst re-reads the item beginning at start as an expression
+// whose XQuery-only primaries are substituted, when what follows the item is
+// an operator rather than the end of it.
+//
+// The item is over at a top-level comma, at a closing bracket this did not
+// open, and at a clause keyword — the same boundary scanExprSingleSource
+// draws, and the one every caller of parseItem relies on. Anything else after
+// it is an operator whose left operand is what was just parsed, so the item
+// was not the whole expression and has to be read again as one.
+func (p *parser) retryAsOperandSubst(start int) (node, bool, error) {
+	save := p.pos
+	p.skipSpaceAndComments()
+	if p.eof() {
+		p.pos = save
+		return nil, false, nil
+	}
+	switch p.src[p.pos] {
+	case ',', ')', ']', '}':
+		p.pos = save
+		return nil, false, nil
+	}
+	p.pos = start
+	src, err := p.scanExprSingleSource()
+	if err != nil || strings.TrimSpace(src) == "" {
+		p.pos = save
+		return nil, false, nil
+	}
+	end := p.pos
+	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	items, ok, err := sub.parseOperandSubst()
+	if err != nil || !ok {
+		p.pos = save
+		return nil, false, err
+	}
+	p.pos = end
+	return &enclosed{items: items}, true, nil
 }
 
 // parseBareItem parses one item without the path that may follow it.

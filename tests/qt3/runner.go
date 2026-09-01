@@ -254,19 +254,37 @@ func xpathVersion(v TargetVersion) xpath.Version {
 // and later, so it is in scope for both targets; "XP30" and "XP30+" are in
 // scope only for a 3.0 run.
 //
-// An XQuery run is scoped by the "XQ" alternatives instead, and admits the
-// "XP" ones too: every XPath 3.1 expression is a legal XQuery.
+// An XQuery run is scoped by the "XQ" alternatives, and by the "XP" ones only
+// when the case names no "XQ" alternative at all is it out of scope.
+//
+// Every XPath 3.1 expression is legal XQuery, but it does not always mean the
+// same thing, and the suite marks the cases where it does not by naming one
+// language and not the other. A string literal is the clearest: "&amp;" is
+// five characters in XPath and one in XQuery, because §3.1.1 gives XQuery's
+// StringLiteral the entity references XPath's lacks. prod-Literal pairs the
+// two readings — Literals056 is "XQ10+" and asserts "&", Literals056a is
+// "XP20+" and asserts "&amp;" — so running the XPath one under an XQuery
+// target asserts the XPath answer against an XQuery processor and guarantees a
+// failure. This is the same pairing the exact "XP20" and "XP30" values below
+// mark between XPath versions, one language apart instead of one version.
+//
+// Only a case naming no "XQ" alternative is dropped. The 300-odd cases marked
+// "XP20+ XQ10+" and the like are in scope as before: naming both is the
+// suite's way of saying the two languages agree.
 
 func specInScope(v string, target TargetVersion) bool {
-	for _, alt := range strings.Fields(v) {
-		if target == XQuery31 {
+	if target == XQuery31 {
+		for _, alt := range strings.Fields(v) {
 			switch alt {
-			case "XQ10", "XQ10+", "XQ30", "XQ30+", "XQ31", "XQ31+",
-				"XP20", "XP20+", "XP30", "XP30+", "XP31", "XP31+":
+			case "XQ10", "XQ10+", "XQ30", "XQ30+", "XQ31", "XQ31+":
 				return true
 			}
-			continue
 		}
+		// No "XQ" alternative: the case asserts the XPath reading, which an
+		// XQuery processor is right not to give.
+		return false
+	}
+	for _, alt := range strings.Fields(v) {
 		switch alt {
 		case "XP20":
 			// Exactly 2.0, with no "+". A handful of cases are written this
@@ -423,7 +441,7 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 // the run: a crash is the most severe kind of conformance failure, and losing
 // the other 28,000 results to it would hide everything behind the first one.
 func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
-	rep = Report{Set: ts.Name, Case: tc.Name, Expr: strings.TrimSpace(tc.Test)}
+	rep = Report{Set: ts.Name, Case: tc.Name, Expr: strings.TrimSpace(tc.Test.Query)}
 	defer func() {
 		if p := recover(); p != nil {
 			rep.Outcome = Fail
@@ -582,7 +600,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// the parameters the query itself stated, and Eval hands back only
 		// the sequence.
 		var q *xquery.Query
-		q, res.err = xquery.Compile(tc.Test, xqueryOptions(ns))
+		q, res.err = xquery.Compile(tc.Test.Query, xqueryOptions(ns))
 		if res.err == nil {
 			res.serialParams = q.SerializationOptions()
 			// §25.1: "if no document can be found at the specified location,
@@ -598,7 +616,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			res.seq, res.err = q.Eval(ctx)
 		}
 	} else {
-		res.seq, res.err = xpath.Eval(tc.Test, ctx, ns)
+		res.seq, res.err = xpath.Eval(tc.Test.Query, ctx, ns)
 	}
 
 	want, err := ParseAssert(tc.Result.Raw)

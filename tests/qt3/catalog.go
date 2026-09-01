@@ -161,8 +161,19 @@ type TestCase struct {
 	Description  string        `xml:"description"`
 	Environments []Environment `xml:"environment"`
 	Dependencies []Dependency  `xml:"dependency"`
-	Test         string        `xml:"test"`
-	Modules      []struct {
+	// Test carries the <test> element both ways it can be written: the query
+	// inline as character data, or a "file" attribute naming a file beside
+	// the test set that holds it. LoadTestSet reads the file form in, so
+	// everything downstream reads Test.Query whichever way the case was
+	// written.
+	//
+	// One field rather than two because the decoder refuses to map two struct
+	// fields onto the same element name.
+	Test struct {
+		Query string `xml:",chardata"`
+		File  string `xml:"file,attr"`
+	} `xml:"test"`
+	Modules []struct {
 		URI  string `xml:"uri,attr"`
 		File string `xml:"file,attr"`
 	} `xml:"module"`
@@ -282,6 +293,23 @@ func LoadTestSet(root, file string) (*TestSet, error) {
 		return nil, err
 	}
 	ts.Dir = filepath.Dir(file)
+	// Pull in the cases whose query lives in its own file. Without this they
+	// ran as the empty query, which fails every assertion the case makes and
+	// counted as an engine failure rather than a harness gap — the
+	// whitespace-sensitive constructor cases are written this way precisely
+	// because their exact bytes matter, and inlining them in XML would not
+	// preserve those bytes.
+	for i := range ts.Cases {
+		if ts.Cases[i].Test.File == "" {
+			continue
+		}
+		q, err := os.ReadFile(
+			filepath.Join(root, ts.Dir, ts.Cases[i].Test.File))
+		if err != nil {
+			return nil, fmt.Errorf("test-case %s: %v", ts.Cases[i].Name, err)
+		}
+		ts.Cases[i].Test.Query = string(q)
+	}
 	return &ts, nil
 }
 

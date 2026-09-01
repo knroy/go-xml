@@ -96,6 +96,33 @@ func (p *parser) parseProlog() error {
 
 		what := p.peekKeyword()
 		var err error
+		if what == "%" || (what == "" && p.lookingAt("%")) {
+			// §4 AnnotatedDecl ::= "declare" Annotation* (VarDecl |
+			// FunctionDecl): the annotations bind to *either* declaration, so
+			// what follows them decides which one this is. Routing every
+			// annotated declaration to parseFunctionDecl made
+			// "declare %eg:sequential variable $foo := 'bar'" fail with
+			// "expected function", though the grammar admits it and the
+			// annotation is one nothing here interprets.
+			var private bool
+			if private, err = p.parseAnnotations(); err == nil {
+				p.skipSpaceAndComments()
+				inSecond = true
+				if p.peekKeyword() == "variable" {
+					err = p.parseVarDecl()
+				} else {
+					err = p.parseFunctionDeclBody(private)
+				}
+			}
+			if err != nil {
+				return err
+			}
+			p.skipSpaceAndComments()
+			if !p.consume(";") {
+				return p.errorf("XPST0003: expected %q after a declaration", ";")
+			}
+			continue
+		}
 		switch what {
 		case "namespace":
 			err = p.parseNamespaceDecl(once, &inSecond)
@@ -116,7 +143,7 @@ func (p *parser) parseProlog() error {
 		case "variable":
 			inSecond = true
 			err = p.parseVarDecl()
-		case "function", "%":
+		case "function":
 			inSecond = true
 			err = p.parseFunctionDecl()
 		case "option":
@@ -125,11 +152,8 @@ func (p *parser) parseProlog() error {
 		case "decimal-format":
 			err = p.parseDecimalFormatDecl(false)
 		case "":
-			if p.lookingAt("%") {
-				inSecond = true
-				err = p.parseFunctionDecl()
-				break
-			}
+			// An annotation is handled above, so nothing that begins no
+			// keyword can start a declaration here.
 			p.pos = save
 			return nil
 		default:
@@ -796,20 +820,16 @@ done:
 // as written rather than splitting here means one place decides what a name
 // in each position resolves to.
 func (p *parser) parseEQName() (prefix, local string, err error) {
-	if p.lookingAt("Q{") {
-		start := p.pos
-		end := strings.IndexByte(p.src[p.pos:], '}')
-		if end < 0 {
-			return "", "", p.errorf("XPST0003: unterminated %q", "Q{")
-		}
-		p.pos += end + 1
-		name := p.scanNCName()
-		if name == "" {
-			return "", "", p.errorf("XPST0003: expected a local name after %q", "}")
-		}
-		return "", p.src[start:p.pos], nil
+	prefix, local, uri, braced, err := p.parseEQNameParts()
+	if err != nil || !braced {
+		return prefix, local, err
 	}
-	return p.parseQName()
+	// Re-spell the scanned name in the "Q{uri}local" form resolveDeclaredName
+	// unpacks. The URI it carries is the scanned one — references expanded
+	// and whitespace normalised — rather than the source text, so a declared
+	// name written with an entity in its URI resolves to the same namespace a
+	// constructor's would.
+	return "", "Q{" + uri + "}" + local, nil
 }
 
 // resolveDeclaredName resolves the name of a declared variable or function.
