@@ -1,7 +1,7 @@
 # W3C conformance: the remaining gaps
 
 Every figure here comes from a full run of the suite it names, measured at
-commit `56543f9` with `tests/check.sh`. Nothing is estimated.
+commit `6c036b5` with `tests/check.sh`. Nothing is estimated.
 
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
@@ -10,7 +10,7 @@ commit `56543f9` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,623 | 8,600 | 99.73% | **23** | 2 | 1 | **20** | 99.76% |
+| **xslt** | W3C XSLT 3.0 | 8,623 | 8,600 | 99.73% | **23** | 2 | 1 | **20** | 99.77% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,351 | 99.87% | **53** | 3 | 0 | **50** | 99.88% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,523 | 99.88% | **49** | 2 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -30,17 +30,28 @@ judgement: `accepted` marks a settled expectation, while `queried` and
 only 3 of 53 XSD 1.0 disagreements and 2 of 49 in 1.1 count as work. The
 remainder that the field marks `accepted` are suite defects proved below.
 
-This is down from 345 at commit `69c53cf`, in two rounds of agents working in
-isolated worktrees. The first cleared 103 cases: 10 of 10 in the
+This is down from 345 at commit `69c53cf`, in three rounds of agents working
+in isolated worktrees. The first cleared 103 cases: 10 of 10 in the
 `xsl:override` cluster, 9 of 12 across `package`/`accept`/`expose`/
 `use-package`, and 80 XSD schema-validity disagreements. The second cleared a
 further 59 — 23 XSLT 3.0, 10 XSD 1.0, 26 XSD 1.1 — and took XPath 2.0 and 3.0
-to a clean 100%.
+to a clean 100%. The third cleared 49 more, almost all of them XSD
+schema-validity rules, and took XPath 3.1 to 100% as well.
 
-Both rounds also moved cases the other way, into "cannot be fixed": the regex
-and validation-ordering items in round 1, and `accumulator-038`,
-`json-to-xml-048`, `validation-0201` and `validation-0006` in round 2, each
-settled by reading the spec or the test rather than by changing the engine.
+Every round also moved cases the other way, into "cannot be fixed", and those
+matter as much as the fixes because they are what stops the remainder being
+mistaken for a backlog. Round 1 settled the regex and validation-ordering
+items; round 2 `accumulator-038`, `json-to-xml-048`, `validation-0201` and
+`validation-0006`; round 3 the four `notQName` cases, `particlesZ001`,
+`particlesZ033_g`, `simple093` and `sequence-0132`. Each was settled by
+reading the spec or the test rather than by changing the engine, and several
+by measuring what the "fix" would actually cost — the `notQName` reading is
+right about the suite and still loses 150 agreements.
+
+The reason the fixable count fell faster than the failure count is that the
+work went where the cases were: XSD schema validity moved from 99.78%/99.68%
+to 99.85%/99.88% across the three rounds, which is most of what was ever
+tractable.
 
 ## How to read the verdicts
 
@@ -135,7 +146,7 @@ three failures involves `\w`, `\d` or `\c` membership. Only these three
 2012-era XSLT 2.0 cases disagree, each exactly where Unicode moved underneath
 them.
 
-## XSLT 3.0 — 29 failures
+## XSLT 3.0 — 23 failures
 
 ### Package composition — 5
 
@@ -191,16 +202,14 @@ is its own investigation.
 | `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
-**XSLT 3.0 ceiling: 8,605 / 8,623 = 99.79%.**
+**XSLT 3.0 ceiling: 8,603 / 8,623 = 99.77%.**
 
-The nineteen that cannot be fixed: `accept-913`, `package-200`,
-`use-package-003`, `package-021err`, `package-022err`,
-`package-version-011`, `unparsed-text-2003`, `streamable-141`, `base-uri-052`,
-`docbook-001`, `docbook-004`, `catalog-006b`, the three `regex-syntax`
-ambiguous-dash cases, `si-copy-117`, `si-copy-of-117` and `import-schema-137`.
-
-`accumulator-038`, the last of them, was settled in round 2: its `main`
-template lacks `visibility="public"`, so a transform may not start at it.
+The twenty that cannot be fixed: `accept-913`, `package-200`,
+`use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
+`unparsed-text-2003`, `streamable-141`, `base-uri-052`, `docbook-001`,
+`docbook-004`, `catalog-006b`, the three `regex-syntax` ambiguous-dash cases,
+`si-copy-117`, `si-copy-of-117`, `import-schema-137`, `accumulator-038` and
+`validation-0201`.
 
 ---
 
@@ -223,24 +232,36 @@ them separately for that reason.
 
 | | Total | `accepted` (ours) | `queried`/`stable` (ceiling) |
 |---|---:|---:|---:|
-| XSD 1.0 | 63 | **13** | 50 |
-| XSD 1.1 | 79 | **30** | 49 |
+| XSD 1.0 | 53 | **8** | 45 |
+| XSD 1.1 | 49 | **5** | 44 |
 
-An agent cleared **80** of these — 26 on 1.0 and 54 on 1.1 — by implementing
-seventeen missing schema-validity rules, without a single agreement count
-falling. The largest were `explicitTimezone` (which had no schema-level
-constraints at all, 9 cases), occurrence attributes on any child of a named
-group (8), a type-cycle check that excused a type whose base is itself (6),
-and substitution-group type derivation (5).
+The `accepted` column is not the same as the fixable column at the top of this
+file: five of those thirteen are settled below as suite defects rather than as
+work — the four `notQName` cases and `particlesZ001` on 1.0,
+`particlesZ033_g`, `simple093` and `iri-001` on 1.1.
+
+Three rounds of agents cleared about **130** of these by implementing missing
+schema-validity rules, without a single agreement count falling. Round 1
+contributed 80 — `explicitTimezone` (which had no schema-level constraints at
+all, 9 cases), occurrence attributes on any child of a named group (8), a
+type-cycle check that excused a type whose base is itself (6), and
+substitution-group type derivation (5). Round 3 contributed most of the rest,
+concentrated in `xs:all` and wildcard restriction and in open content; four of
+its rules were settled outright by the XSD 1.1 schema for schemas the suite
+itself ships, which pins the occurrence attributes those elements admit.
+
+That is why schema validity, long the weaker half of these numbers, is now the
+stronger: **99.85%** on 1.0 and **99.88%** on 1.1, against 99.87% and 99.89%
+for instance validation.
 
 ## What the ceiling consists of
 
 | Set | Cases | Status | Why |
 |---|---:|---|---|
 | `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
-| `MS-Schema`, `MS-SimpleType`, `MS-Element`, `MS-DataTypes`, others | ~31–33 | `queried`/`stable` + bug | Assorted challenged expectations across the Microsoft-contributed sets. |
+| `MS-Schema`, `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, others | 22–23 | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
 
-**Not implementable: 54 (XSD 1.0) and 49 (XSD 1.1).**
+**Not implementable: 50 (XSD 1.0) and 47 (XSD 1.1).**
 
 ### The `notQName` cases are a suite omission, not a gap
 
@@ -272,33 +293,26 @@ suite and still a net loss of 150, so it is not taken.
 
 ## What is genuinely ours
 
-What remains is a different shape from what was cleared. The bulk of the
-`SFALSEACCEPT` backlog is gone; thirteen of the forty-three stragglers are the
-*opposite* problem — `particlesZ001`, `s3_10_6ii01`/`ii02` and
-`s3_10_1ii08`/`ii09` on 1.0, and `mgO029`, `all218`, `all237`, `wild049` and
-`wild050` on 1.1, are places where the content-model and wildcard restriction
-tables are too **strict**. Loosening one risks re-admitting a false accept
-elsewhere, so each has to be measured against both versions.
+Five cases, and they are the residue rather than a cluster.
 
-The 1.1 `SFALSEACCEPT` remainder concentrates in three areas: the `All` group
-(`all009`, `all308`, `all313`), open content (`open036`, `open046`, `open048`)
-and wildcards (`wild057`, `wild069`).
+| Case | Version | Kind | What it needs |
+|---|---|---|---|
+| `MS-Attribute2006-07-15/attP031` | 1.0 | `IFALSEREJECT` | A `use="prohibited"` attribute carrying `fixed`. Under 1.0 a prohibited use is absent from `{attribute uses}`, so `cvc-complex-type.3.2.2` rejects the instance — which is the letter of the spec and what Xerces does. The suite expects valid. |
+| `MS-Particles2006-07-15/particlesZ040` | both | `IFALSEREJECT` | A `<sequence maxOccurs="3">` of three *optional* particles. Because every member is optional, every position is both a first and a last, so an ordinary forward step reads as a restart and the outer counter exhausts inside the first iteration. Diagnosed precisely; the obvious fix gains this and loses six. |
+| `MS-Wildcards2006-07-15/wildZ013` | 1.0 | `SFALSEACCEPT` | Attribute-wildcard intersection under errata E1-10. The expectation carries `bug15629` and a prior entry citing a different bug, so it has been revised twice — worth confirming before the work. |
+| `MS-Particles2006-07-15/particlesK006` | 1.1 | `SFALSEACCEPT` | Particle derivation. |
 
-Concentrated by area:
+`particlesZ040` is the one worth attention: it is a real bug in the
+content-model automaton, it fails on **both** versions, and its cause is
+understood. `counterAllows` suppresses outer-counter charging through
+`innerRepeats` while `advanceCounters` uses a bare `isScopeRestart` and has no
+such guard, so the two disagree about what a restart is. Reconciling them
+gets closer but not all the way; the structural fix — recording forward
+sequence edges as continuations — also suppresses restarts that legitimately
+must happen when a sequence wraps, which under-counts `minOccurs` and costs
+six other cases. A correct fix needs to separate those at runtime.
 
-| Area | XSD 1.0 | XSD 1.1 |
-|---|---:|---:|
-| `MS-Particles` — particle/content-model derivation | 10 | 16 |
-| `MS-Additional` | 7 | 7 |
-| `Simple` — simple-type facets | — | 9 |
-| `Zone`, `All`, `Override`, `Open`, `Wild` — 1.1-specific | — | 26 |
-| `MS-SimpleType`, `MS-IdentityConstraint`, `MS-Attribute` | 9 | — |
-
-All **implementable**. The 1.1-specific clusters (`Override`, `Open`, `Wild`,
-`All`) are the newer features — open content, wildcards, `xs:override`,
-relaxed `xs:all` — where the rules are both newer and less exercised.
-
-**XSD ceilings: 1.0 — 39,352 / 39,404 = 99.87%. 1.1 — 41,516 / 41,570 = 99.87%.**
+**XSD ceilings: 1.0 — 39,354 / 39,404 = 99.87%. 1.1 — 41,525 / 41,572 = 99.89%.**
 
 ---
 
@@ -350,11 +364,15 @@ cannot show is *why* the 126 unfixable cases are unfixable:
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
-No suite reaches 100%, and the reason is consistent across all of them: a
-residue of cases encodes a suite defect, a W3C-challenged expectation, a
-network fetch, a vendor extension, a missing XQuery processor, or a Unicode
-snapshot that has since moved. Those are not deferred work — passing them would
-mean shipping something less correct.
+Three suites do reach 100% — XPath at all three versions, and RELAX NG. None
+of the others will, and the reason is consistent across them: a residue of
+cases encodes a suite defect, a W3C-challenged expectation, a network fetch, a
+vendor extension, or a Unicode snapshot that has since moved. Those are not
+deferred work — passing them would mean shipping something less correct.
+
+The seven that *are* work are listed above by name. That number is small
+enough now that the honest summary is not "here is the backlog" but "here is
+what is left, and here is why the rest is not a backlog".
 
 ## Related
 
