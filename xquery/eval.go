@@ -185,6 +185,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		if err != nil {
 			return err
 		}
+		if err := checkElementName(name); err != nil {
+			return err
+		}
 	}
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
@@ -225,6 +228,9 @@ func (a *attribute) eval(out *builderRef, ctx *evalContext) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := checkAttributeName(name); err != nil {
+		return err
 	}
 	var sb strings.Builder
 	for _, part := range a.value {
@@ -458,4 +464,61 @@ func splitBracedName(lex string) (uri, local string, ok bool) {
 		return "", "", false
 	}
 	return normalizeURILiteral(inner), lex[end+1:], true
+}
+
+// checkAttributeName refuses the names §3.9.3.3 reserves for namespace
+// declarations, which an attribute node may not carry.
+//
+// XQDY0044 covers four cases, and they are four spellings of one rule: an
+// attribute may not say anything about namespace bindings. "xmlns" and any
+// name in the xmlns namespace are declarations rather than attributes. The
+// xml prefix and the XML namespace are bound to each other permanently, so a
+// name that pairs either with anything else would be asserting a binding that
+// is not the processor's to change.
+//
+// The check is here rather than at parse time because a computed name is not
+// known until the constructor runs, and a direct constructor cannot produce
+// any of these anyway: scanAttributes routes xmlns and xmlns:p to the
+// namespace-declaration path before a name is ever resolved.
+func checkAttributeName(name xdm.QName) error {
+	switch {
+	case name.URI == "" && name.Local == "xmlns":
+		return fmt.Errorf(
+			"XQDY0044: an attribute may not be named %q", "xmlns")
+	case name.URI == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0044: an attribute may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xml" && name.URI != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0044: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case name.Prefix != "" && name.Prefix != "xml" && name.URI == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0044: the namespace %q may only be named by the prefix %q",
+			xdm.NSXML, "xml")
+	}
+	return nil
+}
+
+// checkElementName is the same rule for an element name, which §3.9.3.1
+// reports as XQDY0096.
+//
+// An element differs from an attribute in one place: it has no unprefixed
+// "xmlns" case, because an element named xmlns in no namespace is a legal
+// element. What is reserved is the namespace, not the local name.
+func checkElementName(name xdm.QName) error {
+	switch {
+	case name.URI == xdm.NSXMLNS:
+		return fmt.Errorf(
+			"XQDY0096: an element may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xml" && name.URI != xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0096: the prefix %q is bound to %q and may not be rebound",
+			"xml", xdm.NSXML)
+	case name.Prefix != "" && name.Prefix != "xml" && name.URI == xdm.NSXML:
+		return fmt.Errorf(
+			"XQDY0096: the namespace %q may only be named by the prefix %q",
+			xdm.NSXML, "xml")
+	}
+	return nil
 }
