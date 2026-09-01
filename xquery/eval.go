@@ -200,6 +200,7 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 	return nil
 }
 
+
 func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	name := n.name
 	if n.nameExpr != nil {
@@ -234,6 +235,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 		sub.b.NoteDeclared(ns.prefix, ns.uri)
 	}
+	if err := declareOwnName(sub.b); err != nil {
+		return err
+	}
 	for _, a := range n.attrs {
 		if err := a.eval(sub, ctx); err != nil {
 			return err
@@ -266,6 +270,66 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 	}
 	return nil
+}
+
+
+// declareOwnName gives the element under construction a namespace node for
+// the binding its own name needs.
+//
+// §3.9.1.1's namespace fixup: "for each element node in the constructed
+// content, a namespace binding must be present for the prefix and namespace
+// URI of the element name". The element's name carries a prefix and a URI
+// resolved from the static context at the constructor, but that context is
+// not the constructed tree, so nothing has yet put the binding *on the node*.
+// Without it in-scope-prefixes() answered one short and the element serialised
+// as <foo:bar> with no xmlns:foo at all — not a document any parser reads back.
+//
+// Only the element's own name is fixed up here. The static context typically
+// binds a good deal more — the eight predeclared prefixes, plus whatever the
+// prolog declared — and §3.9.1.1 does not put those on the node:
+// Constr-inscope-13 declares foo, never uses it, and expects a bare <new/>,
+// while K2-DirectConElemNamespace-58 writes <xs:element/> and requires the
+// xmlns:xs the *name* needs. A prefix reaches the result by being used, not by
+// being in scope. Attributes are fixed up separately, as they are added.
+//
+// A binding an ancestor already supplies is left alone, so that a tree of
+// elements in one namespace does not carry a redundant declaration on every
+// node.
+func declareOwnName(b *xdmbuild.Builder) error {
+	el := b.Open()
+	if el == nil {
+		return nil
+	}
+	// The xml prefix is bound everywhere by XML Names itself and is never
+	// declared; K2-DirectConElemNamespace-58 writes <xml:element/> and
+	// expects no declaration on it.
+	if el.Name.URI == xdm.NSXML {
+		return nil
+	}
+	if el.Name.URI == "" {
+		// An element in no namespace under an ancestor with a default
+		// namespace has to undeclare it, or reading the result back puts the
+		// element in the ancestor's namespace — a different element from the
+		// one constructed. K2-DirectConElemNamespace-52 is exactly this:
+		// a default namespace on <a>, <e xmlns=""/> inside it.
+		//
+		// The node is written straight onto the element rather than through
+		// the builder's AddNamespace, whose rule against declaring a default
+		// namespace on an element in no namespace (XQDY0102) is about
+		// *binding* one and would reject the undeclaration that is precisely
+		// right here.
+		if el.Name.Prefix != "" {
+			return nil
+		}
+		if uri, ok := el.LookupPrefix(""); ok && uri != "" {
+			el.AddNamespace("", "")
+		}
+		return nil
+	}
+	if uri, ok := el.LookupPrefix(el.Name.Prefix); ok && uri == el.Name.URI {
+		return nil
+	}
+	return b.AddNamespace(el.Name.Prefix, el.Name.URI)
 }
 
 // inheritedBase returns the base URI in force at a node, which is the nearest
