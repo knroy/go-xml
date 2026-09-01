@@ -13,6 +13,9 @@
 # so they are not redistributed here. The tests that use them skip cleanly
 # when the directory is absent; see "Testing" in the README for how to point
 # the suite at your own corpus.
+<<<<<<< HEAD
+/testdata
+=======
 # Both spellings on purpose. "/testdata/" matches a directory and nothing
 # else, so a *symlink* named testdata is not ignored by it — which is how a
 # worktree's symlink to the real corpora was once committed, and then written
@@ -20,3 +23,4 @@
 # whatever the name refers to.
 /testdata
 /testdata/
+>>>>>>> mainline

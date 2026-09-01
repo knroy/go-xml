@@ -279,10 +279,43 @@ func (p *parser) parseQueryBody() ([]node, error) {
 // parseItem parses one item of a query body: a constructor, or an expression
 // handed to xpath.
 func (p *parser) parseItem() (node, error) {
-	// The XQuery-only expression forms are checked first, because each begins
-	// with a keyword or a delimiter that the expression parser beneath would
-	// read as something else: "try" as a function call, "``[" as two empty
-	// string literals and a predicate.
+	// FLWOR and the quantified expressions are read here rather than handed
+	// to xpath, because both admit syntax XPath's grammar does not: every
+	// clause but "for" and "let", and a type declaration on a bound variable.
+	// A plain "for $x in E return F" would compile either way; taking it here
+	// keeps one implementation rather than two that must agree.
+	n, err := p.parseBareItem()
+	if err != nil {
+		return nil, err
+	}
+	// A path step or a predicate may follow the construct — "<e/>/name()",
+	// "(for $x in E return F)[1]". The construct is parsed here and the step
+	// compiled by xpath over its value, because the two halves need different
+	// parsers and neither can read the other's.
+	return p.withTrailingPath(n)
+}
+
+// parseBareItem parses one item without the path that may follow it.
+func (p *parser) parseBareItem() (node, error) {
+	if p.looksLikeFLWOR() {
+		f, err := p.parseFLWOR()
+		if err != nil {
+			return nil, err
+		}
+		return &flworNode{f}, nil
+	}
+	if p.looksLikeQuantified() {
+		q, err := p.parseQuantified()
+		if err != nil {
+			return nil, err
+		}
+		return &quantifiedNode{q}, nil
+	}
+	// The other XQuery-only forms — try/catch, switch, typeswitch, ordered
+	// and unordered, the extension expression and the string constructor —
+	// each begin with a keyword or a delimiter the expression parser beneath
+	// would read as something else: "try" as a function call, "``[" as two
+	// empty string literals and a predicate.
 	if n, ok, err := p.parseXQueryOnly(); ok || err != nil {
 		return n, err
 	}
@@ -328,12 +361,16 @@ func (p *parser) parseExprItem() (node, error) {
 				continue
 			}
 			depth++
-		case ')':
+		case ')', ']', '}':
+			if depth == 0 {
+				// A closing bracket this scan never opened ends the item: it
+				// belongs to the parenthesis or the call this expression is
+				// an argument of.
+				goto done
+			}
 			depth--
 		case '[', '{':
 			depth++
-		case ']', '}':
-			depth--
 		case ',':
 			if depth == 0 {
 				goto done
@@ -346,7 +383,22 @@ done:
 	if src == "" {
 		return nil, p.errorf("XPST0003: expected an expression")
 	}
-	return p.compileMaybeLifting(src)
+	if needsXQueryParser(src) {
+		// A constructor or a FLWOR somewhere inside the expression, rather
+		// than at its start: "(<a/>, <b/>)" and "count(for $x in E group by
+		// $k return $x)" are both expressions xpath cannot read whole, and
+		// neither begins with the construct that makes it so.
+		c, err := p.parseFromSource(src)
+		if err != nil {
+			return nil, err
+		}
+		return &enclosed{items: c.items}, nil
+	}
+	c, err := p.compileExpr(src)
+	if err != nil {
+		return nil, err
+	}
+	return &enclosed{expr: c}, nil
 }
 
 // skipSpaceAndComments consumes whitespace and XQuery comments, which may
@@ -385,13 +437,10 @@ func (p *parser) refuseUnimplemented() error {
 			"XQST0059: a library module needs module resolution, " +
 				"which is not implemented yet")
 	}
-	for _, kw := range []string{"for ", "let ", "some ", "every "} {
-		if hasKeywordPrefix(p.src[p.pos:], kw) {
-			return p.errorf(
-				"XPST0003: %q is not implemented yet",
-				strings.TrimSpace(kw))
-		}
-	}
+	// Nothing else is refused by name any more: FLWOR, the quantified
+	// expressions, the prolog and the XQuery-only expression forms are all
+	// implemented, so a query using one gets a real error from the construct
+	// that is actually wrong rather than a blanket refusal.
 	return nil
 }
 

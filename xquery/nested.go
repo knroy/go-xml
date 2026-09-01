@@ -1,55 +1,197 @@
 package xquery
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
 
-// One of the XQuery-only expression forms nested inside an XPath expression.
-//
-// "(typeswitch ($x) case ... default return ...) eq 1" and
-// "upper-case(typeswitch (...) ...)" are both ordinary XQuery, and neither can
-// reach the parser in exprsingle.go, because the whole run of text is handed
-// to xpath as a substring and the construct is not at its head.
-//
-// The fix has to keep the architecture: xpath must not learn the syntax, and
-// the XQuery parser must not learn XPath's. So the construct is lifted out of
-// the substring before it is handed over, and a variable reference is put in
-// its place. "(typeswitch ($x) ...) eq 1" becomes "($xq:lifted-0) eq 1", with
-// the typeswitch parsed here and bound to that variable when the expression
-// runs. Everything around it is still XPath and is still parsed by the
-// conformant parser.
-//
-// The substitution is sound because what is lifted is a whole ExprSingle
-// enclosed in parentheses, whose value the surrounding expression uses exactly
-// as it would a variable's: an ExprSingle in parentheses has no focus of its
-// own to lose, and a variable reference is a PrimaryExpr, which is what a
-// parenthesised expression is too. What it does *not* survive is a construct
-// that reads the focus set by something outside it — "a/(typeswitch
-// (self::node()) ...)" — because the lifted expression is evaluated before the
-// step establishes the focus. Those are left where they are, unlifted, and
-// fail as they did; there are two of them in the suite.
+// maxNestDepth bounds how deeply expressions this parser reads itself may
+// nest, so that a query written to nest them without limit is refused rather
+// than exhausting the goroutine stack.
+const maxNestDepth = 200
 
-// liftPrefix names the variables this rewriting introduces. The namespace is
-// this package's own so that nothing a query can write collides with it: a
-// query cannot bind a prefix to it, because it never needs to.
-const liftNS = "urn:x-go-xml:xquery:lifted"
+// parseNestedExpr parses an expression this parser has to read itself,
+// returning the items its value is the concatenation of.
+//
+// Only three shapes are unwrapped, and between them they cover every way a
+// constructor or a FLWOR reaches an expression that is otherwise ordinary
+// XPath: the construct itself; a parenthesised expression, "(<a/>, <b/>)";
+// and a function call's arguments, "count(for $x in E group by $k return
+// $x)". The last two put the syntax xpath cannot read inside brackets this
+// parser can find, and the items inside are parsed by the ordinary item
+// parser, which recurses back here for anything nested further.
+//
+// Anything else is a construct this package does not take apart — an operator
+// with a constructor as an operand, say — and is refused by name rather than
+// mis-parsed. Refusing rather than guessing is also what makes the recursion
+// terminate: every path that recurses does so on a strictly shorter
+// substring.
+func (p *parser) parseNestedExpr() ([]node, error) {
+	if p.depth++; p.depth > maxNestDepth {
+		return nil, p.errorf(
+			"XPST0003: expressions nested more than %d deep", maxNestDepth)
+	}
+	defer func() { p.depth-- }()
 
-// lifted is one construct lifted out of an expression.
-type lifted struct {
-	name xdm.QName
-	node node
+	p.skipSpaceAndComments()
+	if p.startsConstructor() || p.looksLikeFLWOR() || p.looksLikeQuantified() {
+		n, err := p.parseItem()
+		if err != nil {
+			return nil, err
+		}
+		p.skipSpaceAndComments()
+		if p.eof() {
+			return []node{n}, nil
+		}
+		// A path or a predicate over the construct: "<e/>/(for $i in
+		// self::node() return $i)" is the mirror of the parenthesised case,
+		// with the syntax xpath cannot read on the left of the "/" rather
+		// than inside brackets, and it is rewritten the same way.
+		return p.pathOver([]node{n})
+	}
+	if p.lookingAt("(") {
+		p.pos++
+		items, err := p.parseParenBody()
+		if err != nil {
+			return nil, err
+		}
+		p.skipSpaceAndComments()
+		if p.eof() {
+			return items, nil
+		}
+		// Something follows the parentheses — "/name()", "[1]", "instance of
+		// ...". The value of the parenthesised part is computed here and the
+		// rest of the expression compiled by xpath over a variable bound to
+		// it, which keeps the path semantics, the predicates and the operator
+		// precedence where they belong. "(for $x in E return F)/g" is the
+		// idiom the suite leans on hardest, and it cannot be read any other
+		// way: the parenthesised half needs this parser and the half after it
+		// needs the other one.
+		return p.pathOver(items)
+	}
+	if items, ok, err := p.parseNestedCall(); ok || err != nil {
+		return items, err
+	}
+	return nil, p.errorf(
+		"XPST0003: a constructor or FLWOR expression cannot appear here")
 }
 
-// liftedExpr is an xpath expression with lifted constructs bound around it.
-type liftedExpr struct {
-	compiled *compiledExpr
-	lifted   []lifted
+// parseParenBody reads the comma-separated items of a parenthesised
+// expression, up to and including its ")".
+func (p *parser) parseParenBody() ([]node, error) {
+	var out []node
+	p.skipSpaceAndComments()
+	if p.consume(")") {
+		return out, nil
+	}
+	for {
+		n, err := p.parseItem()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+		p.skipSpaceAndComments()
+		if p.consume(",") {
+			continue
+		}
+		if p.consume(")") {
+			return out, nil
+		}
+		return nil, p.errorf("XPST0003: expected %q or %q", ",", ")")
+	}
 }
 
-func (n *liftedExpr) eval(out *builderRef, ctx *evalContext) error {
+// parseNestedCall parses a function call whose arguments this parser has to
+// read, rewriting it as a call over values it has already computed.
+//
+// The call is not evaluated here: the arguments are parsed into nodes, and
+// the call itself is compiled by xpath over variables the evaluation binds
+// those values to. So the function library, the argument conversion rules and
+// the arity resolution all stay where they are, and the only thing this does
+// is get the arguments past a parser that could not have read them.
+func (p *parser) parseNestedCall() ([]node, bool, error) {
+	save := p.pos
+	prefix, local, err := p.parseQName()
+	if err != nil {
+		p.pos = save
+		return nil, false, nil
+	}
+	p.skipSpaceAndComments()
+	if !p.consume("(") {
+		p.pos = save
+		return nil, false, nil
+	}
+	args, err := p.parseParenBody()
+	if err != nil {
+		return nil, false, err
+	}
+	p.skipSpaceAndComments()
+	if !p.eof() {
+		// Something follows the call — a predicate, an operator — which this
+		// package does not take apart.
+		p.pos = save
+		return nil, false, nil
+	}
+	c, err := p.compileCallOverArgs(prefix, local, len(args))
+	if err != nil {
+		return nil, false, err
+	}
+	return []node{&nestedCall{fn: c, args: args}}, true, nil
+}
+
+// compileCallOverArgs compiles "f($a0, ..., $an)", so that a call whose
+// arguments this parser had to read is still resolved and applied by xpath.
+func (p *parser) compileCallOverArgs(prefix, local string, n int) (*compiledExpr, error) {
+	var sb strings.Builder
+	if prefix != "" {
+		sb.WriteString(prefix)
+		sb.WriteByte(':')
+	}
+	sb.WriteString(local)
+	sb.WriteByte('(')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("$local:" + callArgLocal(i))
+	}
+	sb.WriteByte(')')
+	return p.compileExpr(sb.String())
+}
+
+// callArgLocal names the variable one parsed argument is bound to. The
+// reserved local-function namespace keeps it from colliding with anything the
+// query itself binds.
+func callArgLocal(i int) string { return "xq-arg" + strconv.Itoa(i) }
+
+// nestedCall is a function call whose arguments this package had to parse
+// itself, because one of them held a constructor or a FLWOR expression.
+//
+// The call is still xpath's: fn is "f($a0, ..., $an)" compiled by that
+// parser, and evaluating it binds each parsed argument's value to the
+// matching variable first. Nothing about how the function is resolved or how
+// its arguments are converted changes — only where the argument values came
+// from.
+type nestedCall struct {
+	fn   *compiledExpr
+	args []node
+}
+
+func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	xp := ctx.xp
+	for i, a := range n.args {
+		v, err := (&enclosed{items: []node{a}}).sequence(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: callArgLocal(i)}, v)
+	}
+	return n.fn.compiled.Eval(xp)
+}
+
+func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 	seq, err := n.sequence(ctx)
 	if err != nil {
 		return err
@@ -57,177 +199,99 @@ func (n *liftedExpr) eval(out *builderRef, ctx *evalContext) error {
 	return appendSequence(out, seq)
 }
 
-// sequence evaluates the lifted constructs, binds each to its variable, and
-// then evaluates the rewritten expression against that.
+// pathOver rewrites "E S" — a value this parser had to read, followed by a
+// path step or a predicate — so that xpath evaluates the step.
 //
-// The bindings are made in order and each is visible to the next, which costs
-// nothing and is what a reader would expect; in practice a lifted construct
-// never refers to another, because they were siblings in the original text.
-func (n *liftedExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
-	for _, l := range n.lifted {
-		seq, err := asEnclosed(l.node).sequence(&evalContext{xp: xp, sc: ctx.sc})
-		if err != nil {
-			return nil, err
-		}
-		xp = xp.WithVar(l.name, seq)
+// The value is computed here and the rest of the expression compiled over a
+// variable bound to it, which keeps the path semantics, the predicates and
+// the document ordering where they belong. "(for $x in E return F)/g" is the
+// idiom the suite leans on hardest, and it cannot be read any other way: the
+// left half needs this parser and the right half needs the other one.
+func (p *parser) pathOver(value []node) ([]node, error) {
+	rest := p.src[p.pos:]
+	if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "[") {
+		// Only a step or a predicate binds tightly enough for the rewrite to
+		// preserve precedence. An operator would not: in "(...) + 1 * 2" the
+		// substitution is still correct, and in "-(...)" and wherever the
+		// left operand is not the whole of what was parsed it is not
+		// obviously so. Guessing wrong there changes an answer silently,
+		// which is worse than refusing.
+		return nil, p.errorf("XPST0003: unexpected %q", firstToken(rest))
 	}
-	return n.compiled.compiled.Eval(xp)
-}
-
-// compileMaybeLifting compiles an expression, first lifting out any
-// XQuery-only construct nested inside it.
-//
-// It is compileExpr's wrapper rather than a change to it, so that the ordinary
-// path — an expression with none of these in it, which is nearly all of them —
-// does one scan and is otherwise untouched.
-func (p *parser) compileMaybeLifting(src string) (node, error) {
-	rewritten, lifts, err := p.liftNested(src)
+	c, err := p.compileExpr("$local:" + parenVar + rest)
 	if err != nil {
 		return nil, err
 	}
-	c, err := p.compileExpr(rewritten)
+	p.pos = len(p.src)
+	return []node{&parenPath{value: value, rest: c}}, nil
+}
+
+// withTrailingPath wraps n in the path step or predicate that follows it,
+// when one does.
+//
+// It is a no-op wherever nothing follows, which is the ordinary case: an item
+// of a query body, an argument of a call, an element of a parenthesised
+// sequence. Where something does follow, only a step or a predicate is taken
+// — see pathOver for why an operator is not — and anything else is left for
+// the caller to report against its own expectations.
+func (p *parser) withTrailingPath(n node) (node, error) {
+	save := p.pos
+	p.skipSpaceAndComments()
+	if p.eof() || (p.src[p.pos] != '/' && p.src[p.pos] != '[') {
+		p.pos = save
+		return n, nil
+	}
+	src, err := p.scanTrailingPath()
 	if err != nil {
 		return nil, err
 	}
-	if len(lifts) == 0 {
-		return &enclosed{expr: c}, nil
+	c, err := p.compileExpr("$local:" + parenVar + src)
+	if err != nil {
+		return nil, err
 	}
-	return &liftedExpr{compiled: c, lifted: lifts}, nil
+	return &parenPath{value: []node{n}, rest: c}, nil
 }
 
-// liftNested finds every parenthesised XQuery-only construct in src, parses it,
-// and replaces its text with a variable reference.
+// scanTrailingPath returns the source of the steps and predicates following
+// the cursor, stopping where the expression they are part of does.
 //
-// Only a construct that fills a whole parenthesised group is lifted. That is
-// the shape the suite writes and it is the one that is safe: the group's
-// boundaries say exactly where the construct ends, so nothing has to guess
-// where an ExprSingle stops inside text this package is not parsing.
-func (p *parser) liftNested(src string) (string, []lifted, error) {
-	if !mightNest(src) {
-		return src, nil, nil
-	}
-	var out strings.Builder
-	var lifts []lifted
-	i := 0
-	for i < len(src) {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
-			if err != nil {
-				// Let the expression parser report it in context.
-				return src, nil, nil
-			}
-			out.WriteString(src[i : end+1])
-			i = end + 1
-			continue
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return src, nil, nil
-				}
-				out.WriteString(src[i : end+1])
-				i = end + 1
-				continue
-			}
-			end, err := findParen(src, i)
-			if err != nil {
-				return src, nil, nil
-			}
-			inner := src[i+1 : end]
-			n, ok, err := p.liftOne(inner)
-			if err != nil {
-				return "", nil, err
-			}
-			if !ok {
-				// Not a construct, but it may hold one: descend, so that
-				// "upper-case((typeswitch ...))" is reached.
-				sub, subLifts, err := p.liftNested(inner)
-				if err != nil {
-					return "", nil, err
-				}
-				lifts = append(lifts, subLifts...)
-				out.WriteString("(" + sub + ")")
-				i = end + 1
-				continue
-			}
-			name := xdm.QName{URI: liftNS,
-				Local: fmt.Sprintf("lifted-%d", len(lifts))}
-			lifts = append(lifts, lifted{name: name, node: n})
-			// Q{uri}local is the one spelling of a variable name that needs
-			// no prefix binding, so the rewritten text is self-contained.
-			out.WriteString("($Q{" + liftNS + "}" + name.Local + ")")
-			i = end + 1
-			continue
-		}
-		out.WriteByte(src[i])
-		i++
-	}
-	return out.String(), lifts, nil
+// It is the same scan an ExprSingle gets, restricted to what may follow a
+// primary: it stops at a comma or a closing bracket it did not open, and at
+// a clause keyword, because a path may be the last thing in a clause.
+func (p *parser) scanTrailingPath() (string, error) {
+	return p.scanExprSingleSource()
 }
 
-// liftOne parses inner as a whole XQuery-only construct, reporting whether it
-// was one.
+// parenVar names the variable a parenthesised expression's value is bound to
+// when a step or a predicate follows it. The reserved local-function
+// namespace keeps it from colliding with anything the query binds.
+const parenVar = "xq-paren"
+
+// parenPath is a parenthesised expression this package had to read, followed
+// by a path step or a predicate that xpath reads.
 //
-// The whole of inner must be the construct: "typeswitch (1) case ... default
-// return 2" is lifted, and "1 + 2" is not, but so is "typeswitch (...) ..., 3",
-// which is a sequence whose first item is one. The trailing text is what
-// distinguishes them, and a construct that does not consume all of inner is
-// left alone rather than half-lifted.
-func (p *parser) liftOne(inner string) (node, bool, error) {
-	sub := &parser{src: inner, sc: p.sc, version: p.version}
-	sub.skipSpaceAndComments()
-	if !sub.startsXQueryOnly() {
-		return nil, false, nil
-	}
-	n, ok, err := sub.parseXQueryOnly()
-	if err != nil || !ok {
-		return nil, false, err
-	}
-	sub.skipSpaceAndComments()
-	if !sub.eof() {
-		// Something followed it inside the same parentheses. Rather than
-		// guess, leave the whole group to the expression parser, which will
-		// report the syntax error against the text as written.
-		return nil, false, nil
-	}
-	return n, true, nil
+// The two halves are evaluated in that order: the parenthesised part produces
+// a value, and the rest of the expression is applied to it through a variable.
+// Splitting it this way is what lets "(for $x in E return F)/g" work without
+// either parser having to understand the other's half.
+type parenPath struct {
+	value []node
+	rest  *compiledExpr
 }
 
-// startsXQueryOnly reports whether one of the XQuery-only forms begins here,
-// without parsing it.
-//
-// It is the cheap half of the test parseXQueryOnly makes, used so that
-// liftOne does not build a sub-parser for every parenthesised group in every
-// expression in the query.
-func (p *parser) startsXQueryOnly() bool {
-	if p.lookingAt("``[") || p.lookingAt("(#") {
-		return true
+func (n *parenPath) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	v, err := (&enclosed{items: n.value}).sequence(ctx)
+	if err != nil {
+		return nil, err
 	}
-	switch p.peekKeyword() {
-	case "try", "switch", "typeswitch", "ordered", "unordered", "validate":
-		return true
-	}
-	return false
+	return n.rest.compiled.Eval(
+		ctx.xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
 }
 
-// mightNest reports whether src could hold one of these constructs at all.
-//
-// Every expression in the query passes through here, so the common answer has
-// to be cheap: a single scan for the keywords, before any parenthesis matching
-// or sub-parsing happens. A false positive costs one wasted walk; a false
-// negative is impossible, because a construct cannot be written without its
-// keyword.
-func mightNest(src string) bool {
-	if strings.Contains(src, "``[") || strings.Contains(src, "(#") {
-		return true
+func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
+	seq, err := n.sequence(ctx)
+	if err != nil {
+		return err
 	}
-	for _, kw := range []string{"try", "switch", "typeswitch", "ordered",
-		"unordered", "validate"} {
-		if strings.Contains(src, kw) {
-			return true
-		}
-	}
-	return false
+	return appendSequence(out, seq)
 }

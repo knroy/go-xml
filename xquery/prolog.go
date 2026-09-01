@@ -651,8 +651,8 @@ func (p *parser) scanDeclExpr() (string, error) {
 			// attribute — is not a terminator. Skipping the whole
 			// constructor is the only reliable way past it, and the
 			// constructor parser is the only thing that knows where it ends.
-			if end, ok := p.skipDirConstructor(); ok {
-				p.pos = end
+			// skipDirConstructor advances past the constructor itself.
+			if err := p.skipDirConstructor(); err == nil {
 				continue
 			}
 		case ';':
@@ -670,38 +670,6 @@ done:
 	return src, nil
 }
 
-// skipDirConstructor advances past a direct constructor beginning at p.pos,
-// returning the offset just after it.
-//
-// It parses rather than scans, because a constructor's extent is exactly as
-// hard to find as its meaning: "<a>{ '</a>' }</a>" ends at the second "</a>",
-// and no amount of angle-bracket counting finds that. The parsed result is
-// thrown away — this is called from a scan whose only question is where the
-// construct ends — and the position is restored, so a syntax error inside it
-// is left for the real parse to report in context.
-func (p *parser) skipDirConstructor() (int, bool) {
-	if !p.lookingAt("<") {
-		return 0, false
-	}
-	save := p.pos
-	defer func() { p.pos = save }()
-	// A "<" that is the less-than operator is not a constructor, and the
-	// constructor parser will fail on it; falling through then treats it as
-	// the ordinary character it is.
-	var err error
-	switch {
-	case p.lookingAt("<!--"):
-		_, err = p.parseDirComment()
-	case p.lookingAt("<?"):
-		_, err = p.parseDirPI()
-	default:
-		_, err = p.parseDirElement()
-	}
-	if err != nil {
-		return 0, false
-	}
-	return p.pos, true
-}
 
 // parseEQName reads an EQName: a QName or a braced URI literal with a local
 // name, "Q{http://example.com/}local".

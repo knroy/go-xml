@@ -194,29 +194,6 @@ done:
 	return st, nil
 }
 
-// parseVarName reads "$" QName and resolves it.
-//
-// A variable name is resolved without the default element namespace, which is
-// what "$x" means everywhere in both languages: an unprefixed variable is in
-// no namespace whatever "declare default element namespace" said.
-func (p *parser) parseVarName() (xdm.QName, error) {
-	if !p.consume("$") {
-		return xdm.QName{}, p.errorf("XPST0003: expected %q", "$")
-	}
-	prefix, local, err := p.parseQName()
-	if err != nil {
-		return xdm.QName{}, err
-	}
-	if prefix == "" {
-		return xdm.QName{Local: local}, nil
-	}
-	uri, ok := p.sc.ResolvePrefix(prefix)
-	if !ok {
-		return xdm.QName{}, p.errorf(
-			"XPST0081: the prefix %q is not bound to a namespace", prefix)
-	}
-	return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
-}
 
 func (n *typeswitchExpr) eval(out *builderRef, ctx *evalContext) error {
 	seq, err := n.run(ctx)

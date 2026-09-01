@@ -26,6 +26,16 @@ type parser struct {
 	// expression language is XPath 3.1's.
 	version xpath.Version
 
+	// lastType is the source of the SequenceType parseOptionalType last read,
+	// empty when the declaration was absent. It is a field rather than a
+	// return value because "as" is optional in four places and threading an
+	// (string, bool, error) through each of them buys nothing.
+	lastType string
+
+	// depth bounds how deeply FLWOR expressions may nest, so that a query
+	// written to nest them thousands deep cannot exhaust the goroutine stack
+	// before the parser can report it.
+	depth int
 	// declaredNS records the prefixes this module's prolog has bound, so that
 	// a second "declare namespace" for one can be reported as XQST0033. The
 	// static context's map cannot answer it: the five predeclared prefixes
@@ -53,6 +63,32 @@ type parser struct {
 type compiledExpr struct {
 	src      string
 	compiled *xpath.Compiled
+	// typed marks an expression a declared type was compiled into, so that
+	// the "treat as" error it may raise is reported under the code a FLWOR
+	// type mismatch has. See retypeError.
+	typed bool
+	// items is set instead of compiled when the expression is a constructor
+	// or a nested FLWOR, neither of which xpath can read.
+	items []node
+	// check is a declared type applied to the value items produced, for the
+	// case where there is no source text to fold a "treat as" into.
+	check *compiledExpr
+}
+
+// eval evaluates the expression, whichever half of it is set.
+func (e *compiledExpr) eval(ctx *evalContext) (xdm.Sequence, error) {
+	if e.items != nil {
+		seq, err := evalItems(e.items, ctx)
+		if err != nil {
+			return nil, err
+		}
+		return applyCheck(e.check, seq, ctx)
+	}
+	seq, err := e.compiled.Eval(ctx.xp)
+	if e.typed {
+		err = retypeError(err)
+	}
+	return seq, err
 }
 
 func (p *parser) eof() bool { return p.pos >= len(p.src) }

@@ -82,7 +82,18 @@ func (p *parser) scanExprSingle(stops ...string) (node, error) {
 	if src == "" {
 		return nil, p.errorAt(start, "XPST0003: expected an expression")
 	}
-	return p.compileMaybeLifting(src)
+	if needsXQueryParser(src) {
+		c, err := p.parseFromSource(src)
+		if err != nil {
+			return nil, err
+		}
+		return &enclosed{items: c.items}, nil
+	}
+	c, err := p.compileExpr(src)
+	if err != nil {
+		return nil, err
+	}
+	return &enclosed{expr: c}, nil
 }
 
 // parseConstructorItem parses a constructor if one starts here, so that a
