@@ -99,9 +99,9 @@ func TestNamespaceDeclarationsResolveTheElementsOwnName(t *testing.T) {
 // from a reference or a CDATA section, or that sits next to real text, stays.
 func TestBoundaryWhitespace(t *testing.T) {
 	for _, c := range []struct {
-		src        string
-		strip      string
-		preserve   string
+		src      string
+		strip    string
+		preserve string
 	}{
 		{`<a> {1} </a>`, `<a>1</a>`, `<a> 1 </a>`},
 		{`<a>   </a>`, `<a/>`, `<a>   </a>`},
@@ -250,10 +250,8 @@ func TestDuplicateAttributeIsAnError(t *testing.T) {
 
 func TestUnimplementedIsNamed(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
-		{`declare namespace p = "urn:x"; 1`, "prolog"},
-		{`xquery version "3.1"; 1`, "prolog"},
-		{`typeswitch(1) case xs:integer return 1 default return 2`, "typeswitch"},
-		{`try { 1 } catch * { 2 }`, "try"},
+		{`import module namespace m = "urn:x"; 1`, "import"},
+		{`import schema namespace s = "urn:x"; 1`, "import"},
 	} {
 		_, err := run(t, c.src, xquery.Options{})
 		if err == nil {
@@ -263,6 +261,23 @@ func TestUnimplementedIsNamed(t *testing.T) {
 		if !strings.Contains(err.Error(), c.want) ||
 			!strings.Contains(err.Error(), "not implemented") {
 			t.Errorf("%s: want a clear %q error, got %v", c.src, c.want, err)
+		}
+	}
+}
+
+// The prolog was refused by name until it was implemented. These two are what
+// that refusal used to cover, kept as a check that the boundary moved rather
+// than as a regression test for a message.
+func TestPrologIsAccepted(t *testing.T) {
+	for _, src := range []string{
+		`declare namespace p = "urn:x"; <p:a/>`,
+		`xquery version "3.1"; 1`,
+		`declare variable $x := 2; $x`,
+		`declare function local:f($n as xs:integer) as xs:integer { $n * 2 };
+		 local:f(21)`,
+	} {
+		if _, err := run(t, src, xquery.Options{}); err != nil {
+			t.Errorf("%s: %v", src, err)
 		}
 	}
 }
@@ -292,5 +307,84 @@ func TestQueryIsConcurrencySafe(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// The XQuery-only expression forms of §§3.11.6, 3.12, 3.14-3.17.
+//
+// Each is checked for the thing that distinguishes it from what the
+// expression parser beneath would otherwise make of the same text, rather than
+// for breadth: the suite supplies breadth.
+func TestXQueryOnlyExpressions(t *testing.T) {
+	for _, c := range []struct{ src, want string }{
+		// A catch clause selects on the code, and binds the err: variables
+		// whether or not the query declared the prefix — §3.16 predeclares it.
+		{`try { 1 div 0 } catch * { "caught" }`, "caught"},
+		{`try { 1 idiv 0 } catch err:FOAR0001 { "div" } catch * { "other" }`, "div"},
+		{`try { 1 idiv 0 } catch *:FOAR0001 { "wild" }`, "wild"},
+		{`try { 1 idiv 0 } catch err:* { "anyerr" }`, "anyerr"},
+		{`try { 1 idiv 0 } catch * { string($err:code) }`,
+			"err:FOAR0001"},
+		// A try whose body succeeds returns the body, and no clause runs.
+		{`try { 41 + 1 } catch * { 0 }`, "42"},
+		// A code that matches no clause propagates rather than being lost.
+		{`try { try { 1 idiv 0 } catch err:XPTY0004 { "wrong" } } ` +
+			`catch * { "outer" }`, "outer"},
+
+		// switch compares atomised values with deep-equal's rule, so an
+		// operand of a different type is a non-match rather than a type error.
+		{`switch (2) case 1 return "a" case 2 return "b" default return "c"`, "b"},
+		{`switch ("x") case 1 return "a" default return "d"`, "d"},
+		{`switch (()) case 1 return "a" default return "empty"`, "empty"},
+		// Several case operands may share one return clause.
+		{`switch (3) case 2 case 3 return "b" default return "c"`, "b"},
+
+		// typeswitch matches a whole SequenceType, occurrence included.
+		{`typeswitch (5) case $i as xs:integer return $i + 1 ` +
+			`default return 0`, "6"},
+		{`typeswitch ((1,2)) case $i as xs:integer return "one" ` +
+			`default return "many"`, "many"},
+		{`typeswitch ("a") case xs:integer|xs:date return "n" ` +
+			`case xs:string return "s" default return "no"`, "s"},
+		{`typeswitch (<a/>) case element(a) return "elem" default return "no"`,
+			"elem"},
+		// The default clause may bind a variable too.
+		{`typeswitch (7) case $i as xs:string return "s" ` +
+			`default $d return $d * 2`, "14"},
+
+		// ordered and unordered return their operand untouched.
+		{`ordered { (1,2,3) }`, "123"},
+		{`unordered { 4 }`, "4"},
+
+		// An unrecognised pragma is ignored and the enclosed expression is
+		// what the extension expression means.
+		{`(# xml:unknown some content #) { 42 }`, "42"},
+
+		// The string constructor is a string, and its interpolations are
+		// atomised and joined with single spaces.
+		{"``[hello]``", "hello"},
+		{"``[a `{1+1}` b]``", "a 2 b"},
+		{"``[`{(1,2)}`]``", "1 2"},
+		// Braces and quotes need no escaping inside one, which is the point.
+		{"``[{\"a\"}]``", `{"a"}`},
+	} {
+		got, err := run(t, c.src, xquery.Options{})
+		if err != nil {
+			t.Errorf("%s: %v", c.src, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
+// An extension expression with no enclosed expression is XQST0079 rather than
+// a silently ignored pragma: §3.17 makes the enclosed expression the only
+// thing a processor recognising no pragma can evaluate.
+func TestPragmaWithoutBodyIsAnError(t *testing.T) {
+	_, err := run(t, `(# xml:unknown x #)`, xquery.Options{})
+	if err == nil || !strings.Contains(err.Error(), "XQST0079") {
+		t.Errorf("want XQST0079, got %v", err)
 	}
 }

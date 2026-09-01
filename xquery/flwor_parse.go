@@ -151,7 +151,7 @@ var stopWords = map[string]bool{
 // clause keyword when what precedes it could end an expression: after "/",
 // "::", "@", "$" or "(" it is a name, and a word followed by "(" or "#" is a
 // function name rather than a keyword.
-func (p *parser) scanExprSingle() (string, error) {
+func (p *parser) scanExprSingleSource() (string, error) {
 	start := p.pos
 	depth := 0
 	// prev is the last significant character seen, which decides whether a
@@ -459,7 +459,7 @@ func (p *parser) parseClauseExpr() (*compiledExpr, error) {
 	if c, ok, err := p.parseOwnExpr(); ok || err != nil {
 		return c, err
 	}
-	src, err := p.scanExprSingle()
+	src, err := p.scanExprSingleSource()
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +494,7 @@ func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, 
 		}
 		return c, nil
 	}
-	src, err := p.scanExprSingle()
+	src, err := p.scanExprSingleSource()
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +790,7 @@ func (p *parser) parseStringLiteral() (string, error) {
 // bindingSource scans the ExprSingle a clause binds, tests or orders by.
 func (p *parser) bindingSource() (string, error) {
 	p.skipSpaceAndComments()
-	return p.scanExprSingle()
+	return p.scanExprSingleSource()
 }
 
 // needsXQueryParser reports whether the expression starting at the cursor

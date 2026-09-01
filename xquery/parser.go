@@ -36,6 +36,26 @@ type parser struct {
 	// written to nest them thousands deep cannot exhaust the goroutine stack
 	// before the parser can report it.
 	depth int
+	// declaredNS records the prefixes this module's prolog has bound, so that
+	// a second "declare namespace" for one can be reported as XQST0033. The
+	// static context's map cannot answer it: the five predeclared prefixes
+	// are in there from the start, and rebinding one of those is legal.
+	declaredNS map[string]bool
+
+	// vars and funcs accumulate the prolog's declarations. They are on the
+	// parser rather than returned from parseProlog because a declaration
+	// later in the prolog may name one earlier — a function body calling
+	// another function is the ordinary case — and the check for a duplicate
+	// name needs everything seen so far.
+	vars  []*varDecl
+	funcs []*funcDecl
+
+	// contextItem is "declare context item", when the prolog made one.
+	contextItem *contextItemDecl
+
+	// formats are the declared decimal formats, keyed by Clark name; the
+	// empty key is the default format.
+	formats map[string]*xpath.DecimalFormat
 }
 
 // compiledExpr is an expression compiled by xpath, kept with the source it
@@ -391,6 +411,22 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	c, err := xpath.CompileVersion(src, p.sc, p.version)
 	if err != nil {
 		return nil, err
+	}
+	// The static base URI and the default collation are properties of the
+	// expression, not of the evaluation, and xpath models them that way. They
+	// are stamped here rather than on the context because the prolog that set
+	// them belongs to this module, and a caller who evaluates the query with
+	// their own context must not thereby change what "declare default
+	// collation" meant.
+	if p.sc.baseURI != "" {
+		c = c.WithStaticBaseURI(p.sc.baseURI)
+	}
+	if p.sc.defaultCollation != "" {
+		coll, err := xpath.ResolveCollation(p.sc.defaultCollation)
+		if err != nil {
+			return nil, err
+		}
+		c = c.WithDefaultCollation(coll)
 	}
 	return &compiledExpr{src: src, compiled: c}, nil
 }

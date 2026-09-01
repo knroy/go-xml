@@ -105,3 +105,49 @@ func skipComment(src string, i int) (int, error) {
 	}
 	return 0, fmt.Errorf("XPST0003: unterminated comment at offset %d", i)
 }
+
+// findParen returns the index of the ")" closing the parenthesis that opens at
+// src[open].
+//
+// It is findEnclosed's counterpart for the parenthesised operand of a switch
+// or typeswitch, and it survives the same three things: a parenthesis inside a
+// string literal, a comment, which itself opens with a parenthesis, and
+// arbitrary nesting. Braces and brackets are counted too, because a map or
+// array constructor inside the operand may hold a parenthesis of its own that
+// is already balanced within it.
+func findParen(src string, open int) (int, error) {
+	if open >= len(src) || src[open] != '(' {
+		return 0, fmt.Errorf("XPST0003: expected %q at offset %d", "(", open)
+	}
+	depth := 0
+	for i := open; i < len(src); i++ {
+		switch src[i] {
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return 0, err
+				}
+				i = end
+				continue
+			}
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i, nil
+			}
+		case '[', '{':
+			depth++
+		case ']', '}':
+			depth--
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return 0, err
+			}
+			i = end
+		}
+	}
+	return 0, fmt.Errorf("XPST0003: unbalanced %q at offset %d", "(", open)
+}

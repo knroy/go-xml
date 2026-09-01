@@ -259,7 +259,7 @@ func (p *parser) withTrailingPath(n node) (node, error) {
 // primary: it stops at a comma or a closing bracket it did not open, and at
 // a clause keyword, because a path may be the last thing in a clause.
 func (p *parser) scanTrailingPath() (string, error) {
-	return p.scanExprSingle()
+	return p.scanExprSingleSource()
 }
 
 // parenVar names the variable a parenthesised expression's value is bound to
