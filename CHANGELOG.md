@@ -56,6 +56,47 @@ usable in a server. `xsd.W3CEntries` states the aliasing as data.
 The schemas themselves are in a companion module, `w3cschemas`, because they
 are W3C documents under W3C terms rather than MIT.
 
+### Security: two nesting constructs the depth counter never saw
+
+The v1.0.0 notes below describe an XPath depth bound "counted at the single
+point every nesting construct passes through". That was an argument about the
+grammar rather than a fact about it, and two constructs did not pass through
+that point. Each exhausted the goroutine stack, which in Go is a *fatal error*
+that `recover()` cannot catch — so an untrusted input killed the process
+rather than failing the request.
+
+* **Sequence types.** `parseSequenceType` recurses into itself for a
+  parenthesised item type, for a function test's argument and return types,
+  and for the member types of `map()` and `array()`. 400 KB of
+  `1 instance of ((((…item()…))))` was enough at Go's default 1 GB stack, and
+  it is reachable through any `@select`, `@test` or `@as`, and through
+  `xs:assert/@test`.
+* **XSD pattern facets.** The XSD-flavour regular-expression parser recurses
+  once per group and counted nothing; a 6 MB schema was enough. Hostile-schema
+  only: the XPath-flavour checker is an iterative scanner, so a pattern
+  arriving as document data never reached it.
+
+Both are now bounded at 1000 levels at their own recursion points, and each
+construct has its own test rather than sharing one and an argument.
+
+Also fixed: **a named function reference with no function library panicked**
+where the equivalent call correctly raised `XPST0017`, and two schema-assembly
+sites **leaked a reader** when a resolver returned one alongside an error.
+
+### Known: nested occurrence bounds
+
+Found by differential fuzzing against a brute-force reference, and invisible
+to both W3C suites. A repeated group whose *only* child is itself repeating is
+decided wrongly in both directions: for `<sequence minOccurs="5"
+maxOccurs="5">` over `<element c minOccurs="2" maxOccurs="2"/>`, ten `c` is
+the only valid document and is refused, while five `c` is accepted. **The
+false-accept direction means a `minOccurs` floor is silently not enforced.**
+
+A group with two or more distinct child names is decided correctly, which is
+why 80,878 suite agreements step around it. Long-standing rather than new.
+Diagnosed in [docs/known-gaps.md](docs/known-gaps.md); not fixed here, because
+the fix is a matcher change the suites cannot defend.
+
 ### Also
 
 * **`xsl:import-schema` can now read a schema carrying a `DOCTYPE`**, via
