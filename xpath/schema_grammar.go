@@ -60,7 +60,20 @@ type schemaRegexpParser struct {
 	// simply "this is XSD 1.1", but they are named apart so each reads as
 	// the rule it is.
 	allowDashAfterRange bool
+
+	// Groups nest, and a group's body is a full regExp, so "((((a))))"
+	// recurses regExp -> branch -> piece -> atom -> regExp once per level.
+	// Nothing else in this grammar recurses, so counting group entry alone
+	// bounds the whole parser. Without it a pattern facet deep enough
+	// exhausts the goroutine stack, and a stack overflow is fatal to the
+	// process rather than catchable by the caller.
+	depth int
 }
+
+// maxSchemaRegexpDepth bounds group nesting in a pattern facet. Appendix F
+// puts no limit on it, but a real pattern is nowhere near this deep, and the
+// alternative to a limit is a crash rather than an error.
+const maxSchemaRegexpDepth = 1000
 
 func (p *schemaRegexpParser) errorf(format string, args ...any) error {
 	return fmt.Errorf("FORX0002: invalid XML Schema regular expression: "+format, args...)
@@ -224,7 +237,14 @@ func (p *schemaRegexpParser) atom() error {
 			return p.errorf("%q is not an XML Schema construct; "+
 				"Appendix F has only plain %q groups", "(?", "(...)")
 		}
-		if err := p.regExp(); err != nil {
+		p.depth++
+		if p.depth > maxSchemaRegexpDepth {
+			return p.errorf("group nesting exceeds %d levels",
+				maxSchemaRegexpDepth)
+		}
+		err := p.regExp()
+		p.depth--
+		if err != nil {
 			return err
 		}
 		if p.peek() != ')' {

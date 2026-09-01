@@ -1193,6 +1193,20 @@ func (p *Parser) resolveFunctionName(lex string) (xdm.QName, error) {
 // castable and treat.
 func (p *Parser) parseSequenceType() (SequenceType, error) {
 	var st SequenceType
+
+	// A type nests independently of the expression holding it: a
+	// parenthesised item type, a function test's signature, and the member
+	// types of map() and array() all recurse back here without passing
+	// through parseExprSingle, so its counter never sees them. Counting here
+	// as well bounds every one of those forms — an unbounded type would
+	// otherwise exhaust the goroutine stack, which no recover() can catch.
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		return st, p.errorf("XPST0003: type nesting exceeds %d levels",
+			maxParseDepth)
+	}
+
 	t := p.cur()
 
 	if t.Kind == TokName && t.Val == "empty-sequence" {
