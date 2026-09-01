@@ -126,3 +126,17 @@ func (i *messageInstr) resolveErrorCode(rt *runtime) (xdm.QName, error) {
 	}
 	return q, nil
 }
+
+// sheetAtLeast30 is processorAtLeast30 for a check made at TRANSFORM time.
+//
+// compileMaxVersion holds the version only while a compilation is running and
+// is cleared when it finishes, so processorAtLeast30 answers "yes" to anything
+// that asks later -- which for a 2.0 run is the wrong answer, silently. The
+// stylesheet keeps the same number for its whole life, so a run-time check
+// asks it instead. Same encoding: zero means unbounded.
+func sheetAtLeast30(s *Stylesheet) bool {
+	if s == nil {
+		return processorAtLeast30()
+	}
+	return s.maxVersion == 0 || s.maxVersion >= 3.0
+}

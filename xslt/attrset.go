@@ -262,7 +262,25 @@ func (i *namespaceInstr) Execute(rt *runtime, out *outputBuilder) error {
 			"XTDE0905: xsl:namespace must not bind a prefix to " +
 				"http://www.w3.org/2000/xmlns/")
 	}
-	if !isLexicalAnyURI(uri) {
+	// The lexical space of xs:anyURI is where the two XSD versions part.
+	// XSD 1.0 defines it by reference to RFC 2396, so "####" is outside it
+	// and XTDE0905 is right; XSD 1.1 3.3.17 redefined it to admit every
+	// string, so no value can fall outside it and the error cannot arise.
+	// The suite splits the same stylesheet on exactly that -- error-0905a
+	// expects XTDE0905 with XSD_1.1 absent, error-0905b expects the namespace
+	// node with it present (W3C bug 30180).
+	//
+	// The processor is the axis, not the stylesheet module: which XSD version
+	// is in force is a property of the processor, and both cases run the same
+	// version="2.0" stylesheet. XSLT 3.0 3.2 is what makes the answer differ
+	// -- "XSLT 3.0 processors may optionally include types defined in XSD
+	// 1.1" -- an option this engine takes and the 2.0 Recommendation does not
+	// offer.
+	//
+	// The xmlns/ prohibition above is untouched: it is a flat rule about one
+	// URI rather than a statement about a lexical space, which is why
+	// error-0905c states no XSD dependency at all.
+	if !sheetAtLeast30(rt.sheet) && !isLexicalAnyURI(uri) {
 		return fmt.Errorf(
 			"XTDE0905: %q is not in the lexical space of xs:anyURI", uri)
 	}
