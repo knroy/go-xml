@@ -913,3 +913,81 @@ func TestAssertionNamedCollectionIsStillUnavailable(t *testing.T) {
 		t.Error("a named collection must not resolve")
 	}
 }
+
+// A repeated group whose every member is optional puts each position at both
+// ends of the repetition, so the automaton cannot tell a step forward through
+// the group from a wraparound into a fresh repetition. Both readings are legal
+// attributions, and the two occurrence bounds want opposite ones: maxOccurs is
+// satisfied if the fewest repetitions fit, minOccurs if the most reach it.
+const optionalSeqSchema = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="doc">
+    <xs:complexType>
+      <xs:sequence maxOccurs="3">
+        <xs:element name="a" minOccurs="0"/>
+        <xs:any namespace="##other" minOccurs="0" maxOccurs="unbounded"
+                processContents="skip"/>
+        <xs:element name="b" minOccurs="0" maxOccurs="2"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`
+
+func TestRepeatedOptionalSequence(t *testing.T) {
+	// One iteration: a, then any number of wildcards, then b. Reading each
+	// forward step as a restart spends maxOccurs="3" before the b.
+	assertValid(t, optionalSeqSchema,
+		`<doc xmlns:x="o"><a/><x:q/><x:q/><x:q/><b/></doc>`)
+	// Two iterations, the second beginning with a wraparound into the
+	// wildcard: still inside the bound of three.
+	assertValid(t, optionalSeqSchema,
+		`<doc xmlns:x="o"><a/><x:q/><x:q/><b/><x:q/><x:q/></doc>`)
+	assertValid(t, optionalSeqSchema, `<doc><b/><b/><b/></doc>`)
+	assertInvalid(t, optionalSeqSchema,
+		`<doc><b/><b/><b/><b/><b/><b/><b/></doc>`, "cvc-complex-type.2.4")
+	// Known shortfall, and the same before this pair of counts as after:
+	// b twice per iteration and three iterations is six, but the low count
+	// stops at three. The wraparound from b back to b is the outer scope's
+	// own loop-back edge and not also a step within one iteration, so it
+	// has no second reading to prefer, and the two scopes' remaining room
+	// is approximated apart rather than searched together. Nothing in the
+	// W3C suite turns on it.
+	assertInvalid(t, optionalSeqSchema,
+		`<doc><b/><b/><b/><b/></doc>`, "cvc-complex-type.2.4")
+}
+
+// The mirror of the case above: here the ambiguous transition has to be read
+// as a restart, because that is the only reading under which the group meets
+// its minimum. One position, one edge, and the same edge is both the element's
+// own repetition and the sequence's.
+func TestRepeatedSequenceMinOccurs(t *testing.T) {
+	const schema = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence minOccurs="2" maxOccurs="unbounded">
+        <xs:element name="e" maxOccurs="unbounded"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`
+	assertValid(t, schema, `<root><e/><e/></root>`)
+	assertInvalid(t, schema, `<root><e/></root>`, "cvc-complex-type.2.4")
+
+	// And with both bounds fixed the admissible lengths are 2 and 4 only:
+	// three e is neither one sequence nor two, and the outer scope must not
+	// offer a repetition the low count has not yet spent.
+	const fixed = `
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType>
+      <xs:sequence maxOccurs="2">
+        <xs:element name="e" minOccurs="2" maxOccurs="2"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`
+	assertValid(t, fixed, `<root><e/><e/></root>`)
+	assertInvalid(t, fixed, `<root><e/><e/><e/></root>`, "cvc-complex-type.2.4")
+	assertInvalid(t, fixed, `<root><e/><e/><e/><e/><e/></root>`, "cvc-complex-type.2.4")
+}
