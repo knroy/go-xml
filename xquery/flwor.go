@@ -462,6 +462,9 @@ type groupSpec struct {
 	// grouping rather than grouping by an existing binding.
 	init      *compiledExpr
 	collation string
+	// check is the declared type of "group by $k as T := E", applied to the
+	// atomised value rather than to what the expression returned. See apply.
+	check     *compiledExpr
 }
 
 // groupByClause partitions the tuple stream: §3.10.7.
@@ -487,6 +490,36 @@ func (c *groupByClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 				return nil, err
 			}
 			t = t.bind(s.name, seq)
+		}
+		staged[i] = t
+	}
+
+	// §3.10.7 rebinds each grouping variable to its *atomised* value before
+	// the partitions are formed, and the return expression sees that value
+	// rather than the node it came from. It is not a detail: "let $state :=
+	// .../state group by $state return <state>{$state}</state>" produces
+	// <state>CA</state> under the rule and <state><state>CA</state></state>
+	// without it, because the node would be copied in whole. The declared
+	// type of "group by $k as T := E" is checked against the atomised value
+	// for the same reason.
+	for i, t := range staged {
+		for _, sp := range c.specs {
+			v, ok := t.lookup(sp.name)
+			if !ok {
+				return nil, fmt.Errorf(
+					"XQST0094: the grouping variable $%s is not in scope",
+					sp.name.Lexical())
+			}
+			atoms, err := xdm.AtomizeChecked(v)
+			if err != nil {
+				return nil, err
+			}
+			t = t.bind(sp.name, atoms)
+			if sp.check != nil {
+				if _, err := applyCheck(sp.check, atoms, t.sub(ctx)); err != nil {
+					return nil, err
+				}
+			}
 		}
 		staged[i] = t
 	}

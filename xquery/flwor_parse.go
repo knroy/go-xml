@@ -724,9 +724,18 @@ func (p *parser) parseGroupByClause() ([]clause, error) {
 		typ := p.lastType
 		p.skipSpaceAndComments()
 		if p.consume(":=") {
-			s.init, err = p.parseTypedClauseExpr(typ, false)
+			s.init, err = p.parseClauseExpr()
 			if err != nil {
 				return nil, err
+			}
+			if typ != "" {
+				// The type is checked against the atomised value the
+				// grouping rebinds, not against what the expression
+				// returned, so it cannot be folded into that expression.
+				s.check, err = p.compileTypeCheck(typ, false)
+				if err != nil {
+					return nil, err
+				}
 			}
 		} else if typ != "" {
 			return nil, p.errorf(

@@ -50,11 +50,34 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 			return nil, err
 		}
 		p.skipSpaceAndComments()
-		if !p.eof() {
-			return nil, p.errorf("XPST0003: unexpected %q",
-				firstToken(p.src[p.pos:]))
+		if p.eof() {
+			return items, nil
 		}
-		return items, nil
+		// Something follows the parentheses — "/name()", "[1]", "instance of
+		// ...". The value of the parenthesised part is computed here and the
+		// rest of the expression compiled by xpath over a variable bound to
+		// it, which keeps the path semantics, the predicates and the operator
+		// precedence where they belong. "(for $x in E return F)/g" is the
+		// idiom the suite leans on hardest, and it cannot be read any other
+		// way: the parenthesised half needs this parser and the half after it
+		// needs the other one.
+		rest := p.src[p.pos:]
+		if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "[") {
+			// Only a step or a predicate binds tightly enough for the
+			// rewrite to preserve precedence. An operator would not: in
+			// "(...) + 1 * 2" the substitution is still correct, but in
+			// "-(...)" and in anything where the parenthesis is not the
+			// whole left operand it is not obviously so, and guessing wrong
+			// here changes the answer silently.
+			return nil, p.errorf("XPST0003: unexpected %q",
+				firstToken(rest))
+		}
+		c, err := p.compileExpr("$local:" + parenVar + rest)
+		if err != nil {
+			return nil, err
+		}
+		p.pos = len(p.src)
+		return []node{&parenPath{value: items, rest: c}}, nil
 	}
 	if items, ok, err := p.parseNestedCall(); ok || err != nil {
 		return items, err
@@ -187,6 +210,40 @@ func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
 }
 
 func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
+	seq, err := n.sequence(ctx)
+	if err != nil {
+		return err
+	}
+	return appendSequence(out, seq)
+}
+
+// parenVar names the variable a parenthesised expression's value is bound to
+// when a step or a predicate follows it. The reserved local-function
+// namespace keeps it from colliding with anything the query binds.
+const parenVar = "xq-paren"
+
+// parenPath is a parenthesised expression this package had to read, followed
+// by a path step or a predicate that xpath reads.
+//
+// The two halves are evaluated in that order: the parenthesised part produces
+// a value, and the rest of the expression is applied to it through a variable.
+// Splitting it this way is what lets "(for $x in E return F)/g" work without
+// either parser having to understand the other's half.
+type parenPath struct {
+	value []node
+	rest  *compiledExpr
+}
+
+func (n *parenPath) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	v, err := (&enclosed{items: n.value}).sequence(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return n.rest.compiled.Eval(
+		ctx.xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
+}
+
+func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
 	seq, err := n.sequence(ctx)
 	if err != nil {
 		return err
