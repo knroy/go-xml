@@ -207,6 +207,14 @@ func (p *parser) scanExprSingle() (string, error) {
 		case c == '<':
 			// A direct constructor inside the expression: its content is XML
 			// and any keyword in it is text, so it is stepped over whole.
+			// Where an operand cannot start, though, this is the less-than
+			// operator and there is no markup to step over — "$x < 3" would
+			// otherwise be read as an unterminated start tag.
+			if !startsMarkup(p.src, p.pos, prev) {
+				p.pos++
+				prev = '<'
+				continue
+			}
 			if err := p.skipDirConstructor(); err != nil {
 				return "", err
 			}
@@ -412,26 +420,17 @@ func (p *parser) startsConstructor() bool {
 // binding. And a quantified expression with a type declaration, which XPath's
 // grammar does not admit.
 func (p *parser) parseClauseExpr() (*compiledExpr, error) {
-	p.skipSpaceAndComments()
-	if p.startsConstructor() {
-		n, err := p.parseItem()
-		if err != nil {
-			return nil, err
-		}
-		return &compiledExpr{src: "constructor", items: []node{n}}, nil
-	}
-	if p.looksLikeFLWOR() || p.looksLikeQuantified() {
-		n, err := p.parseItem()
-		if err != nil {
-			return nil, err
-		}
-		return &compiledExpr{src: "flwor", items: []node{n}}, nil
+	if c, ok, err := p.parseOwnExpr(); ok || err != nil {
+		return c, err
 	}
 	src, err := p.scanExprSingle()
 	if err != nil {
 		return nil, err
 	}
-	return p.compileExpr(src)
+	if !needsXQueryParser(src) {
+		return p.compileExpr(src)
+	}
+	return p.parseFromSource(src)
 }
 
 // parseTypedClauseExpr is parseClauseExpr with a declared type applied to the
@@ -443,8 +442,11 @@ func (p *parser) parseClauseExpr() (*compiledExpr, error) {
 // instead.
 func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, error) {
 	p.skipSpaceAndComments()
-	if p.startsConstructor() || p.looksLikeFLWOR() || p.looksLikeQuantified() {
-		c, err := p.parseClauseExpr()
+	// The type can be folded into the source only when the expression goes to
+	// xpath as a substring. Where it does not — a constructor, a nested FLWOR,
+	// or anything holding one — there is no text to wrap, so the check is
+	// recorded on the compiled expression and applied to the value instead.
+	if c, ok, err := p.parseOwnExpr(); ok || err != nil {
 		if err != nil {
 			return nil, err
 		}
@@ -460,10 +462,56 @@ func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, 
 	if err != nil {
 		return nil, err
 	}
+	if needsXQueryParser(src) {
+		c, err := p.parseFromSource(src)
+		if err != nil {
+			return nil, err
+		}
+		if typ != "" {
+			c.check, err = p.compileTypeCheck(typ, perItem)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return c, nil
+	}
 	if perItem {
 		return p.compileTypedFor(src, typ)
 	}
 	return p.compileTyped(src, typ)
+}
+
+// parseOwnExpr parses an expression this package must read itself when one
+// begins at the cursor, and reports whether it did.
+//
+// It is the shared front half of parseClauseExpr and parseTypedClauseExpr:
+// both have to recognise the same three constructs, and only what they do
+// with the result differs.
+func (p *parser) parseOwnExpr() (*compiledExpr, bool, error) {
+	p.skipSpaceAndComments()
+	if !p.startsConstructor() && !p.looksLikeFLWOR() && !p.looksLikeQuantified() {
+		return nil, false, nil
+	}
+	n, err := p.parseItem()
+	if err != nil {
+		return nil, false, err
+	}
+	return &compiledExpr{src: "xquery", items: []node{n}}, true, nil
+}
+
+// parseFromSource re-reads an expression from its own text with a parser
+// sharing this one's static context.
+//
+// Reading from a substring rather than from the cursor keeps the extent the
+// enclosing scan already decided, which is what the clause after it depends
+// on: the cursor has moved past the expression and must stay there.
+func (p *parser) parseFromSource(src string) (*compiledExpr, error) {
+	sub := &parser{src: src, sc: p.sc, version: p.version, depth: p.depth}
+	items, err := sub.parseNestedExpr()
+	if err != nil {
+		return nil, err
+	}
+	return &compiledExpr{src: src, items: items}, nil
 }
 
 // parseForClause parses "for" and its comma-separated bindings: [45]-[48].
@@ -698,4 +746,209 @@ func (p *parser) parseStringLiteral() (string, error) {
 func (p *parser) bindingSource() (string, error) {
 	p.skipSpaceAndComments()
 	return p.scanExprSingle()
+}
+
+// needsXQueryParser reports whether the expression starting at the cursor
+// contains syntax the expression parser cannot read, and so must be parsed
+// here.
+//
+// The three are constructors, FLWOR expressions and typed quantified
+// expressions. A clause expression is normally handed to xpath as a
+// substring, which works because every XPath expression is an XQuery
+// expression — but not the other way round, and an expression holding one of
+// these has to be taken apart by the parser that understands them.
+//
+// The scan is lexical and deliberately conservative: it may say yes to an
+// expression xpath could have read (a "<" that is a less-than, a "for" that
+// is a name), and the parser it defers to then reads that expression
+// correctly anyway. Saying no where the answer is yes is the failure that
+// matters, and that cannot happen: every construct listed here is introduced
+// by one of the tokens sought.
+func needsXQueryParser(src string) bool {
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return false
+			}
+			i = end
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return false
+				}
+				i = end
+			}
+		case '<':
+			// "<" begins a direct constructor only where an operand may
+			// start. After a name, a literal or a closing bracket it is the
+			// less-than operator, and "$x < 3" is not a constructor however
+			// the character after it looks. What follows must also look like
+			// markup: a name, "!", "?" or "/".
+			if startsMarkup(src, i, lastSignificant(src[:i])) {
+				return true
+			}
+		default:
+			if !isNameStartByte(src[i]) {
+				continue
+			}
+			// A word: only a keyword introducing XQuery-only syntax counts,
+			// and only where it is bare rather than part of a name.
+			if i > 0 && (isNameByte(src[i-1]) || src[i-1] == '$' ||
+				src[i-1] == ':' || src[i-1] == '@') {
+				// Skip to the end of the name so its tail is not rescanned.
+				for i < len(src) && isNameByte(src[i]) {
+					i++
+				}
+				i--
+				continue
+			}
+			j := i
+			for j < len(src) && isNameByte(src[j]) {
+				j++
+			}
+			switch src[i:j] {
+			case "for", "let", "some", "every":
+				// These four are XPath's too, so the keyword alone proves
+				// nothing; what proves it is a clause XPath's grammar lacks.
+				if hasXQueryOnlyClause(src[j:]) {
+					return true
+				}
+			case "element", "attribute", "document", "text", "comment",
+				"processing-instruction", "namespace", "ordered", "unordered":
+				// A computed constructor is the keyword followed by a name or
+				// an expression in braces. A kind test is followed by "(",
+				// and "namespace::" is the axis, which is refused elsewhere.
+				if k := skipSpaceFrom(src, j); k < len(src) &&
+					(src[k] == '{' || isNameStartByte(src[k])) {
+					return true
+				}
+			}
+			i = j - 1
+		}
+	}
+	return false
+}
+
+// hasXQueryOnlyClause reports whether what follows a "for", "let", "some" or
+// "every" uses a clause XPath's cut-down forms do not have.
+//
+// XPath has "for $x in E return F" and "let $x := E return F" and the untyped
+// quantified expressions, and reads all of them at 100% of the suite. What it
+// does not have is every other FLWOR clause, "at", "allowing empty", and a
+// type declaration on any of them — so an expression is only taken from xpath
+// when one of those actually appears.
+func hasXQueryOnlyClause(src string) bool {
+	depth := 0
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return false
+			}
+			i = end
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return false
+				}
+				i = end
+				continue
+			}
+			depth++
+		case '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		default:
+			if !isNameStartByte(src[i]) || depth != 0 {
+				continue
+			}
+			if i > 0 && (isNameByte(src[i-1]) || src[i-1] == '$' ||
+				src[i-1] == ':' || src[i-1] == '@' || src[i-1] == '/') {
+				for i < len(src) && isNameByte(src[i]) {
+					i++
+				}
+				i--
+				continue
+			}
+			j := i
+			for j < len(src) && isNameByte(src[j]) {
+				j++
+			}
+			switch src[i:j] {
+			case "where", "order", "stable", "group", "count", "at",
+				"allowing", "as", "window", "tumbling", "sliding":
+				return true
+			case "return", "satisfies":
+				// The binding is over and nothing XQuery-only appeared in it.
+				// A later clause would have been seen before this word.
+				return false
+			}
+			i = j - 1
+		}
+	}
+	return false
+}
+
+// startsMarkup reports whether the "<" at src[i] opens a direct constructor
+// rather than being the less-than operator.
+//
+// Both readings are legal XQuery and neither character decides it alone. What
+// decides it is grammatical position: "<" is markup only where an operand may
+// begin, so after a name, a literal, a closing bracket or a wildcard it is
+// the operator — "$x < 3" and "count(.) < 3" are comparisons whatever follows
+// the "<". Where an operand may begin, the character after it must still look
+// like markup: a name, "!", "?" or "/". This is the same test both the
+// expression scan and the detector make, so they cannot disagree about where
+// a constructor is.
+func startsMarkup(src string, i int, prev byte) bool {
+	if i+1 >= len(src) {
+		return false
+	}
+	switch c := src[i+1]; {
+	case isNameStartByte(c), c == '!', c == '?', c == '/':
+	default:
+		return false
+	}
+	switch {
+	case prev == 0:
+		return true
+	case isNameByte(prev), prev == ')', prev == ']', prev == '"',
+		prev == '\'', prev == '*':
+		return false
+	}
+	return true
+}
+
+// lastSignificant returns the last non-space byte of s, or 0 when there is
+// none. It decides whether a "<" is markup or a comparison.
+func lastSignificant(s string) byte {
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case ' ', '\t', '\r', '\n':
+		default:
+			return s[i]
+		}
+	}
+	return 0
+}
+
+func skipSpaceFrom(src string, i int) int {
+	for i < len(src) {
+		switch src[i] {
+		case ' ', '\t', '\r', '\n':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
 }

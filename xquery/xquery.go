@@ -209,12 +209,16 @@ func (p *parser) parseExprItem() (node, error) {
 				continue
 			}
 			depth++
-		case ')':
+		case ')', ']', '}':
+			if depth == 0 {
+				// A closing bracket this scan never opened ends the item: it
+				// belongs to the parenthesis or the call this expression is
+				// an argument of.
+				goto done
+			}
 			depth--
 		case '[', '{':
 			depth++
-		case ']', '}':
-			depth--
 		case ',':
 			if depth == 0 {
 				goto done
@@ -226,6 +230,17 @@ done:
 	src := strings.TrimSpace(p.src[start:p.pos])
 	if src == "" {
 		return nil, p.errorf("XPST0003: expected an expression")
+	}
+	if needsXQueryParser(src) {
+		// A constructor or a FLWOR somewhere inside the expression, rather
+		// than at its start: "(<a/>, <b/>)" and "count(for $x in E group by
+		// $k return $x)" are both expressions xpath cannot read whole, and
+		// neither begins with the construct that makes it so.
+		c, err := p.parseFromSource(src)
+		if err != nil {
+			return nil, err
+		}
+		return &enclosed{items: c.items}, nil
 	}
 	c, err := p.compileExpr(src)
 	if err != nil {
