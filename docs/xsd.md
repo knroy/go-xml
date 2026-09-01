@@ -157,6 +157,39 @@ xsd.Options{Resolver: &xsd.MapResolver{
 network, so schema assembly cannot become an outbound request or a blocking
 read.
 
+### The well-known schemas, without the network
+
+`MapResolver` matches a location literally, which is not enough for the W3C
+vocabularies because one document is named several ways. The XSD 1.1 schema for
+schemas is written as `http://www.w3.org/TR/xmlschema11-1/XMLSchema.xsd`, as
+`http://www.w3.org/2001/XMLSchema.xsd`, as a bare relative `XMLSchema.xsd`, and
+as an `xs:import` giving the namespace and no location at all. A relative
+reference is also resolved against the referring document's base *before* a
+resolver sees it, so what arrives is an absolute URI nobody registered.
+
+`CatalogResolver` keys on what a reference means rather than how it is spelled:
+
+```go
+r := xsd.NewCatalogResolver()
+if err := r.AddFromFS(os.DirFS("schemas"), xsd.W3CEntries()); err != nil {
+    return err
+}
+xsd.Options{Version: xsd.Version11, Resolver: r}
+```
+
+`W3CEntries` states the aliasing as data — which file answers which namespace
+and which spellings — so it is recorded once rather than rediscovered. A miss
+is an error rather than a silent nil, because a catalog quietly smaller than
+the caller asked for fails later and somewhere less obvious; `SetFallback`
+names a resolver to consult instead.
+
+This matters more than it looks. Schemas published by the W3C import each other
+by absolute URL, and those fetches are throttled: the W3C's own copy of the
+XSLT 3.0 schema in the XSLT test suite was edited in 2021 to use a relative
+path, the comment there giving the reason as "W3C web site throttling". The
+companion module `w3cschemas` ships those documents, kept separate because they
+are under W3C rather than MIT terms.
+
 ### schemaLocation is a hint
 
 The spec is explicit that `schemaLocation` offers a document rather than

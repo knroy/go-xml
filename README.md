@@ -614,6 +614,25 @@ Every remote-reference mechanism is off unless you turn it on.
   refuses every non-`file` scheme. There is no network option.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
+* **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
+  The default reads a schema beside the one it was given and **refuses a
+  remote URL outright**; `HTTPResolver` is how you opt in to the network.
+  Since schemas name their imports as absolute URLs — the XSLT 3.0 schema
+  imports the XSD 1.1 schema for schemas from `w3.org` — the usual answer is
+  not to fetch them but to answer from a catalog:
+
+  ```go
+  r := xsd.NewCatalogResolver()
+  err := r.AddFromFS(os.DirFS("schemas"), xsd.W3CEntries())
+  ```
+
+  `CatalogResolver` matches a document by namespace and by every
+  `schemaLocation` spelling it is referred to by, so one entry answers the
+  `TR/` URL, the `2001/` URL, a bare relative path and a location-less
+  `xs:import` alike. A reference to something not in the table is an error
+  rather than a request. The companion module
+  [`w3cschemas`](w3cschemas/README.md) ships the W3C documents themselves —
+  separate because they are under W3C rather than MIT terms.
 * **Nesting and recursion are bounded** — parse depth, XPath recursion and
   template recursion each have a limit that produces an error rather than a
   stack overflow.
