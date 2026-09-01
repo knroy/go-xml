@@ -416,7 +416,16 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
-	c, err := xpath.CompileVersion(src, p.sc, p.version)
+	// A string literal in a query may hold character and predefined entity
+	// references, and in an XPath expression it may not. They are resolved
+	// here, on the source, because this is the one place every expression
+	// this package does not read itself passes through on its way to the
+	// XPath parser. See resolveStringLiterals.
+	resolved, err := resolveStringLiterals(src)
+	if err != nil {
+		return nil, err
+	}
+	c, err := xpath.CompileVersion(resolved, p.sc, p.version)
 	if err != nil {
 		return nil, err
 	}
