@@ -169,7 +169,7 @@ func (f *flwor) evalNode(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 // evalItems evaluates a parsed item list to a sequence, which is what a

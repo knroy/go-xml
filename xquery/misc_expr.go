@@ -202,7 +202,7 @@ func (n *stringConstructor) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
