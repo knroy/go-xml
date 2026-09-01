@@ -948,6 +948,15 @@ func hasXQueryOnlyClause(src string) bool {
 			case "where", "order", "stable", "group", "count", "at",
 				"allowing", "as", "window", "tumbling", "sliding":
 				return true
+			case "for", "let":
+				// A second binding keyword before the "return". XPath's
+				// ForExpr and LetExpr each bind a comma-separated list of one
+				// kind, so "let $s := 1 for $d in ..." is a FLWOR with two
+				// clauses and not an XPath expression at all. A "for" that
+				// merely begins the binding's own value — "let $f := for $x
+				// in ... return $x" — is XPath, and answering yes to it is
+				// the conservative direction this scan is allowed to take.
+				return true
 			case "return", "satisfies":
 				// The binding is over and nothing XQuery-only appeared in it.
 				// A later clause would have been seen before this word.
