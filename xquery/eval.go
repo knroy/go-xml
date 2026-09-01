@@ -18,6 +18,33 @@ type evalContext struct {
 	sc *staticContext
 }
 
+// collation resolves a collation URI written on an "order by" or "group by"
+// clause, resolving a relative reference against the static base URI as §5.2
+// requires.
+//
+// The empty URI means the clause said nothing, and the default collation is
+// then whatever the evaluation context carries — nil, which every caller
+// reads as codepoint.
+func (ctx *evalContext) collation(uri string) (xpath.Collation, error) {
+	if uri == "" {
+		return nil, nil
+	}
+	c, err := xpath.ResolveCollation(uri)
+	if err != nil {
+		return nil, fmt.Errorf("XQST0076: %v", err)
+	}
+	return c, nil
+}
+
+// implicitTimezone is the offset ordering and grouping compare date and time
+// values against when one of them has no timezone of its own.
+func (ctx *evalContext) implicitTimezone() int {
+	if ctx.xp == nil {
+		return 0
+	}
+	return ctx.xp.ImplicitTimezone
+}
+
 // builderRef is the builder a constructor appends to.
 //
 // It exists so that the nested builder StartElement returns can be threaded

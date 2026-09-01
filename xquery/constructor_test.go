@@ -250,8 +250,6 @@ func TestDuplicateAttributeIsAnError(t *testing.T) {
 
 func TestUnimplementedIsNamed(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
-		{`for $x in 1 return $x`, "for"},
-		{`let $x := 1 return $x`, "let"},
 		{`declare namespace p = "urn:x"; 1`, "prolog"},
 		{`xquery version "3.1"; 1`, "prolog"},
 		{`typeswitch(1) case xs:integer return 1 default return 2`, "typeswitch"},

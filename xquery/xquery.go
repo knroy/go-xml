@@ -148,6 +148,25 @@ func (p *parser) parseQueryBody() ([]node, error) {
 // parseItem parses one item of a query body: a constructor, or an expression
 // handed to xpath.
 func (p *parser) parseItem() (node, error) {
+	// FLWOR and the quantified expressions are read here rather than handed
+	// to xpath, because both admit syntax XPath's grammar does not: every
+	// clause but "for" and "let", and a type declaration on a bound variable.
+	// A plain "for $x in E return F" would compile either way; taking it here
+	// keeps one implementation rather than two that must agree.
+	if p.looksLikeFLWOR() {
+		f, err := p.parseFLWOR()
+		if err != nil {
+			return nil, err
+		}
+		return &flworNode{f}, nil
+	}
+	if p.looksLikeQuantified() {
+		q, err := p.parseQuantified()
+		if err != nil {
+			return nil, err
+		}
+		return &quantifiedNode{q}, nil
+	}
 	switch {
 	case p.lookingAt("<!--"):
 		return p.parseDirComment()
@@ -249,7 +268,7 @@ func (p *parser) refuseUnimplemented() error {
 				strings.TrimSpace(kw))
 		}
 	}
-	for _, kw := range []string{"for ", "let ", "some ", "every ",
+	for _, kw := range []string{
 		"switch", "typeswitch", "try ", "validate", "ordered", "unordered"} {
 		if hasKeywordPrefix(p.src[p.pos:], kw) {
 			return p.errorf(
