@@ -749,6 +749,17 @@ type varBinder struct {
 	ctx    *xpath.Context
 	byName map[string]*varDecl
 	state  map[string]int
+	// pathViaFunc records that a function-mediated edge lies on the path of
+	// variables currently being initialised.
+	//
+	// It is what tells the two halves of the 3.0 split apart when the cycle
+	// is longer than one hop. A cycle is static only if every edge in it is a
+	// direct variable reference; as soon as one runs through a function body
+	// the whole loop is conditional on that body being entered, so the error
+	// is the dynamic XQDY0054. Set for the duration of a descent through a
+	// function's reachable variables and restored after, so it describes the
+	// path rather than any one variable. See bindVariables.
+	pathViaFunc bool
 }
 
 // newVarBinder prepares a walk, or returns nil when the module declares no
@@ -832,7 +843,18 @@ func (b *varBinder) visit(d *varDecl) error {
 					d.name.Lexical())
 			}
 			if state[dep.name.Clark()] == inProgressState {
-				if deferred {
+				// A cycle is static only when every edge in it is a direct
+				// variable reference. If the variable this one closes back
+				// onto was itself reached through a function body, that body
+				// is part of the loop and may never be entered, so the error
+				// is the dynamic XQDY0054 and is left to the cycle trap to
+				// raise if evaluation actually reaches it.
+				//
+				// K-InternalVariablesWith-19a is the shape: $var2's only
+				// route to $var is through local:func1..func4, and $var
+				// names $var2 directly. XQ10 calls the whole thing XQST0054
+				// (-19); XQ30+ calls it XQDY0054 (-19a).
+				if deferred || b.pathViaFunc {
 					continue
 				}
 				return fmt.Errorf(
@@ -856,7 +878,15 @@ func (b *varBinder) visit(d *varDecl) error {
 				if state[dep.name.Clark()] != unvisitedState {
 					continue
 				}
-				if err := b.visit(dep); err != nil {
+				// A function edge is now on the path. Everything reached
+				// from here, and the variable this edge left, are inside a
+				// loop that a function body would have to close, so a cycle
+				// found below is conditional on that body running.
+				prevViaFunc := b.pathViaFunc
+				b.pathViaFunc = true
+				err := b.visit(dep)
+				b.pathViaFunc = prevViaFunc
+				if err != nil {
 					return err
 				}
 			}
