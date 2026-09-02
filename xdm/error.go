@@ -34,6 +34,17 @@ type Error struct {
 	// fn:error with a QName naming a namespace other than the standard error
 	// one. Code alone cannot carry it, and XSLT 3.0's $err:code is a QName.
 	CodeName *QName
+	// Raised marks an error that fn:error produced rather than one the
+	// engine detected.
+	//
+	// It matters to try/catch. §3.16 catches dynamic errors only, and this
+	// engine tells a static error from a dynamic one by its code, because it
+	// resolves names at evaluation time and a static fault therefore arrives
+	// looking dynamic. fn:error breaks that inference: it raises a *dynamic*
+	// error whatever QName it is handed, so fn:error(xs:QName("err:XPST0008"))
+	// is catchable even though XPST names the static family. Without this
+	// flag the code heuristic refused to catch it.
+	Raised bool
 	// Value is the error object fn:error was given as its third argument.
 	//
 	// It exists for XSLT 3.0's xsl:catch, which exposes it as $err:value. Only

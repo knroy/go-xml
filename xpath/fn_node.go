@@ -442,7 +442,8 @@ func registerContextFuncs(l *Library) {
 				msg = s
 			}
 		}
-		e := &xdm.Error{Code: code, Message: msg, CodeName: codeQName}
+		e := &xdm.Error{Code: code, Message: msg, CodeName: codeQName,
+			Raised: true}
 		if len(args) > 2 {
 			e.Value = args[2]
 		}
