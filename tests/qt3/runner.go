@@ -730,7 +730,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// the sequence.
 		var q *xquery.Query
 		q, res.err = xquery.Compile(tc.Test.Query,
-			xqueryOptions(ns))
+			xqueryOptions(ns, r.testSetURI(ts)))
 		if res.err == nil {
 			res.serialParams = q.SerializationOptions()
 			// §25.1: "if no document can be found at the specified location,
@@ -1430,7 +1430,7 @@ func (c *envCollections) resolve(ctx *xpath.Context, uri string) (xdm.Sequence, 
 		// does. The context item is absent: a collection query is closed over
 		// nothing but the environment.
 		compiled, err := xquery.Compile(q.Expr,
-			xqueryOptions(c.queryOpts))
+			xqueryOptions(c.queryOpts, ""))
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
@@ -2435,26 +2435,44 @@ func matchesQualifiedCode(err error, want string) bool {
 // bindings as prolog-equivalent options, because XQuery resolves names while
 // parsing rather than after it.
 //
-// The static base URI is deliberately NOT supplied here, though §2.1.2
-// requires one and K2-BaseURIProlog-4 depends on it: that case declares the
-// relative "declare base-uri 'abc'" and checks that fn:static-base-uri() came
-// back absolute, which needs an absolute base to resolve against at compile
-// time.
+// testSetURI is the file: URI of the test-set file a case was read from.
 //
-// Seeding it from the evaluation context fixes that one case and breaks five
-// others. The compile-time base URI is not simply the runtime one: the suite's
-// base-URI-12, -14, -23 and -24 resolve relative references against a base the
-// environment or the query supplies later, and K2-BaseURIFunc-30 reads a base
-// URI the environment declares -- all of which a compile-time value pins
-// prematurely. base-URI-23 shows the shape: it came back
+// §2.1.2 defaults the static base URI to "the URI of the resource containing
+// the expression", which for the suite is the test-set file. It is handed to
+// the compiler only as the base a relative "declare base-uri" resolves
+// against -- see xqueryOptions for why it is not the query's base URI.
+func (r *Runner) testSetURI(ts *TestSet) string {
+	if ts == nil || ts.File == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(filepath.Join(r.Root, filepath.FromSlash(ts.File)))
+	if err != nil {
+		return ""
+	}
+	return "file://" + filepath.ToSlash(abs)
+}
+
+// Options.BaseURI is deliberately NOT supplied here, though §2.1.2 requires a
+// static base URI and K2-BaseURIProlog-4 depends on one: that case declares
+// the relative "declare base-uri 'abc'" and checks that fn:static-base-uri()
+// came back absolute, which needs an absolute base to resolve against at
+// compile time.
+//
+// Setting BaseURI from the evaluation context fixes that one case and breaks
+// five others. The compile-time base URI is not simply the runtime one: the
+// suite's base-URI-12, -14, -23 and -24 resolve relative references against a
+// base the environment or the query supplies later, and K2-BaseURIFunc-30
+// reads a base URI the environment declares -- all of which a compile-time
+// value pins prematurely. base-URI-23 shows the shape: it came back
 // "http://www.example.org/examples%20", a URI resolved once too often.
 //
-// Threading the base URI through properly means separating "the base URI to
-// resolve a prolog declaration against" from "the base URI the query runs
-// under", which the compiler does not currently distinguish. That is the fix
-// worth making; supplying one value for both is a net loss.
-func xqueryOptions(ns xpath.NamespaceResolver) xquery.Options {
-	opts := xquery.Options{}
+// declBase is the separation that makes both work. It is the URI of the file
+// holding the query, and the compiler uses it for one thing only: resolving a
+// relative "declare base-uri" against it. A query that declares no base URI
+// never sees it, so the five cases above are untouched, while -4 and -5 get
+// the absolute base their declarations need.
+func xqueryOptions(ns xpath.NamespaceResolver, declBase string) xquery.Options {
+	opts := xquery.Options{DeclarationBaseURI: declBase}
 	if ns == nil {
 		return opts
 	}

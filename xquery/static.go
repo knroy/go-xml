@@ -87,7 +87,8 @@ type staticContext struct {
 
 	// declBase is the URI of the resource the module was read from, and is
 	// used for one thing only: resolving a relative "declare base-uri"
-	// against it, as §4.5 requires.
+	// against it, as §4.5 requires. It is set from Options.DeclarationBaseURI
+	// and read only by parseBaseURIDecl.
 	//
 	// It is deliberately not baseURI. The two answer different questions --
 	// "what does a prolog declaration resolve against" and "what does the

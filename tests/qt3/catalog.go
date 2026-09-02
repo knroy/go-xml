@@ -62,6 +62,15 @@ type TestSet struct {
 	// root walks above it and the file is not found, so the directory has to
 	// travel with the parsed set.
 	Dir string `xml:"-"`
+
+	// File is the test-set file itself, relative to the suite root.
+	//
+	// Dir is not enough for the one thing this is for: §2.1.2 defaults the
+	// static base URI to the URI of the resource holding the expression, and
+	// K2-BaseURIProlog-5 declares the relative base URI "" and then requires
+	// fn:static-base-uri() to end with "prod/BaseURIDecl.xml" -- the file, not
+	// the directory that contains it.
+	File string `xml:"-"`
 }
 
 // ContextItem is an environment's "context-item", whose select attribute is
@@ -323,6 +332,7 @@ func LoadTestSet(root, file string) (*TestSet, error) {
 		return nil, err
 	}
 	ts.Dir = filepath.Dir(file)
+	ts.File = file
 	// Pull in the cases whose query lives in its own file. Without this they
 	// ran as the empty query, which fails every assertion the case makes and
 	// counted as an engine failure rather than a harness gap — the

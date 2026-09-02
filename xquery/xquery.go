@@ -19,6 +19,21 @@ type Options struct {
 	// and is what a relative reference resolves against.
 	BaseURI string
 
+	// DeclarationBaseURI is the URI of the resource the query text was read
+	// from. It is used for one thing only: resolving a relative
+	// "declare base-uri" against it, as §4.5 requires.
+	//
+	// It is deliberately separate from BaseURI. The two answer different
+	// questions -- "what does a prolog declaration resolve against" and "what
+	// does the query run under" -- and conflating them is what made every
+	// earlier attempt at K2-BaseURIProlog-4 a net loss: one value for both
+	// also stamped that value on constructed elements and on
+	// fn:static-base-uri when the query declared nothing, which the suite's
+	// base-URI-12/14/23/24 and K2-BaseURIFunc-30 all detect. Kept apart,
+	// setting this one changes nothing except the resolution a declaration
+	// asks for: a query with no "declare base-uri" is unaffected by it.
+	DeclarationBaseURI string
+
 	// BoundarySpace decides whether whitespace that only separates markup
 	// survives into a constructed element. The zero value strips it, which is
 	// what a query with no "declare boundary-space" gets.
@@ -92,6 +107,7 @@ type Query struct {
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
+	sc.declBase = opts.DeclarationBaseURI
 	sc.boundarySpace = opts.BoundarySpace
 	sc.construction = opts.Construction
 	sc.defaultElementNS = opts.DefaultElementNamespace

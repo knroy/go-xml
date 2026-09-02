@@ -536,7 +536,32 @@ func (p *parser) parseBaseURIDecl(once map[string]*seenDecl, inSecond *bool) err
 	// A relative declared base URI resolves against the one already in force,
 	// which is what "declare base-uri '../'" in a module loaded from a
 	// directory is asking for.
-	p.sc.baseURI = resolveBase(p.sc.baseURI, uri)
+	//
+	// When the caller supplied no base URI but did say where the query text
+	// was read from, that is what §4.5 means by resolving against the base URI
+	// from the static context -- the module's own location. Resolving against
+	// declBase rather than seeding baseURI with it is what lets
+	// K2-BaseURIProlog-4 and -5, which declare the relative "abc" and "" and
+	// require fn:static-base-uri() to come back absolute, work without the
+	// value reaching a query that declares nothing.
+	//
+	// An already-absolute declaration is taken verbatim rather than resolved.
+	// Resolution is not the identity on an absolute URI: url.ResolveReference
+	// reparses and reserialises it, which percent-encodes characters the
+	// declaration is entitled to contain. base-URI-12, -14, -23 and -24 each
+	// declare an absolute URI holding a quote, a "#", or a trailing space and
+	// assert the string comes back unchanged; routing them through resolution
+	// returned "examples%20" for "examples ". Only a relative declaration has
+	// anything to resolve, so only a relative one is resolved.
+	if isAbsoluteURI(uri) {
+		p.sc.baseURI = uri
+		return nil
+	}
+	against := p.sc.baseURI
+	if against == "" {
+		against = p.sc.declBase
+	}
+	p.sc.baseURI = resolveBase(against, uri)
 	return nil
 }
 
@@ -1085,9 +1110,49 @@ func checkEncodingName(enc string) error {
 
 // resolveBase resolves a possibly-relative declared base URI against the one
 // already in force.
+// isAbsoluteURI reports whether s begins with an RFC 3986 scheme, which is
+// what makes a URI reference absolute rather than relative.
+//
+// It reads the prefix directly instead of calling url.Parse because the caller
+// is deciding whether to avoid url.Parse at all: the point is to leave an
+// absolute declaration exactly as written, and parsing it to find out would
+// already have normalised the characters that decision is meant to preserve.
+//
+// A scheme is ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) followed by ":".
+// The leading-letter rule is what keeps a Windows-style "c:/tmp" out of the
+// question only by accident; it is a real scheme by this grammar, and callers
+// pass URIs rather than paths.
+func isAbsoluteURI(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+			continue
+		case c >= '0' && c <= '9', c == '+', c == '-', c == '.':
+			// Legal inside a scheme but not as its first character.
+			if i == 0 {
+				return false
+			}
+		case c == ':':
+			return i > 0
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 func resolveBase(base, decl string) string {
-	if base == "" || decl == "" {
+	if base == "" {
 		return decl
+	}
+	// An empty declared URI is a legitimate relative reference, not an absent
+	// one: RFC 3986 resolves it to the base itself. K2-BaseURIProlog-5 writes
+	// "declare base-uri ''" and then requires fn:static-base-uri() to end with
+	// the file the query was read from, so it must resolve rather than blank
+	// the base out.
+	if decl == "" {
+		return base
 	}
 	b, err := url.Parse(base)
 	if err != nil {
