@@ -53,6 +53,10 @@ func (p *parser) parseXQueryOnly() (node, bool, error) {
 		return p.parseOrderedUnordered()
 	case "validate":
 		return p.parseValidate()
+	case "function":
+		// Only an inline function whose body this package has to read; see
+		// parseInlineFunc, which hands the ordinary ones back to xpath.
+		return p.parseInlineFunc()
 	}
 	return nil, false, nil
 }
