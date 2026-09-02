@@ -258,25 +258,36 @@ func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // parseValidate parses [102] "validate (ValidationMode | type TypeName)?
 // EnclosedExpr", XQuery 3.1 §3.21.
 //
-// The expression is parsed and refused rather than mis-parsed. Validating
-// means running the schema processor over a freshly constructed tree and
-// stamping the resulting PSVI type annotations onto it, and this package has
-// nowhere to put those annotations: the data model here carries a type
-// annotation on a node, but nothing in xdmbuild threads a validated one back
-// through construction, and the in-scope schema definitions the mode needs are
-// part of the prolog's schema import, which is not implemented either.
+// Schema import is not implemented, so the in-scope schema definitions are
+// always empty. What that means for the expression depends on the mode, and
+// the two halves are not the same answer:
 //
-// So this reports XQDY0084 — "the element does not have a top-level element
-// declaration in the in-scope schema definitions" — which is exactly true of
-// every element here, since the in-scope schema definitions are empty. A query
-// that validates against a schema it never imported gets the same answer from
-// a conformant processor.
+// Strict validation demands a declaration. §3.21 makes it XQDY0084 when "the
+// element does not have a top-level element declaration in the in-scope schema
+// definitions", which is true of every element here, so "validate strict" gets
+// the error a conformant processor with no imports would also give it.
+//
+// Lax validation does not demand one. XSD 1.0 §3.3.4 clause 1.2 says lax
+// assessment of an element with no matching declaration is *skipped* — the
+// outcome is "notKnown", which is not an error — and the node comes through
+// unannotated. So "validate lax" over a constructed tree with nothing to
+// validate against succeeds and yields its operand. Refusing it was reading
+// the strict rule onto the lax keyword.
+//
+// The mode is therefore kept rather than parsed and dropped. Type annotations
+// still cannot come from a schema, but they can come from xsi:type when it
+// names a built-in, which validateExpr handles; that much needs no import,
+// since the XSD built-ins are always available.
 func (p *parser) parseValidate() (node, bool, error) {
 	save := p.pos
+	lax := false
 	p.pos += len("validate")
 	p.skipSpaceAndComments()
 	switch {
-	case p.consumeKeyword("lax"), p.consumeKeyword("strict"):
+	case p.consumeKeyword("lax"):
+		lax = true
+		p.skipSpaceAndComments()
+	case p.consumeKeyword("strict"):
 		p.skipSpaceAndComments()
 	case p.consumeKeyword("type"):
 		p.skipSpaceAndComments()
@@ -291,7 +302,7 @@ func (p *parser) parseValidate() (node, bool, error) {
 		return nil, false, nil
 	}
 	// The body is still parsed, so that a syntax error inside it is reported
-	// as one rather than hidden behind the unsupported feature.
+	// as one rather than hidden behind an unsupported mode.
 	body, err := p.parseBracedExprSingle()
 	if err != nil {
 		return nil, true, err
@@ -304,11 +315,16 @@ func (p *parser) parseValidate() (node, bool, error) {
 			"XPST0003: a %q expression needs an expression to validate",
 			"validate")
 	}
-	return &validateExpr{body: body}, true, nil
+	return &validateExpr{body: body, lax: lax}, true, nil
 }
 
-// validateExpr is a parsed validate expression, which fails when it runs.
-type validateExpr struct{ body *enclosed }
+// validateExpr is a parsed validate expression. Lax validation runs; every
+// other mode fails, because it needs schema definitions that were never
+// imported.
+type validateExpr struct {
+	body *enclosed
+	lax  bool
+}
 
 func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 	_, err := n.sequence(ctx)
@@ -321,19 +337,70 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	// though the validation it precedes cannot be: "validate { 1 }" is
 	// XQTY0030 in a processor with every schema in the world imported.
 	seq, err := n.body.sequence(ctx)
-	if err == nil {
-		if len(seq) != 1 {
-			return nil, xdm.Errorf("XQTY0030",
-				"validate requires exactly one element or document node, "+
-					"and its operand is a sequence of %d items", len(seq))
-		}
-		if node, ok := seq[0].(*xdm.Node); !ok ||
-			(node.Kind != xdm.KindElement && node.Kind != xdm.KindDocument) {
-			return nil, xdm.Errorf("XQTY0030",
-				"validate requires an element or document node")
+	if err != nil {
+		return nil, err
+	}
+	if len(seq) != 1 {
+		return nil, xdm.Errorf("XQTY0030",
+			"validate requires exactly one element or document node, "+
+				"and its operand is a sequence of %d items", len(seq))
+	}
+	root, ok := seq[0].(*xdm.Node)
+	if !ok || (root.Kind != xdm.KindElement && root.Kind != xdm.KindDocument) {
+		return nil, xdm.Errorf("XQTY0030",
+			"validate requires an element or document node")
+	}
+	if !n.lax {
+		return nil, xdm.Errorf("XQDY0084",
+			"validate has no in-scope schema definitions to validate "+
+				"against: schema import is not implemented")
+	}
+	// Lax assessment with empty in-scope schema definitions finds no
+	// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes that
+	// a skipped assessment rather than a failure. The tree therefore comes
+	// through as it was built, with one exception below.
+	annotateBuiltinXSIType(root)
+	return seq, nil
+}
+
+// annotateBuiltinXSIType stamps the type annotation an xsi:type attribute
+// names, for the built-in types alone, over a tree being laxly validated.
+//
+// Lax assessment of an element carrying xsi:type is not skipped the way an
+// undeclared element is: XSD 1.0 §3.3.4 clause 1.2.1.2 resolves the type from
+// the attribute and assesses against it. The XSD built-ins need no import to
+// be available — they are always in scope — so this much of lax validation is
+// answerable here even though schema import is not implemented, and a type
+// from any other namespace is left alone because that one really would need
+// the import.
+//
+// The annotation matters beyond its own name: SetTypeAnnotation turns on the
+// is-id and is-idrefs properties for the ID family, and those are what
+// fn:id, fn:element-with-id and fn:idref look the node up by. An element
+// whose content is <empnr xsi:type="xs:ID">E21256</empnr> is an ID in the
+// data model, and without this it was an ordinary untyped element that
+// fn:id could not find.
+//
+// Nothing here validates the content against the type it claims. A lax
+// assessment that found the value invalid would report it, and that check
+// belongs with a real schema processor; what this provides is the annotation,
+// which is the part the data model's ID properties are derived from.
+func annotateBuiltinXSIType(n *xdm.Node) {
+	if n.Kind == xdm.KindElement {
+		if a := n.Attr(xdm.NSXSI, "type"); a != nil {
+			// The value is a QName in the element's namespace scope, so the
+			// prefix is resolved rather than assumed to be "xs": a query is
+			// free to bind the XSD namespace to any prefix it likes.
+			prefix, local := "", strings.TrimSpace(a.Value)
+			if i := strings.IndexByte(local, ':'); i >= 0 {
+				prefix, local = local[:i], local[i+1:]
+			}
+			if uri, ok := n.LookupPrefix(prefix); ok && uri == xdm.NSXS {
+				n.SetTypeAnnotation(local)
+			}
 		}
 	}
-	return nil, xdm.Errorf("XQDY0084",
-		"validate has no in-scope schema definitions to validate against: "+
-			"schema import is not implemented")
+	for _, c := range n.Children {
+		annotateBuiltinXSIType(c)
+	}
 }
