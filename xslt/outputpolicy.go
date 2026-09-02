@@ -109,8 +109,8 @@ func (xsltPolicy) PreserveTypes() bool { return true }
 // is not empty.
 //
 // §5.7.1 joins a run of adjacent atomic values with a single space before any
-// removal rule applies, so two xsl:sequence instructions selecting '' leave a
-// text node holding that space. on-empty-115a builds exactly that document
+// removal rule applies, so two xsl:sequence instructions selecting the empty
+// string leave a text node holding that space. on-empty-115a builds that document
 // and its xsl:on-empty fallback -- "WRONG! the document node contains a
 // space, it is not empty!!!" -- says what is at stake; seqtor-039a wants
 // " | | " where dropping the empties would give "||".

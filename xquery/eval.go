@@ -115,9 +115,16 @@ func (p policy) PreserveTypes() bool {
 // §3.9.1.3 removes zero-length text nodes when constructing complex content,
 // and absorbing a nested document node does not exempt its children from the
 // rule. Constr-docnode-nested-4 counts the text children of
-// "document {'', document{''}, document {document {()}, document {''}}, ''}"
+//
+//	document {'', document{''}, document {document {()}, document {''}}, ''}
+//
 // and expects zero. XSLT answers the opposite, because it inserts the
 // separating space first and that space is content.
+//
+// The expression is written as an indented block because gofmt rewrites a
+// pair of apostrophes in running doc-comment text into a typographic quote,
+// which would turn the empty string literals into something XQuery does not
+// have. Inside a code block they are left alone.
 func (policy) DropEmptyText() bool { return true }
 
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
