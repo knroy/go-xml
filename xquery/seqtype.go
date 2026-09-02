@@ -80,6 +80,20 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 			if depth == 0 {
 				goto done
 			}
+		case '*', '+', '?':
+			// An occurrence indicator is the last thing a sequence type can
+			// carry, so at depth zero the type ends here whatever follows.
+			// Without this the scan ran on through the space after a detached
+			// one and swallowed the next word: "as xs:string *external" gave
+			// the type "xs:string *external", which does not compile, in place
+			// of the type "xs:string*" and an external declaration.
+			// K2-ExternalVariablesWith-7 writes it exactly that way and wants
+			// XPDY0002 for the unsupplied value. Inside brackets the character
+			// is a wildcard or a quantifier and is left alone.
+			if depth == 0 {
+				p.pos++
+				goto done
+			}
 		case ':':
 			// "Q{...}" and "p:local" both contain characters this loop would
 			// otherwise treat as structure; a lone ":" is neither, and ":="
