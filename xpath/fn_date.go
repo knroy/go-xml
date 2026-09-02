@@ -3,16 +3,66 @@ package xpath
 import (
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
+
+// dateAccessorType is the type an accessor's single argument is declared as,
+// read off the function's own name.
+//
+// F&O 3.0 §9.5 declares each component accessor over exactly one of the three
+// calendar types — fn:month-from-date($arg as xs:date?), and correspondingly
+// for -from-dateTime and -from-time — so the name determines what the
+// function conversion rules must cast an xs:untypedAtomic argument to.
+func dateAccessorType(name string) xdm.TypeCode {
+	switch {
+	case strings.HasSuffix(name, "-from-dateTime"):
+		return xdm.TypeDateTime
+	case strings.HasSuffix(name, "-from-date"):
+		return xdm.TypeDate
+	case strings.HasSuffix(name, "-from-time"):
+		return xdm.TypeTime
+	}
+	return xdm.TypeDateTime
+}
+
+// dateAccessorArg applies the function conversion rules to a component
+// accessor's argument.
+//
+// XPath 3.0 §3.1.5.2 states the rules for a parameter whose declared type is
+// an atomic type: "If the expected type is an atomic type ... each item in the
+// given sequence that is of type xs:untypedAtomic is cast to the expected
+// atomic type." An unvalidated document's content is xs:untypedAtomic, so
+// month-from-date(@date) on such a document must cast to xs:date and then take
+// the component, not reject the argument (app-UseCaseR/rdb-queries-results-q9).
+//
+// The cast is confined to xs:untypedAtomic. The same clause promotes only
+// numerics and anyURI; an xs:string is neither cast nor promoted to xs:date,
+// so month-from-date("2008-06-01") stays the XPTY0004 the suite expects.
+func dateAccessorArg(a *xdm.Atomic, want xdm.TypeCode, name string) (*xdm.Atomic, error) {
+	if a.Type == xdm.TypeUntypedAtomic {
+		conv, err := CastAtomic(a, want)
+		if err != nil {
+			return nil, xdm.ErrType(
+				"%s(): %q is not a valid %s", name, a.String(), want.String())
+		}
+		a = conv
+	}
+	if a.DateTimeVal() == nil {
+		return nil, xdm.ErrType(
+			"%s(): expected a date/time value, got %s", name, a.TypeName())
+	}
+	return a, nil
+}
 
 // registerDateFuncs adds the date/time accessor and adjustment functions.
 func registerDateFuncs(l *Library) {
 	// The component accessors. Each returns the empty sequence for an empty
 	// argument, which is what makes them safe to apply to an optional element.
 	dateComponent := func(name string, get func(*xdm.DateTime) xdm.Item) {
+		want := dateAccessorType(name)
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
@@ -23,8 +73,9 @@ func registerDateFuncs(l *Library) {
 				return nil, err
 			}
 			a := it.(*xdm.Atomic)
-			if a.DateTimeVal() == nil {
-				return nil, xdm.ErrType("%s(): expected a date/time value, got %s", name, a.TypeName())
+			a, err = dateAccessorArg(a, want, name)
+			if err != nil {
+				return nil, err
 			}
 			return xdm.One(get(a.DateTimeVal())), nil
 		})
@@ -47,6 +98,7 @@ func registerDateFuncs(l *Library) {
 	// the value carries no timezone — which is exactly how a stylesheet tests
 	// for one.
 	tzAccessor := func(name string) {
+		want := dateAccessorType(name)
 		l.registerFn(name, []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 			atoms := xdm.Atomize(args[0])
 			if len(atoms) == 0 {
@@ -57,10 +109,11 @@ func registerDateFuncs(l *Library) {
 				return nil, err
 			}
 			a := it.(*xdm.Atomic)
-			dt := a.DateTimeVal()
-			if dt == nil {
-				return nil, xdm.ErrType("%s(): expected a date/time value", name)
+			a, err = dateAccessorArg(a, want, name)
+			if err != nil {
+				return nil, err
 			}
+			dt := a.DateTimeVal()
 			if !dt.HasTZ {
 				return xdm.Empty(), nil
 			}

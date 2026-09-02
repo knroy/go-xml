@@ -124,14 +124,96 @@ func (r rangeProps) avg() *big.Rat {
 	return sum.Quo(sum, new(big.Rat).SetInt64(r.cardinality()))
 }
 
+// seqCardinality counts the items an expression yields without necessarily
+// building them.
+//
+// fn:count, fn:empty and fn:exists are defined purely on the length of their
+// argument — F&O 3.0 §14.1.4 gives fn:count as "the number of items in the
+// value of $arg" and §14.1.2/§14.1.3 give fn:empty and fn:exists as tests on
+// that same count — so any part of the argument whose length is known without
+// enumeration need never be enumerated.
+//
+// A comma expression is where this pays. asRange recognises only a *bare*
+// range, because a predicate or a "for" around one changes which items
+// survive; but a sequence constructor does not change its parts, it just
+// concatenates them, so its length is the sum of its parts' lengths. That is
+// the shape the suite actually writes: cbcl-count-002, cbcl-empty-func-001 and
+// cbcl-exists-001 all pass "((), f(()), f(0), (1 to 10000000), f(()), f(1))",
+// where only the range is large. Counting the range from its bounds and
+// evaluating the five small parts normally answers all three without ever
+// materialising ten million integers.
+//
+// Every part that is not a range is evaluated in the ordinary way, so nothing
+// is assumed about side effects or errors: an error in any part still
+// surfaces, and the parts are evaluated left to right as before. Only the
+// range parts are skipped, and only their length is used.
+func seqCardinality(ctx *Context, e Expr) (int64, bool, error) {
+	if r, ok, err := asRange(ctx, e); err != nil {
+		return 0, false, err
+	} else if ok {
+		return r.cardinality(), true, nil
+	}
+	seq, ok := e.(*SequenceExpr)
+	if !ok {
+		return 0, false, nil
+	}
+	var total int64
+	for _, part := range seq.Items {
+		n, ok, err := seqCardinality(ctx, part)
+		if err != nil {
+			return 0, false, err
+		}
+		if ok {
+			total += n
+			continue
+		}
+		// Not a shape with a known length, so it is built. These are the
+		// small parts; the whole point is that the large one never gets here.
+		v, err := part.Eval(ctx)
+		if err != nil {
+			return 0, false, err
+		}
+		// A part that *is* materialised is charged to the evaluation's item
+		// budget exactly as the ordinary path would have charged it. Skipping
+		// this would let "count((huge, huge, huge))" slip past MaxItems just
+		// because the count was taken part by part; the budget is a memory
+		// guard, and these parts really are in memory.
+		if err := ctx.countItems(len(v)); err != nil {
+			return 0, false, err
+		}
+		total += int64(len(v))
+	}
+	return total, true, nil
+}
+
 // rangeAggregate answers an aggregate function over a bare range from its
 // bounds. It reports ok=false when the call is not that shape.
 func rangeAggregate(ctx *Context, e *FuncCall) (xdm.Sequence, bool, error) {
 	if e.Name.URI != xdm.NSFN || len(e.Args) != 1 {
 		return nil, false, nil
 	}
+
+	// count, empty and exists need only a length, so they take the wider
+	// cardinality analysis, which sees through a comma expression as well as
+	// a bare range. The remaining aggregates need the range's *values* and so
+	// stay on asRange below.
 	switch e.Name.Local {
-	case "count", "sum", "min", "max", "avg":
+	case "count", "empty", "exists":
+		n, ok, err := seqCardinality(ctx, e.Args[0])
+		if err != nil || !ok {
+			return nil, false, err
+		}
+		switch e.Name.Local {
+		case "count":
+			return xdm.One(xdm.NewInteger(n)), true, nil
+		case "empty":
+			return xdm.One(xdm.NewBoolean(n == 0)), true, nil
+		}
+		return xdm.One(xdm.NewBoolean(n > 0)), true, nil
+	}
+
+	switch e.Name.Local {
+	case "sum", "min", "max", "avg":
 	default:
 		return nil, false, nil
 	}
@@ -142,8 +224,6 @@ func rangeAggregate(ctx *Context, e *FuncCall) (xdm.Sequence, bool, error) {
 	}
 
 	switch e.Name.Local {
-	case "count":
-		return xdm.One(xdm.NewInteger(r.cardinality())), true, nil
 	case "sum":
 		// fn:sum of the empty sequence is 0, not the empty sequence.
 		return xdm.One(xdm.NewIntegerFromRat(new(big.Rat).SetInt(r.sum()))), true, nil

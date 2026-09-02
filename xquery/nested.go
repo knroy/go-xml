@@ -211,15 +211,42 @@ func (p *parser) compileCallOverArgs(prefix, local string, n int) (*compiledExpr
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString("$local:" + callArgLocal(i))
+		sb.WriteString("$" + callArgPrefix + ":" + callArgLocal(i))
 	}
 	sb.WriteByte(')')
 	return p.compileExpr(sb.String())
 }
 
+// callArgPrefix is the prefix the synthetic argument variables are written
+// with, and callArgNS resolves it the way the compiled text will be read.
+//
+// The text handed to the XPath compiler names these variables by *prefix*, so
+// the URI they end up in is whatever that prefix is bound to in the static
+// context at that point — not whatever this package assumes. XQuery 3.1 §4.11
+// lets a prolog rebind any prefix, "local" included: app-XMark/XMark-All opens
+// with "declare namespace local = "http://www.example.com/"". Binding the value
+// under the fixed local-function namespace while the text resolved to the
+// query's own URI left the variable unbound, which is the XPST0008 that case
+// reported.
+//
+// So the binding side asks the same static context the compiler consulted, and
+// the two agree by construction whatever the prolog did.
+const callArgPrefix = "local"
+
+// callArgNS is the namespace the synthetic argument variables are bound in.
+func callArgNS(sc *staticContext) string {
+	if sc == nil {
+		return nsLocal
+	}
+	if uri, ok := sc.ResolvePrefix(callArgPrefix); ok {
+		return uri
+	}
+	return nsLocal
+}
+
 // callArgLocal names the variable one parsed argument is bound to. The
-// reserved local-function namespace keeps it from colliding with anything the
-// query itself binds.
+// "xq-arg" spelling keeps it from colliding with anything the query itself
+// binds in the same namespace.
 func callArgLocal(i int) string { return "xq-arg" + strconv.Itoa(i) }
 
 // nestedCall is a function call whose arguments this package had to parse
@@ -245,7 +272,7 @@ func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
-		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: callArgLocal(i)}, v)
+		xp = xp.WithVar(xdm.QName{URI: callArgNS(ctx.sc), Local: callArgLocal(i)}, v)
 	}
 	return n.fn.compiled.Eval(xp)
 }

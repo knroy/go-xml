@@ -245,12 +245,44 @@ func callFunction(ctx *Context, fn *xdm.FunctionItem, args ...xdm.Sequence) (xdm
 }
 
 // singleBoolean reads the xs:boolean a predicate function must return.
+//
+// F&O 3.1 §14.2.2 declares fn:filter's second argument as
+// "function(item()) as xs:boolean", and XPath 3.0 §3.1.5.2 requires the
+// function conversion rules to be applied to a coerced function's result as
+// well as to its arguments: the returned value is converted to the declared
+// return type before the caller sees it. So the result is not merely tested
+// for being an xs:boolean — it is atomised and, when xs:untypedAtomic, cast.
+// filter-006 returns an element node from the predicate; atomising it yields
+// xs:untypedAtomic, which casts to xs:boolean and selects the even numbers.
+//
+// This is a cast under the function conversion rules, deliberately not an
+// effective boolean value. §3.1.5.2 promotes only numerics and xs:anyURI and
+// casts only xs:untypedAtomic, so an xs:string result is still XPTY0004
+// (filter-901 passes normalize-space#1), as is an empty or two-item result
+// (filter-902, filter-903), all three of which fn:boolean would have accepted.
 func singleBoolean(seq xdm.Sequence, fn string) (bool, error) {
-	if len(seq) != 1 {
+	// Atomisation comes first because the declared return type is atomic; a
+	// node result is judged by its typed value, not by being a node.
+	atoms, err := xdm.AtomizeChecked(seq)
+	if err != nil {
+		return false, err
+	}
+	if len(atoms) != 1 {
 		return false, xdm.ErrType("%s: the function must return a single xs:boolean", fn)
 	}
-	a, ok := seq[0].(*xdm.Atomic)
-	if !ok || a.Type != xdm.TypeBoolean {
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return false, xdm.ErrType("%s: the function must return xs:boolean", fn)
+	}
+	if a.Type == xdm.TypeUntypedAtomic {
+		conv, err := CastAtomic(a, xdm.TypeBoolean)
+		if err != nil {
+			return false, xdm.ErrType(
+				"%s: %q is not a valid xs:boolean", fn, a.String())
+		}
+		a = conv
+	}
+	if a.Type != xdm.TypeBoolean {
 		return false, xdm.ErrType("%s: the function must return xs:boolean", fn)
 	}
 	return a.Bool(), nil

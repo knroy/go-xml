@@ -580,9 +580,8 @@ func deepEqualText(ctx *Context, a, b string) bool {
 	return a == b
 }
 
-// deepEqualContent compares children, ignoring comments and PIs and merging
-// adjacent text, which is what the spec's "children, excluding comments and
-// processing instructions" rule amounts to.
+// deepEqualContent compares the children that decide an untyped element's
+// content, which are the ones the spec's own path expression selects.
 func deepEqualContent(ctx *Context, a, b *xdm.Node) (bool, error) {
 	ac, bc := significantChildren(a), significantChildren(b)
 	if len(ac) != len(bc) {
@@ -597,25 +596,33 @@ func deepEqualContent(ctx *Context, a, b *xdm.Node) (bool, error) {
 	return true, nil
 }
 
+// significantChildren selects the children fn:deep-equal compares for an
+// untyped element.
+//
+// An element in an unvalidated tree is annotated xs:untyped, a complex type
+// whose variety is mixed, and F&O 3.0 §14.1.13 rules that case as: "Both
+// element nodes have a type annotation that is a complex type with variety
+// mixed, and the sequence $i1/(*|text()) is deep-equal to the sequence
+// $i2/(*|text())". That is a selection over the child axis: comments and
+// processing instructions are simply not selected.
+//
+// Crucially, selecting is all it is. The surviving text nodes are NOT merged.
+// A comment or PI between two text nodes leaves them two separate children on
+// the child axis, so <e>te<?target data?>xt</e> yields the two text nodes "te"
+// and "xt" and is not deep-equal to <e>text</e>, which yields one
+// (K2-SeqDeepEqualFunc-20 and -22 both assert "false false"). Merging here
+// would collapse the two into "text" and make them wrongly compare equal.
+//
+// Nothing is lost by not merging: xdmbuild enforces the XDM invariant that no
+// two text nodes are adjacent, so a constructed tree never presents a run of
+// text children that a parsed one would have presented as one node.
 func significantChildren(n *xdm.Node) []*xdm.Node {
 	var out []*xdm.Node
 	for _, c := range n.Children {
-		switch c.Kind {
-		case xdm.KindComment, xdm.KindPI:
+		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
 			continue
-		case xdm.KindText:
-			// Merge with a preceding text node so that a tree built by a
-			// transform compares equal to a parsed one.
-			if k := len(out); k > 0 && out[k-1].Kind == xdm.KindText {
-				merged := *out[k-1]
-				merged.Value += c.Value
-				out[k-1] = &merged
-				continue
-			}
-			out = append(out, c)
-		default:
-			out = append(out, c)
 		}
+		out = append(out, c)
 	}
 	return out
 }

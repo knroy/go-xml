@@ -46,8 +46,15 @@ import (
 // cannot disagree about where one is.
 
 // stepFn names the zero-arity function one substituted primary is called
-// through. The reserved local-function namespace keeps the name from
-// colliding with anything the query itself declares.
+// through. The "xq-step" spelling keeps the name from colliding with anything
+// the query itself declares in the same namespace.
+//
+// The name is written into the rewritten source with the "local" prefix and so
+// resolves through the static context, exactly like the synthetic argument
+// variables in nested.go — see callArgNS there for why the namespace it lands
+// in cannot be assumed. A prolog that rebinds "local" (app-XMark/XMark-All
+// declares it as "http://www.example.com/") moves the call, so the function
+// has to be registered under wherever the prefix actually points.
 func stepFn(i int) string { return "xq-step" + strconv.Itoa(i) }
 
 // liftedOperand is one XQuery-only primary lifted out of an expression so
@@ -183,7 +190,7 @@ func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error)
 			return nil, "", nil
 		}
 		out.WriteString(src[copied:start])
-		out.WriteString("local:" + stepFn(len(ops)) + "()")
+		out.WriteString(callArgPrefix + ":" + stepFn(len(ops)) + "()")
 		ops = append(ops, liftedOperand{n: n})
 		copied = sub.pos
 		i = sub.pos
@@ -373,7 +380,7 @@ func bindLifted(xp *xpath.Context, ops []liftedOperand,
 	for i, op := range ops {
 		item := op.n
 		lib.Add(xpath.Function{
-			Name:  xdm.QName{URI: nsLocal, Local: stepFn(i)},
+			Name:  xdm.QName{URI: callArgNS(ctx.sc), Local: stepFn(i)},
 			Arity: 0,
 			Call: func(c *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
 				return (&enclosed{items: []node{item}}).sequence(

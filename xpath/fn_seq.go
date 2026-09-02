@@ -258,33 +258,84 @@ func fnSubsequence(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // compared value rather than the lexical form. Numerics therefore share a key
 // space, while strings and untypedAtomic share another — matching the rule
 // that distinct-values compares with eq semantics under a single collation.
+//
+// Numerics are the exception, and are not hashed at all. F&O 3.0 §14.1.7 warns:
+// "If the input sequence contains values of different numeric types that differ
+// from each other by small amounts, then the eq operator is not transitive,
+// because of rounding effects occurring during type promotion. In the situation
+// where the input contains three values A, B, and C such that A eq B, B eq C,
+// but A ne C, then the number of items in the result of the function ... is
+// implementation dependent, subject only to the constraints that (a) no two
+// items in the result sequence compare equal to each other, and (b) every input
+// item that does not appear in the result sequence compares equal to some item
+// that does appear in the result sequence."
+//
+// A hash key cannot satisfy both constraints, because a key forces transitivity
+// on a relation that has none: any single key space must decide that A and C
+// collide or that they do not, and either choice breaks (a) or (b) for some B.
+// fn-distinct-values-1 is exactly that triple — xs:float(1.0) eq
+// xs:decimal(1.0000000000100000000001) when both promote to float, and that
+// decimal eq xs:double(1.00000000001) when both promote to double, yet the
+// float and the double are not equal — and it asserts both constraints
+// directly.
+//
+// So numerics are compared pairwise against the values already kept, with the
+// same compareValues that "eq" itself uses. That satisfies (a) by construction
+// (a value is kept only when it equals nothing already kept) and (b) likewise
+// (a value is dropped only when it equals something kept). It also removes the
+// old whole-sequence float scan, which degraded every numeric to float
+// precision whenever a single xs:float appeared anywhere in the input and so
+// merged values that a pairwise eq keeps apart (cbcl-distinct-values-002b).
+//
+// The pairwise scan is quadratic, but only in the number of *distinct numeric*
+// values; every non-numeric keeps the hash path, and so does the common case of
+// a numeric that repeats a value already kept being found early.
 func fnDistinctValues(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	atoms := xdm.Atomize(args[0])
 	var out xdm.Sequence
 	seen := map[string]bool{}
-
-	// Equality between two numerics is decided in their promoted type, so the
-	// precision the keys are taken at depends on the sequence as a whole: with
-	// an xs:float present, a decimal is compared *as a float*, which makes
-	// xs:decimal("1.2") and xs:float("1.2") the same value. A per-item key
-	// cannot see that, so the sequence is scanned first.
-	narrowToFloat := false
-	for _, it := range atoms {
-		if a, ok := it.(*xdm.Atomic); ok && a.Type == xdm.TypeFloat {
-			narrowToFloat = true
-			break
-		}
-	}
+	// The distinct numerics kept so far, held separately so the pairwise scan
+	// does not walk the non-numeric results as well.
+	var numerics []*xdm.Atomic
 
 	for _, it := range atoms {
 		a := it.(*xdm.Atomic)
+
+		if a.Type.IsNumeric() {
+			// NaN is the one numeric that is not compared pairwise. §14.1.7
+			// says "although NaN does not equal itself, if $arg contains
+			// multiple NaN values a single NaN is returned", so eq would keep
+			// every NaN; the hash key collapses them to one instead.
+			if a.IsNaN() {
+				if seen["NaN"] {
+					continue
+				}
+				seen["NaN"] = true
+				out = append(out, a)
+				continue
+			}
+			dup := false
+			for _, k := range numerics {
+				eq, err := compareValues(ctx, a, k, "eq", false)
+				if err != nil {
+					return nil, err
+				}
+				if eq {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			numerics = append(numerics, a)
+			out = append(out, a)
+			continue
+		}
+
 		key, err := valueKey(ctx, a)
 		if err != nil {
 			return nil, err
-		}
-		if narrowToFloat && a.Type.IsNumeric() && !a.IsNaN() {
-			key = "n\x00" + strconv.FormatFloat(
-				float64(float32(a.Float64())), 'g', 17, 32)
 		}
 		if seen[key] {
 			continue

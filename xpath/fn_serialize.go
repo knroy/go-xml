@@ -224,10 +224,11 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 			}
 			switch p.Name.Local {
 			case "method":
-				if val != "xml" && val != "text" && val != "xhtml" && val != "html" {
-					return opts, fmt.Errorf("SEPM0017: unsupported serialization method %q", val)
+				m, err := checkSerializationMethod(val)
+				if err != nil {
+					return opts, err
 				}
-				opts.method = val
+				opts.method = m
 			case "omit-xml-declaration":
 				if err := checkYesNo(val, p.Name.Local); err != nil {
 					return opts, err
@@ -593,6 +594,26 @@ func applyCharacterMap(s string, m map[rune]string) string {
 		sb.WriteRune(r)
 	}
 	return sb.String()
+}
+
+// checkSerializationMethod validates the "method" serialization parameter.
+//
+// Serialization 3.1 §3 lists the output methods, and §2 makes an unsupported
+// one an error: "It is a serialization error [err:SEPM0017] if the value of
+// the method parameter is not one of the values permitted". The permitted set
+// does not depend on how the parameters were written. fn:serialize's second
+// argument may be given either as an output:serialization-parameters element
+// or as a map, and F&O 3.1 §14.7.2 defines the element form by converting it
+// to the map form before use — so the two spellings must accept exactly the
+// same methods. "json" and "adaptive" are therefore as valid in the element
+// form as in the map form (app-Walmsley/d1e78807h serializes a map through a
+// method="json" element).
+func checkSerializationMethod(v string) (string, error) {
+	switch v {
+	case "xml", "text", "xhtml", "html", "json", "adaptive":
+		return v, nil
+	}
+	return "", fmt.Errorf("SEPM0017: unsupported serialization method %q", v)
 }
 
 // mapSerializationParams reads the parameters from the map form the 3.1

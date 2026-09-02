@@ -6,6 +6,45 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### XQuery conformance: 99.67% to 99.71%
+
+29,719 of 29,805 QT3 cases in scope, up 13. XPath 2.0/3.0/3.1 stay at 100% and
+XSLT at 8,606 / 6,149.
+
+* **A range survives being counted through a comma expression.** `fn:count`,
+  `fn:empty` and `fn:exists` are defined purely on the length of their
+  argument, so a sequence constructor's length is now summed from its parts and
+  a `lo to hi` part contributes its cardinality without being built.
+  `count(((), f(()), (1 to 10000000), f(1)))` no longer trips the five-million
+  item guard. Parts that *are* materialised are still charged to that budget.
+* **`fn:distinct-values` compares numerics pairwise** instead of hashing them.
+  F&O §14.1.7 warns that `eq` is not transitive across numeric types, and
+  constrains the result only to "no two items compare equal" and "every input
+  equals some output" — constraints a single hash key cannot satisfy. This also
+  drops the whole-sequence scan that degraded every numeric to float precision
+  whenever one `xs:float` appeared anywhere in the input.
+* **`fn:deep-equal` no longer merges text across a comment or PI.** The rule for
+  an untyped (mixed-content) element is that `$i1/(*|text())` be deep-equal to
+  `$i2/(*|text())` — a selection over the child axis, which drops comments and
+  PIs but leaves the text nodes either side of one separate. Merging them made
+  `<e>te<?t d?>xt</e>` wrongly equal to `<e>text</e>`.
+* **`fn:filter` applies the function conversion rules to its predicate's
+  result**, so a predicate returning an element is atomised and cast rather
+  than refused. This is a cast, not an effective boolean value: an `xs:string`
+  result is still `XPTY0004`, as are an empty and a two-item result.
+* **The date and time component accessors cast `xs:untypedAtomic`.** Content
+  from an unvalidated document reached `month-from-date` and friends as
+  `xs:untypedAtomic` and was rejected; the function conversion rules cast it to
+  the accessor's declared type. `xs:string` is still not accepted.
+* **`method="json"` is accepted in the element form of the serialization
+  parameters**, which had a narrower list of methods than the map form. The two
+  spellings now share one check.
+* **Synthetic names survive a prolog that rebinds the `local` prefix.** The
+  argument variables and step functions this package invents are written with
+  that prefix and so resolve through the static context; they are now bound
+  under whatever it actually points at rather than under the fixed
+  local-function namespace.
+
 ### Fixed — found by real-world stylesheets
 
 Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and
