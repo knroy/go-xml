@@ -81,6 +81,16 @@ type compiledExpr struct {
 	// check is a declared type applied to the value items produced, for the
 	// case where there is no source text to fold a "treat as" into.
 	check *compiledExpr
+	// sc is the static context in force where the expression was written.
+	//
+	// It is needed by the one thing that resolves a name *after* parsing: a
+	// computed constructor's name expression, whose string result is resolved
+	// against the statically known namespaces (§3.9.3.1). Those are the ones
+	// in scope at the constructor, which inside a direct constructor includes
+	// that element's own xmlns declarations — and by then the evaluation
+	// context holds only the module's, the declarations having gone out of
+	// scope with the parser that made them.
+	sc *staticContext
 	// ops are XQuery-only primaries lifted out of src so that xpath could
 	// compile the rest. Each one's value is bound to "$local:xq-opN" before
 	// compiled is evaluated. See substituteOperands.
@@ -183,7 +193,11 @@ func (p *parser) parseQName() (prefix, local string, err error) {
 	if first == "" {
 		return "", "", p.errorf("XPST0003: expected a name")
 	}
-	if !p.lookingAt(":") || p.lookingAt("::") {
+	// "::" is the axis separator and ":=" is the assignment operator, and
+	// both are single tokens the lexical rules match before QName's colon.
+	// A "let $array:= ..." binds $array and assigns; without the second test
+	// the name eats the colon and the "=" is asked to be a local name.
+	if !p.lookingAt(":") || p.lookingAt("::") || p.lookingAt(":=") {
 		return "", first, nil
 	}
 	p.pos++
@@ -494,7 +508,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		}
 		c = c.WithDefaultCollation(coll)
 	}
-	return &compiledExpr{src: src, compiled: c, ops: opsOut}, nil
+	return &compiledExpr{src: src, compiled: c, sc: p.sc, ops: opsOut}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.

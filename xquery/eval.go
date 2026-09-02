@@ -222,6 +222,38 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
+		case *xdm.ArrayItem:
+			// §3.9.1.3 step 1 applies fn:data to the content sequence, and an
+			// array does have a typed value: it is the concatenation of the
+			// typed values of its members. So an array in element content
+			// contributes its members, not XQTY0105 — "<a>{['a',['b','c'],
+			// 'd']}</a>" is "<a>a b c d</a>", with the members flattened
+			// through the nesting and separated as adjacent atomic values
+			// always are. A map has no typed value and stays refused, which
+			// is why this is not simply an atomization of the whole sequence.
+			//
+			// This is the complex-content rule and applies only where complex
+			// content is being constructed. At the top of a sequence there is
+			// none, and the array is an ordinary item there: a query whose
+			// whole body is "[1, 2]" returns one array, not two integers.
+			if out.b.Open() == nil {
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			flat := xdm.Flatten(xdm.One(v))
+			if len(flat) == 1 && flat[0] == it {
+				// Flatten leaves an array it cannot reduce alone. Refusing it
+				// here keeps the guarantee that this branch terminates.
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := appendSequence(out, flat, sc); err != nil {
+				return err
+			}
 		default:
 			if err := out.b.AppendOpaque(it); err != nil {
 				return err
@@ -388,6 +420,20 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	sub := &builderRef{b: out.b.StartElement(name)}
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
 		el.BaseURI = n.baseURI
+	}
+	// §3.9.3.1: the in-scope namespaces of a constructed element include a
+	// binding for its own name. A direct constructor writes that binding as
+	// an xmlns attribute and it arrives below; a computed one has nowhere to
+	// write it, so the name's own prefix is bound here. Without it the
+	// element carried a namespace URI that nothing declared, and serializing
+	// "declare namespace foo='...'; element foo:e {}" lost the xmlns
+	// altogether. The default element namespace goes in the same way, under
+	// the empty prefix.
+	if el := sub.b.Open(); el != nil && name.URI != "" &&
+		el.InScopeNamespaces()[name.Prefix] != name.URI {
+		if err := sub.b.AddNamespace(name.Prefix, name.URI); err != nil {
+			return err
+		}
 	}
 	// Namespace declarations are applied before anything else, so that they
 	// are in scope for the attributes and the content.
@@ -617,7 +663,7 @@ func joinAtomized(seq xdm.Sequence) (string, error) {
 }
 
 func (n *comment) eval(out *builderRef, ctx *evalContext) error {
-	text, err := contentString(n.content, ctx)
+	text, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
@@ -632,20 +678,11 @@ func (n *comment) eval(out *builderRef, ctx *evalContext) error {
 func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 	target := n.target
 	if n.targetExpr != nil {
-		seq, err := n.targetExpr.compiled.Eval(ctx.xp)
+		t, err := evalPITarget(n.targetExpr, ctx)
 		if err != nil {
 			return err
 		}
-		s, err := joinAtomized(seq)
-		if err != nil {
-			return err
-		}
-		target = s
-		if !xdm.IsNCName(target) {
-			return fmt.Errorf(
-				"XQDY0041: %q is not a valid processing-instruction target",
-				target)
-		}
+		target = t
 	}
 	// §3.9.3.5: the target may not be "xml" in any combination of case, which
 	// XML itself reserves. XQDY0064 is a dynamic error, so it is raised here
@@ -658,10 +695,15 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 			"XQDY0064: %q is not a legal processing-instruction target",
 			target)
 	}
-	text, err := contentString(n.content, ctx)
+	text, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
+	// §3.9.3.5: leading whitespace is stripped from the content. XML has no
+	// way to write it — the target and the data are separated by whitespace,
+	// so a leading space would be reread as part of that separator — and the
+	// data model therefore does not admit it.
+	text = strings.TrimLeft(text, " \t\r\n")
 	if strings.Contains(text, "?>") {
 		return fmt.Errorf(
 			"XQDY0026: a processing instruction may not contain %q", "?>")
@@ -671,17 +713,72 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 	return nil
 }
 
+// evalPITarget computes the target of a processing-instruction constructor.
+//
+// §3.9.3.5 splits the failure in two, and the split is what the suite tests.
+// The atomised name must be a single xs:string, xs:untypedAtomic or xs:NCName
+// — anything else, including an xs:anyURI, an xs:integer, a duration or a
+// sequence that is not of length one, is a *type* error, XPTY0004, because
+// the value could never have been a target. Only once the value is of the
+// right type does its spelling matter, and a string of the right type that
+// is not an NCName is the dynamic error XQDY0041.
+func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
+	seq, err := e.compiled.Eval(ctx.xp)
+	if err != nil {
+		return "", err
+	}
+	atoms, err := xdm.AtomizeChecked(seq)
+	if err != nil {
+		return "", err
+	}
+	if len(atoms) != 1 {
+		return "", fmt.Errorf("XPTY0004: the target of a processing " +
+			"instruction must be a single string")
+	}
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return "", fmt.Errorf("XPTY0004: %s cannot be the target of a "+
+			"processing instruction", atoms[0].TypeName())
+	}
+	switch a.Type {
+	case xdm.TypeString, xdm.TypeUntypedAtomic:
+		// xs:NCName is a subtype of xs:string and arrives as one, so the two
+		// cases the grammar names are the two the model has.
+	default:
+		return "", fmt.Errorf("XPTY0004: %s cannot be the target of a "+
+			"processing instruction", a.TypeName())
+	}
+	// The value came from an expression rather than from the query text, so
+	// nothing has trimmed it: " name " names the target "name", the way the
+	// name of a computed element does.
+	target := strings.TrimSpace(a.String())
+	if !xdm.IsNCName(target) {
+		return "", fmt.Errorf(
+			"XQDY0041: %q is not a valid processing-instruction target",
+			target)
+	}
+	return target, nil
+}
+
 func (n *textNode) eval(out *builderRef, ctx *evalContext) error {
-	text, err := contentString(n.content, ctx)
+	text, empty, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
-	// A text constructor whose content is empty produces no node at all,
-	// rather than an empty one the data model does not admit.
-	if text == "" {
+	// §3.9.3.3: a text constructor whose content expression is the empty
+	// sequence produces no node at all. The test is on the sequence and not
+	// on the string it joins to: "text {()}" yields nothing, while
+	// "text {''}" yields a text node whose string value happens to be empty.
+	if empty {
 		return nil
 	}
-	out.b.AppendNode(&xdm.Node{Kind: xdm.KindText, Value: text})
+	// The node goes in as text rather than as a ready-made node so that the
+	// builder applies §3.9.1.3's two rules about text in complex content:
+	// adjacent text nodes are merged, and a zero-length one is dropped. Both
+	// are conditional on there being a parent, which is what tells apart
+	// "count(text {''})", one free-standing node, from
+	// "count(element e {text {''}}/text())", which is none.
+	out.b.AppendText(text)
 	return nil
 }
 
@@ -711,7 +808,7 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 // contentString evaluates content that becomes a string rather than nodes,
 // which is what a comment, a processing instruction and a text constructor
 // each hold.
-func contentString(content []node, ctx *evalContext) (string, error) {
+func contentString(content []node, ctx *evalContext) (string, bool, error) {
 	// The content is one sequence, and §3.9.3 joins it once: the values of
 	// "text {1,2}" are separated by a single space, and so are the values of
 	// "text {1}, {2}". Joining each item on its own would lose the separator
@@ -724,15 +821,24 @@ func contentString(content []node, ctx *evalContext) (string, error) {
 		case *enclosed:
 			s, err := v.sequence(ctx)
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			seq = append(seq, s...)
 		default:
-			return "", fmt.Errorf(
-				"XPTY0004: this content may not contain a constructed node")
+			// A constructor written directly in the content — "text {1,<a/>}"
+			// — is an item of the content sequence like any other. §3.9.3.1
+			// atomises that sequence, and a constructed node atomises to its
+			// string value, so there is nothing here to refuse: the item's
+			// value is taken rather than its contribution to a tree.
+			s, err := asEnclosed(c).sequence(ctx)
+			if err != nil {
+				return "", false, err
+			}
+			seq = append(seq, s...)
 		}
 	}
-	return joinAtomized(seq)
+	str, err := joinAtomized(seq)
+	return str, len(seq) == 0, err
 }
 
 // evalNodeName computes the name of a computed constructor.
@@ -790,14 +896,24 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 	if !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %q is not a lexical QName", lex)
 	}
+	// The prefix resolves against the namespaces in scope *where the
+	// constructor was written*, which is what §3.9.3.1's "statically known
+	// namespaces" means. Inside a direct constructor those include that
+	// element's own declarations — "<e xmlns:foo='...'>{element {'foo:x'} {}}
+	// </e>" binds foo — and they are only on the expression, the evaluation
+	// context having none but the module's.
+	sc := e.sc
+	if sc == nil {
+		sc = ctx.sc
+	}
 	if isElement {
-		q, err := ctx.sc.resolveElementName(prefix, local)
+		q, err := sc.resolveElementName(prefix, local)
 		if err != nil {
 			return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 		}
 		return q, nil
 	}
-	q, err := ctx.sc.resolveAttributeName(prefix, local)
+	q, err := sc.resolveAttributeName(prefix, local)
 	if err != nil {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 	}
@@ -930,7 +1046,7 @@ func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
 			}
 		}
 	}
-	uri, err := contentString(n.content, ctx)
+	uri, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
