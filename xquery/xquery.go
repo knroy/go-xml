@@ -482,6 +482,39 @@ func (p *parser) parseExprItem() (node, error) {
 	depth := 0
 	for !p.eof() {
 		switch p.src[p.pos] {
+		case '<':
+			// A direct constructor's markup is not expression source, and
+			// nothing inside it can be scanned as though it were: a quote in
+			// a CDATA section does not open a string literal, and "(:" in
+			// element content does not open a comment. Where the "<" is at
+			// operand position the constructor is parsed, which is the only
+			// way to find where it ends — its extent is decided by its
+			// markup, not by a bracket count — and the scan resumes after it.
+			//
+			// Where it is the less-than operator the byte is ordinary and
+			// falls through. Where it is markup this scan cannot read, the
+			// parse fails and the byte is treated as ordinary too, so the
+			// error comes from the parse that follows rather than from here.
+			if !startsMarkup(p.src, p.pos,
+				lastSignificantOperandAware(p.src[start:p.pos])) {
+				break
+			}
+			sub := &parser{src: p.src, pos: p.pos, sc: p.sc,
+				version: p.version, depth: p.depth + 1}
+			if _, err := sub.parseConstructorHere(); err != nil {
+				break
+			}
+			p.pos = sub.pos
+			continue
+		case '`':
+			if p.lookingAt("``[") {
+				end, err := skipStringConstructor(p.src, p.pos)
+				if err != nil {
+					return nil, err
+				}
+				p.pos = end + 1
+				continue
+			}
 		case '\'', '"':
 			end, err := skipString(p.src, p.pos)
 			if err != nil {

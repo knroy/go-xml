@@ -857,6 +857,13 @@ func needsXQueryParser(src string) bool {
 				}
 				i = end
 			}
+		case '`':
+			// [177] StringConstructor. Two backticks and a bracket are not
+			// anything XPath's grammar can read — it has no backtick at all —
+			// so the opener alone settles it wherever it appears.
+			if strings.HasPrefix(src[i:], "``[") {
+				return true
+			}
 		case '<':
 			// "<" begins a direct constructor only where an operand may
 			// start. After a name, a literal or a closing bracket it is the

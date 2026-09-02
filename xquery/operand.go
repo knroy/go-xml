@@ -204,6 +204,11 @@ var wordOperators = map[string]bool{
 // expression, which parseNestedExpr already handles; it is still accepted
 // here so that "<a/> = <b/>" substitutes both operands rather than one.
 func (p *parser) startsOperand(src string, i int, prev byte) bool {
+	if src[i] == '`' {
+		// A string constructor is a PrimaryExpr and its opener is unambiguous:
+		// XPath has no backtick, so "``[" can only be one wherever it stands.
+		return strings.HasPrefix(src[i:], "``[")
+	}
 	if src[i] == '<' {
 		return startsMarkup(src, i, prev)
 	}
