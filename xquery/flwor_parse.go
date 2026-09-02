@@ -976,14 +976,23 @@ func needsXQueryParser(src string) bool {
 				// A computed constructor is the keyword followed by a name or
 				// an expression in braces. A kind test is followed by "(",
 				// and "namespace::" is the axis, which is refused elsewhere.
-				if k := skipSpaceFrom(src, j); k < len(src) &&
+				//
+				// The separator between the two is skipped as a whole. XQuery
+				// 3.1 A.2.4.1 has "Whitespace ::= S | Comment", so a comment
+				// stands wherever whitespace does; scanning past spaces alone
+				// left the "(" of a comment where the brace was looked for,
+				// and read the constructor of K2-XQueryComment-3 --
+				// "comment(: some : content (:some content:):){...}" -- as a
+				// kind test, sending the query to xpath, which has no
+				// computed constructor to parse it with.
+				if k := skipSpaceAndCommentsFrom(src, j); k < len(src) &&
 					(src[k] == '{' || isNameStartByte(src[k])) {
 					return true
 				}
 			case "try":
 				// "try" commits only on a brace: it is not a reserved word,
 				// so "try" alone is a name and "try(1)" is a function call.
-				if k := skipSpaceFrom(src, j); k < len(src) && src[k] == '{' {
+				if k := skipSpaceAndCommentsFrom(src, j); k < len(src) && src[k] == '{' {
 					return true
 				}
 			case "switch", "typeswitch":
@@ -993,7 +1002,7 @@ func needsXQueryParser(src string) bool {
 				// ambiguous on its own, but a function named switch or
 				// typeswitch would have to be declared to be called, and
 				// parseXQueryOnly rejects the reading that does not parse.
-				if k := skipSpaceFrom(src, j); k < len(src) && src[k] == '(' {
+				if k := skipSpaceAndCommentsFrom(src, j); k < len(src) && src[k] == '(' {
 					return true
 				}
 			}
@@ -1249,4 +1258,30 @@ func skipSpaceFrom(src string, i int) int {
 		}
 	}
 	return i
+}
+
+// skipSpaceAndCommentsFrom is skipSpaceFrom over the whole of what the grammar
+// calls ignorable: XQuery 3.1 A.2.4.1 gives
+//
+//	Whitespace ::= S | Comment
+//
+// so a comment stands wherever whitespace does and separates tokens the same
+// way. A scan that looks past a keyword for what follows it must skip both, or
+// a comment written between them hides the token it was looking for.
+//
+// An unterminated comment is left where it is rather than reported: these
+// scans run before the expression is parsed, and the parser gives that error
+// in context.
+func skipSpaceAndCommentsFrom(src string, i int) int {
+	for {
+		i = skipSpaceFrom(src, i)
+		if !strings.HasPrefix(src[i:], "(:") {
+			return i
+		}
+		end, err := skipComment(src, i)
+		if err != nil {
+			return i
+		}
+		i = end + 1
+	}
 }

@@ -373,7 +373,14 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// A computed constructor is the keyword followed by a name or an
 		// expression in braces. A kind test is followed by "(", and
 		// "namespace::" is the axis, which is refused elsewhere.
-		k := skipSpaceFrom(src, j)
+		//
+		// The separator is skipped as a whole, comments included: XQuery 3.1
+		// A.2.4.1 has "Whitespace ::= S | Comment", so one written between the
+		// keyword and the brace hides the brace from a scan that steps over
+		// spaces alone -- and what it leaves in view is the "(" of the
+		// comment, which is exactly the shape of the kind test this test is
+		// meant to tell a constructor apart from.
+		k := skipSpaceAndCommentsFrom(src, j)
 		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
 	case "function":
 		// An inline function is an operand this package owns only when its
@@ -466,7 +473,12 @@ func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
 // "{". Neither shape is a name test, which is what makes the keyword safe to
 // read as a keyword in a place a name test could otherwise stand.
 func constructorFollows(src string, j int) bool {
-	k := skipSpaceFrom(src, j)
+	// A comment separates tokens exactly as whitespace does -- XQuery 3.1
+	// A.2.4.1 has "Whitespace ::= S | Comment" -- so one written between the
+	// keyword and the brace must be skipped to find the brace at all.
+	// K2-XQueryComment-3 writes the constructor that way, as
+	// "$i/b/comment(: some : content (:some content:):){...}".
+	k := skipSpaceAndCommentsFrom(src, j)
 	if k >= len(src) {
 		return false
 	}
@@ -479,6 +491,6 @@ func constructorFollows(src string, j int) bool {
 	for k < len(src) && (isNameByte(src[k]) || src[k] == ':') {
 		k++
 	}
-	k = skipSpaceFrom(src, k)
+	k = skipSpaceAndCommentsFrom(src, k)
 	return k < len(src) && src[k] == '{'
 }
