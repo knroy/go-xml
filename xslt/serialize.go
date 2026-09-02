@@ -688,14 +688,19 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 			// tag in HTML at all, so it is written self-closed with the
 			// space that the HTML compatibility guidelines ask for.
 			//
-			// The name decides, not the namespace. output-0217 and -0223
-			// write the void names with no namespace at all and want them
-			// self-closed, while -0219 and -0220 write non-void names the
-			// same way and want a full end tag: what an HTML parser would
-			// do with the name is the whole of the rule, and requiring the
-			// XHTML namespace for it sent every no-namespace element down
-			// the wrong half.
-			if s.isVoidElement(n.Name.Local) {
+			// The name decides, but only for an element the method
+			// recognises as HTML's. output-0217 and -0223 write the void
+			// names with no namespace at all and want them self-closed,
+			// while -0219 and -0220 write non-void names the same way and
+			// want a full end tag: what an HTML parser would do with the
+			// name is the rest of the rule, and requiring the XHTML
+			// namespace for it sent every no-namespace element down the
+			// wrong half. Those four are all html-version="5.0", which is
+			// the version that recognises the names in no namespace --
+			// Serialization-xhtml-2 says so and asks for the self-closed
+			// form, and -1a asks for "<br></br>" from the same markup under
+			// version 4.0, where only the XHTML namespace is recognised.
+			if s.xhtmlVoidElement(n) {
 				s.writeString(" />")
 			} else {
 				s.writeString("></" + name + ">")
@@ -1519,6 +1524,29 @@ var html4VoidElements = map[string]bool{
 // element.
 var html5VoidElements = map[string]bool{
 	"keygen": true, "source": true, "track": true, "wbr": true,
+}
+
+// xhtmlVoidElement reports whether the xhtml method recognises n as one of
+// HTML's empty elements, which are written with the self-closing spelling.
+//
+// Recognition is by name, but a name alone is not enough: <br> means an HTML
+// line break only where the vocabulary is HTML's. The XHTML namespace always
+// says so. No namespace says so only under html-version 5 -- the description
+// of Serialization-xhtml-1a is "with html-version=4, empty elements are not
+// recognized if not in XHTML namespace", and that case asks for
+// "<br></br>" from a no-namespace <br/>, while -2 asks for "<br />" from the
+// same markup under version 5. A foreign namespace never says so.
+func (s *serializer) xhtmlVoidElement(n *xdm.Node) bool {
+	if !s.isVoidElement(n.Name.Local) {
+		return false
+	}
+	switch n.Name.URI {
+	case nsXHTML:
+		return true
+	case "":
+		return s.html5
+	}
+	return false
 }
 
 // isVoidElement reports whether an element takes no end tag.
