@@ -93,38 +93,31 @@ func (r resolver) ResolvePrefix(p string) (string, bool) {
 	return "", false
 }
 
+// Bindings reports the prefixes the environment declared, which is how the
+// XQuery driver puts them in a query's static context: a query is compiled
+// from source rather than evaluated against a resolver, so the bindings have
+// to be handed over as options before compilation rather than looked up
+// during it. Only the environment's own prefixes are reported — the standard
+// ones ResolvePrefix falls back to are predeclared in the language and would
+// be redeclarations here.
+func (r resolver) Bindings() map[string]string {
+	out := make(map[string]string, len(r.prefixes))
+	for p, u := range r.prefixes {
+		// The empty prefix is the default element namespace, which travels as
+		// its own option; a "declare namespace" for it is not the same thing.
+		if p != "" {
+			out[p] = u
+		}
+	}
+	return out
+}
+
 // DefaultElementNamespace reports the namespace an unprefixed element or type
 // name takes. The environment declares it as a namespace binding with an empty
 // prefix, which is what "xs:QName('ncname')" resolves against.
 func (r resolver) DefaultElementNamespace() string  { return r.prefixes[""] }
 func (r resolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 
-// Bindings reports the prefixes the environment declared, for xqueryOptions.
-//
-// An XPath case is handed this resolver and asks it a prefix at a time, so
-// ResolvePrefix was all it ever needed. XQuery resolves names while parsing
-// and so takes its bindings up front as a map, and xqueryOptions reaches for
-// this method to get one. Without it the type assertion there simply failed
-// and every XQuery case ran with an empty static context, which is why
-// fn-prefix-from-qname-5 — <namespace prefix="foo"/> in its environment and
-// xs:QName("foo:name") in its body — reported the prefix unbound.
-//
-// The predeclared prefixes ResolvePrefix falls back on are deliberately not
-// added: XQuery's own static context already binds them, and copying them in
-// would let an environment that rebinds one be silently overridden.
-func (r resolver) Bindings() map[string]string {
-	out := make(map[string]string, len(r.prefixes))
-	for p, u := range r.prefixes {
-		if p == "" {
-			// The empty prefix is the default element namespace, which
-			// xqueryOptions carries in its own field; binding "" as a prefix
-			// would be XQST0070 territory rather than a declaration.
-			continue
-		}
-		out[p] = u
-	}
-	return out
-}
 
 // Runner executes cases from a suite checkout.
 type Runner struct {
