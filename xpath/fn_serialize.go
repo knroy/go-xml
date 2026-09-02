@@ -399,6 +399,17 @@ func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 
 // serializeNode writes a node and its descendants.
 func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
+	// The text output method writes the string value of what it is given and
+	// no markup at all, so it is answered before the per-kind rendering
+	// below rather than inside it: every branch there emits tags. This is
+	// reached through json-node-output-method="text", which is the one way a
+	// node inside a JSON value asks to be written as its text content --
+	// Serialization-json-52 wants <e>hi</e> to come out as "hi" rather than
+	// as an escaped element.
+	if opts.method == "text" {
+		sb.WriteString(n.StringValue())
+		return
+	}
 	switch n.Kind {
 	case xdm.KindDocument:
 		for _, c := range n.Children {
@@ -787,6 +798,19 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 	case *xdm.FunctionItem:
 		return fmt.Errorf("SERE0021: a function item cannot be serialized as JSON")
 	case *xdm.Node:
+		// An attribute or namespace node has no serialization of its own:
+		// sequence normalisation turns a parentless one into an error rather
+		// than into markup, because there is no document it could belong to.
+		// The JSON method reaches it by a different route -- the node is a
+		// member of an array rather than an item of the result sequence --
+		// but it is the same node in the same position, so it is the same
+		// error. Serialization-json-30 puts an attribute in an array and
+		// asks for SENR0001; without this it was written as the string of
+		// its value, which quietly invented a document for it.
+		if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+			return fmt.Errorf(
+				"SENR0001: an attribute or namespace node cannot be serialized")
+		}
 		// JSON has no node type, so a node is written as a string holding its
 		// serialization under the json-node-output-method (default xml).
 		var inner strings.Builder

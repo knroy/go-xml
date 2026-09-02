@@ -1468,7 +1468,7 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 	// cannot reach the rest of the filesystem by spelling its fixture as a
 	// file: URI.
 	if strings.HasPrefix(full, "file://") {
-		cand := filepath.FromSlash(strings.TrimPrefix(full, "file://"))
+		cand := unescapePath(filepath.FromSlash(strings.TrimPrefix(full, "file://")))
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return t.read(cand, uri, encoding)
 		}
@@ -1486,7 +1486,7 @@ func (t suiteTextResolver) ResolveText(uri, base, encoding string) (string, erro
 		// The base was a filesystem path inside the checkout rather than a
 		// fots: URI. The read() guard keeps that safe — a reference that
 		// climbs out with ".." is refused rather than followed.
-		cand := filepath.Join(t.root, t.dir, filepath.FromSlash(full))
+		cand := filepath.Join(t.root, t.dir, unescapePath(filepath.FromSlash(full)))
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return t.read(cand, uri, encoding)
 		}
@@ -1600,9 +1600,9 @@ func decodeUnparsedText(data []byte, encoding string) (string, error) {
 		if !utf8.ValidString(s) {
 			return "", fmt.Errorf("FOUT1190: not valid UTF-8")
 		}
-		if err := checkXMLChars(s); err != nil {
-			return "", err
-		}
+		// The XML-character restriction is fn:unparsed-text's own rule and
+		// the engine applies it there; fn:json-doc reads through this same
+		// resolver and must not be subject to it.
 		return s, nil
 	case "iso-8859-1", "latin1", "latin-1":
 		var sb strings.Builder
@@ -1616,6 +1616,23 @@ func decodeUnparsedText(data []byte, encoding string) (string, error) {
 		return decodeUTF16(data, false), nil
 	}
 	return "", fmt.Errorf("FOUT1190: unsupported encoding %q", encoding)
+}
+
+// unescapePath turns the percent-encoded form a URI carries back into the
+// characters a filename actually holds.
+//
+// JSONTestSuite ships a fixture named "n_structure_trailing_#.json", and the
+// catalog necessarily spells it "%23" because a bare "#" in a URI starts a
+// fragment. Handing the encoded form to the filesystem looked for a file whose
+// name held those three literal characters and reported FOUT1170 for a fixture
+// the checkout does hold. A path that does not decode is returned unchanged: a
+// stray "%" in a name is not an error, and refusing it would lose files the
+// encoded form would never have named.
+func unescapePath(path string) string {
+	if decoded, err := url.PathUnescape(path); err == nil {
+		return decoded
+	}
+	return path
 }
 
 // isEncName reports whether s matches the EncName production of XML 1.0:
@@ -1924,27 +1941,6 @@ func loadAssertFiles(r *Runner, ts *TestSet, a *Assertion) {
 	for i := range a.Children {
 		loadAssertFiles(r, ts, &a.Children[i])
 	}
-}
-
-// checkXMLChars rejects text holding a character XML does not permit.
-//
-// fn:unparsed-text returns a string, and a string in the data model may only
-// hold characters that are legal in XML: a NUL or a stray control character
-// has no representation there. Decoding one is FOUT1200 rather than a silent
-// pass, and the suite asserts that for a file of NUL bytes.
-func checkXMLChars(s string) error {
-	for _, r := range s {
-		switch {
-		case r == 0x9 || r == 0xA || r == 0xD:
-		case r >= 0x20 && r <= 0xD7FF:
-		case r >= 0xE000 && r <= 0xFFFD:
-		case r >= 0x10000 && r <= 0x10FFFF:
-		default:
-			return fmt.Errorf(
-				"FOUT1200: U+%04X is not a character XML permits", r)
-		}
-	}
-	return nil
 }
 
 // infosetEqual reports whether two serialised documents have the same infoset,

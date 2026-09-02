@@ -418,24 +418,30 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	// comparison against the file's first line fail for a reason nothing in
 	// the stylesheet can see.
 	//
-	// F&O requires FOUT1190 when the resource cannot be decoded, and W3C bug
-	// 29302 settled that a character not permitted in XML is the same error:
-	// the draft's FOUT1170 did not survive, and no case in the suite expects
-	// it. unparsed-text-lines-006 asks for FOUT1190 on a file holding a NUL,
-	// and -004 catches errors="*:FOUT1190" for the same file. Returning a Go
-	// string holding invalid UTF-8 would push the failure downstream into the
-	// serialiser, where it reads as a bug in this engine rather than as a
-	// property of the input.
+	// F&O draws the line between the two decode errors at whether the call
+	// named an encoding. FOUT1190 is "cannot be decoded using the specified
+	// encoding", so it belongs to a read that was told how to read and found
+	// the bytes did not fit; FOUT1200 is raised when "$encoding is absent and
+	// the processor cannot infer the encoding using external information and
+	// the encoding is not UTF-8", which is exactly a plain read of a file
+	// that turns out not to be UTF-8. W3C bug 29302 settled that a character
+	// XML does not permit is the same error as an undecodable one -- the
+	// draft's FOUT1170 did not survive -- so both checks below follow the
+	// same rule. unparsed-text-lines-006 asks for FOUT1190 on a file holding
+	// a NUL and -004 catches errors="*:FOUT1190" for it; both name
+	// iso-8859-1, so both still get FOUT1190. Returning a Go string holding
+	// invalid UTF-8 would push the failure downstream into the serialiser,
+	// where it reads as a bug in this engine rather than as a property of
+	// the input.
 	if !utf8.ValidString(text) {
 		return "", fmt.Errorf("FOUT1190: %s is not valid UTF-8", path)
 	}
-	for _, c := range text {
-		if !isXMLChar(c) {
-			return "", fmt.Errorf(
-				"FOUT1190: %s contains U+%04X, which is not a legal XML character",
-				path, c)
-		}
-	}
+	// Whether the text may hold a character XML does not permit is the
+	// calling function's rule rather than this resolver's, and fn:unparsed-text
+	// applies it on the way out. fn:json-doc reads through the same resolver
+	// and must not apply it: a JSON text may hold U+FFFF, and an unescaped
+	// control character in one is FOJS0001 from the JSON parser rather than a
+	// decoding error raised before the parser runs.
 	return text, nil
 }
 

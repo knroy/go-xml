@@ -192,12 +192,53 @@ func registerUnparsedText(l *Library, since Version) {
 	})
 }
 
-// unparsedText performs the read shared by the three functions.
+// unparsedText performs the read shared by the three functions and applies
+// fn:unparsed-text's own restriction on the characters the result may hold.
 func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 	s, enc, err := unparsedTextArgs(args)
 	if err != nil {
 		return "", err
 	}
+	text, err := readText(ctx, s, enc)
+	if err != nil {
+		return "", err
+	}
+	// A character XML does not permit is an error for fn:unparsed-text, and
+	// W3C bug 29302 settled that it is the same error as an undecodable
+	// resource rather than the draft's FOUT1170. The check lives here rather
+	// than in readText because it is this function's rule, not a property of
+	// reading a file: fn:json-doc performs the same read and must NOT apply
+	// it -- a JSON text is allowed to hold U+FFFF, and an unescaped control
+	// character in one is FOJS0001 raised by the JSON parser, not a
+	// text-decoding error raised before the parser ever sees it. Applying the
+	// restriction to the read itself made json-doc reject both, which is why
+	// the JSONTestSuite cases for a formfeed, a NUL and U+FFFF came back with
+	// the wrong error or with an error where the suite expects a value.
+	//
+	// FOUT1190 is the code when the call named an encoding: the read was told
+	// how to decode, and what came out is not text this function may return.
+	// unparsed-text-lines-006 asks for exactly that on a file of NUL bytes
+	// read as iso-8859-1, and -004 catches errors="*:FOUT1190" for the same
+	// file. With no encoding named the inference failed instead, which is
+	// FOUT1200.
+	code := "FOUT1190"
+	if strings.TrimSpace(enc) == "" {
+		code = "FOUT1200"
+	}
+	for _, c := range text {
+		if !isXMLChar(int64(c)) {
+			return "", fmt.Errorf(
+				"%s: %q holds U+%04X, which is not a legal XML character",
+				code, s, c)
+		}
+	}
+	return text, nil
+}
+
+// readText retrieves one resource as text, with no restriction on the
+// characters it may hold. fn:unparsed-text layers its own on top; fn:json-doc
+// takes the text as it stands and lets the JSON parser judge it.
+func readText(ctx *Context, s, enc string) (string, error) {
 	// No resolver means the function is off, which is the default. The
 	// message names the reason rather than the URI: a stylesheet that gets
 	// this back has not been granted file reads at all, and saying "cannot

@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -893,6 +894,30 @@ func (b *jsonBuilder) boolean(v bool) error { return b.emit(xdm.One(xdm.NewBoole
 // model has no null, and the specification maps it this way.
 func (b *jsonBuilder) null() error { return b.emit(xdm.Empty()) }
 
+// jsonDocReadError restates a retrieval failure in the terms fn:json-doc's
+// callers are entitled to see.
+//
+// The two functions disagree about one code. fn:unparsed-text reports
+// undecodable content as FOUT1190 -- "cannot be decoded using the specified
+// encoding" -- and the suite pins that: fn-unparsed-text-045 and -048 read an
+// iso-8859-1 file with no encoding argument and accept either the decoded
+// string or FOUT1190, and nothing else. fn:json-doc reaches the same bytes by
+// the same read, but its own cases accept only a successful parse, FOJS0001
+// or FOUT1200 -- the JSONTestSuite files that are overlong sequences, lone
+// continuation bytes, latin-1 bytes or UTF-16 without a BOM. FOUT1200 is the
+// code F&O gives that situation from json-doc's side: "$encoding is absent
+// and the processor cannot infer the encoding using external information and
+// the encoding is not UTF-8", which is exactly a json-doc call with no
+// encoding to name. Restating it here keeps both readings intact rather than
+// making one function's requirement break the other's.
+func jsonDocReadError(err error) error {
+	if xdm.ErrorCode(err) != "FOUT1190" {
+		return err
+	}
+	return fmt.Errorf("FOUT1200: %s", strings.TrimPrefix(
+		strings.TrimPrefix(err.Error(), "FOUT1190"), ": "))
+}
+
 // parseJSONText is the shared body of fn:parse-json and fn:json-doc.
 func parseJSONText(ctx *Context, text string, opts jsonOptions) (xdm.Sequence, error) {
 	b := &jsonBuilder{opts: opts}
@@ -1653,10 +1678,20 @@ func registerJSONFuncs(l *Library) {
 		}
 		// The read is fn:unparsed-text's, and so are its errors: json-doc is
 		// specified as that read followed by fn:parse-json, and the suite
-		// asserts FOUT1170 for a URI that cannot be retrieved.
-		text, err := unparsedText(ctx, args[:1])
+		// asserts FOUT1170 for a URI that cannot be retrieved. What it does
+		// NOT inherit is fn:unparsed-text's restriction on which characters
+		// the text may hold. A JSON text may contain U+FFFF, and an
+		// unescaped control character in one is a JSON error -- FOJS0001
+		// from the parser below -- rather than a decoding error raised
+		// before the parser sees the text at all. readText is the same read
+		// without that rule.
+		href, enc, err := unparsedTextArgs(args[:1])
 		if err != nil {
 			return nil, err
+		}
+		text, err := readText(ctx, href, enc)
+		if err != nil {
+			return nil, jsonDocReadError(err)
 		}
 		return parseJSONText(ctx, text, opts)
 	})

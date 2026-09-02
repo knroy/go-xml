@@ -101,25 +101,49 @@ func TestFileResolverRefusesNonFileSchemeText(t *testing.T) {
 	}
 }
 
-// Bytes that are not valid UTF-8, and characters XML does not permit, are
-// reported rather than returned. A Go string holding either would push the
-// failure into the serialiser, where it reads as a bug in this engine instead
-// of as a property of the input.
+// Bytes that are not valid UTF-8 are reported rather than returned. A Go
+// string holding them would push the failure into the serialiser, where it
+// reads as a bug in this engine instead of as a property of the input.
+//
+// The code is FOUT1190, which is what fn:unparsed-text's callers expect:
+// fn-unparsed-text-045 and -048 read an iso-8859-1 file with no encoding
+// argument and accept the decoded string or FOUT1190, and nothing else.
+// fn:json-doc restates it as FOUT1200 on its own side, where the JSON cases
+// require that code instead.
 func TestFileResolverRefusesUndecodableText(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "bad.txt"), []byte{0xff, 0xfe, 0x41}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	r := &FileResolver{Roots: []string{dir}, UnparsedText: true}
+	base := fileURIOf(filepath.Join(dir, "s.xsl"))
+	_, err := r.ResolveText("bad.txt", base, "")
+	if err == nil {
+		t.Fatal("invalid UTF-8 was accepted")
+	}
+	if !strings.Contains(err.Error(), "FOUT1190") {
+		t.Errorf("err = %v, want FOUT1190", err)
+	}
+}
+
+// A character XML does not permit is fn:unparsed-text's rule rather than the
+// resolver's, so the resolver hands the text back and the function rejects
+// it. The split is what lets fn:json-doc read the same file: a JSON text may
+// hold U+FFFF, and an unescaped control character in one is FOJS0001 from the
+// JSON parser rather than a decoding error raised before the parser runs.
+func TestFileResolverReturnsNonXMLCharacters(t *testing.T) {
+	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ctl.txt"), []byte("a\x00b"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r := &FileResolver{Roots: []string{dir}, UnparsedText: true}
 	base := fileURIOf(filepath.Join(dir, "s.xsl"))
-	if _, err := r.ResolveText("bad.txt", base, ""); err == nil {
-		t.Error("invalid UTF-8 was accepted")
+	got, err := r.ResolveText("ctl.txt", base, "")
+	if err != nil {
+		t.Fatalf("ResolveText: %v", err)
 	}
-	if _, err := r.ResolveText("ctl.txt", base, ""); err == nil {
-		t.Error("a NUL, which XML does not permit, was accepted")
+	if got != "a\x00b" {
+		t.Errorf("ResolveText = %q, want the bytes unchanged", got)
 	}
 }
 
