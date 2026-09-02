@@ -118,32 +118,6 @@ func (r resolver) Bindings() map[string]string {
 func (r resolver) DefaultElementNamespace() string  { return r.prefixes[""] }
 func (r resolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 
-// Bindings reports the prefixes the environment declared, for xqueryOptions.
-//
-// An XPath case is handed this resolver and asks it a prefix at a time, so
-// ResolvePrefix was all it ever needed. XQuery resolves names while parsing
-// and so takes its bindings up front as a map, and xqueryOptions reaches for
-// this method to get one. Without it the type assertion there simply failed
-// and every XQuery case ran with an empty static context, which is why
-// fn-prefix-from-qname-5 — <namespace prefix="foo"/> in its environment and
-// xs:QName("foo:name") in its body — reported the prefix unbound.
-//
-// The predeclared prefixes ResolvePrefix falls back on are deliberately not
-// added: XQuery's own static context already binds them, and copying them in
-// would let an environment that rebinds one be silently overridden.
-func (r resolver) Bindings() map[string]string {
-	out := make(map[string]string, len(r.prefixes))
-	for p, u := range r.prefixes {
-		if p == "" {
-			// The empty prefix is the default element namespace, which
-			// xqueryOptions carries in its own field; binding "" as a prefix
-			// would be XQST0070 territory rather than a declaration.
-			continue
-		}
-		out[p] = u
-	}
-	return out
-}
 
 // Runner executes cases from a suite checkout.
 type Runner struct {
