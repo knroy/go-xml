@@ -176,7 +176,7 @@ func (n *tryCatch) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 func (n *tryCatch) sequence(ctx *evalContext) (xdm.Sequence, error) {

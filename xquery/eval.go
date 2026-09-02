@@ -124,7 +124,7 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 // sequence evaluates an enclosed expression to a flat sequence, for the
@@ -170,7 +170,7 @@ type valueNode interface {
 	sequence(ctx *evalContext) (xdm.Sequence, error)
 }
 
-func appendSequence(out *builderRef, seq xdm.Sequence) error {
+func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -204,7 +204,22 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 					continue
 				}
 			}
+			before := 0
+			if el := out.b.Open(); el != nil {
+				before = len(el.Children)
+			}
+			// The namespaces in scope at the *source* have to be read before
+			// the node is appended: appending re-parents a copy of it, and
+			// from there the ancestors that supplied most of those bindings
+			// are no longer reachable.
+			var srcScope map[string]string
+			if v.Kind == xdm.KindElement && out.b.Open() != nil {
+				srcScope = v.InScopeNamespaces()
+			}
 			out.b.AppendNode(v)
+			if el := out.b.Open(); el != nil && len(el.Children) > before {
+				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
+			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
 		default:
@@ -214,6 +229,148 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 		}
 	}
 	return nil
+}
+
+
+// applyCopyNamespaces enforces the two halves of copy-namespaces on a subtree
+// that has just been copied into the element being constructed (§3.9.1.3).
+//
+// Neither half is free, and the defaults are not the do-nothing case they
+// look like. Re-parenting a copy loses the bindings its ancestors supplied and
+// silently grants it the destination's, so preserve and inherit are as much
+// work as their opposites — they are the work of putting back what the copy
+// should have kept.
+//
+// preserve restores the in-scope namespaces the original had. They are read
+// before the append, because afterwards the ancestors that supplied most of
+// them are no longer reachable from the copy.
+//
+// no-preserve instead drops the namespace nodes the copied element carried,
+// keeping the ones its own name and its attributes' names still need — a copy
+// whose name became unresolvable would not be a node at all. copynamespace-16
+// is the case: three nested constructors each declaring a prefix, and only the
+// innermost element's own bindings survive to the innermost copy.
+//
+// The two are exclusive; inherit and no-inherit then apply on top of either.
+//
+// no-inherit stops the copy from picking up what is in scope at the
+// destination, which re-parenting otherwise gives it for free. There is no way
+// to *not* inherit in the data model, so the bindings are undeclared on the
+// copy's root instead, which is what the namespace axis then reports.
+// copynamespace-17 asks for both and expects the copy to be left with the xml
+// binding alone.
+func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticContext) {
+	if n == nil || n.Kind != xdm.KindElement {
+		return
+	}
+	preserve := sc == nil || sc.preserveNS
+	inherit := sc == nil || sc.inheritNS
+	if preserve {
+		preserveScope(n, srcScope)
+	} else {
+		stripNamespaces(n)
+	}
+	if inherit {
+		return
+	}
+	// The bindings to undeclare are the ones the *parent* supplies; the
+	// copy's own, whether original or just rebuilt above, are not inherited
+	// and must survive. An undeclaration is written as an empty URI, which
+	// InScopeNamespaces and LookupPrefix both read as "not in scope here".
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	if n.Parent != nil {
+		for prefix := range n.Parent.InScopeNamespaces() {
+			if prefix == "xml" || own[prefix] {
+				continue
+			}
+			n.AddNamespace(prefix, "")
+		}
+	}
+}
+
+// preserveScope gives a copied element the namespace nodes it had at the
+// source but that its new position no longer supplies.
+//
+// copy-namespaces preserve means the copy keeps "all the in-scope namespaces
+// of the original element", and most of those are usually not on the element
+// itself — they are on ancestors the copy has left behind. Re-parenting alone
+// therefore loses them: Constr-inscope-7 copies <foo:child3/> out of a parent
+// that declared foo, and the copy arrived with the right namespace URI on its
+// name and no binding for it anywhere.
+//
+// Only the bindings the destination does not already agree with are written,
+// so a copy landing where the same prefix means the same thing stays clean.
+// A binding the copy declares itself wins over the source scope, which is
+// what an undeclaration on the copied element means.
+func preserveScope(n *xdm.Node, srcScope map[string]string) {
+	if len(srcScope) == 0 {
+		return
+	}
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	for prefix, uri := range srcScope {
+		if prefix == "xml" || own[prefix] {
+			continue
+		}
+		if cur, ok := n.LookupPrefix(prefix); ok && cur == uri {
+			continue
+		}
+		n.AddNamespace(prefix, uri)
+	}
+	// A default namespace the source did not have, but the destination
+	// supplies, would silently move the copy into it. Constr-inscope-10 is
+	// the case: <child2> in no namespace copied under a <new> that declares
+	// one, and the expected result carries the xmlns="" that keeps it out.
+	if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
+		if uri, ok := n.LookupPrefix(""); ok && uri != "" {
+			n.AddNamespace("", "")
+		}
+	}
+}
+
+// stripNamespaces rebuilds a subtree's namespace nodes as the smallest set its
+// names require, which is what copy-namespaces no-preserve asks for.
+//
+// "Only those namespace bindings that are used in the names of the element and
+// its attributes" survive. The set is recomputed per element rather than
+// filtered down the tree, because a descendant may need a prefix its ancestor
+// does not: dropping the ancestor's binding and stopping there would leave the
+// descendant's name pointing at nothing.
+func stripNamespaces(n *xdm.Node) {
+	if n.Kind != xdm.KindElement {
+		return
+	}
+	need := map[string]string{}
+	if n.Name.URI != "" && n.Name.URI != xdm.NSXML {
+		need[n.Name.Prefix] = n.Name.URI
+	}
+	for _, a := range n.Attrs {
+		if a.Name.URI != "" && a.Name.URI != xdm.NSXML {
+			need[a.Name.Prefix] = a.Name.URI
+		}
+	}
+	kept := n.Namespaces[:0]
+	for _, ns := range n.Namespaces {
+		if uri, ok := need[ns.Name.Local]; ok && uri == ns.Value {
+			kept = append(kept, ns)
+			delete(need, ns.Name.Local)
+		}
+	}
+	n.Namespaces = kept
+	// A name whose binding was never on this element in the first place — it
+	// came from an ancestor that the copy has left behind — still needs one,
+	// or the copy would carry a prefix bound to nothing.
+	for prefix, uri := range need {
+		n.AddNamespace(prefix, uri)
+	}
+	for _, ch := range n.Children {
+		stripNamespaces(ch)
+	}
 }
 
 func (n *element) eval(out *builderRef, ctx *evalContext) error {
@@ -250,6 +407,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 		sub.b.NoteDeclared(ns.prefix, ns.uri)
 	}
+	if err := declareOwnName(sub.b); err != nil {
+		return err
+	}
 	for _, a := range n.attrs {
 		if err := a.eval(sub, ctx); err != nil {
 			return err
@@ -282,6 +442,66 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 	}
 	return nil
+}
+
+
+// declareOwnName gives the element under construction a namespace node for
+// the binding its own name needs.
+//
+// §3.9.1.1's namespace fixup: "for each element node in the constructed
+// content, a namespace binding must be present for the prefix and namespace
+// URI of the element name". The element's name carries a prefix and a URI
+// resolved from the static context at the constructor, but that context is
+// not the constructed tree, so nothing has yet put the binding *on the node*.
+// Without it in-scope-prefixes() answered one short and the element serialised
+// as <foo:bar> with no xmlns:foo at all — not a document any parser reads back.
+//
+// Only the element's own name is fixed up here. The static context typically
+// binds a good deal more — the eight predeclared prefixes, plus whatever the
+// prolog declared — and §3.9.1.1 does not put those on the node:
+// Constr-inscope-13 declares foo, never uses it, and expects a bare <new/>,
+// while K2-DirectConElemNamespace-58 writes <xs:element/> and requires the
+// xmlns:xs the *name* needs. A prefix reaches the result by being used, not by
+// being in scope. Attributes are fixed up separately, as they are added.
+//
+// A binding an ancestor already supplies is left alone, so that a tree of
+// elements in one namespace does not carry a redundant declaration on every
+// node.
+func declareOwnName(b *xdmbuild.Builder) error {
+	el := b.Open()
+	if el == nil {
+		return nil
+	}
+	// The xml prefix is bound everywhere by XML Names itself and is never
+	// declared; K2-DirectConElemNamespace-58 writes <xml:element/> and
+	// expects no declaration on it.
+	if el.Name.URI == xdm.NSXML {
+		return nil
+	}
+	if el.Name.URI == "" {
+		// An element in no namespace under an ancestor with a default
+		// namespace has to undeclare it, or reading the result back puts the
+		// element in the ancestor's namespace — a different element from the
+		// one constructed. K2-DirectConElemNamespace-52 is exactly this:
+		// a default namespace on <a>, <e xmlns=""/> inside it.
+		//
+		// The node is written straight onto the element rather than through
+		// the builder's AddNamespace, whose rule against declaring a default
+		// namespace on an element in no namespace (XQDY0102) is about
+		// *binding* one and would reject the undeclaration that is precisely
+		// right here.
+		if el.Name.Prefix != "" {
+			return nil
+		}
+		if uri, ok := el.LookupPrefix(""); ok && uri != "" {
+			el.AddNamespace("", "")
+		}
+		return nil
+	}
+	if uri, ok := el.LookupPrefix(el.Name.Prefix); ok && uri == el.Name.URI {
+		return nil
+	}
+	return b.AddNamespace(el.Name.Prefix, el.Name.URI)
 }
 
 // inheritedBase returns the base URI in force at a node, which is the nearest
