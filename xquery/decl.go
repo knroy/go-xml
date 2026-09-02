@@ -156,9 +156,14 @@ func (p *parser) parseDeclBody() (*compiledExpr, []node, error) {
 // parseFunctionDecl reads "declare [annotations] function name(params) [as
 // type] ({ body } | external)".
 func (p *parser) parseFunctionDecl() error {
-	private, err := p.parseAnnotations()
+	private, conflict, err := p.parseAnnotationList()
 	if err != nil {
 		return err
+	}
+	if conflict {
+		return p.errorf(
+			"XQST0106: a function may carry only one of %s and %s",
+			"%public", "%private")
 	}
 	return p.parseFunctionDeclBody(private)
 }
@@ -273,19 +278,36 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 // Only %public and %private are defined by the specification, and only for
 // module scoping. An annotation in a namespace of the caller's own is legal
 // and ignored; one in the fn: namespace or another reserved one is XQST0045.
+//
+// conflict reports that a declaration carried more than one of %public and
+// %private, which §4.15 forbids. The rule is that at most *one* of the pair
+// may appear, so %public %public breaks it as surely as %public %private:
+// modules-pub-priv-31 and -32 repeat one annotation and are errors too.
+//
+// It is returned rather than raised here because the error code names the
+// declaration: XQST0106 for a function and XQST0116 for a variable, and
+// which one this is is not known until the keyword after the annotations has
+// been read.
 func (p *parser) parseAnnotations() (private bool, err error) {
+	private, _, err = p.parseAnnotationList()
+	return private, err
+}
+
+// parseAnnotationList is parseAnnotations plus the public/private conflict.
+func (p *parser) parseAnnotationList() (private, conflict bool, err error) {
+	scoping := 0
 	for {
 		p.skipSpaceAndComments()
 		if !p.consume("%") {
-			return private, nil
+			return private, scoping > 1, nil
 		}
 		prefix, local, err := p.parseEQName()
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		name, err := p.resolveDeclaredName(prefix, local, false)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if prefix == "" && !strings.HasPrefix(local, "Q{") {
 			// §4.15: "if the QName is unprefixed, it is in the namespace
@@ -297,8 +319,18 @@ func (p *parser) parseAnnotations() (private bool, err error) {
 			name = xdm.QName{URI: xdm.NSFN, Local: local}
 		}
 		switch {
-		case name.URI == xdm.NSFN && (name.Local == "private" || name.Local == "public"):
+		case (name.URI == xdm.NSFN || name.URI == nsXQueryOptions) &&
+			(name.Local == "private" || name.Local == "public"):
+			// %public and %private are defined in both the fn: namespace,
+			// where an unprefixed annotation lands, and in the option
+			// namespace http://www.w3.org/2012/xquery, which is how
+			// modules-pub-priv-30 writes the second of the pair. Both are
+			// otherwise reserved by the case below, so this has to come
+			// first or %xq:public is XQST0045 rather than the annotation it
+			// is. Only these two locals escape: %xq:x stays reserved, which
+			// annotation-26 and annotation-27 check.
 			private = name.Local == "private"
+			scoping++
 		case name.URI == xdm.NSFN, name.URI == xdm.NSXS, name.URI == xdm.NSXSI,
 			name.URI == xdm.NSXML, name.URI == xdm.NSMath,
 			name.URI == xdm.NSArray, name.URI == xdm.NSMap,
@@ -308,7 +340,7 @@ func (p *parser) parseAnnotations() (private bool, err error) {
 			// the option namespace http://www.w3.org/2012/xquery stand on the
 			// same footing as fn, xs, xsi and xml, so %math:x is XQST0045
 			// rather than a vendor annotation that is legal and ignored.
-			return false, p.errorf(
+			return false, false, p.errorf(
 				"XQST0045: %q is a reserved namespace for an annotation", name.URI)
 		}
 		p.skipSpaceAndComments()
@@ -322,14 +354,14 @@ func (p *parser) parseAnnotations() (private bool, err error) {
 			for {
 				p.skipSpaceAndComments()
 				if err := p.skipAnnotationLiteral(); err != nil {
-					return false, err
+					return false, false, err
 				}
 				p.skipSpaceAndComments()
 				if p.consume(",") {
 					continue
 				}
 				if !p.consume(")") {
-					return false, p.errorf(
+					return false, false, p.errorf(
 						"XPST0003: expected %q or %q in an annotation", ",", ")")
 				}
 				break
