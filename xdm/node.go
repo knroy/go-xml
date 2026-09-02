@@ -213,6 +213,12 @@ type Node struct {
 	// assigned on the first cross-tree comparison. Zero means unassigned.
 	detachedID int64
 
+	// numbered guards the one-shot pre-order walk that gives the nodes of an
+	// unfinalized tree distinct order values. It sits beside detachedID
+	// because both are properties of a root that has no Tree of its own, and
+	// both are set at most once however many callers ask.
+	numbered int32
+
 	// offset is the byte position where this node starts in the source text,
 	// stored one greater than the true offset so that the zero value means
 	// "unknown". Nodes are built by a transform in two dozen places with a
@@ -307,6 +313,21 @@ func (n *Node) Order() int {
 			root = root.Parent
 		}
 		base = int(detachedRootID(root)) + detachedIDBias
+		// Within the tree the root identity is only half the answer: every
+		// node under it still carries the zero order it was built with, so
+		// they all reduced to the same number. fn:generate-id() is built on
+		// this, and a stylesheet that used it as a map key got XTDE3365 for
+		// two genuinely different nodes -- reported against SchXslt2, whose
+		// transpiler keys a severity map on generate-id() of each
+		// sch:assert and sch:report.
+		//
+		// Numbering happens here rather than when the tree is built because
+		// most result trees are serialized and discarded without anyone
+		// asking for a node's identity, and a pre-order walk per construction
+		// would be paid by every transform to serve the few that ask.
+		if n.order == 0 && n != root {
+			numberDetachedSubtree(root)
+		}
 	}
 	// The tree component is shifted well clear of any plausible document
 	// size. A document with more than a million nodes would overlap the next
@@ -484,6 +505,40 @@ func numberDetachedRoot(n *Node) {
 		return
 	}
 	detachedRootID(root)
+}
+
+// numberDetachedSubtree assigns document-order indices under an unfinalized
+// root, so that Order can tell its nodes apart.
+//
+// It is idempotent through the root's own flag: the walk runs once per root
+// however many identities are asked for. Tree.Finalize does the same job for
+// a parsed document, and this is deliberately not that -- Finalize also
+// stamps n.tree, which would claim these nodes for a tree they do not belong
+// to and change what Compare says about them.
+func numberDetachedSubtree(root *Node) {
+	if !atomic.CompareAndSwapInt32(&root.numbered, 0, 1) {
+		return
+	}
+	var counter int32
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		n.order = counter
+		counter++
+		// Namespace and attribute nodes precede children, matching the order
+		// Tree.assign uses so the two agree about what document order means.
+		for _, ns := range n.Namespaces {
+			ns.order = counter
+			counter++
+		}
+		for _, a := range n.Attrs {
+			a.order = counter
+			counter++
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
 }
 
 // ancestorChain returns n's ancestors root-first, ending with n itself.

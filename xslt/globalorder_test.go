@@ -111,3 +111,11 @@ func TestArrowOperatorArityInAPattern(t *testing.T) {
 		t.Fatalf("got %s, want both an <empty/> and a <full/>", got)
 	}
 }
+
+// generate-id() must answer differently for two nodes of a tree built by a
+// sequence constructor, which is where SchXslt2 keys a map.
+//
+// The result tree is never finalized, so every node under one root kept the
+// zero document-order index it was built with and generate-id() collapsed
+// them onto one value. A stylesheet using it as a map key then got XTDE3365
+// for a duplicate that was really two different nodes.
