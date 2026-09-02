@@ -126,6 +126,26 @@ func (p *parser) parseComputed() (node, bool, error) {
 		return &computedAttr{attr: at}, true, nil
 
 	case "processing-instruction":
+		// A target written out rather than computed is an NCName:
+		//
+		//   CompPIConstructor ::= "processing-instruction"
+		//                         (NCName | ("{" Expr "}")) EnclosedExpr
+		//
+		// NCName is the non-colonised name, so neither a prefix nor a braced
+		// URI literal belongs here — the same rule the namespace constructor
+		// below applies to its prefix. Only nameLocal was read, so
+		// "processing-instruction foo:pi {...}" quietly dropped the prefix
+		// and built <?pi text?>: a wrong answer rather than the rejection the
+		// grammar calls for, which is err:XPST0003. (Constr-comppi-name-2)
+		if nameExpr == nil && (namePrefix != "" || nameBraced) {
+			written := qnameText(namePrefix, nameLocal)
+			if nameBraced {
+				written = "Q{" + nameURI + "}" + nameLocal
+			}
+			return nil, true, p.errorAt(start,
+				"XPST0003: a processing-instruction constructor takes an "+
+					"NCName target, not %q", written)
+		}
 		// §3.9.3.5 refuses "xml" in any combination of case as a target.
 		// XQDY0064 is a *dynamic* error, so it is raised by pi.eval even for
 		// a target written as a name and knowable here: the suite catches it

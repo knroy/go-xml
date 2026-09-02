@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // parseOptionalType reads an optional "as SequenceType" and leaves its source
@@ -173,6 +174,57 @@ func (p *parser) compileTypedFor(src, typ string) (*compiledExpr, error) {
 	c.src = src
 	c.typed = true
 	return c, nil
+}
+
+// compileEmptyCheck compiles the test that the empty sequence matches the
+// declared type typ, for a "for" clause that says "allowing empty".
+//
+// It covers the one binding a "for" clause's per-item check cannot reach.
+// That check is a loop over the bound items, so a binding of no items runs it
+// zero times — correct for an ordinary "for", which then produces no tuple at
+// all, and wrong for "allowing empty", which produces a tuple whose variable
+// is bound to the empty sequence. That binding is subject to the declaration
+// like any other, and §3.10.2 makes a value that does not match err:XPTY0004.
+//
+// The test is compiled here and run in forClause.apply, on the branch that
+// actually makes the empty binding, because whether it applies is a property
+// of the *value* and not of the text. outer-012 and outer-013 differ by one
+// character and settle it: both write "for $x as xs:integer allowing empty at
+// $p in 1 to $n", and that clause is legal in both, because "1 to 5" is never
+// empty and so the empty binding is never made. Refusing it at parse time on
+// the ground that xs:integer excludes () would reject a conformant query. It
+// is only the inner clause, whose "($x+1) to $n" *is* empty on the last
+// iteration, that binds () — and there outer-013's "xs:integer" must raise
+// where outer-012's "xs:integer?" must not.
+//
+// The test is written as "() treat as T" so that xpath's matcher decides,
+// rather than a second reading of the occurrence indicators living here.
+func (p *parser) compileEmptyCheck(typ string) (*compiledExpr, error) {
+	if typ == "" {
+		return nil, nil
+	}
+	c, err := p.compileExpr("() treat as " + typ)
+	if err != nil {
+		return nil, err
+	}
+	c.typed = true
+	return c, nil
+}
+
+// runEmptyCheck applies the compiled empty-binding check, mapping treat's
+// XPDY0050 to the XPTY0004 a declared-type mismatch carries.
+//
+// "() treat as T" reads neither the context item nor any function, so the
+// tuple's context is not needed and the answer cannot vary with it.
+func runEmptyCheck(check *compiledExpr) error {
+	if check == nil {
+		return nil
+	}
+	if _, err := check.compiled.Eval(
+		xpath.NewContext(nil, xpath.Builtins())); err != nil {
+		return retypeError(err)
+	}
+	return nil
 }
 
 // typeCheckVar names the variable the per-item type check binds. It is

@@ -194,7 +194,12 @@ type forClause struct {
 	// allowingEmpty makes an empty binding sequence yield one tuple with the
 	// variable bound to the empty sequence, rather than none at all.
 	allowingEmpty bool
-	seq           *compiledExpr
+	// emptyCheck tests the declared type against the empty sequence, for the
+	// tuple allowingEmpty produces. The per-item check on seq cannot cover
+	// that binding, because it loops over items and there are none. Nil when
+	// the clause declares no type or does not allow empty.
+	emptyCheck *compiledExpr
+	seq        *compiledExpr
 }
 
 func (c *forClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
@@ -208,6 +213,16 @@ func (c *forClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 			// §3.10.2: "allowing empty" is the outer join. The variable is
 			// bound to the empty sequence and the positional variable to 0,
 			// which is the one position value no item can occupy.
+			//
+			// This is the one binding a declared type is checked against
+			// here rather than per item: the per-item check runs over seq,
+			// which is empty. A type that excludes the empty sequence — a
+			// bare "xs:integer" rather than "xs:integer?" — is XPTY0004 at
+			// exactly this point, and only at this point, since a clause
+			// whose sequence is never empty never reaches it.
+			if err := runEmptyCheck(c.emptyCheck); err != nil {
+				return nil, err
+			}
 			n := t.bind(c.name, nil)
 			if c.hasPos {
 				n = n.bind(c.pos, xdm.One(xdm.NewInteger(0)))

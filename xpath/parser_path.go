@@ -483,9 +483,33 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			// ("prefix:b", where a colon is not allowed in a NON-colonised
 			// name) are the two ways what remains fails to be one.
 			//
-			// Only a string literal is treated this way. A target written as
-			// a name was already lexed as one, so it cannot be anything but
-			// an NCName by the time it arrives here.
+			// A target written as a name is a different rule. The grammar is
+			//
+			//   PITest ::= "processing-instruction" "("
+			//              (NCName | StringLiteral)? ")"
+			//
+			// and NCName is the *non-colonised* name: it admits neither a
+			// prefix nor a braced URI literal. The lexer hands back one
+			// TokName for any of those spellings, so "p:x" and "Q{}x" arrive
+			// here looking like a target and are not one — there is no parse,
+			// which is err:XPST0003, and it is raised however the name would
+			// have resolved. Accepting them built a test whose Local held a
+			// colon or a brace, and since a PI's target is by construction an
+			// NCName, the test could never match: the query silently selected
+			// the empty sequence instead of being rejected. That is the
+			// failure this check exists to prevent. (eqname-019)
+			//
+			// A StringLiteral target is not a grammar question but a value
+			// one, so it keeps its own rule and its own code: leading and
+			// trailing whitespace is stripped, and what remains must be an
+			// NCName or the test is a type error. The stripping is not
+			// cosmetic -- K2-NameTest-22 writes processing-instruction("b ")
+			// and requires it to MATCH the <?b asd?> in the input, so the
+			// trailing space cannot be carried into the comparison.
+			// K2-NameTest-21 ("123ncname", which does not start with a name
+			// character) and -23 ("prefix:b", where a colon is not allowed in
+			// a NON-colonised name) are the two ways what remains fails to be
+			// one.
 			if t.Kind == TokString {
 				target = strings.TrimSpace(target)
 				if !isNCName(target) {
@@ -493,6 +517,17 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 						"XPTY0004: %q is not an NCName, so it cannot be a "+
 							"processing-instruction target", t.Val)
 				}
+			} else if !isNCName(target) {
+				// A braced URI literal reaches here under the synthetic
+				// prefix the lexer gives it, which is not what was written,
+				// so it is named by its shape instead.
+				written := strconv.Quote(target)
+				if strings.HasPrefix(target, bracedURIPrefix) {
+					written = "a braced URI literal"
+				}
+				return nil, p.errorf(
+					"XPST0003: the target in %s() is an NCName, and %s is "+
+						"not one", "processing-instruction", written)
 			}
 			kt.Name = &xdm.QName{Local: target}
 			kt.HasName = true

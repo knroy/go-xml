@@ -597,6 +597,19 @@ func (p *parser) parseForClause() ([]clause, error) {
 		// then the positional variable, then "in".
 		if p.consumeWords("allowing", "empty") {
 			c.allowingEmpty = true
+			// The per-item check applied below is a loop over the bound
+			// items, so it runs zero times on a binding of no items. For an
+			// ordinary "for" that is right — no items means no tuple. For
+			// "allowing empty" it is not: the clause still produces a tuple,
+			// with the variable bound to the empty sequence, and that
+			// binding must satisfy the declaration too. The check for it is
+			// compiled here and run in apply, on the branch that makes the
+			// binding; see compileEmptyCheck for why it cannot be settled
+			// here. (outer-013, and outer-012 for why not statically)
+			c.emptyCheck, err = p.compileEmptyCheck(typ)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if p.consumeWord("at") {
 			pos, err := p.parseVarName()
