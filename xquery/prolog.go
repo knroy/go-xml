@@ -538,6 +538,20 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		if err != nil {
 			return err
 		}
+		// The grammar gives ContextItemDecl an ItemType, not a SequenceType:
+		// the context item is one item, so an occurrence indicator has nothing
+		// to quantify and "declare context item as xs:integer+" is a syntax
+		// error rather than a type error. contextDecl-023 asserts XPST0003 for
+		// exactly that. parseSequenceType is the only parser available here
+		// and it accepts the indicator, so it is rejected after the fact.
+		if src := strings.TrimSpace(t.src); src != "" {
+			switch src[len(src)-1] {
+			case '+', '*', '?':
+				return p.errorf(
+					"XPST0003: the context item type %q may not carry an "+
+						"occurrence indicator", src)
+			}
+		}
 		decl.typ = t
 		p.skipSpaceAndComments()
 	}

@@ -231,8 +231,9 @@ func (q *Query) bindContextItem(ctx *xpath.Context, b *varBinder) (
 	d := q.contextItem
 	sub := *ctx
 	if d.external && ctx.Item != nil {
-		// Only the type check applies: the value is the caller's.
-		if _, err := d.typ.convert(xdm.Sequence{ctx.Item},
+		// Only the type check applies: the value is the caller's. match
+		// rather than convert, for the reason given below.
+		if _, err := d.typ.match(xdm.Sequence{ctx.Item},
 			"the context item"); err != nil {
 			return nil, err
 		}
@@ -261,13 +262,29 @@ func (q *Query) bindContextItem(ctx *xpath.Context, b *varBinder) (
 	if err != nil {
 		return nil, err
 	}
-	seq, err = d.typ.convert(seq, "the context item")
+	// match rather than convert: §4.16 says the value of the initialiser must
+	// *match* the declared type, and the suite spells out that the function
+	// conversion rules are not the ones meant. contextDecl-039 declares "as
+	// xs:double := 1.234" and wants XPTY0004 rather than the promoted double,
+	// and contextDecl-044 wants the same of an external default; both are
+	// described as "function conversion rules not applied to context item".
+	// This is the same distinction §4.14 draws for a variable declaration, and
+	// the context item is no more converted than a variable is.
+	seq, err = d.typ.match(seq, "the context item")
 	if err != nil {
 		return nil, err
 	}
 	switch len(seq) {
 	case 0:
-		sub.Item = nil
+		// An initialiser that produced nothing is XPTY0004, not an absent
+		// context item. The specification names no error here and leaving the
+		// item absent would be the other defensible reading, but the suite
+		// settles it: contextDecl-032 initialises from "(1 to 17)[20]" and
+		// contextDecl-060 from "()", and both want XPTY0004. Binding nothing
+		// would instead surface later as XPDY0002 from whatever read ".",
+		// blaming the reference rather than the declaration that is at fault.
+		return nil, fmt.Errorf(
+			"XPTY0004: the context item initialiser produced an empty sequence")
 	case 1:
 		sub.Item = seq[0]
 	default:
