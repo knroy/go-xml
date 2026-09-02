@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -108,6 +109,13 @@ type serializeOptions struct {
 	standalone string
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
+	// normalize applies the Unicode normalization form the serialization
+	// parameters asked for, or is nil when none was asked for. It is held
+	// here rather than applied to the finished document because a character
+	// map's replacement string is written through untouched, normalisation
+	// included: the two transforms have to be interleaved, and only the code
+	// that applies the map knows where one ends and the other begins.
+	normalize func(string) string
 	// encoding is the output encoding. Nothing is transcoded -- everything
 	// is written as UTF-8 -- but the JSON method needs to know when a
 	// character has to be escaped because the encoding could not have held
@@ -528,8 +536,20 @@ func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
 }
 
 // escapeText escapes the characters that may not appear in content.
+//
+// The carriage return is escaped along with the three that are structurally
+// impossible, and for a different reason: it is perfectly legal in content,
+// but an XML parser normalises a literal one to a line feed before the
+// document reaches the data model. Writing it literally therefore loses it,
+// and a text node holding a carriage return would come back holding a line
+// feed. The numeric reference is the only spelling that survives the round
+// trip. Serialization-json-55 puts "&#xd;" in a text node and the same
+// character in a plain string, and asks to see the two spelled differently:
+// "&#13;" for the node, which is serialized as XML inside the JSON string,
+// and "\r" for the string, which is JSON's own escape.
 func escapeText(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	r := strings.NewReplacer(
+		"&", "&amp;", "<", "&lt;", ">", "&gt;", "\r", "&#xD;")
 	return r.Replace(s)
 }
 
@@ -868,11 +888,72 @@ func writeJSONItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) erro
 // asked for.
 func writeJSONString(sb *strings.Builder, s string, opts serializeOptions) {
 	sb.WriteString(`"`)
-	for _, r := range s {
-		if repl, ok := opts.charMap[r]; ok {
-			sb.WriteString(repl)
+	// Unicode normalisation is interleaved with the character map rather than
+	// applied to the finished document, for the reason xslt's mapSegments
+	// gives at length: a replacement string is written through untouched, and
+	// normalising the output afterwards would touch it. So each run between
+	// two mapped characters is normalised whole -- whole, because a combining
+	// sequence spans several characters and normalising them one at a time
+	// would leave every one of them exactly as it was -- and each replacement
+	// is written as the map spelled it. Serialization-json-35 maps "z" to a
+	// "c" plus a combining cedilla and asks for NFC: the run around it
+	// composes, the replacement stays decomposed.
+	for _, run := range splitOnCharMap(s, opts.charMap) {
+		if run.mapped {
+			sb.WriteString(run.text)
 			continue
 		}
+		writeJSONRun(sb, opts.normalized(run.text), opts)
+	}
+	sb.WriteString(`"`)
+}
+
+// normalized applies the requested Unicode normalization form, if any.
+func (o serializeOptions) normalized(s string) string {
+	if o.normalize == nil {
+		return s
+	}
+	return o.normalize(s)
+}
+
+// charMapRun is one stretch of a string that the character map either claimed
+// whole -- in which case text is the replacement, written verbatim -- or did
+// not touch at all.
+type charMapRun struct {
+	text   string
+	mapped bool
+}
+
+// splitOnCharMap breaks a string into the runs the map claimed and the runs
+// between them, so that a caller can treat the two differently. With no map
+// the whole string is one unclaimed run.
+func splitOnCharMap(s string, m map[rune]string) []charMapRun {
+	if len(m) == 0 {
+		return []charMapRun{{text: s}}
+	}
+	var runs []charMapRun
+	start := 0
+	for i, r := range s {
+		repl, ok := m[r]
+		if !ok {
+			continue
+		}
+		if i > start {
+			runs = append(runs, charMapRun{text: s[start:i]})
+		}
+		runs = append(runs, charMapRun{text: repl, mapped: true})
+		start = i + utf8.RuneLen(r)
+	}
+	if start < len(s) {
+		runs = append(runs, charMapRun{text: s[start:]})
+	}
+	return runs
+}
+
+// writeJSONRun writes one unmapped run of a JSON string with the escapes the
+// method requires.
+func writeJSONRun(sb *strings.Builder, s string, opts serializeOptions) {
+	for _, r := range s {
 		switch r {
 		case '"':
 			sb.WriteString(`\"`)
@@ -903,15 +984,24 @@ func writeJSONString(sb *strings.Builder, s string, opts serializeOptions) {
 			// character regardless would have made "-𐌰-" come back as
 			// "-\uD800\uDF30-" from a UTF-8 serialisation that had no
 			// reason to avoid it (Serialization-json-33).
-			if r > 0xFFFF && !jsonEncodingHolds(opts.encoding, r) {
-				r -= 0x10000
-				fmt.Fprintf(sb, `\u%04X\u%04X`, 0xD800+(r>>10), 0xDC00+(r&0x3FF))
+			if !jsonEncodingHolds(opts.encoding, r) {
+				if r > 0xFFFF {
+					r -= 0x10000
+					fmt.Fprintf(sb, `\u%04X\u%04X`,
+						0xD800+(r>>10), 0xDC00+(r&0x3FF))
+					continue
+				}
+				// A character inside the basic plane is one \u escape, not
+				// a pair: Serialization-json-57 asks for the euro sign under
+				// encoding="US-ASCII" and wants "\u20AC". The astral case
+				// above needed the surrogate pair only because \u names a
+				// single UTF-16 code unit and an astral character is two.
+				fmt.Fprintf(sb, `\u%04X`, r)
 				continue
 			}
 			sb.WriteRune(r)
 		}
 	}
-	sb.WriteString(`"`)
 }
 
 // serializeAdaptiveSeq renders a sequence with the adaptive output method.
@@ -1179,6 +1269,13 @@ type SerializeParams struct {
 	// CharMap maps a character to the string that replaces it on output, as
 	// xsl:character-map defines.
 	CharMap map[rune]string
+	// Normalize applies the requested Unicode normalization form, or is nil
+	// when the normalization-form parameter was "none". The caller supplies
+	// the function rather than the form's name because normalisation cannot
+	// be left until the document is finished: a character map's replacement
+	// is exempt from it, so the two have to be interleaved here, where the
+	// map is applied.
+	Normalize func(string) string
 	// Encoding is the output encoding. Nothing is transcoded -- both methods
 	// return a string -- but the JSON method escapes a character the named
 	// encoding could not have held, and only the caller knows which was
@@ -1195,6 +1292,7 @@ func (p SerializeParams) opts() serializeOptions {
 		itemSeparator:        p.ItemSeparator,
 		hasItemSep:           p.HasItemSeparator,
 		charMap:              p.CharMap,
+		normalize:            p.Normalize,
 		encoding:             p.Encoding,
 	}
 	if o.jsonNodeOutputMethod == "" {
