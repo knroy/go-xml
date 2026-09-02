@@ -109,6 +109,17 @@ func (p policy) PreserveTypes() bool {
 	return p.sc == nil || p.sc.construction == PreserveTypes
 }
 
+// DropEmptyText is true: a document node XQuery builds from zero-length
+// values has no children.
+//
+// §3.9.1.3 removes zero-length text nodes when constructing complex content,
+// and absorbing a nested document node does not exempt its children from the
+// rule. Constr-docnode-nested-4 counts the text children of
+// "document {'', document{''}, document {document {()}, document {''}}, ''}"
+// and expects zero. XSLT answers the opposite, because it inserts the
+// separating space first and that space is content.
+func (policy) DropEmptyText() bool { return true }
+
 func (n *literalText) eval(out *builderRef, ctx *evalContext) error {
 	out.b.AppendText(n.text)
 	return nil

@@ -660,6 +660,10 @@ func (b *Builder) ToTree() *xdm.Node {
 	// as text at document level and validation="strict" reports XTTE1550 for
 	// a document node whose children are not exactly one element.
 	sep := b.itemSep
+	// Whether a zero-length text node survives as a child of the document
+	// node is the one rule of complex content the two languages answer
+	// differently, so it is the policy's to answer. See Policy.DropEmptyText.
+	dropEmpty := b.policy != nil && b.policy.DropEmptyText()
 	emitted := 0
 	for _, it := range b.items {
 		if sep != nil && emitted > 0 {
@@ -718,7 +722,7 @@ func (b *Builder) ToTree() *xdm.Node {
 					tree.Root.BaseURI = n.BaseURI
 				}
 				for _, ch := range n.Children {
-					appendMergingText(tree.Root, ch)
+					appendMergingText(tree.Root, ch, dropEmpty)
 				}
 				prevAtomic = false
 				continue
@@ -729,7 +733,7 @@ func (b *Builder) ToTree() *xdm.Node {
 			// instructions in a variable — contributes one text child, not
 			// two. AppendText already merges this way inside an element;
 			// a document node is complex content by the same rule.
-			appendMergingText(tree.Root, n)
+			appendMergingText(tree.Root, n, dropEmpty)
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {
 			text := a.String()
@@ -746,8 +750,28 @@ func (b *Builder) ToTree() *xdm.Node {
 				// which "document {'abc', document {'def'}, 'ghi'}" ends with
 				// and which Constr-cont-document-5 counts as one child.
 				kids[len(kids)-1].Value += text
-			default:
+			case text != "" || !dropEmpty:
 				tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: text})
+			default:
+				// Under XQuery's rule a lone zero-length atomic starts no
+				// child. The two arms above still take it -- joining "" onto
+				// a text node beside it is a no-op that correctly leaves one
+				// child rather than two -- but with nothing to join, the same
+				// §3.9.1.3 rule that drops a zero-length text *node* forty
+				// lines above drops the text node this value would have
+				// become. The conversion to text happens first and the
+				// removal applies to its result, so "document {''}" is
+				// childless, which is what Constr-docnode-nested-4 asserts.
+				//
+				// prevAtomic must stay false here, and that is not a detail:
+				// it is what says a run of atomic values is open, and the
+				// first arm above appends a separating space to the last
+				// child on the strength of it. Setting it when no child was
+				// created would leave that arm indexing an empty child list.
+				// The run simply has not started yet -- "document {'', 'a'}"
+				// is the one text node "a" -- and the next value that
+				// produces text opens it.
+				continue
 			}
 			// With a separator in force there are no runs of adjacent atomic
 			// values left to merge with a space: the separator already sits
@@ -803,11 +827,27 @@ func (b *Builder) AppendOpaque(it xdm.Item) error {
 // absorption too, which is what Constr-cont-document-4 and -5 test:
 // "document {'abc', 'def', document {'ghi', 'jkl'}, 'mno'}" has one child,
 // and appending the absorbed children without merging gave three.
-func appendMergingText(parent, n *xdm.Node) {
+func appendMergingText(parent, n *xdm.Node, dropEmpty bool) {
 	if n.Kind == xdm.KindText {
 		if kids := parent.Children; len(kids) > 0 &&
 			kids[len(kids)-1].Kind == xdm.KindText {
 			kids[len(kids)-1].Value += n.Value
+			return
+		}
+		// Under XQuery's rule a zero-length text node is dropped rather than
+		// becoming a child, the same rule the caller applies to a top-level
+		// one: §3.9.1.3 removes zero-length text when constructing complex
+		// content, and absorbing a document node does not exempt its children
+		// from it. "document {document {''}}" was otherwise left with the one
+		// empty text child that Constr-docnode-nested-4 counts and expects
+		// none of.
+		//
+		// The merge above comes first, and has to: merging with a preceding
+		// text node is how "document {1, document{2}}" ends with a single
+		// child, and appending nothing to it is the right answer for an
+		// empty value either way. Only a node that would start a new child
+		// is dropped.
+		if dropEmpty && n.Value == "" {
 			return
 		}
 	}

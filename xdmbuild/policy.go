@@ -133,4 +133,29 @@ type Policy interface {
 	// XSLT: validation="preserve" against any other validation mode.
 	// XQuery: construction mode preserve against strip.
 	PreserveTypes() bool
+
+	// DropEmptyText reports whether a text node that a document constructor
+	// would be left holding is dropped when it is zero length.
+	//
+	// The two languages part company here, and only over a document node's
+	// children -- inside an element both drop zero-length text, which
+	// AppendText does for either.
+	//
+	// XQuery returns true. "document {'', document{''}, ''}" has no children
+	// at all: every value contributes a zero-length text node, §3.9.1.3
+	// removes each of them, and Constr-docnode-nested-4 counts the result
+	// and expects zero.
+	//
+	// XSLT returns false, because the same construction is not empty there.
+	// A run of adjacent atomic values is joined by a single space *before*
+	// the removal rule applies, so two xsl:sequence instructions selecting
+	// '' leave a text node holding one space -- content, not nothing. The
+	// suite is emphatic about it: on-empty-115a builds exactly that document
+	// and its xsl:on-empty fallback reads "WRONG! the document node contains
+	// a space, it is not empty!!!", and seqtor-039a wants " | | " where
+	// dropping the empties would give "||".
+	//
+	// So this is a real difference in the languages rather than a gap, which
+	// is why it is asked rather than decided in the builder.
+	DropEmptyText() bool
 }
