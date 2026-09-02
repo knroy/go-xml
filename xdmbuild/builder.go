@@ -505,6 +505,37 @@ func (b *Builder) AddNamespace(prefix, uri string) error {
 	return nil
 }
 
+// AddOwnNameNamespace binds the prefix of the element's own name, without
+// recording the binding as a namespace node the result sequence produced.
+//
+// The distinction is the one the declared field documents. A prefix carried
+// only by the element's NAME is not a namespace node a sequence constructor
+// wrote, so a later binding of that same prefix is not two namespace nodes in
+// conflict: section 11.7, and XQuery §3.9.3.1 with it, resolve the clash by
+// renaming the element's prefix and keeping both URIs reachable.
+//
+// Routing the own-name binding through AddNamespace recorded it in declared
+// and so turned exactly that case into the error the rename exists to avoid.
+// nscons-011 is the shape: element {QName(two, 'p:e')} { namespace p {one} }
+// must rename the element's prefix and keep p bound to one, and it reported
+// XQDY0102 instead.
+func (b *Builder) AddOwnNameNamespace(prefix, uri string) error {
+	was, had := b.declared[prefix]
+	err := b.AddNamespace(prefix, uri)
+	// Restore declared to what it was, so that the own-name binding is not
+	// visible to a later conflict check. Everything else AddNamespace does --
+	// the namespace node itself, the default-namespace rule, the rename of an
+	// already-conflicting prefix -- is wanted and is left in place.
+	if b.declared != nil {
+		if had {
+			b.declared[prefix] = was
+		} else {
+			delete(b.declared, prefix)
+		}
+	}
+	return err
+}
+
 // freshPrefix returns a prefix not yet bound on the element under
 // construction, derived from want so that the result still reads as the
 // stylesheet's choice.

@@ -464,7 +464,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// the empty prefix.
 	if el := sub.b.Open(); el != nil && name.URI != "" &&
 		el.InScopeNamespaces()[name.Prefix] != name.URI {
-		if err := sub.b.AddNamespace(name.Prefix, name.URI); err != nil {
+		// The element's own name, so this binding must not be recorded as a
+		// namespace node the content produced -- see AddOwnNameNamespace.
+		if err := sub.b.AddOwnNameNamespace(name.Prefix, name.URI); err != nil {
 			return err
 		}
 	}
@@ -612,7 +614,12 @@ func declareOwnName(b *xdmbuild.Builder) error {
 	if uri, ok := el.LookupPrefix(el.Name.Prefix); ok && uri == el.Name.URI {
 		return nil
 	}
-	return b.AddNamespace(el.Name.Prefix, el.Name.URI)
+	// The element's own name, so AddOwnNameNamespace rather than
+	// AddNamespace: the binding is not a namespace node the content
+	// produced, and recording it as one made a later "namespace p {...}" for
+	// the same prefix look like two conflicting namespace nodes instead of
+	// the rename §3.9.3.1 calls for.
+	return b.AddOwnNameNamespace(el.Name.Prefix, el.Name.URI)
 }
 
 // inheritedBase returns the base URI in force at a node, which is the nearest
@@ -788,7 +795,14 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 // right type does its spelling matter, and a string of the right type that
 // is not an NCName is the dynamic error XQDY0041.
 func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
-	seq, err := e.compiled.Eval(ctx.xp)
+	// bind, for the reason evalNodeName gives: a target expression holding a
+	// lifted XQuery-only primary needs the context that installs the
+	// "local:xq-stepN()" function standing in for it.
+	xp, err := e.bind(ctx)
+	if err != nil {
+		return "", err
+	}
+	seq, err := e.compiled.Eval(xp)
 	if err != nil {
 		return "", err
 	}
@@ -915,7 +929,17 @@ func contentString(content []node, ctx *evalContext) (string, bool, error) {
 // where the same failure in a direct constructor is static, because a direct
 // constructor's name is written in the query and a computed one's is not.
 func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName, error) {
-	seq, err := e.compiled.Eval(ctx.xp)
+	// Through bind, not the raw context: a name expression holding an
+	// XQuery-only primary was compiled by lifting that primary out into a
+	// "local:xq-stepN()" call, and the function behind that call exists only
+	// in the context bind builds. Evaluating against ctx.xp reached xpath
+	// with the call still in the expression and nothing to answer it, which
+	// surfaced as XPST0017 naming a function the query never wrote.
+	xp, err := e.bind(ctx)
+	if err != nil {
+		return xdm.QName{}, err
+	}
+	seq, err := e.compiled.Eval(xp)
 	if err != nil {
 		return xdm.QName{}, err
 	}
@@ -1087,7 +1111,16 @@ func checkElementName(name xdm.QName) error {
 func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
 	prefix := n.prefix
 	if n.prefixExpr != nil {
-		seq, err := n.prefixExpr.compiled.Eval(ctx.xp)
+		// bind, for the same reason evalNodeName uses it: the prefix
+		// expression may hold an XQuery-only primary that was lifted into a
+		// "local:xq-stepN()" call, and only bind installs the function that
+		// call reaches. nscons-015 writes "namespace { <a/>/* } { ... }",
+		// where the constructor is the lifted primary.
+		xp, err := n.prefixExpr.bind(ctx)
+		if err != nil {
+			return err
+		}
+		seq, err := n.prefixExpr.compiled.Eval(xp)
 		if err != nil {
 			return err
 		}

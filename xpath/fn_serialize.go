@@ -392,6 +392,22 @@ func paramValue(p *xdm.Node) (string, error) {
 func serializeItem(sb *strings.Builder, it xdm.Item, opts serializeOptions) error {
 	switch v := it.(type) {
 	case *xdm.Node:
+		// Sequence normalization rejects an attribute or namespace node in
+		// the sequence being serialized: there is no document for it to
+		// belong to, so there is nothing to write it *into* — a start tag is
+		// the only place either one has a syntax, and normalization is past
+		// the point where one could be supplied. The JSON path already
+		// raised this; the XML path wrote the node's value instead, so
+		// serialize(namespace z {"..."}) produced the bare URI.
+		//
+		// This is the top-level per-item entry, which is the whole of the
+		// rule's reach: an attribute reached as part of an element is inside
+		// a start tag and serializes normally. nscons-029 is the namespace
+		// case.
+		if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+			return fmt.Errorf(
+				"SENR0001: an attribute or namespace node cannot be serialized")
+		}
 		serializeNode(sb, v, opts)
 		return nil
 	case *xdm.FunctionItem:
