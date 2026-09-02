@@ -228,7 +228,13 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 	if conv, ok := xpath.CoerceFunctionItem(seq, t.stype); ok {
 		return conv, nil
 	}
-	if !t.stype.HasAtomicType {
+	// xs:numeric is a union of the three numeric primitives, so it carries no
+	// atomic type code of its own — but it is an atomic type as far as the
+	// function conversion rules are concerned, and an untypedAtomic argument
+	// against it must still be converted. Barring it here left "declare
+	// function local:f($n as xs:numeric) ... ; local:f(<a>255</a>)" refusing
+	// the untypedAtomic that atomising the element gives (xs-numeric-020).
+	if !t.stype.HasAtomicType && !t.stype.IsNumericType {
 		return nil, fmt.Errorf("XPTY0004: %s does not match its declared type %s",
 			what, t.src)
 	}
@@ -304,6 +310,21 @@ func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 	// a different rule from the single-target cast below.
 	if c, ok := xpath.CastToUnion(a, t.stype); ok {
 		return c, nil
+	}
+	// xs:numeric behaves as it does in a cast: the identity on a value that
+	// already is numeric, and a cast to xs:double on anything else. Only an
+	// untypedAtomic reaches the second half here, because a numeric value
+	// matched the declared type before castOne was called and a non-numeric
+	// one is not convertible. xs-numeric-020 asserts both halves of the
+	// result: local:f(<a>255</a>) is 256 and its type is xs:double.
+	if t.stype.IsNumericType {
+		if a.Type.IsNumeric() {
+			return a, nil
+		}
+		if a.Type != xdm.TypeUntypedAtomic {
+			return nil, fmt.Errorf("%s is not %s", a.TypeName(), t.src)
+		}
+		return xpath.CastAtomic(a, xdm.TypeDouble)
 	}
 	switch a.Type {
 	case xdm.TypeUntypedAtomic:
