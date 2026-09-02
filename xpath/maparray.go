@@ -198,6 +198,20 @@ func (e *LookupExpr) lookupIn(ctx *Context, it xdm.Item) (xdm.Sequence, error) {
 		}
 		out := xdm.Sequence{}
 		for _, k := range keys {
+			// The key specifier is atomised, and §3.11.3.1 then applies the
+			// function conversion rules against array:get's xs:integer
+			// parameter. That converts xs:untypedAtomic — which is what the
+			// atomisation of an element yields — by casting it, so
+			// "(<x>1</x>, <y>2</y>)" subscripts an array as 1 and 2 rather
+			// than raising. Only untypedAtomic is converted; a typed
+			// xs:decimal is still refused below.
+			if k.Type == xdm.TypeUntypedAtomic {
+				c, err := CastAtomic(k, xdm.TypeInteger)
+				if err != nil {
+					return nil, err
+				}
+				k = c
+			}
 			// An array is indexed by position, so the key has to be an
 			// xs:integer: "?a" on an array is a type error rather than an
 			// absent member, and so is "?(1.0)" — an xs:decimal is not an
