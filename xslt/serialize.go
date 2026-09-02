@@ -946,7 +946,16 @@ func (s *serializer) indent(depth int) {
 // section is a CDATA section whatever the namespace, and output-0114 and
 // -0138 ask for one around XHTML's own <example> and <h1>.
 func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
-	return s.html && !s.xhtml && n.Name.URI == ""
+	if !s.html || s.xhtml {
+		return false
+	}
+	// HTML5 absorbed XHTML's namespace into its own vocabulary, so an element
+	// in it is native there and foreign under HTML 4. Serialization-html-19b
+	// and -19c are the same document with the same cdata-section-elements of
+	// "b html:em", differing only in the version: 19b is 4.0 and wants a
+	// CDATA section around html:em, 19c is 5.0 and wants none. The absent
+	// namespace is native under both.
+	return n.Name.URI == "" || (s.html5 && n.Name.URI == nsXHTML)
 }
 
 // htmlIsland reports whether the html method must write n with XML syntax
