@@ -170,6 +170,27 @@ func (p *parser) scanExprSingleSource() (string, error) {
 	// prev is the last significant character seen, which decides whether a
 	// word here can be a keyword at all.
 	prev := byte(0)
+	// branch records that the word just scanned was "then" or "else", and
+	// nested counts the FLWORs opened after one that no "return" has closed
+	// yet. Together they are the context the single prev byte cannot carry.
+	//
+	// Every word collapses prev to a sentinel, so "then let $i := 1 return $i"
+	// presented "let" as a bare clause keyword at depth zero and the scan
+	// ended the ExprSingle there. The extent was truncated to "if (..) then",
+	// needsQueryParser never saw the typed let, and parseIf declined the whole
+	// conditional -- the XPST0003 the sudoku demo reports. A branch of a
+	// conditional is itself an ExprSingle, so a FLWOR opening there is nested
+	// inside this expression rather than being a clause of the enclosing one.
+	//
+	// Only these two keywords consult the preceding word, so the name-versus-
+	// keyword rule the axis-step cases rest on is untouched: "$start-column"
+	// and "$x/order" are still settled by the prev byte and "count(..)" by the
+	// lookahead in wordIsName. Axes089's
+	// "let $color := if (..) then 'a' else 'b' return <td/>" is unaffected --
+	// its branches are literals, which reset branch, so the "return" after
+	// them still ends the scan and stays with the enclosing let.
+	branch := false
+	nested := 0
 	for !p.eof() {
 		c := p.src[p.pos]
 		// A literal, a comment, a pragma or a string constructor holds no
@@ -183,6 +204,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			p.pos = end + 1
 			if c != '(' {
 				prev = '"'
+				branch = false
 			}
 			continue
 		}
@@ -191,6 +213,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			depth++
 			p.pos++
 			prev = c
+			branch = false
 			continue
 
 		case c == ')' || c == ']' || c == '}':
@@ -203,15 +226,20 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			depth--
 			p.pos++
 			prev = c
+			branch = false
 			continue
 
 		case c == ',':
-			if depth == 0 {
+			if depth == 0 && nested == 0 {
 				// A comma at depth zero separates the items of the enclosing
 				// Expr, and an ExprSingle by definition contains none.
 				goto done
 			}
+			// Inside a FLWOR opened in a conditional branch it separates that
+			// FLWOR's own bindings instead -- one clause may bind several
+			// variables -- so it is part of this expression, not a boundary.
 			p.pos++
+			branch = false
 			continue
 
 		case c == '<':
@@ -223,12 +251,14 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			if !startsMarkup(p.src, p.pos, prev) {
 				p.pos++
 				prev = '<'
+				branch = false
 				continue
 			}
 			if err := p.skipDirConstructor(); err != nil {
 				return "", err
 			}
 			prev = '>'
+			branch = false
 			continue
 
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
@@ -238,6 +268,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 
 		if !isNameStartByte(c) {
 			prev = c
+			branch = false
 			p.pos++
 			continue
 		}
@@ -247,10 +278,18 @@ func (p *parser) scanExprSingleSource() (string, error) {
 		w := p.scanNCName()
 		if depth == 0 && stopWords[w] && canStartClause(prev) &&
 			!p.wordIsName(w) {
-			p.pos = wordStart
-			goto done
+			switch {
+			case branch && bindingKeywords[w]:
+				nested++
+			case w == "return" && nested > 0:
+				nested--
+			default:
+				p.pos = wordStart
+				goto done
+			}
 		}
 		prev = 'x'
+		branch = w == "then" || w == "else"
 	}
 done:
 	src := strings.TrimSpace(p.src[start:p.pos])

@@ -85,6 +85,21 @@ type staticContext struct {
 	// and stamped on constructed elements.
 	baseURI string
 
+	// declBase is the URI of the resource the module was read from, and is
+	// used for one thing only: resolving a relative "declare base-uri"
+	// against it, as §4.5 requires.
+	//
+	// It is deliberately not baseURI. The two answer different questions --
+	// "what does a prolog declaration resolve against" and "what does the
+	// query run under" -- and conflating them is what made every earlier
+	// attempt at K2-BaseURIProlog-4 a net loss: seeding baseURI so that a
+	// relative declaration could be made absolute also stamped that value on
+	// constructed elements and on fn:static-base-uri when the query declared
+	// nothing, which base-URI-12/14/23/24 and K2-BaseURIFunc-30 all detect.
+	// Kept apart, seeding this one changes nothing except the resolution a
+	// declaration asks for.
+	declBase string
+
 	// defaultCollation is what a comparison uses when the call names none.
 	// The empty string means the codepoint collation, which is the default
 	// everywhere and what xpath uses for the zero value.

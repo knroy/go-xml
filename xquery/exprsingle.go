@@ -153,6 +153,10 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 	// its "return" belongs to it rather than to whatever enclosed the caller.
 	// Only when the count is zero does a "return" end the expression.
 	open := 0
+	// Conditionals opened at depth zero within the scan and not yet closed by
+	// their own "else", counted for the same reason "open" counts FLWORs: the
+	// "else" of a nested "if" is not the one that ends this branch.
+	cond := 0
 	for i < len(p.src) {
 		c := p.src[i]
 		// A literal, a comment, a pragma or a string constructor holds no
@@ -177,9 +181,21 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 		case '[', '{':
 			depth++
 		case ',':
-			if depth == 0 {
+			if depth == 0 && open == 0 {
 				return i, nil
 			}
+			// With a FLWOR still open the comma separates that FLWOR's own
+			// bindings rather than the items of an enclosing Expr: one clause
+			// may bind several variables, as the sudoku demo writes
+			//
+			//	then let $index as xs:integer := ..,
+			//	         $possibleValues as xs:integer* := ..
+			//	     return ..
+			//
+			// Ending the scan here cut the branch mid-clause and reported
+			// XPST0003 at the "return" left unread. The "return" that closes
+			// the FLWOR is already counted below, so the comma follows the
+			// same nesting rule the keywords do.
 		default:
 			if depth == 0 && len(stops) > 0 && isNameByte(c) &&
 				(i == p.pos || !isNameByte(p.src[i-1])) {
@@ -205,6 +221,22 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 				// caller, and end this expression.
 				case w == "return" && open > 0:
 					open--
+				// A "then" opens a conditional whose own "else" closes it,
+				// counted the way "return" closes a FLWOR. Without this the
+				// then-branch of an outer conditional ended at the first
+				// "else" it met, which belongs to a nested "if":
+				//
+				//	then let $i := .. return if (..) then () else if (..) ..
+				//
+				// is the sudoku demo's populateValues, and the branch was cut
+				// after "then ()", leaving the outer "else" unread and
+				// reported as XPST0003. "then" needs no shape test of its own
+				// the way the binding keywords do, because it can only ever
+				// follow an "if (..)".
+				case w == "then":
+					cond++
+				case w == "else" && cond > 0:
+					cond--
 				default:
 					for _, kw := range stops {
 						if w == kw {
