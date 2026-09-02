@@ -98,6 +98,21 @@ func (p *parser) scanExprSingle(stops ...string) (node, error) {
 	return &enclosed{expr: c}, nil
 }
 
+// parseConstructorHere parses the direct constructor beginning at the cursor,
+// leaving the cursor after it. It is what a scanner uses to step over one:
+// only a parse can find where a constructor ends.
+func (p *parser) parseConstructorHere() (node, error) {
+	switch {
+	case p.lookingAt("<!--"):
+		return p.parseDirComment()
+	case p.lookingAt("<?"):
+		return p.parseDirPI()
+	case p.lookingAt("<"):
+		return p.parseDirElement()
+	}
+	return nil, p.errorf("XPST0003: expected a direct constructor")
+}
+
 // parseConstructorItem parses a constructor if one starts here, so that a
 // return clause may be one: "case 1 return <a/>" is ordinary.
 func (p *parser) parseConstructorItem() (node, bool, error) {
