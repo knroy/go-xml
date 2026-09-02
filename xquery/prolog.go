@@ -85,16 +85,21 @@ func (p *parser) parseProlog() error {
 		p.skipSpaceAndComments()
 
 		if kw == "import" {
-			ok, err := p.parseImport(save)
-			if err != nil {
+			what := p.peekKeyword()
+			// The faults an import's own syntax settles are reported before
+			// the resolver is missed. They are decided by the declaration as
+			// written, so a processor that cannot fetch the target still owes
+			// the right error: XQST0059 says "no such module", which is a
+			// different complaint from a prefix that may not be bound at all.
+			if err := p.checkImportSyntax(what); err != nil {
 				return err
 			}
-			if !ok {
-				// Not an import: "import" is a name here, and the prolog
-				// ends before it.
-				return nil
-			}
-			continue
+			// A module or schema import needs a resolver for the imported
+			// module's own text, which this package does not yet have. It is
+			// refused by name so that the failure says what is missing
+			// rather than pointing at a token.
+			p.pos = save
+			return p.errorf("XQST0059: %s import is not implemented yet", what)
 		}
 
 		what := p.peekKeyword()
@@ -107,26 +112,12 @@ func (p *parser) parseProlog() error {
 			// "declare %eg:sequential variable $foo := 'bar'" fail with
 			// "expected function", though the grammar admits it and the
 			// annotation is one nothing here interprets.
-			var private, conflict bool
-			if private, conflict, err = p.parseAnnotationList(); err == nil {
+			var private bool
+			if private, err = p.parseAnnotations(); err == nil {
 				p.skipSpaceAndComments()
 				inSecond = true
 				if p.peekKeyword() == "variable" {
-					// §4.15 allows at most one of %public and %private
-					// on a declaration, and gives the two kinds separate
-					// codes: XQST0116 for a variable, XQST0106 for a
-					// function.
-					if conflict {
-						err = p.errorf(
-							"XQST0116: a variable may carry only one of %s and %s",
-							"%public", "%private")
-					} else {
-						err = p.parseVarDecl()
-					}
-				} else if conflict {
-					err = p.errorf(
-						"XQST0106: a function may carry only one of %s and %s",
-						"%public", "%private")
+					err = p.parseVarDecl()
 				} else {
 					err = p.parseFunctionDeclBody(private)
 				}
@@ -262,10 +253,20 @@ func (p *parser) parseNamespaceDecl(once map[string]*seenDecl, inSecond *bool) e
 	// call to the constructor. It is a removal rather than a binding to "",
 	// because a name resolved against the empty URI would silently be in no
 	// namespace instead of being an error.
+	// §4.2 forbids a prolog from saying anything at all about xml or xmlns:
+	// "it is a static error if the prefix is xml or xmlns". That is stricter
+	// than the rule bind applies, which allows xml to be bound to its own
+	// namespace because a constructor's xmlns:xml="…/XML/1998/namespace" is
+	// legal — an XML parser would have accepted it. A prolog has no such
+	// excuse, so both prefixes are refused here whatever the URI, including
+	// the zero-length one that would otherwise be read as an undeclaration.
+	// namespaceDecl-3 declares xml to its own correct URI and K2-Namespace-
+	// Prolog-7 undeclares xmlns; both are XQST0070.
+	if prefix == "xml" || prefix == "xmlns" {
+		return p.errorf("XQST0070: the prefix %q may not be declared in a "+
+			"prolog", prefix)
+	}
 	if uri == "" {
-		if prefix == "xml" {
-			return p.errorf("XQST0070: the prefix %q may not be undeclared", "xml")
-		}
 		delete(p.sc.ns, prefix)
 		p.declaredNS[prefix] = true
 		return nil
@@ -973,98 +974,56 @@ func resolveBase(base, decl string) string {
 	return b.ResolveReference(r).String()
 }
 
-// parseImport reads a module or schema import, §4.11 and §4.12, productions
-// [21]-[23].
+// checkImportSyntax reports the faults of an import that its own text settles,
+// leaving the cursor wherever it stopped — the caller resets it.
 //
-// Neither can be carried out: both need the imported module's or schema's own
-// text, and this package has no resolver for either. The declaration is still
-// parsed rather than refused on sight, because the parts of it that can be
-// wrong before anything is fetched are wrong whatever the resolver would have
-// found, and the suite asks for those errors by name.
-//
-// start is the offset of the "import" keyword, so that a word that only looked
-// like one can be given back to the expression parser.
-func (p *parser) parseImport(start int) (bool, error) {
+// Only the "namespace Prefix = URI" form is examined. "import schema" may also
+// be written with "default element namespace" or with no prefix at all, and
+// neither has a prefix or a target namespace to complain about; a module
+// import's URI is not a target namespace in the same sense, so the empty-URI
+// rule below is a schema rule only.
+func (p *parser) checkImportSyntax(what string) error {
+	p.pos += len(what)
 	p.skipSpaceAndComments()
-	kind := p.peekKeyword()
-	if kind != "module" && kind != "schema" {
-		// "import" is not a reserved word, so this is a name and the query
-		// is an expression: K2-ModuleImport-1 is "import ne import", a
-		// comparison of two paths, which must reach the evaluator and fail
-		// there on the absent context item rather than here on the grammar.
-		p.pos = start
-		return false, nil
+	if !p.consume("namespace") {
+		return nil
 	}
-	p.pos += len(kind)
-
-	if kind == "module" {
-		// ModuleImport ::= "import" "module" ("namespace" NCName "=")?
-		// URILiteral ("at" URILiteral ("," URILiteral)*)?
-		if p.consumeKeyword("namespace") {
-			p.skipSpaceAndComments()
-			prefix, local, err := p.parseEQName()
-			if err != nil {
-				return false, err
-			}
-			if prefix != "" || strings.HasPrefix(local, "Q{") {
-				return false, p.errorf(
-					"XPST0003: a module import binds an %s, not a %s",
-					"NCName", "QName")
-			}
-			p.skipSpaceAndComments()
-			// "=", and only "=". K-ModuleImport-3 writes ":=", which is the
-			// variable declaration's operator and not this one's.
-			if !p.consume("=") || p.lookingAt("=") {
-				return false, p.errorf("XPST0003: expected %q after the %s of a %s",
-					"=", "namespace prefix", "module import")
-			}
-		}
-	} else if p.consumeKeyword("namespace") {
-		// SchemaPrefix ::= "namespace" NCName "=" | "default" "element"
-		// "namespace"
-		p.skipSpaceAndComments()
-		if _, _, err := p.parseEQName(); err != nil {
-			return false, err
-		}
-		p.skipSpaceAndComments()
-		if !p.consume("=") {
-			return false, p.errorf("XPST0003: expected %q after the %s of a %s",
-				"=", "namespace prefix", "schema import")
-		}
-	} else if p.consumeKeyword("default") {
-		if !p.consumeKeyword("element") || !p.consumeKeyword("namespace") {
-			return false, p.errorf("XPST0003: expected %q in a %s",
-				"default element namespace", "schema import")
-		}
+	p.skipSpaceAndComments()
+	prefix := p.scanNCName()
+	if prefix == "" {
+		return nil
 	}
-
+	p.skipSpaceAndComments()
+	// §4.11 spells the binding with "=". ":=" is the variable declaration's
+	// operator and the grammar does not admit it here, which is XPST0003
+	// rather than anything about the import.
+	if p.lookingAt(":=") {
+		return p.errorf("XPST0003: expected %q, not %q in an import", "=", ":=")
+	}
+	if !p.consume("=") {
+		return nil
+	}
+	// §4.11: neither a schema nor a module import may bind "xml" or "xmlns".
+	// The prefixes are reserved by the Namespaces recommendation, so no
+	// target could make the binding legal.
+	if prefix == "xml" || prefix == "xmlns" {
+		return p.errorf(
+			"XQST0070: the prefix %q may not be bound by an import", prefix)
+	}
+	if what != "schema" {
+		return nil
+	}
+	p.skipSpaceAndComments()
 	uri, err := p.parseStringLiteral()
 	if err != nil {
-		return false, err
+		return nil
 	}
-	// §4.11: "It is a static error [err:XQST0088] if the literal URI of a
-	// module import is a zero-length string." The location hints after "at"
-	// are not covered by it, and are not checked here for the same reason
-	// the target is not fetched.
-	if kind == "module" && uri == "" {
-		return false, p.errorf(
-			"XQST0088: the target namespace of a module import may not be empty")
+	// §4.11: a schema import binding a prefix must name a target namespace,
+	// because the prefix is bound to it. An empty one leaves the prefix
+	// bound to no namespace, which XQST0057 refuses outright.
+	if uri == "" {
+		return p.errorf("XQST0057: a schema import that binds the prefix %q "+
+			"must name a target namespace", prefix)
 	}
-	if p.consumeKeyword("at") {
-		for {
-			if _, err := p.parseStringLiteral(); err != nil {
-				return false, err
-			}
-			if !p.consumeAtDepthZero(",") {
-				break
-			}
-		}
-	}
-	p.skipSpaceAndComments()
-	if !p.consume(";") {
-		return false, p.errorf("XPST0003: expected %q after a declaration", ";")
-	}
-	// Everything that could be decided without the target has been. What is
-	// left needs it, so the failure names the resolver rather than a token.
-	return false, p.errorf("XQST0059: %s import is not implemented yet", kind)
+	return nil
 }

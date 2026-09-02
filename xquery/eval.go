@@ -124,7 +124,7 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 // sequence evaluates an enclosed expression to a flat sequence, for the
@@ -170,7 +170,7 @@ type valueNode interface {
 	sequence(ctx *evalContext) (xdm.Sequence, error)
 }
 
-func appendSequence(out *builderRef, seq xdm.Sequence) error {
+func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error {
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -182,15 +182,78 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 			// and the check has to happen here because AppendNode reports
 			// nothing to a caller.
 			if v.Kind == xdm.KindAttribute {
-				if el := out.b.Open(); el != nil && len(el.Children) > 0 {
-					return fmt.Errorf("XQTY0024: the attribute %s follows a "+
-						"node that is not an attribute in the content of "+
-						"element %s", v.Name.Lexical(), el.Name.Lexical())
+				if el := out.b.Open(); el != nil {
+					if len(el.Children) > 0 {
+						return fmt.Errorf("XQTY0024: the attribute %s follows a "+
+							"node that is not an attribute in the content of "+
+							"element %s", v.Name.Lexical(), el.Name.Lexical())
+					}
+					// The attribute is added here rather than through
+					// AppendNode, which discards what AddAttribute returns
+					// because XSLT has nothing to do with it: the fault it
+					// reports is the duplicate attribute, and for XQuery the
+					// policy turns that into XQDY0025 (§3.9.1.3). Two
+					// attributes of the same name reaching element content in
+					// a sequence — "<a>{$attr1, $attr2}</a>" — is exactly the
+					// shape the suite tests, and the error has to reach the
+					// caller to be raised at all.
+					if err := out.b.AddAttributeTyped(
+						v.Name, v.Value, v.TypeAnnotation); err != nil {
+						return err
+					}
+					continue
 				}
 			}
+			before := 0
+			if el := out.b.Open(); el != nil {
+				before = len(el.Children)
+			}
+			// The namespaces in scope at the *source* have to be read before
+			// the node is appended: appending re-parents a copy of it, and
+			// from there the ancestors that supplied most of those bindings
+			// are no longer reachable.
+			var srcScope map[string]string
+			if v.Kind == xdm.KindElement && out.b.Open() != nil {
+				srcScope = v.InScopeNamespaces()
+			}
 			out.b.AppendNode(v)
+			if el := out.b.Open(); el != nil && len(el.Children) > before {
+				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
+			}
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
+		case *xdm.ArrayItem:
+			// §3.9.1.3 step 1 applies fn:data to the content sequence, and an
+			// array does have a typed value: it is the concatenation of the
+			// typed values of its members. So an array in element content
+			// contributes its members, not XQTY0105 — "<a>{['a',['b','c'],
+			// 'd']}</a>" is "<a>a b c d</a>", with the members flattened
+			// through the nesting and separated as adjacent atomic values
+			// always are. A map has no typed value and stays refused, which
+			// is why this is not simply an atomization of the whole sequence.
+			//
+			// This is the complex-content rule and applies only where complex
+			// content is being constructed. At the top of a sequence there is
+			// none, and the array is an ordinary item there: a query whose
+			// whole body is "[1, 2]" returns one array, not two integers.
+			if out.b.Open() == nil {
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			flat := xdm.Flatten(xdm.One(v))
+			if len(flat) == 1 && flat[0] == it {
+				// Flatten leaves an array it cannot reduce alone. Refusing it
+				// here keeps the guarantee that this branch terminates.
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := appendSequence(out, flat, sc); err != nil {
+				return err
+			}
 		default:
 			if err := out.b.AppendOpaque(it); err != nil {
 				return err
@@ -198,6 +261,148 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 		}
 	}
 	return nil
+}
+
+
+// applyCopyNamespaces enforces the two halves of copy-namespaces on a subtree
+// that has just been copied into the element being constructed (§3.9.1.3).
+//
+// Neither half is free, and the defaults are not the do-nothing case they
+// look like. Re-parenting a copy loses the bindings its ancestors supplied and
+// silently grants it the destination's, so preserve and inherit are as much
+// work as their opposites — they are the work of putting back what the copy
+// should have kept.
+//
+// preserve restores the in-scope namespaces the original had. They are read
+// before the append, because afterwards the ancestors that supplied most of
+// them are no longer reachable from the copy.
+//
+// no-preserve instead drops the namespace nodes the copied element carried,
+// keeping the ones its own name and its attributes' names still need — a copy
+// whose name became unresolvable would not be a node at all. copynamespace-16
+// is the case: three nested constructors each declaring a prefix, and only the
+// innermost element's own bindings survive to the innermost copy.
+//
+// The two are exclusive; inherit and no-inherit then apply on top of either.
+//
+// no-inherit stops the copy from picking up what is in scope at the
+// destination, which re-parenting otherwise gives it for free. There is no way
+// to *not* inherit in the data model, so the bindings are undeclared on the
+// copy's root instead, which is what the namespace axis then reports.
+// copynamespace-17 asks for both and expects the copy to be left with the xml
+// binding alone.
+func applyCopyNamespaces(n *xdm.Node, srcScope map[string]string, sc *staticContext) {
+	if n == nil || n.Kind != xdm.KindElement {
+		return
+	}
+	preserve := sc == nil || sc.preserveNS
+	inherit := sc == nil || sc.inheritNS
+	if preserve {
+		preserveScope(n, srcScope)
+	} else {
+		stripNamespaces(n)
+	}
+	if inherit {
+		return
+	}
+	// The bindings to undeclare are the ones the *parent* supplies; the
+	// copy's own, whether original or just rebuilt above, are not inherited
+	// and must survive. An undeclaration is written as an empty URI, which
+	// InScopeNamespaces and LookupPrefix both read as "not in scope here".
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	if n.Parent != nil {
+		for prefix := range n.Parent.InScopeNamespaces() {
+			if prefix == "xml" || own[prefix] {
+				continue
+			}
+			n.AddNamespace(prefix, "")
+		}
+	}
+}
+
+// preserveScope gives a copied element the namespace nodes it had at the
+// source but that its new position no longer supplies.
+//
+// copy-namespaces preserve means the copy keeps "all the in-scope namespaces
+// of the original element", and most of those are usually not on the element
+// itself — they are on ancestors the copy has left behind. Re-parenting alone
+// therefore loses them: Constr-inscope-7 copies <foo:child3/> out of a parent
+// that declared foo, and the copy arrived with the right namespace URI on its
+// name and no binding for it anywhere.
+//
+// Only the bindings the destination does not already agree with are written,
+// so a copy landing where the same prefix means the same thing stays clean.
+// A binding the copy declares itself wins over the source scope, which is
+// what an undeclaration on the copied element means.
+func preserveScope(n *xdm.Node, srcScope map[string]string) {
+	if len(srcScope) == 0 {
+		return
+	}
+	own := map[string]bool{}
+	for _, ns := range n.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	for prefix, uri := range srcScope {
+		if prefix == "xml" || own[prefix] {
+			continue
+		}
+		if cur, ok := n.LookupPrefix(prefix); ok && cur == uri {
+			continue
+		}
+		n.AddNamespace(prefix, uri)
+	}
+	// A default namespace the source did not have, but the destination
+	// supplies, would silently move the copy into it. Constr-inscope-10 is
+	// the case: <child2> in no namespace copied under a <new> that declares
+	// one, and the expected result carries the xmlns="" that keeps it out.
+	if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
+		if uri, ok := n.LookupPrefix(""); ok && uri != "" {
+			n.AddNamespace("", "")
+		}
+	}
+}
+
+// stripNamespaces rebuilds a subtree's namespace nodes as the smallest set its
+// names require, which is what copy-namespaces no-preserve asks for.
+//
+// "Only those namespace bindings that are used in the names of the element and
+// its attributes" survive. The set is recomputed per element rather than
+// filtered down the tree, because a descendant may need a prefix its ancestor
+// does not: dropping the ancestor's binding and stopping there would leave the
+// descendant's name pointing at nothing.
+func stripNamespaces(n *xdm.Node) {
+	if n.Kind != xdm.KindElement {
+		return
+	}
+	need := map[string]string{}
+	if n.Name.URI != "" && n.Name.URI != xdm.NSXML {
+		need[n.Name.Prefix] = n.Name.URI
+	}
+	for _, a := range n.Attrs {
+		if a.Name.URI != "" && a.Name.URI != xdm.NSXML {
+			need[a.Name.Prefix] = a.Name.URI
+		}
+	}
+	kept := n.Namespaces[:0]
+	for _, ns := range n.Namespaces {
+		if uri, ok := need[ns.Name.Local]; ok && uri == ns.Value {
+			kept = append(kept, ns)
+			delete(need, ns.Name.Local)
+		}
+	}
+	n.Namespaces = kept
+	// A name whose binding was never on this element in the first place — it
+	// came from an ancestor that the copy has left behind — still needs one,
+	// or the copy would carry a prefix bound to nothing.
+	for prefix, uri := range need {
+		n.AddNamespace(prefix, uri)
+	}
+	for _, ch := range n.Children {
+		stripNamespaces(ch)
+	}
 }
 
 func (n *element) eval(out *builderRef, ctx *evalContext) error {
@@ -216,6 +421,20 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
 		el.BaseURI = n.baseURI
 	}
+	// §3.9.3.1: the in-scope namespaces of a constructed element include a
+	// binding for its own name. A direct constructor writes that binding as
+	// an xmlns attribute and it arrives below; a computed one has nowhere to
+	// write it, so the name's own prefix is bound here. Without it the
+	// element carried a namespace URI that nothing declared, and serializing
+	// "declare namespace foo='...'; element foo:e {}" lost the xmlns
+	// altogether. The default element namespace goes in the same way, under
+	// the empty prefix.
+	if el := sub.b.Open(); el != nil && name.URI != "" &&
+		el.InScopeNamespaces()[name.Prefix] != name.URI {
+		if err := sub.b.AddNamespace(name.Prefix, name.URI); err != nil {
+			return err
+		}
+	}
 	// Namespace declarations are applied before anything else, so that they
 	// are in scope for the attributes and the content.
 	for _, ns := range n.namespaces {
@@ -233,6 +452,9 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 		sub.b.NoteDeclared(ns.prefix, ns.uri)
+	}
+	if err := declareOwnName(sub.b); err != nil {
+		return err
 	}
 	for _, a := range n.attrs {
 		if err := a.eval(sub, ctx); err != nil {
@@ -266,6 +488,66 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 	}
 	return nil
+}
+
+
+// declareOwnName gives the element under construction a namespace node for
+// the binding its own name needs.
+//
+// §3.9.1.1's namespace fixup: "for each element node in the constructed
+// content, a namespace binding must be present for the prefix and namespace
+// URI of the element name". The element's name carries a prefix and a URI
+// resolved from the static context at the constructor, but that context is
+// not the constructed tree, so nothing has yet put the binding *on the node*.
+// Without it in-scope-prefixes() answered one short and the element serialised
+// as <foo:bar> with no xmlns:foo at all — not a document any parser reads back.
+//
+// Only the element's own name is fixed up here. The static context typically
+// binds a good deal more — the eight predeclared prefixes, plus whatever the
+// prolog declared — and §3.9.1.1 does not put those on the node:
+// Constr-inscope-13 declares foo, never uses it, and expects a bare <new/>,
+// while K2-DirectConElemNamespace-58 writes <xs:element/> and requires the
+// xmlns:xs the *name* needs. A prefix reaches the result by being used, not by
+// being in scope. Attributes are fixed up separately, as they are added.
+//
+// A binding an ancestor already supplies is left alone, so that a tree of
+// elements in one namespace does not carry a redundant declaration on every
+// node.
+func declareOwnName(b *xdmbuild.Builder) error {
+	el := b.Open()
+	if el == nil {
+		return nil
+	}
+	// The xml prefix is bound everywhere by XML Names itself and is never
+	// declared; K2-DirectConElemNamespace-58 writes <xml:element/> and
+	// expects no declaration on it.
+	if el.Name.URI == xdm.NSXML {
+		return nil
+	}
+	if el.Name.URI == "" {
+		// An element in no namespace under an ancestor with a default
+		// namespace has to undeclare it, or reading the result back puts the
+		// element in the ancestor's namespace — a different element from the
+		// one constructed. K2-DirectConElemNamespace-52 is exactly this:
+		// a default namespace on <a>, <e xmlns=""/> inside it.
+		//
+		// The node is written straight onto the element rather than through
+		// the builder's AddNamespace, whose rule against declaring a default
+		// namespace on an element in no namespace (XQDY0102) is about
+		// *binding* one and would reject the undeclaration that is precisely
+		// right here.
+		if el.Name.Prefix != "" {
+			return nil
+		}
+		if uri, ok := el.LookupPrefix(""); ok && uri != "" {
+			el.AddNamespace("", "")
+		}
+		return nil
+	}
+	if uri, ok := el.LookupPrefix(el.Name.Prefix); ok && uri == el.Name.URI {
+		return nil
+	}
+	return b.AddNamespace(el.Name.Prefix, el.Name.URI)
 }
 
 // inheritedBase returns the base URI in force at a node, which is the nearest
@@ -381,7 +663,7 @@ func joinAtomized(seq xdm.Sequence) (string, error) {
 }
 
 func (n *comment) eval(out *builderRef, ctx *evalContext) error {
-	text, err := contentString(n.content, ctx)
+	text, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
@@ -396,25 +678,32 @@ func (n *comment) eval(out *builderRef, ctx *evalContext) error {
 func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 	target := n.target
 	if n.targetExpr != nil {
-		seq, err := n.targetExpr.compiled.Eval(ctx.xp)
+		t, err := evalPITarget(n.targetExpr, ctx)
 		if err != nil {
 			return err
 		}
-		s, err := joinAtomized(seq)
-		if err != nil {
-			return err
-		}
-		target = s
-		if !xdm.IsNCName(target) {
-			return fmt.Errorf(
-				"XQDY0041: %q is not a valid processing-instruction target",
-				target)
-		}
+		target = t
 	}
-	text, err := contentString(n.content, ctx)
+	// §3.9.3.5: the target may not be "xml" in any combination of case, which
+	// XML itself reserves. XQDY0064 is a dynamic error, so it is raised here
+	// for a target written as a name as much as for a computed one — a try
+	// catches it either way. The *direct* constructor "<?xml ...?>" is
+	// different: there the target is markup rather than an expression, and
+	// XPST0003 refuses it while parsing.
+	if strings.EqualFold(target, "xml") {
+		return fmt.Errorf(
+			"XQDY0064: %q is not a legal processing-instruction target",
+			target)
+	}
+	text, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
+	// §3.9.3.5: leading whitespace is stripped from the content. XML has no
+	// way to write it — the target and the data are separated by whitespace,
+	// so a leading space would be reread as part of that separator — and the
+	// data model therefore does not admit it.
+	text = strings.TrimLeft(text, " \t\r\n")
 	if strings.Contains(text, "?>") {
 		return fmt.Errorf(
 			"XQDY0026: a processing instruction may not contain %q", "?>")
@@ -424,17 +713,72 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 	return nil
 }
 
+// evalPITarget computes the target of a processing-instruction constructor.
+//
+// §3.9.3.5 splits the failure in two, and the split is what the suite tests.
+// The atomised name must be a single xs:string, xs:untypedAtomic or xs:NCName
+// — anything else, including an xs:anyURI, an xs:integer, a duration or a
+// sequence that is not of length one, is a *type* error, XPTY0004, because
+// the value could never have been a target. Only once the value is of the
+// right type does its spelling matter, and a string of the right type that
+// is not an NCName is the dynamic error XQDY0041.
+func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
+	seq, err := e.compiled.Eval(ctx.xp)
+	if err != nil {
+		return "", err
+	}
+	atoms, err := xdm.AtomizeChecked(seq)
+	if err != nil {
+		return "", err
+	}
+	if len(atoms) != 1 {
+		return "", fmt.Errorf("XPTY0004: the target of a processing " +
+			"instruction must be a single string")
+	}
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return "", fmt.Errorf("XPTY0004: %s cannot be the target of a "+
+			"processing instruction", atoms[0].TypeName())
+	}
+	switch a.Type {
+	case xdm.TypeString, xdm.TypeUntypedAtomic:
+		// xs:NCName is a subtype of xs:string and arrives as one, so the two
+		// cases the grammar names are the two the model has.
+	default:
+		return "", fmt.Errorf("XPTY0004: %s cannot be the target of a "+
+			"processing instruction", a.TypeName())
+	}
+	// The value came from an expression rather than from the query text, so
+	// nothing has trimmed it: " name " names the target "name", the way the
+	// name of a computed element does.
+	target := strings.TrimSpace(a.String())
+	if !xdm.IsNCName(target) {
+		return "", fmt.Errorf(
+			"XQDY0041: %q is not a valid processing-instruction target",
+			target)
+	}
+	return target, nil
+}
+
 func (n *textNode) eval(out *builderRef, ctx *evalContext) error {
-	text, err := contentString(n.content, ctx)
+	text, empty, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}
-	// A text constructor whose content is empty produces no node at all,
-	// rather than an empty one the data model does not admit.
-	if text == "" {
+	// §3.9.3.3: a text constructor whose content expression is the empty
+	// sequence produces no node at all. The test is on the sequence and not
+	// on the string it joins to: "text {()}" yields nothing, while
+	// "text {''}" yields a text node whose string value happens to be empty.
+	if empty {
 		return nil
 	}
-	out.b.AppendNode(&xdm.Node{Kind: xdm.KindText, Value: text})
+	// The node goes in as text rather than as a ready-made node so that the
+	// builder applies §3.9.1.3's two rules about text in complex content:
+	// adjacent text nodes are merged, and a zero-length one is dropped. Both
+	// are conditional on there being a parent, which is what tells apart
+	// "count(text {''})", one free-standing node, from
+	// "count(element e {text {''}}/text())", which is none.
+	out.b.AppendText(text)
 	return nil
 }
 
@@ -464,7 +808,7 @@ func (n *document) eval(out *builderRef, ctx *evalContext) error {
 // contentString evaluates content that becomes a string rather than nodes,
 // which is what a comment, a processing instruction and a text constructor
 // each hold.
-func contentString(content []node, ctx *evalContext) (string, error) {
+func contentString(content []node, ctx *evalContext) (string, bool, error) {
 	// The content is one sequence, and §3.9.3 joins it once: the values of
 	// "text {1,2}" are separated by a single space, and so are the values of
 	// "text {1}, {2}". Joining each item on its own would lose the separator
@@ -477,15 +821,24 @@ func contentString(content []node, ctx *evalContext) (string, error) {
 		case *enclosed:
 			s, err := v.sequence(ctx)
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			seq = append(seq, s...)
 		default:
-			return "", fmt.Errorf(
-				"XPTY0004: this content may not contain a constructed node")
+			// A constructor written directly in the content — "text {1,<a/>}"
+			// — is an item of the content sequence like any other. §3.9.3.1
+			// atomises that sequence, and a constructed node atomises to its
+			// string value, so there is nothing here to refuse: the item's
+			// value is taken rather than its contribution to a tree.
+			s, err := asEnclosed(c).sequence(ctx)
+			if err != nil {
+				return "", false, err
+			}
+			seq = append(seq, s...)
 		}
 	}
-	return joinAtomized(seq)
+	str, err := joinAtomized(seq)
+	return str, len(seq) == 0, err
 }
 
 // evalNodeName computes the name of a computed constructor.
@@ -543,14 +896,24 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 	if !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %q is not a lexical QName", lex)
 	}
+	// The prefix resolves against the namespaces in scope *where the
+	// constructor was written*, which is what §3.9.3.1's "statically known
+	// namespaces" means. Inside a direct constructor those include that
+	// element's own declarations — "<e xmlns:foo='...'>{element {'foo:x'} {}}
+	// </e>" binds foo — and they are only on the expression, the evaluation
+	// context having none but the module's.
+	sc := e.sc
+	if sc == nil {
+		sc = ctx.sc
+	}
 	if isElement {
-		q, err := ctx.sc.resolveElementName(prefix, local)
+		q, err := sc.resolveElementName(prefix, local)
 		if err != nil {
 			return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 		}
 		return q, nil
 	}
-	q, err := ctx.sc.resolveAttributeName(prefix, local)
+	q, err := sc.resolveAttributeName(prefix, local)
 	if err != nil {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 	}
@@ -683,7 +1046,7 @@ func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
 			}
 		}
 	}
-	uri, err := contentString(n.content, ctx)
+	uri, _, err := contentString(n.content, ctx)
 	if err != nil {
 		return err
 	}

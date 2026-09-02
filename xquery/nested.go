@@ -43,6 +43,23 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 	// handles that case has to see the expression from here rather than from
 	// wherever the unwrapping stopped.
 	start := p.pos
+	// A conditional whose branches this parser must read is one of the shapes
+	// unwrapped here rather than lifted into a variable. Lifting is what the
+	// operand substitution below does, and it evaluates what it lifts before
+	// the rewritten expression runs — which for a conditional evaluates both
+	// branches, against §3.8's requirement that exactly one is. See ifexpr.go.
+	if p.peekKeyword() == "if" {
+		if n, ok, err := p.parseIf(); ok || err != nil {
+			if err != nil {
+				return nil, err
+			}
+			p.skipSpaceAndComments()
+			if p.eof() {
+				return []node{n}, nil
+			}
+			return p.pathOverOrSubstitute([]node{n}, start)
+		}
+	}
 	if p.startsConstructor() || p.looksLikeFLWOR() || p.looksLikeQuantified() {
 		n, err := p.parseItem()
 		if err != nil {
@@ -219,7 +236,10 @@ type nestedCall struct {
 }
 
 func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
+	xp, err := n.fn.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i, a := range n.args {
 		v, err := (&enclosed{items: []node{a}}).sequence(ctx)
 		if err != nil {
@@ -235,7 +255,7 @@ func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 // pathOver rewrites "E S" — a value this parser had to read, followed by a
@@ -323,8 +343,12 @@ func (n *parenPath) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	xp, err := n.rest.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return n.rest.compiled.Eval(
-		ctx.xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
+		xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
 }
 
 func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
@@ -332,5 +356,5 @@ func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
