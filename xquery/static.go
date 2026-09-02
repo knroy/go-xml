@@ -43,6 +43,25 @@ const (
 // declarations on that element go out of scope with it. The copy is shallow
 // and the map is cloned, which is the whole of the scoping discipline.
 type staticContext struct {
+	// xqVersion is the version of XQuery named by the module's version
+	// declaration (§4.1), or defaultXQVersion when it declared none.
+	//
+	// It is here rather than on the parser because it outlives parsing. A
+	// module's declared version decides the *static* answer to a handful of
+	// questions -- an unprefixed option name, whether a cast's unknown target
+	// type is XPST0051 or XQST0052 -- and also a *dynamic* one: whether a
+	// circularity that runs through a function body is the static XQST0054 or
+	// the dynamic XQDY0054, which cannot be settled until the query runs. The
+	// static context is the one thing both the parser and the evaluator hold:
+	// Query.sc and evalContext.sc are the same pointer the parser used, so
+	// recording it here makes the version reachable from both without a second
+	// channel that could disagree with the first.
+	//
+	// It is copied by child() along with everything else, and is never
+	// rebound: a version declaration may appear only once, and only before the
+	// prolog, so there is no scope in which it could change.
+	xqVersion XQVersion
+
 	// ns maps a prefix to the URI bound to it. The XML prefix is bound from
 	// the start, as §4.1 requires, and cannot be rebound.
 	ns map[string]string
@@ -138,6 +157,11 @@ const (
 // how nearly every example in the function specification is written.
 func newStaticContext() *staticContext {
 	return &staticContext{
+		// A module that has not yet been read has declared no version, and
+		// §4.1 leaves such a module's version implementation-defined. This
+		// engine implements 3.1. parseVersionDecl overwrites this when the
+		// module does name a version.
+		xqVersion: defaultXQVersion,
 		ns: map[string]string{
 			"xml":   xdm.NSXML,
 			"xs":    xdm.NSXS,

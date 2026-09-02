@@ -44,6 +44,13 @@ func (p *parser) parseOrderedUnordered() (node, bool, error) {
 	// absent, and both keywords return their operand's value unchanged.
 	// K-OrderExpr-1a and -2a assert exactly that, under an XQ31+ dependency
 	// and citing the bug that made the change.
+	//
+	// Left at 3.1's reading whatever the module declares, even though the
+	// version is now recorded on the static context. A 1.0 module writing
+	// "ordered{}" is accepted here where a conforming 1.0 processor would
+	// raise XPST0003, which is a permissive divergence: nothing is given a
+	// wrong answer, only a query is accepted that need not have been. Routing
+	// it would mean sc.xqVersion.atLeast31() around the empty case here.
 	return body, true, nil
 }
 
@@ -130,6 +137,11 @@ func (p *parser) parsePragma() error {
 	// pragma is in here anyway. So there is nothing to report: the name is
 	// well-formed, and whether the extension expression is an error is
 	// decided by parseExtension, on whether an enclosed expression follows.
+	//
+	// Left at 3.1's reading whatever the module declares, on the same
+	// permissive-divergence reasoning as parseOrderedUnordered above: a 1.0 or
+	// 3.0 module writing an unprefixed pragma name is accepted rather than
+	// refused. Routing it would mean sc.xqVersion.atLeast31() here.
 	//
 	// The content runs to the first "#)". It is not parsed: a pragma's
 	// contents are whatever the implementation that recognises it says they

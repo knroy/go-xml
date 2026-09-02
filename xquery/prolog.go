@@ -667,25 +667,34 @@ func (p *parser) parseOptionDecl() error {
 	if err != nil {
 		return err
 	}
-	// An unprefixed option name is legal and is simply ignored.
+	// An unprefixed option name is version dependent.
 	//
-	// XQuery 1.0 §4.16 required the name to be prefixed and made an
-	// unprefixed one XPST0081. 3.0 lifted the restriction: the name is in no
-	// namespace, matches none of the options this processor acts on, and the
-	// effect of an option a processor does not recognise is
-	// implementation-defined -- so ignoring it is conforming.
-	// K-OptionDeclarationProlog-1b is "declare option myopt 'option value';
-	// true()" under XQ30+ and accepts either XQST0123 or true.
+	// XQuery 1.0 §4.16 says of the option declaration's name: "The QName must
+	// have a prefix; if it does not, a static error is raised [err:XPST0081]."
+	// XQuery 3.0 §4.19 drops that sentence entirely and instead says the name
+	// "is not in any namespace" when unprefixed, leaving the effect of an
+	// option the processor does not recognise implementation-defined -- so
+	// from 3.0 an unprefixed option name is legal and ignoring it conforms.
 	//
-	// This parser is unconditionally 3.1 -- parseVersionDecl reads the
-	// version declaration and discards it, and nothing records a version --
-	// so the 1.0 rule cannot be the one applied. The XQ10 sibling of this
-	// case, which does want XPST0081, is out of scope for the same reason.
+	// The suite states both halves over the same source:
+	// K-OptionDeclarationProlog-1 is "declare option myopt 'option value';
+	// true()" under XQ10 and wants XPST0081; -1b is the same query under
+	// XQ30+ and accepts either XQST0123 or true.
 	//
-	// The name falls through to resolveElementName below, whose error is
-	// already swallowed for an empty prefix, and lands in no namespace; the
-	// declaration then matches no option this processor knows and is
-	// discarded.
+	// A braced "Q{...}name" is not an unprefixed name in this sense -- it
+	// carries its own namespace -- so only a genuinely bare NCName is caught
+	// here. That spelling did not exist in 1.0 at all, so the guard cannot
+	// misfire on a 1.0 module: such a module could not have written one.
+	if !p.sc.xqVersion.atLeast30() && prefix == "" && !strings.HasPrefix(local, "Q{") {
+		return p.errorf(
+			"XPST0081: an option declaration's name must be prefixed in "+
+				"XQuery %s", p.sc.xqVersion)
+	}
+	// From 3.0 the name falls through to resolveElementName below, whose
+	// error is already swallowed for an empty prefix, and lands in no
+	// namespace; the declaration then matches no option this processor knows
+	// and is discarded.
+	//
 	// A braced name carries its own namespace and must not be sent through
 	// resolveElementName, which would take the default element namespace and
 	// leave the whole "Q{uri}local" spelling as the local part. The check
@@ -979,6 +988,15 @@ func (p *parser) resolveDeclaredName(prefix, local string, isFunction bool) (xdm
 // proper. A version this processor does not implement is XQST0031, which is
 // the specification's way of saying "this query was written for a language I
 // do not have" rather than a syntax error.
+//
+// The version it reads is recorded on the static context, and the expression
+// language the parser hands substrings to is set from it. Both matter: a
+// module that says 1.0 is judged by 1.0's rules at the decision points that
+// route through sc.xqVersion, and its expressions are XPath 2.0 expressions
+// rather than 3.1 ones. This engine still *implements* 3.1 almost everywhere
+// -- recording the version is what makes the distinction representable, and
+// the routed decision points are the ones where 1.0 and 3.1 are known to
+// disagree.
 func (p *parser) parseVersionDecl() error {
 	p.skipSpaceAndComments()
 	save := p.pos
@@ -993,12 +1011,17 @@ func (p *parser) parseVersionDecl() error {
 		if err != nil {
 			return err
 		}
-		switch v {
-		case "1.0", "3.0", "3.1":
-		default:
+		ver, ok := parseXQVersion(v)
+		if !ok {
 			return p.errorf("XQST0031: this processor does not implement "+
 				"XQuery version %q", v)
 		}
+		p.sc.xqVersion = ver
+		// The expression language follows the module's version: XQuery 1.0 is
+		// defined over XPath 2.0, 3.0 over XPath 3.0, 3.1 over XPath 3.1. This
+		// is read by everything the parser hands to the xpath package, and it
+		// is what feeds the version gate in castTargetTypeError.
+		p.version = ver.xpathVersion()
 		p.skipSpaceAndComments()
 		if p.consumeKeyword("encoding") {
 			p.skipSpaceAndComments()
@@ -1011,9 +1034,14 @@ func (p *parser) parseVersionDecl() error {
 			}
 		}
 	case p.consumeKeyword("encoding"):
-		// 3.0 added the encoding-only form. There is nothing to do with the
-		// name but check it: the source has already been decoded by the time
-		// it reaches this package, and re-decoding it would be wrong.
+		// 3.0 added the encoding-only form: "xquery encoding" with no version
+		// at all. Such a module has named no version, so it keeps the default
+		// the static context was built with -- there is nothing here to
+		// record.
+		//
+		// There is nothing to do with the name but check it either: the source
+		// has already been decoded by the time it reaches this package, and
+		// re-decoding it would be wrong.
 		p.skipSpaceAndComments()
 		enc, err := p.parseURILiteral()
 		if err != nil {

@@ -46,6 +46,49 @@ which — the effective boolean value a `where` clause, a `satisfies` clause and
 a window clause's conditions take — was a latent instance of the same bug,
 unreached only because two independent lexical scanners happen to agree about
 which expressions carry a lifted operand.
+### The declared XQuery version is recorded
+
+`parseVersionDecl` used to read `xquery version "1.0";`, check the literal
+against a list of three, and throw it away. Nothing recorded which version a
+module had declared, so every rule that differs between 1.0 and 3.1 was
+answered by whichever reading the 3.1 conformance run wanted — correct for the
+suite, and silently wrong for a module that had said 1.0.
+
+The version is now recorded on the module's static context, which is the one
+structure both the parser and the evaluator hold: `Query.sc`, `evalContext.sc`
+and the parser's `sc` are the same pointer, so a static rule and a dynamic one
+cannot disagree about which version applies. A module with no version
+declaration is compiled as 3.1, which §4.1 leaves implementation-defined and
+which is what this engine implements — so nothing about existing behaviour
+changed. `XQST0031` is raised for a version outside the three, from the same
+function that maps the literal, so the error and the recorded state agree by
+construction.
+
+Three decision points that had been hardcoded now ask:
+
+* An unprefixed `declare option` name is `XPST0081` under 1.0 §4.16 ("The
+  QName must have a prefix; if it does not, a static error is raised") and
+  legal from 3.0 §4.19, which drops the sentence and puts the name in no
+  namespace.
+* A cast target naming a type that is in scope nowhere is `XPST0051` under 1.0
+  and `XQST0052` from 3.0 §3.13.2. The gate for this already existed in
+  `xpath.castTargetTypeError` and was starved of input, because the XQuery
+  parser was pinned to XPath 3.1; the declared version now selects the
+  expression language too, since XQuery 1.0 is defined over XPath 2.0, 3.0
+  over XPath 3.0 and 3.1 over XPath 3.1.
+* A variable circularity running through a function body is the static
+  `XQST0054` under 1.0 §4.14 and the dynamic `XQDY0054` from 3.0 §4.16, which
+  narrows the static error to a cycle whose every edge is a direct variable
+  reference.
+
+Everything else stays at 3.1's reading whatever the module declares — the
+empty operand of `ordered {}`, an unprefixed pragma name, `XQST0134` for a
+bare `namespace-node()` step. Each is a permissive divergence: a 1.0 module a
+conforming 1.0 processor would reject is accepted, and none is given a wrong
+answer. `docs/xquery.md` lists them.
+
+No conformance movement: 29,796 / 7 on the XQuery target, 100% on all three
+XPath targets, 8,606 and 6,149 on XSLT.
 
 ### XQuery conformance: 99.61% to 99.98%
 

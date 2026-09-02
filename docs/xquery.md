@@ -162,6 +162,44 @@ try { 1 div 0 } catch * { "caught" }        (: "caught"  — dynamic :)
 try { $undeclared } catch * { "caught" }    (: XPST0008  — static, escapes :)
 ```
 
+## The version declaration
+
+A module may open with `xquery version "1.0";`, `"3.0"` or `"3.1"`. The version
+it names is recorded on the module's static context and is reachable from both
+the parser and the evaluator. A module that names no version is compiled as
+3.1: §4.1 leaves that case implementation-defined, and 3.1 is what this engine
+implements. A version this processor does not implement — anything other than
+those three — is `XQST0031`.
+
+```xquery
+xquery version "1.0"; declare option myopt "v"; true()
+(: XPST0081 — 1.0 §4.16 requires an option name to be prefixed :)
+
+xquery version "3.0"; declare option myopt "v"; true()
+(: true()   — 3.0 §4.19 dropped that requirement :)
+```
+
+The engine still *implements* 3.1 almost everywhere. What the recorded version
+buys is that the places where the versions are known to disagree can ask, and
+three do:
+
+| Rule | 1.0 | 3.0 and later |
+| --- | --- | --- |
+| Unprefixed `declare option` name (§4.16 / §4.19) | `XPST0081` | legal, ignored |
+| Cast target naming a type not in scope (§3.13.2) | `XPST0051` | `XQST0052` |
+| Variable circularity through a function body (§4.14 / §4.16) | `XQST0054` (static) | `XQDY0054` (dynamic) |
+
+The declared version also selects the expression language each expression is
+compiled at, since XQuery 1.0 is defined over XPath 2.0, 3.0 over XPath 3.0 and
+3.1 over XPath 3.1.
+
+Everything else remains judged by 3.1's rules whatever the module declares —
+including the empty operand of `ordered {}` and `unordered {}`, an unprefixed
+pragma name, and `XQST0134` for a bare `namespace-node()` step. Those are
+accepted at every version rather than refused at the earlier ones. This is a
+permissive divergence: a 1.0 module that a conforming 1.0 processor would
+reject is accepted here, but no module is given a wrong *answer*.
+
 ## What is not implemented
 
 Two declarations parse and are then refused, rather than being mis-parsed.

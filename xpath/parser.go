@@ -1099,6 +1099,13 @@ func (e *StringConcat) String() string {
 // p.xquery and not off the version alone. And it is 3.0-and-later, so an
 // XQuery 1.0 module keeps XPST0051.
 //
+// The version arm was dead until the xquery package began recording what a
+// module's version declaration said and compiling its expressions at the
+// matching XPath version: every XQuery expression arrived here at XPath 3.1
+// regardless, so the XPST0051 branch could not be taken and the sentence
+// above described behaviour the engine could not produce. It now can — see
+// xquery.XQVersion.xpathVersion.
+//
 // Only the *type* error is renumbered. A target that names a well-known type
 // which is merely not permitted keeps the code it already had — XPST0080 for
 // an abstract type, XPST0003 for a grammar violation such as a trailing "*" —

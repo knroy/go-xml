@@ -783,6 +783,17 @@ empty-order, copy-namespaces and the declared context item; `try`/`catch`;
 `switch`; `typeswitch`; quantified expressions; `ordered`/`unordered`; the
 extension expression; and the string constructor.
 
+The version declaration is recorded rather than discarded. A module may open
+with `xquery version "1.0"`, `"3.0"` or `"3.1"`; anything else is `XQST0031`,
+and a module that declares nothing is compiled as 3.1. The engine implements
+3.1 throughout, but the three rules the versions are known to disagree on now
+ask which version applies: an unprefixed `declare option` name is `XPST0081`
+in 1.0 and legal from 3.0; a cast target naming a type not in scope is
+`XPST0051` in 1.0 and `XQST0052` from 3.0; and a variable circularity running
+through a function body is the static `XQST0054` in 1.0 and the dynamic
+`XQDY0054` from 3.0. See [docs/xquery.md](docs/xquery.md) for what stays at
+3.1's reading whatever the module declares.
+
 Two declarations parse and are then refused rather than mis-parsed, because
 both need a module store this package does not have: `import module` raises
 `XQST0059`, and `import schema` leaves the in-scope schema definitions empty

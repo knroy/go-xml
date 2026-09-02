@@ -112,7 +112,10 @@ func Compile(src string, opts Options) (*Query, error) {
 	// an offset into the same string.
 	src = normalizeLineEndings(src)
 
-	p := &parser{src: src, sc: sc, version: xpath.XPath31,
+	// The parser starts at the expression version its static context's
+	// declared XQuery version implies -- the default until parseVersionDecl
+	// says otherwise, which it does before anything else is read.
+	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
 		declaredNS: map[string]bool{}}
 	// The version declaration, the prolog and the body are read in that order
 	// because each changes how the next is read: a version declaration can

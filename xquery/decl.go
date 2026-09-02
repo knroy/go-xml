@@ -700,9 +700,14 @@ func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context) (x
 // graph that has to be walked rather than a list that can be run down.
 //
 // A cycle in that graph is XQST0054 only when it runs from one variable
-// straight to another. XQuery 3.0 split the error in two: a circularity that
-// passes through a *function* body is XQDY0054, a dynamic error, because a
-// function body is not necessarily entered. "declare variable $v :=
+// straight to another, in a module at XQuery 3.0 or later. XQuery 3.0 split
+// the error in two: a circularity that passes through a *function* body is
+// XQDY0054, a dynamic error, because a function body is not necessarily
+// entered. XQuery 1.0 made no such distinction and called the whole thing
+// XQST0054, so the split is routed through the module's declared version --
+// see the guard in visit.
+//
+// "declare variable $v :=
 // f(); declare function f() { if (never()) then $v else 22 };" names $v inside
 // f, so the text has a cycle, but the branch that closes it is not taken and
 // the query has an answer — K2-InternalVariablesWithout-1b asserts 22. Only
@@ -749,7 +754,10 @@ type varBinder struct {
 	// variables currently being initialised.
 	//
 	// It is what tells the two halves of the 3.0 split apart when the cycle
-	// is longer than one hop. A cycle is static only if every edge in it is a
+	// is longer than one hop, in a module at 3.0 or later; a 1.0 module has
+	// only the one half, and visit's guard says so.
+	//
+	// A cycle is static only if every edge in it is a
 	// direct variable reference; as soon as one runs through a function body
 	// the whole loop is conditional on that body being entered, so the error
 	// is the dynamic XQDY0054. Set for the duration of a descent through a
@@ -757,6 +765,15 @@ type varBinder struct {
 	// path rather than any one variable. See bindVariables.
 	pathViaFunc bool
 }
+
+// version is the XQuery version the module declared, which decides how a
+// circularity that runs through a function body is reported. See visit.
+//
+// Read off the Query's static context rather than carried on the binder: the
+// static context is the one place the declared version is recorded, and the
+// walk happens at evaluation time, long after the parser that recorded it has
+// gone.
+func (b *varBinder) version() XQVersion { return b.q.sc.xqVersion }
 
 // newVarBinder prepares a walk, or returns nil when the module declares no
 // global variables and there is nothing to walk.
@@ -850,7 +867,26 @@ func (b *varBinder) visit(d *varDecl) error {
 				// route to $var is through local:func1..func4, and $var
 				// names $var2 directly. XQ10 calls the whole thing XQST0054
 				// (-19); XQ30+ calls it XQDY0054 (-19a).
-				if deferred || b.pathViaFunc {
+				//
+				// XQuery 1.0 §4.14 has no such exemption: "It is a static
+				// error [err:XQST0054] if a variable depends on itself",
+				// where the dependency relation it defines is the transitive
+				// closure over both variable references and function calls,
+				// with no regard for whether the function body is entered.
+				// XQuery 3.0 §4.16 narrows the static case to a cycle whose
+				// edges are all direct variable references and adds
+				// XQDY0054 for the rest. So the exemption is 3.0-and-later,
+				// and a 1.0 module reports the static error for the whole
+				// loop.
+				//
+				// The external-declaration half (deferred) is NOT gated: an
+				// external variable's initialiser is a default rather than a
+				// definition in 1.0 as much as in 3.1, and XQDY0054 does not
+				// exist in 1.0 to report it with -- so a 1.0 module keeps the
+				// permissive answer there rather than gaining a static error
+				// the specification does not ask for. See the comment above
+				// on extvardef-011.
+				if deferred || (b.pathViaFunc && b.version().atLeast30()) {
 					continue
 				}
 				return fmt.Errorf(

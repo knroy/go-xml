@@ -643,6 +643,13 @@ func rejectNamespaceAxis(src string) error {
 // legal use names an axis explicitly, which is exactly what distinguishes the
 // two, so the test is for the test standing alone after a "/" or at the head
 // of the expression.
+//
+// XQST0134 is raised whatever version the module declared, and deliberately.
+// The namespace-node() kind test does not exist in XQuery 1.0 at all, so a 1.0
+// module writing this step is in error either way -- only the code a 1.0
+// processor would report differs, and it would be a grammar error rather than
+// a right answer this engine withholds. Routing it would trade one refusal for
+// another and is not worth a branch.
 func rejectNamespaceNodeStep(src string) error {
 	const kind = "namespace-node("
 	for i := 0; i+len(kind) <= len(src); i++ {

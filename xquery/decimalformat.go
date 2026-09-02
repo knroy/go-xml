@@ -269,7 +269,13 @@ func (q *Query) registerFormatNumber(lib *xpath.Library) {
 			}
 			df = f
 		}
-		out, err := xpath.FormatNumberVersion(num, pic, df, xpath.XPath31)
+		// The picture-string grammar is version dependent -- 3.0 added the
+		// exponent separator, 3.1 the sign in the exponent part -- and the
+		// version to judge it by is the module's, not this call site's. It
+		// was a bare xpath.XPath31 literal while nothing recorded the
+		// module's version; now that something does, it follows the module.
+		out, err := xpath.FormatNumberVersion(
+			num, pic, df, q.sc.xqVersion.xpathVersion())
 		if err != nil {
 			return nil, err
 		}

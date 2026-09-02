@@ -37,6 +37,13 @@ func DeepEqualSequences(ctx *Context, a, b xdm.Sequence) (bool, error) {
 // The whole of src must be the type: trailing text is a syntax error rather
 // than something to be ignored, so that "xs:integer)" is refused where the
 // caller's brace matching went wrong.
+//
+// The type is parsed at XPath 3.1 whatever version the host is at, so a type
+// written in an XQuery 1.0 module's typeswitch may name map() or array() and
+// is accepted. Taking a Version would be the honest signature, but this is
+// exported and the divergence is permissive -- an earlier module is allowed a
+// type it should not have had, and is not given a wrong answer -- so the
+// widening is left in place rather than paid for with a breaking change.
 func ParseSequenceType(src string, ns NamespaceResolver) (SequenceType, error) {
 	if ns == nil {
 		ns = defaultResolver{}
