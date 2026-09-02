@@ -825,16 +825,29 @@ func (r *Runner) principalSource(set *TestSet, tc *TestCase) (*xdm.Node, string,
 			if err != nil {
 				return nil, "", err
 			}
-			tree, err := xdm.ParseString(string(stripBOM(data)),
-				xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
-					// Retrieved by URI, so it has a dm:document-uri as well
-					// as a base URI and fn:document-uri must report it. A
-					// tree a stylesheet builds gets neither, which is the
-					// distinction that function exists to make.
-					DocumentURI:      fileURI(p),
-					ExternalEntities: r.entityResolver()})
+			popts := xdm.ParseOptions{AllowDOCTYPE: true, BaseURI: fileURI(p),
+				// Retrieved by URI, so it has a dm:document-uri as well
+				// as a base URI and fn:document-uri must report it. A
+				// tree a stylesheet builds gets neither, which is the
+				// distinction that function exists to make.
+				DocumentURI:      fileURI(p),
+				ExternalEntities: r.entityResolver()}
+			tree, err := xdm.ParseString(string(stripBOM(data)), popts)
 			if err != nil {
 				return nil, "", err
+			}
+			// The environment may ask for the source to be XInclude-processed
+			// before the transform sees it. Only base-uri-052 does, and it is
+			// what that case exists to test: the xml:base fixup of XInclude
+			// 1.0 section 4.5.5, which is the only way base-uri() can answer
+			// where an included element really came from.
+			if s.XInclude == "true" {
+				if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+					Resolver: r.entityResolver(),
+					Parse:    popts,
+				}); err != nil {
+					return nil, "", err
+				}
 			}
 			if err := r.annotate(set, env, s, tree.Root); err != nil {
 				return nil, "", err

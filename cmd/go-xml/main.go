@@ -63,6 +63,9 @@ func run() error {
 				"XXE surface; it also requires -allow-doctype)")
 		allowUnparsedText = flag.Bool("allow-unparsed-text", false,
 			"let fn:unparsed-text read files from the -allow-dir roots as raw text")
+		xinclude = flag.Bool("xinclude", false,
+			"process xi:include elements in the source document, reading the "+
+				"included resources from the -allow-dir roots")
 		xpathVersion = flag.String("xpath-version", "",
 			"XPath version for the stylesheet's expressions: 2.0, 3.0 or 3.1. "+
 				"Empty derives it from the stylesheet's own version attribute, "+
@@ -240,6 +243,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		resultDir:    *resultDir,
 		trackPos:     *trackPos,
 		externalEnts: *allowExternalEnts,
+		xinclude:     *xinclude,
 		maxDepth:     *maxDepth,
 	}
 
@@ -318,6 +322,7 @@ type transformCfg struct {
 	resultDir    string
 	trackPos     bool
 	externalEnts bool
+	xinclude     bool
 	maxDepth     int
 }
 
@@ -348,6 +353,24 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		tree, err := xdm.ParseString(string(data), popts)
 		if err != nil {
 			return err
+		}
+		// XInclude is a transformation of the parsed document rather than a
+		// parsing option — XInclude 1.0 section 4 defines it over a finished
+		// infoset — so it runs here, between the parse and the transform, and
+		// only when asked for. The resolver doing the reading is the same one
+		// that gates fn:doc and xsl:include, so an inclusion is confined to
+		// the -allow-dir roots on exactly the same terms.
+		if cfg.xinclude {
+			if err := xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+				Resolver: cfg.resolver,
+				// The included documents are held to the same limits as the
+				// including one: an inclusion becomes part of the document,
+				// so it must not be a way around a bound the document itself
+				// was held to.
+				Parse: popts,
+			}); err != nil {
+				return err
+			}
 		}
 		root = tree.Root
 	}

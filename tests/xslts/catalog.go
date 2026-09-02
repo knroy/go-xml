@@ -124,6 +124,11 @@ type Source struct {
 	// item need not be a document node, and three cases in the suite name an
 	// element or a text node this way.
 	Select string `xml:"select,attr"`
+	// XInclude is the environment's xinclude="true", which asks that the
+	// document be XInclude-processed before the transform sees it. Only
+	// base-uri-052 sets it, and it is what that case exists to test: the
+	// xml:base fixup XInclude 1.0 section 4.5.5 requires.
+	XInclude string `xml:"xinclude,attr"`
 	// Validation is "strict", "lax" or "skip". A source declared strict is
 	// meant to reach the transform carrying type annotations from the
 	// environment's schema, which is what makes "instance of my:type"

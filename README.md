@@ -669,6 +669,17 @@ Every remote-reference mechanism is off unless you turn it on.
   refuses every non-`file` scheme. There is no network option.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
+* **XInclude is off** unless a caller runs `xdm.ProcessXInclude` explicitly.
+  It is a document-level pass rather than a parsing option — XInclude 1.0 §4
+  defines it as a transformation from one infoset to another — and it reads
+  only what an `xdm.IncludeResolver` hands it. `xslt.FileResolver` implements
+  that through the **same** `resolvePath` that gates `fn:doc`, `xsl:include`
+  and external entities, so an inclusion is confined to the named roots on
+  exactly the same terms: no non-`file` scheme, symlinks resolved before the
+  containment check, nothing outside the roots. This matters more here than
+  elsewhere, because with XInclude it is the *source document* — the party the
+  threat model already treats as hostile — that names what to read. The CLI
+  exposes it as `-xinclude`.
 * **`xs:import` and `xs:include` fail closed**, via `xsd.Options.Resolver`.
   The default reads a schema beside the one it was given and **refuses a
   remote URL outright**; `HTTPResolver` is how you opt in to the network.
@@ -823,16 +834,25 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. 549 of its 593 test documents render,
-  and the HTML is byte-identical to the Saxon-produced reference output once
-  the timestamp and generator metadata (both environment-dependent) are
-  normalised. Of the 44 that do not, 43 need XInclude — DocBook
-  resolves it through `ext:xinclude`, a Saxon-Java extension it ships as a
-  `.jar`, and the stylesheet's own `function-available()` fallback handles the
-  absence. The last is a timeout. The five that used to be counted here are
-  answered by flags this engine already had — three raised `XTDE0420` and two
-  declared a DOCTYPE — and the figure above is now measured with them, which is
-  what a user of this corpus would pass. On `XTDE0420`:
+  a multi-stage `fn:transform` pipeline. **572** of its 593 test documents
+  render (544 before XInclude), and the HTML is byte-identical to the
+  Saxon-produced reference output once the timestamp and generator metadata
+  (both environment-dependent) are normalised.
+
+  The 42 that once needed `ext:xinclude` were the interesting case. DocBook's
+  pipeline calls that Saxon-Java extension function on the source document, and
+  its `function-available()` fallback quietly passes the document through
+  unchanged — which leaves the `xi:include` elements in the tree, where the
+  main transform has no template for them and raises `XTMM9000`. **Native
+  XInclude at parse time is what those documents actually need, not the
+  extension function**: the pipeline stage is guarded by `test="exists(//xi:include)"`,
+  so once the inclusions are already resolved the stage does not run at all and
+  the extension is never asked for. `-xinclude` therefore fixes 28 of the 42
+  outright. The remaining 14 fail on `xpointer` schemes that are **not part of
+  XInclude**: Saxon's `xpath()` scheme, and RFC 5147 text fragments (`line=`,
+  `char=`, `search=`) layered on `parse="text"`. Those are DocBook conventions,
+  and implementing them to move a number is not the same as conforming to a
+  specification, so they are deliberately left out. Three more raise `XTDE0420`:
   DocBook builds a temporary tree from a sequence containing an attribute,
   which §5.8.1 makes an error, and this engine is right to refuse it — the
   ordered rules there unwrap document nodes but never attributes, and the

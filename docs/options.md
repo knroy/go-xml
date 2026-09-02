@@ -443,6 +443,54 @@ join it into a path without checking for traversal.
 Not configurable. `fn:unparsed-text()` is disabled unconditionally — it cannot
 read a file even with `Docs` set.
 
+### XInclude
+
+Off unless asked for, and asked for per call rather than per process. XInclude
+is not a parsing option: XInclude 1.0 §4 defines it as a transformation from
+one infoset to another, so it runs as a pass over an already-parsed tree.
+
+```go
+tree, err := xdm.ParseString(src, opts)
+if err != nil { return err }
+err = xdm.ProcessXInclude(tree, xdm.XIncludeOptions{
+    Resolver: resolver, // an *xslt.FileResolver, or your own
+    Parse:    opts,     // the included documents get the same limits
+})
+```
+
+`ProcessXInclude` modifies the tree in place and re-finalises document order,
+so node identities must not be held across the call.
+
+**The resolver is the whole of the confinement.** `xdm` has no filesystem and
+no network; it can read only what a resolver hands it. `xslt.FileResolver`
+implements `xdm.IncludeResolver` through the same `resolvePath` that gates
+`fn:doc`, `xsl:include` and external entities — a non-file scheme is rejected
+before the filesystem is touched, symlinks are resolved before the containment
+check, and a path outside the roots is refused. An inclusion therefore reaches
+nothing `fn:doc` could not already reach. A **nil** resolver refuses every
+inclusion, which is not the same as doing nothing: the include still fails, so
+it still uses its `xi:fallback` or is a fatal error.
+
+Implemented: `parse="xml"` and `parse="text"` (honouring `encoding`), an
+absent or empty `href` meaning the including document, `xi:fallback` on any
+failure, the `xml:base` fixup of §4.5.5, recursive inclusion, and loop
+detection. For `xpointer`, the two forms XInclude requires — a **shorthand**
+pointer (an ID) and the **element()** scheme (a child sequence) — are
+supported. `xpointer()`/`xpath()` are not: they are not required by XInclude,
+and they would invert this package's dependency on the XPath evaluator.
+RFC 5147 text fragments (`line=`, `char=`, `search=`) are **not** implemented
+either; they are a DocBook convention layered on `parse="text"`, not part of
+XInclude, and an unsupported pointer part falls through by the XPointer
+Framework's own rule rather than being an error.
+
+Two bounds apply to one pass: at most 200 resources are read in total, and
+inclusions may nest at most 40 deep. Neither substitutes for the other — a
+loop repeats a URI and is caught by name, while a fan-out of a thousand
+distinct files repeats nothing.
+
+The `go-xml` command exposes this as `-xinclude`, reading from the
+`-allow-dir` roots.
+
 ### Regular-expression backreferences
 
 Not configurable, and deliberately so. `fn:matches` resolves a backreference

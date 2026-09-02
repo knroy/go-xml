@@ -14,7 +14,9 @@ exposed.
 
 If you parse untrusted XML with default options, the dangerous classes are
 closed: no XXE, no entity expansion, no network access, no file access, no
-stylesheet-driven writes. Input size, node count, nesting depth and recursion
+stylesheet-driven writes, and no XInclude — parsing alone never performs an
+inclusion; see *XInclude* below for what running one grants and what it does
+not. Input size, node count, nesting depth and recursion
 depth are all bounded by default. The one thing you must still do yourself is
 **sanitise URLs if you render transform output as HTML**.
 
@@ -24,6 +26,52 @@ which some real formats require — the entity expansion bound now counts every
 could allocate hundreds of megabytes. And if you compile *untrusted schemas*
 rather than only validating untrusted documents, one exponential case remains
 open and is described under *Open findings*.
+
+---
+
+## XInclude: a new reader on the old gate
+
+XInclude was added after the third audit, and it is the first feature where the
+**source document itself names a resource to read**. Everything else that
+reads — `fn:doc`, `xsl:include`, `fn:unparsed-text`, external entities — is
+named by a *stylesheet* or by a DOCTYPE. XInclude is named by an element in the
+document, and the document is exactly the party this threat model treats as
+hostile. That makes the confinement the whole of the safety argument rather
+than part of it.
+
+The answer is that there is no new gate. `xdm` has no filesystem and no
+network; `ProcessXInclude` reads only what an `xdm.IncludeResolver` hands it,
+and `xslt.FileResolver` implements that interface by calling the very same
+`resolvePath` that already gates every other read: a non-`file` scheme is
+rejected before the filesystem is touched, symlinks are resolved before the
+containment check, and a path outside every root is refused. An inclusion
+therefore reaches nothing `fn:doc` could not already reach — it is the same
+files, from the same roots, with the same refusals.
+
+Writing a second check here was considered and rejected. Two copies of a
+containment rule are two things to keep correct, and the first time they drift,
+one of them is the hole — which is the same reasoning that put
+`ResolveEntity` and `ResolveText` through `resolvePath` rather than giving each
+its own.
+
+It is off by default in the sense that matters: nothing in this library calls
+`ProcessXInclude`, so a caller who has not asked for XInclude does not have it,
+and a caller who has asked has already named the roots. There is deliberately
+no per-resolver `XInclude bool` beside `UnparsedText`: the switch would sit
+below the one that already decides the question, and a caller who set it and
+then wondered why nothing happened would be measuring the wrong thing.
+
+Asserted by regression test rather than argued: a path escape (five spellings,
+including `..` traversal and a bare absolute path), a symlink out of a root,
+every network scheme against a canary HTTP server that records **zero** hits,
+an end-to-end hostile document whose `xi:include` names an `http://` URL, and
+that an `xi:fallback` cannot be used to launder a refusal into a read.
+
+Two bounds hold the cost of one pass: at most 200 resources read in total, and
+at most 40 levels of nesting. Neither substitutes for the other, and neither
+substitutes for loop detection — a loop repeats a URI and is caught by name,
+while a fan-out of a thousand distinct files repeats nothing and would
+otherwise cost a thousand parses.
 
 ---
 

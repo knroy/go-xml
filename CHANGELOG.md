@@ -6,6 +6,59 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### XInclude
+
+`xdm.ProcessXInclude` implements XML Inclusions (XInclude) 1.0, Second Edition,
+as a pass over an already-parsed tree — which is what the specification says it
+is: §4 defines XInclude as a transformation from one infoset to another, not as
+a parsing option. Running it after the parse means an included document is
+parsed by the same `Parse` under the same limits, an `xi:fallback` subtree is
+already built and can simply be moved, and a loop is caught by comparing URIs
+rather than by inspecting a half-built tree.
+
+Implemented: `parse="xml"` and `parse="text"` (honouring `encoding`), an absent
+or empty `href` meaning the including document, `xi:fallback` on any failure
+with a fatal error when there is none, the `xml:base` fixup of §4.5.5,
+recursive inclusion, and loop detection. For `xpointer`, the two forms
+XInclude requires a conforming processor to support: a **shorthand** pointer
+(an ID) and the **element()** scheme (a child sequence).
+
+Deliberately not implemented: the `xpointer()` and `xpath()` schemes — neither
+is required by XInclude, and both would invert this package's dependency on the
+XPath evaluator — and RFC 5147 text fragments (`line=`, `char=`, `search=`),
+which are a DocBook convention layered on `parse="text"` rather than part of
+XInclude at all. An unsupported scheme falls through to the next pointer part
+by the XPointer Framework's own rule, and identifies nothing when there is no
+other part, which §4.4 makes a fallback condition.
+
+An href-less include carrying an `xpointer` selects from the tree it already
+sits in rather than re-reading the file. That is not the loop §4.5 forbids —
+that rule is about including a document *in itself* — and reading the file
+again would both report a loop that is not one and address a reparse rather
+than the tree an earlier inclusion has already modified.
+
+**The confinement is unchanged.** `xdm` has no filesystem and no network; it
+reads only what an `xdm.IncludeResolver` hands it. `xslt.FileResolver`
+implements that interface through the very same `resolvePath` that gates
+`fn:doc`, `xsl:include`, `fn:unparsed-text` and external entities — a non-file
+scheme is rejected before the filesystem is touched, symlinks are resolved
+before the containment check, and a path outside the roots is refused. An
+inclusion therefore reaches nothing `fn:doc` could not already reach. There is
+deliberately no second gate written here: two copies of a containment check are
+two things to keep correct, and the first time they drift one of them is the
+hole. Regression tests assert the path escapes, the symlink escape, every
+network scheme against a canary server that records zero hits, and that a
+fallback cannot be used to launder a refusal.
+
+It is off unless asked for. `ProcessXInclude` is never called by this library
+on its own; the `go-xml` command exposes it as `-xinclude`, reading from the
+`-allow-dir` roots.
+
+The XSLT 3.0 suite's `base-uri-052` passes as a result — it was previously
+listed as not implementable purely because the feature was absent — taking the
+suite from 8,606 to 8,607. In the DocBook xslTNG corpus it takes documents that
+transform cleanly from 544 to 572 of 593.
+
 ### One scanner for what is not syntax (internal)
 
 XQuery's parser decides which sub-parser reads an expression by scanning ahead

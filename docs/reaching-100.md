@@ -177,17 +177,17 @@ uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
 
 **To fix: implement EXSLT.** Defensible as a feature; not a conformance fix.
 
-### 4 — features deliberately not implemented
+### 3 — features deliberately not implemented
 
 - **`streamable-141`** — needs streamability analysis.
-- **`base-uri-052`** — needs XInclude.
+- **`catalog-006b`** — needs `xsl:assert`.
 
-`catalog-006b` was the third. It needed `xsl:assert`, which this section called
-"the cheapest real feature on the list" — and it was: §22.2 defines the
-instruction by reference to `xsl:message`, so the work was one `@test`
-evaluation, the `XTMM9001` default code in place of `XTMM9000`, and registering
-the element name in the four tables the compiler reads. It is implemented, and
-the case passes.
+`base-uri-052` used to be on this list and is now **fixed**: XInclude is
+implemented (`xdm.ProcessXInclude`), and the harness honours the environment's
+`xinclude="true"`.
+
+Of these, **`xsl:assert` is the cheapest real feature on the list** and worth
+doing on its own merits.
 
 ### 3 — costs more than it gains
 

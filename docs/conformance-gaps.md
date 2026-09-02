@@ -14,10 +14,10 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | **3** | 0 | **6** | 99.90% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | **5** | **2** | **13** | 99.83% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | **8** | 0 | **43** | 99.89% |
-| **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | **9** | **2** | **36** | 99.92% |
+| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 0 | **19** | 99.78% |
+| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
+| **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | | **Total** | | | | **134** | **25** | **7** | **102** | |
 
@@ -300,19 +300,13 @@ them separate, and `override-t-003a` is the case.
 |---|---|---|
 | `regex-syntax-0056`, `regex-syntax-0086`, `regex-syntax-0102` | **Not implementable** | Ambiguous-dash character classes such as `[^a-d-b-c]` and `[a-a-x-x]+`, which XSD 1.0 rejects and XSD 1.1 accepts. **The suite contradicts itself**: `regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the *identical* pattern and the *identical* `XSD_1.1 satisfied="false"` dependency, yet the first asserts `FORX0002` and the second asserts a successful match. No engine can pass both. The XSD 1.0 rule was implemented and measured: it fixes these three (`984/3 → 987/0`) at a cost of −3 XSLT 2.0, −9 QT3 and −34 XSD 1.1, for a net loss. Reverted. |
 
-### Filed as "deliberately out of scope" — 5, and two of them are not
-
-Two of these five were placed here on a reading of their file name or their
-error message rather than of the test. `docbook-004` contains no extension
-element, and `package-version-011` makes no network request.
+### Deliberately out of scope — 4
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `streamable-141` | **Out of scope — harness gap** | Not "requires streamability analysis". The spec settles it the other way: "For a **non-streaming processor** … A non-streaming processor is **not required to assess whether constructs are guaranteed-streamable**", and signalling XTSE3430 is one of three things a *streaming* processor may do at user option. So the case does not apply to this engine at all. It is in scope only because its `dependencies` omit `<feature value="streaming"/>` while its environment declares `<source … streaming="true"/>` — and the harness reads the feature but never the attribute. Honouring `source/@streaming` moves this case out of the denominator, alongside the 2,716 already skipped. |
-| `base-uri-052` | **Not implementable** | The environment declares `xinclude="true"`; XInclude is not implemented. (Same shape as `streamable-141`: the unimplemented feature is declared on `source`, not in `dependencies`, so the harness cannot scope it out. Assigned separately.) |
-| `docbook-001` | **Not implementable** | The vendored DocBook XSL 1.79.1 uses EXSLT `exsl:document`, a vendor extension outside the XSLT specification. |
-| `docbook-004` | **Implementable — ours** | **Nothing to do with EXSLT**; it was grouped here by name prefix alone. The whole stylesheet is five lines and contains no extension element: `<xsl:source-document streamable="no" href="docbook-xsl-1.79.1/NEWS.xml#V1.79.1_Tools"><xsl:copy-of select="."/></xsl:source-document>`. It tests an `xml:id` fragment identifier on `xsl:source-document/@href`; the target element with that exact `xml:id` is present in `NEWS.xml`. `xslt/sourcedoc.go` never looks at the `#` — it always sets the focus to the document root — so we copy the whole document. Its streamed twin `docbook-003` is correctly skipped on the `streaming` feature; `-004` is deliberately the non-streamed variant so a non-streaming processor can pass it. |
-| `package-version-011` | **Implementable — ours; no fetch is involved** | The stylesheet has no `xsl:use-package` and reads `_package-version="{doc('')/xsl:package/@version}"`. `doc('')` is the zero-length URI, which names the containing module — already parsed and in memory. Nothing is fetched and no resolver is needed. The engine already knows this for `fn:document`: `xslt/rtfuncs.go` gates on `ctx.Docs == nil && !onlyEmptyURIs(args[0])`, whose comment reads "document(\"\") names the stylesheet and reaches no resolver, so the gate that refuses document access without one must not refuse it." `fn:doc` has no equivalent — `xpath/fn_node.go` returns FODC0002 unconditionally, *before* the empty-URI handling eleven lines below it. The SSRF rationale does not reach `doc('')`, which can only ever name the module already loaded. Saxon passes it. |
+| `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,716 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
+| `docbook-001`, `docbook-004` | **Not implementable** | EXSLT `exsl:document`, as above. |
+| `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
 
 ### Long tail — 6
 
@@ -328,36 +322,19 @@ is its own investigation.
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file and is the twentieth XSLT 3.0 failure.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 | `unparsed-text-2003` | **Out of scope — suite defect** | Not "the catalog assumes live internet". The suite has a purpose-built dependency for this, and the harness already honours it: `available_documents`, documented as "the test is dependent on the availability of external documents that are not part of the test suite, for example pages on the W3C web site", is listed in `tests/xslts/deps.go` among the dependencies that put a case out of scope. **`unparsed-text-2002`, the case immediately above `2003` in the same file and needing the same URL, declares `<available_documents value="https://www.w3.org/Consortium/mission.html"/>` and is correctly skipped.** `2003` declares only `<spec value="XSLT20+"/>`. One missing attribute, exactly the shape of the `accumulator-038`/`-039` omission accepted as a suite defect above. The case belongs out of the denominator, not in the failure list. |
 
-**XSLT 3.0: 8,606 / 8,626 = 99.77% now.** The audit changed this picture. The
-twenty divide as follows.
-
-**Fixable — 3.** `docbook-004` and `package-version-011` are engine gaps;
-`validation-0201` is a harness comparison the suite's own schema authorises.
-
-**Out of scope once the harness reads what the suite already declares — 2.**
-`streamable-141` (its environment declares `source/@streaming`) and
-`unparsed-text-2003` (its sibling declares `available_documents` for the same
-URL). These leave the denominator rather than joining the numerator.
-
-**Open question — 1.** `accept-913`: our XTDE3052 is wrong under the spec's own
-scoping, the wanted XTDE0040 is unreachable, and XTSE3080 conflicts with what
-`accept-902`/`-910` demand. Unmeasured.
-
-**Deliberate divergence — 1.** `evaluate-045`. Implementable and spec-mandated;
-not counted as unfixable.
-
-**Not implementable — 13:** `package-021err`, `package-022err`, `base-uri-052`,
-`docbook-001`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
-`import-schema-137`, `accumulator-038`, `validation-0006`, `strip-space-009`,
-and — as cost and architecture judgements rather than impossibilities, flagged
-as such above — `package-200` and `use-package-003`.
-
-**Attainable: 8,609 / 8,624 = 99.83%**, taking the three fixable cases and
-removing the two out-of-scope ones from the denominator.
-
-`catalog-006b` is no longer among them. It was listed as needing `xsl:assert`,
-which was a feature gap rather than an impossibility, and the instruction is
-implemented now.
+**XSLT 3.0 ceiling: 8,607 / 8,626 = 99.78%** — what passes now. `base-uri-052`
+left this list when XInclude was implemented: the environment's
+`xinclude="true"` now runs a real inclusion pass, and the case's assertions are
+about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
+once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
+are settled above as not implementable, so no headroom is left against this
+suite. The eighteen that cannot be fixed: `accept-913`, `package-200`,
+`use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
+`unparsed-text-2003`, `streamable-141`, `docbook-001`,
+`docbook-004`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
+`import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
+and `evaluate-045` (the last given up deliberately; see *Deliberate
+divergence* above).
 
 The three `regex-syntax` ambiguous-dash cases are no longer among them: they
 pass now that `XSD_1.1` is scoped to the version being measured rather than to
@@ -544,9 +521,11 @@ is *why* the 102 unfixable cases are unfixable:
 | **Unicode moved** | 2 | `regex-syntax-xslt20-0984` and `-0985`, both already corrected by the W3C in their XSLT 3.0 twins and never back-ported. `-0987` was here and is not: it is ours. |
 | **Suite contradicts itself** | 1 | `strip-space-009` asserts a whitespace-preservation rule §4.4 does not state, and its own comment says it exists to exercise Saxon's code paths. `sequence-0132` was listed here and is better explained directly from §11.10 + §3.9; `simple093` was listed here and is reopened as a question. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
-| **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. `docbook-004` was listed here in error — it contains no extension element at all. |
-| **Feature deliberately not implemented** | 2 | `base-uri-052` (XInclude) and `catalog-006b` (`xsl:assert`). `streamable-141` was listed here and is out of scope instead; XSD `iri-001` was listed here and is ours. |
-| **Costs more than it gains — *not* an impossibility** | 2 | `package-200` (would cost 4 cases to gain 1) and `use-package-003` (needs the package threaded through the XPath static context; Saxon passes it). Both were filed as "not implementable"; they are judgements about cost and architecture. `accept-913` was listed here and is reopened as a question. |
+| **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
+| **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
+| **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `catalog-006b` (`xsl:assert`), and XSD `iri-001`, which needs a DOCTYPE this parser refuses by default. `base-uri-052` was here until XInclude was implemented. |
+| **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
+| **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
 The XSLT rows above are exact and case-by-case. The XSD rows are not: they are
 derived from the `status` field and the kind of each disagreement, and the two

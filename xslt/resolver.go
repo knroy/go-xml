@@ -378,6 +378,20 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return decodeText(data, encoding, path)
+}
+
+// decodeText turns the bytes of a text resource into a Go string, honouring
+// the encoding the caller named and the one the resource declares.
+//
+// It is factored out of ResolveText because XInclude's parse="text" is defined
+// by the same rules — XInclude 1.0 section 4.4 defers to the encoding
+// determination F&O describes — and two copies of an encoding table is two
+// places for a decode to be wrong in different ways.
+//
+// The path argument appears only in error messages, so that a refusal names
+// the file that could not be read rather than leaving the caller to guess.
+func decodeText(data []byte, encoding, path string) (string, error) {
 	// F&O 3.0 section 14.8.2: "The encoding of the external resource is
 	// determined as follows: external encoding information is used if
 	// available, otherwise if the media type of the resource is text/xml or
@@ -505,4 +519,63 @@ func xmlDeclEncoding(data []byte) string {
 		return ""
 	}
 	return rest[1 : 1+j]
+}
+
+// ResolveInclude implements xdm.IncludeResolver, so that a document this
+// resolver loads may pull in other resources through XInclude.
+//
+// Every constraint the rest of this type enforces applies here unchanged,
+// because the path goes through the same resolvePath as fn:doc, xsl:include,
+// fn:unparsed-text and external entities: a non-file scheme — http, https,
+// ftp, anything — is rejected before the filesystem is touched, symlinks are
+// resolved before the containment check, and a path outside every root is
+// refused. There is deliberately nothing XInclude-specific about the
+// confinement. A second gate written here would be a second thing to keep
+// correct, and the first time the two drifted one of them would be the hole.
+//
+// XInclude is therefore no wider a primitive than fn:doc already is: it reads
+// the same files, from the same roots, with the same refusals. What it adds is
+// only *who asks* — an element in the source document rather than an
+// expression in the stylesheet — and the source document is exactly the party
+// this library's threat model already treats as hostile, which is why reusing
+// the confinement is the whole answer rather than merely part of it.
+//
+// Unlike ResolveText there is no flag of its own guarding this. The gate sits
+// one level up: nothing in this library performs XInclude processing unless
+// the caller asks for it, and a caller that has asked has already named the
+// roots. A second switch here would let a caller enable XInclude and then be
+// quietly surprised that it did nothing.
+//
+// The returned URI is the file: URI of what was actually read, since that is
+// what a relative reference inside the included resource resolves against and
+// what XInclude's base URI fixup records.
+func (r *FileResolver) ResolveInclude(href, base, encoding string) ([]byte, string, error) {
+	path, err := r.resolvePath(href, base)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if encoding == "" {
+		// An XML inclusion: hand the bytes over untouched and let the XML
+		// parser read the declaration or the BOM, which is what XInclude 1.0
+		// section 4.4 requires — the encoding attribute "is ignored" for
+		// parse="xml". Decoding here would decode twice.
+		return data, fileURIOf(path), nil
+	}
+	// A text inclusion. Section 4.4 defers to the same encoding rules
+	// fn:unparsed-text follows, and this type already implements them once —
+	// the XML-declaration override and the BOM strip included — so the decode
+	// is shared rather than written a second time and left to drift.
+	// decodeText also refuses an encoding it cannot decode exactly, which
+	// matters more here than for unparsed-text: mis-decoded bytes become
+	// *nodes* of the document, and silently wrong output is precisely what
+	// this library declines to produce.
+	text, err := decodeText(data, encoding, path)
+	if err != nil {
+		return nil, "", err
+	}
+	return []byte(text), fileURIOf(path), nil
 }
