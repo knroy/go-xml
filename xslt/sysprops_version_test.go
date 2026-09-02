@@ -24,6 +24,41 @@ func TestProductVersionIsNotStale(t *testing.T) {
 	if strings.HasPrefix(got, "v") {
 		t.Errorf("product-version is %q; the v prefix is Go's, not the product's", got)
 	}
+	// The suite writes this property into xsl:package/@package-version after
+	// stripping everything but digits and dots, so anything that is not a
+	// bare triple becomes an invalid package version rather than an untidy
+	// string. package-version-010 says so in its own description, and it
+	// went from passing to failing when the first version of this function
+	// answered a pseudo-version.
+	if !isReleaseTriple(got) {
+		t.Errorf("product-version is %q, which is not an N.N.N release triple; "+
+			"package-version-010 writes it into @package-version", got)
+	}
+}
+
+// TestIsReleaseTriple pins the filter, including the forms that reached it
+// from a real build: a pseudo-version, a dirty working tree, and the two
+// values debug.ReadBuildInfo gives when there is no module version at all.
+func TestIsReleaseTriple(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{"1.2.0", true},
+		{"0.0.0", true},
+		{"10.20.30", true},
+		{"1.2", false},
+		{"1.2.3.4", false},
+		{"1.2.", false},
+		{"", false},
+		{"(devel)", false},
+		{"1.2.1-0.20260902200715-20286fbc88af", false},
+		{"unreleased", false},
+	} {
+		if got := isReleaseTriple(c.in); got != c.want {
+			t.Errorf("isReleaseTriple(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
 }
 
 // TestProductVersionAgreesWithAvailableSystemProperties pins section 18.2's

@@ -11,10 +11,13 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 It was a constant nobody edited, so it said `0.1` through the 1.0, 1.1 and
 1.2 releases -- and a stylesheet dispatching on it, which is the only reason
 section 18.2 defines the property, got an answer three tags out of date. It
-is read from the build now: the module version where the binary was built
-from a tagged module, otherwise the VCS revision the toolchain stamps, and
-`unreleased` where there is neither. None of those can go stale by being left
-alone.
+is read from the build now, reduced to the release triple it descends from:
+a pre-release or build suffix is dropped, and anything that is not a bare
+`N.N.N` answers `0.0.0`. The shape matters as much as the value --
+`package-version-010` writes the property into `xsl:package/@package-version`
+after stripping all but digits and dots, so a pseudo-version becomes an
+invalid package version rather than an untidy string. The case says so in its
+own description, and it caught the first version of this fix.
 
 Reported from the field against 1.2.0, alongside the base-URI defect below.
 

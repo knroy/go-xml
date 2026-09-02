@@ -18,39 +18,58 @@ import (
 // wrong for three tags. It was reported from the field, against 1.2.0.
 //
 // debug.ReadBuildInfo reports the module version when the binary was built
-// by `go install module@version` or `go build` inside a module that has a
-// tag. A build from a working tree reports "(devel)", and one from a GOPATH
-// checkout reports nothing at all; both fall back to the VCS revision the
-// toolchain stamps, and only failing that to "unreleased". None of those is
-// a version number a stylesheet should branch on, and each says truthfully
-// that it is not one, which "0.1" did not.
+// by `go install module@version`, and a pseudo-version derived from the last
+// tag when built inside the module. Anything that is not a bare N.N.N release
+// triple answers 0.0.0, which is the shape the property has to have: a
+// stylesheet may write it straight into xsl:package/@package-version, and
+// "unreleased" or a commit hash is not a version anyone can compare.
 func productVersion() string {
+	const unknown = "0.0.0"
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "unreleased"
+		return unknown
 	}
-	if v := bi.Main.Version; v != "" && v != "(devel)" {
-		return strings.TrimPrefix(v, "v")
+	v := strings.TrimPrefix(bi.Main.Version, "v")
+	// A pseudo-version carries the commit and a timestamp after the triple,
+	// and a tag may carry a pre-release or build suffix. Both are dropped:
+	// what is left is the release this build descends from, which is the
+	// question section 18.2 asks. package-version-010 is why it matters --
+	// it writes the property into xsl:package/@package-version through
+	// replace(., '[^0-9\.]', ''), so a suffix does not merely look untidy,
+	// it becomes digits spliced onto the triple and the package version is
+	// then invalid. The case says so in its own description: "this test may
+	// fail if the product version is not a valid package version".
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
 	}
-	var rev, modified string
-	for _, s := range bi.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			modified = s.Value
+	if !isReleaseTriple(v) {
+		return unknown
+	}
+	return v
+}
+
+// isReleaseTriple reports whether v is N.N.N with no empty component.
+//
+// The check is here rather than left to the caller because every route into
+// productVersion can produce something that is not one: "(devel)" from a
+// working-tree build, "" from a GOPATH checkout, and a tag someone pushed in
+// a shape Go accepts and a package version does not.
+func isReleaseTriple(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
 		}
 	}
-	if rev == "" {
-		return "unreleased"
-	}
-	if len(rev) > 12 {
-		rev = rev[:12]
-	}
-	if modified == "true" {
-		return "unreleased+" + rev + ".dirty"
-	}
-	return "unreleased+" + rev
+	return true
 }
 
 // systemProperties is every system property this processor defines, keyed by
