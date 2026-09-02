@@ -561,6 +561,62 @@ func rejectNamespaceAxis(src string) error {
 		return fmt.Errorf(
 			"XPST0003: XQuery has no %q axis", "namespace")
 	}
+	return rejectNamespaceNodeStep(src)
+}
+
+// rejectNamespaceNodeStep refuses "namespace-node()" written as a step of its
+// own, which XQuery 3.0 gives its own error, XQST0134.
+//
+// The kind test itself is perfectly legal in XQuery and the suite uses it
+// freely: "self::namespace-node()", "attribute::namespace-node()", a function
+// signature, an "instance of". What XQuery does not have is the namespace
+// *axis*, and an unprefixed step takes the child axis, so the only way to read
+// a bare "namespace-node()" step is as the axis the language lacks. Every
+// legal use names an axis explicitly, which is exactly what distinguishes the
+// two, so the test is for the test standing alone after a "/" or at the head
+// of the expression.
+func rejectNamespaceNodeStep(src string) error {
+	const kind = "namespace-node("
+	for i := 0; i+len(kind) <= len(src); i++ {
+		switch src[i] {
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return nil
+			}
+			i = end
+			continue
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return nil
+				}
+				i = end
+				continue
+			}
+		}
+		if !strings.HasPrefix(src[i:], kind) {
+			continue
+		}
+		// What precedes decides it. A name character means the test is the
+		// tail of a longer name; a ":" means an axis was named, and an axis
+		// makes the use legal. Anything else — a "/", a "(", the start of the
+		// expression — leaves the step on the child axis with nothing to say
+		// so, which is the case §3.3.2.1 refuses.
+		j := len(strings.TrimRight(src[:i], " \t\r\n"))
+		if j > 0 {
+			if src[j-1] == ':' {
+				continue
+			}
+			if r, _ := utf8.DecodeLastRuneInString(src[:j]); xdm.IsNameChar(r) {
+				continue
+			}
+		}
+		return fmt.Errorf(
+			"XQST0134: XQuery has no %q axis, so %s) cannot stand as a step",
+			"namespace", kind)
+	}
 	return nil
 }
 
