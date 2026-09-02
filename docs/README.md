@@ -3,6 +3,8 @@
 * **[Using go-xml in a server](server.md)** — compile once, transform or
   validate per request; a hardened XSD validation endpoint, timeouts, limits,
   and the mistakes that matter under load.
+* **[XQuery](xquery.md)** — XQuery 3.1: the two entry points, getting output,
+  external variables, options, and what is not implemented.
 * **[Validating XML](validation.md)** — what this engine can and cannot check,
   and how to combine it with the pieces it does not provide.
 * **[XSD](xsd.md)** — the schema validator in detail: versions, resolvers,

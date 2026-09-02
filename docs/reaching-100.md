@@ -84,7 +84,7 @@ processor. **Nothing to do here, and doing it would be wrong.**
 security). They are counted as fixable here, which is the less flattering
 reading.
 
-### 0 — no XQuery processor (now out of scope, not failing)
+### 0 — no XQuery module loader (now out of scope, not failing)
 
 `fn-load-xquery-module-003`, `-004`, `fn-function-lookup-764`.
 
@@ -94,17 +94,19 @@ the harness treats `fn-load-xquery-module` as an unsupported feature and the
 cases fall out of scope. That is what took XPath 3.1 to 100%. The reasoning
 below is why they are out of scope rather than a gap.
 
-`fn:load-xquery-module` compiles an XQuery library module. This engine
-implements XPath and XSLT. F&O 3.1 anticipates exactly this: **FOQM0006 is
-defined as "the implementation does not support the load-xquery-module
-function"**, and raising it is the conforming answer.
+`fn:load-xquery-module` compiles an XQuery library module. This engine now
+implements XQuery too, in [`xquery`](../xquery/), but not *module import*:
+`import module` raises `XQST0059`, so there is no module store for this
+function to load from. F&O 3.1 anticipates exactly this: **FOQM0006 is defined
+as "the implementation does not support the load-xquery-module function"**, and
+raising it is the conforming answer.
 
 Two of the suite's own cases cannot both pass — `-003` wants FOQM0002 ("cannot
 be located") for an expression `-903` wants FOQM0006 for. Locating a module is
 something only a processor could do.
 
-**To fix: write an XQuery engine.** That is a second language implementation,
-not a conformance fix.
+**To fix: implement module import in `xquery`,** then bridge the function to
+it. The engine is no longer the missing piece; the module store is.
 
 ### 2 — the suite contradicts itself
 
@@ -234,7 +236,10 @@ a known structural limit). Streaming is the largest of all — 2,716 cases
 currently out of scope, a 31% larger denominator — and would be a project in
 itself.
 
-**An XQuery engine and EXSLT are not on this list.** They are separate products.
+**EXSLT is not on this list.** It is a separate product. XQuery was, and is
+now implemented in [`xquery`](../xquery/) at 98.37%; what remains of it there
+is tracked in [xquery.md](xquery.md) rather than here, because this file is
+about the XPath and XSLT figures.
 
 ---
 

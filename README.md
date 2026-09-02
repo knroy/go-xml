@@ -1,6 +1,6 @@
 # go-xml
 
-**XML Schema 1.0/1.1 validation, XPath 2.0/3.0/3.1 and XSLT 2.0/3.0 in pure Go.** No cgo,
+**XML Schema 1.0/1.1 validation, XPath 2.0/3.0/3.1, XQuery 3.1 and XSLT 2.0/3.0 in pure Go.** No cgo,
 no JVM, no libxml2 — one `go get`, and it cross-compiles like any Go package.
 
 ```
@@ -18,13 +18,14 @@ err = schema.Validate(tree.Root, xsd.ValidateOptions{})
 Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 `/invoice/total` — not just "invalid".
 
-### The four packages
+### The packages
 
 | | |
 |---|---|
 | [`xdm`](xdm/) | the parser and the XDM tree everything else reads |
 | [`xsd`](xsd/) | XML Schema 1.0 and 1.1: assembly, validation, PSVI annotation |
 | [`xpath`](xpath/) | XPath 2.0: lexer, parser, evaluator, `fn:` library |
+| [`xquery`](xquery/) | XQuery 3.1: constructors, FLWOR, the prolog |
 | [`xslt`](xslt/) | XSLT 2.0: templates, modes, keys, grouping, serialisation |
 
 ### Safe by default
@@ -71,6 +72,7 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,778 in scope); maps, arrays, the lookup operator, the JSON family |
+| **XQuery 3.1** | 98.37% of the W3C QT3 suite (29,443 of 29,930 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
@@ -128,12 +130,13 @@ unless enabled; see [Security defaults](#security-defaults).
 
 ## What this is
 
-Six packages, each usable on its own:
+Seven packages, each usable on its own:
 
 | Package | What it holds |
 |---|---|
 | [`xdm`](xdm/) | The XQuery/XPath data model: typed atomic values, the node tree, an XML parser |
 | [`xpath`](xpath/) | XPath 2.0, 3.0 and 3.1: lexer, parser, evaluator, and the `fn:`, `map:`, `array:` and `math:` function libraries |
+| [`xquery`](xquery/) | XQuery 3.1: constructors, FLWOR, the prolog, and the XQuery-only expression forms |
 | [`xslt`](xslt/) | XSLT 2.0 and 3.0: pattern matching, the stylesheet compiler, the transform runtime, serialisation |
 | [`xsd`](xsd/) | XML Schema 1.0 and 1.1: the component model, schema assembly, content models, facets, identity constraints |
 | [`dtd`](dtd/) | DTD validation: content models, attribute defaults, `ID`/`IDREF` |
@@ -142,6 +145,8 @@ Six packages, each usable on its own:
 
 ## Documentation
 
+* **[docs/xquery.md](docs/xquery.md)** — XQuery 3.1: entry points, output,
+  external variables, options
 * **[docs/validation.md](docs/validation.md)** — XSD, DTD and RELAX NG
   validation, Schematron, and which kind of "valid" you actually need. Start
   here if you came to check a document against a schema.
@@ -1278,11 +1283,12 @@ later checkout can move the denominator — see
 by 461 in one step.
 
 **Skips are reported separately and are never counted as passes.** The suite is
-FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1; XQuery is out of scope
-here, so 10,043 cases are out of scope — 15,545 of them requiring XQuery
-or a later XPath. Failing a test for a language the engine does not claim to
-implement would say nothing about conformance, and counting those as passes is
-how a conformance number becomes meaningless.
+FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1. Each is measured on its
+own denominator, because a case that needs a language the target does not
+claim says nothing about that target's conformance: the XPath targets exclude
+the XQuery-only cases, and the XQuery target runs 29,930 of the suite's 31,821
+with 1,891 skipped. Counting an out-of-scope case as a pass is how a
+conformance number becomes meaningless.
 
 It found four real bugs on the first run, none of which the two production
 corpora had exercised:

@@ -1,5 +1,18 @@
 # Implementing XQuery 3.1
 
+> **Historical.** This is the plan written *before* the work, kept for the
+> design rationale in it — in particular why the parser reads source rather
+> than a token stream, which is still the shape of the implementation. The
+> forecasts below have been overtaken: XQuery 3.1 now exists in
+> [`xquery`](../xquery/) at **98.37%** of the QT3 suite. For what the package
+> does today, read [xquery.md](xquery.md); for what it still cannot do, read
+> [known-gaps.md](known-gaps.md).
+>
+> The one forecast worth checking against the outcome: the lexer was correctly
+> named as the central risk, and the constraint held — `xpath/lexer.go` and
+> `xpath/parser*.go` were never modified. That is also why two of the
+> remaining failure clusters have no fix.
+
 What it would take, what it reuses, and what is actually at risk.
 
 Measured against the tree at `3bef1a0`. Nothing here is estimated where it

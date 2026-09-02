@@ -1,7 +1,7 @@
 # Options reference
 
-Every configuration field in the four packages, what it does, what the zero
-value means, and when you would change it.
+Every configuration field in the library, what it does, what the zero value
+means, and when you would change it.
 
 The code in this file is compiled and run before it is committed, so the field
 names and types are the real ones.
@@ -454,6 +454,44 @@ one from document data. See
 
 The XML Schema pattern facet has no backreference at all — Appendix F's grammar
 has no form for one — so `xsd` rejects them outright under both versions.
+
+---
+
+## xquery.Options
+
+The zero value is the specification's defaults, so `xquery.Options{}` is a
+conformant starting point. Every field is the caller's way of saying what the
+query's prolog could have said itself — and if the prolog *does* say it, the
+prolog wins.
+
+```go
+q, err := xquery.Compile(`<a>{ 1 + 2 }</a>`, xquery.Options{})
+seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
+```
+
+| Field | Type | Prolog equivalent | What it does |
+|---|---|---|---|
+| `BaseURI` | `string` | `declare base-uri` | Stamped on constructed elements; what a relative reference resolves against. |
+| `BoundarySpace` | `BoundarySpace` | `declare boundary-space` | `StripSpace` (zero) discards whitespace that only separates markup; `PreserveSpace` keeps it. |
+| `Construction` | `Construction` | `declare construction` | `PreserveTypes` (zero) keeps a copied node's type annotation; `StripTypes` replaces it with `xs:untyped`. |
+| `DefaultElementNamespace` | `string` | `declare default element namespace` | Applied to an unprefixed *element* name. Never to an attribute name. |
+| `Namespaces` | `map[string]string` | `declare namespace` | Extra prefix bindings. |
+
+Nine prefixes are bound before `Namespaces` is consulted and never need to be
+listed: `xml`, `xs`, `xsi`, `fn`, `local`, `math`, `map` and `array` from
+§4.1, plus `err` from §3.16, which is what makes `catch err:FODC0002` work
+with no declaration of its own.
+
+`BoundarySpace` is the default most likely to surprise. Whitespace between
+markup is **stripped**, so `<a>  <b/>  </a>` constructs `<a><b/></a>`.
+
+A query is *code*, not data. The sandbox is the same as everywhere else in
+this library — `fn:doc`, `fn:collection` and `fn:unparsed-text` all refuse
+without a resolver — but an untrusted query can still spend arbitrary CPU and
+memory, so bound it with `ctx.Ctx` and a timeout the way
+[server.md](server.md) does for stylesheets.
+
+See [xquery.md](xquery.md) for the guide.
 
 ---
 

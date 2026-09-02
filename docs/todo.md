@@ -12,6 +12,7 @@ Current position:
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,236 of 19,236 in scope |
 | XPath 3.1 | 100.00% — 21,778 of 21,778 in scope (0 failing) |
+| XQuery 3.1 | 98.37% — 29,443 of 29,930 in scope (487 failing) |
 | XSLT 2.0 | 99.85% — 6,149 of 6,158 in scope (9 failing) |
 | XSLT 3.0 | 99.78% — 8,607 of 8,626 in scope (19 failing); streaming out of scope |
 | RELAX NG | 100.00% — 965 of 965 |
@@ -106,6 +107,22 @@ wildcards, identity constraints and notations; all of it has since landed.
 
 ---
 
+### 1.5 XQuery module import — the last structural gap in `xquery`
+
+`import module` raises `XQST0059` and `import schema` leaves the in-scope
+schema definitions empty, so `validate { … }` raises `XQDY0084`. Both parse
+correctly and are then refused; neither is mis-parsed.
+
+**What it buys.** Beyond the XQuery cases themselves, it is the one thing
+blocking `fn:load-xquery-module`, which is why three XPath 3.1 cases are out
+of scope rather than passing — see
+[reaching-100.md](reaching-100.md).
+
+**What it costs.** A module store and a resolver, plus the cycle detection
+that `import` needs. It is the same shape of problem as `xsd`'s schema
+assembly, and the resolver must default to nil like every other one here, or
+a query gains the ability to fetch.
+
 ## 2. Bugs
 
 ### 2.1 XSD: 51 disagreements on 1.0, 47 on 1.1 — none of them a defect
@@ -141,7 +158,25 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: no in-scope failures
+### 2.3 XPath: `$e-1` parses as a variable named `e-1`
+
+The one known defect the suite does not cover, in either language. `$e-1`
+reads the hyphen as part of the variable name instead of as subtraction, and
+`$e-$s` fails to parse outright. Saxon and BaseX both read them as
+subtraction.
+
+It is not a scanner bug — `-` is a legal `NameChar`, and `$a-b` genuinely
+*is* a single variable in XQuery, so the greedy match is right there. The two
+cases separate only on the grammar's whitespace rules, which puts the fix at
+the variable-reference site in the parser. That site is in `xpath/parser*.go`,
+which the XQuery design depends on not changing, so it is open rather than
+scheduled. The diagnosis is in
+[known-gaps.md](known-gaps.md).
+
+**Workaround: write `$e - 1`.** Anything generating queries should space its
+binary operators.
+
+### 2.4 XPath: no in-scope failures
 
 XPath 2.0, 3.0 and 3.1 are all at 100%. The last case to fall was
 `fn-matches-51`, the one shape this deliberately refuses by default, and it is

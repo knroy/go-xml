@@ -92,8 +92,10 @@ and type-annotation stripping — which is the mechanism working as intended.
 All three XPath versions now agree with the suite on every case in scope.
 
 The last three disagreements were both halves of one thing:
-`fn:load-xquery-module` compiles an XQuery library module, and this engine has
-no XQuery processor.
+`fn:load-xquery-module` compiles an XQuery library *module*. There is now an
+XQuery processor in [`xquery`](../xquery/), but it does not implement module
+import — `import module` raises `XQST0059` — so there is still nothing that
+can load one.
 
 The suite settles it with a feature dependency that the harness was not
 reading. The set declares `fn-load-xquery-module` `satisfied="true"` and then

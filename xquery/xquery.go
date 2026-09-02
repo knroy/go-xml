@@ -33,8 +33,10 @@ type Options struct {
 	DefaultElementNamespace string
 
 	// Namespaces are prefix bindings available to the query, as though its
-	// prolog had declared them. The five predeclared prefixes of §4.1 are
-	// bound already and do not need to appear here.
+	// prolog had declared them. The eight predeclared prefixes of §4.1 —
+	// xml, xs, xsi, fn, local, math, map and array — are bound already, as is
+	// err, which §3.16 binds so that "catch err:FODC0002" works with no
+	// declaration. None of them need to appear here.
 	Namespaces map[string]string
 }
 
@@ -75,14 +77,18 @@ type Query struct {
 
 // Compile compiles a query.
 //
-// What is implemented is the prolog, the constructors and the XQuery-only
-// expression forms: direct and computed constructors, try/catch, switch,
-// typeswitch, ordered and unordered, the extension expression, the string
-// constructor, and validate, which parses and then refuses because the
-// in-scope schema definitions are empty until schema import exists. A query
-// that is only an expression compiles too, since every XPath 3.1 expression
-// is an XQuery expression. FLWOR and the two imports are not yet implemented
-// and are reported as such rather than mis-parsed.
+// What is implemented is the prolog, the constructors, FLWOR and the
+// XQuery-only expression forms: direct and computed constructors, every FLWOR
+// clause including group by, order by and the two window clauses, try/catch,
+// switch, typeswitch, quantified and ordered/unordered expressions, the
+// extension expression and the string constructor. A query that is only an
+// expression compiles too, since every XPath 3.1 expression is an XQuery
+// expression.
+//
+// Two things parse and are then refused rather than mis-parsed, because both
+// need a module store this package does not have: "import schema", which
+// leaves the in-scope schema definitions empty and so makes validate raise
+// XQDY0084, and "import module", which raises XQST0059.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
