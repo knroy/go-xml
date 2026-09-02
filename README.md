@@ -79,7 +79,7 @@ Requires Go 1.26 or later.
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 944, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 984, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.1; the exported surface is stable, and a breaking change means 2.0 with a new module path |
 
@@ -176,21 +176,29 @@ Seven packages, each usable on its own:
 
 ## Architecture
 
-The layering is strict and one-directional. XSLT uses XPath, XPath uses XDM,
-and XDM knows nothing about either — which is what keeps the data model honest
-when XSLT needs something awkward.
+The layering is strict and one-directional. Both host languages use XPath,
+XPath uses XDM, and XDM knows nothing about any of them — which is what keeps
+the data model honest when a host language needs something awkward.
+
+XSLT and XQuery are siblings rather than layers: neither uses the other, and
+both compile their expressions with `xpath` and build their result trees with
+`xdmbuild`. That sharing is the reason XQuery arrived at 99% in one push
+rather than being a second engine — the expression language and the ~437
+functions were already there and already at 100%.
 
 ```
   cmd/go-xml          command-line transformer
         │
-  ┌─────▼──────────────────────────────────────────┐
-  │ xslt      stylesheet compiler + runtime        │
-  │           patterns · templates · instructions  │
-  │           serialisation · result documents     │
-  └─────┬──────────────────────────────────────────┘
-        │  compiles match patterns and select
-        │  expressions; evaluates them per node
-  ┌─────▼──────────────────────────────────────────┐
+  ┌─────▼─────────────────────────┐  ┌─────────────────────────────┐
+  │ xslt   stylesheet compiler    │  │ xquery  constructors · FLWOR │
+  │        patterns · templates   │  │         the prolog           │
+  │        instructions · output  │  │                              │
+  └─────┬─────────────────────────┘  └─────┬───────────────────────┘
+        │                                  │
+        │        ┌─────────────────────────┘
+        │        │  both build result trees with xdmbuild, and hand
+        │        │  every expression to xpath to compile and evaluate
+  ┌─────▼────────▼─────────────────────────────────┐
   │ xpath     lexer → parser → optimiser → runtime │
   │           functions · operators · type system  │
   └─────┬──────────────────────────────────────────┘
@@ -270,6 +278,30 @@ XPath alone:
 ctx := xpath.NewContext(docTree.Root, xpath.Builtins())
 seq, err := xpath.Eval("sum(//invoice/@total)", ctx, nil)
 ```
+
+XQuery, which compiles once and evaluates concurrently the same way a
+stylesheet does. A query returns a sequence; serialising it is a separate step:
+
+```go
+q, err := xquery.Compile(`
+    <totals>{
+      for $i in //invoice
+      group by $y := year-from-date(xs:date($i/@date))
+      order by $y
+      return <year n="{$y}">{ sum($i/@total) }</year>
+    }</totals>`, xquery.Options{})
+
+seq, err := q.Eval(xpath.NewContext(docTree.Root, xpath.Builtins()))
+err = xslt.Serialize(os.Stdout, seq, xslt.OutputSettings{OmitXMLDecl: true}, nil)
+// <totals><year n="2023">7</year><year n="2024">15</year></totals>
+```
+
+The `xs:date` cast is not decoration: an attribute in an unvalidated document
+is `xs:untypedAtomic`, and `year-from-date` refuses it with `XPTY0004` rather
+than guessing.
+
+See [docs/xquery.md](docs/xquery.md) for options, external variables and what
+is not implemented.
 
 CLI:
 
@@ -722,6 +754,21 @@ literal.
 `from`), `output` (the `xml`, `html` and `text` methods, named as well as
 unnamed), `result-document`, `as` type declarations, attribute value templates,
 and the simplified literal-result-element stylesheet form.
+
+**XQuery 3.1.** Everything the language adds on top of XPath, since the
+expression half is `xpath`'s and already at 100%: direct and computed
+constructors for all seven node kinds; every FLWOR clause — `for`, `let`,
+`where`, `group by`, `order by`, `count`, and both the tumbling and sliding
+window clauses; the prolog, with namespace, variable, function, option and
+decimal-format declarations, boundary-space, construction, ordering,
+empty-order, copy-namespaces and the declared context item; `try`/`catch`;
+`switch`; `typeswitch`; quantified expressions; `ordered`/`unordered`; the
+extension expression; and the string constructor.
+
+Two declarations parse and are then refused rather than mis-parsed, because
+both need a module store this package does not have: `import module` raises
+`XQST0059`, and `import schema` leaves the in-scope schema definitions empty
+so `validate { … }` raises `XQDY0084`. See [docs/xquery.md](docs/xquery.md).
 
 **Collations.** Two are implemented: codepoint, and the ASCII
 case-insensitive collation the spec defines, which needs no locale data. Both
