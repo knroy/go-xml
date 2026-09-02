@@ -126,6 +126,11 @@ func (p *parser) parseComputed() (node, bool, error) {
 		return &computedAttr{attr: at}, true, nil
 
 	case "processing-instruction":
+		// §3.9.3.5 refuses "xml" in any combination of case as a target.
+		// XQDY0064 is a *dynamic* error, so it is raised by pi.eval even for
+		// a target written as a name and knowable here: the suite catches it
+		// with "try { processing-instruction XML {} } catch err:XQDY0064",
+		// which only a dynamic error reaches.
 		return &pi{target: nameLocal, targetExpr: nameExpr,
 			content: content}, true, nil
 

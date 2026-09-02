@@ -182,10 +182,26 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 			// and the check has to happen here because AppendNode reports
 			// nothing to a caller.
 			if v.Kind == xdm.KindAttribute {
-				if el := out.b.Open(); el != nil && len(el.Children) > 0 {
-					return fmt.Errorf("XQTY0024: the attribute %s follows a "+
-						"node that is not an attribute in the content of "+
-						"element %s", v.Name.Lexical(), el.Name.Lexical())
+				if el := out.b.Open(); el != nil {
+					if len(el.Children) > 0 {
+						return fmt.Errorf("XQTY0024: the attribute %s follows a "+
+							"node that is not an attribute in the content of "+
+							"element %s", v.Name.Lexical(), el.Name.Lexical())
+					}
+					// The attribute is added here rather than through
+					// AppendNode, which discards what AddAttribute returns
+					// because XSLT has nothing to do with it: the fault it
+					// reports is the duplicate attribute, and for XQuery the
+					// policy turns that into XQDY0025 (§3.9.1.3). Two
+					// attributes of the same name reaching element content in
+					// a sequence — "<a>{$attr1, $attr2}</a>" — is exactly the
+					// shape the suite tests, and the error has to reach the
+					// caller to be raised at all.
+					if err := out.b.AddAttributeTyped(
+						v.Name, v.Value, v.TypeAnnotation); err != nil {
+						return err
+					}
+					continue
 				}
 			}
 			out.b.AppendNode(v)
@@ -410,6 +426,17 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 				"XQDY0041: %q is not a valid processing-instruction target",
 				target)
 		}
+	}
+	// §3.9.3.5: the target may not be "xml" in any combination of case, which
+	// XML itself reserves. XQDY0064 is a dynamic error, so it is raised here
+	// for a target written as a name as much as for a computed one — a try
+	// catches it either way. The *direct* constructor "<?xml ...?>" is
+	// different: there the target is markup rather than an expression, and
+	// XPST0003 refuses it while parsing.
+	if strings.EqualFold(target, "xml") {
+		return fmt.Errorf(
+			"XQDY0064: %q is not a legal processing-instruction target",
+			target)
 	}
 	text, err := contentString(n.content, ctx)
 	if err != nil {
