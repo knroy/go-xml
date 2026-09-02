@@ -97,7 +97,7 @@ Requires Go 1.26 or later.
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 993, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,070, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1554,8 +1554,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,374 / 14,405 (99.78%) | 24,967 / 24,999 (99.87%) |
-| XSD 1.1 | 15,316 / 15,365 (99.68%) | 26,176 / 26,206 (99.89%) |
+| XSD 1.0 | 14,385 / 14,405 (99.86%) | 24,968 / 24,999 (99.88%) |
+| XSD 1.1 | 15,347 / 15,365 (99.88%) | 26,178 / 26,207 (99.89%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

@@ -179,15 +179,13 @@ uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
 
 ### 3 — features deliberately not implemented
 
-- **`streamable-141`** — needs streamability analysis.
-- **`catalog-006b`** — needs `xsl:assert`.
+- **`streamable-141`** — needs the §19.8 streamability analysis.
 
-`base-uri-052` used to be on this list and is now **fixed**: XInclude is
-implemented (`xdm.ProcessXInclude`), and the harness honours the environment's
-`xinclude="true"`.
-
-Of these, **`xsl:assert` is the cheapest real feature on the list** and worth
-doing on its own merits.
+Two cases used to be on this list and are now **fixed**. `base-uri-052` went
+when XInclude was implemented (`xdm.ProcessXInclude`), and the harness honours
+the environment's `xinclude="true"`. `catalog-006b` went with `xsl:assert`,
+which was the cheapest feature here and is done: the case reports every XSLT
+element the processor recognises, so an absent one is visible in it.
 
 ### 3 — costs more than it gains
 
@@ -248,7 +246,7 @@ Streamed execution proper would buy almost none of it. See
 [conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 99.67%; what remains of it there
+now implemented in [`xquery`](../xquery/) at 99.98%; what remains of it there
 is tracked in [xquery.md](xquery.md) rather than here, because this file is
 about the XPath and XSLT figures.
 

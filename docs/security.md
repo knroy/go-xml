@@ -554,7 +554,8 @@ revision of this document said the function was disabled *unconditionally*;
 that was true when written and is no longer, and the distinction matters to
 anyone deciding what a root may contain. `xsl:result-document` never writes to
 disk; the engine returns secondary results to the caller as data. XInclude is
-not implemented.
+off unless a caller runs `xdm.ProcessXInclude` and names the roots it may read
+— see *XInclude: a new reader on the old gate* above.
 
 `AllowHost` resists spoofing: it uses `u.Hostname()`, so userinfo tricks
 (`http://good.example@127.0.0.1/`) and ports do not fool it, and it is

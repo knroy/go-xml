@@ -440,8 +440,15 @@ join it into a path without checking for traversal.
 
 ### fn:unparsed-text
 
-Not configurable. `fn:unparsed-text()` is disabled unconditionally — it cannot
-read a file even with `Docs` set.
+Off by default, and it has a switch of its own: `TransformOptions.Texts` in
+`xslt`, `Context.Texts` in `xpath`. Setting the document resolver does not set
+it, and that separation is the point. `fn:doc` hands back a parsed XML
+document, so a file that is not well-formed discloses nothing; `fn:unparsed-text`
+hands back the raw bytes of any file inside the roots.
+
+`xslt.FileResolver` implements it behind `UnparsedText`, off by default and
+implied by nothing else. On the command line it is `-allow-unparsed-text`,
+reading from the `-allow-dir` roots.
 
 ### XInclude
 

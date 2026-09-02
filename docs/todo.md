@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.79% — 8,608 of 8,626 in scope (18 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
-| Tests | 944, clean under `-race` |
+| Tests | 1,070, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
