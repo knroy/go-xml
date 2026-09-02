@@ -119,10 +119,10 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.78%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.79%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
-   now 5 of 19, all five documented as unreachable rather than outstanding.
+   now 5 of 18, all five documented as unreachable rather than outstanding.
    What is left is a long tail of one or two cases across thirty test sets,
    which is harder to summarise but easier to live with — no single feature is
    systematically weak. The corpus differential against Saxon remains stronger
@@ -875,16 +875,13 @@ What they found, none of which the suites covered:
 | A base URI that is a filesystem path | `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986 references, so a bare path made `resolve-uri(rel, static-base-uri())` raise `FORG0002`. The CLI now spells it as a `file:` URI — `file:///home/u/s.xsl` on Unix and `file:///C:/dir/s.xsl` on Windows, the RFC 8089 empty-authority form. Two slashes would make the drive letter an authority, and the path would come back without it |
 
 **One deliberate divergence.** Confining the private-function default to a real
-`xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — so
-the XSLT 3.0 figure is 8,607 rather than 8,608. Saxon does not enforce it
-either: its own XSLT 3.0 results report `evaluate-045` as `wrongError`. Inside
-an `xsl:package`, declared visibility is honoured exactly as before. The
-alternative was that no stylesheet outside a package can call its own
-functions from its own `xsl:evaluate`, which is not a boundary its author drew.
-
-The figure is 8,608 rather than 8,607 since attribute values stopped being
-read with their surrounding whitespace attached; `evaluate-045` still fails,
-and is still meant to.
+`xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
+case the engine gives up on purpose, and the reason 8,608 is not 8,609. Saxon
+does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
+`wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
+as before. The alternative was that no stylesheet outside a package can call
+its own functions from its own `xsl:evaluate`, which is not a boundary its
+author drew.
 
 ## Where it fails
 

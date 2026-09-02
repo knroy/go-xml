@@ -6,6 +6,28 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### The gate no longer runs the conformance suites twice
+
+`tests/check.sh` ran its `unit tests` and `race` steps without
+`GOXSLT_NO_SUITES`, so in an environment that has `testdata/` on disk — which
+is exactly the conformance job — each suite harness fell back to it and ran
+the whole conformance job a second time. Under `-race` that second run passed
+`go test`'s 10-minute default and panicked rather than reported:
+
+    panic: test timed out after 10m0s
+        running tests:
+            TestXSLTSuite (1m53s)
+
+The two figures only reconcile if the deadline was spent by the 3.0 suite
+before the 2.0 suite started, both in the same binary. The step now takes 21
+seconds. `-timeout` is set here as well as in `ci.yml`, where it had been
+fixed and here had not, and `-count=1` because a cached result cannot show a
+regression. The suites still run in full in their own section.
+
+Two comments were also rewritten so that `gofmt` leaves them alone: it turns a
+pair of apostrophes in running doc-comment prose into a typographic quote, and
+both quoted XPath or XQuery in which `''` is the empty string literal.
+
 ### A base URI is a URI, not a path
 
 `fn:static-base-uri` and `fn:base-uri` returned the filesystem path the file
@@ -81,7 +103,8 @@ on its own; the `go-xml` command exposes it as `-xinclude`, reading from the
 The XSLT 3.0 suite's `base-uri-052` passes as a result — it was previously
 listed as not implementable purely because the feature was absent — taking the
 suite from 8,606 to 8,607. In the DocBook xslTNG corpus it takes documents that
-transform cleanly from 544 to 572 of 593.
+transform cleanly from 549 to 577 of 593 — measured with the flags a reader of
+that corpus would pass, which is what `tests/check.sh` now does.
 
 ### One scanner for what is not syntax (internal)
 
@@ -237,11 +260,13 @@ XSLT at 8,606 / 6,149.
 
 Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and
 [XSpec](https://github.com/xspec/xspec), two XSLT 3.0 codebases large enough to
-exercise combinations the W3C suites do not reach. 549 of DocBook's 593 test
+exercise combinations the W3C suites do not reach. 577 of DocBook's 593 test
 documents now render, byte-identical to the Saxon reference output once the
 timestamp and generator metadata are normalised, and all 225 applicable XSpec
-descriptions compile. Most of the remaining 49 need a Saxon-Java extension
-function for XInclude.
+descriptions compile. 28 of those came from implementing XInclude, which is
+what those documents actually need rather than the Saxon-Java extension
+function their pipeline reaches for; 14 of the remaining 16 want `xpointer`
+schemes that are not part of XInclude.
 
 * **`xsl:copy` over a non-node context item** no longer raises `XTTE0945`.
   11.9.1 raises it only when the context item is *absent*; one that is present
@@ -280,7 +305,7 @@ so a v1.0 program compiles and behaves the same.
 | XPath 3.0 (QT3) | — | **100%** |
 | XPath 3.1 (QT3) | — | **100%** |
 | XSLT 2.0 | 99.63% | **99.85%** |
-| XSLT 3.0 | — | **99.78%** |
+| XSLT 3.0 | — | **99.79%** |
 | XSD 1.0 schema / instance | 99.56% / 99.88% | **99.86% / 99.88%** |
 | XSD 1.1 schema / instance | 99.18% / 99.89% | **99.88% / 99.89%** |
 | RELAX NG (spectest) | 100% | **100%** |
@@ -289,8 +314,10 @@ so a v1.0 program compiles and behaves the same.
 packages (`xsl:package`, `use-package`, `accept`, `expose`, `override`),
 accumulators, `xsl:evaluate`, `xsl:iterate`, `xsl:merge`, `xsl:try`, maps and
 arrays, higher-order functions, JSON, and the 3.0 serialization methods.
-Streaming is not implemented, and its 2,716 cases are out of scope rather than
-failing.
+Streaming is not implemented, and its 2,646 cases are out of scope rather than
+failing — though measured with that gate lifted, 92% of them pass anyway,
+because §19.1 lets a processor answer a request for streamed evaluation by
+building the tree.
 
 **Schema validity was the weak half and is no longer.** XSD 1.1 went from
 99.18% to 99.88% — roughly a hundred and thirty missing schema-validity rules,

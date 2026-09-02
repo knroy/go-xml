@@ -232,13 +232,20 @@ What remains is not conformance work but engineering the suites cannot see:
 the content-model matcher's nested-occurrence bug above, and whatever else
 fuzzing turns up. That is the better use of the next round.
 
-Two larger items are defensible as *features* rather than conformance work,
-and should be judged that way: **XInclude**, and **a package-aware XPath static
-context** (unlocks `use-package-003` and removes a known structural limit).
-`xsl:assert` was the third and the cheapest, and is done. Streaming is the
-largest of all — 2,716 cases
-currently out of scope, a 31% larger denominator — and would be a project in
-itself.
+One larger item is defensible as a *feature* rather than conformance work and
+should be judged that way: **a package-aware XPath static context** (unlocks
+`use-package-003` and removes a known structural limit). `xsl:assert` and
+**XInclude** were the other two and are both done -- XInclude took DocBook
+xslTNG from 549 to 577 of 593.
+
+Streaming has the largest denominator, 2,646 cases out of scope, but it is not
+the project it looks like. Measured with the gate lifted and nothing else
+changed, 2,424 of those pass already: §19.1 lets a processor answer a request
+for streamed evaluation by building the tree, and this engine does. Of the 222
+that fail, 150 want XTSE3430 -- a *refusal* of a non-streamable stylesheet,
+which needs the §19.8 posture and sweep analysis and no runtime change at all.
+Streamed execution proper would buy almost none of it. See
+[conformance-gaps.md](conformance-gaps.md) for the breakdown.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
 now implemented in [`xquery`](../xquery/) at 99.67%; what remains of it there

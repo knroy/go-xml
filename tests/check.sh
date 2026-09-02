@@ -193,11 +193,24 @@ $GO build ./... || fail "build"
 section "vet"
 $GO vet ./... || fail "vet"
 
+# GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They
+# are the fast gate, and the suites get their own sections below; without it a
+# run that has testdata/ on disk does the whole conformance job twice, because
+# each suite harness falls back to ./testdata when its own variable is unset.
+#
+# Under -race that second run is not merely wasted: it is slow enough to pass
+# go test's 10m default and panic rather than report, which is what CI saw --
+# "panic: test timed out after 10m0s, running tests: TestXSLTSuite (1m53s)".
+# The two figures only reconcile if the deadline was spent by the 3.0 suite
+# before the 2.0 suite started, both of them running in the same binary.
+#
+# -timeout is therefore set explicitly here as well as in ci.yml, and
+# -count=1 because a cached result cannot show a regression.
 section "unit tests"
-$GO test ./... || fail "unit tests"
+GOXSLT_NO_SUITES=1 $GO test ./... -count=1 || fail "unit tests"
 
 section "race"
-$GO test -race ./... || fail "race"
+GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
 
 if [ "$MODE" = fast ]; then
 	printf '\n=== fast mode: external suites not run\n'
