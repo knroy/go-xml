@@ -531,6 +531,15 @@ func parseXPathVersion(s string) (*xpath.Version, error) {
 //
 // url.URL does the escaping, so a directory containing a space or any other
 // character that is not URI-safe survives the round trip.
+//
+// The leading slash is added rather than left to url.URL because a Windows
+// path does not have one. filepath.Abs gives C:\dir\s.xsl, which ToSlash makes
+// C:/dir/s.xsl, and url.URL writes a path that does not begin with "/" without
+// one -- producing file://C:/dir/s.xsl, where C: is the *authority* rather than
+// the drive. Parsing that back gives host "C:" and path "/dir/s.xsl", so the
+// drive letter is silently gone and every URI resolved against it names a file
+// that is not there. RFC 8089 spells a local path with an empty authority, and
+// Saxon agrees: file:///C:/dir/s.xsl.
 func fileURI(path string) string {
 	if path == "" || strings.HasPrefix(path, "file:") {
 		return path
@@ -539,6 +548,17 @@ func fileURI(path string) string {
 	if err != nil {
 		abs = path
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	return absPathToFileURI(filepath.ToSlash(abs))
+}
+
+// absPathToFileURI spells an already-absolute, already-slash-separated path as
+// a file: URI. It is separate from fileURI so that both platforms' spellings
+// can be tested on either platform: filepath.Abs and ToSlash are what make
+// fileURI itself answer differently on Windows and Unix.
+func absPathToFileURI(slashed string) string {
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	u := url.URL{Scheme: "file", Path: slashed}
 	return u.String()
 }

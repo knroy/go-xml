@@ -116,7 +116,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 	if u, err := url.Parse(href); err == nil && u.Scheme != "" && u.Scheme != "file" {
 		return "", fmt.Errorf("scheme %q is not permitted (only local files)", u.Scheme)
 	}
-	href = strings.TrimPrefix(href, "file://")
+	href = fileURIToPath(href)
 
 	// A fragment identifier selects within a document rather than naming a
 	// different one, so it is removed before the filesystem sees it — it is
@@ -128,7 +128,7 @@ func (r *FileResolver) resolvePath(href, base string) (string, error) {
 
 	p := href
 	if !filepath.IsAbs(p) && base != "" {
-		baseDir := filepath.Dir(strings.TrimPrefix(base, "file://"))
+		baseDir := filepath.Dir(fileURIToPath(base))
 		p = filepath.Join(baseDir, p)
 	}
 	abs, err := filepath.Abs(p)
@@ -297,11 +297,45 @@ func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error
 	return tree, nil
 }
 
+// fileURIToPath turns a file: URI back into a filesystem path, and leaves
+// anything that is not one alone.
+//
+// It is the inverse of fileURIOf, and it exists because stripping the "file://"
+// prefix textually is not: on Windows that leaves "/C:/dir/s.xsl" from the
+// three-slash form, which is not a path any filesystem call accepts, and it
+// leaves a percent-escape unescaped, so a directory with a space in its name
+// became one with "%20" in it.
+func fileURIToPath(s string) string {
+	if !strings.HasPrefix(s, "file:") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		// Not a URI after all; the textual strip is the best that can be done
+		// and is what this did before.
+		return strings.TrimPrefix(s, "file://")
+	}
+	p := u.Path
+	// A Windows path arrives as "/C:/dir/s.xsl" -- an empty authority followed
+	// by a drive-letter path. The leading slash belongs to the URI, not to the
+	// path, and only there: "/home/u" keeps its own.
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p)
+}
+
 // fileURIOf renders an absolute filesystem path as a file: URI.
 //
 // The resolvers strip the scheme again before touching the filesystem; the
 // URI form exists because base URIs are resolved by the URI rules, which need
 // a scheme to treat the base as absolute.
+//
+// The leading slash matters on Windows, where an absolute path is C:\dir\s.xsl
+// and has none of its own: "file://" + "C:/dir/s.xsl" makes C: the authority
+// rather than the drive, and parsing it back yields host "C:" and a path with
+// the drive letter gone. RFC 8089 gives a local path an empty authority, which
+// is the three-slash form.
 func fileURIOf(path string) string {
 	if path == "" || strings.HasPrefix(path, "file:") {
 		return path
@@ -313,7 +347,11 @@ func fileURIOf(path string) string {
 		}
 		path = abs
 	}
-	return "file://" + filepath.ToSlash(path)
+	slashed := filepath.ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return "file://" + slashed
 }
 
 // ResolveEntity implements xdm.EntityResolver, so that a document this

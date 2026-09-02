@@ -872,7 +872,7 @@ What they found, none of which the suites covered:
 | `xsl:copy` over a non-node context item | XTTE0945 is raised only when the context item is **absent**; one that is present but atomic returns the value. Conflating the two made `xsl:copy` inside `xsl:for-each` over atomics an error |
 | `fn:key` with a prefix bound per-module | The key name is a lexical QName resolved at run time. Keeping one binding per prefix let the last module included decide what every such name expanded to — XSpec binds `local` to 19 different URIs |
 | `xsl:evaluate` calling the stylesheet's own functions | §10.4.1 excludes *private* functions, and the default is private — but visibility is a property of a component of an `xsl:package`, and a plain `xsl:stylesheet` is not one. See below |
-| A base URI that is a filesystem path | `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986 references, so a bare path made `resolve-uri(rel, static-base-uri())` raise `FORG0002`. The CLI now spells it as a `file:` URI |
+| A base URI that is a filesystem path | `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986 references, so a bare path made `resolve-uri(rel, static-base-uri())` raise `FORG0002`. The CLI now spells it as a `file:` URI — `file:///home/u/s.xsl` on Unix and `file:///C:/dir/s.xsl` on Windows, the RFC 8089 empty-authority form. Two slashes would make the drive letter an authority, and the path would come back without it |
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — so

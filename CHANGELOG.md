@@ -6,6 +6,30 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### A base URI is a URI, not a path
+
+`fn:static-base-uri` and `fn:base-uri` returned the filesystem path the file
+was read from — `C:\Users\m\s.xsl` on Windows, `/home/u/s.xsl` on Unix —
+where they are defined to return a URI. Saxon returns
+`file:///C:/Users/m/s.xsl` for the same stylesheet. The consequence was not
+just a differently-spelled string: a bare path has no scheme, so it is not an
+absolute URI, and the idiom that locates a file beside the stylesheet —
+`resolve-uri('sample2.xml', base-uri())` — failed outright with `FORG0002`.
+Reported against 1.2.0 on both Windows and Linux.
+
+The CLI now spells every base and document URI with `file:`, in the RFC 8089
+empty-authority form: `file:///home/u/s.xsl`, `file:///C:/dir/s.xsl`. The
+three slashes matter on Windows. A Windows absolute path has no leading slash
+of its own, so the two-slash spelling `file://C:/dir/s.xsl` makes `C:` the
+*authority* rather than the drive: parsing it back yields host `C:` and a path
+with the drive letter gone, and every URI resolved against it names a file
+that is not there.
+
+The reverse conversion was textual too — stripping a `file://` prefix — which
+left `/C:/dir/s.xsl` on Windows, a path no filesystem call accepts, and left
+percent-escapes undecoded, so a directory whose name contains a space became
+one containing `%20`. It now goes through a real URI parse.
+
 ### XInclude
 
 `xdm.ProcessXInclude` implements XML Inclusions (XInclude) 1.0, Second Edition,
