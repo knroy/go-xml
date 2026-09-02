@@ -31,8 +31,22 @@ jobs:
           fi
       - run: go vet ./...
       - run: go build ./...
+      # GOXSLT_NO_SUITES keeps the conformance suites out of the fast gate.
+      # The suite harnesses fall back to ./testdata when their env var is
+      # unset, so if a cached checkout is present they run here too -- which
+      # is the conformance job's work done a second time, and under -race it
+      # is slow enough to hit go test's 10m default and fail the build. The
+      # figures those runs produce are ignored here in any case: this job
+      # exists to catch a broken commit in about a minute.
       - run: go test ./... -count=1
-      - run: go test ./... -race -count=1
+        env:
+          GOXSLT_NO_SUITES: '1'
+      # -timeout is set explicitly rather than left at the 10m default,
+      # because the default is what turned a slow run into a panic rather
+      # than a slow run.
+      - run: go test ./... -race -count=1 -timeout 25m
+        env:
+          GOXSLT_NO_SUITES: '1'
 
   # The conformance gate. These suites are third-party and are not vendored,
   # so CI fetches them — which is also the only place they are fetched

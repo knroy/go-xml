@@ -18,6 +18,15 @@ import (
 //
 // GOXSLT_XSLTS_VERBOSE=1 lists the failures rather than only counting them.
 func TestXSLTSuite(t *testing.T) {
+	// GOXSLT_NO_SUITES skips the conformance suites regardless of what is on
+	// disk. The fallback below finds ./testdata whenever a checkout is there,
+	// which is right for a developer and wrong for a fast CI gate that has one
+	// cached: the suite then runs in the unit-test stage as well as in the
+	// conformance job, and under -race it is slow enough to exceed go test's
+	// 10m default and panic rather than report.
+	if os.Getenv("GOXSLT_NO_SUITES") != "" {
+		t.Skip("GOXSLT_NO_SUITES is set")
+	}
 	root := os.Getenv("GOXSLT_XSLTS")
 	if root == "" {
 		root = "../../testdata/xslt30-test"
