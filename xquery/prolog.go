@@ -122,13 +122,28 @@ func (p *parser) parseProlog() error {
 			// "declare %eg:sequential variable $foo := 'bar'" fail with
 			// "expected function", though the grammar admits it and the
 			// annotation is one nothing here interprets.
-			var private bool
-			if private, err = p.parseAnnotations(); err == nil {
+			var private, conflict bool
+			if private, conflict, err = p.parseAnnotationList(); err == nil {
 				p.skipSpaceAndComments()
 				inSecond = true
-				if p.peekKeyword() == "variable" {
+				isVar := p.peekKeyword() == "variable"
+				// §4.15 admits at most one of %public and %private on a
+				// declaration, so %public %public breaks the rule as surely
+				// as %public %private. The code names the declaration rather
+				// than the annotation — XQST0106 for a function, XQST0116 for
+				// a variable — which is why the conflict is reported here and
+				// not where it is detected: the keyword that settles which
+				// one this is has only just been read.
+				switch {
+				case conflict && isVar:
+					err = p.errorf("XQST0116: a variable declaration may "+
+						"carry at most one of %s and %s", "%public", "%private")
+				case conflict:
+					err = p.errorf("XQST0106: a function declaration may "+
+						"carry at most one of %s and %s", "%public", "%private")
+				case isVar:
 					err = p.parseVarDecl()
-				} else {
+				default:
 					err = p.parseFunctionDeclBody(private)
 				}
 			}
