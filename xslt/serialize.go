@@ -631,6 +631,22 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		if inScope[ns.Name.Local] == ns.Value {
 			continue
 		}
+		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is
+		// syntax only XML 1.1 has, and the serialization parameter that asks
+		// for it is undeclare-prefixes. XSLT 3.0 §11.7 states the licence
+		// exactly: "Namespace undeclarations are generated automatically by
+		// the serializer if undeclare-prefixes="yes" is specified on
+		// xsl:output". Without it the binding is simply left out of the
+		// output, which loses nothing a 1.0 reader can express -- a prefix
+		// no name in the subtree uses cannot be missed.
+		//
+		// The default-namespace undeclaration xmlns="" is a separate matter
+		// and is not covered here: it is legal in XML 1.0, it is written
+		// below on its own terms, and omitting it would move an element into
+		// a namespace it is not in.
+		if ns.Value == "" && ns.Name.Local != "" && !s.opts.UndeclarePrefixes {
+			continue
+		}
 		s.writeNamespaceDecl(ns.Name.Local, ns.Value)
 		declared[ns.Name.Local] = ns.Value
 	}

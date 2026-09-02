@@ -6,10 +6,37 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
-### XQuery conformance: 99.61% to 99.82%
+### XQuery conformance: 99.61% to 99.85%
 
-29,750 of 29,805 QT3 cases in scope, up 61 across four passes. XPath 2.0/3.0/3.1 stay at 100% and
+29,759 of 29,803 QT3 cases in scope, up 70 across five passes. XPath 2.0/3.0/3.1 stay at 100% and
 XSLT at 8,606 / 6,149.
+
+* **A constructed element no longer inherits its parent's namespace fixup.**
+  XQuery §3.9.1.3 passes down exactly one kind of binding — the ones written as
+  namespace *declaration attributes* — while the bindings §3.9.1.1 adds so that
+  an element's own name and its attributes' names resolve are local to that
+  element. Reading in-scope namespaces by walking the XDM tree cannot tell the
+  two apart, so `<e a:n1="c" b:n1="c">` handed both `a` and `b` to every child;
+  the child now undeclares what it is not entitled to. K2-NameTest-30/31,
+  K2-InScopePrefixesFunc-25 and cbcl-directconelem-001/002.
+* **`copy-namespaces preserve` stops undeclaring the default namespace on a
+  prefixed copy.** The default namespace applies to unprefixed element names
+  and to nothing else, so a `<bar:b>` copied under an `<a xmlns="http://foo">`
+  is not moved by that binding, and the `xmlns=""` was taking away a namespace
+  §4.8's `inherit` entitles the copy to keep. An unprefixed copy in no
+  namespace still gets the undeclaration it needs.
+* **The XML output method honours `undeclare-prefixes`.** The parameter was
+  validated and then ignored: a `xmlns:p=""` in the tree was written out
+  regardless, which is XML 1.1 syntax. XSLT 3.0 §11.7 generates prefix
+  undeclarations only when `undeclare-prefixes="yes"`, so they are now omitted
+  by default. The default-namespace undeclaration `xmlns=""` is legal in XML
+  1.0 and is unaffected.
+* **The QT3 harness compares result *sequences* by infoset.** A query returning
+  two elements, or text beside an element, serialises to something that is not
+  a well-formed document, so the infoset comparison — the only one that ignores
+  where a namespace declaration sits — could not parse it and never ran. Both
+  sides are now wrapped in the same synthetic root first. This is what the
+  note on K2-FilterExpr-7 had already identified as the fix worth making.
 
 * **A range survives being counted through a comma expression.** `fn:count`,
   `fn:empty` and `fn:exists` are defined purely on the length of their

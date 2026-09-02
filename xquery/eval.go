@@ -391,9 +391,21 @@ func preserveScope(n *xdm.Node, srcScope map[string]string) {
 	// supplies, would silently move the copy into it. Constr-inscope-10 is
 	// the case: <child2> in no namespace copied under a <new> that declares
 	// one, and the expected result carries the xmlns="" that keeps it out.
-	if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
-		if uri, ok := n.LookupPrefix(""); ok && uri != "" {
-			n.AddNamespace("", "")
+	//
+	// Only a copy whose own name is unprefixed is at that risk. The default
+	// namespace applies to unprefixed element names and to nothing else, so
+	// a copy named with a prefix -- <bar:b> under an <a xmlns="http://foo">
+	// -- is not moved by the destination's default binding, and undeclaring
+	// it would instead *take away* a binding copy-namespaces inherit says
+	// the copy is entitled to. §4.8: with inherit, "the copied nodes retain
+	// ... the in-scope namespaces of the construction". functx-change-
+	// element-ns-all copies <bar:b> into an element in a default namespace
+	// and expects <bar:b xmlns:bar="http://bar"> with no undeclaration.
+	if n.Name.Prefix == "" && n.Name.URI == "" {
+		if _, hadDefault := srcScope[""]; !hadDefault && !own[""] {
+			if uri, ok := n.LookupPrefix(""); ok && uri != "" {
+				n.AddNamespace("", "")
+			}
 		}
 	}
 }
@@ -516,6 +528,11 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 	}
+	// The attributes are on the node now, so their name fixups are too, and
+	// what this element genuinely needs is finally known. Anything its parent
+	// supplies beyond that and beyond the declaration attributes has to be
+	// undeclared here -- see limitInherited.
+	limitInherited(sub.b.Open(), n.inherited)
 	// §3.9.1.3: the base URI of a constructed element is the static base URI
 	// of the constructor *unless* the element carries an xml:base attribute,
 	// in which case it is that attribute resolved against the base URI in
@@ -556,6 +573,79 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// query, and answered the empty string.
 	rebase()
 	return nil
+}
+
+// limitInherited undeclares, on a freshly constructed element, every binding
+// its constructed parent supplies that §3.9.1.3 does not pass down.
+//
+// The rule is narrow and easy to miss. Of everything in scope on a constructed
+// element, only one kind reaches the elements constructed inside it:
+//
+//	"The in-scope namespaces property of the constructed element consists of
+//	 ... namespace bindings for the namespace declaration attributes of this
+//	 element and of its ancestors in the constructed tree ..."
+//
+// The other bindings a constructed element carries are *namespace fixup*
+// (§3.9.1.1): the binding its own name needs, and one per prefixed attribute
+// name. Those exist so the element is serialisable and its own names resolve.
+// They are not declaration attributes and they do not descend.
+//
+// The engine's in-scope answer is a walk up the XDM tree, which cannot tell
+// the two kinds apart -- a namespace node is a namespace node. So the
+// separation has to be written into the tree, and the only way the data model
+// offers is an undeclaration (an empty URI) on the child, which is exactly
+// what the namespace axis and fn:in-scope-prefixes then report.
+//
+// K2-NameTest-30 is the case that pins it down: <e a:n1="c" b:n1="c"> binds
+// both a and b, because its own attribute names require both, and yet the
+// test requires that on the child <a:n1/> the prefix a is in scope and b is
+// not. Nothing but the element's own needs distinguishes them, so a fixup
+// binding cannot be inherited. cbcl-directconelem-001/002 assert the same
+// split from the other side, and assert it identically under no-inherit and
+// inherit -- copy-namespaces governs *copied* nodes, not the constructed
+// parent-child relationship, so it has no say here.
+//
+// What the child keeps is therefore: the declaration attributes in scope
+// (inherited, which the caller has already written), the bindings its own
+// name and attribute names need (already on the node from fixup), and xml,
+// which XML Names binds everywhere and which can never be undeclared.
+func limitInherited(el *xdm.Node, inherited map[string]string) {
+	if el == nil || el.Parent == nil || el.Parent.Kind != xdm.KindElement {
+		return
+	}
+	// Bindings this element already carries -- fixup for its own name and its
+	// attributes' names, plus the declaration attributes written above --
+	// shadow the parent's and need no undeclaration.
+	own := map[string]bool{}
+	for _, ns := range el.Namespaces {
+		own[ns.Name.Local] = true
+	}
+	// A prefix a name on this element needs, that the parent happens to
+	// supply with the same URI, has no namespace node here: fixup skipped it
+	// precisely because the parent already agreed. Undeclaring it would break
+	// the name, so it counts as needed rather than inherited.
+	need := map[string]string{}
+	if el.Name.URI != "" {
+		need[el.Name.Prefix] = el.Name.URI
+	}
+	for _, a := range el.Attrs {
+		if a.Name.URI != "" && a.Name.Prefix != "" {
+			need[a.Name.Prefix] = a.Name.URI
+		}
+	}
+	for prefix, uri := range el.Parent.InScopeNamespaces() {
+		switch {
+		case prefix == "xml", own[prefix]:
+			continue
+		case inherited[prefix] == uri:
+			// A declaration attribute in scope here. It descends, and the
+			// parent already carries it, so nothing to write.
+			continue
+		case need[prefix] == uri:
+			continue
+		}
+		el.AddNamespace(prefix, "")
+	}
 }
 
 // declareOwnName gives the element under construction a namespace node for

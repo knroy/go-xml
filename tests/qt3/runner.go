@@ -2220,15 +2220,40 @@ func loadAssertFiles(r *Runner, ts *TestSet, a *Assertion) {
 // It is the last comparison xmlMatches tries, after the textual ones, because
 // parsing is the expensive answer and a text match is the common case.
 func infosetEqual(a, b string) bool {
-	ta, err := xdm.ParseString(a, xdm.ParseOptions{})
+	ta, err := parseFragment(a)
 	if err != nil {
 		return false
 	}
-	tb, err := xdm.ParseString(b, xdm.ParseOptions{})
+	tb, err := parseFragment(b)
 	if err != nil {
 		return false
 	}
 	return nodesEqual(ta.Root, tb.Root)
+}
+
+// parseFragment parses a serialised *result sequence*, which is not in general
+// a well-formed document.
+//
+// A query returns a sequence, and the suite's assert-xml spells out whatever
+// that sequence serialises to: two sibling elements for a query returning two,
+// or text beside an element for "(count(...), $i)". Neither has the single
+// root element XML requires, so parsing them directly fails and the infoset
+// comparison -- the only one that ignores where a namespace declaration sits
+// -- never runs. That left cases failing on nothing but a redundant xmlns the
+// harness's own writer emits, with the engine's tree already correct.
+//
+// Wrapping both sides in the same synthetic root makes them parseable without
+// changing what is compared: nodesEqual walks from the root down, and an
+// identical wrapper on each side cancels out. The wrapper's name is one no
+// result can collide with, and it declares nothing, so it contributes no
+// namespace of its own to the fragment inside it.
+func parseFragment(s string) (*xdm.Tree, error) {
+	if t, err := xdm.ParseString(s, xdm.ParseOptions{}); err == nil {
+		return t, nil
+	}
+	return xdm.ParseString(
+		"<qt3-fragment-wrapper>"+s+"</qt3-fragment-wrapper>",
+		xdm.ParseOptions{})
 }
 
 // nodesEqual compares two trees by name, value and children, taking a name to
