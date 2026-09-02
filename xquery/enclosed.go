@@ -1,6 +1,9 @@
 package xquery
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // findEnclosed returns the index of the "}" closing the enclosed expression
 // that opens at src[open], which must be a "{".
@@ -33,6 +36,16 @@ func findEnclosed(src string, open int) (int, error) {
 	depth := 0
 	for i := open; i < len(src); i++ {
 		switch src[i] {
+		case '`':
+			// A string constructor's content is not syntax; step over it
+			// whole, the way a string literal is stepped over.
+			if strings.HasPrefix(src[i:], "``[") {
+				end, err := skipStringConstructor(src, i)
+				if err != nil {
+					return 0, err
+				}
+				i = end
+			}
 		case '{':
 			depth++
 		case '}':
@@ -54,17 +67,149 @@ func findEnclosed(src string, open int) (int, error) {
 				}
 				i = end
 			}
+		case '<':
+			// A direct constructor's content is markup, not expression text,
+			// and the two disagree about the quote: an apostrophe is an
+			// ordinary character in "<f>f's value</f>" where in an expression
+			// it opens a literal. Reading the constructor as expression text
+			// sent skipString off looking for the partner of that apostrophe
+			// and it ran to the end of the query — K2-Axes-1 is exactly that
+			// query. Only the markup is stepped over here; a "{" inside it
+			// puts the scan back on expression text, which is what makes
+			// "<a>{ 'x}y' }</a>" still find its own brace.
+			if end, ok := skipDirectConstructor(src, i); ok {
+				i = end
+			}
 		}
 	}
 	return 0, fmt.Errorf("XPST0003: unterminated enclosed expression at offset %d", open)
 }
 
+// skipDirectConstructor returns the index of the last character of the direct
+// element constructor that opens at src[i], reporting false when src[i] does
+// not begin one.
+//
+// It steps over markup only: attribute values, whose quotes do delimit, and
+// element content, whose quotes do not. An enclosed expression inside either
+// is handed back to findEnclosed, so the two functions alternate through a
+// constructor that nests expressions and elements to any depth.
+//
+// A false report is deliberately cheap: "a < b" is a comparison and there is
+// no constructor to skip, so the caller carries on reading expression text and
+// the "<" is just an operator.
+func skipDirectConstructor(src string, i int) (int, bool) {
+	if i+1 >= len(src) || !isNameStartByte(src[i+1]) {
+		return 0, false
+	}
+	depth := 0
+	for j := i; j < len(src); j++ {
+		switch {
+		case src[j] == '<' && j+1 < len(src) && src[j+1] == '/':
+			// An end tag closes the innermost open element. Its name cannot
+			// contain a quote or a brace, so it is enough to run to the ">".
+			k := j
+			for k < len(src) && src[k] != '>' {
+				k++
+			}
+			if k >= len(src) {
+				return 0, false
+			}
+			depth--
+			j = k
+			if depth == 0 {
+				return j, true
+			}
+		case src[j] == '<' && j+1 < len(src) && src[j+1] == '!':
+			// A comment or CDATA section: neither holds anything the scan
+			// cares about, so run to its end.
+			var close string
+			if strings.HasPrefix(src[j:], "<!--") {
+				close = "-->"
+			} else if strings.HasPrefix(src[j:], "<![CDATA[") {
+				close = "]]>"
+			} else {
+				return 0, false
+			}
+			k := strings.Index(src[j:], close)
+			if k < 0 {
+				return 0, false
+			}
+			j += k + len(close) - 1
+		case src[j] == '<' && j+1 < len(src) && src[j+1] == '?':
+			k := strings.Index(src[j:], "?>")
+			if k < 0 {
+				return 0, false
+			}
+			j += k + 1
+		case src[j] == '<':
+			if j+1 >= len(src) || !isNameStartByte(src[j+1]) {
+				return 0, false
+			}
+			// A start tag. Quotes inside it delimit attribute values, and an
+			// attribute value may itself hold an enclosed expression, so the
+			// tag is walked rather than skipped wholesale.
+			k, selfClosing, ok := skipStartTag(src, j)
+			if !ok {
+				return 0, false
+			}
+			j = k
+			if !selfClosing {
+				depth++
+			} else if depth == 0 {
+				return j, true
+			}
+		case src[j] == '{':
+			// Element content is back to expression text inside the braces.
+			end, err := findEnclosed(src, j)
+			if err != nil {
+				return 0, false
+			}
+			j = end
+		}
+	}
+	return 0, false
+}
+
+// skipStartTag returns the index of the ">" ending the start tag that opens at
+// src[i], and whether the tag closed the element itself.
+func skipStartTag(src string, i int) (end int, selfClosing bool, ok bool) {
+	for j := i + 1; j < len(src); j++ {
+		switch src[j] {
+		case '\'', '"':
+			e, err := skipString(src, j)
+			if err != nil {
+				return 0, false, false
+			}
+			j = e
+		case '{':
+			e, err := findEnclosed(src, j)
+			if err != nil {
+				return 0, false, false
+			}
+			j = e
+		case '/':
+			if j+1 < len(src) && src[j+1] == '>' {
+				return j + 1, true, true
+			}
+		case '>':
+			return j, false, true
+		}
+	}
+	return 0, false, false
+}
+
 // skipString returns the index of the quote closing the literal that opens at
 // src[i].
 //
-// The doubled quote is XQuery's only escape inside a literal: 'it''s' is one
-// string holding an apostrophe. A literal opened with one quote is unaffected
-// by the other, so 'a"b' and "a'b" both hold what they look like they hold.
+// The doubled quote is XQuery's only escape inside a literal: a two-character
+// run of the opening quote stands for one of that character, so the six-byte
+// literal spelling "it" + two apostrophes + "s" is one string holding an
+// apostrophe. A literal opened with one quote is unaffected by the other, so
+// 'a"b' and "a'b" both hold what they look like they hold.
+//
+// The example is spelled out in words rather than written literally because
+// gofmt rewrites a doubled ASCII apostrophe in a comment into a typographic
+// quote, which would make this paragraph describe the wrong escape.
 func skipString(src string, i int) (int, error) {
 	q := src[i]
 	for j := i + 1; j < len(src); j++ {
@@ -122,6 +267,15 @@ func findParen(src string, open int) (int, error) {
 	depth := 0
 	for i := open; i < len(src); i++ {
 		switch src[i] {
+		case '`':
+			if strings.HasPrefix(src[i:], "``[") {
+				end, err := skipStringConstructor(src, i)
+				if err != nil {
+					return 0, err
+				}
+				i = end
+				continue
+			}
 		case '(':
 			if i+1 < len(src) && src[i+1] == ':' {
 				end, err := skipComment(src, i)
@@ -150,4 +304,48 @@ func findParen(src string, open int) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("XPST0003: unbalanced %q at offset %d", "(", open)
+}
+
+// skipStringConstructor returns the index of the last byte of the "]“" that
+// closes the string constructor opening at src[i], which must be "“[".
+//
+// The scanners that walk an expression looking for a comma, a bracket or a
+// keyword all have to step over one of these whole, for the reason they step
+// over a string literal: §3.11.6 exists so that a query can carry text with
+// quotes, braces and brackets in it without escaping any of them, so every
+// byte between the delimiters is content and none of it is syntax. Reading
+// "“[[\"']]“" as a bracket and then a string literal is what left
+// string-constructor-021's regex looking unterminated.
+//
+// The one thing inside that is not content is an interpolation, "`{ ... }`",
+// whose body is an expression and may hold a nested string constructor of its
+// own; a depth count is kept so that the inner one's "]“" does not close the
+// outer.
+func skipStringConstructor(src string, i int) (int, error) {
+	if !strings.HasPrefix(src[i:], "``[") {
+		return 0, fmt.Errorf("XPST0003: expected %q at offset %d", "``[", i)
+	}
+	start := i
+	i += 3
+	for i < len(src) {
+		switch {
+		case strings.HasPrefix(src[i:], "]``"):
+			return i + 2, nil
+		case strings.HasPrefix(src[i:], "`{"):
+			end, err := findEnclosed(src, i+1)
+			if err != nil {
+				return 0, err
+			}
+			// [180] StringConstructorInterpolation closes with "}`", so the
+			// backtick after the brace belongs to the delimiter.
+			i = end + 1
+			if i < len(src) && src[i] == '`' {
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	return 0, fmt.Errorf(
+		"XPST0003: unterminated string constructor at offset %d", start)
 }

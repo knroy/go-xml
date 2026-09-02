@@ -26,7 +26,7 @@ type runtime struct {
 	// so the promise is only kept by evaluating once and reusing. Keyed by
 	// functionCallKey; see apply.go.
 	funcResults map[string]xdm.Sequence
-	ctx   *xpath.Context
+	ctx         *xpath.Context
 
 	// deferredErr holds the failure of a global whose evaluation is not by
 	// itself the transform's failure -- an abstract variable, whose body
@@ -1050,7 +1050,6 @@ func globalRefs(g *Variable) []string {
 	}
 	return out
 }
-
 
 // globalRuntimeFor is the runtime a global variable's initialiser is evaluated
 // in, which differs from the transform's only in its focus.

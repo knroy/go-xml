@@ -1,7 +1,6 @@
 package xslt
 
 import (
-
 	"github.com/knroy/go-xml/xdm"
 )
 

@@ -285,7 +285,7 @@ func (p *parser) scanAttributeValue() ([]rawPart, error) {
 	var run strings.Builder
 	flush := func() {
 		if run.Len() > 0 {
-			parts = append(parts, rawPart{text: normalizeAttr(run.String())})
+			parts = append(parts, rawPart{text: run.String()})
 			run.Reset()
 		}
 	}
@@ -340,37 +340,23 @@ func (p *parser) scanAttributeValue() ([]rawPart, error) {
 			return nil, p.errorf(
 				"XPST0003: %q is not allowed in an attribute value", "<")
 
+		case c == '\t' || c == '\n':
+			run.WriteByte(' ')
+			p.pos++
+
+		case c == '\r':
+			// A literal CRLF pair normalises to one space, not two.
+			run.WriteByte(' ')
+			p.pos++
+			if !p.eof() && p.src[p.pos] == '\n' {
+				p.pos++
+			}
+
 		default:
 			run.WriteByte(c)
 			p.pos++
 		}
 	}
-}
-
-// normalizeAttr applies XML attribute-value normalisation for a CDATA-typed
-// attribute: every whitespace character becomes a space, and nothing is
-// trimmed or collapsed.
-func normalizeAttr(s string) string {
-	if !strings.ContainsAny(s, "\t\r\n") {
-		return s
-	}
-	var sb strings.Builder
-	sb.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\t', '\n':
-			sb.WriteByte(' ')
-		case '\r':
-			sb.WriteByte(' ')
-			// A CRLF pair normalises to one space, not two.
-			if i+1 < len(s) && s[i+1] == '\n' {
-				i++
-			}
-		default:
-			sb.WriteByte(s[i])
-		}
-	}
-	return sb.String()
 }
 
 // predefined are the five entity references XML defines and XQuery inherits.
@@ -465,6 +451,14 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
+	// %public and %private have to be refused before the strip removes them.
+	// stripAnnotations exists because xpath has no syntax for an annotation
+	// and the value of one is implementation-defined; these two are the
+	// exception §4.18 makes, and once stripped there is nothing left to
+	// object to.
+	if err := rejectAnnotatedInlineFunction(src); err != nil {
+		return nil, err
+	}
 	stripped, err := p.stripAnnotations(src)
 	if err != nil {
 		return nil, err
@@ -552,6 +546,62 @@ func rejectNamespaceAxis(src string) error {
 		}
 		return fmt.Errorf(
 			"XPST0003: XQuery has no %q axis", "namespace")
+	}
+	return rejectNamespaceNodeStep(src)
+}
+
+// rejectNamespaceNodeStep refuses "namespace-node()" written as a step of its
+// own, which XQuery 3.0 gives its own error, XQST0134.
+//
+// The kind test itself is perfectly legal in XQuery and the suite uses it
+// freely: "self::namespace-node()", "attribute::namespace-node()", a function
+// signature, an "instance of". What XQuery does not have is the namespace
+// *axis*, and an unprefixed step takes the child axis, so the only way to read
+// a bare "namespace-node()" step is as the axis the language lacks. Every
+// legal use names an axis explicitly, which is exactly what distinguishes the
+// two, so the test is for the test standing alone after a "/" or at the head
+// of the expression.
+func rejectNamespaceNodeStep(src string) error {
+	const kind = "namespace-node("
+	for i := 0; i+len(kind) <= len(src); i++ {
+		switch src[i] {
+		case '\'', '"':
+			end, err := skipString(src, i)
+			if err != nil {
+				return nil
+			}
+			i = end
+			continue
+		case '(':
+			if i+1 < len(src) && src[i+1] == ':' {
+				end, err := skipComment(src, i)
+				if err != nil {
+					return nil
+				}
+				i = end
+				continue
+			}
+		}
+		if !strings.HasPrefix(src[i:], kind) {
+			continue
+		}
+		// What precedes decides it. A name character means the test is the
+		// tail of a longer name; a ":" means an axis was named, and an axis
+		// makes the use legal. Anything else — a "/", a "(", the start of the
+		// expression — leaves the step on the child axis with nothing to say
+		// so, which is the case §3.3.2.1 refuses.
+		j := len(strings.TrimRight(src[:i], " \t\r\n"))
+		if j > 0 {
+			if src[j-1] == ':' {
+				continue
+			}
+			if r, _ := utf8.DecodeLastRuneInString(src[:j]); xdm.IsNameChar(r) {
+				continue
+			}
+		}
+		return fmt.Errorf(
+			"XQST0134: XQuery has no %q axis, so %s) cannot stand as a step",
+			"namespace", kind)
 	}
 	return nil
 }

@@ -419,9 +419,17 @@ func (p *parser) parseDirComment() (node, error) {
 		if p.lookingAt("-->") {
 			text := p.src[start:p.pos]
 			p.pos += 3
-			if strings.Contains(text, "--") {
+			// [179] DirCommentConstructor is spelled out of
+			// DirCommentContents, which admits neither "--" nor a trailing
+			// "-", so a direct comment whose content breaks the rule is
+			// refused by the grammar and the error is the static XPST0003.
+			// XQDY0072 is the dynamic code, and it belongs to the computed
+			// constructor, whose content is an expression and is not known
+			// until the query runs.
+			if strings.Contains(text, "--") || strings.HasSuffix(text, "-") {
 				return nil, p.errorAt(start,
-					"XQDY0072: a comment may not contain %q", "--")
+					"XPST0003: a comment may not contain %q or end with %q",
+					"--", "-")
 			}
 			return &comment{content: []node{&literalText{text: text}}}, nil
 		}
@@ -441,8 +449,15 @@ func (p *parser) parseDirPI() (node, error) {
 			"XPST0003: a processing instruction needs a target")
 	}
 	if strings.EqualFold(target, "xml") {
+		// §3.9.3 forbids "xml" in any case as a PI target, and where the
+		// target is written out as a literal name the prohibition is part of
+		// the grammar — [180] PITarget excludes it — so the error is the
+		// static XPST0003. It is only the *computed* constructor, whose
+		// target is not known until the expression is evaluated, that raises
+		// the dynamic XQDY0064; Constr-pi-target-1..4 write "<?xml?>" and
+		// friends directly and require the static code.
 		return nil, p.errorAt(start,
-			"XQDY0064: %q is not a legal processing-instruction target", target)
+			"XPST0003: %q is not a legal processing-instruction target", target)
 	}
 	// A target not followed by space runs straight into "?>".
 	if !p.lookingAt("?>") {
@@ -484,6 +499,35 @@ func (p *parser) parseCDATA() (string, error) {
 	}
 }
 
+// blankEnclosedBody reports whether an enclosed expression's body holds no
+// expression: nothing but whitespace and comments.
+//
+// A comment counts as nothing, and it has to, because "{(:comment:)}" is the
+// empty enclosed expression written the long way and Constr-attr-enclexpr-12
+// and K2-DirectConElemContent-26b both write it. Trimming whitespace alone
+// left the comment behind and sent it to xpath as though it were an
+// expression.
+func blankEnclosedBody(body string) bool {
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case ' ', '\t', '\r', '\n':
+		case '(':
+			if i+1 < len(body) && body[i+1] == ':' {
+				end, err := skipComment(body, i)
+				if err != nil {
+					return false
+				}
+				i = end
+				continue
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // parseEnclosed parses "{ Expr? }", handing the expression to xpath.
 //
 // This is the boundary the whole design turns on: everything between the
@@ -496,7 +540,7 @@ func (p *parser) parseEnclosed() (node, error) {
 	}
 	body := p.src[p.pos+1 : end]
 	p.pos = end + 1
-	if strings.TrimSpace(body) == "" {
+	if blankEnclosedBody(body) {
 		// "{}" is an empty sequence, which contributes nothing.
 		return &enclosed{braced: true}, nil
 	}
@@ -518,7 +562,7 @@ func (p *parser) compileContent(parts []rawPart) ([]node, error) {
 			out = append(out, &literalText{text: part.text})
 			continue
 		}
-		if strings.TrimSpace(part.text) == "" {
+		if blankEnclosedBody(part.text) {
 			out = append(out, &enclosed{})
 			continue
 		}

@@ -114,6 +114,18 @@ func (b *Builder) AppendNode(n *xdm.Node) {
 		}
 		return
 	}
+	if n.Kind == xdm.KindText && b.open != nil {
+		// A text node becoming the content of an element is merged with the
+		// text beside it and dropped when it is empty, which is section
+		// 5.7.1's rule for constructing complex content and XQuery §3.9.1.3's
+		// for the same thing. AppendText is where both live, and appending
+		// the node as a child instead left two text nodes adjacent — which
+		// no result tree may hold. "document {'def', <anode/>, 'ghi'}" used
+		// as element content beside 'abc' and 'jkl' gave four children where
+		// the merged tree has three.
+		b.AppendText(n.Value)
+		return
+	}
 	if b.open != nil {
 		// Copying is only needed when the node is about to be re-parented:
 		// AppendChild rewrites Parent and tree pointers, so adopting a source

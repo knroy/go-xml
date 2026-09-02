@@ -204,6 +204,11 @@ var wordOperators = map[string]bool{
 // expression, which parseNestedExpr already handles; it is still accepted
 // here so that "<a/> = <b/>" substitutes both operands rather than one.
 func (p *parser) startsOperand(src string, i int, prev byte) bool {
+	if src[i] == '`' {
+		// A string constructor is a PrimaryExpr and its opener is unambiguous:
+		// XPath has no backtick, so "``[" can only be one wherever it stands.
+		return strings.HasPrefix(src[i:], "``[")
+	}
 	if src[i] == '<' {
 		return startsMarkup(src, i, prev)
 	}
@@ -233,6 +238,16 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// "namespace::" is the axis, which is refused elsewhere.
 		k := skipSpaceFrom(src, j)
 		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
+	case "function":
+		// An inline function is an operand this package owns only when its
+		// body needs the XQuery parser, and only parsing it says whether it
+		// does. Lifting one out matters more than lifting out a constructor:
+		// substituting the body would evaluate it outside the scope the
+		// parameters are bound in. See inlineFunc.
+		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
+			depth: p.depth + 1}
+		_, ok, _ := sub.parseInlineFunc()
+		return ok
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
 		// only be the construct — the same test parseXQueryOnly makes.

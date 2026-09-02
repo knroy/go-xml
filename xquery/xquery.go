@@ -121,6 +121,9 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization}
 	q.lib = q.registerFunctions(nil)
+	if err := q.checkStaticCalls(); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
@@ -141,6 +144,9 @@ func Eval(src string, ctx *xpath.Context, opts Options) (xdm.Sequence, error) {
 func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
+	}
+	if err := q.checkBodyVars(ctx); err != nil {
+		return nil, err
 	}
 	ctx, err := q.prepare(ctx)
 	if err != nil {
@@ -191,13 +197,33 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 		sub.StaticBaseURI = q.sc.baseURI
 	}
 	out := &sub
+	// One binder serves both halves. The context item's initialiser may name
+	// a global and a global's initialiser may read the context item, so the
+	// two are one dependency graph rather than two phases: bindContextItem
+	// initialises just the variables it names, and the rest are done after,
+	// against a context that now has the item in it.
+	b := q.newVarBinder(out)
 	if q.contextItem != nil {
 		var err error
-		if out, err = q.bindContextItem(out); err != nil {
+		if out, err = q.bindContextItem(out, b); err != nil {
+			return nil, err
+		}
+		if b != nil {
+			// The variables the context item forced are already bound on the
+			// binder's own context; carrying them onto the one that now holds
+			// the item keeps both sets in scope for what follows.
+			b.rebase(out)
+		}
+	}
+	if b == nil {
+		return out, nil
+	}
+	for _, d := range q.vars {
+		if err := b.visit(d); err != nil {
 			return nil, err
 		}
 	}
-	return q.bindVariables(out)
+	return b.ctx, nil
 }
 
 // bindContextItem applies "declare context item" (§4.16).
@@ -206,40 +232,65 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 // back to its default when there is not. A non-external one replaces the
 // caller's item outright, which is what a query that computes its own context
 // is asking for. XPDY0002 is the error when neither supplies one.
-func (q *Query) bindContextItem(ctx *xpath.Context) (*xpath.Context, error) {
+func (q *Query) bindContextItem(ctx *xpath.Context, b *varBinder) (
+	*xpath.Context, error) {
 	d := q.contextItem
 	sub := *ctx
 	if d.external && ctx.Item != nil {
-		// Only the type check applies: the value is the caller's.
-		if _, err := d.typ.convert(xdm.Sequence{ctx.Item},
+		// Only the type check applies: the value is the caller's. match
+		// rather than convert, for the reason given below.
+		if _, err := d.typ.match(xdm.Sequence{ctx.Item},
 			"the context item"); err != nil {
 			return nil, err
 		}
 		return ctx, nil
 	}
-	if d.init == nil {
+	if d.init == nil && d.body == nil {
 		if ctx.Item != nil {
 			return ctx, nil
 		}
 		return nil, fmt.Errorf(
 			"XPDY0002: no value was supplied for the declared context item")
 	}
-	// The initialiser is evaluated with the globals already in scope, so a
-	// "declare context item := $doc" can name one. bindVariables runs after
-	// this, so the initialiser sees only what the caller bound — which is the
-	// dependency order §4.16 gives, since the context item is part of the
-	// dynamic context the variables are initialised against.
-	seq, err := d.init.compiled.Eval(&sub)
+	// The globals the initialiser names are bound first, and only those.
+	// "declare context item := $y[3]" needs $y to have a value; it does not
+	// need the variables declared after it, and one of those may well be the
+	// one that reads the context item — contextDecl-016 declares $x as
+	// fn:position() precisely to check that it sees the item this sets. So
+	// the dependency is followed exactly as far as it goes and no further.
+	if b != nil {
+		if err := b.bindNamed(d.references()); err != nil {
+			return nil, err
+		}
+		sub = *b.ctx
+	}
+	seq, err := q.evalBody(d.body, d.init, &sub)
 	if err != nil {
 		return nil, err
 	}
-	seq, err = d.typ.convert(seq, "the context item")
+	// match rather than convert: §4.16 says the value of the initialiser must
+	// *match* the declared type, and the suite spells out that the function
+	// conversion rules are not the ones meant. contextDecl-039 declares "as
+	// xs:double := 1.234" and wants XPTY0004 rather than the promoted double,
+	// and contextDecl-044 wants the same of an external default; both are
+	// described as "function conversion rules not applied to context item".
+	// This is the same distinction §4.14 draws for a variable declaration, and
+	// the context item is no more converted than a variable is.
+	seq, err = d.typ.match(seq, "the context item")
 	if err != nil {
 		return nil, err
 	}
 	switch len(seq) {
 	case 0:
-		sub.Item = nil
+		// An initialiser that produced nothing is XPTY0004, not an absent
+		// context item. The specification names no error here and leaving the
+		// item absent would be the other defensible reading, but the suite
+		// settles it: contextDecl-032 initialises from "(1 to 17)[20]" and
+		// contextDecl-060 from "()", and both want XPTY0004. Binding nothing
+		// would instead surface later as XPDY0002 from whatever read ".",
+		// blaming the reference rather than the declaration that is at fault.
+		return nil, fmt.Errorf(
+			"XPTY0004: the context item initialiser produced an empty sequence")
 	case 1:
 		sub.Item = seq[0]
 	default:
@@ -437,6 +488,39 @@ func (p *parser) parseExprItem() (node, error) {
 	depth := 0
 	for !p.eof() {
 		switch p.src[p.pos] {
+		case '<':
+			// A direct constructor's markup is not expression source, and
+			// nothing inside it can be scanned as though it were: a quote in
+			// a CDATA section does not open a string literal, and "(:" in
+			// element content does not open a comment. Where the "<" is at
+			// operand position the constructor is parsed, which is the only
+			// way to find where it ends — its extent is decided by its
+			// markup, not by a bracket count — and the scan resumes after it.
+			//
+			// Where it is the less-than operator the byte is ordinary and
+			// falls through. Where it is markup this scan cannot read, the
+			// parse fails and the byte is treated as ordinary too, so the
+			// error comes from the parse that follows rather than from here.
+			if !startsMarkup(p.src, p.pos,
+				lastSignificantOperandAware(p.src[start:p.pos])) {
+				break
+			}
+			sub := &parser{src: p.src, pos: p.pos, sc: p.sc,
+				version: p.version, depth: p.depth + 1}
+			if _, err := sub.parseConstructorHere(); err != nil {
+				break
+			}
+			p.pos = sub.pos
+			continue
+		case '`':
+			if p.lookingAt("``[") {
+				end, err := skipStringConstructor(p.src, p.pos)
+				if err != nil {
+					return nil, err
+				}
+				p.pos = end + 1
+				continue
+			}
 		case '\'', '"':
 			end, err := skipString(p.src, p.pos)
 			if err != nil {

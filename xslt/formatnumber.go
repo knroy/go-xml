@@ -1,9 +1,9 @@
 package xslt
 
 import (
-	"strconv"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"unicode"
 

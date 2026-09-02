@@ -94,9 +94,18 @@ func (p *parser) parseVarName() (xdm.QName, error) {
 	if !p.consume("$") {
 		return xdm.QName{}, p.errorf("XPST0003: expected %q", "$")
 	}
-	prefix, local, err := p.parseQName()
+	prefix, local, uri, braced, err := p.parseEQNameParts()
 	if err != nil {
 		return xdm.QName{}, err
+	}
+	// A variable may be named in the braced form, "$Q{uri}local", wherever
+	// the grammar admits a VarName — VarName is an EQName [132], not a QName.
+	// A braced name carries its URI already, so there is no prefix to resolve
+	// and no prefix to record: two spellings of the same URI name the same
+	// variable, which is what eqname-024 asserts by binding under one
+	// spelling and reading under another.
+	if braced {
+		return xdm.QName{URI: uri, Local: local}, nil
 	}
 	return p.sc.resolveAttributeName(prefix, local)
 }
@@ -847,6 +856,13 @@ func needsXQueryParser(src string) bool {
 					return false
 				}
 				i = end
+			}
+		case '`':
+			// [177] StringConstructor. Two backticks and a bracket are not
+			// anything XPath's grammar can read — it has no backtick at all —
+			// so the opener alone settles it wherever it appears.
+			if strings.HasPrefix(src[i:], "``[") {
+				return true
 			}
 		case '<':
 			// "<" begins a direct constructor only where an operand may

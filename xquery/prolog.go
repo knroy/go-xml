@@ -50,16 +50,16 @@ type seenDecl struct {
 // and returns immediately.
 func (p *parser) parseProlog() error {
 	once := map[string]*seenDecl{
-		"boundary-space":     {code: "XQST0068"},
-		"construction":       {code: "XQST0067"},
-		"ordering":           {code: "XQST0065"},
-		"empty-order":        {code: "XQST0069"},
-		"copy-namespaces":    {code: "XQST0055"},
-		"default-collation":  {code: "XQST0038"},
-		"base-uri":           {code: "XQST0032"},
-		"default-element-ns": {code: "XQST0066"},
+		"boundary-space":      {code: "XQST0068"},
+		"construction":        {code: "XQST0067"},
+		"ordering":            {code: "XQST0065"},
+		"empty-order":         {code: "XQST0069"},
+		"copy-namespaces":     {code: "XQST0055"},
+		"default-collation":   {code: "XQST0038"},
+		"base-uri":            {code: "XQST0032"},
+		"default-element-ns":  {code: "XQST0066"},
 		"default-function-ns": {code: "XQST0066"},
-		"context-item":       {code: "XQST0099"},
+		"context-item":        {code: "XQST0099"},
 	}
 	// §4 divides the prolog into two parts: the setters, imports and
 	// namespace declarations come first, and the variable, function and
@@ -538,18 +538,35 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		if err != nil {
 			return err
 		}
+		// The grammar gives ContextItemDecl an ItemType, not a SequenceType:
+		// the context item is one item, so an occurrence indicator has nothing
+		// to quantify and "declare context item as xs:integer+" is a syntax
+		// error rather than a type error. contextDecl-023 asserts XPST0003 for
+		// exactly that. parseSequenceType is the only parser available here
+		// and it accepts the indicator, so it is rejected after the fact.
+		if src := strings.TrimSpace(t.src); src != "" {
+			switch src[len(src)-1] {
+			case '+', '*', '?':
+				return p.errorf(
+					"XPST0003: the context item type %q may not carry an "+
+						"occurrence indicator", src)
+			}
+		}
 		decl.typ = t
 		p.skipSpaceAndComments()
 	}
 	switch {
 	case p.consume(":="):
 		p.skipSpaceAndComments()
-		src, err := p.scanDeclExpr()
-		if err != nil {
-			return err
-		}
-		decl.init, err = p.compileExpr(src)
-		if err != nil {
+		var err error
+		// parseDeclBody rather than compileExpr, for the reason a variable
+		// declaration uses it: "declare context item := <a>bananas</a>" has a
+		// constructor for an initialiser, and a constructor cannot be handed
+		// to xpath. compileExpr alone lifts it to a "$local:xq-opN" it then
+		// never binds, so the query fails with XPST0008 naming a variable the
+		// parser invented. §4.16 puts no restriction on the initialiser that
+		// §4.14 does not put on a variable's, so the two read it the same way.
+		if decl.init, decl.body, err = p.parseDeclBody(); err != nil {
 			return err
 		}
 	case p.consumeKeyword("external"):
@@ -557,12 +574,8 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		p.skipSpaceAndComments()
 		if p.consume(":=") {
 			p.skipSpaceAndComments()
-			src, err := p.scanDeclExpr()
-			if err != nil {
-				return err
-			}
-			decl.init, err = p.compileExpr(src)
-			if err != nil {
+			var err error
+			if decl.init, decl.body, err = p.parseDeclBody(); err != nil {
 				return err
 			}
 		}
