@@ -200,6 +200,21 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 	return nil
 }
 
+// declaresPrefix reports whether a constructor's own namespace declarations
+// bind prefix. One that does has already said what the prefix means, and the
+// element's name must not be allowed to say it again: a *conflicting* second
+// binding is what AddNamespace resolves by renaming the element, which is
+// right for a namespace node the content supplied and wrong for the name's
+// own, since the name is the thing being bound.
+func declaresPrefix(decls []nsBinding, prefix string) bool {
+	for _, ns := range decls {
+		if ns.prefix == prefix {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	name := n.name
 	if n.nameExpr != nil {
@@ -233,6 +248,31 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 		sub.b.NoteDeclared(ns.prefix, ns.uri)
+	}
+	// §3.9.3.1: the in-scope namespaces of a constructed element include a
+	// binding for its own name's prefix and URI. A direct constructor gets
+	// one from the declaration that put the prefix in scope, but a computed
+	// one whose name is an xs:QName value has no declaration behind it at
+	// all — "element {QName('http://newns','num')} {1}" builds an element in
+	// a namespace nothing binds, and it serialised as a bare <num> in no
+	// namespace, which is a different element from the one constructed.
+	//
+	// It is added after the explicit declarations rather than before so that
+	// a constructor doing both keeps the rule AddNamespace already applies:
+	// a namespace node wins over the element's own prefix, which is renamed.
+	// Adding it first would have made the constructor's own name the winner
+	// and reversed that.
+	//
+	// The binding goes on the element even where an ancestor already has it.
+	// The in-scope namespaces of an element are a property of the node, not
+	// of where it happens to sit: an element lifted out of the tree it was
+	// built in keeps its own name resolvable, and a serialiser that tracks
+	// what is in scope writes the declaration once regardless.
+	if name.URI != "" && !declaresPrefix(n.namespaces, name.Prefix) {
+		if err := sub.b.AddNamespace(name.Prefix, name.URI); err != nil {
+			return err
+		}
+		sub.b.NoteDeclared(name.Prefix, name.URI)
 	}
 	for _, a := range n.attrs {
 		if err := a.eval(sub, ctx); err != nil {
