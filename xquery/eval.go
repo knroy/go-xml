@@ -191,6 +191,38 @@ func appendSequence(out *builderRef, seq xdm.Sequence) error {
 			out.b.AppendNode(v)
 		case *xdm.Atomic:
 			out.b.AppendValue(v)
+		case *xdm.ArrayItem:
+			// §3.9.1.3 step 1 applies fn:data to the content sequence, and an
+			// array does have a typed value: it is the concatenation of the
+			// typed values of its members. So an array in element content
+			// contributes its members, not XQTY0105 — "<a>{['a',['b','c'],
+			// 'd']}</a>" is "<a>a b c d</a>", with the members flattened
+			// through the nesting and separated as adjacent atomic values
+			// always are. A map has no typed value and stays refused, which
+			// is why this is not simply an atomization of the whole sequence.
+			//
+			// This is the complex-content rule and applies only where complex
+			// content is being constructed. At the top of a sequence there is
+			// none, and the array is an ordinary item there: a query whose
+			// whole body is "[1, 2]" returns one array, not two integers.
+			if out.b.Open() == nil {
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			flat := xdm.Flatten(xdm.One(v))
+			if len(flat) == 1 && flat[0] == it {
+				// Flatten leaves an array it cannot reduce alone. Refusing it
+				// here keeps the guarantee that this branch terminates.
+				if err := out.b.AppendOpaque(it); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := appendSequence(out, flat); err != nil {
+				return err
+			}
 		default:
 			if err := out.b.AppendOpaque(it); err != nil {
 				return err
