@@ -35,10 +35,17 @@ func (p *parser) expandStringLiterals(src string) (string, error) {
 	for i := 0; i < len(src); i++ {
 		switch src[i] {
 		case '(':
-			// A comment. Its content is not source and holds no literals.
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
+			// A comment or a pragma. Neither is source and neither holds a
+			// literal: a quote inside a comment is text, and PragmaContents
+			// is "(Char* - (Char* '#)' Char*))", unparsed text in which an
+			// "&" is an ordinary character rather than a reference to expand.
+			//
+			// This site cannot hand its string literals to skipNonSyntax,
+			// because a literal is precisely what it is here to rewrite; only
+			// the two regions it must not look inside are delegated.
+			if i+1 < len(src) && (src[i+1] == ':' || src[i+1] == '#') {
+				end, ok, err := skipNonSyntax(src, i)
+				if !ok || err != nil {
 					// Let the expression parser report it in its own words.
 					return src, nil
 				}

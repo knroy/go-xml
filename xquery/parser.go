@@ -511,24 +511,16 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 // "namespace::" is just text.
 func rejectNamespaceAxis(src string) error {
 	for i := 0; i+len("namespace::") <= len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A literal, a comment or a pragma is not source, and "namespace::"
+		// inside one is text rather than the axis. An unterminated region
+		// leaves the extent unknown, so this stops looking and lets the
+		// expression parser report the fault properly.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
-				// Let the expression parser report it properly.
 				return nil
 			}
 			i = end
 			continue
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return nil
-				}
-				i = end
-				continue
-			}
 		}
 		if !strings.HasPrefix(src[i:], "namespace::") {
 			continue
@@ -560,23 +552,16 @@ func rejectNamespaceAxis(src string) error {
 func rejectNamespaceNodeStep(src string) error {
 	const kind = "namespace-node("
 	for i := 0; i+len(kind) <= len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A literal, a comment or a pragma is not source, and "namespace::"
+		// inside one is text rather than the axis. An unterminated region
+		// leaves the extent unknown, so this stops looking and lets the
+		// expression parser report the fault properly.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return nil
 			}
 			i = end
 			continue
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return nil
-				}
-				i = end
-				continue
-			}
 		}
 		if !strings.HasPrefix(src[i:], kind) {
 			continue

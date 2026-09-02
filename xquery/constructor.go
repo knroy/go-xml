@@ -548,9 +548,15 @@ func blankEnclosedBody(body string) bool {
 		switch body[i] {
 		case ' ', '\t', '\r', '\n':
 		case '(':
+			// Only a comment may stand here. A pragma is not "nothing": an
+			// ExtensionExpr is an expression, so "{(#p:x#) {1}}" has a body
+			// and this must answer false for it, which the fallthrough to
+			// the return below already does.
 			if i+1 < len(body) && body[i+1] == ':' {
 				end, err := skipComment(body, i)
 				if err != nil {
+					// An unterminated comment is not a comment; let the
+					// parser report it in context.
 					return false
 				}
 				i = end

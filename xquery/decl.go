@@ -1113,22 +1113,18 @@ func sortedKeys(set map[string]bool) []string {
 // the kind tests out of the set without listing them.
 func scanCalls(src string, set map[string]bool) {
 	for i := 0; i < len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A name followed by "(" inside a literal, a comment or a pragma is
+		// text, not a call. An unterminated region leaves the rest of the
+		// source unscannable, so the scan stops with what it has.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return
 			}
 			i = end
+			continue
+		}
+		switch src[i] {
 		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return
-				}
-				i = end
-				continue
-			}
 			j := i
 			for j > 0 && (isNameByte(src[j-1]) || src[j-1] == ':') {
 				j--
@@ -1258,21 +1254,17 @@ func (d *contextItemDecl) references() []string {
 // satisfiable.
 func scanVarRefs(src string, set map[string]bool) {
 	for i := 0; i < len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A "$name" inside a literal, a comment or a pragma is text, not a
+		// variable reference. An unterminated region leaves the rest of the
+		// source unscannable, so the scan stops with what it has.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return
 			}
 			i = end
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return
-				}
-				i = end
-			}
+			continue
+		}
+		switch src[i] {
 		case '$':
 			j := i + 1
 			for j < len(src) && (isNameByte(src[j]) || src[j] == ':') {
@@ -1409,22 +1401,18 @@ func (p *parser) stripAnnotations(src string) (string, error) {
 	var out strings.Builder
 	copied := 0
 	for i := 0; i < len(src); i++ {
-		switch src[i] {
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					// Let the expression parser report it in its own words.
-					return src, nil
-				}
-				i = end
-			}
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A "%" inside a literal, a comment or a pragma is an ordinary
+		// character, not the head of an annotation. An unterminated region
+		// leaves the extent unknown, so the source is returned untouched and
+		// the expression parser reports the fault in its own words.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return src, nil
 			}
 			i = end
+			continue
+		}
+		switch src[i] {
 		case 'Q':
 			// A braced URI literal is a third region whose bytes are not
 			// grammar: "%" is an ordinary character of a URI, and percent

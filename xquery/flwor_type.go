@@ -79,17 +79,24 @@ func (p *parser) scanSequenceType() (string, error) {
 		if p.consume("(") {
 			depth := 1
 			for !p.eof() && depth > 0 {
+				// A literal inside the test holds no parenthesis this depth
+				// count should see, and a comment stands wherever whitespace
+				// does -- "element(: c :)(a)" is a kind test with a comment
+				// in it, and the "(" inside the comment is not the test's.
+				// Going through skipNonSyntax is what gives this scan the
+				// comment case it lacked.
+				if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
+					if err != nil {
+						return "", err
+					}
+					p.pos = end + 1
+					continue
+				}
 				switch p.src[p.pos] {
 				case '(':
 					depth++
 				case ')':
 					depth--
-				case '\'', '"':
-					end, err := skipString(p.src, p.pos)
-					if err != nil {
-						return "", err
-					}
-					p.pos = end
 				}
 				p.pos++
 			}

@@ -148,14 +148,20 @@ func (p *parser) parseTypeUntil(stops ...string) (xpath.SequenceType, error) {
 	depth := 0
 	for i < len(p.src) {
 		c := p.src[i]
-		switch c {
-		case '\'', '"':
-			end, err := skipString(p.src, i)
+		// A literal inside a kind test holds no bracket this scan should
+		// count, and a comment stands wherever whitespace does, so a stop
+		// keyword written inside one is text rather than the keyword. Going
+		// through skipNonSyntax is what gives this scan the comment case it
+		// did not have: "as (: return :) xs:integer return $x" used to stop
+		// at the word inside the comment.
+		if end, ok, err := skipNonSyntax(p.src, i); ok {
 			if err != nil {
 				return xpath.SequenceType{}, err
 			}
 			i = end + 1
 			continue
+		}
+		switch c {
 		case '(':
 			depth++
 		case '{':

@@ -35,37 +35,23 @@ func findEnclosed(src string, open int) (int, error) {
 	}
 	depth := 0
 	for i := open; i < len(src); i++ {
-		switch src[i] {
-		case '`':
-			// A string constructor's content is not syntax; step over it
-			// whole, the way a string literal is stepped over.
-			if strings.HasPrefix(src[i:], "``[") {
-				end, err := skipStringConstructor(src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end
+		// A string literal, a comment, a pragma or a string constructor is
+		// not syntax: a brace inside any of them is an ordinary character.
+		// skipNonSyntax is the one place that knows which regions those are.
+		if end, ok, err := skipNonSyntax(src, i); ok {
+			if err != nil {
+				return 0, err
 			}
+			i = end
+			continue
+		}
+		switch src[i] {
 		case '{':
 			depth++
 		case '}':
 			depth--
 			if depth == 0 {
 				return i, nil
-			}
-		case '\'', '"':
-			end, err := skipString(src, i)
-			if err != nil {
-				return 0, err
-			}
-			i = end
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end
 			}
 		case '<':
 			// A direct constructor's content is markup, not expression text,
@@ -266,25 +252,18 @@ func findParen(src string, open int) (int, error) {
 	}
 	depth := 0
 	for i := open; i < len(src); i++ {
+		// A comment and a pragma both open with "(", so this has to come
+		// before the depth count: neither opens a parenthesis the ")" that
+		// closes the operand could ever match.
+		if end, ok, err := skipNonSyntax(src, i); ok {
+			if err != nil {
+				return 0, err
+			}
+			i = end
+			continue
+		}
 		switch src[i] {
-		case '`':
-			if strings.HasPrefix(src[i:], "``[") {
-				end, err := skipStringConstructor(src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end
-				continue
-			}
 		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end
-				continue
-			}
 			depth++
 		case ')':
 			depth--
@@ -295,12 +274,6 @@ func findParen(src string, open int) (int, error) {
 			depth++
 		case ']', '}':
 			depth--
-		case '\'', '"':
-			end, err := skipString(src, i)
-			if err != nil {
-				return 0, err
-			}
-			i = end
 		}
 	}
 	return 0, fmt.Errorf("XPST0003: unbalanced %q at offset %d", "(", open)
@@ -348,4 +321,96 @@ func skipStringConstructor(src string, i int) (int, error) {
 	}
 	return 0, fmt.Errorf(
 		"XPST0003: unterminated string constructor at offset %d", start)
+}
+
+// skipNonSyntax steps over the one non-syntax token that begins at src[i],
+// returning the index of its last byte and reporting whether src[i] began one
+// at all.
+//
+// This is the single place that knows what "not syntax" means, and it exists
+// because every scanner in this package needs the same answer. A scanner that
+// walks raw source looking for a comma, a bracket, a keyword or a "<" is
+// counting characters that the grammar has not yet tokenised, and four regions
+// of a query hold characters that look like grammar but are not:
+//
+//   - [222] StringLiteral. A brace, a comma or a parenthesis inside 'a}b' is an
+//     ordinary character, and the doubled quote is the only escape.
+//   - [91] Comment ::= "(:" (CommentContents | Comment)* ":)". Comments nest,
+//     so "(: a (: b :) c :)" is one comment, and a quote inside one is not a
+//     literal: "(: it's :)" is well formed.
+//   - [105] Pragma ::= "(#" S? EQName (S PragmaContents)? "#)", where
+//     PragmaContents is "(Char* - (Char* '#)' Char*))" -- arbitrary text that
+//     no rule ever parses. A quote, a brace or a comma in a pragma is an
+//     ordinary character.
+//   - [180] StringConstructor, opened by two backticks and a bracket.
+//     §3.11.6 exists precisely so a query can carry quotes, braces and
+//     brackets without escaping any of them.
+//
+// The pragma is the case that motivated unifying these. Most copies of this
+// scan handled comments and literals but were blind to "(#", so the quote in
+// "1 eq (#p:x \" #) {1}" opened a string literal that never closed; the scan
+// gave up, the expression was routed to the XPath parser, which has no pragma
+// in its grammar at all, and the query was refused. Fixing three of the copies
+// left the rest carrying the same bug, which is the shape of defect this
+// helper is meant to make unrepresentable: there is now one answer to "what is
+// not syntax here", and every scanner asks it.
+//
+// Errors. The copies disagreed about what to do with an unterminated region:
+// most swallowed the error and carried on scanning, while parseExprItem
+// returned it. Returning it is correct and is the rule here. A scan that
+// cannot tell where a non-syntax region ends does not know where syntax
+// resumes, so continuing means scanning a comment's or a pragma's contents as
+// though they were grammar -- exactly the failure the pragma bug was. The
+// error is reported and the caller decides; callers whose contract is a
+// yes/no answer with no error channel (needsXQueryParser, blankEnclosedBody
+// and their kin) still have to choose, and each chooses the answer that hands
+// the text to a parser that will report the fault in context, rather than
+// guessing at a boundary it cannot see.
+//
+// A "(" that is not followed by ":" or "#" is an ordinary parenthesis, and a
+// backtick that does not open a string constructor is an ordinary byte. Both
+// are reported as "not a non-syntax token", so the caller's own case for them
+// still runs: the parenthesis it must count, the operator it must read.
+func skipNonSyntax(src string, i int) (end int, ok bool, err error) {
+	if i >= len(src) {
+		return 0, false, nil
+	}
+	switch src[i] {
+	case '\'', '"':
+		end, err := skipString(src, i)
+		return end, true, err
+	case '(':
+		if i+1 < len(src) && src[i+1] == ':' {
+			end, err := skipComment(src, i)
+			return end, true, err
+		}
+		if i+1 < len(src) && src[i+1] == '#' {
+			end, err := skipPragma(src, i)
+			return end, true, err
+		}
+	case '`':
+		if strings.HasPrefix(src[i:], "``[") {
+			end, err := skipStringConstructor(src, i)
+			return end, true, err
+		}
+	}
+	return 0, false, nil
+}
+
+// skipPragma returns the index of the ")" closing the pragma that opens at
+// src[i], which must be "(#".
+//
+// [105] Pragma ::= "(#" S? EQName (S PragmaContents)? "#)" with
+// PragmaContents ::= (Char* - (Char* '#)' Char*)), so the contents run to the
+// *first* "#)" and nothing inside them nests or escapes. Unlike a comment,
+// a pragma does not nest: "(# a (# b #)" ends at that one "#)".
+func skipPragma(src string, i int) (int, error) {
+	if !strings.HasPrefix(src[i:], "(#") {
+		return 0, fmt.Errorf("XPST0003: expected %q at offset %d", "(#", i)
+	}
+	j := strings.Index(src[i+2:], "#)")
+	if j < 0 {
+		return 0, fmt.Errorf("XPST0003: unterminated pragma at offset %d", i)
+	}
+	return i + 2 + j + 1, nil
 }

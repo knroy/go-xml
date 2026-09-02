@@ -877,23 +877,18 @@ func (p *parser) scanDeclExpr() (string, error) {
 	start := p.pos
 	depth := 0
 	for !p.eof() {
-		switch p.src[p.pos] {
-		case '\'', '"':
-			end, err := skipString(p.src, p.pos)
+		// A literal, a comment, a pragma or a string constructor holds no
+		// ";" and no bracket this scan should count: a semicolon written
+		// inside any of them does not end the declaration.
+		if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
 			if err != nil {
 				return "", err
 			}
 			p.pos = end + 1
 			continue
+		}
+		switch p.src[p.pos] {
 		case '(':
-			if p.pos+1 < len(p.src) && p.src[p.pos+1] == ':' {
-				end, err := skipComment(p.src, p.pos)
-				if err != nil {
-					return "", err
-				}
-				p.pos = end + 1
-				continue
-			}
 			depth++
 		case ')':
 			depth--

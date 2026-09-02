@@ -36,16 +36,18 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 	depth := 0
 	for !p.eof() {
 		c := p.src[p.pos]
+		// A comment stands wherever whitespace does, and a literal inside a
+		// kind test holds no delimiter this scan should count. Both open
+		// with a byte the switch below would otherwise read as syntax.
+		if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
+			if err != nil {
+				return nil, err
+			}
+			p.pos = end + 1
+			continue
+		}
 		switch c {
 		case '(':
-			if p.pos+1 < len(p.src) && p.src[p.pos+1] == ':' {
-				end, err := skipComment(p.src, p.pos)
-				if err != nil {
-					return nil, err
-				}
-				p.pos = end + 1
-				continue
-			}
 			depth++
 		case '[':
 			depth++
@@ -69,13 +71,6 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 				goto done
 			}
 			depth--
-		case '\'', '"':
-			end, err := skipString(p.src, p.pos)
-			if err != nil {
-				return nil, err
-			}
-			p.pos = end + 1
-			continue
 		case ',', ';':
 			if depth == 0 {
 				goto done

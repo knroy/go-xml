@@ -148,27 +148,38 @@ func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error)
 
 	for i := 0; i < len(src); {
 		c := src[i]
-		switch {
-		case c == '\'' || c == '"':
-			end, err := skipString(src, i)
-			if err != nil {
-				return nil, "", nil
+		// A literal, a comment, a pragma or a string constructor is not
+		// source: neither an operand nor the "last significant byte" this
+		// scan tracks can be found inside one.
+		//
+		// startsOperand is asked first, because two of those regions are
+		// themselves the XQuery-only primaries this function exists to lift
+		// out -- an ExtensionExpr opens with "(#", and a StringConstructor
+		// with two backticks and a bracket. Stepping over one would lose the
+		// very operand being sought, so the region is only skipped when it is
+		// not an operand: a string literal or a comment.
+		isOperand := p.startsOperand(src, i, prev)
+		if !isOperand {
+			if end, ok, err := skipNonSyntax(src, i); ok {
+				if err != nil {
+					// An unterminated region leaves the extent unknown;
+					// abandon substitution and let the expression parser
+					// report the fault in context.
+					return nil, "", nil
+				}
+				i = end + 1
+				// A literal is a complete operand, so what follows it is not
+				// at operand position; a comment is whitespace and changes
+				// nothing.
+				if c != '(' {
+					prev = '"'
+				}
+				continue
 			}
-			i = end + 1
-			prev = '"'
-			continue
-
-		case c == '(' && i+1 < len(src) && src[i+1] == ':':
-			end, err := skipComment(src, i)
-			if err != nil {
-				return nil, "", nil
-			}
-			i = end + 1
-			continue
 		}
 
 		start := i
-		if !p.startsOperand(src, i, prev) {
+		if !isOperand {
 			if isNameStartByte(c) {
 				// Step over the whole name, so that a keyword's tail is not
 				// rescanned as though it began a word of its own.

@@ -172,24 +172,21 @@ func (p *parser) scanExprSingleSource() (string, error) {
 	prev := byte(0)
 	for !p.eof() {
 		c := p.src[p.pos]
+		// A literal, a comment, a pragma or a string constructor holds no
+		// keyword and no bracket this scan should count. The pragma matters
+		// here in particular: its contents are unparsed text, so a "return"
+		// or a quote written inside one must not end the expression.
+		if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
+			if err != nil {
+				return "", err
+			}
+			p.pos = end + 1
+			if c != '(' {
+				prev = '"'
+			}
+			continue
+		}
 		switch {
-		case c == '\'' || c == '"':
-			end, err := skipString(p.src, p.pos)
-			if err != nil {
-				return "", err
-			}
-			p.pos = end + 1
-			prev = '"'
-			continue
-
-		case c == '(' && p.pos+1 < len(p.src) && p.src[p.pos+1] == ':':
-			end, err := skipComment(p.src, p.pos)
-			if err != nil {
-				return "", err
-			}
-			p.pos = end + 1
-			continue
-
 		case c == '(' || c == '[' || c == '{':
 			depth++
 			p.pos++
@@ -896,44 +893,39 @@ func (p *parser) bindingSource() (string, error) {
 // by one of the tokens sought.
 func needsXQueryParser(src string) bool {
 	for i := 0; i < len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// [104] ExtensionExpr ::= Pragma+ EnclosedExpr
+		// [105] Pragma        ::= "(#" S? EQName (S PragmaContents)? "#)"
+		//
+		// XPath's grammar has no pragma at all, so "(#" settles the question
+		// outright, and answering here stops the scan before the contents,
+		// which are unparsed text. Before the pragma was recognised, the
+		// quote of "1 eq (#p:x \" #) {1}" opened a string literal that never
+		// closed, so this scan gave up and answered false, sending the
+		// expression to xpath to be refused as an unterminated string.
+		if strings.HasPrefix(src[i:], "(#") {
+			return true
+		}
+		// [177] StringConstructor. Two backticks and a bracket are not
+		// anything XPath's grammar can read — it has no backtick at all — so
+		// the opener alone settles it wherever it appears. Like the pragma it
+		// is answered before skipNonSyntax steps over it, because stepping
+		// over it would lose the very fact being sought.
+		if strings.HasPrefix(src[i:], "``[") {
+			return true
+		}
+		// A literal or a comment holds no syntax, so nothing sought below can
+		// be found inside one. An unterminated one means the extent cannot be
+		// known: this scan has no error channel, and answering false hands the
+		// text to xpath, which reports the fault in context -- the behaviour
+		// this scan already had.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return false
 			}
 			i = end
-		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return false
-				}
-				i = end
-				continue
-			}
-			// [104] ExtensionExpr ::= Pragma+ EnclosedExpr
-			// [105] Pragma        ::= "(#" S? EQName (S PragmaContents)? "#)"
-			//
-			// XPath's grammar has no pragma at all, so "(#" settles it the way
-			// "``[" does, and answering here also stops the scan before the
-			// contents. PragmaContents is "(Char* - (Char* '#)' Char*))" --
-			// arbitrary text that is never parsed, so a quote or a bracket in
-			// it is an ordinary character. Falling through to the scan below
-			// let the quote of "1 eq (#p:x \" #) {1}" open a string literal
-			// that never closed, so the scan gave up and sent the expression
-			// to xpath, which cannot read a pragma, to be refused there as an
-			// unterminated string.
-			if i+1 < len(src) && src[i+1] == '#' {
-				return true
-			}
-		case '`':
-			// [177] StringConstructor. Two backticks and a bracket are not
-			// anything XPath's grammar can read — it has no backtick at all —
-			// so the opener alone settles it wherever it appears.
-			if strings.HasPrefix(src[i:], "``[") {
-				return true
-			}
+			continue
+		}
+		switch src[i] {
 		case '<':
 			// "<" begins a direct constructor only where an operand may
 			// start. After a name, a literal or a closing bracket it is the
@@ -1068,22 +1060,19 @@ func startsBindingClause(kw, rest string) bool {
 func hasXQueryOnlyClause(src string) bool {
 	depth := 0
 	for i := 0; i < len(src); i++ {
-		switch src[i] {
-		case '\'', '"':
-			end, err := skipString(src, i)
+		// A clause keyword written inside a literal, a comment or a pragma is
+		// text, not a clause. An unterminated region leaves the extent
+		// unknown; this scan has no error channel, so it answers false and
+		// the expression goes to xpath, which reports the fault in context.
+		if end, ok, err := skipNonSyntax(src, i); ok {
 			if err != nil {
 				return false
 			}
 			i = end
+			continue
+		}
+		switch src[i] {
 		case '(':
-			if i+1 < len(src) && src[i+1] == ':' {
-				end, err := skipComment(src, i)
-				if err != nil {
-					return false
-				}
-				i = end
-				continue
-			}
 			depth++
 		case '[', '{':
 			depth++
@@ -1277,6 +1266,11 @@ func skipSpaceFrom(src string, i int) int {
 // An unterminated comment is left where it is rather than reported: these
 // scans run before the expression is parsed, and the parser gives that error
 // in context.
+//
+// Like skipSpaceAndComments, this deliberately does not go through
+// skipNonSyntax. Only a comment is ignorable; a literal, a pragma and a
+// string constructor are expressions, and skipping one here would step past
+// the very token the caller is looking for.
 func skipSpaceAndCommentsFrom(src string, i int) int {
 	for {
 		i = skipSpaceFrom(src, i)

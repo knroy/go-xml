@@ -155,32 +155,19 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 	open := 0
 	for i < len(p.src) {
 		c := p.src[i]
-		switch c {
-		case '`':
-			if strings.HasPrefix(p.src[i:], "``[") {
-				end, err := skipStringConstructor(p.src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end + 1
-				continue
-			}
-		case '\'', '"':
-			end, err := skipString(p.src, i)
+		// A literal, a comment, a pragma or a string constructor holds no
+		// stop keyword and no bracket this scan should count. A pragma's
+		// contents in particular are unparsed text, so a comma or a quote
+		// written inside one must not end the expression.
+		if end, ok, err := skipNonSyntax(p.src, i); ok {
 			if err != nil {
 				return 0, err
 			}
 			i = end + 1
 			continue
+		}
+		switch c {
 		case '(':
-			if i+1 < len(p.src) && p.src[i+1] == ':' {
-				end, err := skipComment(p.src, i)
-				if err != nil {
-					return 0, err
-				}
-				i = end + 1
-				continue
-			}
 			depth++
 		case ')', ']', '}':
 			depth--

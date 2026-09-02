@@ -510,6 +510,16 @@ func (p *parser) parseExprItem() (node, error) {
 	start := p.pos
 	depth := 0
 	for !p.eof() {
+		// A string literal, a comment, a pragma or a string constructor is
+		// not expression source: a comma or a bracket inside any of them is
+		// an ordinary character and must not end the item.
+		if end, ok, err := skipNonSyntax(p.src, p.pos); ok {
+			if err != nil {
+				return nil, err
+			}
+			p.pos = end + 1
+			continue
+		}
 		switch p.src[p.pos] {
 		case '<':
 			// A direct constructor's markup is not expression source, and
@@ -535,46 +545,7 @@ func (p *parser) parseExprItem() (node, error) {
 			}
 			p.pos = sub.pos
 			continue
-		case '`':
-			if p.lookingAt("``[") {
-				end, err := skipStringConstructor(p.src, p.pos)
-				if err != nil {
-					return nil, err
-				}
-				p.pos = end + 1
-				continue
-			}
-		case '\'', '"':
-			end, err := skipString(p.src, p.pos)
-			if err != nil {
-				return nil, err
-			}
-			p.pos = end + 1
-			continue
 		case '(':
-			if p.pos+1 < len(p.src) && p.src[p.pos+1] == ':' {
-				end, err := skipComment(p.src, p.pos)
-				if err != nil {
-					return nil, err
-				}
-				p.pos = end + 1
-				continue
-			}
-			// [105] Pragma ::= "(#" S? EQName (S PragmaContents)? "#)", whose
-			// PragmaContents is "(Char* - (Char* '#)' Char*))" -- arbitrary
-			// text that no rule parses. So a quote, a bracket or a comma in a
-			// pragma is an ordinary character, and the whole pragma has to be
-			// stepped over rather than scanned. Without this the quote of
-			// "1 eq (#p:x \" #) {1}" opened a literal that ran to the end of
-			// the query and was reported here as unterminated.
-			if p.pos+1 < len(p.src) && p.src[p.pos+1] == '#' {
-				j := strings.Index(p.src[p.pos+2:], "#)")
-				if j < 0 {
-					return nil, p.errorf("XPST0003: unterminated pragma")
-				}
-				p.pos += 2 + j + 2
-				continue
-			}
 			depth++
 		case ')', ']', '}':
 			if depth == 0 {
@@ -623,6 +594,12 @@ done:
 // namespace" and "declarenamespace" differ only in that a separator was
 // there, and a comment is a legal separator — "declare(:x:)namespace" is a
 // namespace declaration.
+//
+// This deliberately does not go through skipNonSyntax, which steps over every
+// non-syntax region. A.2.4.1 gives Whitespace ::= S | Comment, and a comment
+// is the only one of the four that is ignorable: a string literal, a pragma
+// and a string constructor are all expressions, so consuming one here would
+// swallow a token rather than the space before it.
 func (p *parser) skipSpaceAndComments() bool {
 	start := p.pos
 	for {

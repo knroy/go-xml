@@ -6,6 +6,27 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### One scanner for what is not syntax (internal)
+
+XQuery's parser decides which sub-parser reads an expression by scanning ahead
+over raw source, and that scan has to step over the regions whose bytes look
+like grammar but are not: string literals, comments (which nest), pragmas
+(whose contents are unparsed text) and string constructors. That logic was
+duplicated across eighteen scanners in thirteen files, and the copies did not
+agree — most were blind to `(#`, so the quote in `1 eq (#p:x " #) {1}` opened a
+literal that never closed and the expression was routed to the XPath parser,
+which has no pragma in its grammar at all. Fixing three copies left the rest
+carrying the same defect.
+
+All of them now route through one `skipNonSyntax` helper, which answers "what
+here is not syntax" in one place and reports an unterminated region rather than
+scanning through it as though its contents were grammar. Two scanners gained a
+comment case they had silently lacked (`parseTypeUntil` and the kind-test scan
+in `flwor_type.go`); the two whitespace skippers deliberately stay
+comment-only, since A.2.4.1 gives `Whitespace ::= S | Comment` and the other
+three regions are expressions. No behaviour change in the suites: XQuery stays
+at 29,796, XPath at 15,183 / 19,244 / 21,786, XSLT at 8,606 / 6,149.
+
 ### XQuery conformance: 99.61% to 99.98%
 
 29,796 of 29,803 QT3 cases in scope, up 107 across seven passes. XPath 2.0/3.0/3.1 stay at 100% and
