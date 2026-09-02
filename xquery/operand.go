@@ -114,14 +114,25 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 				// "<", so a word operator reports itself as an operator
 				// rather than as the name byte it ends with.
 				if wordOperators[src[w:i]] {
-					prev = '+'
+					prev = operatorPrev
 				} else {
 					prev = src[i-1]
 				}
 				continue
 			}
 			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
-				prev = c
+				// "-" and "*" each spell both a name character and a binary
+				// operator, and what tells the two apart is whether the byte
+				// before them abuts: "a-b" is one name and "a - b" is a
+				// subtraction. Reporting the operator reading is what lets
+				// "1 * <a/>" and "3 - <a/>" substitute their right operand,
+				// which the name reading refused. prev is whitespace-stripped
+				// and cannot answer this, so the source is looked at.
+				if (c == '-' || c == '*') && isOperandBreak(src, i) {
+					prev = operatorPrev
+				} else {
+					prev = c
+				}
 			}
 			i++
 			continue
@@ -151,6 +162,18 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 	}
 	out.WriteString(src[copied:])
 	return ops, out.String(), nil
+}
+
+// isOperandBreak reports whether the "-" or "*" at src[i] is a binary
+// operator rather than a character continuing the name before it.
+//
+// A name byte immediately before it — no whitespace — means it continues a
+// name: "a-b" is one NCName and "*" after a name byte cannot occur at all.
+// Anything else is operator position, including the digit that ends a numeric
+// literal, which is a name byte but can never be part of a name because a
+// name may not begin with one.
+func isOperandBreak(src string, i int) bool {
+	return i == 0 || !isNameByte(src[i-1])
 }
 
 // wordOperators are the operators spelled as words. After one of them an
