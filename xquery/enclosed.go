@@ -188,7 +188,6 @@ func skipStartTag(src string, i int) (end int, selfClosing bool, ok bool) {
 	return 0, false, false
 }
 
-
 // skipString returns the index of the quote closing the literal that opens at
 // src[i].
 //
