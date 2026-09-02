@@ -367,6 +367,30 @@ type DynamicFunctionLibrary interface {
 	LookupDynamic(ctx *Context, name xdm.QName, arity int) (Function, bool)
 }
 
+// ScopedFunctionLibrary is a FunctionLibrary whose answer to an ORDINARY call
+// depends on where the call is written.
+//
+// Plain XPath has no such notion: a function is either in the static context
+// or it is not, and one library answers for the whole expression. XSLT 3.0
+// packages break that. 3.6.3.4 puts in a package's static context only "the
+// components of the packages it uses that are visible to it" -- public, final
+// or abstract -- so a PRIVATE function of a used package is not callable from
+// the using package even though it is perfectly callable from inside the
+// package that declares it. One name, two answers, decided by the caller.
+//
+// The context is passed for the same reason DynamicFunctionLibrary passes it:
+// the package a call was written in is a property of the expression, carried
+// on Context.StaticHost.
+//
+// A library that does not implement this is scoped the same wherever it is
+// called from, which is what XPath on its own means.
+type ScopedFunctionLibrary interface {
+	FunctionLibrary
+	// LookupFrom returns the function a call written in ctx's package resolves
+	// to, or false where that package may not see it.
+	LookupFrom(ctx *Context, name xdm.QName, arity int) (Function, bool)
+}
+
 // Function is a callable XPath function.
 type Function struct {
 	Name  xdm.QName

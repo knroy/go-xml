@@ -93,7 +93,7 @@ seen. `check.sh` fails when a count goes **down**.
 ```
 DocBook 577
 TestQT3XQuery 29800
-TestXSLT30Suite 8610
+TestXSLT30Suite 8611
 TestXSLTSuite 6149
 XSD10 39347
 XSD11 41532

@@ -15,8 +15,8 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 1 | 1 | **6** | 99.90% |
-| **xslt** | W3C XSLT 3.0 | 8,625 | 8,610 | 99.83% | **15** | 2 | 1 | **12** | 99.85% |
+| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 2 | 1 | **5** | 99.90% |
+| **xslt** | W3C XSLT 3.0 | 8,625 | 8,611 | 99.84% | **14** | 2 | 1 | **11** | 99.86% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -216,13 +216,15 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 23 failures across the two targets
+# xslt — 22 failures across the two targets
 
-Eight at the 2.0 target and fifteen at the 3.0 target. Three cases fail at
+Eight at the 2.0 target and fourteen at the 3.0 target. Three cases fail at
 both — `import-schema-137`, `validation-0201` and `docbook-001` — so the
-distinct case count is twenty. (This heading has read 29, 28 and 27 in turn as
-`xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009` missing
-from the 3.0 list, and `unparsed-text-2003` left the denominator.)
+distinct case count is nineteen. (This heading has read 29, 28, 27 and 23 in
+turn as `xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009`
+missing from the 3.0 list, `unparsed-text-2003` left the denominator, and
+`use-package-003` was fixed by scoping an ordinary function call to the package
+it is written in.)
 
 ## XSLT 2.0 — 9 failures
 
@@ -304,7 +306,7 @@ data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
 the data, rather than on Appendix F's own words. That caveat cuts against
 changing anything, not for it.
 
-## XSLT 3.0 — 15 failures
+## XSLT 3.0 — 14 failures
 
 ### Deliberate divergence — 1
 
@@ -312,7 +314,29 @@ changing anything, not for it.
 |---|---|---|
 | `evaluate-045` | **Won't fix** — implementable, deliberately not done | It asserts that a stylesheet function with no `visibility` attribute is private, and so unreachable from `xsl:evaluate`. **The suite is right and this row's old spec argument was false.** It claimed visibility is a property of a component of an `xsl:package` and "a plain `xsl:stylesheet` is not one". §3.6 says the opposite verbatim: "When the `xsl:package` element is not used explicitly, **the entire stylesheet comprises a single implicit package**." §3.6.3.1's ladder ends "Otherwise, private", with no carve-out, and `xsl:evaluate`'s static context admits user-defined functions only "provided their visibility is not hidden or private". So XTDE3160 is correct and we diverge knowingly. The reason to diverge is unchanged and is a real one: enforcing it means no stylesheet outside a package can call its own functions from its own `xsl:evaluate`, which breaks deployed stylesheets — DocBook xslTNG does this in all 613 of its test documents — and Saxon diverges the same way (`wrongError` in its own submission). This is a **won't fix, not a can't fix**, and it is excluded from the unfixable count below. |
 
-### Package composition — 5
+### Package composition — 4
+
+Was 28, then 5. `use-package-003` was the most recent to fall, and its old row
+is worth keeping in mind when reading the rest of this file: it was recorded as
+architecture debt that needed the flat `xpath.Library` restructured, and the
+narrow fix turned out to need no restructuring at all. §3.6.3.4 admits into a
+package's static context only the components of the packages it uses that are
+*visible* to it, so an ordinary function call has to be answered differently
+depending on which package wrote it — a private function of a used package is
+callable from inside that package and nowhere else. The machinery for a
+call-site-dependent answer already existed for dynamic references
+(`DynamicFunctionLibrary`, and `hostPackage` riding on every compiled
+expression), so the change was a second interface in the same shape,
+`ScopedFunctionLibrary`, consulted at the single point every static call already
+passes through. Two things had to be got right beyond that, and both were caught
+only by diffing the failing case list rather than the count: a component's
+visibility is its declaration's attribute *as adjusted by its package
+manifest*, and composition consumes the `xsl:expose` elements, so the answer has
+to be recorded while composition still has it (`expose-002`); and a declaration
+inside an `xsl:override` supplies a body for a component of the used package,
+which keeps the visibility that package gave it, so the override's own
+`visibility="private"` must not hide it from the library that calls it
+(`override-f-026`).
 
 Was 28. Two agents cleared 23 of them: all ten `xsl:override` cases and nine of
 the twelve across `package`/`accept`/`expose`/`use-package`. Both independently
@@ -327,8 +351,7 @@ them separate, and `override-t-003a` is the case.
 | `package-021err` | **Not implementable** — reason corrected | Still a half-applied 2020 erratum (E36), but **not for the reason this row used to give**. It claimed neither `@name` nor `@names` admits an arity. §3.6.2 admits one in `@names` explicitly: "The `names` attribute selects a subset of those components by name (**and in the case of functions, arity**) … Examples are `*`, `p:*`, `*:local`, `p:local`, and **`p:local#2`**", and §3.6.3.2 imports those rules for `xsl:accept`. We already parse `#N` correctly. The real defect is confined to the *used* package, which writes `<xsl:function name="me:function1#0">` where `@name` is an `eqname` — so the function has no well-formed name, nothing matches, and we raise XTSE3030 rather than the wanted XTSE3050. Passing would mean tolerating a malformed `@name`, which is a suite workaround, not a conformance fix. The suite has repaired this elsewhere: `accept-916` carries `change="Remove unintended error, missing arity on function name"`. |
 | `package-022err` | **Not implementable** | `component="function#0"` genuinely violates the `@component` enumeration `"template" \| "function" \| "attribute-set" \| "variable" \| "mode"`. Same erratum, applied to a different attribute in each file. |
 | `accept-913` | **Open question** — old reason stale, our error wrong either way | The old row argued only about `xsl:initial-template`, and that half still holds: §3.6.3.2 says a component matched by no `xsl:accept` keeps its visibility and only a *private* one becomes hidden, so the template stays public and the wanted XTDE0040 is unreachable. But that is not what we now report. We raise **XTDE3052**, which §3.6.3.2 scopes by its own parenthetical to "an abstract component accepted into a using package with `visibility="absent"`" — and `accept-913` has no `xsl:accept` at all, so nothing is absent. The defensible code is **XTSE3080** (§3.7: "It is a static error if a top-level package … contains symbolic references referring to components whose visibility is `abstract`"), because an unmatched *abstract* component stays abstract — "in a using package it can either remain abstract or be overridden" — and the public initial template references it via `xsl:use-attribute-sets`. The sibling `accept-914` wants exactly XTSE3080 for the neighbouring shape. What blocks a change is a genuine tension rather than a spec reading: `accept-902`/`-910` present nearly the same structure and want the dynamic XTDE3052, and `xslt/usepackage.go` separates them today only by whether an `xsl:accept` named the component. Separating "referenced from the top level" from "merely inherited and invoked" is a reference-graph question and is unmeasured. Recorded as open, not settled. |
-| `package-200` | **Costs more than it gains** | *Not* an impossibility. `package-version="'1.0.0'"` wants XTSE3000, but `use-package-291`–`294` write four other malformed ranges and all want XTSE0020. One sentence — "an attribute contains a value that is not one of the permitted values" — covers all five identically, and nothing in the `PackageVersionRange` grammar separates a quoted version from any other malformed one. A processor *could* special-case a range that is a valid `PackageVersion` in quotes, which none of 291–294 are. The current answer costs 1 case and saves 4, and that trade — not the spec — is the reason it stands. |
-| `use-package-003` | **Architecture debt** — implementable, not at this blast radius | A private function of a used package must resolve inside it and not outside. Functions live in one flat `xpath.Library` resolved by name at runtime, and `FuncCall` carries only a QName. A lexical rename was implemented; it fixed this case and broke `override-f-026`, where `g:transitive-closure` exists at arity 1 (public) and arity 2 (private) — a name-based rewrite cannot separate arities. A real fix needs the package threaded through the XPath static context. Saxon 9.8 passes the case. This is a scoped design change with a stated cost, not an impossibility, and it should not sit beside the genuine ones. |
+| `package-200` | **Not worth it** — re-examined, verdict unchanged, reasoning sharpened | Re-read against §3.6.1's two grammars and all four siblings. The old row said no rule separates the five; a rule *does* exist, and it is still not worth taking. `package-version="'1.0.0'"` is a well-formed `PackageVersion` wrapped in apostrophes; `use-package-291`–`294` write `2.0.0-alpha:beta`, `TotallyInvalid`, `-3.6` and `-alpha`, none of which parse under any reading. "Strip a matched pair of quotes and it parses" therefore does separate them — but that is a rule about *quoting*, and neither grammar mentions quotes. Two facts settle it. `package-version="'…'"` occurs **exactly once in the whole suite**, in `package-201.xsl`, so the rule would have precisely one instance and no second case to confirm it against — the signature of a special case, not a rule. And the genuine XTSE3000 shape is already implemented and passing: `error-3000a` writes the perfectly well-formed range `2.0.0` and expects XTSE3000 because no package matches it, which is exactly what §3.6.1 says the error means ("no package matching the package name and version … can be located"). `package-201.xsl`'s own comment agrees, calling for "a package-not-found error". Reporting XTSE0020 for a value that is not a range at all is the defensible reading; special-casing one quoted string to convert it into a not-found is not. Costs 1 case, deliberately. |
 
 ### Schema-aware validation — 5
 
@@ -368,14 +391,14 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. |
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file when the audit found it.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 
-**XSLT 3.0 ceiling: 8,610 / 8,625 = 99.83%** — what passes now. `base-uri-052`
+**XSLT 3.0 ceiling: 8,611 / 8,625 = 99.84%** — what passes now. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
 are settled above as not implementable, so no headroom is left against this
-suite. The fifteen that cannot be fixed: `accept-913`, `package-200`,
-`use-package-003`, `package-021err`, `package-022err`, `streamable-141`,
+suite. The fourteen that cannot be fixed: `accept-913`, `package-200`,
+`package-021err`, `package-022err`, `streamable-141`,
 `docbook-001`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
 and `evaluate-045` (the last given up deliberately; see *Deliberate
@@ -622,7 +645,7 @@ is *why* the 99 unfixable cases are unfixable:
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
 | **Feature deliberately not implemented** | 1 | `streamable-141` needs the §19.8 streamability analysis. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
-| **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
+| **Costs more than it gains** | 2 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (a rule separating it from `use-package-291`–`294` exists but rests on quoting, which neither grammar mentions, and would have exactly one instance in the suite). `use-package-003` was here and is now **fixed**: the narrow form of the change its row called for — carrying the declaring package's visibility on the function component and checking it at the call site — turned out to be contained, and gained the case with no regression. |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
 The XSLT rows above are exact and case-by-case. The XSD rows are not: they are
@@ -680,9 +703,9 @@ contrived example to force Saxon down a particular code path", and
 `validation-0201`'s expected file is Saxon's output byte-for-byte. Saxon's
 submission also predates `accept-913`, `package-200`, `package-021err`,
 `package-022err` and the `docbook` set, so it is silent on those. Where Saxon
-passes a case *and* the spec text supports it — `package-version-011`,
-`use-package-003` — that is real evidence; where Saxon is the source of the
-expectation, it is not.
+passes a case *and* the spec text supports it — `package-version-011`, and
+`use-package-003` before it was fixed — that is real evidence; where Saxon is
+the source of the expectation, it is not.
 
 ## Corrections from the audit
 
@@ -728,9 +751,11 @@ the previous verdicts got wrong.
   edition-neutral, not 4e.
 
 **Claims of "not implementable" that were really cost or architecture.**
-`package-200` (1 case gained, 4 lost), `use-package-003` (the row already read
-"not implementable *at this blast radius*" and named the design change needed),
-and `accept-913` before it was reopened. The file's own definition — "passing
+`package-200` (a special case with one instance, not a rule), `use-package-003`
+(the row already read "not implementable *at this blast radius*" and named the
+design change needed — and when that change was actually attempted it proved
+narrow, so the row was wrong twice over), and `accept-913` before it was
+reopened. The file's own definition — "passing
 would require violating the specification, reaching the network, shipping a
 vendor extension, contradicting a second test in the same suite, or encoding a
 snapshot of Unicode that is no longer current" — covers none of these.

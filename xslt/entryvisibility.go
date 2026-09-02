@@ -274,6 +274,83 @@ func (p packageScopedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function,
 	return p.inner.Lookup(name, arity)
 }
 
+// LookupFrom implements xpath.ScopedFunctionLibrary.
+//
+// 3.6.3.4 puts in a package's static context "the components of the packages
+// it uses that are visible to it", which for a function means public, final or
+// abstract. A PRIVATE function of a used package is not among them, so a call
+// to it written in the using package resolves to nothing and is XPST0017 --
+// use-package-003 calls p:f-private from the package that uses
+// use-package-base-001 and expects exactly that.
+//
+// The flat library cannot express this on its own, because the same
+// declaration must stay reachable from INSIDE the package that wrote it:
+// use-package-base-001's public p:f and final p:f-final both call the private
+// p:f-private, and use-package-001 and -002 require those to work. Pruning the
+// component would break them, which is why referencedWithin keeps it. The
+// answer therefore has to depend on the caller, and it does: the package a
+// call was written in rides on the context as hostPackage.
+//
+// Only a call from a package that does NOT declare the function is filtered.
+// A package's own private functions are fully visible to it -- privacy is a
+// boundary between packages, not within one -- so the declaring package's own
+// calls take the flat library's answer unchanged.
+func (p packageScopedLibrary) LookupFrom(
+	ctx *xpath.Context, name xdm.QName, arity int,
+) (xpath.Function, bool) {
+	if p.sheet == nil ||
+		!p.sheet.functionHiddenFrom(packageOf(ctx), name, arity) {
+		return p.inner.Lookup(name, arity)
+	}
+	return xpath.Function{}, false
+}
+
+// functionHiddenFrom reports whether a call written in pkg may not see the
+// stylesheet function of this name and arity.
+//
+// It says yes only when the name is declared somewhere and EVERY package that
+// declares it both is not pkg and gives it a visibility 3.6.3.4 withholds --
+// private or hidden. One visible declaration anywhere is enough to bind the
+// call, because the flat library holds a single entry per name and arity and
+// that entry is the one the call would reach; refusing it because some other
+// package also declares the name privately would take away a function the
+// caller is entitled to.
+//
+// A declaration in pkg's own set settles it immediately: privacy is a boundary
+// between packages, never within one, so a package sees everything it declares
+// whatever visibility it wrote. use-package-base-001's public p:f calls its own
+// private p:f-private, which use-package-001 requires to work.
+//
+// It is confined to a real xsl:package, for the reason evaluateMayCall is
+// confined to one: visibility is a property of a COMPONENT of a package, and
+// a plain xsl:stylesheet has no package boundary for anything to be private
+// with respect to. The private DEFAULT of 3.5.2 would otherwise make every
+// function a stylesheet declares uncallable from its own expressions.
+//
+// A name no package declares is not a stylesheet function at all -- it is a
+// builtin, which this rule says nothing about -- so it stays visible.
+func (s *Stylesheet) functionHiddenFrom(pkg int, name xdm.QName, arity int) bool {
+	if !s.isPackage || s.pkgFuncVis == nil {
+		return false
+	}
+	key := functionVisibilityKey(name, arity)
+	declared := false
+	for p, byName := range s.pkgFuncVis {
+		vis, ok := byName[key]
+		if !ok {
+			continue
+		}
+		if p == pkg {
+			return false
+		}
+		declared = true
+		if vis != "private" && vis != "hidden" {
+			return false
+		}
+	}
+	return declared
+}
+
 // LookupDynamic implements xpath.DynamicFunctionLibrary.
 //
 // A name the stylesheet does not declare at any arity is not a stylesheet

@@ -95,7 +95,18 @@ func lookupFor(ctx *Context, name xdm.QName, arity int) (Function, bool) {
 	if ctx == nil || ctx.Funcs == nil {
 		return Function{}, false
 	}
-	fn, ok := ctx.Funcs.Lookup(name, arity)
+	// A library that scopes an ordinary call by the package it is written in
+	// answers for itself; see ScopedFunctionLibrary. Asking it here rather
+	// than at each call site covers the named function reference and the
+	// partial application as well as the plain call, all of which arrive
+	// through this one function.
+	lookup := ctx.Funcs.Lookup
+	if sl, ok := ctx.Funcs.(ScopedFunctionLibrary); ok {
+		lookup = func(n xdm.QName, a int) (Function, bool) {
+			return sl.LookupFrom(ctx, n, a)
+		}
+	}
+	fn, ok := lookup(name, arity)
 	if !ok {
 		// fn:concat is the one genuinely variadic function in the library.
 		// Lookup is keyed by (name, arity), so it is registered at each of a

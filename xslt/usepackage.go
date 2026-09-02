@@ -1217,6 +1217,19 @@ func (c *compiler) acceptComponents(u *usePackageDecl) (map[string]visibility, e
 			}
 		}
 	}
+	// comp.vis is what the used package's own manifest settled on -- the
+	// declaration's visibility attribute as adjusted by its xsl:expose rules
+	// -- which is the visibility 3.6.3.4 judges a call from the using package
+	// against. It is recorded now because the manifest does not survive
+	// composition; see composedVisibility.
+	if composedVisibility == nil {
+		composedVisibility = map[*xdm.Node]visibility{}
+	}
+	for _, comp := range u.comps {
+		if comp.el != nil && !comp.reExported {
+			composedVisibility[comp.el] = comp.vis
+		}
+	}
 	u.acceptedVis = vis
 	u.assignedVis = assigned
 	u.hiddenByAccept = hidden
@@ -2075,6 +2088,22 @@ func makesDynamicReference(root *xdm.Node) bool {
 // dynamicRefCache memoises makesDynamicReference per package tree. Cleared
 // with the rest of the compile-scoped package state; see Compile.
 var dynamicRefCache map[*xdm.Node]bool
+
+// composedVisibility is the effective visibility of a used package's component
+// declarations, keyed by the declaration element.
+//
+// It is recorded during composition because that is the only moment the answer
+// is known. A component's visibility comes from its own attribute AND the
+// xsl:expose rules of its package manifest, 3.5.2, and composition consumes
+// the manifest: by the time the declarations are compiled into functions the
+// xsl:expose elements are gone from the tree, so exposedVisibility called then
+// sees no rules and reports the private default for a component the manifest
+// made public. expose-A declares p:f1 with no visibility attribute and exposes
+// it with names="p:*", and reading the attribute at compile time called it
+// private.
+//
+// Cleared with the rest of the compile-scoped package state; see Compile.
+var composedVisibility map[*xdm.Node]visibility
 
 // namesDynamicFunction reports whether text mentions one of the functions that
 // take a component name as a value.

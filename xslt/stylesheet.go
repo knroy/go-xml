@@ -177,6 +177,25 @@ type Stylesheet struct {
 	// 3.6.3.5 excluding it explicitly.
 	pkgFuncs map[int]map[string]xpath.Function
 
+	// pkgFuncVis is the visibility each package's own function declarations
+	// carry, keyed the same way as pkgFuncs. It is what decides whether a
+	// call written in ANOTHER package may see one: 3.6.3.4 admits only the
+	// public, final and abstract components of a used package.
+	//
+	// It is kept per package rather than read out of functionVisibility
+	// because that map is flat and keeps only the last declaration of a name.
+	// Two packages may declare one name at different visibilities --
+	// override-f-026 declares g:neighbours abstract in the used package and
+	// private in the xsl:override that substitutes for it -- and the flat
+	// answer is then wrong for one of them.
+	//
+	// The value is the visibility AFTER the manifest is applied, since 3.5.2
+	// gives a component's visibility two sources: the declaration's own
+	// attribute and the xsl:expose rules. expose-A declares p:f1 with no
+	// attribute and exposes it public with names="p:*", and reading the
+	// attribute alone would call it private.
+	pkgFuncVis map[int]map[string]string
+
 	// templateVisibility is xsl:template/@visibility per Clark name, which
 	// decides whether an invocation may start at the template; see
 	// entryvisibility.go.
@@ -655,6 +674,10 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	// reference; see makesDynamicReference.
 	dynamicRefCache = nil
 	defer func() { dynamicRefCache = nil }()
+	// And the visibility composition settled on for each used component; see
+	// composedVisibility.
+	composedVisibility = nil
+	defer func() { composedVisibility = nil }()
 	// Which package used which is package state on the same terms; see
 	// packageParent.
 	packageParent = map[int]int{}

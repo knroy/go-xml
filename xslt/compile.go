@@ -1667,6 +1667,51 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 			}
 		}
 		c.sheet.pkgFuncs[pkg][key] = entry
+		// The visibility this package gives the declaration, manifest
+		// included, so that a call from another package can be judged
+		// against it; see functionHiddenFrom.
+		//
+		// Composition already resolved this declaration's visibility against
+		// its own package manifest, and that answer is the authoritative one:
+		// the xsl:expose rules it accounts for are gone from the tree by now.
+		// Falling back to the attribute is right only for a declaration
+		// composition never saw, which is one of the principal package's own.
+		vis := ""
+		// A declaration written inside an xsl:override supplies the BODY of a
+		// component of the used package, and that component keeps the
+		// visibility the used package gave it. The visibility attribute here
+		// governs the overriding declaration within the overriding package,
+		// not the substituted component, so it must not be allowed to hide
+		// the component from the package whose own code calls it.
+		//
+		// override-f-026 is that shape: the library declares g:neighbours
+		// abstract and calls it from its public g:transitive-closure, and the
+		// using package overrides it with visibility="private". Recording the
+		// override's private against the name left the library's own call
+		// resolving to nothing.
+		if overridingPackage(el, compilePackage) != compilePackage {
+			vis = "public"
+		}
+		if v, ok := composedVisibility[el]; ok && vis == "" {
+			vis = string(v)
+		}
+		if vis == "" {
+			vis = strings.TrimSpace(el.AttrValue("visibility"))
+		}
+		if vis == "" {
+			if v := exposedVisibility(el); v != "" {
+				vis = string(v)
+			} else {
+				vis = "private"
+			}
+		}
+		if c.sheet.pkgFuncVis == nil {
+			c.sheet.pkgFuncVis = map[int]map[string]string{}
+		}
+		if c.sheet.pkgFuncVis[pkg] == nil {
+			c.sheet.pkgFuncVis[pkg] = map[string]string{}
+		}
+		c.sheet.pkgFuncVis[pkg][key] = vis
 	}
 	return nil
 }
