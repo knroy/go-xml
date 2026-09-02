@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -842,7 +843,7 @@ func (p *Parser) parseCastable() (Expr, error) {
 		}
 		st, err := p.parseSequenceType()
 		if err != nil {
-			return nil, err
+			return nil, p.castTargetTypeError(err)
 		}
 		if err := checkCastTarget(st); err != nil {
 			return nil, err
@@ -864,7 +865,7 @@ func (p *Parser) parseCast() (Expr, error) {
 		}
 		st, err := p.parseSequenceType()
 		if err != nil {
-			return nil, err
+			return nil, p.castTargetTypeError(err)
 		}
 		if err := checkCastTarget(st); err != nil {
 			return nil, err
@@ -1075,6 +1076,44 @@ func (e *StringConcat) Eval(ctx *Context) (xdm.Sequence, error) {
 
 func (e *StringConcat) String() string {
 	return e.Left.String() + " || " + e.Right.String()
+}
+
+// castTargetTypeError renumbers a cast target's type error for XQuery 3.0.
+//
+// The type named in "cast as" and "castable as" is parsed by the same code
+// that parses the type in "instance of", so a name that is in scope nowhere
+// arrives here as XPST0051 — the correct code for XPath at every version, and
+// for XQuery 1.0. XQuery 3.0 gave the cast case an error of its own: a
+// SingleType naming a type that is not among the in-scope schema types is
+// XQST0052.
+//
+// The suite states both halves of the rule directly, in one file, over
+// character-for-character identical queries that differ only in their spec
+// dependency. "'string' cast as xs:untyped" is XPST0051 under XQ10
+// (K-SeqExprCast-5) and XQST0052 under XQ30+ (K-SeqExprCast-5a). The same
+// pairing holds for xs:anyType (7/7a), for a name that denotes nothing at all
+// (9/9a), and for "castable as" (K-SeqExprCastable-6/6a).
+//
+// Both conditions are load-bearing. The renumbering is XQuery-only, so an
+// XPath 3.1 expression still reports XPST0051 — which is why this hangs off
+// p.xquery and not off the version alone. And it is 3.0-and-later, so an
+// XQuery 1.0 module keeps XPST0051.
+//
+// Only the *type* error is renumbered. A target that names a well-known type
+// which is merely not permitted keeps the code it already had — XPST0080 for
+// an abstract type, XPST0003 for a grammar violation such as a trailing "*" —
+// because neither of those is "the type is not in scope".
+func (p *Parser) castTargetTypeError(err error) error {
+	if err == nil || !p.xquery || !p.version.atLeast30() {
+		return err
+	}
+	var e *xdm.Error
+	if !errors.As(err, &e) || e.Code != "XPST0051" {
+		return err
+	}
+	// Rebuilt rather than mutated: the error value may be shared, and only
+	// the code differs between the two languages.
+	return xdm.Errorf("XQST0052", "%s", e.Message)
 }
 
 // checkCastTarget rejects a cast whose target cannot be a target.
