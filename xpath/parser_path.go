@@ -448,7 +448,30 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 		kt.Kind = xdm.KindPI
 		// The target may be given as a name or a string literal.
 		if t := p.cur(); t.Kind == TokName || t.Kind == TokString {
-			kt.Name = &xdm.QName{Local: t.Val}
+			target := t.Val
+			// A StringLiteral target is converted to an NCName before it is
+			// compared against anything: leading and trailing whitespace is
+			// stripped, and what remains must be an NCName or the test is a
+			// type error. The stripping is not cosmetic -- K2-NameTest-22
+			// writes processing-instruction("b ") and requires it to MATCH
+			// the <?b asd?> in the input, so the trailing space cannot be
+			// carried into the comparison. K2-NameTest-21 ("123ncname",
+			// which does not start with a name character) and -23
+			// ("prefix:b", where a colon is not allowed in a NON-colonised
+			// name) are the two ways what remains fails to be one.
+			//
+			// Only a string literal is treated this way. A target written as
+			// a name was already lexed as one, so it cannot be anything but
+			// an NCName by the time it arrives here.
+			if t.Kind == TokString {
+				target = strings.TrimSpace(target)
+				if !isNCName(target) {
+					return nil, p.errorf(
+						"XPTY0004: %q is not an NCName, so it cannot be a "+
+							"processing-instruction target", t.Val)
+				}
+			}
+			kt.Name = &xdm.QName{Local: target}
 			kt.HasName = true
 			p.pos++
 		}
