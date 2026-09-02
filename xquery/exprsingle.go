@@ -41,6 +41,8 @@ func (p *parser) parseXQueryOnly() (node, bool, error) {
 		return n, true, err
 	}
 	switch p.peekKeyword() {
+	case "if":
+		return p.parseIf()
 	case "try":
 		return p.parseTryCatch()
 	case "switch":

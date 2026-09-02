@@ -43,6 +43,23 @@ func (p *parser) parseNestedExpr() ([]node, error) {
 	// handles that case has to see the expression from here rather than from
 	// wherever the unwrapping stopped.
 	start := p.pos
+	// A conditional whose branches this parser must read is one of the shapes
+	// unwrapped here rather than lifted into a variable. Lifting is what the
+	// operand substitution below does, and it evaluates what it lifts before
+	// the rewritten expression runs — which for a conditional evaluates both
+	// branches, against §3.8's requirement that exactly one is. See ifexpr.go.
+	if p.peekKeyword() == "if" {
+		if n, ok, err := p.parseIf(); ok || err != nil {
+			if err != nil {
+				return nil, err
+			}
+			p.skipSpaceAndComments()
+			if p.eof() {
+				return []node{n}, nil
+			}
+			return p.pathOverOrSubstitute([]node{n}, start)
+		}
+	}
 	if p.startsConstructor() || p.looksLikeFLWOR() || p.looksLikeQuantified() {
 		n, err := p.parseItem()
 		if err != nil {
