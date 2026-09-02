@@ -75,6 +75,27 @@ type compiler struct {
 	// same reason as patternFuncs. See varfuncs.go.
 	varFuncs []varFuncRef
 
+	// funcRefs maps an xsl:function's Clark name to the globals its body
+	// names, so that a global whose initialiser calls that function can be
+	// ordered after them. A function body is the second way a dependency
+	// hides from a lexical scan of the declaration itself: the first was a
+	// sequence constructor, and bodyRefs handles that.
+	//
+	// DocBook xslTNG needs both. Its $v:nominal-page-width selects
+	// f:parse-length($nominal-page-width), and f:parse-length matches against
+	// $vp:relative-regex declared in another module -- a name that appears
+	// nowhere in the variable's own text.
+	//
+	// Arity is not part of the key. Two functions of one name differing only
+	// in arity are rare, and conflating them can only over-collect, which
+	// costs an early binding and nothing else.
+	funcRefs map[string][]string
+
+	// funcCalls maps an xsl:function's Clark name to the functions its body
+	// calls, so foldFunctionRefsIntoGlobals can follow a chain: a global that
+	// calls f, whose body calls g, depends on what g names.
+	funcCalls map[string][]string
+
 	// inputTypeAnnotations is the value the modules so far have agreed on,
 	// for XTSE0265. Empty means no module has stated one.
 	inputTypeAnnotations string
@@ -1003,6 +1024,8 @@ func (c *compiler) compileVariable(el *xdm.Node) (*Variable, error) {
 		return v, nil
 	}
 
+	v.bodyRefs = bodyVariableRefs(el)
+
 	body, err := c.compileSequence(el, el)
 	if err != nil {
 		return nil, err
@@ -1520,6 +1543,19 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 		}
 		params = append(params, p)
 	}
+	if refs := bodyVariableRefs(el); len(refs) > 0 {
+		if c.funcRefs == nil {
+			c.funcRefs = map[string][]string{}
+		}
+		c.funcRefs[qn.Clark()] = append(c.funcRefs[qn.Clark()], refs...)
+	}
+	if calls := bodyFunctionCalls(el); len(calls) > 0 {
+		if c.funcCalls == nil {
+			c.funcCalls = map[string][]string{}
+		}
+		c.funcCalls[qn.Clark()] = append(c.funcCalls[qn.Clark()], calls...)
+	}
+
 	body, err := c.compileSequenceFrom(el, el, i)
 	if err != nil {
 		return err

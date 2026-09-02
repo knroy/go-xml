@@ -1331,10 +1331,33 @@ func patternFuncCalls(src string) []patternFuncCall {
 			i = j - 1
 			continue
 		}
+		// "$x => f()" passes $x as the first argument, so the arity is one
+		// more than the parentheses hold. Counting only what is written
+		// inside them reported XPST0017 for a valid pattern: XSpec matches on
+		// "x:expect[node() => empty()]", and fn:empty has no nullary form, so
+		// a correct arrow call looked like a call to a function that does not
+		// exist. The arrow operator is XPath 3.0 and this scan predates it.
+		if arrowBefore(src, i) {
+			args++
+		}
 		out = append(out, patternFuncCall{name: name, arity: args})
 		i = end
 	}
 	return out
+}
+
+// arrowBefore reports whether the name starting at i is the target of an
+// arrow operator, ignoring whitespace between the two.
+//
+// Only "=>" counts. "<=" and ">=" end in the same character but are
+// comparisons, and neither can be followed by a function call that takes the
+// comparison's left side as an argument.
+func arrowBefore(src string, i int) bool {
+	k := i - 1
+	for k >= 0 && (src[k] == ' ' || src[k] == '\t' || src[k] == '\r' || src[k] == '\n') {
+		k--
+	}
+	return k >= 1 && src[k] == '>' && src[k-1] == '='
 }
 
 // xpathKeyword holds the XPath 2.0 keywords that may be followed by "(",

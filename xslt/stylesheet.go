@@ -315,6 +315,27 @@ type Variable struct {
 	// ordered after the renamed original, which is emitted *after* the
 	// overriding declaration in the used package's tree.
 	selectNS map[string]string
+	// bodyRefs are the globals named by a declaration whose value comes from
+	// a sequence constructor rather than a select attribute, already expanded
+	// to Clark names.
+	//
+	// globalRefs scans Select, and a variable with content has none: it
+	// returned nothing, the ordering pass learned no dependency, and the
+	// binding order fell back to the order of declaration. That is right often
+	// enough to hide -- a global usually follows what it needs -- and wrong
+	// exactly when the two sit in different modules, because xsl:import binds
+	// the imported module's globals before the importing module's. DocBook
+	// xslTNG does precisely that: an xsl:param in an imported param.xsl
+	// chooses on a variable declared in an included variable.xsl, and every
+	// one of its 593 test documents failed with XPST0008 for a name that is
+	// declared.
+	//
+	// They are collected at compile time from the element's own subtree,
+	// where the namespace bindings each expression was written under are
+	// still to hand. The runtime sees only []Instruction, whose one method is
+	// Execute, so recovering them there would mean a type switch over every
+	// instruction kind.
+	bodyRefs []string
 }
 
 // keyDef is a compiled xsl:key.
@@ -696,6 +717,9 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 	if err := c.checkVariableFuncs(); err != nil {
 		return nil, err
 	}
+	// Every module has compiled, so an xsl:function declared after -- or
+	// imported after -- the global that calls it is now known.
+	c.foldFunctionRefsIntoGlobals()
 	// XTSE1290 likewise: two imported xsl:decimal-format declarations may
 	// conflict with each other and still be harmless, because the importing
 	// module overrides both.

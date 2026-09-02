@@ -125,3 +125,66 @@ var lateBoundFuncNames = func() map[string]bool {
 	}
 	return m
 }()
+
+// foldFunctionRefsIntoGlobals adds to each global the variables named by the
+// bodies of the functions its initialiser calls.
+//
+// A dependency reaches a global by three routes, and a lexical scan of the
+// declaration sees only the first: its select expression, its sequence
+// constructor, and the body of a function it calls. DocBook xslTNG needs all
+// three, and the third is the one no amount of scanning the declaration
+// itself can find -- $v:nominal-page-width selects f:parse-length(...), whose
+// body matches against a $vp:relative-regex declared in another module.
+//
+// The walk is transitive and bounded by the set of functions, so a recursive
+// or mutually recursive pair terminates: a name already visited is not
+// followed again.
+//
+// This runs after every module has compiled, because the xsl:function may be
+// declared below the global that calls it or in a module imported afterwards
+// -- the same reason checkVariableFuncs runs here.
+func (c *compiler) foldFunctionRefsIntoGlobals() {
+	if len(c.funcRefs) == 0 {
+		return
+	}
+	for _, g := range c.sheet.globals {
+		if g.Select == nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, ref := range g.bodyRefs {
+			seen[ref] = true
+		}
+		// A function that names this very global is not a dependency of it.
+		// param-0301 is the case: $x selects my:func(1), and my:func declares
+		// a local $b whose select is $x. Section 9.4 makes that a circularity
+		// only if it is evaluated, and here it never is -- the function
+		// returns $a + 2 and never reads $b. Recording the self-reference
+		// turned a stylesheet the specification requires to work into
+		// XPST0008.
+		seen[g.Name.Clark()] = true
+		// The queue makes the walk transitive: a function whose body calls
+		// another contributes that one's references too. visited bounds it,
+		// so recursion -- direct or mutual -- terminates.
+		visited := map[string]bool{}
+		var queue []string
+		for _, call := range g.Select.StaticCalls() {
+			queue = append(queue, call.Name.Clark())
+		}
+		for len(queue) > 0 {
+			fn := queue[0]
+			queue = queue[1:]
+			if visited[fn] {
+				continue
+			}
+			visited[fn] = true
+			for _, ref := range c.funcRefs[fn] {
+				if !seen[ref] {
+					seen[ref] = true
+					g.bodyRefs = append(g.bodyRefs, ref)
+				}
+			}
+			queue = append(queue, c.funcCalls[fn]...)
+		}
+	}
+}

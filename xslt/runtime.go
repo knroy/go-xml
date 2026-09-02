@@ -1002,9 +1002,21 @@ const packageVarNS = "http://go-xml.invalid/xslt/package/"
 // prefixed reference simply does not match and is left to declaration order.
 func globalRefs(g *Variable) []string {
 	if g.Select == nil {
-		return nil
+		// The value comes from a sequence constructor. Its references were
+		// collected at compile time, where the namespace bindings were still
+		// available -- see bodyVariableRefs.
+		return g.bodyRefs
 	}
-	src := g.Select.Source()
+	// bodyRefs is non-empty here only for a global whose select expression
+	// calls an xsl:function: foldFunctionRefsIntoGlobals put that function's
+	// own references there, and they are dependencies of this global just as
+	// much as the names it writes itself.
+	return append(variableRefsIn(g.Select.Source(), g.selectNS), g.bodyRefs...)
+}
+
+// variableRefsIn returns the variable names src refers to, expanded through
+// ns, which maps a prefix to the URI bound to it where src was written.
+func variableRefsIn(src string, ns map[string]string) []string {
 	var out []string
 	var quote byte
 	for i := 0; i < len(src); i++ {
@@ -1038,7 +1050,7 @@ func globalRefs(g *Variable) []string {
 				// global and fell back to declaration order, which is wrong
 				// for $xsl:original: the renamed original is emitted after
 				// the overriding declaration that refers to it.
-				if uri, has := g.selectNS[prefix]; has {
+				if uri, has := ns[prefix]; has {
 					out = append(out, xdm.QName{URI: uri, Local: local}.Clark())
 					i = j - 1
 					continue
@@ -1047,6 +1059,79 @@ func globalRefs(g *Variable) []string {
 			out = append(out, xdm.QName{Local: ref}.Clark())
 		}
 		i = j - 1
+	}
+	return out
+}
+
+// bodyVariableRefs returns the globals a sequence constructor names, expanded
+// to Clark names against the bindings in force where each was written.
+//
+// It walks the declaration's own subtree at compile time rather than the
+// compiled []Instruction, because an Instruction's only method is Execute:
+// recovering the expressions from it would mean a type switch over every
+// instruction kind, and every new instruction would silently omit itself.
+// The element tree still carries both the expression text and the namespace
+// bindings it was written under, which is what expanding a prefix needs.
+//
+// Every attribute is scanned, not a list of the ones known to hold
+// expressions. The scan exists to *order* bindings, and naming one variable
+// too many only evaluates something earlier than it strictly had to be --
+// harmless -- while naming one too few restores the bug this exists to fix.
+// An attribute value template puts an expression inside braces in an
+// attribute that holds no expression otherwise, so a list would have to
+// enumerate those too.
+func bodyVariableRefs(el *xdm.Node) []string {
+	// A name the subtree binds for itself is not a dependency on a global of
+	// that name, and treating it as one invents a circularity. param-0301 is
+	// exactly that case: a global $x calls a function whose body declares a
+	// local $x -- a circularity the specification requires to go unreported,
+	// because nothing ever evaluates it.
+	//
+	// Collecting the bound names in a first pass over the whole subtree,
+	// rather than tracking scope as the walk descends, is deliberately
+	// blunt. Over-suppressing costs an ordering, which the runtime's
+	// bind-on-demand retry then recovers; under-suppressing invents a cycle
+	// that fails the transform outright.
+	bound := map[string]bool{}
+	var names func(n *xdm.Node)
+	names = func(n *xdm.Node) {
+		if n.Kind == xdm.KindElement && isXSL(n, "variable") ||
+			n.Kind == xdm.KindElement && isXSL(n, "param") {
+			if a := n.Attr("", "name"); a != nil {
+				if qn, err := resolveQNameAttr(n, a.Value); err == nil {
+					bound[qn.Clark()] = true
+				}
+			}
+		}
+		for _, c := range n.Children {
+			names(c)
+		}
+	}
+	for _, c := range el.Children {
+		names(c)
+	}
+
+	seen := map[string]bool{}
+	var out []string
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		if n.Kind == xdm.KindElement {
+			ns := n.InScopeNamespaces()
+			for _, a := range n.Attrs {
+				for _, ref := range variableRefsIn(a.Value, ns) {
+					if !seen[ref] && !bound[ref] {
+						seen[ref] = true
+						out = append(out, ref)
+					}
+				}
+			}
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	for _, c := range el.Children {
+		walk(c)
 	}
 	return out
 }
@@ -1075,4 +1160,90 @@ func globalRuntimeFor(rt *runtime, g *Variable) *runtime {
 	// the variable: a variable whose pkg is the top-level one reaches this
 	// function only through the arm above.
 	return rt.withFocus(nil, 0, 0)
+}
+
+// bodyFunctionCalls returns the Clark names of the functions a declaration's
+// subtree calls, so a chain of calls can be followed when ordering globals.
+//
+// Like bodyVariableRefs the scan is lexical and deliberately generous: a name
+// that is not really a function call costs a lookup in a map that does not
+// hold it. What it must not do is miss one, because a missed call is a
+// dependency that goes back to being ordered by luck.
+func bodyFunctionCalls(el *xdm.Node) []string {
+	seen := map[string]bool{}
+	var out []string
+	var walk func(n *xdm.Node)
+	walk = func(n *xdm.Node) {
+		if n.Kind == xdm.KindElement {
+			ns := n.InScopeNamespaces()
+			for _, a := range n.Attrs {
+				for _, c := range functionCallsIn(a.Value, ns) {
+					if !seen[c] {
+						seen[c] = true
+						out = append(out, c)
+					}
+				}
+			}
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(el)
+	return out
+}
+
+// functionCallsIn returns the names written as "prefix:local(" in src,
+// expanded through ns.
+//
+// Only a prefixed name is collected. An unprefixed call is a built-in, whose
+// body is not a stylesheet's to depend on, and collecting it would mean
+// matching every fn: name in every attribute for nothing.
+func functionCallsIn(src string, ns map[string]string) []string {
+	var out []string
+	var quote byte
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if !isNameStartByte(c) {
+			continue
+		}
+		j := i
+		for j < len(src) && isNameByte(src[j]) {
+			j++
+		}
+		name := src[i:j]
+		// Skip whitespace between the name and the parenthesis: "f:x (1)" is
+		// a call, and XPath permits the space.
+		k := j
+		for k < len(src) && (src[k] == ' ' || src[k] == '\t' ||
+			src[k] == '\n' || src[k] == '\r') {
+			k++
+		}
+		if k < len(src) && src[k] == '(' {
+			if prefix, local, ok := strings.Cut(name, ":"); ok {
+				if uri, has := ns[prefix]; has {
+					out = append(out, xdm.QName{URI: uri, Local: local}.Clark())
+				}
+			}
+		}
+		i = j - 1
+	}
+	return out
+}
+
+// isNameStartByte is the ASCII subset of the characters an NCName may begin
+// with. isNameByte, which pattern30.go already defines for the same kind of
+// lexical scan, covers the rest.
+func isNameStartByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
