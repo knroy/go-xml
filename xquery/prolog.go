@@ -85,11 +85,19 @@ func (p *parser) parseProlog() error {
 		p.skipSpaceAndComments()
 
 		if kw == "import" {
+			what := p.peekKeyword()
+			// The faults an import's own syntax settles are reported before
+			// the resolver is missed. They are decided by the declaration as
+			// written, so a processor that cannot fetch the target still owes
+			// the right error: XQST0059 says "no such module", which is a
+			// different complaint from a prefix that may not be bound at all.
+			if err := p.checkImportSyntax(what); err != nil {
+				return err
+			}
 			// A module or schema import needs a resolver for the imported
 			// module's own text, which this package does not yet have. It is
 			// refused by name so that the failure says what is missing
 			// rather than pointing at a token.
-			what := p.peekKeyword()
 			p.pos = save
 			return p.errorf("XQST0059: %s import is not implemented yet", what)
 		}
@@ -954,4 +962,58 @@ func resolveBase(base, decl string) string {
 		return decl
 	}
 	return b.ResolveReference(r).String()
+}
+
+// checkImportSyntax reports the faults of an import that its own text settles,
+// leaving the cursor wherever it stopped — the caller resets it.
+//
+// Only the "namespace Prefix = URI" form is examined. "import schema" may also
+// be written with "default element namespace" or with no prefix at all, and
+// neither has a prefix or a target namespace to complain about; a module
+// import's URI is not a target namespace in the same sense, so the empty-URI
+// rule below is a schema rule only.
+func (p *parser) checkImportSyntax(what string) error {
+	p.pos += len(what)
+	p.skipSpaceAndComments()
+	if !p.consume("namespace") {
+		return nil
+	}
+	p.skipSpaceAndComments()
+	prefix := p.scanNCName()
+	if prefix == "" {
+		return nil
+	}
+	p.skipSpaceAndComments()
+	// §4.11 spells the binding with "=". ":=" is the variable declaration's
+	// operator and the grammar does not admit it here, which is XPST0003
+	// rather than anything about the import.
+	if p.lookingAt(":=") {
+		return p.errorf("XPST0003: expected %q, not %q in an import", "=", ":=")
+	}
+	if !p.consume("=") {
+		return nil
+	}
+	// §4.11: neither a schema nor a module import may bind "xml" or "xmlns".
+	// The prefixes are reserved by the Namespaces recommendation, so no
+	// target could make the binding legal.
+	if prefix == "xml" || prefix == "xmlns" {
+		return p.errorf(
+			"XQST0070: the prefix %q may not be bound by an import", prefix)
+	}
+	if what != "schema" {
+		return nil
+	}
+	p.skipSpaceAndComments()
+	uri, err := p.parseStringLiteral()
+	if err != nil {
+		return nil
+	}
+	// §4.11: a schema import binding a prefix must name a target namespace,
+	// because the prefix is bound to it. An empty one leaves the prefix
+	// bound to no namespace, which XQST0057 refuses outright.
+	if uri == "" {
+		return p.errorf("XQST0057: a schema import that binds the prefix %q "+
+			"must name a target namespace", prefix)
+	}
+	return nil
 }

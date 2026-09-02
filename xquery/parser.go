@@ -449,6 +449,9 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
+	if err := rejectAnnotatedInlineFunction(src); err != nil {
+		return nil, err
+	}
 	expanded, err := p.expandStringLiterals(src)
 	if err != nil {
 		return nil, err
@@ -606,4 +609,47 @@ func (p *parser) parseEQNameParts() (prefix, local, uri string, braced bool, err
 	}
 	prefix, local, err = p.parseQName()
 	return prefix, local, "", false, err
+}
+
+// rejectAnnotatedInlineFunction reports XQST0125 for "%public function(...)"
+// and its %private counterpart.
+//
+// §4.18: "it is a static error if an inline function expression is annotated
+// as %public or %private" — the two say where a *declared* function is
+// visible, and an inline one is an expression with no declaration to be
+// visible from. Every other annotation on an inline function is admitted by
+// the grammar and ignored, as it is on a declaration.
+//
+// The test is lexical because an annotated inline function never reaches a
+// parse: xpath's grammar has no annotation, so its lexer refuses the "%" and
+// the error has to be recognised before the source is handed over. Only the
+// head of the expression is read, which is where an annotation may stand.
+func rejectAnnotatedInlineFunction(src string) error {
+	rest := strings.TrimLeft(src, " \t\r\n")
+	for strings.HasPrefix(rest, "%") {
+		name := rest[1:]
+		i := 0
+		for i < len(name) && (isNameByte(name[i]) || name[i] == ':') {
+			i++
+		}
+		local := name[:i]
+		if j := strings.LastIndex(local, ":"); j >= 0 {
+			local = local[j+1:]
+		}
+		rest = strings.TrimLeft(name[i:], " \t\r\n")
+		// The error is only about an annotation on an *inline function*, so
+		// it needs the "function" that follows the annotation list. A
+		// prefixed %eg:public is a vendor annotation that merely ends in the
+		// same word, and resolveDeclaredName is what settles that for a
+		// declaration; here an unprefixed name is the whole of what §4.18
+		// names, since an unprefixed annotation is always in the fn
+		// namespace.
+		if strings.HasPrefix(rest, "function") &&
+			!strings.Contains(name[:i], ":") &&
+			(local == "public" || local == "private") {
+			return fmt.Errorf(
+				"XQST0125: an inline function may not be annotated %%%s", local)
+		}
+	}
+	return nil
 }
