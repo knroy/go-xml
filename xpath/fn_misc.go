@@ -398,6 +398,23 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 				// was never validated, not a substitute: an attribute
 				// annotated ID counts however it is spelled, and one merely
 				// called "id" in a validated document does not.
+				// An xml:id whose value is not an NCName is not an ID.
+				//
+				// xml:id §4 normalises the value and §5 makes a value that is
+				// not an NCName an xml:id error, whose consequence is that the
+				// attribute's is-id property is false -- so fn:id must not
+				// find it. XQuery permits reporting XQDY0091 instead, which is
+				// why fn-id-25 accepts either; answering with the element is
+				// the one thing neither allows.
+				//
+				// The check applies only to the name-based fallback for
+				// xml:id. An attribute the data model has already marked IsID,
+				// or one a schema annotated as xs:ID, was validated by
+				// whatever produced it and is taken at its word.
+				if a.Name.URI == xdm.NSXML && a.Name.Local == "id" &&
+					!isNCName(strings.TrimSpace(a.Value)) {
+					continue
+				}
 				isIDAttr := a.IsID || isIDAnnotation(a.TypeAnnotation) ||
 					(a.Name.URI == xdm.NSXML && a.Name.Local == "id") ||
 					(a.Name.URI == "" && a.Name.Local == "id")
