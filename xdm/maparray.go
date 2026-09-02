@@ -32,6 +32,15 @@ type MapItem struct {
 type mapEntry struct {
 	key   *Atomic
 	value Sequence
+	// ckey is the canonical form of key, the same string index is keyed by.
+	//
+	// It is stored rather than recomputed because MapKeyOf is not cheap for a
+	// numeric key -- it goes through big.Rat.RatString and string
+	// concatenation -- and every whole-map rebuild used to call it once per
+	// entry. RemoveAll over a map of n entries therefore cost n canonical-key
+	// constructions on top of the copy, which op:same-key-024 pays 11,250
+	// times over.
+	ckey string
 }
 
 func (m *MapItem) isItem() {}
@@ -152,13 +161,26 @@ func (m *MapItem) Put(key *Atomic, value Sequence) (*MapItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := m.clone()
-	if i, ok := out.index[k]; ok {
-		out.entries[i] = mapEntry{key: key, value: value}
-		return out, nil
+	if i, ok := m.index[k]; ok {
+		// Replacing the value under an existing key leaves the index exactly
+		// as it was: the same canonical keys at the same positions. So the
+		// index map is shared with the receiver rather than rehashed, and
+		// only the entries slice is copied.
+		//
+		// That is safe because the index is never written through after a
+		// map is handed out -- the only writers are this function's append
+		// path below, RemoveAll and clone, each of which builds a fresh map,
+		// and MapBuilder, which owns its map until Build. Sharing it here
+		// removed the whole-map rehash that was 93% of the cost of map:put,
+		// which op:same-key-023 and -024 call once per key.
+		entries := make([]mapEntry, len(m.entries))
+		copy(entries, m.entries)
+		entries[i] = mapEntry{key: key, value: value, ckey: k}
+		return &MapItem{entries: entries, index: m.index}, nil
 	}
+	out := m.clone()
 	out.index[k] = len(out.entries)
-	out.entries = append(out.entries, mapEntry{key: key, value: value})
+	out.entries = append(out.entries, mapEntry{key: key, value: value, ckey: k})
 	return out, nil
 }
 
@@ -188,11 +210,11 @@ func (b *MapBuilder) Set(key *Atomic, value Sequence) error {
 		return err
 	}
 	if i, ok := b.m.index[k]; ok {
-		b.m.entries[i] = mapEntry{key: key, value: value}
+		b.m.entries[i] = mapEntry{key: key, value: value, ckey: k}
 		return nil
 	}
 	b.m.index[k] = len(b.m.entries)
-	b.m.entries = append(b.m.entries, mapEntry{key: key, value: value})
+	b.m.entries = append(b.m.entries, mapEntry{key: key, value: value, ckey: k})
 	return nil
 }
 
@@ -250,14 +272,14 @@ func (m *MapItem) RemoveAll(keys []*Atomic) (*MapItem, error) {
 		index:   make(map[string]int, len(m.index)),
 	}
 	for _, e := range m.entries {
-		ek, err := MapKeyOf(e.key)
-		if err != nil {
-			return nil, err
-		}
-		if drop[ek] {
+		// e.ckey was computed when the entry went in. Recomputing it here
+		// cost a MapKeyOf per entry per removal, which was the single
+		// largest cost in op:same-key-024 -- and MapKeyOf for a numeric key
+		// builds a big.Rat and concatenates strings, so it is far from free.
+		if drop[e.ckey] {
 			continue
 		}
-		out.index[ek] = len(out.entries)
+		out.index[e.ckey] = len(out.entries)
 		out.entries = append(out.entries, e)
 	}
 	return out, nil
