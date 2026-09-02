@@ -815,8 +815,20 @@ func (b *varBinder) visit(d *varDecl) error {
 				if deferred {
 					continue
 				}
+				// A variable whose own initialiser names it is not a cycle
+				// in the dependency graph: it is a reference to a name that
+				// is not in scope. §4.14 puts a declared variable in scope
+				// throughout the module *except* its own VarValue, so the
+				// "$var1" inside "declare variable $var1 := $var1" resolves
+				// against nothing and is an unbound reference, XPST0008.
+				//
+				// Unlike the cycles below, this is not the error XQuery 3.0
+				// renumbered — the suite asks for XPST0008 under XQ10
+				// (K-InternalVariablesWith-15a) and under XQ30+ (-15b), the
+				// same query in both, because scope does not depend on the
+				// version.
 				return fmt.Errorf(
-					"XQST0054: the variable %s depends on itself",
+					"XPST0008: undeclared variable $%s",
 					d.name.Lexical())
 			}
 			if state[dep.name.Clark()] == inProgressState {
