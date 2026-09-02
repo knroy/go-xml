@@ -278,15 +278,18 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 	// "/ordered{bid}" is a path whose one step is an ordered expression, and
 	// PathExpr-21 says so outright. But a name after a "/" is usually a name
 	// test, and every keyword here is also a legal element name, so only the
-	// spellings that cannot be a name test are taken: a keyword followed by
-	// "{" is a constructor, since a name test may not be followed by a brace.
-	// The others -- "for", "function", "try" and their kin -- are left alone
-	// after a "/", where the step reading is the right one.
+	// spellings that cannot be a name test at all are taken. A constructor
+	// keyword followed by "{", or by a name and then a "{", is one of them:
+	// no name test may be followed by a brace, and none may be followed by a
+	// second name. "<a2/>/element e { ... }" of K2-InScopePrefixesFunc-29 is
+	// the second shape. The remaining keywords -- "for", "function", "try"
+	// and their kin -- are left alone after a "/", where the step reading is
+	// the right one.
 	if prev == '/' {
 		switch src[i:j] {
 		case "element", "attribute", "document", "text", "comment",
 			"processing-instruction", "namespace", "ordered", "unordered":
-			if k := skipSpaceFrom(src, j); k >= len(src) || src[k] != '{' {
+			if !constructorFollows(src, j) {
 				return false
 			}
 		default:
@@ -389,4 +392,26 @@ func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
 		return err
 	}
 	return appendSequence(out, seq, ctx.sc)
+}
+
+// constructorFollows reports whether what stands after a constructor keyword
+// at src[j] can only be a computed constructor: a "{", or a name and then a
+// "{". Neither shape is a name test, which is what makes the keyword safe to
+// read as a keyword in a place a name test could otherwise stand.
+func constructorFollows(src string, j int) bool {
+	k := skipSpaceFrom(src, j)
+	if k >= len(src) {
+		return false
+	}
+	if src[k] == '{' {
+		return true
+	}
+	if !isNameStartByte(src[k]) {
+		return false
+	}
+	for k < len(src) && (isNameByte(src[k]) || src[k] == ':') {
+		k++
+	}
+	k = skipSpaceFrom(src, k)
+	return k < len(src) && src[k] == '{'
 }
