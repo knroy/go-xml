@@ -349,7 +349,33 @@ func LoadTestSet(root, file string) (*TestSet, error) {
 // The sources carry the same role/file/uri attributes as a context source,
 // but role is unused: membership in the collection is the point, not the name
 // it is bound to.
+// A collection may instead name its members by a query rather than by files.
+// The catalog schema allows <collection> to hold either <source> children or
+// <query> children, and the query form is how the suite builds collections
+// whose members are not documents at all: "integer-collection" is
+// <query>1 to 10</query> and "atomic-collection" is <query>(1, "hello", 1e0)
+// </query>. The engine's CollectionResolver already returns an xdm.Sequence
+// rather than a node list precisely so that such a collection can be
+// expressed, so honouring <query> here costs nothing on the engine side.
 type Collection struct {
-	URI     string   `xml:"uri,attr"`
-	Sources []Source `xml:"source"`
+	URI     string            `xml:"uri,attr"`
+	Sources []Source          `xml:"source"`
+	Queries []CollectionQuery `xml:"query"`
+}
+
+// CollectionQuery is one <query> child of a <collection>: an XQuery expression
+// whose result is contributed to the collection.
+//
+// The optional uri attribute is the document URI of the item the query
+// produces, which UseCaseR31's "users-json" collection uses so that a
+// collection member can be named. It is recorded for completeness; a member
+// that is not a node has no document URI to stamp.
+type CollectionQuery struct {
+	URI  string `xml:"uri,attr"`
+	Expr string `xml:",chardata"`
+
+	// dir is the directory the environment was written in, filled in by
+	// resolveEnv. A query may name a file relative to its own test-set, and
+	// after the merge there is nothing else left to say which one that was.
+	dir string
 }

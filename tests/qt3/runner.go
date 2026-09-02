@@ -430,6 +430,17 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 				src.File = srcPath(dir, src.File)
 				rc.Sources = append(rc.Sources, src)
 			}
+			// A <query> collection member is an expression, not a path, so
+			// there is nothing to rewrite in it here. What it does need is
+			// the directory it was written in: "users-json" calls
+			// unparsed-text-lines("UseCaseR31/users.json"), a reference
+			// relative to the test-set that wrote it, and the merged
+			// environment no longer records which document that was. The
+			// directory is therefore carried on the query itself.
+			for _, q := range c.Queries {
+				q.dir = dir
+				rc.Queries = append(rc.Queries, q)
+			}
 			out.Collections = append(out.Collections, rc)
 		}
 		out.Params = append(out.Params, e.Params...)
@@ -612,11 +623,25 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		ctx.Docs = docs
 	}
 	if len(env.Collections) > 0 {
-		cr := &envCollections{r: r, byURI: map[string][]string{}}
+		cr := &envCollections{
+			r:         r,
+			byURI:     map[string][]string{},
+			queryURI:  map[string][]CollectionQuery{},
+			cache:     map[string]xdm.Sequence{},
+			declared:  map[string]bool{},
+			queryOpts: ns,
+		}
 		for _, c := range env.Collections {
+			// The URI is declared even when the collection turns out to be
+			// empty, so that asking for it is "an empty collection" and not
+			// "no such collection". <collection uri=""><query>...</query>
+			// </collection> declares the default collection, and a source
+			// list and a query list are both legitimate ways to fill one.
+			cr.declared[c.URI] = true
 			for _, src := range c.Sources {
 				cr.byURI[c.URI] = append(cr.byURI[c.URI], src.File)
 			}
+			cr.queryURI[c.URI] = append(cr.queryURI[c.URI], c.Queries...)
 		}
 		ctx.Collections = cr
 	}
@@ -1269,8 +1294,120 @@ func (caseBlind) IndexOf(s, sub string) int {
 type envCollections struct {
 	r     *Runner
 	byURI map[string][]string
+
+	// queryURI holds the <query> members of each collection. They are
+	// evaluated on demand rather than up front: most cases never call
+	// fn:collection at all, and an environment is resolved for every case
+	// that references it.
+	queryURI map[string][]CollectionQuery
+
+	// cache holds the result of evaluating a URI's queries.
+	//
+	// fn:collection is required to be stable: §14.2 says "two calls on
+	// fn:collection with the same argument ... must return the same result",
+	// and cbcl-collection-004 checks exactly that by comparing collection()
+	// with itself. Evaluating "1 to 10" twice would give equal values but
+	// re-evaluating a node-building query would give different node identity,
+	// so the result is computed once per environment and reused.
+	cache map[string]xdm.Sequence
+
+	// declared records every URI the environment named, whether or not it
+	// has any members. A collection that exists and is empty is not the same
+	// as one that was never declared: the first returns (), the second is
+	// FODC0002.
+	declared map[string]bool
+
+	// queryOpts is the namespace resolver the environment supplies, so a
+	// collection query is compiled in the same static context as the case.
+	queryOpts xpath.NamespaceResolver
 }
 
+// resolve returns the collection URI's members, evaluating any <query>
+// members against ctx the first time it is asked.
+//
+// ctx is the context of the fn:collection call, which is what carries the
+// suite's fn:unparsed-text resolver and its test-set directory. UseCaseR31's
+// "users-json" collection is <query>unparsed-text-lines("UseCaseR31/users.json")
+// ! parse-json(.)</query>, and evaluating it needs precisely that wiring;
+// building a fresh context here would lose it.
+func (c *envCollections) resolve(ctx *xpath.Context, uri string) (xdm.Sequence, error) {
+	if seq, ok := c.cache[uri]; ok {
+		return seq, nil
+	}
+	var out xdm.Sequence
+	for _, f := range c.byURI[uri] {
+		doc, err := c.r.loadDoc(f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, doc)
+	}
+	for _, q := range c.queryURI[uri] {
+		// The query is a whole XQuery expression, not an XPath one --
+		// "1 to 10" happens to be both, but a query may use constructs XPath
+		// does not have -- so it goes through the same compiler a test case
+		// does. The context item is absent: a collection query is closed over
+		// nothing but the environment.
+		compiled, err := xquery.Compile(q.Expr, xqueryOptions(c.queryOpts))
+		if err != nil {
+			return nil, fmt.Errorf("collection %q: %w", uri, err)
+		}
+		sub := *ctx
+		sub.Collections = nil // a collection query does not nest
+		seq, err := compiled.Eval(&sub)
+		if err != nil {
+			return nil, fmt.Errorf("collection %q: %w", uri, err)
+		}
+		out = append(out, seq...)
+	}
+	if c.cache != nil {
+		c.cache[uri] = out
+	}
+	return out, nil
+}
+
+// ResolveCollectionIn is the entry point fn:collection actually uses; see
+// resolve for why the calling context is needed.
+func (c *envCollections) ResolveCollectionIn(ctx *xpath.Context, uri, base string) (xdm.Sequence, error) {
+	key, ok := c.lookup(uri, base)
+	if !ok {
+		// The default collection is the empty URI. A case that asks for a
+		// collection the environment did not declare gets an error, which is
+		// what a conforming processor does.
+		return nil, fmt.Errorf("no collection %q", uri)
+	}
+	return c.resolve(ctx, key)
+}
+
+// lookup maps a requested URI to the key the environment declared it under,
+// resolving a relative URI against the environment's static base URI.
+//
+// collection-006 asks for "collection1" against
+// "http://www.w3.org/2010/09/qt-fots-catalog/". Resolving is the resolver's
+// job — the engine hands over the base and does not guess what a URI means to
+// the caller.
+func (c *envCollections) lookup(uri, base string) (string, bool) {
+	if c.declared[uri] {
+		return uri, true
+	}
+	if base == "" {
+		return "", false
+	}
+	b, err := url.Parse(base)
+	if err != nil {
+		return "", false
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", false
+	}
+	abs := b.ResolveReference(u).String()
+	return abs, c.declared[abs]
+}
+
+// ResolveCollection satisfies xpath.CollectionResolver for a caller that does
+// not offer a context. Only the file-backed members can be served that way; a
+// <query> member has nothing to evaluate against.
 func (c *envCollections) ResolveCollection(uri, base string) (xdm.Sequence, error) {
 	files, ok := c.byURI[uri]
 	// A relative URI resolves against the static base URI the environment
