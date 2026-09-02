@@ -285,7 +285,7 @@ func (p *parser) scanAttributeValue() ([]rawPart, error) {
 	var run strings.Builder
 	flush := func() {
 		if run.Len() > 0 {
-			parts = append(parts, rawPart{text: normalizeAttr(run.String())})
+			parts = append(parts, rawPart{text: run.String()})
 			run.Reset()
 		}
 	}
@@ -340,37 +340,23 @@ func (p *parser) scanAttributeValue() ([]rawPart, error) {
 			return nil, p.errorf(
 				"XPST0003: %q is not allowed in an attribute value", "<")
 
+		case c == '\t' || c == '\n':
+			run.WriteByte(' ')
+			p.pos++
+
+		case c == '\r':
+			// A literal CRLF pair normalises to one space, not two.
+			run.WriteByte(' ')
+			p.pos++
+			if !p.eof() && p.src[p.pos] == '\n' {
+				p.pos++
+			}
+
 		default:
 			run.WriteByte(c)
 			p.pos++
 		}
 	}
-}
-
-// normalizeAttr applies XML attribute-value normalisation for a CDATA-typed
-// attribute: every whitespace character becomes a space, and nothing is
-// trimmed or collapsed.
-func normalizeAttr(s string) string {
-	if !strings.ContainsAny(s, "\t\r\n") {
-		return s
-	}
-	var sb strings.Builder
-	sb.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\t', '\n':
-			sb.WriteByte(' ')
-		case '\r':
-			sb.WriteByte(' ')
-			// A CRLF pair normalises to one space, not two.
-			if i+1 < len(s) && s[i+1] == '\n' {
-				i++
-			}
-		default:
-			sb.WriteByte(s[i])
-		}
-	}
-	return sb.String()
 }
 
 // predefined are the five entity references XML defines and XQuery inherits.

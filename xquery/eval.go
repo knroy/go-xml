@@ -120,7 +120,17 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 	if n.expr == nil {
 		return nil
 	}
-	seq, err := n.expr.compiled.Eval(ctx.xp)
+	// bind rather than ctx.xp: compileExpr may have lifted an XQuery-only
+	// primary out of this expression's source and left a variable reference
+	// where it stood, and the value has to be bound before xpath is asked to
+	// evaluate over it. Evaluating in the bare context instead reports the
+	// invented variable as undeclared — which is what
+	// "{<p:e/>/namespace-uri()}" in an attribute value did.
+	xp, err := n.expr.bind(ctx)
+	if err != nil {
+		return err
+	}
+	seq, err := n.expr.compiled.Eval(xp)
 	if err != nil {
 		return err
 	}
@@ -131,7 +141,11 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 // callers that need its value rather than its contribution to a tree.
 func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if n.expr != nil {
-		return n.expr.compiled.Eval(ctx.xp)
+		xp, err := n.expr.bind(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return n.expr.compiled.Eval(xp)
 	}
 	if n.items == nil {
 		return nil, nil

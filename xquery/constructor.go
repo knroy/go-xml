@@ -441,8 +441,15 @@ func (p *parser) parseDirPI() (node, error) {
 			"XPST0003: a processing instruction needs a target")
 	}
 	if strings.EqualFold(target, "xml") {
+		// §3.9.3 forbids "xml" in any case as a PI target, and where the
+		// target is written out as a literal name the prohibition is part of
+		// the grammar — [180] PITarget excludes it — so the error is the
+		// static XPST0003. It is only the *computed* constructor, whose
+		// target is not known until the expression is evaluated, that raises
+		// the dynamic XQDY0064; Constr-pi-target-1..4 write "<?xml?>" and
+		// friends directly and require the static code.
 		return nil, p.errorAt(start,
-			"XQDY0064: %q is not a legal processing-instruction target", target)
+			"XPST0003: %q is not a legal processing-instruction target", target)
 	}
 	// A target not followed by space runs straight into "?>".
 	if !p.lookingAt("?>") {

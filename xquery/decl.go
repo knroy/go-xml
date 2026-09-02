@@ -637,7 +637,15 @@ func (q *Query) callDeclared(d *funcDecl) func(*xpath.Context, []xdm.Sequence) (
 // the two shapes a function body and a variable initialiser can have.
 func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context) (xdm.Sequence, error) {
 	if expr != nil {
-		return expr.compiled.Eval(ctx)
+		// Through bind, for the reason enclosed.sequence does the same: an
+		// XQuery-only primary compileExpr lifted out of a function body or a
+		// variable initialiser is bound to a variable that only bind knows
+		// about.
+		xp, err := expr.bind(&evalContext{xp: ctx, sc: q.sc})
+		if err != nil {
+			return nil, err
+		}
+		return expr.compiled.Eval(xp)
 	}
 	if body == nil {
 		return nil, nil
