@@ -79,9 +79,14 @@ func run() error {
 		initial = flag.String("initial-template", "",
 			"start at this named template instead of applying templates to a "+
 				"source document; no input document is then needed")
-		mode     = flag.String("mode", "", "initial mode for apply-templates")
-		showMsgs = flag.Bool("messages", false, "print xsl:message output to stderr")
-		tzMin    = flag.Int("timezone", 0,
+		mode            = flag.String("mode", "", "initial mode for apply-templates")
+		showMsgs        = flag.Bool("messages", false, "print xsl:message output to stderr")
+		compatDropAttrs = flag.Bool("compat-drop-attributes-on-document", false,
+			"discard an attribute that reaches the content of a document node "+
+				"instead of raising XTDE0420; the specified behaviour is the "+
+				"error, and this matches Saxon instead, which stylesheets such "+
+				"as DocBook xslTNG are written against")
+		tzMin = flag.Int("timezone", 0,
 			"implicit timezone in minutes east of UTC, for dates that carry none")
 		nowStr = flag.String("now", "",
 			"fix fn:current-dateTime to this xs:dateTime, making the run reproducible")
@@ -195,7 +200,10 @@ Exit status: 0 if every input transformed, 1 otherwise.
 	// keyed on the setting, so this cannot serve a stale compilation.
 	xpath.SetBacktrackingRegex(*backtrackRegex)
 
-	sheet, err := compileStylesheet(*sheetPath, resolver, *xpathVersion)
+	sheet, err := compileStylesheet(*sheetPath, resolver, *xpathVersion,
+		xslt.Compatibility{
+			DropAttributesOnDocumentNode: *compatDropAttrs,
+		})
 	if err != nil {
 		return err
 	}
@@ -270,7 +278,7 @@ Exit status: 0 if every input transformed, 1 otherwise.
 }
 
 func compileStylesheet(path string, resolver *xslt.FileResolver,
-	xpathVersion string) (*xslt.Stylesheet, error) {
+	xpathVersion string, compat xslt.Compatibility) (*xslt.Stylesheet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -288,6 +296,7 @@ func compileStylesheet(path string, resolver *xslt.FileResolver,
 		Resolver:     resolver,
 		BaseURI:      abs,
 		XPathVersion: v,
+		Compat:       compat,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compiling stylesheet: %w", err)

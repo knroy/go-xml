@@ -353,7 +353,10 @@ func evalVariableRaw(v *Variable, rt *runtime) (xdm.Sequence, error) {
 	}
 	// Building a variable's content is temporary output state.
 	sub := rt.temporaryOutput()
-	out := newOutputBuilder()
+	// This builder is the one that turns a sequence constructor into the
+	// document node a variable without "as" holds, so it is where
+	// XTDE0420 is decided and where the compatibility switch has to reach.
+	out := newOutputBuilderFor(rt.sheet)
 	if err := execSequence(v.Body, sub, out); err != nil {
 		return nil, err
 	}

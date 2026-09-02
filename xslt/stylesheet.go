@@ -185,6 +185,10 @@ type Stylesheet struct {
 	// isPackage says the principal module is an xsl:package, which is what
 	// gives mode visibility something to be relative to.
 	isPackage bool
+
+	// compat records the deliberate relaxations the caller asked for. The
+	// zero value is the specified behaviour; see Compatibility.
+	compat Compatibility
 	// source is the stylesheet's own document, which document("") returns.
 	//
 	// Section 16.1 defines the zero-length URI as naming the document
@@ -619,6 +623,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			characterMaps:    map[string]map[rune]string{},
 			funcs:            newStylesheetFuncs(),
 			baseURI:          stylesheetBase(doc, opts.BaseURI),
+			compat:           opts.Compat,
 			maxVersion:       opts.MaxVersion,
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose
@@ -760,6 +765,45 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 }
 
 // CompileOptions configures compilation.
+// Compatibility relaxes rules this engine is right to enforce, for callers
+// who have to run stylesheets written against a processor that does not.
+//
+// Every field here is off by default and every one makes this engine LESS
+// correct. They exist because being right is not on its own useful: a rule
+// that no released processor enforces is a rule real stylesheets were never
+// written to satisfy, and a library that refuses them all is one that cannot
+// be adopted. Turning a field on is the caller saying, explicitly and in one
+// place, that they would rather match the incumbent than the specification.
+//
+// Nothing here is inferred. A stylesheet cannot switch these on for itself,
+// because the decision belongs to the host that knows where the stylesheet
+// came from.
+type Compatibility struct {
+	// DropAttributesOnDocumentNode discards an attribute or namespace node
+	// that reaches the content of a document node, instead of raising
+	// XTDE0420.
+	//
+	// The specified behaviour is the error. 5.8.1 applies its rules in the
+	// order listed, and the rule that unwraps a document node in the result
+	// sequence unwraps document nodes only -- an attribute survives it and
+	// reaches the check. The suite agrees: error-0420a exists to assert this,
+	// and its own description reads "the xsl:copy is copying a document node
+	// which can't have an attribute".
+	//
+	// Saxon nonetheless accepts it, and stylesheets are written to that.
+	// DocBook xslTNG builds a temporary tree from a sequence containing an
+	// attribute in its head.xsl, and every document carrying an xml:lang
+	// fails against a processor that applies the rule.
+	DropAttributesOnDocumentNode bool
+
+	// PrivateFunctionsVisibleToEvaluate is retained for symmetry and is a
+	// no-op: the private-visibility default is already confined to a real
+	// xsl:package, which is where visibility is a meaningful property. It is
+	// named here so that the behaviour is discoverable alongside the other
+	// divergences rather than only in the changelog.
+	PrivateFunctionsVisibleToEvaluate bool
+}
+
 type CompileOptions struct {
 	// Resolver loads xsl:include and xsl:import targets. Nil disables them,
 	// which is the safe default for untrusted stylesheets.
@@ -812,6 +856,11 @@ type CompileOptions struct {
 	// deliberate departure from conformance in both directions, which is why
 	// nothing sets it implicitly.
 	XPathVersion *xpath.Version
+
+	// Compat relaxes rules this engine is right to enforce, for stylesheets
+	// written against a processor that does not. The zero value enforces
+	// them all; see Compatibility.
+	Compat Compatibility
 
 	// MaxVersion caps the XSLT version whose constructs the compiler will
 	// accept, whatever the stylesheet's own @version says.

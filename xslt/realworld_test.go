@@ -134,3 +134,50 @@ func TestKeyPrefixBoundInSeveralModules(t *testing.T) {
 		t.Errorf("got %q, want the key found whatever the include order", got)
 	}
 }
+
+// TestCompatDropAttributesOnDocumentNode covers the opt-in relaxation of
+// XTDE0420.
+//
+// The error is correct and stays on by default: 5.8.1 applies its rules in
+// the order listed, and the one that unwraps a document node in the result
+// sequence unwraps document nodes only, so an attribute reaches the check.
+// The suite asserts exactly this in error-0420a. Saxon accepts it anyway, and
+// DocBook xslTNG builds such a tree in head.xsl for every document carrying an
+// xml:lang -- so a caller running stylesheets written against Saxon can ask
+// for the attribute to be dropped instead.
+func TestCompatDropAttributesOnDocumentNode(t *testing.T) {
+	const sheet = `<xsl:stylesheet version="3.0" ` +
+		`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+		`<xsl:output omit-xml-declaration="yes"/>` +
+		`<xsl:template match="/">` +
+		`<xsl:variable name="v"><xsl:apply-templates select="/*"/></xsl:variable>` +
+		`<out><xsl:value-of select="$v"/></out></xsl:template>` +
+		`<xsl:template match="doc"><xsl:attribute name="lang">en</xsl:attribute>` +
+		`<xsl:text>kept</xsl:text></xsl:template></xsl:stylesheet>`
+
+	// Default: the specified behaviour, which is the error.
+	if _, err := runErr(t, sheet, `<doc/>`); err == nil ||
+		!strings.Contains(err.Error(), "XTDE0420") {
+		t.Errorf("default: got %v, want XTDE0420", err)
+	}
+
+	// Opt in: the attribute is dropped and everything else is built as it
+	// would have been, which is what makes the rest of the tree usable.
+	compiled, err := Compile(mustParse(t, sheet), CompileOptions{
+		Compat: Compatibility{DropAttributesOnDocumentNode: true},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	src, err := xdm.ParseString(`<doc/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := compiled.Transform(context.Background(), src.Root, TransformOptions{})
+	if err != nil {
+		t.Fatalf("with the relaxation: %v", err)
+	}
+	if got := res.String(); got != "<out>kept</out>" {
+		t.Errorf("got %q, want the attribute dropped and the text kept", got)
+	}
+}

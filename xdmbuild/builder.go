@@ -574,22 +574,37 @@ func (b *Builder) Sequence() xdm.Sequence { return b.items }
 // xsl:function as="attribute()" is written that way — and only wrapping the
 // result in a document node makes it wrong.
 func (b *Builder) ToDocument() (*xdm.Node, error) {
+	// A policy that answers nil to this fault is saying the node should be
+	// dropped rather than reported -- the same convention
+	// FaultDuplicateAttribute already uses, where 5.7.1 discards the loser
+	// silently. Kept is every item the policy did not object to, so the rest
+	// of the tree is built exactly as it would have been.
+	kept := b.items[:0:0]
 	for _, it := range b.items {
 		n, ok := it.(*xdm.Node)
 		if !ok {
+			kept = append(kept, it)
 			continue
 		}
+		var err error
 		switch n.Kind {
 		case xdm.KindAttribute:
-			return nil, b.policy.Err(FaultAttrOnDocument,
+			err = b.policy.Err(FaultAttrOnDocument,
 				fmt.Sprintf("an attribute node (%s) cannot be the content of "+
 					"a document node", n.Name.Lexical()))
 		case xdm.KindNamespace:
-			return nil, b.policy.Err(FaultAttrOnDocument,
+			err = b.policy.Err(FaultAttrOnDocument,
 				fmt.Sprintf("a namespace node (%s) cannot be the content of "+
 					"a document node", n.Name.Local))
+		default:
+			kept = append(kept, it)
+			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
+	b.items = kept
 	return b.ToTree(), nil
 }
 

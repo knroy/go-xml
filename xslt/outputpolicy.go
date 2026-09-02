@@ -21,6 +21,20 @@ func newOutputBuilder() *outputBuilder {
 	return xdmbuild.New(xsltPolicy{})
 }
 
+// newOutputBuilderFor returns a builder configured for one stylesheet.
+//
+// It differs from newOutputBuilder only in honouring the compatibility
+// options that stylesheet was compiled with. A nil stylesheet -- which is
+// what the internal callers that build a throwaway tree pass -- gets the
+// strict policy, because nothing about those trees reaches a caller who could
+// have asked for anything else.
+func newOutputBuilderFor(s *Stylesheet) *outputBuilder {
+	if s == nil || !s.compat.DropAttributesOnDocumentNode {
+		return xdmbuild.New(xsltPolicy{})
+	}
+	return xdmbuild.New(xsltPolicy{dropAttrOnDocument: true})
+}
+
 // xsltPolicy names the structural faults of content construction the way XSLT
 // names them, and answers the namespace and type questions the way XSLT
 // answers them.
@@ -30,7 +44,13 @@ func newOutputBuilder() *outputBuilder {
 // rather than per transformation, and are applied where the instruction is
 // executed rather than here — see xsl:element and xsl:copy. A policy that
 // needed to vary would be constructed per builder instead.
-type xsltPolicy struct{}
+type xsltPolicy struct {
+	// dropAttrOnDocument discards an attribute or namespace node that
+	// reaches the content of a document node, instead of raising XTDE0420.
+	// Set from Compatibility.DropAttributesOnDocumentNode; off by default,
+	// because the default has to be the specified behaviour.
+	dropAttrOnDocument bool
+}
 
 // Err gives each fault the code XSLT 3.0 defines for it.
 //
@@ -38,13 +58,20 @@ type xsltPolicy struct{}
 // in the sequence have the same name, "attribute A is discarded" — the later
 // one wins, silently. XQuery raises XQDY0025 for the same sequence, which is
 // why the builder asks rather than assuming.
-func (xsltPolicy) Err(f xdmbuild.Fault, detail string) error {
+func (p xsltPolicy) Err(f xdmbuild.Fault, detail string) error {
 	switch f {
 	case xdmbuild.FaultDuplicateAttribute:
 		return nil
 	case xdmbuild.FaultAttrAfterChild:
 		return fmt.Errorf("XTDE0410: %s", detail)
 	case xdmbuild.FaultAttrOnDocument:
+		// Returning ErrDiscardItem rather than an error is what makes the
+		// builder drop the offending node and carry on, which is what Saxon
+		// does here and what DocBook xslTNG relies on. Off unless the caller
+		// asked; see Compatibility.
+		if p.dropAttrOnDocument {
+			return nil
+		}
 		return fmt.Errorf("XTDE0420: %s", detail)
 	case xdmbuild.FaultConflictingPrefix:
 		return fmt.Errorf("XTDE0430: %s", detail)
