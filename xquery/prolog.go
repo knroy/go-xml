@@ -544,12 +544,15 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 	switch {
 	case p.consume(":="):
 		p.skipSpaceAndComments()
-		src, err := p.scanDeclExpr()
-		if err != nil {
-			return err
-		}
-		decl.init, err = p.compileExpr(src)
-		if err != nil {
+		var err error
+		// parseDeclBody rather than compileExpr, for the reason a variable
+		// declaration uses it: "declare context item := <a>bananas</a>" has a
+		// constructor for an initialiser, and a constructor cannot be handed
+		// to xpath. compileExpr alone lifts it to a "$local:xq-opN" it then
+		// never binds, so the query fails with XPST0008 naming a variable the
+		// parser invented. §4.16 puts no restriction on the initialiser that
+		// §4.14 does not put on a variable's, so the two read it the same way.
+		if decl.init, decl.body, err = p.parseDeclBody(); err != nil {
 			return err
 		}
 	case p.consumeKeyword("external"):
@@ -557,12 +560,8 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		p.skipSpaceAndComments()
 		if p.consume(":=") {
 			p.skipSpaceAndComments()
-			src, err := p.scanDeclExpr()
-			if err != nil {
-				return err
-			}
-			decl.init, err = p.compileExpr(src)
-			if err != nil {
+			var err error
+			if decl.init, decl.body, err = p.parseDeclBody(); err != nil {
 				return err
 			}
 		}

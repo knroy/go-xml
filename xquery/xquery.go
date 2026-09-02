@@ -191,13 +191,33 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 		sub.StaticBaseURI = q.sc.baseURI
 	}
 	out := &sub
+	// One binder serves both halves. The context item's initialiser may name
+	// a global and a global's initialiser may read the context item, so the
+	// two are one dependency graph rather than two phases: bindContextItem
+	// initialises just the variables it names, and the rest are done after,
+	// against a context that now has the item in it.
+	b := q.newVarBinder(out)
 	if q.contextItem != nil {
 		var err error
-		if out, err = q.bindContextItem(out); err != nil {
+		if out, err = q.bindContextItem(out, b); err != nil {
+			return nil, err
+		}
+		if b != nil {
+			// The variables the context item forced are already bound on the
+			// binder's own context; carrying them onto the one that now holds
+			// the item keeps both sets in scope for what follows.
+			b.rebase(out)
+		}
+	}
+	if b == nil {
+		return out, nil
+	}
+	for _, d := range q.vars {
+		if err := b.visit(d); err != nil {
 			return nil, err
 		}
 	}
-	return q.bindVariables(out)
+	return b.ctx, nil
 }
 
 // bindContextItem applies "declare context item" (§4.16).
@@ -206,7 +226,8 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 // back to its default when there is not. A non-external one replaces the
 // caller's item outright, which is what a query that computes its own context
 // is asking for. XPDY0002 is the error when neither supplies one.
-func (q *Query) bindContextItem(ctx *xpath.Context) (*xpath.Context, error) {
+func (q *Query) bindContextItem(ctx *xpath.Context, b *varBinder) (
+	*xpath.Context, error) {
 	d := q.contextItem
 	sub := *ctx
 	if d.external && ctx.Item != nil {
@@ -217,19 +238,26 @@ func (q *Query) bindContextItem(ctx *xpath.Context) (*xpath.Context, error) {
 		}
 		return ctx, nil
 	}
-	if d.init == nil {
+	if d.init == nil && d.body == nil {
 		if ctx.Item != nil {
 			return ctx, nil
 		}
 		return nil, fmt.Errorf(
 			"XPDY0002: no value was supplied for the declared context item")
 	}
-	// The initialiser is evaluated with the globals already in scope, so a
-	// "declare context item := $doc" can name one. bindVariables runs after
-	// this, so the initialiser sees only what the caller bound — which is the
-	// dependency order §4.16 gives, since the context item is part of the
-	// dynamic context the variables are initialised against.
-	seq, err := d.init.compiled.Eval(&sub)
+	// The globals the initialiser names are bound first, and only those.
+	// "declare context item := $y[3]" needs $y to have a value; it does not
+	// need the variables declared after it, and one of those may well be the
+	// one that reads the context item — contextDecl-016 declares $x as
+	// fn:position() precisely to check that it sees the item this sets. So
+	// the dependency is followed exactly as far as it goes and no further.
+	if b != nil {
+		if err := b.bindNamed(d.references()); err != nil {
+			return nil, err
+		}
+		sub = *b.ctx
+	}
+	seq, err := q.evalBody(d.body, d.init, &sub)
 	if err != nil {
 		return nil, err
 	}
