@@ -222,6 +222,24 @@ else
     git clone --depth 1 https://github.com/w3c/qt3tests.git $QT3"
 fi
 
+section "W3C QT3 (XQuery 3.1)"
+# The XQuery half of the same catalog. It is a separate test from TestQT3 --
+# the XPath figures are a regression check that must not move while XQuery is
+# worked on -- and it was previously not run here at all, which is why XQuery
+# had no row in docs/conformance-gaps.md.
+if [ -f "$QT3/catalog.xml" ]; then
+	out=$(GOXSLT_QT3="$QT3" $GO test ./tests/qt3/ -count=1 -run TestQT3XQuery -v 2>&1) || true
+	if printf '%s' "$out" | grep -q 'in-scope:'; then
+		printf '%s\n' "$out" | grep -E 'in-scope:'
+		ratchet TestQT3XQuery "$out"
+	else
+		fail "the XQuery suite ran but reported no summary — did it skip?"
+		printf '%s\n' "$out" | tail -5
+	fi
+else
+	skip "QT3 not at $QT3 (XQuery)"
+fi
+
 section "W3C xsdtests (XML Schema 1.0 and 1.1)"
 if [ -f "$XSDTS/suite.xml" ]; then
 	for flag in "" -11; do

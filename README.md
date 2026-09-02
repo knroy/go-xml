@@ -817,11 +817,13 @@ reach:
   the timestamp and generator metadata (both environment-dependent) are
   normalised. Of the 49 that do not, 42 need `ext:xinclude` — a Saxon-Java
   extension function DocBook ships as a `.jar`, whose absence the stylesheet's
-  own `function-available()` fallback handles. Three more raise `XTDE0420`,
-  which is an open question rather than a known defect: DocBook builds a
-  temporary tree from a sequence that contains an attribute, the spec says
-  that is an error, and Saxon nonetheless produces the expected output. Its 75
-  localisation files are generated with this engine too.
+  own `function-available()` fallback handles. Three more raise `XTDE0420`:
+  DocBook builds a temporary tree from a sequence containing an attribute,
+  which §5.8.1 makes an error, and this engine is right to refuse it — the
+  ordered rules there unwrap document nodes but never attributes, and the
+  suite's own `error-0420a` says "the xsl:copy is copying a document node
+  which can't have an attribute". Saxon accepts it anyway. Its 75 localisation
+  files are generated with this engine too.
 * **[XSpec](https://github.com/xspec/xspec)** — an XSLT compiler written in
   XSLT. All 225 of its `.xspec` test descriptions that target a stylesheet
   compile; the other 59 declare no `@stylesheet` because they drive the

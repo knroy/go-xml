@@ -9,20 +9,29 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xquery** | QT3 — XQuery 3.1 | 29,805 | 29,689 | 99.61% | **116** | ? | ? | ? | ? |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 3 | **17** | 99.80% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 0 | **20** | 99.77% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **126** | **0** | **2** | **124** | |
+| | **Total** | | | | **242** | **0** | **0** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
 that and 100%.
 
-**126 disagreements in total**, of which **none is a known engine defect**,
-**124 cannot be fixed without shipping something less correct**, and **2 are
-open questions**.
+**126 disagreements are triaged**, of which **none is a known engine defect**
+and **every one would require shipping something less correct to pass**. There
+is no remaining open question against either XSLT suite: `validation-0006` and
+`validation-0201`, the last two, were settled against the spec text and the
+test sources and are recorded below.
+
+**XQuery's 116 are not triaged**, which is why its row carries `?` rather than
+zeros. The suite was not run by `tests/check.sh` until now, so unlike every
+other row here no one has read the failures to say which are engine defects and
+which are not. Do not read that row as "116 cannot be fixed" — it is unknown,
+and it is the one place in this document where real work may be hiding.
 
 The XSD split is taken from the suite's own `status` field rather than from
 judgement: `accepted` marks a settled expectation, while `queried` and
@@ -179,8 +188,8 @@ them separate, and `override-t-003a` is the case.
 |---|---|---|
 | `si-copy-117`, `si-copy-of-117` | **Not implementable** | Not ordering cases at all. Both write `<xsl:copy select="/*/*/@version" type="xs:date"/>` — a `type` attribute and **no `validation` attribute**. §19.2 keys the codes to which attribute was written: XTTE1510 begins "If the **validation attribute** ... has the effective value `strict`", which is literally unmet, while XTTE1540 is "if an **[xsl:]type attribute** is defined ... and the outcome of schema validity assessment against that type is ... other than valid", which is exactly met. The suite's own description says "validate attribute **by type**". Our XTTE1540 is correct. |
 | `import-schema-137` | **Not implementable** | The one genuine ordering case, and §2.9 explicitly declines to settle it: "If more than one error arises, an implementation is not required to signal any errors other than the first one that it detects. **It is implementation-dependent which of the several errors is signaled.**" Both errors are real, so either choice conforms; the suite is testing one processor's order. |
-| `validation-0006` | **Open question** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. A distinct question from the three above. |
-| `validation-0201` | **Implementable** | XHTML serialisation, as above. |
+| `validation-0006` | **Not implementable** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. XTTE1555 is scoped by its own text to "when validating a **document node**", and a parentless attribute is not one; XTTE1540, which covers the `type` attribute, is what the case actually meets. The stylesheet says so itself: "a contrived example to force **Saxon** down a particular code path". |
+| `validation-0201` | **Not implementable** | The expected `schvalid001.out` is Saxon's output byte-for-byte, indenting 3 spaces then 6 where this serializer writes 2. Indentation is implementation-defined, and the suite rewrote the sibling `validation-0202` in 2013 to stop asserting it. |
 
 ### Regex — 3
 
@@ -210,14 +219,16 @@ is its own investigation.
 | `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
-**XSLT 3.0 ceiling: 8,609 / 8,626 = 99.80%**, the 8,606 that pass now plus the
-two open questions.
-
-The seventeen that cannot be fixed: `accept-913`, `package-200`,
+**XSLT 3.0 ceiling: 8,606 / 8,626 = 99.77%** — what passes now. The two cases
+once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
+are settled above as not implementable, so no headroom is left against this
+suite. The nineteen that cannot be fixed: `accept-913`, `package-200`,
 `use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
 `unparsed-text-2003`, `streamable-141`, `base-uri-052`, `docbook-001`,
 `docbook-004`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
-`import-schema-137`, `accumulator-038` and `validation-0201`.
+`import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
+and `evaluate-045` (the last given up deliberately; see *Deliberate
+divergence* above).
 
 The three `regex-syntax` ambiguous-dash cases are no longer among them: they
 pass now that `XSD_1.1` is scoped to the version being measured rather than to
