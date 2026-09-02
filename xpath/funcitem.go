@@ -53,13 +53,15 @@ func (e *NamedFunctionRef) Eval(ctx *Context) (xdm.Sequence, error) {
 	// must be about para[4]'s xml:lang, not para[1]'s. Passing the caller's
 	// context straight through made it about para[1] and inverted both.
 	//
-	// Only a reference written *with* a focus retains one. Where there is
-	// none there is nothing to retain, and falling through to the caller's
-	// context is what keeps a bare "fn:name#0" usable in the places that
-	// supply a focus at call time.
-	if ctx.Item != nil {
-		item.Invoke = withRetainedFocus(ctx, item.Invoke)
-	}
+	// The *absence* of a focus is retained just as the presence of one is.
+	// 3.1.6 makes the function item's dynamic context the one at the point of
+	// the reference, and a context with no context item is such a context:
+	// "let $f := name#0 return <a/>/$f()" writes the reference where there is
+	// no focus, so calling it is XPDY0002 however much focus the call site
+	// has. Falling through to the caller's context instead let the path step
+	// supply one and the call returned "a" -- the wrong answer, and one the
+	// spec gives no reading under which it is right. (xqhof14)
+	item.Invoke = withRetainedFocus(ctx, item.Invoke)
 	return xdm.One(item), nil
 }
 
@@ -106,6 +108,19 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			sub.Ctx = c.Ctx
 			sub.items = c.items
+			// Only the *focus* is retained from the reference point; the
+			// variable bindings come from the call. The two parts of the
+			// captured context have opposite lifetimes in a prolog, where a
+			// reference may be written before the variables it will need
+			// exist: function-literal-707 writes "local:plus#2" in a global
+			// initialiser and declares the $a its body reads *after* it, so
+			// restoring the reference's bindings wholesale hid a declaration
+			// that is in scope throughout the module. The focus has no such
+			// problem -- it is a property of where the reference stands, and
+			// that is exactly what 3.1.6 says to keep.
+			// Bindings are the Vars map plus the Parent chain lookups walk,
+			// so both come from the call.
+			sub.Vars, sub.Parent = c.Vars, c.Parent
 			// The retained focus does not retain the host's dynamic-call
 			// markers. XSLT 3.0 24.3 says the XSLT extensions to the dynamic
 			// context are not part of a function item's closure, so a marker

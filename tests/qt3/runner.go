@@ -202,6 +202,26 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			if strings.Contains(d.Value, "1.1") && !strings.Contains(d.Value, "1.0") {
 				return "needs XML 1.1"
 			}
+			// The value may name an *edition* of XML 1.0 and not just the
+			// version, and the suite uses all three spellings: "1.0" for any
+			// edition, "1.0:4-" for the 4th edition or earlier, and
+			// "1.0:5+ 1.1" for the 5th or later. The distinction is real,
+			// because the editions disagree about which characters may start
+			// a name -- U+037F and U+017F are excluded before the 5th and
+			// admitted from it on. This engine transcribes the 5th edition's
+			// productions (see xdm/qname.go and xpath/lexer.go), so a case
+			// restricted to the 4th and earlier is asking for behaviour a
+			// conformant 5th-edition processor must not have, in the same way
+			// an XSD 1.0-only case is above.
+			//
+			// It is out of scope rather than a failure, and the suite says so
+			// itself: XMLEdition.xml pairs each "1.0:4-" case with a "-new"
+			// one carrying "1.0:5+ 1.1" and asserting the opposite result.
+			// Those two are in scope and both pass, which is the evidence
+			// that the engine is on the right side of the split.
+			if strings.Contains(d.Value, "1.0:4-") {
+				return "needs XML 1.0 4th edition or earlier"
+			}
 		case "language", "default-language":
 			if d.Value != "en" && d.Value != "" {
 				return "needs language " + d.Value
