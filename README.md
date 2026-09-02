@@ -72,7 +72,7 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,236 of 19,236 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,778 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.07% of the W3C QT3 suite (29,521 of 29,797 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
+| **XQuery 3.1** | 99.22% of the W3C QT3 suite (29,566 of 29,797 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
