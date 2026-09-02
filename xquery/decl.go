@@ -613,10 +613,12 @@ func (q *Query) callDeclared(d *funcDecl) func(*xpath.Context, []xdm.Sequence) (
 				"XPST0017: the external function %s#%d has no implementation",
 				d.name.Lexical(), len(d.params))
 		}
-		if ctx.Depth > xpath.MaxDepth {
-			return nil, fmt.Errorf(
-				"FOAR0002: recursion too deep in %s", d.name.Lexical())
-		}
+		// The recursion bound is enforced by Context.Descend, which every
+		// function call goes through before reaching here and which honours
+		// the caller's own limit. A second check against the package default
+		// could only ever be wrong: it was written with ">" where Descend
+		// uses ">=", so it never fired, and had it fired it would have
+		// reported the depth guard as an arithmetic overflow.
 		sub := *ctx
 		sub.Depth = ctx.Depth + 1
 		// The function's own scope: no context item, and only its parameters

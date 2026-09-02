@@ -176,6 +176,17 @@ type Context struct {
 	// named templates, which the spec does not bound.
 	Depth int
 
+	// MaxDepth is the bound Depth is checked against. Zero means the package
+	// default, MaxDepth.
+	//
+	// It is settable because the default is a guard against untrusted input
+	// rather than a limit the language imposes: a query that recurses five
+	// thousand deep is perfectly legal, and fn-format-number's numberformat121
+	// and 122 do exactly that on purpose. A caller evaluating an expression it
+	// trusts can raise the bound; one evaluating an expression from outside
+	// should leave it alone.
+	MaxDepth int
+
 	// items counts the items materialised into intermediate sequences during
 	// this evaluation, bounding memory the way Depth bounds stack.
 	//
@@ -208,8 +219,24 @@ func (c *Context) WithNow(t time.Time) *Context {
 	return &n
 }
 
-// MaxDepth bounds recursive evaluation.
+// MaxDepth bounds recursive evaluation by default.
+//
+// It is a denial-of-service guard for a caller evaluating an expression it did
+// not write, not a conformance limit: nothing in the specification caps
+// recursion, and a query is entitled to recurse as deeply as it likes. A
+// caller that trusts its input can raise the bound through Context.MaxDepth,
+// which is what the conformance harnesses do — xslt.TransformOptions has
+// carried the same escape hatch for template recursion all along.
 const MaxDepth = 500
+
+// depthLimit is the bound in force, which is Context.MaxDepth where the caller
+// set one and MaxDepth otherwise.
+func (c *Context) depthLimit() int {
+	if c.MaxDepth > 0 {
+		return c.MaxDepth
+	}
+	return MaxDepth
+}
 
 // MaxItems bounds the number of items an evaluation may materialise.
 //
@@ -497,8 +524,8 @@ func (c *Context) Err() error {
 // Descend returns a copy with the recursion depth incremented, erroring past
 // the limit.
 func (c *Context) Descend() (*Context, error) {
-	if c.Depth >= MaxDepth {
-		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels", MaxDepth)
+	if lim := c.depthLimit(); c.Depth >= lim {
+		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels", lim)
 	}
 	n := *c
 	n.Depth++

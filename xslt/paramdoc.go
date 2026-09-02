@@ -129,6 +129,29 @@ func ApplyParameterDocument(root *xdm.Node, o *OutputSettings) error {
 		if err != nil {
 			return err
 		}
+		// A list-of-QNames parameter in a parameter document is written with
+		// *lexical* QNames, resolved against the in-scope namespaces of the
+		// element that carries the value. XSLT states the rule for the same
+		// parameters on xsl:output -- "the effective value of the attribute
+		// contains one or more lexical QNames. The prefix in such a QName is
+		// expanded using the in-scope namespaces ... In the case of
+		// cdata-section-elements, an unprefixed element name is expanded
+		// using the default namespace" -- and Serialization 3.1 §3.1 applies
+		// it to a parameter document too.
+		//
+		// SetSerializationParam takes only a name and a string, with no
+		// namespace context, so it can accept nothing but EQNames. The
+		// bindings are on the parameter element and are known only here, so
+		// this is where a lexical QName is rewritten into the EQName form
+		// that survives the flattening. Serialization-035 is exactly this:
+		// the value "Q{...a}e b:e Q{...c}e e" sits on an element carrying
+		// xmlns:b and a default namespace, and b:e was being dropped
+		// altogether while the bare e was being read as no-namespace.
+		if qnameListParam[p.Name.Local] {
+			if val, err = expandParamQNames(p, val); err != nil {
+				return err
+			}
+		}
 		if err := SetSerializationParam(o, p.Name.Local, val); err != nil {
 			return err
 		}
@@ -303,6 +326,53 @@ func readParamCharacterMaps(p *xdm.Node) (map[rune]string, error) {
 		out[r[0]] = to
 	}
 	return out, nil
+}
+
+// qnameListParam names the serialization parameters whose value is a list of
+// element names, and which therefore take lexical QNames resolved against the
+// namespaces in scope where the value was written.
+//
+// use-character-maps is a list of names too, but of character maps rather than
+// of elements, and XSLT's rule about the default namespace is written for
+// element names; it is left alone.
+var qnameListParam = map[string]bool{
+	"cdata-section-elements": true,
+	"suppress-indentation":   true,
+}
+
+// expandParamQNames rewrites the lexical QNames in a parameter document's
+// list-of-names value into the EQName form parseEQNameList understands,
+// resolving each prefix against the in-scope namespaces of the element that
+// carried the value.
+//
+// An unprefixed name takes the default namespace, which is the rule XSLT
+// states for cdata-section-elements specifically: unlike almost everywhere
+// else a name appears, an element name here is not in no namespace merely
+// because it has no prefix. A name already written as an EQName is left as it
+// is -- the two notations are both allowed in the same list.
+func expandParamQNames(p *xdm.Node, val string) (string, error) {
+	scope := p.InScopeNamespaces()
+	fields := strings.Fields(val)
+	for i, n := range fields {
+		if strings.HasPrefix(n, "Q{") {
+			continue
+		}
+		prefix, local := "", n
+		if j := strings.IndexByte(n, ':'); j >= 0 {
+			prefix, local = n[:j], n[j+1:]
+		}
+		uri, ok := scope[prefix]
+		if !ok && prefix != "" {
+			// An unbound prefix is an error here, unlike in parseEQNameList:
+			// there the reader simply had no bindings, while here the
+			// bindings are in hand and the name is genuinely unresolvable.
+			return "", fmt.Errorf(
+				"SEPM0017: the prefix %q in serialization parameter %q is not bound",
+				prefix, p.Name.Local)
+		}
+		fields[i] = "Q{" + uri + "}" + local
+	}
+	return strings.Join(fields, " "), nil
 }
 
 // parseEQNameList reads a whitespace-separated list of names in EQName

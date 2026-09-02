@@ -229,7 +229,16 @@ func formatNumberImpl(num *xdm.Atomic, pic string, df *DecimalFormat, v Version)
 	}
 
 	f := num.Float64()
-	if math.IsInf(f, 0) {
+	// Only an inexact type has an infinity to print. xs:decimal and xs:integer
+	// are exact and unbounded here -- they are big.Rat underneath -- so a
+	// decimal of 10^5000 is a perfectly finite number that merely has no
+	// double to be converted to. Testing math.IsInf on the converted double
+	// therefore mistook a large finite decimal for an infinity and printed
+	// "Infinity" for it, which is what numberformat121 asks for exactly and
+	// gets wrong. The rest of the function is exact-rational throughout, so
+	// the value needs no double at all once this guard has been passed.
+	if (num.Type == xdm.TypeDouble || num.Type == xdm.TypeFloat) &&
+		math.IsInf(f, 0) {
 		sign := ""
 		if f < 0 && !explicitNegative {
 			sign = string(df.MinusSign)

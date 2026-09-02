@@ -443,6 +443,12 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 			}
 			out.Collections = append(out.Collections, rc)
 		}
+		// The context item an environment supplies. Without it the item is
+		// absent and a case that declares "context item as T external" gets
+		// XPDY0002 -- correctly, since nothing bound one -- instead of the
+		// type error it is testing for. contextDecl-020 supplies 'London'
+		// against a declared xs:integer and wants XPTY0004.
+		out.ContextItem = append(out.ContextItem, e.ContextItem...)
 		out.Params = append(out.Params, e.Params...)
 		out.Namespaces = append(out.Namespaces, e.Namespaces...)
 		out.Schemas = append(out.Schemas, e.Schemas...)
@@ -679,6 +685,19 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 	// unbounded round() precision was found, after it consumed twenty minutes
 	// and all available memory before the harness could report anything.
 	ctx.Ctx = runCtx
+	// numberformat121 and 122 recurse five thousand deep on purpose, to build
+	// a decimal of 10^5000 and 10^-5000 and check that format-number prints
+	// each exactly. xpath.MaxDepth is 500 and is a DoS guard for a caller
+	// evaluating an expression it did not write; the suite is trusted input,
+	// and refusing one of its cases measures the guard rather than the
+	// engine. This is the same reasoning tests/xslts gives for raising
+	// TransformOptions.MaxDepth to 5000 for template recursion.
+	//
+	// The figure is well above the 5000 the query names because a level of
+	// its recursion is not a level of Descend: the body is an arrow chain
+	// whose call spends several frames per turn. It is still low enough that
+	// a genuine runaway terminates rather than exhausting the stack.
+	ctx.MaxDepth = 20000
 	res := outcome{}
 	if r.Target == XQuery31 {
 		// An XQuery case holds a whole query, not an expression, and the
@@ -690,7 +709,8 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// the parameters the query itself stated, and Eval hands back only
 		// the sequence.
 		var q *xquery.Query
-		q, res.err = xquery.Compile(tc.Test.Query, xqueryOptions(ns))
+		q, res.err = xquery.Compile(tc.Test.Query,
+			xqueryOptions(ns))
 		if res.err == nil {
 			res.serialParams = q.SerializationOptions()
 			// §25.1: "if no document can be found at the specified location,
@@ -773,14 +793,25 @@ func check(a Assertion, res *outcome) (bool, string) {
 		}
 		return true, ""
 	case "any-of":
+		// Each branch's own reason is kept, not just its kind. An any-of
+		// names the alternatives a conforming processor may choose between,
+		// so when none holds the interesting question is what the result
+		// actually was -- and reporting only "none of {error,assert-true}
+		// held" answered every such failure with the same uninformative
+		// line, giving no way to tell a wrong value from an unexpected error
+		// without re-running the case by hand.
 		var reasons []string
 		for _, c := range a.Children {
-			if ok, _ := check(c, res); ok {
+			ok, why := check(c, res)
+			if ok {
 				return true, ""
 			}
-			reasons = append(reasons, c.Kind)
+			if why == "" {
+				why = c.Kind
+			}
+			reasons = append(reasons, c.Kind+": "+why)
 		}
-		return false, "none of {" + strings.Join(reasons, ",") + "} held"
+		return false, "none of {" + strings.Join(reasons, "; ") + "} held"
 	case "not":
 		for _, c := range a.Children {
 			if ok, _ := check(c, res); ok {
@@ -1219,6 +1250,22 @@ func writeNodeXML(sb *strings.Builder, n *xdm.Node) {
 	case xdm.KindComment:
 		sb.WriteString("<!--" + n.Value + "-->")
 	case xdm.KindPI:
+		// The space is written even for an empty PI, though XML 1.0 §2.6 --
+		//   PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
+		// -- makes it part of the data's delimiter rather than of the target,
+		// so "<?y?>" is the strictly correct spelling and is what both real
+		// serializers write (xslt/serialize.go, xpath/fn_serialize.go each
+		// guard it).
+		//
+		// It stays here because the suite's own assert-xml expectations
+		// disagree with each other: K2-FilterExpr-7 spells an empty PI
+		// "<?y?>", while Constr-comppi-empty-1 and -2, Constr-pi-content-3
+		// and K2-Axes-66 all spell it "<?pi ?>". No single textual rendering
+		// satisfies both, and the four outnumber the one. Both spellings
+		// denote the same infoset -- an empty PI -- so the real fix is for
+		// the comparison to reach infosetEqual, which cannot parse a bare PI
+		// because it has no root element. That is the thing worth fixing;
+		// changing the spelling here only moves which cases fail.
 		sb.WriteString("<?" + n.Name.Local + " " + n.Value + "?>")
 	case xdm.KindAttribute:
 		// A bare attribute in a result sequence serialises as its value.
@@ -1277,6 +1324,20 @@ func (caseBlind) StartsWith(s, p string) bool {
 func (caseBlind) EndsWith(s, suf string) bool {
 	return strings.HasSuffix(strings.ToLower(s), strings.ToLower(suf))
 }
+
+// Key is the collation's grouping key: two strings the collation calls equal
+// must have the same key.
+//
+// It is an optional method, and omitting it is not harmless. "group by ...
+// collation" partitions with a hash map, and a collation without a Key has its
+// strings hashed verbatim -- so the collation is silently ignored and every
+// key becomes its own group rather than the grouping failing. group-017 groups
+// ("ax","bx","cx","Ay","By","Cy") case-blind and expects three groups; without
+// this it got six, and nothing reported that the collation had not been used.
+//
+// Lowercasing is the same fold Compare applies, so the key and the comparison
+// agree by construction.
+func (caseBlind) Key(s string) string { return strings.ToLower(s) }
 
 func (caseBlind) IndexOf(s, sub string) int {
 	// The index is into the original string, so the folded index only works
@@ -1348,7 +1409,8 @@ func (c *envCollections) resolve(ctx *xpath.Context, uri string) (xdm.Sequence, 
 		// does not have -- so it goes through the same compiler a test case
 		// does. The context item is absent: a collection query is closed over
 		// nothing but the environment.
-		compiled, err := xquery.Compile(q.Expr, xqueryOptions(c.queryOpts))
+		compiled, err := xquery.Compile(q.Expr,
+			xqueryOptions(c.queryOpts))
 		if err != nil {
 			return nil, fmt.Errorf("collection %q: %w", uri, err)
 		}
@@ -2250,6 +2312,25 @@ func matchesQualifiedCode(err error, want string) bool {
 // An XPath case is given a NamespaceResolver; an XQuery case needs the same
 // bindings as prolog-equivalent options, because XQuery resolves names while
 // parsing rather than after it.
+//
+// The static base URI is deliberately NOT supplied here, though §2.1.2
+// requires one and K2-BaseURIProlog-4 depends on it: that case declares the
+// relative "declare base-uri 'abc'" and checks that fn:static-base-uri() came
+// back absolute, which needs an absolute base to resolve against at compile
+// time.
+//
+// Seeding it from the evaluation context fixes that one case and breaks five
+// others. The compile-time base URI is not simply the runtime one: the suite's
+// base-URI-12, -14, -23 and -24 resolve relative references against a base the
+// environment or the query supplies later, and K2-BaseURIFunc-30 reads a base
+// URI the environment declares -- all of which a compile-time value pins
+// prematurely. base-URI-23 shows the shape: it came back
+// "http://www.example.org/examples%20", a URI resolved once too often.
+//
+// Threading the base URI through properly means separating "the base URI to
+// resolve a prolog declaration against" from "the base URI the query runs
+// under", which the compiler does not currently distinguish. That is the fix
+// worth making; supplying one value for both is a net loss.
 func xqueryOptions(ns xpath.NamespaceResolver) xquery.Options {
 	opts := xquery.Options{}
 	if ns == nil {
