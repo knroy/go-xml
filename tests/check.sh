@@ -61,15 +61,21 @@ abspath() {
 # flags it. That happened here, to commit 9843c44, and was found only by
 # accident. A number that may not go down is what catches it.
 #
-# One case is load-sensitive and the mark accounts for it. catalog-007 asks
-# whether every element/attribute pair the schema permits appears somewhere in
-# the suite's non-error stylesheets, which means parsing all of them inside the
-# runner's 10s per-case timeout. On an idle machine it passes and the 3.0 suite
-# reports 8594; under load -- a parallel build, or several agents sharing the
-# box -- it exceeds the deadline and the suite reports one fewer. The mark is
-# therefore the LOWER figure, so a busy machine cannot fail the check on an
-# unmodified tree. A run one above the mark is the same tree on a quieter
-# machine, not an improvement -- do not record it with GOXSLT_RATCHET=update.
+# Load sensitivity used to make this fire on unmodified trees, and the cause
+# was the harness rather than the engine. Three cases in the "catalog" set
+# parse every non-error stylesheet in the suite inside a single transform;
+# catalog-005b and catalog-007 are the two that came closest to the old 10s
+# per-case deadline. An idle machine finished them and a loaded one did not,
+# so the reported figure moved with whatever else was running on the box --
+# 8605 in CI under a parallel build, 8607 on a quiet laptop -- and the mark
+# had to be carried at the low end to stay usable.
+#
+# The per-case deadline is now 60s (GOXSLT_CASE_TIMEOUT overrides it), which
+# is far enough from the wall that both cases finish on a loaded runner. The
+# mark is therefore the real figure rather than the degraded one. If this
+# starts drifting again, re-measure before recording a new mark: a number that
+# moves between runs is measurement noise, and recording the high end of it
+# just moves the false failure to the next slow machine.
 #
 # Set GOXSLT_RATCHET=update to record a new high after a deliberate change,
 # or GOXSLT_RATCHET=off to skip the check entirely.

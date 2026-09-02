@@ -1232,3 +1232,21 @@ func harnessLibrary() *xpath.Library {
 	xpath.RegisterHarnessFuncs(lib)
 	return lib
 }
+
+// caseTimeout is the per-case wall-clock deadline for a suite run.
+//
+// It is a property of the machine doing the measuring, not of the engine, so
+// it is set high enough that a loaded CI runner reports the same figure as an
+// idle laptop. A case that genuinely does not terminate is still caught: the
+// go test -timeout covering the whole run is the backstop, and it is far
+// below the time 8,626 cases would take if this deadline were doing nothing.
+//
+// GOXSLT_CASE_TIMEOUT takes a Go duration ("90s", "2m") for a slower box.
+func caseTimeout() time.Duration {
+	if v := os.Getenv("GOXSLT_CASE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
+}

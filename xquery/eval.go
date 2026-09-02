@@ -263,7 +263,6 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 	return nil
 }
 
-
 // applyCopyNamespaces enforces the two halves of copy-namespaces on a subtree
 // that has just been copied into the element being constructed (§3.9.1.3).
 //
@@ -489,7 +488,6 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	}
 	return nil
 }
-
 
 // declareOwnName gives the element under construction a namespace node for
 // the binding its own name needs.

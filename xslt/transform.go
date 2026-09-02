@@ -814,7 +814,7 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
 			TypeAnnotation: n.TypeAnnotation,
 			IsID:           n.IsID, IsIDREFS: n.IsIDREFS,
-			IsNilled:       n.IsNilled}
+			IsNilled: n.IsNilled}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}

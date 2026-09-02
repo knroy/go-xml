@@ -62,9 +62,15 @@ func findEnclosed(src string, open int) (int, error) {
 // skipString returns the index of the quote closing the literal that opens at
 // src[i].
 //
-// The doubled quote is XQuery's only escape inside a literal: 'it''s' is one
-// string holding an apostrophe. A literal opened with one quote is unaffected
-// by the other, so 'a"b' and "a'b" both hold what they look like they hold.
+// The doubled quote is XQuery's only escape inside a literal: a two-character
+// run of the opening quote stands for one of that character, so the six-byte
+// literal spelling "it" + two apostrophes + "s" is one string holding an
+// apostrophe. A literal opened with one quote is unaffected by the other, so
+// 'a"b' and "a'b" both hold what they look like they hold.
+//
+// The example is spelled out in words rather than written literally because
+// gofmt rewrites a doubled ASCII apostrophe in a comment into a typographic
+// quote, which would make this paragraph describe the wrong escape.
 func skipString(src string, i int) (int, error) {
 	q := src[i]
 	for j := i + 1; j < len(src); j++ {

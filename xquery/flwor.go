@@ -469,7 +469,7 @@ type groupSpec struct {
 	collation string
 	// check is the declared type of "group by $k as T := E", applied to the
 	// atomised value rather than to what the expression returned. See apply.
-	check     *compiledExpr
+	check *compiledExpr
 }
 
 // groupByClause partitions the tuple stream: §3.10.7.

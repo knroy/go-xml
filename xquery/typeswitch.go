@@ -194,7 +194,6 @@ done:
 	return st, nil
 }
 
-
 func (n *typeswitchExpr) eval(out *builderRef, ctx *evalContext) error {
 	seq, err := n.run(ctx)
 	if err != nil {

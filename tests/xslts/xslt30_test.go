@@ -4,7 +4,6 @@ import (
 	"os"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/knroy/go-xml/xpath"
 )
@@ -24,7 +23,6 @@ func TestXSLT30Suite(t *testing.T) {
 		t.Skip("set GOXSLT_XSLTS to a checkout of w3c/xslt30-test to run the suite")
 	}
 
-
 	// The suite's patterns are trusted input, so the backtracking matcher is
 	// enabled for the run, exactly as the QT3 harness enables it. It is off by
 	// default because a pattern can come from document data and the matcher
@@ -36,7 +34,21 @@ func TestXSLT30Suite(t *testing.T) {
 	xpath.SetBacktrackingRegex(true)
 	defer xpath.SetBacktrackingRegex(false)
 
-	r := &Runner{Root: root, Timeout: 10 * time.Second, Target: XSLT30}
+	// The per-case deadline is 60s rather than the 10s this used to use, and
+	// it is a measurement parameter rather than a limit on the engine.
+	//
+	// Three cases in the "catalog" set parse every non-error stylesheet in the
+	// suite inside one transform -- catalog-005b and catalog-007 are the two
+	// that come closest to the wall. At 10s an idle machine finished them and
+	// a loaded one did not, so the reported figure moved with what else was
+	// running on the box: 8605 under a parallel build, 8607 on a quiet
+	// machine. That is measurement noise presented as a conformance number,
+	// and it made the ratchet fire on unmodified trees in CI.
+	//
+	// GOXSLT_CASE_TIMEOUT overrides it for a machine slower still. Raising it
+	// cannot turn a failing case into a passing one except where the only
+	// thing wrong was the clock, which is precisely the situation here.
+	r := &Runner{Root: root, Timeout: caseTimeout(), Target: XSLT30}
 	sum, err := r.Run()
 	if err != nil {
 		t.Fatalf("run: %v", err)

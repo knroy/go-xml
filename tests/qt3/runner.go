@@ -118,7 +118,6 @@ func (r resolver) Bindings() map[string]string {
 func (r resolver) DefaultElementNamespace() string  { return r.prefixes[""] }
 func (r resolver) DefaultFunctionNamespace() string { return xdm.NSFN }
 
-
 // Runner executes cases from a suite checkout.
 type Runner struct {
 	Root string

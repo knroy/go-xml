@@ -320,7 +320,6 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	return nil
 }
 
-
 // isNamespaceSensitiveType reports whether a type annotation names a type
 // whose values carry a namespace prefix that must stay bound.
 //
@@ -510,7 +509,6 @@ func undeclareInherited(el *xdm.Node) {
 		el.AddNamespace(p, "")
 	}
 }
-
 
 // fixupNamespaces declares on el whatever its own name and its attribute names
 // need and cannot already see, which is the part of §5.8.3 that applies to an

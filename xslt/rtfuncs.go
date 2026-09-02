@@ -1342,7 +1342,6 @@ func onlyEmptyURIs(seq xdm.Sequence) bool {
 	return true
 }
 
-
 // isLexicalQName reports whether s has the form of a QName: an NCName, or two
 // separated by one colon.
 func isLexicalQName(s string) bool {

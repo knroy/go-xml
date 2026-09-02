@@ -50,16 +50,16 @@ type seenDecl struct {
 // and returns immediately.
 func (p *parser) parseProlog() error {
 	once := map[string]*seenDecl{
-		"boundary-space":     {code: "XQST0068"},
-		"construction":       {code: "XQST0067"},
-		"ordering":           {code: "XQST0065"},
-		"empty-order":        {code: "XQST0069"},
-		"copy-namespaces":    {code: "XQST0055"},
-		"default-collation":  {code: "XQST0038"},
-		"base-uri":           {code: "XQST0032"},
-		"default-element-ns": {code: "XQST0066"},
+		"boundary-space":      {code: "XQST0068"},
+		"construction":        {code: "XQST0067"},
+		"ordering":            {code: "XQST0065"},
+		"empty-order":         {code: "XQST0069"},
+		"copy-namespaces":     {code: "XQST0055"},
+		"default-collation":   {code: "XQST0038"},
+		"base-uri":            {code: "XQST0032"},
+		"default-element-ns":  {code: "XQST0066"},
 		"default-function-ns": {code: "XQST0066"},
-		"context-item":       {code: "XQST0099"},
+		"context-item":        {code: "XQST0099"},
 	}
 	// §4 divides the prolog into two parts: the setters, imports and
 	// namespace declarations come first, and the variable, function and

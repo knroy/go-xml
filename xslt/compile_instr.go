@@ -1465,7 +1465,7 @@ type evaluateInstr struct {
 // here would have let those through.
 var xsltOnlyFunctions = map[string]bool{
 	"accumulator-after":         true,
-	"accumulator-before":         true,
+	"accumulator-before":        true,
 	"current":                   true,
 	"current-group":             true,
 	"current-grouping-key":      true,
