@@ -88,14 +88,31 @@ func serializationSettings(params map[string]string, paramDoc *xdm.Node) (xslt.O
 	if strings.EqualFold(params["method"], "adaptive") {
 		o.OmitXMLDecl = true
 	}
+	// The parameter document is applied FIRST, so that a parameter the prolog
+	// also declares overrides it.
+	//
+	// XQuery 3.1 §2.2.4 settles the direction: "if a serialization parameter
+	// is specified both in the parameter document and in an option
+	// declaration, the value in the option declaration takes precedence".
+	// (§25.1's opposite rule is XSLT's, where the parameter document is named
+	// by xsl:result-document and is the more specific of the two.) The case
+	// that pins it is Serialization-xml-04, whose title is "explicit
+	// declaration overrides parameter document": its prolog says indent "no"
+	// and omit-xml-declaration "yes" where the document says the reverse, and
+	// it asks for an unindented result with no declaration -- while still
+	// taking cdata-section-elements from the document, which the prolog does
+	// not mention.
+	if paramDoc != nil {
+		if err := xslt.ApplyParameterDocument(paramDoc, &o); err != nil {
+			return o, err
+		}
+	}
 	for name, val := range params {
 		switch name {
 		case "parameter-document":
 			// The document itself is fetched by the caller, which is the
-			// only place that knows where a test-set's files live, and
-			// applied below. Its parameters win over the ones declared
-			// beside it, which is the precedence §25.1 gives a parameter
-			// document, so it cannot be folded in here in map order.
+			// only place that knows where a test-set's files live, and is
+			// applied above.
 			continue
 		case "use-character-maps":
 			// A character map is spelled out as markup in a parameter
@@ -106,15 +123,6 @@ func serializationSettings(params map[string]string, paramDoc *xdm.Node) (xslt.O
 			if err := xslt.SetSerializationParam(&o, name, val); err != nil {
 				return o, err
 			}
-		}
-	}
-	// Last, so that it overrides what was declared beside it: "a
-	// serialization parameter specified in the parameter-document takes
-	// precedence over a value supplied ... in the selected output
-	// definition".
-	if paramDoc != nil {
-		if err := xslt.ApplyParameterDocument(paramDoc, &o); err != nil {
-			return o, err
 		}
 	}
 	return o, nil
