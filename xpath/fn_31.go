@@ -32,16 +32,21 @@ func register31Funcs(l *Library) {
 // registerTransform adds fn:transform, F&O 3.1 section 14.7.1.
 //
 // The function runs a transformation described by an options map and returns
-// its results as a map. This engine has an XSLT processor, so refusing is not
-// obviously the honest answer — but what fn:transform requires is compiling
-// and running a stylesheet supplied at *evaluation* time, from inside an
-// expression the XSLT layer may itself be evaluating, under a set of options
-// this implementation does not model. Claiming support and then mishandling
-// those options would be worse than declining.
+// its results as a map. Doing that needs an XSLT processor, and this package
+// does not depend on xslt — the layering is one-directional and stays that
+// way. So what is registered here is a stub that declines, which is the
+// honest answer for a caller evaluating a bare XPath expression: there is no
+// transformation to run.
 //
-// FOXT0004 is the code the specification gives for exactly this: "the
-// implementation does not support the transformation". The two cases in scope
-// assert it, both declaring the fn-transform-XSLT feature unsatisfied.
+// xslt/fntransform.go overrides it for the duration of a transform, the same
+// way key() and current() are bound per transform. A stylesheet therefore has
+// fn:transform and a plain xpath.Eval caller does not, which is the
+// separation every other XSLT-only function here already draws.
+//
+// FOXT0004 is the code the specification gives for a processor that cannot
+// run the transformation: "the implementation does not support the
+// transformation". The two cases in scope assert it, both declaring the
+// fn-transform-XSLT feature unsatisfied.
 func registerTransform(l *Library) {
 	l.registerFnSince(XPath31, "transform", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// The argument is still checked: a call passing something that is not

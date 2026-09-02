@@ -76,6 +76,7 @@ var runtimeFuncNames = map[string]bool{
 	"key":                  true,
 	"regex-group":          true,
 	"snapshot":             true,
+	"transform":            true,
 	"system-property":      true,
 	"type-available":       true,
 }
@@ -96,6 +97,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 	// bound here for the same reason: they are XSLT's, not XPath's, and a
 	// bare xpath.Eval caller has no business seeing them. See copyfuncs.go.
 	registerCopyFuncs(l, rt)
+
+	// fn:transform needs an XSLT processor, which is why xpath registers a
+	// stub that declines and this overrides it. See fntransform.go.
+	registerTransformFunc(l, rt)
 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "key"}, Arity: 2,

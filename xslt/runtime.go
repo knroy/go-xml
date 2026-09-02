@@ -19,6 +19,18 @@ import (
 type runtime struct {
 	sheet *Stylesheet
 
+	// goCtx is the caller's context.Context, kept so that a nested transform
+	// started by fn:transform is cancelled with the outer one rather than
+	// outliving it.
+	goCtx context.Context
+
+	// opts is the caller's TransformOptions, kept so that a nested transform
+	// started by fn:transform inherits what this one was given -- above all
+	// the resolvers, since a nested transform that could reach documents the
+	// outer one could not would be a hole in the sandbox rather than a
+	// feature. See fntransform.go.
+	opts TransformOptions
+
 	// funcResults memoises the results of stylesheet functions declared
 	// new-each-time="no". Section 10.3 makes that a promise that two calls
 	// with the same arguments return the SAME result, which for a function
@@ -518,6 +530,8 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		secondary:     new([]SecondaryResult),
 		baseURIUsed:   new(bool),
 		baseOutputURI: opts.BaseOutputURI,
+		opts:          opts,
+		goCtx:         ctx,
 	}
 
 	// A transform started from a named template has no source document, and
