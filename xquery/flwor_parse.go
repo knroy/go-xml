@@ -947,7 +947,9 @@ func needsXQueryParser(src string) bool {
 			case "for", "let", "some", "every":
 				// These four are XPath's too, so the keyword alone proves
 				// nothing; what proves it is a clause XPath's grammar lacks.
-				if hasXQueryOnlyClause(src[j:]) {
+				// The binding test bounds that scan — see startsBindingClause.
+				if startsBindingClause(src[i:j], src[j:]) &&
+					hasXQueryOnlyClause(src[j:]) {
 					return true
 				}
 			case "element", "attribute", "document", "text", "comment",
@@ -980,6 +982,46 @@ func needsXQueryParser(src string) bool {
 		}
 	}
 	return false
+}
+
+// startsBindingClause reports whether a "for", "let", "some" or "every" at the
+// cursor actually begins a binding clause, given the text that follows the
+// keyword.
+//
+// None of the four is a reserved word, and the grammar settles each of them
+// on the character after the keyword rather than on the keyword itself:
+//
+//	ForClause        ::= "for" "$" VarName TypeDeclaration? ...
+//	LetClause        ::= "let" "$" VarName TypeDeclaration? ...
+//	QuantifiedExpr   ::= ("some" | "every") "$" VarName ...
+//	WindowClause     ::= "for" ("tumbling" | "sliding") "window" ...
+//
+// So a "$" must follow, or — for "for" alone — the window spelling. Anything
+// else is a name: "for()" is a call to a function named "for", which
+// xquery30keywords5 declares along with a function for every other keyword.
+//
+// This test has to run before hasXQueryOnlyClause, because that scan looks
+// forward for a clause keyword and cannot tell the end of the binding it is
+// scanning from the start of an unrelated expression after it. Given
+// "for() + count()" it would find the "count" of a later call and report a
+// FLWOR that is not there. Requiring the binding first bounds the scan to
+// text that really is a binding.
+func startsBindingClause(kw, rest string) bool {
+	k := skipSpaceFrom(rest, 0)
+	if k < len(rest) && rest[k] == '$' {
+		return true
+	}
+	if kw != "for" {
+		return false
+	}
+	// The window form: "for tumbling window $x ..." binds its variable after
+	// two more keywords, so the "$" test above does not see it.
+	j := k
+	for j < len(rest) && isNameByte(rest[j]) {
+		j++
+	}
+	w := rest[k:j]
+	return w == "sliding" || w == "tumbling"
 }
 
 // hasXQueryOnlyClause reports whether what follows a "for", "let", "some" or

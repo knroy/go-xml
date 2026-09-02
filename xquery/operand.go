@@ -307,6 +307,17 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 	case "for", "let", "some", "every":
 		// XPath has the untyped forms of all four, so the keyword alone
 		// proves nothing; what proves it is a clause XPath's grammar lacks.
+		//
+		// The binding test comes first. None of the four is reserved, so
+		// "for()" is a call to a function named "for" and begins no clause at
+		// all — and hasXQueryOnlyClause scans forward for a clause keyword
+		// without being able to see where the supposed binding ends, so on
+		// "for() + count()" it would find the "count" of an unrelated later
+		// call and report a FLWOR. Requiring "$" (or the window spelling)
+		// first bounds that scan to text that really is a binding.
+		if !startsBindingClause(src[i:j], src[j:]) {
+			return false
+		}
 		return hasXQueryOnlyClause(src[j:])
 	case "element", "attribute", "document", "text", "comment",
 		"processing-instruction", "namespace", "ordered", "unordered":
