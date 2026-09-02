@@ -20,7 +20,7 @@ import (
 // reference behind — which works wherever the sub-expression's value does not
 // depend on where it stood. A function body is exactly the place where it
 // does: "function($a) { <x>{$a}</x> }" substituted becomes "function($a) {
-// $local:xq-op0 }" with the constructor evaluated outside, where $a is not
+// local:xq-step0() }" with the constructor evaluated outside, where $a is not
 // bound, and the result is XPST0008 for a variable the query plainly binds.
 // So the body has to stay inside the function, which means this package has
 // to build the function item itself.

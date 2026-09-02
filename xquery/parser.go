@@ -92,26 +92,22 @@ type compiledExpr struct {
 	// scope with the parser that made them.
 	sc *staticContext
 	// ops are XQuery-only primaries lifted out of src so that xpath could
-	// compile the rest. Each one's value is bound to "$local:xq-opN" before
-	// compiled is evaluated. See substituteOperands.
-	ops []node
+	// compile the rest. Each one is reached through a "local:xq-stepN()"
+	// call installed before compiled is evaluated. See substituteOperands.
+	ops []liftedOperand
 }
 
-// bind returns the context compiled must be evaluated in, with every lifted
-// operand's value bound to the variable that replaced it.
+// bind returns the context compiled must be evaluated in, with a function
+// installed for every lifted operand that replaced a primary.
 //
 // It is the ordinary context wherever nothing was lifted, which is the common
-// case; the loop only runs for an expression compileExpr had to rewrite.
+// case; the library is only built for an expression compileExpr had to
+// rewrite.
 func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
-	xp := ctx.xp
-	for i, op := range e.ops {
-		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
-		if err != nil {
-			return nil, err
-		}
-		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: opVar(i)}, v)
+	if len(e.ops) == 0 {
+		return ctx.xp, nil
 	}
-	return xp, nil
+	return bindLifted(ctx.xp, e.ops, ctx), nil
 }
 
 // eval evaluates the expression, whichever half of it is set.
@@ -467,7 +463,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err != nil {
 		return nil, err
 	}
-	var opsOut []node
+	var opsOut []liftedOperand
 	c, err := xpath.CompileVersion(expanded, p.sc, p.version)
 	if err != nil {
 		// The source handed here is XQuery this parser has already rewritten

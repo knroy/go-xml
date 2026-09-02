@@ -587,7 +587,7 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		// parseDeclBody rather than compileExpr, for the reason a variable
 		// declaration uses it: "declare context item := <a>bananas</a>" has a
 		// constructor for an initialiser, and a constructor cannot be handed
-		// to xpath. compileExpr alone lifts it to a "$local:xq-opN" it then
+		// to xpath. compileExpr alone lifts it to a "local:xq-stepN()" it then
 		// never binds, so the query fails with XPST0008 naming a variable the
 		// parser invented. §4.16 puts no restriction on the initialiser that
 		// §4.14 does not put on a variable's, so the two read it the same way.

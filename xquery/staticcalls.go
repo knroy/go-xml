@@ -103,7 +103,7 @@ func collectStaticCalls(n node, add func(*compiledExpr)) {
 			add(e)
 			if e != nil {
 				for _, op := range e.ops {
-					collectStaticCalls(op, add)
+					collectStaticCalls(op.n, add)
 				}
 			}
 		}

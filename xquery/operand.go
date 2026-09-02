@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // Constructors and the other XQuery-only forms as operands of an ordinary
@@ -18,25 +19,40 @@ import (
 // precedence belong to xpath and the operand belongs here, and neither parser
 // can read the other's half.
 //
-// The way out is the one every other split in this package uses: compute the
-// half this parser owns, bind it to a variable, and let xpath compile an
-// expression over that variable. Here it is done for every XQuery-only
-// primary in the expression at once. Each one's source span is replaced by
-// "$local:xq-opN" and the rewritten source — now pure XPath — goes to xpath,
-// which sees a variable reference exactly where the primary was. Substituting
-// at *primary* position is what makes this precedence-preserving: a variable
-// reference is a PrimaryExpr, the same grammatical slot the constructor and
-// the FLWOR occupied, so every operator around it binds as it did before.
+// The way out is the one every other split in this package uses: keep the
+// half this parser owns, and let xpath compile an expression around it. Here
+// it is done for every XQuery-only primary in the expression at once. Each
+// one's source span is replaced by a call to "local:xq-stepN()", a zero-arity
+// function this package installs, and the rewritten source — now pure XPath —
+// goes to xpath, which sees a function call exactly where the primary was.
+// Substituting at *primary* position is what makes this precedence-
+// preserving: a function call is a PrimaryExpr, the same grammatical slot the
+// constructor and the FLWOR occupied, so every operator around it binds as it
+// did before.
+//
+// A call rather than a variable, because a variable is bound once and the
+// primary may stand somewhere that is evaluated many times, each with its own
+// focus: the right operand of "/", the body of a "for" that a path drives,
+// the inside of a predicate. "$e/(for $i in ... order by $i return name(.))"
+// is the shape that forces it — the FLWOR is a step, "." is the node the step
+// is applied to, and a variable bound before the path ran raised XPDY0002
+// because at that moment there was no focus at all. The call is evaluated
+// where it stands, as often as it stands there, with whatever focus xpath has
+// set.
 //
 // This is not a general re-parse of XQuery in this package. It only finds the
 // primaries, and it finds them with the same lexical test needsXQueryParser
 // uses to decide that xpath cannot read the expression at all, so the two
 // cannot disagree about where one is.
 
-// opVar names the variable one substituted operand's value is bound to. The
-// reserved local-function namespace keeps it from colliding with anything the
-// query itself binds.
-func opVar(i int) string { return "xq-op" + strconv.Itoa(i) }
+// stepFn names the zero-arity function one substituted primary is called
+// through. The reserved local-function namespace keeps the name from
+// colliding with anything the query itself declares.
+func stepFn(i int) string { return "xq-step" + strconv.Itoa(i) }
+
+// liftedOperand is one XQuery-only primary lifted out of an expression so
+// that xpath could compile the rest around it.
+type liftedOperand struct{ n node }
 
 // parseOperandSubst rewrites the expression at the cursor as an XPath
 // expression over variables bound to the XQuery-only primaries in it,
@@ -76,8 +92,8 @@ func (p *parser) parseOperandSubst() ([]node, bool, error) {
 // or a "<" is at operand position at all: after a name, a literal or a
 // closing bracket, "<" is less-than and "element" is a name. Strings and
 // comments are stepped over so that neither can be mistaken for source.
-func (p *parser) substituteOperands(src string) ([]node, string, error) {
-	var ops []node
+func (p *parser) substituteOperands(src string) ([]liftedOperand, string, error) {
+	var ops []liftedOperand
 	var out strings.Builder
 	copied := 0
 	prev := byte(0)
@@ -167,8 +183,8 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 			return nil, "", nil
 		}
 		out.WriteString(src[copied:start])
-		out.WriteString("$local:" + opVar(len(ops)))
-		ops = append(ops, n)
+		out.WriteString("local:" + stepFn(len(ops)) + "()")
+		ops = append(ops, liftedOperand{n: n})
 		copied = sub.pos
 		i = sub.pos
 		prev = ')'
@@ -307,7 +323,7 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 // precedence, atomization or the comparison rules changes — only where the
 // operand values came from.
 type operandExpr struct {
-	ops  []node
+	ops  []liftedOperand
 	rest *compiledExpr
 }
 
@@ -316,14 +332,36 @@ func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i, op := range n.ops {
-		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
-		if err != nil {
-			return nil, err
-		}
-		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: opVar(i)}, v)
+	return n.rest.compiled.Eval(bindLifted(xp, n.ops, ctx))
+}
+
+// bindLifted makes the lifted operands reachable from the rewritten
+// expression, by installing one zero-arity function per operand over the
+// library already in the context.
+//
+// The library is chained rather than replaced, so every builtin and every
+// function the query declared still resolves; only the invented names are
+// new. Each closure carries the static context the primary was written in,
+// which is what a constructor inside it needs, and takes its focus from the
+// context xpath hands the call — which is the whole reason these are calls.
+func bindLifted(xp *xpath.Context, ops []liftedOperand,
+	ctx *evalContext) *xpath.Context {
+
+	lib := xpath.NewLibrary(xp.Funcs)
+	for i, op := range ops {
+		item := op.n
+		lib.Add(xpath.Function{
+			Name:  xdm.QName{URI: nsLocal, Local: stepFn(i)},
+			Arity: 0,
+			Call: func(c *xpath.Context, _ []xdm.Sequence) (xdm.Sequence, error) {
+				return (&enclosed{items: []node{item}}).sequence(
+					&evalContext{xp: c, sc: ctx.sc})
+			},
+		})
 	}
-	return n.rest.compiled.Eval(xp)
+	sub := *xp
+	sub.Funcs = lib
+	return &sub
 }
 
 func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
