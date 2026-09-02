@@ -366,10 +366,17 @@ stylesheetCorpus() { # name, stylesheet, glob, extra flags
 # runtime of the whole script.
 BIN=$(mktemp -t goxml.XXXXXX) || BIN=""
 if [ -n "$BIN" ] && $GO build -o "$BIN" ./cmd/go-xml; then
+	# DocBook is run with the flags a real user of this corpus would pass, so
+	# the count measures the engine rather than a thin invocation. Two of its
+	# documents declare a DOCTYPE, and three build a temporary tree from a
+	# sequence containing an attribute -- correct to refuse by 5.8.1, which is
+	# why the relaxation is opt-in rather than the default. Measuring without
+	# these reported 544 where the engine could already do 549.
 	stylesheetCorpus DocBook \
 		"$XSLTNG/src/main/xslt/docbook.xsl" \
 		"$XSLTNG/src/test/resources/xml/*.xml" \
-		"-allow-dir $XSLTNG -allow-unparsed-text"
+		"-allow-dir $XSLTNG -allow-unparsed-text -allow-doctype \
+		 -compat-drop-attributes-on-document"
 	stylesheetCorpus XSpec \
 		"$XSPEC/src/compiler/compile-xslt-tests.xsl" \
 		"$XSPEC/test/*.xspec" \

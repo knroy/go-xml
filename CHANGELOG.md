@@ -160,7 +160,7 @@ XSLT at 8,606 / 6,149.
 
 Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and
 [XSpec](https://github.com/xspec/xspec), two XSLT 3.0 codebases large enough to
-exercise combinations the W3C suites do not reach. 544 of DocBook's 593 test
+exercise combinations the W3C suites do not reach. 549 of DocBook's 593 test
 documents now render, byte-identical to the Saxon reference output once the
 timestamp and generator metadata are normalised, and all 225 applicable XSpec
 descriptions compile. Most of the remaining 49 need a Saxon-Java extension

@@ -823,12 +823,16 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. 544 of its 593 test documents render,
+  a multi-stage `fn:transform` pipeline. 549 of its 593 test documents render,
   and the HTML is byte-identical to the Saxon-produced reference output once
   the timestamp and generator metadata (both environment-dependent) are
-  normalised. Of the 49 that do not, 42 need `ext:xinclude` — a Saxon-Java
-  extension function DocBook ships as a `.jar`, whose absence the stylesheet's
-  own `function-available()` fallback handles. Three more raise `XTDE0420`:
+  normalised. Of the 44 that do not, 43 need XInclude — DocBook
+  resolves it through `ext:xinclude`, a Saxon-Java extension it ships as a
+  `.jar`, and the stylesheet's own `function-available()` fallback handles the
+  absence. The last is a timeout. The five that used to be counted here are
+  answered by flags this engine already had — three raised `XTDE0420` and two
+  declared a DOCTYPE — and the figure above is now measured with them, which is
+  what a user of this corpus would pass. On `XTDE0420`:
   DocBook builds a temporary tree from a sequence containing an attribute,
   which §5.8.1 makes an error, and this engine is right to refuse it — the
   ordered rules there unwrap document nodes but never attributes, and the
