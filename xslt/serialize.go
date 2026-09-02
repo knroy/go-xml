@@ -430,7 +430,20 @@ func (s *serializer) writeDoctypeFor(n *xdm.Node) {
 			// Four tests pin the three halves of this apart: output-0209
 			// and -0210 the casing, -0211 the prefix, -0213 an element
 			// that is not html, and -0214 an html that is not XHTML's.
-			if n.Kind == xdm.KindElement && n.Name.URI == nsXHTML &&
+			// No namespace counts as XHTML's here, while a foreign one does
+			// not. output-0214 pins the refusal with an element explicitly
+			// in http://www.example.com/not-xhtml, and output-0213 pins it
+			// for an element that is not named html at all; neither says
+			// anything about an element in no namespace. The XQuery
+			// serialization cases do: Serialization-xhtml-22, -27, -36,
+			// -37, -37a, -38 and -40 write a bare <html/>, which a direct
+			// element constructor puts in no namespace unless the query
+			// declared a default one, and every one of them asks to see the
+			// DOCTYPE. Requiring the XHTML namespace withheld it from a
+			// document whose element is called html and is in no namespace
+			// that contradicts it.
+			if n.Kind == xdm.KindElement &&
+				(n.Name.URI == nsXHTML || n.Name.URI == "") &&
 				strings.EqualFold(n.Name.Local, "html") {
 				s.writeString("<!DOCTYPE " + n.Name.Local + ">\n")
 			}
@@ -690,8 +703,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// tree it is given, and a <head> of somebody else's vocabulary is not a
 	// place to describe a media type -- output-0214 and -0215 build exactly
 	// that and assert no meta appears.
+	// No namespace counts as XHTML's, for the same reason the DOCTYPE rule
+	// above accepts it: output-0214 and -0215 build a <head> in an explicitly
+	// alien namespace, which is what those cases are about, and say nothing
+	// about one in no namespace. Serialization-xhtml-36, -37 and -37a write a
+	// bare <html><head/></html> -- no namespace, because a direct element
+	// constructor puts it in none -- and ask to see the content-type meta.
 	if s.html && strings.EqualFold(n.Name.Local, "head") &&
-		(!s.xhtml || n.Name.URI == nsXHTML) {
+		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") {
 		s.inHead = true
 		defer func() { s.inHead = false }()
 		// include-content-type="no" suppresses the meta element. It defaults
