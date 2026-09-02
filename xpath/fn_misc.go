@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/knroy/go-xml/xdm"
@@ -659,7 +660,14 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if err != nil {
 				return nil, err
 			}
-			out, err := formatDateTimePicture(a.DateTimeVal(), pic, name, ctx.Version)
+			// Section 9.8.4.3: an Olson timezone name in $place moves the
+			// value into that zone before any component is rendered, and
+			// supplies the zone's own abbreviation for "[ZN]".
+			dt, zone := a.DateTimeVal(), ""
+			if place, ok := requestedPlace(args); ok {
+				dt, zone = applyPlace(dt, place)
+			}
+			out, err := formatDateTimePicture(dt, pic, name, ctx.Version, zone)
 			if err != nil {
 				return nil, err
 			}
@@ -791,7 +799,7 @@ func isCalendarName(s string) bool {
 // supply: fn:format-date has no clock and fn:format-time has no calendar, and
 // section 16.5.1 makes a marker naming an absent component XTDE1350 rather
 // than something to render as blank.
-func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string, v Version) (string, error) {
+func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string, v Version, zone string) (string, error) {
 	var sb strings.Builder
 	runes := []rune(pic)
 
@@ -825,7 +833,7 @@ func formatDateTimePicture(dt *xdm.DateTime, pic string, fn string, v Version) (
 		marker := strings.TrimSpace(string(runes[i+1 : end]))
 		i = end
 
-		text, err := formatComponent(dt, marker, fn, v)
+		text, err := formatComponent(dt, marker, fn, v, zone)
 		if err != nil {
 			return "", err
 		}
@@ -842,7 +850,7 @@ const dateComponents = "YMDdFWwEC"
 const timeComponents = "HhPmsf"
 
 // formatComponent renders one [component]presentation marker.
-func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version) (string, error) {
+func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version, zone string) (string, error) {
 	if marker == "" {
 		return "", fmt.Errorf("FOFD1340: empty component in picture")
 	}
@@ -1033,7 +1041,7 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version) (str
 		}
 		return applyNameCase("ISO", pres, width), nil
 	case 'Z', 'z':
-		return formatTZMarker(dt, comp, pres, width, traditional), nil
+		return formatTZMarker(dt, comp, pres, width, traditional, zone), nil
 	}
 	return "", fmt.Errorf("FOFD1340: unsupported picture component %q", string(comp))
 }
@@ -1697,7 +1705,7 @@ func daysFromCivilLocal(y, m, d int) int64 {
 // is a sign, the hours, and — only when the offset is not a whole number of
 // hours — a colon and the minutes; a minimum width of 5 or more is what asks
 // for the minutes to be spelled out unconditionally.
-func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional bool) string {
+func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional bool, zone string) string {
 	if !dt.HasTZ {
 		// "[ZZ]" asks for the military letter, and J is the one that names
 		// the absence of a timezone. Every other picture renders nothing.
@@ -1719,6 +1727,19 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 	if comp == 'Z' && pres == "Z" {
 		if letter, ok := militaryTZ(off); ok {
 			return letter
+		}
+	}
+	// "[ZN]" asks for the timezone by name. A name is only available when
+	// $place named an Olson zone, since the same offset is called different
+	// things in different countries; UTC is the exception, having one
+	// conventional name everywhere. Anything else falls through to the
+	// numeric form, which the specification names as the fallback.
+	if comp == 'Z' && isNamePresentation(pres) {
+		switch {
+		case zone != "":
+			return applyNameCase(zone, pres, width)
+		case off == 0:
+			return applyNameCase("GMT", pres, width)
 		}
 	}
 	// The separator between hours and minutes is whatever the picture writes
@@ -2315,6 +2336,61 @@ func requestedLanguage(args []xdm.Sequence) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(s), true
+}
+
+// requestedPlace returns the $place argument of a date formatting function.
+func requestedPlace(args []xdm.Sequence) (string, bool) {
+	if len(args) < 5 || len(args[4]) == 0 {
+		return "", false
+	}
+	s, err := argString(args, 4)
+	if err != nil || strings.TrimSpace(s) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(s), true
+}
+
+// applyPlace adjusts a date/time into the zone named by the $place argument
+// and returns the zone's abbreviation for "[ZN]" to render.
+//
+// Section 9.8.4.3 admits two forms of place: an ISO 3166 country code and an
+// Olson timezone name. Only the Olson form carries an offset, and only it is
+// acted on here; a country code names a region that may span several zones, so
+// there is nothing unambiguous to adjust to.
+//
+// A name the platform cannot resolve is not an error. The specification says
+// an unrecognized place falls back to the default place from the dynamic
+// context, which is what returning the value untouched amounts to. That also
+// covers a host with no timezone database installed: such a system formats as
+// if no place had been given rather than failing.
+//
+// An unzoned value is left alone as well. Moving it would require inventing
+// the instant it denotes, and the adjustment is defined as preserving one.
+func applyPlace(dt *xdm.DateTime, place string) (*xdm.DateTime, string) {
+	if dt == nil || !dt.HasTZ || !strings.Contains(place, "/") {
+		return dt, ""
+	}
+	loc, err := time.LoadLocation(place)
+	if err != nil {
+		return dt, ""
+	}
+	// The zone offset depends on the instant, because daylight saving moves
+	// it, so the value has to be placed on the timeline before the zone can
+	// be asked which offset applies.
+	utc := dt.ToSeconds(0)
+	secs, _ := new(big.Float).SetRat(utc).Int64()
+	name, off := time.Unix(secs, 0).In(loc).Zone()
+	shifted, err := dateTimeFromSeconds(utc, true, off/60)
+	if err != nil {
+		return dt, ""
+	}
+	// A zone with no abbreviation of its own reports its numeric offset —
+	// "+0530" and the like. That is not a name, and "[ZN]" falls back to the
+	// offset format on its own, so it is not passed on as one.
+	if name != "" && (name[0] == '+' || name[0] == '-') {
+		name = ""
+	}
+	return shifted, name
 }
 
 // supportedLanguage reports whether the language tag selects the one language

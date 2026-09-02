@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // looksLikeFLWOR reports whether a FLWOR expression starts here.
@@ -724,6 +725,9 @@ func (p *parser) parseOrderByClause() ([]clause, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := p.checkCollation(uri); err != nil {
+				return nil, err
+			}
 			s.collation = uri
 		}
 		c.specs = append(c.specs, s)
@@ -777,6 +781,9 @@ func (p *parser) parseGroupByClause() ([]clause, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := p.checkCollation(uri); err != nil {
+				return nil, err
+			}
 			s.collation = uri
 		}
 		c.specs = append(c.specs, s)
@@ -785,6 +792,37 @@ func (p *parser) parseGroupByClause() ([]clause, error) {
 		}
 	}
 	return []clause{c}, nil
+}
+
+// checkCollation rejects a collation URI no implementation of this processor
+// supports, as the static error XQST0076.
+//
+// The check belongs at parse time because XQST0076 is a *static* error: a
+// query naming an unknown collation is in error whether or not the clause
+// ever gets as far as comparing two keys. Resolving it lazily, on the first
+// comparison, hid the fault behind the shape of the data — "order by 1" makes
+// every key identical, and a stream of fewer than two tuples is never sorted
+// at all, so an invalid collation went unreported in exactly the cases a test
+// for it is written with.
+//
+// A relative reference is resolved against the static base URI per §5.2. The
+// literal is tried first because ResolveCollation accepts the abbreviated
+// forms of the built-in collations on their own, and resolving those against
+// a base would turn a name it recognizes into one it does not.
+func (p *parser) checkCollation(uri string) error {
+	if uri == "" {
+		return nil
+	}
+	if _, err := xpath.ResolveCollation(uri); err == nil {
+		return nil
+	}
+	resolved := resolveBase(p.sc.baseURI, uri)
+	if resolved != uri {
+		if _, err := xpath.ResolveCollation(resolved); err == nil {
+			return nil
+		}
+	}
+	return p.errorf("XQST0076: collation %q is not supported", uri)
 }
 
 // consumeAtDepthZero consumes a separator that belongs to the clause rather
