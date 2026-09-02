@@ -125,6 +125,18 @@ func Compile(src string, opts Options) (*Query, error) {
 		return nil, err
 	}
 	body, err := p.parseQueryBody()
+	if err == nil && body == nil {
+		// [1] Module ::= VersionDecl? (LibraryModule | MainModule) and
+		// [3] MainModule ::= Prolog QueryBody: a main module whose text runs
+		// out after the prolog has no query body, which is a grammar error
+		// rather than an empty result. K2-Axes-97 is "declare function
+		// local:foo() external;" and nothing else, and asks for XPST0003.
+		//
+		// The check is here and not in parseQueryBody, which is reused to
+		// read the braced body of a constructor, a switch and a typeswitch --
+		// and "attribute name {}" has an empty one legitimately.
+		err = p.errorf("XPST0003: a main module must have a query body")
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -264,15 +264,34 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		return false
 	}
 	// A word is only a keyword where an operand may begin. After a name, a
-	// "$", a "@", a "/" or a "::" it is part of a name or a step.
+	// "$", a "@" or a "::" it is part of a name or a step.
 	if prev != 0 && (isNameByte(prev) || prev == '$' || prev == ':' ||
-		prev == '@' || prev == '/' || prev == ')' || prev == ']' ||
+		prev == '@' || prev == ')' || prev == ']' ||
 		prev == '"' || prev == '\'' || prev == '*') {
 		return false
 	}
 	j := i
 	for j < len(src) && isNameByte(src[j]) {
 		j++
+	}
+	// A "/" is different from the rest: a step may be a PrimaryExpr, so
+	// "/ordered{bid}" is a path whose one step is an ordered expression, and
+	// PathExpr-21 says so outright. But a name after a "/" is usually a name
+	// test, and every keyword here is also a legal element name, so only the
+	// spellings that cannot be a name test are taken: a keyword followed by
+	// "{" is a constructor, since a name test may not be followed by a brace.
+	// The others -- "for", "function", "try" and their kin -- are left alone
+	// after a "/", where the step reading is the right one.
+	if prev == '/' {
+		switch src[i:j] {
+		case "element", "attribute", "document", "text", "comment",
+			"processing-instruction", "namespace", "ordered", "unordered":
+			if k := skipSpaceFrom(src, j); k >= len(src) || src[k] != '{' {
+				return false
+			}
+		default:
+			return false
+		}
 	}
 	switch src[i:j] {
 	case "for", "let", "some", "every":

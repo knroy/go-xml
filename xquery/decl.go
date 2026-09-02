@@ -194,6 +194,18 @@ func (p *parser) parseFunctionDeclBody(private bool) error {
 	if err != nil {
 		return err
 	}
+	// The parameter list is required by the grammar, and whether the text is
+	// a function declaration at all is settled before anything is said about
+	// the name it declares. "declare function name" is not a declaration in
+	// the wrong namespace; it is not a declaration. K2-Axes-96 is that text
+	// exactly and asks for XPST0003, which the XQST0045 below was answering
+	// first because the name resolves into fn: by default.
+	//
+	// The cursor is not moved: the "(" is consumed below, where the rest of
+	// the declaration is read in order.
+	if k := skipSpaceFrom(p.src, p.pos); k >= len(p.src) || p.src[k] != '(' {
+		return p.errorf("XPST0003: expected %q after the function name", "(")
+	}
 	if name.URI == "" {
 		return p.errorf(
 			"XQST0060: a declared function must be in a namespace (%q)", local)
