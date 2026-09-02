@@ -236,10 +236,13 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
 		// only be the construct — the same test parseXQueryOnly makes.
-		// The probe compiles the construct's subexpressions to decide
-		// whether it is one, so it needs this parser's static context and
-		// version: compileExpr reads the declared base URI and collation off
-		// them, and a bare parser has neither.
+		// The probe inherits the static context and the version, because
+		// deciding whether this is a switch means parsing one, and that
+		// reaches compileExpr for the operand and every branch. A parser
+		// without an sc dereferences nil there rather than reporting that
+		// the keyword was not a switch after all; the depth is carried too
+		// so that a probe cannot outrun the nesting limit the real parse
+		// would hit.
 		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
 			depth: p.depth + 1}
 		_, ok, _ := sub.parseXQueryOnly()

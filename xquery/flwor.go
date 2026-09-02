@@ -291,9 +291,10 @@ func (c *countClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 type orderSpec struct {
 	key        *compiledExpr
 	descending bool
-	// emptyGreatest is the empty-order for this spec. The default is the
-	// static context's, which §4.5 makes "empty least" unless a prolog says
-	// otherwise; this package has no prolog yet, so it is least.
+	// emptyGreatest is the empty-order for this spec: it is set from the
+	// static context's default, which "declare default order empty
+	// greatest|least" establishes for the module, and overridden by an
+	// "empty greatest|least" written on the spec itself.
 	emptyGreatest bool
 	collation     string
 }
@@ -416,16 +417,20 @@ func compareOrderKeys(a, b *xdm.Atomic, spec *orderSpec, ctx *evalContext) (int,
 	case ea && eb:
 		return 0, nil
 	case ea, eb:
-		// The empty one sorts first under "empty least" and last under
-		// "empty greatest" — before the descending flag is applied, which
-		// §3.10.6 states explicitly: the empty-order is not reversed by
-		// "descending".
+		// "empty least" ranks the empty key below every other and "empty
+		// greatest" above it, and that is all this decides. The direction
+		// is not applied here: the caller reverses the sign of whatever
+		// this returns when the spec is descending, exactly as it does for
+		// an ordinary comparison, so negating it here as well would cancel
+		// out and leave the empty-order the same in both directions.
+		//
+		// The effect is that "descending" does move the empty key, and the
+		// suite says it should: prod-EmptyOrderDecl 10-13 declare "empty
+		// greatest" with "descending" and want the empty *first*, while
+		// 18-21 declare "empty least" with "descending" and want it last.
 		less := -1
 		if spec.emptyGreatest {
 			less = 1
-		}
-		if spec.descending {
-			less = -less
 		}
 		if ea {
 			return less, nil

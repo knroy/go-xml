@@ -520,9 +520,16 @@ func (p *parser) skipSpaceAndComments() bool {
 // while the implementation is incomplete.
 func (p *parser) refuseUnimplemented() error {
 	if hasKeywordPrefix(p.src[p.pos:], "module namespace") {
+		// A library module is not a main module: [1] Module ::= VersionDecl?
+		// (LibraryModule | MainModule), and only a main module has a query
+		// body. Compile is asked for a main module, so a library module here
+		// is a grammar error and XPST0003 -- not XQST0059, which is about an
+		// import that could not be resolved and is the wrong complaint when
+		// nothing has been imported. K2-ModuleProlog-1 asks for XPST0003 by
+		// name; that a resolver is also missing is a separate, later fact.
 		return p.errorf(
-			"XQST0059: a library module needs module resolution, " +
-				"which is not implemented yet")
+			"XPST0003: a library module has no query body, and cannot be " +
+				"evaluated as a main module")
 	}
 	// Nothing else is refused by name any more: FLWOR, the quantified
 	// expressions, the prolog and the XQuery-only expression forms are all
