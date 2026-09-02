@@ -101,6 +101,17 @@ func Compile(src string, opts Options) (*Query, error) {
 		}
 	}
 
+	// XQuery 3.1 section 4.1 normalises the line endings of the query text
+	// before anything reads it: a carriage return, alone or followed by a
+	// line feed, is one line feed. The rule is the one XML applies to a
+	// parsed document, applied here to the query itself, and it reaches a
+	// string literal along with everything else -- the literal is part of the
+	// query text, so '&#xd;&#xa;' in the source is a single line feed in the
+	// value, which is what line-ending-Q002 and -Q003 assert. Doing it here
+	// rather than in the lexer is what keeps every offset the parser reports
+	// an offset into the same string.
+	src = normalizeLineEndings(src)
+
 	p := &parser{src: src, sc: sc, version: xpath.XPath31,
 		declaredNS: map[string]bool{}}
 	// The version declaration, the prolog and the body are read in that order
@@ -663,4 +674,28 @@ func firstToken(s string) string {
 // does not yet parse.
 func unimplemented(what string) error {
 	return fmt.Errorf("XPST0003: %s is not implemented yet", what)
+}
+
+// normalizeLineEndings applies XQuery 3.1 section 4.1's end-of-line handling
+// to the query text: "\r\n" and a lone "\r" each become "\n".
+//
+// The common case is a query with no carriage return at all, which is
+// returned untouched rather than rebuilt.
+func normalizeLineEndings(src string) string {
+	if !strings.ContainsRune(src, '\r') {
+		return src
+	}
+	var sb strings.Builder
+	sb.Grow(len(src))
+	for i := 0; i < len(src); i++ {
+		if src[i] != '\r' {
+			sb.WriteByte(src[i])
+			continue
+		}
+		sb.WriteByte('\n')
+		if i+1 < len(src) && src[i+1] == '\n' {
+			i++
+		}
+	}
+	return sb.String()
 }
