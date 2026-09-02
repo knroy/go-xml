@@ -1753,10 +1753,12 @@ func formatTZMarker(dt *xdm.DateTime, comp byte, pres, width string, traditional
 			return letter
 		}
 	}
-	// "[ZN]" asks for the timezone by name. A name is only available when
-	// $place named an Olson zone, since the same offset is called different
-	// things in different countries; UTC is the exception, having one
-	// conventional name everywhere. Anything else falls through to the
+	// "[ZN]" asks for the timezone by name. A name comes from $place, which
+	// either names an Olson zone -- whose abbreviation is exact -- or a
+	// country whose conventional names apply to the offset; the same offset
+	// is called different things in different places, so without a place
+	// there is nothing to choose between them. UTC is the exception, having
+	// one conventional name everywhere. Anything else falls through to the
 	// numeric form, which the specification names as the fallback.
 	if comp == 'Z' && isNamePresentation(pres) {
 		switch {
@@ -2374,13 +2376,100 @@ func requestedPlace(args []xdm.Sequence) (string, bool) {
 	return strings.TrimSpace(s), true
 }
 
+// conventionalTZName is the name "[ZN]" renders for a timezone offset when
+// $place names a country rather than a single zone.
+//
+// Section 9.8.4.2 asks for the timezone "output (where possible) as a timezone
+// name", notes that "the same timezone offset has different names in different
+// places", and permits the implementation to "apply a default, for example by
+// using the timezone names that are conventional in North America". The
+// specification's own worked table in 9.8.4.6 shows what it means by that: for
+// $place "us" it renders -10:00 as HST, -05:00 as EST, +00:00 as GMT, +05:30
+// as IST and +13:00 as "+13:00".
+//
+// That table is the design, and it is worth being precise about what it is
+// not. It is not a timezone-database lookup: +05:30 is not a United States
+// offset at all, yet the row still names it IST, because the name is the one
+// conventionally attached to the offset rather than one derived from the
+// country. Nor does it depend on the date -- the same table serves an xs:time,
+// which has no date for a daylight-saving rule to be evaluated against. So
+// this is a fixed offset-to-name map, and deliberately so: deriving these from
+// the host's zoneinfo would make the output depend on which tzdata snapshot
+// the machine happens to carry, and would fail outright on a host that has
+// none.
+//
+// An offset with no conventional name is absent from the map, and "[ZN]" then
+// falls back to the numeric format the specification names -- which is why
+// +13:00 is not listed.
+//
+// The North American offsets carry two names, because a name says whether
+// daylight saving is in force and the offset alone does not: -05:00 is Eastern
+// Standard Time in January and Central Daylight Time in July. The second name
+// is used when the value's date falls in the daylight-saving window, and the
+// first when it does not or when there is no date to ask -- an xs:time has
+// none, which is why the standard name is the default rather than an error.
+var conventionalTZName = map[int]struct{ standard, daylight string }{
+	-600: {"HST", "HST"}, // Hawaii does not observe daylight saving
+	-540: {"AKST", "HDT"},
+	-480: {"PST", "AKDT"},
+	-420: {"MST", "PDT"},
+	-360: {"CST", "MDT"},
+	-300: {"EST", "CDT"},
+	0:    {"GMT", "GMT"},
+	60:   {"CET", "CEST"},
+	330:  {"IST", "IST"}, // India: no daylight saving, and the name the
+	// specification's own table gives for +05:30 even under $place "us"
+}
+
+// northAmericanDST reports whether a date falls in the daylight-saving window
+// that the United States has observed since 2007: from the second Sunday in
+// March to the first Sunday in November.
+//
+// It is a rule, not a database. The alternative -- asking the host's zoneinfo
+// -- would make the formatted output depend on which tzdata snapshot the
+// machine carries, and would give no answer at all on a host without one.
+//
+// A value with no date, an xs:time, never reaches here: its caller has no year
+// to pass and takes the standard name.
+func northAmericanDST(y, m, d int) bool {
+	switch {
+	case m < 3 || m > 11:
+		return false
+	case m > 3 && m < 11:
+		return true
+	}
+	// Zeller's congruence gives the weekday of the first of the month, from
+	// which the second Sunday in March and the first in November follow.
+	first := weekdayOf(y, m, 1)
+	if m == 3 {
+		// The second Sunday: the first Sunday is 1 + (7-first)%7, and a week
+		// after that is the changeover.
+		return d >= 1+(7-first)%7+7
+	}
+	return d < 1+(7-first)%7
+}
+
+// weekdayOf returns the day of the week for a date, 0 for Sunday.
+func weekdayOf(y, m, d int) int {
+	if m < 3 {
+		m += 12
+		y--
+	}
+	k, j := y%100, y/100
+	h := (d + 13*(m+1)/5 + k + k/4 + j/4 + 5*j) % 7
+	// Zeller numbers Saturday 0; shift so Sunday is 0.
+	return (h + 6) % 7
+}
+
 // applyPlace adjusts a date/time into the zone named by the $place argument
 // and returns the zone's abbreviation for "[ZN]" to render.
 //
 // Section 9.8.4.3 admits two forms of place: an ISO 3166 country code and an
-// Olson timezone name. Only the Olson form carries an offset, and only it is
-// acted on here; a country code names a region that may span several zones, so
-// there is nothing unambiguous to adjust to.
+// Olson timezone name. Only the Olson form carries an offset, so only it moves
+// the value: a country code names a region that may span several zones, and
+// there is nothing unambiguous to adjust to. It can still supply a *name*
+// though, which is what the country-code branch below does and what
+// distinguishes a place of "us" from no place at all.
 //
 // A name the platform cannot resolve is not an error. The specification says
 // an unrecognized place falls back to the default place from the dynamic
@@ -2391,8 +2480,34 @@ func requestedPlace(args []xdm.Sequence) (string, bool) {
 // An unzoned value is left alone as well. Moving it would require inventing
 // the instant it denotes, and the adjustment is defined as preserving one.
 func applyPlace(dt *xdm.DateTime, place string) (*xdm.DateTime, string) {
-	if dt == nil || !dt.HasTZ || !strings.Contains(place, "/") {
+	if dt == nil || !dt.HasTZ {
 		return dt, ""
+	}
+	if !strings.Contains(place, "/") {
+		// An ISO 3166 country code names the region whose conventional
+		// timezone names apply. The value is not moved -- the country has no
+		// single offset to move it to -- but the offset it already carries
+		// can be named.
+		if len(place) != 2 {
+			return dt, ""
+		}
+		for i := 0; i < 2; i++ {
+			if c := place[i] | 0x20; c < 'a' || c > 'z' {
+				return dt, ""
+			}
+		}
+		names, ok := conventionalTZName[dt.TZOffset]
+		if !ok {
+			return dt, ""
+		}
+		// An xs:time carries no date -- its Month is zero -- so there is no
+		// daylight-saving window to place it in, and the standard name
+		// applies. That is the specification's own table, which gives EST for
+		// -05:00 with no date in sight.
+		if dt.Month != 0 && northAmericanDST(dt.Year, dt.Month, dt.Day) {
+			return dt, names.daylight
+		}
+		return dt, names.standard
 	}
 	loc, err := time.LoadLocation(place)
 	if err != nil {
