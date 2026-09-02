@@ -248,6 +248,20 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	if el := sub.b.Open(); el != nil && n.baseURI != "" {
 		el.BaseURI = n.baseURI
 	}
+	// §3.9.3.1: the in-scope namespaces of a constructed element include a
+	// binding for its own name. A direct constructor writes that binding as
+	// an xmlns attribute and it arrives below; a computed one has nowhere to
+	// write it, so the name's own prefix is bound here. Without it the
+	// element carried a namespace URI that nothing declared, and serializing
+	// "declare namespace foo='...'; element foo:e {}" lost the xmlns
+	// altogether. The default element namespace goes in the same way, under
+	// the empty prefix.
+	if el := sub.b.Open(); el != nil && name.URI != "" &&
+		el.InScopeNamespaces()[name.Prefix] != name.URI {
+		if err := sub.b.AddNamespace(name.Prefix, name.URI); err != nil {
+			return err
+		}
+	}
 	// Namespace declarations are applied before anything else, so that they
 	// are in scope for the attributes and the content.
 	for _, ns := range n.namespaces {
@@ -643,14 +657,24 @@ func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName,
 	if !xdm.IsNCName(local) || (prefix != "" && !xdm.IsNCName(prefix)) {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %q is not a lexical QName", lex)
 	}
+	// The prefix resolves against the namespaces in scope *where the
+	// constructor was written*, which is what §3.9.3.1's "statically known
+	// namespaces" means. Inside a direct constructor those include that
+	// element's own declarations — "<e xmlns:foo='...'>{element {'foo:x'} {}}
+	// </e>" binds foo — and they are only on the expression, the evaluation
+	// context having none but the module's.
+	sc := e.sc
+	if sc == nil {
+		sc = ctx.sc
+	}
 	if isElement {
-		q, err := ctx.sc.resolveElementName(prefix, local)
+		q, err := sc.resolveElementName(prefix, local)
 		if err != nil {
 			return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 		}
 		return q, nil
 	}
-	q, err := ctx.sc.resolveAttributeName(prefix, local)
+	q, err := sc.resolveAttributeName(prefix, local)
 	if err != nil {
 		return xdm.QName{}, fmt.Errorf("XQDY0074: %v", err)
 	}
