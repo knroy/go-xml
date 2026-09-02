@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **99.45%** of the W3C QT3 suite (29,640 of 29,805 in
+XQuery 3.1, measured at **99.61%** of the W3C QT3 suite (29,689 of 29,805 in
 scope). What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
