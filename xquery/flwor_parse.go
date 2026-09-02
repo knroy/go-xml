@@ -426,6 +426,21 @@ func (p *parser) finishFLWOR(f *flwor) (*flwor, error) {
 	return f, nil
 }
 
+// startsXQueryOnly reports whether one of the XQuery-only expression forms —
+// typeswitch, switch, try, validate, ordered, unordered, the extension
+// expression or the string constructor — begins at the cursor.
+//
+// A clause's expression is an ExprSingle and every one of these is an
+// ExprSingle, so "for $x in E return typeswitch ($x) ..." is ordinary syntax.
+// None is reserved, though, so the test is the one parseXQueryOnly itself
+// makes: it trial-parses, and only a construct that parses commits.
+func (p *parser) startsXQueryOnly() bool {
+	save := p.pos
+	defer func() { p.pos = save }()
+	_, ok, _ := p.parseXQueryOnly()
+	return ok
+}
+
 // startsConstructor reports whether a direct or computed constructor begins
 // at the cursor.
 func (p *parser) startsConstructor() bool {
@@ -525,7 +540,8 @@ func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, 
 // with the result differs.
 func (p *parser) parseOwnExpr() (*compiledExpr, bool, error) {
 	p.skipSpaceAndComments()
-	if !p.startsConstructor() && !p.looksLikeFLWOR() && !p.looksLikeQuantified() {
+	if !p.startsConstructor() && !p.looksLikeFLWOR() &&
+		!p.looksLikeQuantified() && !p.startsXQueryOnly() {
 		return nil, false, nil
 	}
 	n, err := p.parseItem()
