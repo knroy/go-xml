@@ -1953,6 +1953,10 @@ func resolveAgainst(base, ref string) string {
 type envDocResolver struct {
 	r     *Runner
 	byURI map[string]string
+	// dir is the test-set's directory, relative to the suite root. A case
+	// may call fn:doc with a path relative to it that the environment never
+	// declared; see ResolveDocument.
+	dir string
 }
 
 func envDocs(r *Runner, dir string, env Environment) *envDocResolver {
@@ -1993,10 +1997,10 @@ func envDocs(r *Runner, dir string, env Environment) *envDocResolver {
 			byURI[filepath.Join(r.Root, src.File)] = src.File
 		}
 	}
-	if len(byURI) == 0 {
-		return nil
-	}
-	return &envDocResolver{r: r, byURI: byURI}
+	// The resolver is returned even with nothing declared, because it can
+	// still find a document by its path under the test-set directory; see
+	// ResolveDocument.
+	return &envDocResolver{r: r, byURI: byURI, dir: dir}
 }
 
 func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
@@ -2008,6 +2012,31 @@ func (d *envDocResolver) ResolveDocument(uri, base string) (*xdm.Tree, error) {
 		// matching only the reference as written left it unreachable.
 		if base != "" && !strings.Contains(uri, "://") {
 			file, ok = d.byURI[resolveAgainst(base, uri)]
+		}
+	}
+	if !ok && !strings.Contains(uri, "://") && !filepath.IsAbs(uri) {
+		// A relative reference the environment never declared still names a
+		// file in the checkout, relative to the test-set's own directory --
+		// the same rule a <resource> path follows.
+		//
+		// UseCaseR31-030 calls doc("UseCaseR31/Wikipedia-Origami.xml") under
+		// the "json-docs" environment, which declares the JSON resources the
+		// other cases in the set read but not this XML document. The file is
+		// right there in the suite; nothing but the catalog entry was
+		// missing, so refusing it tested the harness rather than the engine.
+		//
+		// The path is confined to the suite root. A case cannot reach outside
+		// it with "..", and one that tries gets the FODC0002 it would have
+		// got before.
+		cand := filepath.Join(d.dir, filepath.FromSlash(uri))
+		full := filepath.Join(d.r.Root, cand)
+		if root, err := filepath.Abs(d.r.Root); err == nil {
+			if abs, err := filepath.Abs(full); err == nil &&
+				strings.HasPrefix(abs, root+string(filepath.Separator)) {
+				if st, err := os.Stat(full); err == nil && !st.IsDir() {
+					file, ok = cand, true
+				}
+			}
 		}
 	}
 	if !ok {
