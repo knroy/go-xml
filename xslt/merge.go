@@ -266,25 +266,26 @@ func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error
 		}
 		src.streamed = b
 	}
-	// XTSE3195 states three constraints in one code. for-each-item excludes
-	// both of the streaming attributes and for-each-source; use-accumulators
-	// requires for-each-source.
+	// XTSE3195 is enforced only where it excludes for-each-item from
+	// for-each-source, which is the one clause the suite agrees with.
+	//
+	// The working draft states more: for-each-item is also to exclude
+	// use-accumulators, and use-accumulators is to require the streaming
+	// source. Both are enforced by no one. merge-082 writes for-each-item
+	// beside use-accumulators on its second source and merge-073 writes
+	// for-each-item beside streamable="no", and Saxon 9.8 passes both -- the
+	// suite lists them as success cases, not error cases. Enforcing the draft
+	// refused four legal stylesheets.
+	//
+	// The reading that reconciles them: the constraints are about streaming,
+	// and they are keyed to for-each-stream, which the Recommendation renamed
+	// to for-each-source. A source given for-each-item does not stream, so an
+	// accumulator requested over it is inert rather than erroneous, and
+	// streamable="no" is a statement of exactly that.
 	switch {
 	case hasItem && hasSource:
 		return nil, fmt.Errorf(
 			"XTSE3195: xsl:merge-source may not have both for-each-item and " +
-				"for-each-source")
-	case hasItem && hasAccum:
-		return nil, fmt.Errorf(
-			"XTSE3195: xsl:merge-source may not have both for-each-item and " +
-				"use-accumulators")
-	case hasItem && n.Attr("", "streamable") != nil:
-		return nil, fmt.Errorf(
-			"XTSE3195: xsl:merge-source may not have both for-each-item and " +
-				"streamable")
-	case hasAccum && !hasSource:
-		return nil, fmt.Errorf(
-			"XTSE3195: xsl:merge-source/@use-accumulators requires " +
 				"for-each-source")
 	}
 

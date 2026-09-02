@@ -33,6 +33,17 @@ const (
 )
 
 func parseValidationMode(s string) (validationMode, error) {
+	// Section 3.2: "Except where the set of allowed values of an attribute is
+	// specified using the italicized name string or char, leading and
+	// trailing whitespace in the attribute value is ignored." validation is
+	// an enumeration, so validation=" lax " asks for lax.
+	//
+	// The element table already trims before checking the value against the
+	// enumeration, so an untrimmed value got that far and was refused here
+	// instead -- which made a legal stylesheet fail with the error meant for
+	// an illegal one. The whole source-document/stream-* set is written that
+	// way.
+	s = strings.TrimSpace(s)
 	switch s {
 	case "", "strip":
 		return validateStrip, nil

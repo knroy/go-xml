@@ -181,3 +181,60 @@ func TestCompatDropAttributesOnDocumentNode(t *testing.T) {
 		t.Errorf("got %q, want the attribute dropped and the text kept", got)
 	}
 }
+
+// TestEnumeratedAttributeIgnoresSurroundingSpace covers section 3.2: "Except
+// where the set of allowed values of an attribute is specified using the
+// italicized name string or char, leading and trailing whitespace in the
+// attribute value is ignored."
+//
+// The element table trimmed before checking the value against the
+// enumeration, so validation=" lax " reached the instruction and was refused
+// there instead -- a legal stylesheet failing with the error meant for an
+// illegal one. Every case in the suite's source-document/stream-* set is
+// written with the spaces, which is how it went unnoticed: the whole set was
+// gated behind the streaming feature.
+func TestEnumeratedAttributeIgnoresSurroundingSpace(t *testing.T) {
+	for _, v := range []string{"lax", " lax ", "\tstrip\n", " preserve "} {
+		sheet := `<xsl:stylesheet version="3.0" ` +
+			`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+			`<xsl:output omit-xml-declaration="yes"/>` +
+			`<xsl:template match="/"><xsl:copy-of select="*" ` +
+			`validation="` + v + `"/></xsl:template></xsl:stylesheet>`
+		// A schema is needed for strict and lax to assess anything, so the
+		// value here is only asked to be understood, not acted on: what the
+		// test rejects is XTSE0020, which says it was not understood.
+		if _, err := runErr(t, sheet, `<doc/>`); err != nil &&
+			strings.Contains(err.Error(), "XTSE0020") {
+			t.Errorf("validation=%q: got %v, want the value to be accepted", v, err)
+		}
+	}
+}
+
+// TestMergeSourceItemWithStreamableIsLegal covers XTSE3195, which constrains
+// for-each-item against the streaming source and says nothing about
+// streamable or -- as the suite and Saxon 9.8 read it -- use-accumulators.
+//
+// merge-073 writes for-each-item beside streamable="no", which is what a
+// merge that has asked NOT to stream looks like; merge-082 writes it beside
+// use-accumulators. Both are success cases in the suite and both pass in
+// Saxon's report, and enforcing the working draft's wider wording refused
+// them.
+func TestMergeSourceItemWithStreamableIsLegal(t *testing.T) {
+	for _, attrs := range []string{
+		`streamable="no"`,
+		`use-accumulators="#all"`,
+	} {
+		sheet := `<xsl:stylesheet version="3.0" ` +
+			`xmlns:xsl="http://www.w3.org/1999/XSL/Transform">` +
+			`<xsl:output omit-xml-declaration="yes"/>` +
+			`<xsl:template match="/"><out><xsl:merge>` +
+			`<xsl:merge-source ` + attrs + ` for-each-item="/" select="doc/i">` +
+			`<xsl:merge-key select="."/></xsl:merge-source>` +
+			`<xsl:merge-action><xsl:value-of select="current-merge-group()"/>` +
+			`</xsl:merge-action></xsl:merge></out></xsl:template></xsl:stylesheet>`
+		if _, err := runErr(t, sheet, `<doc><i>a</i></doc>`); err != nil &&
+			strings.Contains(err.Error(), "XTSE3195") {
+			t.Errorf("merge-source %s: got %v, want it accepted", attrs, err)
+		}
+	}
+}
