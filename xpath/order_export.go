@@ -14,6 +14,18 @@ import "github.com/knroy/go-xml/xdm"
 // the value-comparison rule exactly, so this exposes that rule rather than
 // restating it.
 //
+// version is the language version the ordering is judged under, and it is a
+// parameter rather than a constant because which pairs are ordered at all
+// depends on it. F&O 3.0 section 11.1 enumerates the comparison operators on
+// the binary types — "The following comparison operators on xs:base64Binary
+// and xs:hexBinary values are defined" — and lists only op:hexBinary-equal
+// and op:base64Binary-equal, so under 3.0 those types carry equality alone.
+// 3.1 adds op:hexBinary-less-than and its siblings, which is what lets
+// "order by" sort a sequence of them. rawCompare already draws that line;
+// leaving Version at its zero value here silently put every caller on the
+// wrong side of it, so a 3.1 "order by" over xs:hexBinary reported XPTY0004
+// while the very same values compared fine with "lt".
+//
 // ok is false when the two types have no ordering between them (a string
 // against a number), which the caller reports in whatever code its context
 // requires: XPTY0004 for an ordering key, a separate group for grouping.
@@ -22,11 +34,11 @@ import "github.com/knroy/go-xml/xdm"
 // "order by" does, since it orders NaN with the empty sequence — decides that
 // before calling, because the position depends on the clause's empty-order
 // and not on the values.
-func OrderAtomics(a, b *xdm.Atomic, coll Collation, implicitTZ int) (int, bool) {
+func OrderAtomics(a, b *xdm.Atomic, coll Collation, implicitTZ int, version Version) (int, bool) {
 	if a == nil || b == nil {
 		return 0, false
 	}
-	ctx := &Context{ImplicitTimezone: implicitTZ}
+	ctx := &Context{ImplicitTimezone: implicitTZ, Version: version}
 	if coll != nil {
 		ctx.collation = coll
 	}

@@ -53,6 +53,18 @@ func (ctx *evalContext) implicitTimezone() int {
 	return ctx.xp.ImplicitTimezone
 }
 
+// languageVersion is the XPath/XQuery version expressions are judged under.
+//
+// Ordering needs it because which types are ordered at all is version
+// dependent: the binary types carry equality only until 3.1 adds
+// op:hexBinary-less-than and its siblings.
+func (ctx *evalContext) languageVersion() xpath.Version {
+	if ctx.xp == nil {
+		return 0
+	}
+	return ctx.xp.Version
+}
+
 // builderRef is the builder a constructor appends to.
 //
 // It exists so that the nested builder StartElement returns can be threaded

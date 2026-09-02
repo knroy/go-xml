@@ -456,7 +456,7 @@ func compareOrderKeys(a, b *xdm.Atomic, spec *orderSpec, ctx *evalContext) (int,
 	if err != nil {
 		return 0, err
 	}
-	cmp, ok := xpath.OrderAtomics(a, b, coll, ctx.implicitTimezone())
+	cmp, ok := xpath.OrderAtomics(a, b, coll, ctx.implicitTimezone(), ctx.languageVersion())
 	if !ok {
 		return 0, fmt.Errorf("XPTY0004: %s and %s cannot be ordered together",
 			a.TypeName(), b.TypeName())
