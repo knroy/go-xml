@@ -370,18 +370,22 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		return hasXQueryOnlyClause(src[j:])
 	case "element", "attribute", "document", "text", "comment",
 		"processing-instruction", "namespace", "ordered", "unordered":
-		// A computed constructor is the keyword followed by a name or an
-		// expression in braces. A kind test is followed by "(", and
-		// "namespace::" is the axis, which is refused elsewhere.
+		// A computed constructor is the keyword, then an optional name, then
+		// the content in braces. The braces are not optional in any of them:
 		//
-		// The separator is skipped as a whole, comments included: XQuery 3.1
-		// A.2.4.1 has "Whitespace ::= S | Comment", so one written between the
-		// keyword and the brace hides the brace from a scan that steps over
-		// spaces alone -- and what it leaves in view is the "(" of the
-		// comment, which is exactly the shape of the kind test this test is
-		// meant to tell a constructor apart from.
-		k := skipSpaceAndCommentsFrom(src, j)
-		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
+		//   [157] CompElemConstructor ::= "element" (EQName | ("{" Expr "}")) ContentExpr
+		//   [164] CompAttrConstructor ::= "attribute" (EQName | ("{" Expr "}")) EnclosedExpr
+		//   [166] CompNamespaceConstructor ::= "namespace" (Prefix | EnclosedPrefixExpr) EnclosedURIExpr
+		//
+		// and EnclosedExpr is "{" Expr? "}". So the brace is what settles it,
+		// which is what constructorFollows looks for -- past an optional name
+		// when there is one. Accepting a bare name after the keyword was too
+		// much: every one of these words is also a legal element name, so
+		// "namespace lt namespace" read as a constructor named "lt" and was
+		// refused, where it is two name tests compared with "lt" and raises
+		// XPDY0002 for want of a context item. K2-CopyNamespacesProlog-3 asks
+		// for exactly that.
+		return constructorFollows(src, j)
 	case "function":
 		// An inline function is an operand this package owns only when its
 		// body needs the XQuery parser, and only parsing it says whether it

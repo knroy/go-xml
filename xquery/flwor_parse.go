@@ -985,8 +985,13 @@ func needsXQueryParser(src string) bool {
 				// "comment(: some : content (:some content:):){...}" -- as a
 				// kind test, sending the query to xpath, which has no
 				// computed constructor to parse it with.
-				if k := skipSpaceAndCommentsFrom(src, j); k < len(src) &&
-					(src[k] == '{' || isNameStartByte(src[k])) {
+				// The brace settles it. Every computed constructor ends in an
+				// EnclosedExpr, so the keyword and an optional name are
+				// always followed by one -- and every one of these words is
+				// also a legal element name, so a bare name after the keyword
+				// is not enough: "namespace lt namespace" is two name tests
+				// compared with "lt". See constructorFollows.
+				if constructorFollows(src, j) {
 					return true
 				}
 			case "try":
