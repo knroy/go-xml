@@ -94,8 +94,25 @@ asymmetry is not principled — it is where the line happens to fall today.
 
 ## Checking the schema itself
 
-Loading a schema does not check every constraint the spec places on schemas.
-Two of them are a separate call:
+Unique Particle Attribution, Element Declarations Consistent and Particle
+Valid (Restriction) are all applied when the schema is loaded. Each is a
+property of the schema alone, so a document violating one *is not a schema* in
+the spec's terms, and it fails to load rather than validating clean.
+
+This is not the Xerces arrangement, which gates the first two behind
+`schema-full-checking`, off by default. That precedent governs whether a
+*validator* pays the cost; it is the wrong analogy for a loader asked "is this
+a schema?", where answering yes for a schema the spec says does not exist is a
+false accept. The cost is paid once per load rather than once per document.
+
+`Options.LaxUPA` relaxes Unique Particle Attribution to the permissive reading
+Saxon and XSV use, in which two competing particles may be references to the
+same element declaration. Without it such a schema does not load. It is off by
+default because the strict reading is the conforming one, but schemas written
+against either of those processors do rely on it.
+
+`Schema.CheckConstraints` re-runs UPA and Element Declarations Consistent on a
+loaded schema:
 
 ```go
 if err := schema.CheckConstraints(xsd.CheckOptions{}); err != nil {
@@ -103,21 +120,13 @@ if err := schema.CheckConstraints(xsd.CheckOptions{}); err != nil {
 }
 ```
 
-That covers Unique Particle Attribution and Element Declarations Consistent.
-They are separate because they are the expensive half and say nothing about
-whether any instance document is valid — the same reason Xerces gates exactly
-these behind `schema-full-checking`, default false.
-
-`CheckOptions.LaxUPA` selects the permissive reading Saxon and XSV use, in
-which two competing particles may be references to the same element
-declaration. The strict reading rejects those. It is off by default because
-strict is the conforming one, but schemas written against Saxon may rely on
-it.
-
-**Particle Valid (Restriction) is not checked.** A schema whose restriction
-is unsound in that specific way is accepted here rather than reported. This is
-a deliberate gap, and it is the company the implementation keeps: libxml2 does
-not implement it at all, and Xerces leaves it off by default.
+Since loading already applies them, this re-runs work the schema has passed.
+It stays exported for two cases: a caller that loaded with `Options.LaxUPA`
+set has no other way to ask for the strict answer afterwards, and a caller
+holding a `Schema` from elsewhere may want the constraints as a list of errors
+rather than as a load failure. `CheckOptions.Version` selects the UPA rule —
+XSD 1.1 no longer counts an element particle competing with a wildcard as a
+violation, and the zero value is 1.0, which keeps the stricter one.
 
 ## Resolving schemaLocation
 

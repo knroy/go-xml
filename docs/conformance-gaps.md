@@ -395,7 +395,7 @@ for instance validation.
 
 | Set | Cases | Status | Why |
 |---|---:|---|---|
-| `MS-Regex2006-07-15` | 22 (both versions) | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
+| `MS-Regex2006-07-15` | 22 per version, 44 in all | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Schema`, `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, others | 22–23 | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
 
 **Not implementable: 43 (XSD 1.0) and 36 (XSD 1.1)** — the remainder after the
@@ -445,7 +445,7 @@ is the claim the audit most clearly overturned.
 The `queried` defence itself was spot-checked on four cases and **held** in each
 — `ste110` (bug 4957, circular unions), `gMonth002`/`004` (bug 6901, withdrawn
 gMonth lexical forms), `anyURI_a004_1339.i` (bug 4126, whose own annotation
-sides with us) and the 22 `MS-Regex` cases (bug 4113). In every one we disagree
+sides with us) and the `MS-Regex` cases, 22 on each version (bug 4113). In every one we disagree
 in the direction the filed bug points, which is what makes the status a defence
 rather than a label.
 
@@ -558,7 +558,7 @@ is *why* the 102 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
-| **W3C has challenged its own expected result** | 61 | The `queried` cases: XSD 1.0 (30) and 1.1 (31). The 22 `MS-Regex` cases across both versions are one open bug, 4113. Spot-checked on four; in each we disagree in the direction the filed bug points. |
+| **W3C has challenged its own expected result** | 61 | The `queried` cases: XSD 1.0 (30) and 1.1 (31). The `MS-Regex` cases, 22 on each version, are one open bug, 4113. Spot-checked on four; in each we disagree in the direction the filed bug points. |
 | **W3C settled the expectation after a bug** | 20 | The `stable bugNNNN` cases that are not `indeterminate`: XSD 1.0 (15) and 1.1 (13), less the eight per version now recognised as `indeterminate` scoring errors. These are *settled*, not challenged — the previous revision counted them as challenged, which inverts the status. |
 | **Suite defect** | 9 | `format-number-070` invokes a template the stylesheet does not declare (verified: zero `xsl:import`/`xsl:include` and zero `name="main"`); `package-021err`/`022err` carry a half-applied erratum; `accumulator-038` omits the `visibility="public"` its sibling was patched to add in 2019; the four `notQName` cases are XSD 1.1 tests the suite forgot to mark `version="1.1"`; `particlesZ001` never propagated its instanceTest's version split to its schemaTest; `attP031` says in its own prose that the attribute *does* appear yet expects valid. |
 | **Unicode moved** | 2 | `regex-syntax-xslt20-0984` and `-0985`, both already corrected by the W3C in their XSLT 3.0 twins and never back-ported. `-0987` was here and is not: it is ours. |

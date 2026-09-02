@@ -107,7 +107,7 @@ true here:
 1. **Schema-validity is the weaker half of the XSD numbers**, at 99.86% (1.0)
    and 99.88% (1.1) — a schema invalid in one of the remaining ways is
    accepted rather than reported. Instance validation, which is what most
-   callers actually do, is 99.87% and 99.89%. The remaining disagreements are
+   callers actually do, is 99.88% and 99.89%. The remaining disagreements are
    listed in *Where it fails*, along with what the suite skips and why; **most
    of them — 89 of 98 — are cases the W3C itself has queried**, including
    every one of the 44 `MS-Regex` disagreements, which are a single open bug.

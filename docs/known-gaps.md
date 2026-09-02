@@ -535,14 +535,15 @@ needing more than 1,024 digits, so formatting cannot be made to allocate
 without limit. The *value* did not move; only its lexical form now says what it
 is.
 
-### Singleton XPath failures
+### Singleton XPath failures (all fixed)
 
-Six remain, one per set, each needing its own diagnosis: `fn-doc-29`
+Six remained here, one per set, each needing its own diagnosis: `fn-doc-29`
 (namespace declarations dropped on a document read through `fn:doc`),
 `op-concatenate-mix-args-019`, `fn-union-node-args-003`, `ForExpr013`,
-`CondExpr017`, `K2-Literals-7` (a decimal literal with 79 leading zeros).
+`CondExpr017` and `K2-Literals-7`, the decimal literal above. All are closed:
+XPath reports no in-scope failures at 2.0, 3.0 or 3.1.
 
-Two of the four listed here previously are fixed:
+Two of the four listed here before them were fixed first:
 
 * **`fn-in-scope-prefixes-23`** — `in-scope-prefixes(/)` answered with the root
   element's prefixes. The parameter is `element()`, so a document node is
@@ -566,111 +567,37 @@ attribute, which `encoding/xml` never parses.
 
 ## What would move the numbers
 
-Measured on 2026-08-21 with both suites present. Ordered by cases-per-unit-work,
-not by cluster size — several of the largest clusters are the least worth doing.
+The counts this section used to carry were measured in August and were never
+re-derived. They had drifted badly — the XSD table summed to 251 and 368
+disagreements against 51 and 47 actually measured, and the XPath section
+described twenty-six open failures on suites that report none. Restating
+figures here also violated this file's own rule at the top: they live in
+[conformance-gaps.md](conformance-gaps.md), because a percentage copied into
+two places drifts in one of them. It drifted in this one.
 
-### The shape of what is left
-
-| | XSD 1.0 | XSD 1.1 |
-|---|---:|---:|
-| schema false accept | 195 | 305 |
-| schema false reject | 6 | 9 |
-| instance false accept | 45 | 49 |
-| instance false reject | 5 | 5 |
-| *of those, W3C-disputed* | *49* | *48* |
-
-Roughly a sixth of every disagreement is a test the W3C's own metadata marks
-`queried` or ties to an open bug. Those are not defects to fix.
-
-### XSD: the 21 schema false rejects are the whole story
-
-A false reject breaks a working caller; a false accept only fails to catch
-someone else's mistake. They are not symmetric, and a single percentage hides
-that. **Every one of the 21 is Particle Valid (Restriction)** — one subsystem:
-
-| cause | cases |
-|---|---:|
-| a group has no corresponding particle in the base | 5 |
-| the base requires a group the restriction omits | 4 |
-| all-group restricted by a wildcard or a sequence | 5 |
-| `notQName` needs XSD 1.1 (correct under 1.0) | 3 |
-| occurrence-budget disagreements | 2 |
-| other | 2 |
-
-`particlesZ001` and `addB183` fail under **both** versions, which makes them
-the best entry point: they are bugs in shared logic rather than 1.1-specific
-gaps. The all-group cases (`all206`, `all218`, `all237`, `wild049`, `wild050`)
-need `allSubsumes` extended to wildcards, where deciding how a wildcard's
-occurrences split across the names it spans is the hard part — `all244` shows
-it is not a simple count.
-
-**Cost: small, one subsystem. Buys: 21 cases and, more importantly, correctness
-for valid schemas this refuses today.** Do this first.
-
-### XSD: the 500 schema false accepts are the largest number and the worst ratio
-
-They cluster in `MS-Particles` (47/46), `MS-Schema` (45/44), `MS-SimpleType`,
-`MS-ComplexType`, and for 1.1 also `Wild`, `CTA` and `Open`. Each is an
-unwritten Schema Component Constraint: a schema that should be rejected loads.
-
-Two reasons this is not the obvious next move despite being the biggest number.
-
-First, **no valid schema is affected**, which is why the false-reject count is
-two orders of magnitude smaller.
-
-Second, **each rule added is a chance to reject a schema real systems depend
-on**, and the conformance suite cannot catch that — it scores agreement with
-W3C labels, so a rule that is merely *too strict* only shows up if the suite
-happens to contain a valid schema exercising it. The production corpora are the
-only guard. Re-load them after every rule:
-
-```
-65 of 65 UBL 2.1 and 427 of 427 CII/EN16931 schemas must still load clean.
-```
-
-**Cost: high and open-ended, one rule at a time. Buys: the percentage, and
-little else.**
-
-### XSD instance: 10 false rejects, individually diagnosed
-
-`idc006.nogen` is keyref resolution across a subtree boundary. `gMonth002_2061`
-and `gMonth004_2063` are the old `--MM--` lexical form (W3C bug 6901).
-`particlesZ040` is the greedy content-model matcher, already documented as
-resisting a targeted fix. `attP031` and `cta0022` are one-offs.
-
-**Cost: five separate diagnoses. Buys: 10 cases, all of them false rejects.**
-
-### XPath: 12 of the 26 are architectural, 4 are the harness
-
-Of what remains:
-
-- **12** are regex backreferences, which RE2 does not have. Not fixable without
-  a second engine; see §2.3 of [todo.md](todo.md) for why capture groups plus
-  an explicit comparison does not work.
-That is the whole list. Every other disagreement has been fixed, and the route
-there is worth recording: of the seventeen that remained after the ordinary
-bugs, **five were the QT3 harness rather than the engine**, two needed DTD
+What is durable from it is the route rather than the arithmetic. Of the
+seventeen XPath disagreements that remained after the ordinary bugs were
+fixed, **five were the QT3 harness rather than the engine**, two needed DTD
 attribute defaulting, two needed a document to be retrievable under the URI
 `fn:document-uri` reports for it, and one was a lexical form that disagreed
-with its own value. A conformance number is only as honest as the harness
-producing it.
+with its own value. The adversarial audit of the XSLT and XSD verdicts found
+the same shape again: of the twenty-three cases now judged fixable, most are
+the harness — chiefly eight XSD `indeterminate` expectations per version
+silently scored as "must be invalid" — and only four are engine defects.
 
-**Cost: a diagnosis each. Buys: little — 12 of the 17 are backreferences and 4 more are outside the engine.**
+A conformance number is only as honest as the harness producing it, and a
+verdict is only as good as the last time someone re-derived it.
 
-### Recommended order
+For what is currently fixable, open, or unreachable, and why, see
+[conformance-gaps.md](conformance-gaps.md). For what buying it would cost, see
+[reaching-100.md](reaching-100.md).
 
-1. **XSD particle restriction** — 21 false rejects, one subsystem, real callers
-   affected today.
-2. **XPath singletons** — 10 cases, independent, each small.
-3. **XSD instance false rejects** — 10 cases, five diagnoses.
-4. **Schema Component Constraints** — the 500, one rule at a time, corpora
-   re-loaded after each.
-
-XML 1.1 support sits outside this list and unlocks 38 instance tests plus nine
-schemas that do not parse today; it is a larger piece of work and is described
-in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
+XML 1.1 support sits outside all of this and unlocks 38 instance tests plus
+nine schemas that do not parse today; it is a larger piece of work and is
+described in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
 
 ---
+
 
 ## What 100% would take
 

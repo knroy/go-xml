@@ -215,39 +215,33 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 86 failures are a long tail rather than a missing feature. Four
-groups account for much of it, and each is understood:
-
-* **Schema awareness.** Six `app-spec-examples` cases use `validate lax` and
-  then rely on the resulting type annotations, which needs the schema
-  processor `import schema` does not have. They carry no `schemaValidation`
-  dependency, so a non-schema-aware processor is expected to run them.
-
-* **Namespace non-inheritance on constructed elements.** Eight cases —
-  `K2-NameTest-30`/`31`, `K2-InScopePrefixesFunc-25`/`28`,
-  `cbcl-directconelem-001`/`002` and two `functx` change-element-ns cases —
-  share one cause. §3.9.1.3 puts only a *namespace declaration attribute* into
-  the in-scope namespaces of the elements constructed within it, whereas a
-  binding a prolog `declare namespace` supplied to resolve an element's own
-  name does not inherit. This engine reads in-scope namespaces by walking the
-  XDM tree, which cannot tell the two apart, so an inner constructed element
-  reports its parent's prolog-derived bindings as well as its own.
-  Distinguishing them needs constructed elements to carry an explicit in-scope
-  set rather than inheriting structurally.
-
-* **Zero-length text in `document {}`.** `Constr-docnode-nested-4` requires
-  `document {''}` to have no text child. The builder's `ToTree` is shared with
-  XSLT sequence normalisation, which requires the opposite — XSLT §11.10 keeps
-  zero-length text nodes at the top level of a sequence constructor, and
-  `function-1009` counts three of them. The fix is a policy flag rather than a
-  guard; applying the guard unconditionally costs ten XSLT 3.0 cases.
+The remaining 7 failures are a long tail rather than a missing feature, and
+each is understood:
 
 * **Pathological map cost.** `same-key-023` builds 421,875 keys and performs an
   O(n) `map:put` and `map:remove` per key. `MapItem` is an entries slice plus a
   rebuilt index, so both are linear in the map's size no matter how small the
   constant factor is made; terminating needs a persistent map — a HAMT, or a
-  copy-on-write overlay. Its sibling `same-key-024`, at 11,250 keys, now
-  passes.
+  copy-on-write overlay. Its sibling `same-key-024`, at 11,250 keys, passes.
+
+* **A prolog base URI that is not a URI.** `K2-BaseURIProlog-4` and `-5`
+  declare a base URI the spec expects to be rejected with `XPST0001`, and this
+  engine accepts it and answers `false`.
+
+* **`eqname-007`** uses a prefix in an EQName that the engine does not find
+  bound, reporting `FODF1280`.
+
+* **`K2-sequenceExprTypeswitch-5`** wants `XPST0008` for an unbound name in a
+  `typeswitch`, and gets a successful evaluation.
+
+* **Two demo queries.** `sudoku` and `RexParser` fail to parse at offset 0
+  with `XPST0003`: a constructor or FLWOR expression where the parser does not
+  admit one. Both are large real-world queries rather than targeted cases,
+  which is what makes them worth keeping in view.
+
+The three groups this section used to list — schema-aware `validate lax`,
+namespace non-inheritance on constructed elements, and zero-length text in
+`document {}` — have all been fixed.
 
 See [known-gaps.md](known-gaps.md) for the variable-name/subtraction defect,
 which the suite does not cover.

@@ -1,18 +1,23 @@
 # What reaching 100% would take
 
-Measured at commit `6fa4150`. The short answer: **100% is not reachable on any
+Measured at commit `7ed5279`. The short answer: **100% is not reachable on any
 of these suites**, and the great majority of what remains are cases where
 passing would mean shipping something *less* correct. What follows separates
 the work that exists from the work that does not.
 
+The verdict columns are the ones in
+[conformance-gaps.md](conformance-gaps.md), which is where they are argued
+case by case; this file is about what buying them would cost.
+
 | | Failing | Fixable | Open | Cannot fix |
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
-| XSLT 2.0 | 9 | 0 | 0 | 9 |
-| XSLT 3.0 | 19 | 0 | 2 | 17 |
-| XSD 1.0 | 51 | 0 | 0 | 51 |
-| XSD 1.1 | 47 | 0 | 0 | 47 |
-| **Total** | **126** | **0** | **2** | **124** |
+| XQuery 3.1 | 7 | 0 | 3 | 4 |
+| XSLT 2.0 | 9 | 2 | 1 | 6 |
+| XSLT 3.0 | 18 | 4 | 1 | 13 |
+| XSD 1.0 | 51 | 8 | 0 | 43 |
+| XSD 1.1 | 47 | 9 | 2 | 36 |
+| **Total** | **132** | **23** | **7** | **102** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -26,9 +31,16 @@ challenged, and 89 of the 98 XSD disagreements are of that kind — 44 of them
 
 ## Part 1 — what is left
 
-**Nothing that is fixable.** Every case in the fixable column reached zero over
-three rounds of work; what stands between here and 100% is the 124 in Part 2
-plus two open questions.
+**Twenty-three cases are work.** An earlier revision of this file said the
+fixable column had reached zero over three rounds; an adversarial re-audit
+overturned that, and the detail is in
+[conformance-gaps.md](conformance-gaps.md). Four are engine defects
+(`docbook-004`, `package-version-011`, `regex-syntax-xslt20-0987`, `iri-001`),
+two are cases the suite itself declares out of scope through a dependency the
+harness does not read, and the rest are harness scoring defects — chiefly the
+eight XSD `indeterminate` expectations per version that are silently scored as
+"must be invalid". Seven more are open questions, settled neither way. What
+stands between here and 100% is the 102 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -43,10 +55,13 @@ The last four to fall are worth recording, because they are the shape of what
 
 `attP031` left the column the other way: it is a suite defect, not work.
 
-### The two open questions
+### The open questions
 
-`validation-0006` and `strip-space-009`. Both ask for behaviour the checked-in
-spec text does not settle, so neither is counted as a pass or as a defect.
+Seven, spread across three suites: three in XQuery, one at each XSLT target,
+and two on XSD 1.1 (`simple093` and `particlesZ033_g`). Each asks for
+behaviour the checked-in spec text does not settle, so none is counted as a
+pass or as a defect. `validation-0006` and `strip-space-009` stood here until
+the audit settled both as not implementable.
 
 ### What a zero here does not mean
 
@@ -61,7 +76,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 124 that are not work
+## Part 2 — the 102 that are not work
 
 Grouped by what would actually have to change.
 
@@ -108,21 +123,20 @@ something only a processor could do.
 **To fix: implement module import in `xquery`,** then bridge the function to
 it. The engine is no longer the missing piece; the module store is.
 
-### 2 — the suite contradicts itself
+### 1 — the suite contradicts itself
 
-`regex-syntax-0056`, `-0086`, `-0102`. Ambiguous-dash character classes that
-XSD 1.0 rejects and 1.1 accepts.
+`strip-space-009` asserts a whitespace-preservation rule §4.4 does not state,
+and its own comment concedes the point.
 
-`regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the **identical**
-pattern and the **identical** `XSD_1.1 satisfied="false"` dependency, and one
-asserts `FORX0002` while the other asserts a successful match.
-
-The XSD 1.0 rule was implemented and measured: it fixes these three at a cost
-of −3 XSLT 2.0, −9 QT3 and −34 XSD 1.1. Reverted.
-
-**A real fix needs a per-call XSD version knob** so the regex grammar follows
-the harness rather than a single engine-wide setting. That is a plausible
-change, but it buys three cases and touches a shared engine.
+The three `regex-syntax` ambiguous-dash cases — `-0056`, `-0086`, `-0102` —
+stood here until recently and now **pass**. They were the case where
+`regex-syntax-0056` and `regex-syntax-xslt20-0056` carry the identical pattern
+and the identical `XSD_1.1 satisfied="false"` dependency while one asserts
+`FORX0002` and the other a successful match. An engine-wide XSD 1.0 rule fixed
+them at a cost of −3 XSLT 2.0, −9 QT3 and −34 XSD 1.1, and was reverted;
+scoping `XSD_1.1` to the version being measured rather than to the engine
+bought all three with no such cost, and took `catalog-005b` and
+`type-available-0151` with them.
 
 ### 4 — the spec declines to decide
 
@@ -149,7 +163,7 @@ cases disagree.
 
 **To fix: freeze a 2012 Unicode table.** That would make every other case wrong.
 
-### 11 — suite defects
+### 3 — suite defects
 
 - **`format-number-070`** — the catalog invokes `<initial-template
   name="main"/>`; the stylesheet has one template, `match="root"`, and zero
@@ -160,24 +174,33 @@ cases disagree.
 
 **To fix: accept invalid stylesheets.**
 
-### 3 — network access
+### 2 — network access
 
 `unparsed-text-2003` (both targets) asserts
 `unparsed-text-available('http://www.w3.org/Consortium/mission.html')` is true;
 `package-version-011` wants a document with no resolver configured.
 
 Resolvers are nil by default so an untrusted stylesheet cannot fetch what it
-names. **To fix: make outbound HTTP the default.** That is a security
-regression, not a conformance gain.
+names, and making outbound HTTP the default would be a security regression
+rather than a conformance gain. Neither case needs that, though:
+`unparsed-text-2003` omits the `available_documents` dependency its own
+neighbour `unparsed-text-2002` declares and the harness already honours, and
+`package-version-011` is triaged as an engine defect. Both sit in the fixable
+column for those reasons.
 
-### 3 — vendor extension
+### 2 — vendor extension
 
-`docbook-001` (both targets) and `docbook-004`. The vendored DocBook XSL 1.79.1
-uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
+`docbook-001`, on both targets. The vendored DocBook XSL 1.79.1 uses EXSLT
+`exsl:document` — 19 times in `chunker.xsl` alone.
 
 **To fix: implement EXSLT.** Defensible as a feature; not a conformance fix.
 
-### 3 — features deliberately not implemented
+`docbook-004` was filed here on the strength of its neighbour's name and is
+not an EXSLT case at all: its stylesheet is five lines with no extension
+element, testing `xsl:source-document` with an `xml:id` fragment identifier.
+It is an engine defect, and is counted as fixable.
+
+### 1 — features deliberately not implemented
 
 - **`streamable-141`** — needs the §19.8 streamability analysis.
 
@@ -216,17 +239,23 @@ rewritten in 2013 "to avoid serialization dependencies"; `0201` was not.
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** Of 126
-disagreements, 124 would require agreeing with a disputed result, shipping a
+**Reaching 100% is not a goal that survives contact with the suites.** Of 132
+disagreements, 102 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
-invalid input, or weakening a security default. The other two are open
-questions the spec does not settle.
+invalid input, or weakening a security default. Seven more are open questions
+the spec does not settle.
 
-**There is no conformance work left to schedule.** The ceiling and the measured
-state are the same number on every suite, which is what a zero in the fixable
-column means.
+**Twenty-three are work, and most of that work is in the harness rather than
+the engine** — the eight XSD `indeterminate` expectations per version scored as
+"must be invalid", a Saxon-byte-exact serialisation comparison, and two cases
+the suite puts out of scope through a dependency the harness does not read.
+Four are engine defects. An earlier revision of this file claimed the fixable
+column had reached zero; the audit recorded in
+[conformance-gaps.md](conformance-gaps.md) overturned that, and the claim is
+worth remembering as the kind a document makes when its verdicts stop being
+re-derived.
 
-What remains is not conformance work but engineering the suites cannot see:
+Beyond that is engineering the suites cannot see:
 the content-model matcher's nested-occurrence bug above, and whatever else
 fuzzing turns up. That is the better use of the next round.
 

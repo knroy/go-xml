@@ -190,8 +190,16 @@ not made valid by pretending it is absent — but only honoured under
 
 ### Checking the schema itself
 
-Unique Particle Attribution and Element Declarations Consistent are checked on
-request:
+Unique Particle Attribution, Element Declarations Consistent and Particle
+Valid (Restriction) are all applied at load time. Each is a property of the
+schema alone, so a schema violating one fails to load rather than validating
+clean.
+
+`Options.LaxUPA` selects the permissive UPA reading Saxon and XSV use, where
+only the element declaration need be identifiable rather than the particle;
+without it such a schema does not load. `Schema.CheckConstraints` re-runs UPA
+and Element Declarations Consistent on a loaded schema, which is how a caller
+that loaded permissively asks for the strict answer:
 
 ```go
 if err := schema.CheckConstraints(xsd.CheckOptions{}); err != nil {
@@ -199,15 +207,8 @@ if err := schema.CheckConstraints(xsd.CheckOptions{}); err != nil {
 }
 ```
 
-They are a separate call because they are the expensive half and say nothing
-about whether an instance document is valid — the same reason Xerces gates
-them behind `schema-full-checking`, default false. `CheckOptions.LaxUPA`
-selects the permissive reading Saxon and XSV use, where only the element
-declaration need be identifiable rather than the particle.
-
-Particle Valid (Restriction) is **not** checked. libxml2 does not implement it
-at all and Xerces leaves it off by default, so a schema invalid in that
-specific way is accepted here rather than reported.
+See [xsd.md](xsd.md) for why these gate loading rather than sitting behind an
+opt-in as they do in Xerces.
 
 ### Resolving schemaLocation
 
