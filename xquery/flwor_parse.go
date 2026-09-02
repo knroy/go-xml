@@ -964,6 +964,15 @@ func hasXQueryOnlyClause(src string) bool {
 			case "where", "order", "stable", "group", "count", "at",
 				"allowing", "as", "window", "tumbling", "sliding":
 				return true
+			case "for", "let":
+				// A second binding keyword before the "return". XPath's
+				// ForExpr and LetExpr each bind a comma-separated list of one
+				// kind, so "let $s := 1 for $d in ..." is a FLWOR with two
+				// clauses and not an XPath expression at all. A "for" that
+				// merely begins the binding's own value — "let $f := for $x
+				// in ... return $x" — is XPath, and answering yes to it is
+				// the conservative direction this scan is allowed to take.
+				return true
 			case "return", "satisfies":
 				// The binding is over and nothing XQuery-only appeared in it.
 				// A later clause would have been seen before this word.
@@ -1009,8 +1018,15 @@ func startsMarkup(src string, i int, prev byte) bool {
 	switch {
 	case prev == 0, prev == operatorPrev:
 		return true
-	case isNameByte(prev), prev == ')', prev == ']', prev == '"',
-		prev == '\'', prev == '*':
+	case isNameByte(prev):
+		// A name ends where an operand ends, so "$x < 3" is a comparison —
+		// unless the name is one of the keywords an operand *follows*, and
+		// "if ($c) then <a/> else <b/>" is two constructors rather than four
+		// comparisons of the word "then". The words are exactly those that
+		// end a clause or an operator and hand the grammar back to an
+		// ExprSingle; every other bare word before a "<" is an operand.
+		return lastSignificantOperandAware(src[:i]) == operatorPrev
+	case prev == ')', prev == ']', prev == '"', prev == '\'', prev == '*':
 		return false
 	}
 	return true

@@ -37,7 +37,18 @@ func writeNode(sb *strings.Builder, n *xdm.Node) {
 		}
 	case xdm.KindElement:
 		sb.WriteString("<" + n.Name.Lexical())
+		// A binding an ancestor already made is inherited, so writing it
+		// again says the same thing twice. Every element carries a binding
+		// for its own name, which on a nested element is usually one the
+		// parent declared.
+		var inherited map[string]string
+		if n.Parent != nil {
+			inherited = n.Parent.InScopeNamespaces()
+		}
 		for _, ns := range n.Namespaces {
+			if inherited[ns.Name.Local] == ns.Value {
+				continue
+			}
 			if ns.Name.Local == "" {
 				sb.WriteString(` xmlns="` + ns.Value + `"`)
 			} else {
