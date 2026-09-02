@@ -52,6 +52,10 @@ func (p *parser) parseOperandSubst() ([]node, bool, error) {
 	if err != nil || len(ops) == 0 {
 		return nil, false, err
 	}
+	// compileExpr substitutes again where xpath still refuses the source,
+	// and its numbering restarts at zero. Here that would rebind the
+	// variables this pass just chose, so the source it is given must have
+	// nothing left to lift; substituteOperands scans to the end, so it does.
 	c, err := p.compileExpr(rewritten)
 	if err != nil {
 		// The rewrite is only worth attempting; where it produces something
@@ -100,7 +104,7 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 		}
 
 		start := i
-		if !startsOperand(src, i, prev) {
+		if !p.startsOperand(src, i, prev) {
 			if isNameStartByte(c) {
 				// Step over the whole name, so that a keyword's tail is not
 				// rescanned as though it began a word of its own.
@@ -114,14 +118,25 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 				// "<", so a word operator reports itself as an operator
 				// rather than as the name byte it ends with.
 				if wordOperators[src[w:i]] {
-					prev = '+'
+					prev = operatorPrev
 				} else {
 					prev = src[i-1]
 				}
 				continue
 			}
 			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
-				prev = c
+				// "-" and "*" each spell both a name character and a binary
+				// operator, and what tells the two apart is whether the byte
+				// before them abuts: "a-b" is one name and "a - b" is a
+				// subtraction. Reporting the operator reading is what lets
+				// "1 * <a/>" and "3 - <a/>" substitute their right operand,
+				// which the name reading refused. prev is whitespace-stripped
+				// and cannot answer this, so the source is looked at.
+				if (c == '-' || c == '*') && isOperandBreak(src, i) {
+					prev = operatorPrev
+				} else {
+					prev = c
+				}
 			}
 			i++
 			continue
@@ -153,6 +168,18 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 	return ops, out.String(), nil
 }
 
+// isOperandBreak reports whether the "-" or "*" at src[i] is a binary
+// operator rather than a character continuing the name before it.
+//
+// A name byte immediately before it — no whitespace — means it continues a
+// name: "a-b" is one NCName and "*" after a name byte cannot occur at all.
+// Anything else is operator position, including the digit that ends a numeric
+// literal, which is a name byte but can never be part of a name because a
+// name may not begin with one.
+func isOperandBreak(src string, i int) bool {
+	return i == 0 || !isNameByte(src[i-1])
+}
+
 // wordOperators are the operators spelled as words. After one of them an
 // operand begins, so a "<" there is markup and not a comparison — which is
 // the opposite of what the last byte of the word, a name byte, would say on
@@ -176,7 +203,7 @@ var wordOperators = map[string]bool{
 // grammar does not have. prev == 0 — nothing before it — is the head of the
 // expression, which parseNestedExpr already handles; it is still accepted
 // here so that "<a/> = <b/>" substitutes both operands rather than one.
-func startsOperand(src string, i int, prev byte) bool {
+func (p *parser) startsOperand(src string, i int, prev byte) bool {
 	if src[i] == '<' {
 		return startsMarkup(src, i, prev)
 	}
@@ -209,7 +236,12 @@ func startsOperand(src string, i int, prev byte) bool {
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
 		// only be the construct — the same test parseXQueryOnly makes.
-		sub := &parser{src: src, pos: i}
+		// The probe compiles the construct's subexpressions to decide
+		// whether it is one, so it needs this parser's static context and
+		// version: compileExpr reads the declared base URI and collation off
+		// them, and a bare parser has neither.
+		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
+			depth: p.depth + 1}
 		_, ok, _ := sub.parseXQueryOnly()
 		return ok
 	}
@@ -230,7 +262,10 @@ type operandExpr struct {
 }
 
 func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
+	xp, err := n.rest.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i, op := range n.ops {
 		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
 		if err != nil {
@@ -246,5 +281,5 @@ func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }

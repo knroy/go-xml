@@ -536,6 +536,22 @@ func isDurationLike(t xdm.TypeCode) bool {
 		t == xdm.TypeDayTimeDuration
 }
 
+// isOperandDuration reports whether a duration may be an operand of an
+// arithmetic operator.
+//
+// F&O 3.0 defines twelve duration operators and every one of them names
+// xs:yearMonthDuration or xs:dayTimeDuration in its signature —
+// op:add-dayTimeDurations, op:add-yearMonthDuration-to-date,
+// op:multiply-dayTimeDuration and so on. There is no signature over the base
+// xs:duration, so an operand of that type matches no operator and the
+// expression is a type error, not an addition that happens to work. The two
+// subtypes carry the fields the arithmetic needs and xs:duration carries both
+// at once, which is exactly why it is excluded: "P1M1D" has no defined sum
+// with a date.
+func isOperandDuration(t xdm.TypeCode) bool {
+	return t == xdm.TypeYearMonthDuration || t == xdm.TypeDayTimeDuration
+}
+
 // compareNumeric compares two numeric values after promotion. Decimal and
 // integer operands compare exactly through big.Rat; anything involving a
 // double or float goes through float64, where NaN is handled by the caller.

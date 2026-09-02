@@ -426,6 +426,21 @@ func (p *parser) finishFLWOR(f *flwor) (*flwor, error) {
 	return f, nil
 }
 
+// startsXQueryOnly reports whether one of the XQuery-only expression forms —
+// typeswitch, switch, try, validate, ordered, unordered, the extension
+// expression or the string constructor — begins at the cursor.
+//
+// A clause's expression is an ExprSingle and every one of these is an
+// ExprSingle, so "for $x in E return typeswitch ($x) ..." is ordinary syntax.
+// None is reserved, though, so the test is the one parseXQueryOnly itself
+// makes: it trial-parses, and only a construct that parses commits.
+func (p *parser) startsXQueryOnly() bool {
+	save := p.pos
+	defer func() { p.pos = save }()
+	_, ok, _ := p.parseXQueryOnly()
+	return ok
+}
+
 // startsConstructor reports whether a direct or computed constructor begins
 // at the cursor.
 func (p *parser) startsConstructor() bool {
@@ -525,7 +540,8 @@ func (p *parser) parseTypedClauseExpr(typ string, perItem bool) (*compiledExpr, 
 // with the result differs.
 func (p *parser) parseOwnExpr() (*compiledExpr, bool, error) {
 	p.skipSpaceAndComments()
-	if !p.startsConstructor() && !p.looksLikeFLWOR() && !p.looksLikeQuantified() {
+	if !p.startsConstructor() && !p.looksLikeFLWOR() &&
+		!p.looksLikeQuantified() && !p.startsXQueryOnly() {
 		return nil, false, nil
 	}
 	n, err := p.parseItem()
@@ -832,7 +848,7 @@ func needsXQueryParser(src string) bool {
 			// less-than operator, and "$x < 3" is not a constructor however
 			// the character after it looks. What follows must also look like
 			// markup: a name, "!", "?" or "/".
-			if startsMarkup(src, i, lastSignificant(src[:i])) {
+			if startsMarkup(src, i, lastSignificantOperandAware(src[:i])) {
 				return true
 			}
 		default:
@@ -979,6 +995,17 @@ func hasXQueryOnlyClause(src string) bool {
 // like markup: a name, "!", "?" or "/". This is the same test both the
 // expression scan and the detector make, so they cannot disagree about where
 // a constructor is.
+//
+// prev is the last significant byte, and for three of them that byte does not
+// settle the question on its own. "-" and "*" each spell both a name
+// character and a binary operator, and the last byte of a word operator is a
+// name byte like any other, so "3 - <a/>", "1 * <a/>" and "3 eq <a/>" all
+// look like a "<" after a name while every one of them is an operator with a
+// constructor for its right operand. A caller that can tell the two apart
+// says so by passing operatorPrev; one that cannot pass an unreduced byte,
+// and is answered conservatively — which for this function means yes, since
+// saying yes to an expression xpath could have read costs a reparse and
+// saying no to a constructor loses it.
 func startsMarkup(src string, i int, prev byte) bool {
 	if i+1 >= len(src) {
 		return false
@@ -989,7 +1016,7 @@ func startsMarkup(src string, i int, prev byte) bool {
 		return false
 	}
 	switch {
-	case prev == 0:
+	case prev == 0, prev == operatorPrev:
 		return true
 	case isNameByte(prev):
 		// A name ends where an operand ends, so "$x < 3" is a comparison —
@@ -998,44 +1025,71 @@ func startsMarkup(src string, i int, prev byte) bool {
 		// comparisons of the word "then". The words are exactly those that
 		// end a clause or an operator and hand the grammar back to an
 		// ExprSingle; every other bare word before a "<" is an operand.
-		return endsWithOperandKeyword(src[:i])
+		return lastSignificantOperandAware(src[:i]) == operatorPrev
 	case prev == ')', prev == ']', prev == '"', prev == '\'', prev == '*':
 		return false
 	}
 	return true
 }
 
-// endsWithOperandKeyword reports whether src ends with a keyword after which
-// an operand begins.
+// operatorPrev is what a scanner passes as startsMarkup's prev when it knows
+// the byte before the "<" ended an operator rather than an operand.
 //
-// "return", "then", "else", "in", "satisfies" and "at" end a clause or an
-// operator; the value comparisons and the sequence and arithmetic operators
-// spelled as words are the same case, since each takes an operand on the
-// right. A word is only one of these when it stands alone: "myelse" is a name
-// and so is "a:else".
-func endsWithOperandKeyword(src string) bool {
-	j := len(src)
-	for j > 0 && (src[j-1] == ' ' || src[j-1] == '\t' ||
-		src[j-1] == '\r' || src[j-1] == '\n') {
+// It is "+" because "+" is the one arithmetic operator whose spelling can be
+// nothing else: it is not a name byte, not a wildcard, and not the head of a
+// word. Using it rather than inventing a sentinel keeps the value inside the
+// domain the rest of the switch is written over.
+const operatorPrev = byte('+')
+
+// lastSignificantOperandAware returns the last significant byte of s, reduced
+// to operatorPrev when that byte ended a binary operator rather than a name.
+//
+// The three ambiguous spellings are "-", "*" and a word operator's final
+// letter. Each is distinguishable from a name by what precedes it: a "-" or a
+// "*" that continues a name has a name byte immediately before it, while one
+// used as an operator is separated from its left operand — "a-b" is one name
+// and "a - b" is a subtraction. A trailing word is an operator when it is one
+// of the words §3.5 and §3.6 spell that way, which wordOperators lists.
+func lastSignificantOperandAware(s string) byte {
+	i := len(s)
+	for i > 0 {
+		switch s[i-1] {
+		case ' ', '\t', '\r', '\n':
+			i--
+			continue
+		}
+		break
+	}
+	if i == 0 {
+		return 0
+	}
+	c := s[i-1]
+	switch c {
+	case '-', '*':
+		// Preceded by whitespace or by nothing, it cannot be continuing a
+		// name, so it is the binary operator. "1 * <a/>" and "3 - <a/>" reach
+		// here; "a-b < 3" and "*/x < 3" do not, because the byte before is a
+		// name byte or a "/".
+		if i == 1 {
+			return operatorPrev
+		}
+		switch s[i-2] {
+		case ' ', '\t', '\r', '\n':
+			return operatorPrev
+		}
+		return c
+	}
+	if !isNameByte(c) {
+		return c
+	}
+	j := i
+	for j > 0 && isNameByte(s[j-1]) {
 		j--
 	}
-	src = src[:j]
-	for j > 0 && isNameByte(src[j-1]) {
-		j--
+	if wordOperators[s[j:i]] {
+		return operatorPrev
 	}
-	if j > 0 && (src[j-1] == ':' || src[j-1] == '$' || src[j-1] == '@') {
-		return false
-	}
-	switch src[j:] {
-	case "return", "then", "else", "in", "satisfies", "at", "to",
-		"eq", "ne", "lt", "le", "gt", "ge", "is",
-		"and", "or", "div", "idiv", "mod", "union", "intersect", "except",
-		"treat", "castable", "cast", "instance", "of", "as", "where",
-		"by", "ascending", "descending", "empty", "collation", "let",
-		"for", "some", "every", "case", "default", "if":
-		return true
-	}
-	return false
+	return c
 }
 
 // lastSignificant returns the last non-space byte of s, or 0 when there is

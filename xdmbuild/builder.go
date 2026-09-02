@@ -640,6 +640,18 @@ func (b *Builder) ToTree() *xdm.Node {
 				prevAtomic = false
 				continue
 			}
+			// XDM forbids two adjacent text children, and complex content
+			// is where that has to be enforced: a body of two text nodes —
+			// "document {text {'te'}, text {'xt'}}", or two xsl:text
+			// instructions in a variable — contributes one text child, not
+			// two. AppendText already merges this way inside an element;
+			// a document node is complex content by the same rule.
+			if kids := tree.Root.Children; n.Kind == xdm.KindText &&
+				len(kids) > 0 && kids[len(kids)-1].Kind == xdm.KindText {
+				kids[len(kids)-1].Value += n.Value
+				prevAtomic = false
+				continue
+			}
 			tree.Root.AppendChild(DeepCopy(n))
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {

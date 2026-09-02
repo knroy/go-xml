@@ -342,7 +342,7 @@ func castToDuration(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 func temporalArithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
 	switch {
 	// duration + duration, duration - duration
-	case isDurationLike(a.Type) && isDurationLike(b.Type):
+	case isOperandDuration(a.Type) && isOperandDuration(b.Type):
 		if op == "div" {
 			return divideDurations(a, b)
 		}
@@ -352,15 +352,15 @@ func temporalArithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
 		return addDurations(a, b, op == "-")
 
 	// duration * number, duration div number
-	case isDurationLike(a.Type) && b.Type.IsNumeric():
+	case isOperandDuration(a.Type) && b.Type.IsNumeric():
 		return scaleDuration(a, b, op)
 
 	// number * duration
-	case a.Type.IsNumeric() && isDurationLike(b.Type) && op == "*":
+	case a.Type.IsNumeric() && isOperandDuration(b.Type) && op == "*":
 		return scaleDuration(b, a, "*")
 
 	// duration div duration yields a decimal ratio
-	case isDurationLike(a.Type) && isDurationLike(b.Type) && op == "div":
+	case isOperandDuration(a.Type) && isOperandDuration(b.Type) && op == "div":
 		return divideDurations(a, b)
 
 	// date - date yields a dayTimeDuration
@@ -376,14 +376,14 @@ func temporalArithmetic(a, b *xdm.Atomic, op string) (*xdm.Atomic, error) {
 		return xdm.NewDuration(d, xdm.TypeDayTimeDuration), nil
 
 	// date +/- duration
-	case isDateLike(a.Type) && isDurationLike(b.Type):
+	case isDateLike(a.Type) && isOperandDuration(b.Type):
 		if op != "+" && op != "-" {
 			return nil, xdm.ErrType("operator %q is not defined on a date and a duration", op)
 		}
 		return addDurationToDate(a, b, op == "-")
 
 	// duration + date
-	case isDurationLike(a.Type) && isDateLike(b.Type) && op == "+":
+	case isOperandDuration(a.Type) && isDateLike(b.Type) && op == "+":
 		return addDurationToDate(b, a, false)
 	}
 	return nil, xdm.ErrType("operator %q is not defined on %s and %s",

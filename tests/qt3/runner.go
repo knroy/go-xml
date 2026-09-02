@@ -93,11 +93,31 @@ func (r resolver) ResolvePrefix(p string) (string, bool) {
 	return "", false
 }
 
+// Bindings reports the prefixes the environment declared, which is how the
+// XQuery driver puts them in a query's static context: a query is compiled
+// from source rather than evaluated against a resolver, so the bindings have
+// to be handed over as options before compilation rather than looked up
+// during it. Only the environment's own prefixes are reported — the standard
+// ones ResolvePrefix falls back to are predeclared in the language and would
+// be redeclarations here.
+func (r resolver) Bindings() map[string]string {
+	out := make(map[string]string, len(r.prefixes))
+	for p, u := range r.prefixes {
+		// The empty prefix is the default element namespace, which travels as
+		// its own option; a "declare namespace" for it is not the same thing.
+		if p != "" {
+			out[p] = u
+		}
+	}
+	return out
+}
+
 // DefaultElementNamespace reports the namespace an unprefixed element or type
 // name takes. The environment declares it as a namespace binding with an empty
 // prefix, which is what "xs:QName('ncname')" resolves against.
 func (r resolver) DefaultElementNamespace() string  { return r.prefixes[""] }
 func (r resolver) DefaultFunctionNamespace() string { return xdm.NSFN }
+
 
 // Runner executes cases from a suite checkout.
 type Runner struct {

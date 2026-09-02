@@ -176,7 +176,7 @@ func (n *tryCatch) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 func (n *tryCatch) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -195,6 +195,17 @@ func (n *tryCatch) run(ctx *evalContext) (xdm.Sequence, error) {
 		return nil, err
 	}
 	code := errorCodeName(err)
+	// §3.16: a try/catch catches a *dynamic* error. A static error is not
+	// catchable — it is a property of the expression, not of one evaluation
+	// of it, and the suite says so outright ("An undefined variable (static
+	// error) is not caught"). This engine resolves variables, functions and
+	// prefixes when the reference is evaluated rather than in a binding pass,
+	// so an error the spec raises statically arrives here looking dynamic;
+	// the code is what distinguishes the two, and it is enough. Letting it
+	// through unchanged reports it as the static error it is.
+	if isStaticErrorCode(code) {
+		return nil, err
+	}
 	for _, c := range n.catches {
 		for _, t := range c.tests {
 			if !t.matches(code) {
@@ -281,4 +292,24 @@ func bindErrorVars(ctx *xpath.Context, err error, code xdm.QName) *xpath.Context
 	bind("column-number", nil)
 	bind("additional", nil)
 	return ctx
+}
+
+// isStaticErrorCode reports whether a code names a static error, which a
+// try/catch must not catch.
+//
+// The XQuery and XPath error codes encode their kind in the prefix: XPST and
+// XQST are the static errors, XPDY and XQDY the dynamic ones, and XPTY/XQTY
+// the type errors, which §2.3.1 raises dynamically wherever this engine has
+// no static typing feature to raise them earlier. The two static families are
+// the whole of what is excluded here; every other code, including the FO*
+// function errors, is dynamic and catchable.
+func isStaticErrorCode(code xdm.QName) bool {
+	if code.URI != xdm.NSErr {
+		// fn:error may raise a code in a namespace of its own, and such a
+		// code is dynamic whatever it is spelled like: only the standard
+		// namespace's codes carry the spec's kind in their prefix.
+		return false
+	}
+	return strings.HasPrefix(code.Local, "XPST") ||
+		strings.HasPrefix(code.Local, "XQST")
 }
