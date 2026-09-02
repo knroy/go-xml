@@ -667,11 +667,25 @@ func (p *parser) parseOptionDecl() error {
 	if err != nil {
 		return err
 	}
-	// §4.19: the name must be prefixed. An unprefixed option name would take
-	// the default element namespace, which is not what an option name means.
-	if prefix == "" && !strings.HasPrefix(local, "Q{") {
-		return p.errorf("XPST0081: an option name must have a prefix")
-	}
+	// An unprefixed option name is legal and is simply ignored.
+	//
+	// XQuery 1.0 §4.16 required the name to be prefixed and made an
+	// unprefixed one XPST0081. 3.0 lifted the restriction: the name is in no
+	// namespace, matches none of the options this processor acts on, and the
+	// effect of an option a processor does not recognise is
+	// implementation-defined -- so ignoring it is conforming.
+	// K-OptionDeclarationProlog-1b is "declare option myopt 'option value';
+	// true()" under XQ30+ and accepts either XQST0123 or true.
+	//
+	// This parser is unconditionally 3.1 -- parseVersionDecl reads the
+	// version declaration and discards it, and nothing records a version --
+	// so the 1.0 rule cannot be the one applied. The XQ10 sibling of this
+	// case, which does want XPST0081, is out of scope for the same reason.
+	//
+	// The name falls through to resolveElementName below, whose error is
+	// already swallowed for an empty prefix, and lands in no namespace; the
+	// declaration then matches no option this processor knows and is
+	// discarded.
 	// A braced name carries its own namespace and must not be sent through
 	// resolveElementName, which would take the default element namespace and
 	// leave the whole "Q{uri}local" spelling as the local part. The check
