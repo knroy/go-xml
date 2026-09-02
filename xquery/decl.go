@@ -390,9 +390,25 @@ func (p *parser) parseAnnotationList() (private, conflict bool, err error) {
 	}
 }
 
-// skipAnnotationLiteral consumes one Literal — a string, or a number with an
-// optional sign — and refuses anything else. It only has to recognise them,
-// since an annotation's values are not interpreted.
+// skipAnnotationLiteral consumes one Literal — a string or a number — and
+// refuses anything else. It only has to recognise them, since an annotation's
+// values are not interpreted.
+//
+// A leading sign is not part of one. The grammar bottoms out at
+//
+//	Literal        ::= NumericLiteral | StringLiteral
+//	NumericLiteral ::= IntegerLiteral | DecimalLiteral | DoubleLiteral
+//	IntegerLiteral ::= Digits
+//	DecimalLiteral ::= ("." Digits) | (Digits "." [0-9]*)
+//	DoubleLiteral  ::= (("." Digits) | (Digits ("." [0-9]*)?))
+//	                   [eE] [+-]? Digits
+//
+// and no branch admits a sign in front: "-1" is a UnaryExpr, which is an
+// expression and not a Literal, so "%eg:x(-1)" has no parse and is XPST0003
+// for the same reason "%eg:x(1+2)" is. Accepting it let an annotation carry
+// something the grammar does not have. The sign *inside* a DoubleLiteral's
+// exponent is a different thing — the last branch above puts it there — and
+// the loop below still takes it. (inline-fn-019)
 func (p *parser) skipAnnotationLiteral() error {
 	if p.eof() {
 		return p.errorf("XPST0003: expected a literal in an annotation")
@@ -408,9 +424,6 @@ func (p *parser) skipAnnotationLiteral() error {
 		return nil
 	}
 	start := p.pos
-	if !p.eof() && (p.src[p.pos] == '-' || p.src[p.pos] == '+') {
-		p.pos++
-	}
 	for !p.eof() {
 		c := p.src[p.pos]
 		// One pass takes the digits, the decimal point and an exponent with

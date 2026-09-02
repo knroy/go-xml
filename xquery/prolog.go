@@ -720,6 +720,25 @@ func (p *parser) parseOptionDecl() error {
 			return p.errorf(
 				"XQST0109: %q is not a serialization parameter", name.Local)
 		}
+		// The same error covers a second case: §2.2.4 continues "... or if
+		// the local name of the option is use-character-maps". It is a
+		// serialization parameter, so the set above rightly holds it, but it
+		// is not one an output declaration may set. The reason is structural
+		// rather than arbitrary -- its value is a map from character to
+		// replacement string, and an option declaration's value is a single
+		// URILiteral, which has no way to spell one. A query that writes it
+		// here has said something it cannot mean, so accepting the string and
+		// discarding it, as this did, is the wrong answer twice over: the
+		// declaration had no effect and nothing said so. A character map
+		// still reaches serialization through output:parameter-document,
+		// which is why that name is *not* excluded (Serialization-006/007
+		// require it to be accepted). (Serialization-023)
+		if name.Local == "use-character-maps" {
+			return p.errorf(
+				"XQST0109: %q may not be set by an option declaration; its "+
+					"value is a map, which an option's URILiteral cannot "+
+					"express", name.Local)
+		}
 		if p.serialization == nil {
 			p.serialization = map[string]string{}
 		}
