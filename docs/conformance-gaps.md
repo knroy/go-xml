@@ -14,13 +14,13 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 2 | 1 | **6** | 99.90% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,608 | 99.79% | **18** | 4 | 1 | **13** | 99.84% |
+| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,797 | 99.98% | **6** | 0 | 3 | **3** | 99.99% |
+| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 2 | 1 | **5** | 99.90% |
+| **xslt** | W3C XSLT 3.0 | 8,625 | 8,609 | 99.81% | **16** | 3 | 1 | **12** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
-| **xsd** | W3C xsdtests 1.1 | 41,558 | 41,519 | 99.91% | **39** | 1 | 2 | **36** | 99.94% |
+| **xsd** | W3C xsdtests 1.1 | 41,558 | 41,519 | 99.91% | **39** | 1 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **114** | **7** | **7** | **100** | |
+| | **Total** | | | | **110** | **6** | **5** | **99** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -46,7 +46,7 @@ reflects that.
 > unchanged, and where the audit could not settle a case it says so rather than
 > moving it to a flattering bucket.
 
-**102 disagreements are triaged as unfixable.** Twenty-three are work: engine
+**99 disagreements are triaged as unfixable.** Six are work: engine
 defects, harness defects, or cases the suite already declares out of scope and
 the harness does not read. Seven are open questions, settled neither way.
 
@@ -439,8 +439,8 @@ is the claim the audit most clearly overturned.
 |---|---|---|
 | `iri-001` | 1.1 | **Ours.** `wgData/iri/ElementDeclarations.xsd` is expected valid and we reject it: the type-library schemas it imports carry an internal DTD subset, and the harness never sets `AllowDOCTYPE`, so `TypeLibrary-URI-RFC3986.xsd` fails to parse. Nothing is wrong with those schemas. This is an engine/harness policy choice, and there is no W3C status to appeal to because the group has no `<current>` element. It also masks 12 downstream instance tests in the same group. |
 | `indeterminate` cases | both | **Was ours — a harness scoring bug, now fixed.** `schZ012_a`, `schZ015`, `schG14`, `schA2.i`, `schA5.i`, `addC002`, `addB071`, `elemZ031` and, on 1.0 only, `particlesZ026` and `particlesZ026.v` carry `<expected validity="indeterminate"/>`; `schZ012_a`'s own annotation says "The WG decided the spec. is underspecified in this area, so implementations may reasonably differ," and `particlesZ026` records that the TSTF found its validity implementation-determined. `expectedValidity` in `tests/xsdsuite/main.go` read the attribute as `w == "valid"`, so `indeterminate` silently became "must be invalid" and our acceptance scored as a false accept. The driver now treats it as a third outcome, skips the case, and reports the count on its own `indeterminate` column. This removed **10** disagreements on 1.0 and **8** on 1.1 — the earlier estimate of 8 per version missed the two 1.0-only `particlesZ026` cases. Because the cases leave the denominator as well as the numerator, the agreeing counts fell by 6 per version (39,353 → 39,347 and 41,525 → 41,519) while the percentages rose; `tests/ratchet.txt` was lowered to match. |
-| `simple093` | 1.1 | **Open, not a settled suite defect.** Expected invalid, we accept; the schema unions `xs:QName` with `xs:NOTATION` and the test title is "xs:NOTATION not allowed as member type of union type". The file previously called this a suite defect on the strength of `particlesZ007.xsd` writing a similar union, but gave no reading of the 1.1 rule. Status is `accepted`. It looks more like a missing schema-validity rule than a defect. |
-| `particlesZ033_g` | 1.1 | **Open, not a settled suite defect.** Expected invalid, we accept. The schema uses very large `maxOccurs` (up to 45,678,363) and the test concerns implementation limits on occurrence counts. Arguably ours for enforcing no limit; not established either way from the suite alone. |
+| `simple093` | 1.1 | **Not implementable — the suite contradicts itself.** Expected invalid; the schema unions `xs:QName` with `xs:NOTATION`, and Part 2 §3.2.19 does forbid NOTATION being "used directly in a schema", so the case is a correct reading. But `msData particlesZ007` declares a schema containing `<xsd:union memberTypes="xsd:NOTATION"/>` **valid**, and both carry `status="accepted"`. The rule was implemented and measured: 1.1 trades one for the other (agree 41,519 → 41,518) and 1.0 loses two outright (39,347 → 39,345), because particlesZ007 has a dependent instance test and simple093 is not run under 1.0 at all. Reverted; `xsd/facet_check.go` enforces §3.2.19 in the three places the suite is consistent about. |
+| `particlesZ033_g` | 1.1 | **Not implementable — magnitude is not what the family tests.** Expected invalid; the test's own note says "validates as xs:any if maxOccurs greater than 4096", which describes a 2006 vendor behaviour rather than a rule. No threshold can satisfy the family: sibling `particlesZ033_a` carries `maxOccurs="79228162514264337593543950335"` — 7.9×10²⁸, far larger than `_g`'s 45,678,363 — and is expected **valid**. What actually separates `_g` from the `_f` we correctly reject is that `_f`'s substitution-group member beside `<xsd:element ref='head'>` was replaced by a local element, removing the UPA conflict; accepting `_g` follows from getting UPA right. Where the WG did adjudicate implementation limits, in `elemZ031`, it resolved the expectation to `indeterminate` rather than invalid (bug 4059). |
 
 The `queried` defence itself was spot-checked on four cases and **held** in each
 — `ste110` (bug 4957, circular unions), `gMonth002`/`004` (bug 6901, withdrawn
@@ -555,7 +555,7 @@ streaming dependency:
 # Summary
 
 The per-suite counts are in the table at the top. What that table cannot show
-is *why* the 102 unfixable cases are unfixable:
+is *why* the 99 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|

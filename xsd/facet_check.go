@@ -78,10 +78,13 @@ func (p *parser) checkNotationEnumerated(t *SimpleType, el *xdm.Node) {
 		// <xs:union memberTypes="xs:QName xs:NOTATION"/> invalid, while
 		// msData particlesZ007 declares a schema containing
 		// <xsd:union memberTypes="xsd:NOTATION"/> valid. Both carry
-		// status="accepted". Enforcing the rule trades simple093 for
-		// particlesZ007 in 1.1 and loses particlesZ007 outright in 1.0,
-		// where simple093 is not even run. Left unenforced pending a
-		// suite resolution.
+		// status="accepted". Enforcing the rule was implemented and
+		// measured twice: it trades simple093 for particlesZ007 in 1.1
+		// (agree 41519 to 41518) and costs 1.0 two cases outright
+		// (39347 to 39345), because particlesZ007 has a dependent
+		// instance test as well as the schema test and simple093 is not
+		// run under 1.0 at all. Left unenforced pending a suite
+		// resolution.
 	}
 }
 
