@@ -181,6 +181,30 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 	if tc.Test.InitialFunction != nil {
 		return false, "initial function (XSLT 3.0)"
 	}
+	// A case that dereferences a document only the network can supply is out
+	// of scope, whether or not it remembered to say so.
+	//
+	// The suite has a purpose-built dependency for this -- <available_documents
+	// value="..."/> -- and the loop over deps.Others below already excludes
+	// every case declaring one. unparsed-text-2003 is the case that does not
+	// declare one and needs to: it asks
+	// unparsed-text-available('http://www.w3.org/Consortium/mission.html') and
+	// asserts true, which no offline processor can answer. Its neighbour
+	// unparsed-text-2002 reads the same two URLs from the same environment and
+	// DOES declare available_documents for both, so the omission on 2003 is a
+	// slip in the catalog rather than a statement that the case is offline.
+	//
+	// Rather than name the case, the exclusion is derived from the fact that
+	// makes it unrunnable. The environment both cases share declares those
+	// URLs as <resource file="http://..."/> -- a resource whose @file is an
+	// absolute http(s) URI rather than a path beside the test set is one the
+	// harness can only obtain over the wire -- and the exclusion fires only
+	// when the case's own stylesheet actually contains that URI. That keeps
+	// the other forty-odd cases sharing the environment in scope: they never
+	// mention the remote resources and pass offline today.
+	if why := remoteResource(set, tc); why != "" {
+		return false, why
+	}
 	// And so is a stylesheet that can only be read as XSLT 3.0, whatever the
 	// catalog's <spec> says. Two cases are mislabelled XSLT20+ in the suite's
 	// own metadata: character-map-026 asks for the adaptive output method,
@@ -309,6 +333,63 @@ func xslt30OnlyConstruct(set *TestSet, tc *TestCase) string {
 		for _, c := range xslt30Constructs {
 			if c.re.MatchString(src) {
 				return c.why
+			}
+		}
+	}
+	return ""
+}
+
+// remoteResource reports why a case needs the network, or "" if it does not.
+//
+// An environment <resource> whose @file is an absolute http(s) URI is a
+// document the harness has no local copy of; every other resource names a file
+// shipped beside the test set. A case is excluded only when one of its own
+// stylesheets names such a URI, because the environments declaring them are
+// shared with many cases that never read them.
+//
+// The comparison is on the URI as written. The suite's stylesheets and its
+// environments do disagree on scheme for these documents -- the environment
+// says http, unparsed-text-2002 asks for https -- so both forms of each
+// declared resource are looked for.
+func remoteResource(set *TestSet, tc *TestCase) string {
+	var remote []string
+	add := func(envs []Environment, only bool) {
+		for _, env := range envs {
+			if only && !envReferenced(env.Name, tc) {
+				continue
+			}
+			for _, r := range env.Resources {
+				u := r.File
+				if u == "" {
+					u = r.URI
+				}
+				switch {
+				case strings.HasPrefix(u, "http://"):
+					remote = append(remote, u, "https://"+u[len("http://"):])
+				case strings.HasPrefix(u, "https://"):
+					remote = append(remote, u, "http://"+u[len("https://"):])
+				}
+			}
+		}
+	}
+	add(tc.Environments, false)
+	add(set.Environments, true)
+	if len(remote) == 0 {
+		return ""
+	}
+	for _, sr := range tc.Test.Stylesheets {
+		src := sr.Content
+		if sr.File != "" {
+			data, err := os.ReadFile(
+				filepath.Join(set.Dir, filepath.FromSlash(sr.File)))
+			if err != nil {
+				continue
+			}
+			src = string(data)
+		}
+		for _, u := range remote {
+			if strings.Contains(src, u) {
+				return "depends on available_documents"
 			}
 		}
 	}

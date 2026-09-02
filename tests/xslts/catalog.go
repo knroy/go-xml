@@ -107,6 +107,19 @@ type Environment struct {
 	// cases at all, so a runner reading only the case-level ones finds none
 	// and reports the whole set as unrunnable.
 	Stylesheets []StylesheetRef `xml:"stylesheet"`
+	// Resources are the non-XML documents fn:unparsed-text and friends may
+	// read. Most name a file shipped beside the test set, which the engine
+	// resolves as an ordinary relative reference and which needs no modelling
+	// here. The ones that matter for scope are those whose @file is itself an
+	// absolute http(s) URI: they say the environment is only complete when
+	// the network is. See remoteResource in deps.go.
+	Resources []Resource `xml:"resource"`
+}
+
+// Resource is one non-XML document an environment makes readable.
+type Resource struct {
+	URI  string `xml:"uri,attr"`
+	File string `xml:"file,attr"`
 }
 
 // Source is one input document, either named by file or given inline.
