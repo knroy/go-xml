@@ -306,20 +306,20 @@ func findParen(src string, open int) (int, error) {
 	return 0, fmt.Errorf("XPST0003: unbalanced %q at offset %d", "(", open)
 }
 
-// skipStringConstructor returns the index of the last byte of the "]``" that
-// closes the string constructor opening at src[i], which must be "``[".
+// skipStringConstructor returns the index of the last byte of the "]“" that
+// closes the string constructor opening at src[i], which must be "“[".
 //
 // The scanners that walk an expression looking for a comma, a bracket or a
 // keyword all have to step over one of these whole, for the reason they step
 // over a string literal: §3.11.6 exists so that a query can carry text with
 // quotes, braces and brackets in it without escaping any of them, so every
 // byte between the delimiters is content and none of it is syntax. Reading
-// "``[[\"']]``" as a bracket and then a string literal is what left
+// "“[[\"']]“" as a bracket and then a string literal is what left
 // string-constructor-021's regex looking unterminated.
 //
 // The one thing inside that is not content is an interpolation, "`{ ... }`",
 // whose body is an expression and may hold a nested string constructor of its
-// own; a depth count is kept so that the inner one's "]``" does not close the
+// own; a depth count is kept so that the inner one's "]“" does not close the
 // outer.
 func skipStringConstructor(src string, i int) (int, error) {
 	if !strings.HasPrefix(src[i:], "``[") {
