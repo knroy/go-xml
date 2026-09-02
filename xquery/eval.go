@@ -510,7 +510,11 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 	// stamp above is a provisional answer and this is the final one. Without
 	// it base-uri(<e xml:base="http://example.com/"/>) answered the query's
 	// own base URI, or nothing, which is wrong in both directions.
-	if el := sub.b.Open(); el != nil {
+	rebase := func() {
+		el := sub.b.Open()
+		if el == nil {
+			return
+		}
 		parent := n.baseURI
 		if el.Parent != nil {
 			// A nested constructor resolves against the base URI its
@@ -523,11 +527,20 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 		}
 		xdmbuild.Rebase(el, parent)
 	}
+	// Before the content, so that a constructor nested in it resolves against
+	// the base URI this element has actually settled on.
+	rebase()
 	for _, c := range n.content {
 		if err := c.eval(sub, ctx); err != nil {
 			return err
 		}
 	}
+	// And again after it, because a computed constructor has no attribute
+	// list of its own: "element e { attribute xml:base {...} }" writes the
+	// attribute as content, so the first pass had nothing to see and the
+	// element kept the static base URI. Constr-compelem-baseuri-1 is that
+	// query, and answered the empty string.
+	rebase()
 	return nil
 }
 
@@ -1004,6 +1017,14 @@ func checkAttributeName(name xdm.QName) error {
 	case name.URI == xdm.NSXMLNS:
 		return fmt.Errorf(
 			"XQDY0044: an attribute may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xmlns":
+		// The prefix reserved for declarations, whatever URI it was paired
+		// with. XQ.E19 added this case to §3.9.3.3 on its own, because the
+		// namespace test above misses it: fn:QName() will pair "xmlns:foo"
+		// with any URI at all, and comp-attr-bad-name-7 and cbcl-constr-
+		// compattr-002 both do exactly that.
+		return fmt.Errorf(
+			"XQDY0044: an attribute name may not use the prefix %q", "xmlns")
 	case name.Prefix == "xml" && name.URI != xdm.NSXML:
 		return fmt.Errorf(
 			"XQDY0044: the prefix %q is bound to %q and may not be rebound",
@@ -1027,6 +1048,12 @@ func checkElementName(name xdm.QName) error {
 	case name.URI == xdm.NSXMLNS:
 		return fmt.Errorf(
 			"XQDY0096: an element may not be in the namespace %q", xdm.NSXMLNS)
+	case name.Prefix == "xmlns":
+		// The same addition XQ.E19 made for an attribute; see
+		// checkAttributeName. comp-elem-bad-name-6 constructs the name with
+		// fn:QName and expects XQDY0096.
+		return fmt.Errorf(
+			"XQDY0096: an element name may not use the prefix %q", "xmlns")
 	case name.Prefix == "xml" && name.URI != xdm.NSXML:
 		return fmt.Errorf(
 			"XQDY0096: the prefix %q is bound to %q and may not be rebound",

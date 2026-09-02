@@ -308,10 +308,21 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 		// within element content — an attribute preceded by a node that is
 		// neither an attribute nor a namespace — which is checked below where
 		// there is an element to check it against.
-		b.items = append(b.items, &xdm.Node{
+		// The prefix rule applies to a parentless attribute too. §3.9.3.3
+		// requires a namespaced attribute to carry a prefix, because XML
+		// gives an unprefixed attribute no namespace at all and the name
+		// would not survive being written out. There is no element here to
+		// hang the declaration on, but the *name* is still asked about:
+		// K2-ComputeConAttr-54 reads prefix-from-QName(node-name(...)) off a
+		// standalone attribute and requires a prefix to be there, and -55
+		// requires the XML namespace to have got "xml" rather than an
+		// invented one.
+		n := &xdm.Node{
 			Kind: xdm.KindAttribute, Name: name, Value: value,
 			TypeAnnotation: typeAnnotation,
-		})
+		}
+		fixupOrphanAttrPrefix(n)
+		b.items = append(b.items, n)
 		return nil
 	}
 	// Adding an attribute after children exist is an error the spec calls out,
@@ -341,6 +352,20 @@ func (b *Builder) AddAttributeTyped(name xdm.QName, value string,
 		TypeAnnotation: typeAnnotation})
 	fixupAttrPrefix(b.open, b.open.Attrs[len(b.open.Attrs)-1])
 	return nil
+}
+
+// fixupOrphanAttrPrefix is fixupAttrPrefix for an attribute with no element
+// to declare anything on: only the name can be repaired, so an invented
+// prefix is chosen without consulting bindings that do not exist yet.
+func fixupOrphanAttrPrefix(attr *xdm.Node) {
+	switch {
+	case attr.Name.URI == "":
+		attr.Name.Prefix = ""
+	case attr.Name.URI == xdm.NSXML:
+		attr.Name.Prefix = "xml"
+	case attr.Name.Prefix == "":
+		attr.Name.Prefix = "ns0"
+	}
 }
 
 // fixupAttrPrefix gives a namespaced attribute a usable prefix and declares
