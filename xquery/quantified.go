@@ -36,7 +36,7 @@ func (q *quantified) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 	}
 	for _, t := range stream {
-		ok, err := evalBool(q.test, t.sub(ctx))
+		ok, err := q.test.evalBool(t.sub(ctx))
 		if err != nil {
 			return nil, err
 		}

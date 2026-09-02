@@ -68,14 +68,33 @@ type parser struct {
 
 // compiledExpr is an expression compiled by xpath, kept with the source it
 // came from so that an error can quote it.
+//
+// The compiled half is NOT the whole expression. Three other fields carry
+// machinery that has to be applied for the result to be right — ops, which
+// binds the XQuery-only primaries lifted out of src; typed, which restates
+// the error code a declared type raises; and check, the standalone type test
+// for a value with no source text to fold a "treat as" into. Evaluating the
+// compiled half on its own silently skips all three, and it skips them
+// without failing loudly: a lifted operand surfaces as XPST0017 naming a
+// function the query never wrote, and a declared type reports XPDY0050 where
+// the specification says XPTY0004. Both of those were real bugs, found long
+// after the call sites that caused them read as obviously correct.
+//
+// So the compiled expression is unreachable by any name a call site would
+// reach for. Evaluation goes through eval, evalBool or evalIn, each of which
+// applies the machinery; static analysis, which wants the compiled form and
+// nothing around it, goes through inspect, whose name says so.
 type compiledExpr struct {
-	src      string
-	compiled *xpath.Compiled
+	src string
+	// xpc is the xpath half. It is deliberately named for nothing a call
+	// site would reach for: use eval/evalBool/evalIn to run it and inspect
+	// to analyse it, and see the type comment above for why.
+	xpc *xpath.Compiled
 	// typed marks an expression a declared type was compiled into, so that
 	// the "treat as" error it may raise is reported under the code a FLWOR
 	// type mismatch has. See retypeError.
 	typed bool
-	// items is set instead of compiled when the expression is a constructor
+	// items is set instead of xpc when the expression is a constructor
 	// or a nested FLWOR, neither of which xpath can read.
 	items []node
 	// check is a declared type applied to the value items produced, for the
@@ -93,11 +112,29 @@ type compiledExpr struct {
 	sc *staticContext
 	// ops are XQuery-only primaries lifted out of src so that xpath could
 	// compile the rest. Each one is reached through a "local:xq-stepN()"
-	// call installed before compiled is evaluated. See substituteOperands.
+	// call installed before xpc is evaluated. See substituteOperands.
 	ops []liftedOperand
 }
 
-// bind returns the context compiled must be evaluated in, with a function
+// inspect returns the compiled expression for STATIC ANALYSIS ONLY — reading
+// the call and variable names the compiler recorded, never running it.
+//
+// It exists so that the two uses of the compiled form are visibly different
+// at the call site. checkStaticCalls and checkBodyVars want the expression as
+// a parse tree to walk; they neither have an evaluation context nor want one,
+// and nothing about ops, typed or check bears on what they read. Every other
+// caller is evaluating, and must use eval, evalBool or evalIn instead.
+//
+// The result is nil for an expression xpath never compiled — a constructor or
+// a nested FLWOR, which is held in items — so a caller must test for it.
+func (e *compiledExpr) inspect() *xpath.Compiled {
+	if e == nil {
+		return nil
+	}
+	return e.xpc
+}
+
+// bind returns the context xpc must be evaluated in, with a function
 // installed for every lifted operand that replaced a primary.
 //
 // It is the ordinary context wherever nothing was lifted, which is the common
@@ -110,6 +147,37 @@ func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
 	return bindLifted(ctx.xp, e.ops, ctx), nil
 }
 
+// evalIn evaluates the xpath half in a context derived from the bound one.
+//
+// Several callers have a value of their own to bind before the expression can
+// run: a nested call's arguments, a parenthesised path's left half, a lifted
+// operand's own operands, a standalone type check's subject. They differ only
+// in what they add, so decorate receives the context bind produced and
+// returns the one to evaluate in; passing nil adds nothing.
+//
+// Routing them through here rather than letting each reach for the compiled
+// expression is the point of the type: the decoration composes ON TOP OF
+// bind's library rather than replacing it, and the typed rewrite still
+// applies to whatever comes back. A call site that builds its own context and
+// evaluates directly gets both of those wrong by omission, and nothing about
+// the way it reads says so.
+func (e *compiledExpr) evalIn(ctx *evalContext,
+	decorate func(*xpath.Context) *xpath.Context) (xdm.Sequence, error) {
+
+	xp, err := e.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if decorate != nil {
+		xp = decorate(xp)
+	}
+	seq, err := e.xpc.Eval(xp)
+	if e.typed {
+		err = retypeError(err)
+	}
+	return seq, err
+}
+
 // eval evaluates the expression, whichever half of it is set.
 func (e *compiledExpr) eval(ctx *evalContext) (xdm.Sequence, error) {
 	if e.items != nil {
@@ -119,15 +187,41 @@ func (e *compiledExpr) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 		return applyCheck(e.check, seq, ctx)
 	}
-	xp, err := e.bind(ctx)
+	return e.evalIn(ctx, nil)
+}
+
+// evalBool is the effective boolean value of the expression, which a "where"
+// clause, a quantified expression's satisfies clause and a window clause's
+// conditions all need.
+//
+// The xpath half goes to EvalBool rather than through eval, because xpath can
+// answer a predicate without materialising the sequence behind it. That
+// shortcut still has to run in the bound context: an expression with a lifted
+// operand reached through EvalBool on the bare context would ask xpath for a
+// "local:xq-stepN()" nothing had installed. Today no clause expression can
+// carry one — the scanner that decides a clause needs this package's parser
+// fires on the same constructs the operand lifter fires on, so such an
+// expression is held in items and never reaches here — but that is two
+// independent lexical scanners happening to agree, not an invariant either of
+// them states. Binding costs nothing when ops is empty and removes the
+// dependency on that coincidence.
+func (e *compiledExpr) evalBool(ctx *evalContext) (bool, error) {
+	if e.items == nil {
+		xp, err := e.bind(ctx)
+		if err != nil {
+			return false, err
+		}
+		ok, err := e.xpc.EvalBool(xp)
+		if e.typed {
+			err = retypeError(err)
+		}
+		return ok, err
+	}
+	seq, err := e.eval(ctx)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	seq, err := e.compiled.Eval(xp)
-	if e.typed {
-		err = retypeError(err)
-	}
-	return seq, err
+	return xpath.EffectiveBooleanValue(seq)
 }
 
 func (p *parser) eof() bool { return p.pos >= len(p.src) }
@@ -501,7 +595,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		}
 		c = c.WithDefaultCollation(coll)
 	}
-	return &compiledExpr{src: src, compiled: c, sc: p.sc, ops: opsOut}, nil
+	return &compiledExpr{src: src, xpc: c, sc: p.sc, ops: opsOut}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.

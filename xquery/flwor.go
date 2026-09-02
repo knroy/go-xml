@@ -104,19 +104,6 @@ func (t tuple) sub(ctx *evalContext) *evalContext {
 	return &evalContext{xp: t.context(ctx), sc: ctx.sc}
 }
 
-// evalBool is the effective boolean value of a clause expression, which
-// "where" tests and a quantified expression's satisfies clause both need.
-func evalBool(e *compiledExpr, ctx *evalContext) (bool, error) {
-	if e.items == nil {
-		return e.compiled.EvalBool(ctx.xp)
-	}
-	seq, err := e.eval(ctx)
-	if err != nil {
-		return false, err
-	}
-	return xpath.EffectiveBooleanValue(seq)
-}
-
 // A clause transforms a tuple stream.
 //
 // The stream is materialised rather than streamed because "order by" and
@@ -271,7 +258,7 @@ type whereClause struct{ test *compiledExpr }
 func (c *whereClause) apply(in []tuple, ctx *evalContext) ([]tuple, error) {
 	var out []tuple
 	for _, t := range in {
-		ok, err := evalBool(c.test, t.sub(ctx))
+		ok, err := c.test.evalBool(t.sub(ctx))
 		if err != nil {
 			return nil, err
 		}

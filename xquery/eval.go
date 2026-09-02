@@ -151,17 +151,13 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 	if n.expr == nil {
 		return nil
 	}
-	// bind rather than ctx.xp: compileExpr may have lifted an XQuery-only
-	// primary out of this expression's source and left a variable reference
-	// where it stood, and the value has to be bound before xpath is asked to
-	// evaluate over it. Evaluating in the bare context instead reports the
-	// invented variable as undeclared — which is what
+	// eval rather than the compiled form against ctx.xp: compileExpr may have
+	// lifted an XQuery-only primary out of this expression's source and left a
+	// variable reference where it stood, and the value has to be bound before
+	// xpath is asked to evaluate over it. Evaluating in the bare context
+	// instead reports the invented variable as undeclared — which is what
 	// "{<p:e/>/namespace-uri()}" in an attribute value did.
-	xp, err := n.expr.bind(ctx)
-	if err != nil {
-		return err
-	}
-	seq, err := n.expr.compiled.Eval(xp)
+	seq, err := n.expr.eval(ctx)
 	if err != nil {
 		return err
 	}
@@ -172,11 +168,7 @@ func (n *enclosed) eval(out *builderRef, ctx *evalContext) error {
 // callers that need its value rather than its contribution to a tree.
 func (n *enclosed) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if n.expr != nil {
-		xp, err := n.expr.bind(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return n.expr.compiled.Eval(xp)
+		return n.expr.eval(ctx)
 	}
 	if n.items == nil {
 		return nil, nil
@@ -908,14 +900,10 @@ func (n *pi) eval(out *builderRef, ctx *evalContext) error {
 // right type does its spelling matter, and a string of the right type that
 // is not an NCName is the dynamic error XQDY0041.
 func evalPITarget(e *compiledExpr, ctx *evalContext) (string, error) {
-	// bind, for the reason evalNodeName gives: a target expression holding a
+	// eval, for the reason evalNodeName gives: a target expression holding a
 	// lifted XQuery-only primary needs the context that installs the
 	// "local:xq-stepN()" function standing in for it.
-	xp, err := e.bind(ctx)
-	if err != nil {
-		return "", err
-	}
-	seq, err := e.compiled.Eval(xp)
+	seq, err := e.eval(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -1042,17 +1030,13 @@ func contentString(content []node, ctx *evalContext) (string, bool, error) {
 // where the same failure in a direct constructor is static, because a direct
 // constructor's name is written in the query and a computed one's is not.
 func evalNodeName(e *compiledExpr, ctx *evalContext, isElement bool) (xdm.QName, error) {
-	// Through bind, not the raw context: a name expression holding an
+	// Through eval, not the raw context: a name expression holding an
 	// XQuery-only primary was compiled by lifting that primary out into a
 	// "local:xq-stepN()" call, and the function behind that call exists only
 	// in the context bind builds. Evaluating against ctx.xp reached xpath
 	// with the call still in the expression and nothing to answer it, which
 	// surfaced as XPST0017 naming a function the query never wrote.
-	xp, err := e.bind(ctx)
-	if err != nil {
-		return xdm.QName{}, err
-	}
-	seq, err := e.compiled.Eval(xp)
+	seq, err := e.eval(ctx)
 	if err != nil {
 		return xdm.QName{}, err
 	}
@@ -1224,16 +1208,12 @@ func checkElementName(name xdm.QName) error {
 func (n *namespaceNode) eval(out *builderRef, ctx *evalContext) error {
 	prefix := n.prefix
 	if n.prefixExpr != nil {
-		// bind, for the same reason evalNodeName uses it: the prefix
+		// eval, for the same reason evalNodeName uses it: the prefix
 		// expression may hold an XQuery-only primary that was lifted into a
 		// "local:xq-stepN()" call, and only bind installs the function that
 		// call reaches. nscons-015 writes "namespace { <a/>/* } { ... }",
 		// where the constructor is the lifted primary.
-		xp, err := n.prefixExpr.bind(ctx)
-		if err != nil {
-			return err
-		}
-		seq, err := n.prefixExpr.compiled.Eval(xp)
+		seq, err := n.prefixExpr.eval(ctx)
 		if err != nil {
 			return err
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // maxNestDepth bounds how deeply expressions this parser reads itself may
@@ -263,18 +264,25 @@ type nestedCall struct {
 }
 
 func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp, err := n.fn.bind(ctx)
-	if err != nil {
-		return nil, err
-	}
+	// The arguments are evaluated before the call, in source order, and each
+	// is bound to the variable standing in for it. They are computed up front
+	// rather than inside the decoration because evaluating one can fail, and
+	// evalIn's decoration has nowhere to report an error to.
+	vals := make([]xdm.Sequence, len(n.args))
 	for i, a := range n.args {
 		v, err := (&enclosed{items: []node{a}}).sequence(ctx)
 		if err != nil {
 			return nil, err
 		}
-		xp = xp.WithVar(xdm.QName{URI: callArgNS(ctx.sc), Local: callArgLocal(i)}, v)
+		vals[i] = v
 	}
-	return n.fn.compiled.Eval(xp)
+	return n.fn.evalIn(ctx, func(xp *xpath.Context) *xpath.Context {
+		for i, v := range vals {
+			xp = xp.WithVar(
+				xdm.QName{URI: callArgNS(ctx.sc), Local: callArgLocal(i)}, v)
+		}
+		return xp
+	})
 }
 
 func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
@@ -370,12 +378,9 @@ func (n *parenPath) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
-	xp, err := n.rest.bind(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return n.rest.compiled.Eval(
-		xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
+	return n.rest.evalIn(ctx, func(xp *xpath.Context) *xpath.Context {
+		return xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v)
+	})
 }
 
 func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {

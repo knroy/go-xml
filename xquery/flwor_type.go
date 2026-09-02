@@ -222,16 +222,18 @@ func (p *parser) compileEmptyCheck(typ string) (*compiledExpr, error) {
 // XPDY0050 to the XPTY0004 a declared-type mismatch carries.
 //
 // "() treat as T" reads neither the context item nor any function, so the
-// tuple's context is not needed and the answer cannot vary with it.
+// tuple's context is not needed and the answer cannot vary with it. A fresh
+// one is still routed through eval rather than handed to the compiled form
+// directly, so that the typed rewrite the check depends on is applied by the
+// same code path everything else uses; compileEmptyCheck sets typed, and a
+// direct evaluation here would have to remember to call retypeError itself.
 func runEmptyCheck(check *compiledExpr) error {
 	if check == nil {
 		return nil
 	}
-	if _, err := check.compiled.Eval(
-		xpath.NewContext(nil, xpath.Builtins())); err != nil {
-		return retypeError(err)
-	}
-	return nil
+	ctx := &evalContext{xp: xpath.NewContext(nil, xpath.Builtins())}
+	_, err := check.eval(ctx)
+	return err
 }
 
 // typeCheckVar names the variable the per-item type check binds. It is
@@ -284,10 +286,11 @@ func applyCheck(check *compiledExpr, v xdm.Sequence, ctx *evalContext) (xdm.Sequ
 	if check == nil {
 		return v, nil
 	}
-	sub := ctx.xp.WithVar(xdm.QName{URI: nsLocal, Local: "xq-typed-item"}, v)
-	out, err := check.compiled.Eval(sub)
-	if err != nil {
-		return nil, retypeError(err)
-	}
-	return out, nil
+	// evalIn rather than a context built here and evaluated directly: the
+	// value has to be bound on top of whatever bind produced, and the typed
+	// rewrite compileTypeCheck asked for has to be applied to the error. Both
+	// are evalIn's job, so neither can be forgotten by a later edit.
+	return check.evalIn(ctx, func(xp *xpath.Context) *xpath.Context {
+		return xp.WithVar(xdm.QName{URI: nsLocal, Local: "xq-typed-item"}, v)
+	})
 }

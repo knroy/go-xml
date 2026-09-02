@@ -27,11 +27,17 @@ import (
 func (q *Query) checkStaticCalls() error {
 	seen := map[string]bool{}
 	var calls []xpath.StaticCall
+	// inspect, not eval: this reads the calls the compiler recorded and never
+	// runs the expression, so the ops/typed/check machinery an evaluation
+	// would have to apply is beside the point here. It answers nil for an
+	// expression xpath never compiled — a constructor or a nested FLWOR —
+	// whose calls the node walker below finds instead.
 	add := func(e *compiledExpr) {
-		if e == nil || e.compiled == nil {
+		c := e.inspect()
+		if c == nil {
 			return
 		}
-		calls = append(calls, e.compiled.StaticCalls()...)
+		calls = append(calls, c.StaticCalls()...)
 	}
 	for _, d := range q.funcs {
 		add(d.expr)
@@ -178,14 +184,19 @@ func (q *Query) checkBodyVars(ctx *xpath.Context) error {
 		global[d.name.Clark()] = true
 	}
 	for _, d := range q.funcs {
-		if d.expr == nil || d.expr.compiled == nil || len(d.expr.ops) > 0 {
+		// inspect, not eval: the free variables are read off the compiled
+		// form, and nothing is run. An expression with lifted operands is
+		// skipped rather than inspected, because the lifter's own invented
+		// variables would be reported as free.
+		body := d.expr.inspect()
+		if body == nil || len(d.expr.ops) > 0 {
 			continue
 		}
 		params := map[string]bool{}
 		for _, pm := range d.params {
 			params[pm.name.Clark()] = true
 		}
-		for _, name := range d.expr.compiled.FreeVariables() {
+		for _, name := range body.FreeVariables() {
 			k := name.Clark()
 			if params[k] || global[k] {
 				continue

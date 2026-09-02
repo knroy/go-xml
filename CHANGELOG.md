@@ -26,6 +26,26 @@ in `flwor_type.go`); the two whitespace skippers deliberately stay
 comment-only, since A.2.4.1 gives `Whitespace ::= S | Comment` and the other
 three regions are expressions. No behaviour change in the suites: XQuery stays
 at 29,796, XPath at 15,183 / 19,244 / 21,786, XSLT at 8,606 / 6,149.
+### Internal: a compiled XQuery expression can no longer be evaluated unsafely
+
+No behaviour changes and no conformance movement; this removes the shape of a
+bug rather than an instance of one. An XQuery expression that xpath compiled
+carries three things besides the compiled form — the XQuery-only primaries
+lifted out of its source, the error-code rewrite a declared type needs, and a
+standalone type check — and every one of them is skipped by evaluating the
+compiled form directly. That read as correct at each call site and had already
+produced two real bugs, in a computed constructor's name expression and in a
+processing instruction's target, each surfacing as `XPST0017` naming a
+function the query never wrote.
+
+The compiled form is now unreachable by name from the call sites. Evaluation
+goes through `eval`, `evalBool` or `evalIn`, which apply the machinery;
+static analysis, which wants the compiled form and nothing around it, goes
+through `inspect`, whose name says so. Ten direct uses were converted, one of
+which — the effective boolean value a `where` clause, a `satisfies` clause and
+a window clause's conditions take — was a latent instance of the same bug,
+unreached only because two independent lexical scanners happen to agree about
+which expressions carry a lifted operand.
 
 ### XQuery conformance: 99.61% to 99.98%
 

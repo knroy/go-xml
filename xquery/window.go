@@ -128,7 +128,7 @@ func (c *windowClause) windows(t tuple, seq xdm.Sequence, ctx *evalContext) ([]t
 	var out []tuple
 	for s := 1; s <= len(seq); s++ {
 		st := c.start.bind(t, seq, s)
-		ok, err := evalBool(c.start.when, st.sub(ctx))
+		ok, err := c.start.when.evalBool(st.sub(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +177,7 @@ func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 	if !c.hasEnd {
 		for e := s + 1; e <= len(seq); e++ {
 			nt := c.start.bind(st, seq, e)
-			ok, err := evalBool(c.start.when, nt.sub(ctx))
+			ok, err := c.start.when.evalBool(nt.sub(ctx))
 			if err != nil {
 				return 0, false, err
 			}
@@ -189,7 +189,7 @@ func (c *windowClause) findEnd(st tuple, seq xdm.Sequence, s int,
 	}
 	for e := s; e <= len(seq); e++ {
 		et := c.end.bind(st, seq, e)
-		ok, err := evalBool(c.end.when, et.sub(ctx))
+		ok, err := c.end.when.evalBool(et.sub(ctx))
 		if err != nil {
 			return 0, false, err
 		}

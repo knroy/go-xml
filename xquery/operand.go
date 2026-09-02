@@ -439,11 +439,15 @@ type operandExpr struct {
 }
 
 func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp, err := n.rest.bind(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return n.rest.compiled.Eval(bindLifted(xp, n.ops, ctx))
+	// Two layers of lifting can meet here. This node's own ops are the ones
+	// parseOperandSubst pulled out; rest may carry a second set that
+	// compileExpr had to lift when xpath refused what was left. evalIn binds
+	// rest's, and the decoration chains this node's on top, so a primary from
+	// either pass resolves. Reaching for the compiled form and installing only
+	// one of the two libraries loses the other silently.
+	return n.rest.evalIn(ctx, func(xp *xpath.Context) *xpath.Context {
+		return bindLifted(xp, n.ops, ctx)
+	})
 }
 
 // bindLifted makes the lifted operands reachable from the rewritten
