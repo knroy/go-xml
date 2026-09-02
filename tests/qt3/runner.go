@@ -183,7 +183,7 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 				"fn-load-xquery-module",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",
-				"advanced-uca-fallback", "olson-timezone", "remote_http":
+				"advanced-uca-fallback", "remote_http":
 				if d.Satisfied != "false" {
 					return "needs feature " + d.Value
 				}
