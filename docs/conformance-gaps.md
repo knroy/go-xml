@@ -7,8 +7,8 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.0 | 19,236 | 19,236 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,778 | 21,778 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
 | **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 2 | **17** | 99.80% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
@@ -116,7 +116,7 @@ can make truthfully. The reasoning is recorded in `xpath/fn_31.go`.
 the harness's own comparison serializer writing a literal CR, which XML §2.11
 converts to LF on re-parse.
 
-**XPath: 21,778 / 21,778 = 100.00%, on all three versions.**
+**XPath: 21,786 / 21,786 = 100.00%, on all three versions.**
 
 ---
 

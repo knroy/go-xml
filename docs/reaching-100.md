@@ -237,7 +237,7 @@ currently out of scope, a 31% larger denominator — and would be a project in
 itself.
 
 **EXSLT is not on this list.** It is a separate product. XQuery was, and is
-now implemented in [`xquery`](../xquery/) at 99.22%; what remains of it there
+now implemented in [`xquery`](../xquery/) at 99.45%; what remains of it there
 is tracked in [xquery.md](xquery.md) rather than here, because this file is
 about the XPath and XSLT figures.
 
