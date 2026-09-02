@@ -1,5 +1,5 @@
 DocBook 544
-TestQT3XQuery 29706
+TestQT3XQuery 29719
 TestXSLT30Suite 8606
 TestXSLTSuite 6149
 XSD10 39353
