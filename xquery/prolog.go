@@ -634,9 +634,23 @@ func (p *parser) parseOptionDecl() error {
 	if prefix == "" && !strings.HasPrefix(local, "Q{") {
 		return p.errorf("XPST0081: an option name must have a prefix")
 	}
-	name, err := p.sc.resolveElementName(prefix, local)
-	if err != nil && prefix != "" {
-		return err
+	// A braced name carries its own namespace and must not be sent through
+	// resolveElementName, which would take the default element namespace and
+	// leave the whole "Q{uri}local" spelling as the local part. The check
+	// above already knows an option name may be written that way; resolving
+	// it the same way made every "declare option Q{...}method" land in the
+	// wrong namespace, so the serialization options of the method-text set --
+	// which spell the name that way throughout -- were silently dropped and
+	// their results written as XML.
+	var name xdm.QName
+	if strings.HasPrefix(local, "Q{") {
+		end := strings.IndexByte(local, '}')
+		name = xdm.QName{URI: local[2:end], Local: local[end+1:]}
+	} else {
+		name, err = p.sc.resolveElementName(prefix, local)
+		if err != nil && prefix != "" {
+			return err
+		}
 	}
 	p.skipSpaceAndComments()
 	val, err := p.parseURILiteral()

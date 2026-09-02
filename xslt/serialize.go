@@ -221,6 +221,19 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 				if v.Kind == xdm.KindComment || v.Kind == xdm.KindPI {
 					continue
 				}
+				// Sequence normalisation runs before any method does, so a
+				// parentless attribute or namespace node is an error here
+				// too: there is no document it could belong to, and the text
+				// method having nothing to write for it is not the same as
+				// there being nothing wrong. Serialization-text-1 through -4
+				// send one straight to the serialiser and ask for SENR0001.
+				if v.Kind == xdm.KindAttribute || v.Kind == xdm.KindNamespace {
+					if s.err == nil {
+						s.err = fmt.Errorf("SENR0001: an attribute or " +
+							"namespace node cannot be serialised on its own")
+					}
+					return s.err
+				}
 				s.writeString(s.normalized(s.mapChars(v.StringValue())))
 			case *xdm.Atomic:
 				s.writeString(s.normalized(s.mapChars(v.String())))
@@ -1022,6 +1035,23 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 			sb.WriteString("&lt;")
 		case '>':
 			sb.WriteString("&gt;")
+		case '\r', '\u0085', '\u2028':
+			// Three characters survive a round trip only as references.
+			// A literal CR is turned into LF by the line-ending
+			// normalisation every XML parser performs before the document
+			// reaches an application, so a text node holding one comes back
+			// holding something else. U+0085 (NEL) and U+2028 (LINE
+			// SEPARATOR) are line endings to an XML 1.1 parser and get the
+			// same treatment. Serialization 3.1 §5 requires the reference
+			// for exactly this reason, and K2-Serialization-5 and -10 assert
+			// it. The html method is excluded: its escaping is HTML's, where
+			// none of the three is a line ending and CR carries no such
+			// rule.
+			if s.html && !s.xhtml {
+				sb.WriteRune(r)
+				continue
+			}
+			fmt.Fprintf(sb, "&#%d;", r)
 		case '\u00a0':
 			// The HTML method writes a no-break space as the named entity, so
 			// that it survives a transport that mangles non-ASCII bytes and
@@ -1475,6 +1505,12 @@ func escapeAttr(v string) string {
 			sb.WriteString("&#13;")
 		case '\t':
 			sb.WriteString("&#9;")
+		case '\u0085', '\u2028':
+			// NEL and LINE SEPARATOR are line endings to an XML 1.1 parser
+			// and would be normalised away, so they survive only as
+			// references -- the same reason CR and LF above are escaped.
+			// K2-Serialization-6 and -9 assert it for attribute values.
+			fmt.Fprintf(&sb, "&#%d;", r)
 		default:
 			sb.WriteRune(r)
 		}
