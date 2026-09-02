@@ -57,7 +57,23 @@ func registerSerialize(l *Library) {
 		// The HTML method writes a doctype declaration ahead of the document.
 		// html-version 5 is the only one this serialiser is asked for, and
 		// its doctype carries no public or system identifier.
-		if opts.method == "html" {
+		//
+		// A declaration belongs to a *document*, though, and fn:serialize is
+		// as often handed a fragment: serialize($doc//body, ...) asks for the
+		// markup of that element, not for a standalone HTML page wrapped
+		// around it. A doctype there is a character the caller did not ask
+		// for, which is what serialize-html-003 -- "html method - HTML5
+		// fragment - no DOCTYPE" -- asserts with an exact string value.
+		//
+		// What separates the two is the document element. serialize-html-001
+		// and -002 serialise a whole <html> element and want the declaration;
+		// -003 serialises the <body> inside it and wants none. So the
+		// declaration is written when the thing being serialised really is an
+		// HTML document -- an <html> element, or a document node containing
+		// one -- and withheld otherwise. The name is matched case-blind
+		// because HTML element names are, and it is the local name that is
+		// matched, since a prefix is not part of the element's identity.
+		if opts.method == "html" && serializesHTMLDocument(seqArg(args, 0)) {
 			sb.WriteString("<!DOCTYPE html>\n")
 		}
 		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
@@ -93,6 +109,37 @@ func registerSerialize(l *Library) {
 		}
 		return strSeq(out), nil
 	})
+}
+
+// serializesHTMLDocument reports whether a sequence being serialised with the
+// html method is an HTML document rather than a fragment of one, which is what
+// decides whether a document type declaration is written ahead of it.
+//
+// The test is the document element: an <html> element, or a document node
+// whose element child is one. A fragment rooted anywhere else -- a <body>, a
+// <p> -- is markup to be embedded, and prefixing it with a doctype produces a
+// string the caller cannot use where it meant to use it.
+func serializesHTMLDocument(seq xdm.Sequence) bool {
+	for _, it := range seq {
+		n, ok := it.(*xdm.Node)
+		if !ok {
+			continue
+		}
+		switch n.Kind {
+		case xdm.KindElement:
+			// Case-blind on the local name: HTML element names are, and the
+			// prefix is not part of the element's identity.
+			return strings.EqualFold(n.Name.Local, "html")
+		case xdm.KindDocument:
+			for _, c := range n.Children {
+				if c.Kind == xdm.KindElement {
+					return strings.EqualFold(c.Name.Local, "html")
+				}
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // serializeOptions are the serialization parameters this implementation reads.
