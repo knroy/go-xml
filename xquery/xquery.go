@@ -145,6 +145,9 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
 	}
+	if err := q.checkBodyVars(ctx); err != nil {
+		return nil, err
+	}
 	ctx, err := q.prepare(ctx)
 	if err != nil {
 		return nil, err

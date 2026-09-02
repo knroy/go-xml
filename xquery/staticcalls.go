@@ -136,3 +136,69 @@ func collectStaticCalls(n node, add func(*compiledExpr)) {
 		each([]*compiledExpr{v.expr}, v.body)
 	}
 }
+
+// checkBodyVars reports XPST0008 for a variable a declared function's body
+// names and nothing binds.
+//
+// §4.15 gives a function body a static context that holds its own parameters
+// and the module's global variables, and nothing else. In particular it does
+// not hold another function's parameters — K-FunctionProlog-37 declares
+// local:MyFunction($myArg) and then names $myArg inside local:MyFunction2,
+// which is an error even though the name is a parameter of a function three
+// lines up. A global variable *is* in scope throughout the module in either
+// textual direction, so a body may name one declared below it.
+//
+// Variables resolve at evaluation time here, so the reference was previously
+// found only when the function was actually called, and both of those cases
+// declare a function nothing calls. The names come from
+// xpath.Compiled.FreeVariables, which subtracts what the expression itself
+// binds; a lexical scan cannot, and would report the $b of "let $b := $a
+// return $b" as unbound.
+//
+// It runs per evaluation rather than at compile time, and takes the context
+// the query will run in. XQuery says a name a function body reads must be a
+// parameter or a global the prolog declares, but a host may also bind a
+// variable straight onto the evaluation context — which is how the suite's
+// environments supply theirs, and how UseCaseSTRING's q4 names $company-data
+// that no prolog declares. Those bindings are as real as a declaration and
+// only the context knows them, so the check waits for it. Nothing has been
+// evaluated by then, which is what the cases need: they declare a function
+// that is never called.
+//
+// Only a body that compiled wholly to an XPath expression is checked. A body
+// this package had to parse holds XQuery's own binding forms — every FLWOR
+// clause, a typeswitch case, a catch clause's error variables, a window
+// clause's four — and the walker beneath cannot see any of them, so a name
+// they bind would be reported as free. The cost of missing those bodies is a
+// case not caught; the cost of guessing at them is a valid query refused, and
+// only the first is acceptable.
+func (q *Query) checkBodyVars(ctx *xpath.Context) error {
+	global := map[string]bool{}
+	for _, d := range q.vars {
+		global[d.name.Clark()] = true
+	}
+	for _, d := range q.funcs {
+		if d.expr == nil || d.expr.compiled == nil || len(d.expr.ops) > 0 {
+			continue
+		}
+		params := map[string]bool{}
+		for _, pm := range d.params {
+			params[pm.name.Clark()] = true
+		}
+		for _, name := range d.expr.compiled.FreeVariables() {
+			k := name.Clark()
+			if params[k] || global[k] {
+				continue
+			}
+			if ctx != nil {
+				if _, ok := ctx.LookupVar(name); ok {
+					continue
+				}
+			}
+			return fmt.Errorf(
+				"XPST0008: $%s is not in scope in the body of %s#%d",
+				name.Lexical(), d.name.Lexical(), len(d.params))
+		}
+	}
+	return nil
+}
