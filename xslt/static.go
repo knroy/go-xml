@@ -725,6 +725,37 @@ func (p *staticPhase) eval(el *xdm.Node, src string) (xdm.Sequence, error) {
 		ctx.RegexVersion = xpath.XPath31
 	}
 	ctx.StaticBaseURI = el.BaseURI
+	// Whether a static expression can read a document follows the PROCESSOR
+	// version, and the two specifications say opposite things about it.
+	//
+	// XSLT 2.0's 3.13 table fixes "Available documents" at *None*, so fn:doc
+	// must resolve nothing however the processor is configured;
+	// use-when-0406 exists to pin that, and its own modification note says
+	// why it is marked 2.0-only -- "in 3.0, use-when expressions can access
+	// documents". XSLT 3.0's 9.7 table replaces None with
+	// implementation-defined, for both "Available documents" and "Statically
+	// known documents", which leaves the URI space to this processor. The
+	// severe constraints 9.7 does impose are on what the STYLESHEET may be
+	// asked about -- no context item, no stylesheet functions, no source
+	// document -- not on whether documents resolve at all.
+	//
+	// At 3.0, then, the module resolver answers, and only it: a host that
+	// supplied no resolver gave the stylesheet no way to reach the
+	// filesystem, and the static phase is not the place to hand it one. That
+	// the two interfaces are separate is incidental -- FileResolver is both
+	// -- and a resolver that is only a ModuleResolver still resolves nothing
+	// here, which is the same refusal as before.
+	//
+	// package-version-011 is the case that needs it: it writes
+	// _package-version="{doc('')/xsl:package/@version}" to set the package
+	// version from the module's own @version, and doc('') is the empty
+	// reference, which denotes the document it appears in -- the stylesheet
+	// module, whose URI is the static base URI just set. Saxon 9.8 passes it.
+	if processorAtLeast30() {
+		if docs, ok := p.c.opts.Resolver.(xpath.DocumentResolver); ok {
+			ctx.Docs = docs
+		}
+	}
 	for _, sv := range p.vars {
 		ctx = ctx.WithVar(sv.name, sv.val)
 	}

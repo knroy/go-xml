@@ -31,6 +31,33 @@ as the percentages rise:
 
 `tests/ratchet.txt` is lowered to the new agreeing counts. No engine behaviour
 changed; only what the harness counts.
+### An XSLT 3.0 static expression can read a document
+
+The static phase built its evaluation context with no document resolver, so
+`fn:doc` in a `use-when`, a `static="yes"` variable or a shadow attribute
+always failed with `FODC0002: document access is disabled`. That is XSLT 2.0's
+rule, not XSLT 3.0's: 2.0's 3.13 table fixes *Available documents* at **None**,
+while 3.0's 9.7 table replaces it with **implementation-defined**, for both
+*Available documents* and *Statically known documents*. The severe constraints
+9.7 does impose are on what the stylesheet may be asked about — no context
+item, no stylesheet functions, no source document — not on whether documents
+resolve at all.
+
+At the 3.0 target the module resolver now answers, and only it: a host that
+supplied no `Resolver` gave the stylesheet no way to reach the filesystem, and
+the static phase is not the place to hand it one. At the 2.0 target nothing
+resolves, as before.
+
+`package-version-011` is the case, and it is the one the suite marks: it writes
+a shadow `package-version` attribute that reads the module's own `@version`
+through an empty document reference. Saxon 9.8 passes it. `use-when-0406` pins
+the other side, and its own modification note states the split — *"Marked test
+as 2.0-only: in 3.0, use-when expressions can access documents"* — which is why
+the change is gated on the processor version rather than applied to both.
+
+XSLT 3.0 8608 → 8609 passing. XSLT 2.0 unchanged at 6149; ungating it cost
+`use-when-0406` and took 2.0 to 6148, which is what the gate is for. XQuery and
+both XSD targets unchanged.
 
 ### The gate no longer runs the conformance suites twice
 
