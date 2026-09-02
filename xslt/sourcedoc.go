@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -103,7 +104,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
 	if i.validation.isDefault() {
-		return tree.Root, nil
+		return fragmentOf(tree.Root, href)
 	}
 	copied := xdm.NewTree()
 	copied.Root.BaseURI = tree.Root.BaseURI
@@ -114,7 +115,46 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if err := i.validation.assess(rt, copied.Root); err != nil {
 		return nil, err
 	}
-	return copied.Root, nil
+	return fragmentOf(copied.Root, href)
+}
+
+// fragmentOf applies the fragment identifier of href, if there is one, to the
+// document that href retrieved.
+//
+// The resolver deliberately drops the fragment before it reaches the
+// filesystem -- a fragment names a part of a resource, not a different
+// resource, so two hrefs differing only in their fragment must retrieve one
+// document (XSLT 2.0 section 16.1, and see resolver.go). Applying it is
+// therefore this instruction's job, and until now nothing did it: the whole
+// document was returned and the fragment silently discarded, which is what
+// docbook-004 caught.
+//
+// 18.1 says of xsl:source-document/@href that "the process of obtaining a
+// document node given a URI is the same as for the doc function", and the
+// media type here is an XML one, whose fragment identifiers RFC 7303 defines
+// as a bare name -- an XML Name selecting the element with that ID -- or an
+// XPointer. Only the bare-name form is honoured: it is the shorthand pointer
+// of XPointer Framework section 3.2, and it is the form the suite uses.
+//
+// A fragment that selects nothing falls back to the document node rather than
+// raising. The error XSLT gives for a fragment is XTRE1160, and that is for
+// one that is malformed for the media type, not for one that is well formed
+// and matches no element; the specification leaves the latter
+// implementation-defined, and returning the document is the reading that
+// cannot turn a working stylesheet into a failing one.
+func fragmentOf(root *xdm.Node, href string) (*xdm.Node, error) {
+	i := strings.IndexByte(href, '#')
+	if i < 0 {
+		return root, nil
+	}
+	frag := href[i+1:]
+	if frag == "" || !xdm.IsNCName(frag) {
+		return root, nil
+	}
+	if n := xdm.ElementByID(root, frag); n != nil {
+		return n, nil
+	}
+	return root, nil
 }
 
 // isDefault reports whether the spec asks for nothing: no type, and the

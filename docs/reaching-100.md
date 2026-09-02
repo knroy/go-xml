@@ -198,7 +198,11 @@ column for those reasons.
 `docbook-004` was filed here on the strength of its neighbour's name and is
 not an EXSLT case at all: its stylesheet is five lines with no extension
 element, testing `xsl:source-document` with an `xml:id` fragment identifier.
-It is an engine defect, and is counted as fixable.
+It was an engine defect, and is now **fixed**: the resolver strips the
+fragment before the filesystem sees it — correctly, since a fragment names a
+part of a resource rather than a different one — and nothing then applied it,
+so the whole document was returned. `xslt/sourcedoc.go` now resolves the
+bare-name fragment against the retrieved document.
 
 ### 1 — features deliberately not implemented
 

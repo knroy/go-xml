@@ -742,7 +742,7 @@ func selectXPointer(root *Node, ptr string) ([]*Node, error) {
 	// A shorthand pointer is an NCName with no parenthesis anywhere: the
 	// XPointer Framework distinguishes the two forms by exactly that.
 	if !strings.Contains(ptr, "(") {
-		if n := elementByID(root, ptr); n != nil {
+		if n := ElementByID(root, ptr); n != nil {
 			return []*Node{n}, nil
 		}
 		return nil, fmt.Errorf("no element with ID %q", ptr)
@@ -850,7 +850,7 @@ func elementScheme(root *Node, data string) (*Node, error) {
 	steps := strings.Split(data, "/")
 	if steps[0] != "" {
 		// Rooted at an ID rather than at the document.
-		cur = elementByID(root, steps[0])
+		cur = ElementByID(root, steps[0])
 		if cur == nil {
 			return nil, fmt.Errorf("no element with ID %q", steps[0])
 		}
@@ -880,14 +880,19 @@ func elementScheme(root *Node, data string) (*Node, error) {
 	return cur, nil
 }
 
-// elementByID finds the element whose ID is id.
+// ElementByID finds the element whose ID is id.
+//
+// It is exported because a bare-name fragment identifier means the same thing
+// wherever it appears: XPointer Framework section 3.2 defines the shorthand
+// pointer as selecting the element with a matching ID, and xsl:source-document
+// resolves its href fragment by that rule (see xslt/sourcedoc.go).
 //
 // xml:id is honoured unconditionally, and a DTD-declared ID attribute is
 // honoured through Node.IsID, which the DTD machinery sets. A plain attribute
 // merely *named* "id" is deliberately not treated as one: without a DTD or a
 // schema saying so it is an ordinary attribute, and guessing would make an
 // inclusion resolve differently depending on data the document never declared.
-func elementByID(n *Node, id string) *Node {
+func ElementByID(n *Node, id string) *Node {
 	if n.Kind == KindElement {
 		for _, a := range n.Attrs {
 			if a.Value != id {
@@ -899,7 +904,7 @@ func elementByID(n *Node, id string) *Node {
 		}
 	}
 	for _, c := range n.Children {
-		if f := elementByID(c, id); f != nil {
+		if f := ElementByID(c, id); f != nil {
 			return f
 		}
 	}

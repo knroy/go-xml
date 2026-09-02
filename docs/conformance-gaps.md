@@ -301,7 +301,7 @@ them separate, and `override-t-003a` is the case.
 |---|---|---|
 | `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,646 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
 | `docbook-001` | **Not implementable** | EXSLT `exsl:document`, as above. |
-| `docbook-004` | **Implementable — ours** | *Not* an EXSLT case, though it was filed as one on the strength of its neighbour's name. Its stylesheet is five lines with no extension element at all: it extracts part of a document with `xsl:source-document` and an `xml:id` fragment identifier, and the fragment resolution is what fails. See *Corrections from the audit*. |
+| `docbook-004` | **Fixed** | *Not* an EXSLT case, though it was filed as one on the strength of its neighbour's name. Its stylesheet is five lines with no extension element at all: it extracts part of a document with `xsl:source-document` and an `xml:id` fragment identifier. The resolver strips the fragment before the filesystem sees it, and nothing applied it afterwards, so the whole document came back. `xslt/sourcedoc.go` now resolves the bare-name fragment. See *Corrections from the audit*. |
 | `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
 
 ### Long tail — 3
@@ -641,7 +641,7 @@ the previous verdicts got wrong.
 | Case | Was | Now | Why the old verdict failed |
 |---|---|---|---|
 | `strip-space-009` | *absent* | Not implementable | Not a wrong verdict but a **missing** one: it is the twentieth XSLT 3.0 failure and appeared nowhere in this file, while the prose enumerated nineteen against a table saying twenty. |
-| `docbook-004` | Vendor extension (EXSLT) | Ours | Grouped with `docbook-001` by name. The stylesheet is five lines with no extension element; it tests an `xml:id` fragment on `xsl:source-document/@href`, which `xslt/sourcedoc.go` ignores entirely. |
+| `docbook-004` | Vendor extension (EXSLT) | Ours — now fixed | Grouped with `docbook-001` by name. The stylesheet is five lines with no extension element; it tests an `xml:id` fragment on `xsl:source-document/@href`, which `xslt/sourcedoc.go` ignored entirely. It now applies the bare-name fragment to the retrieved document. |
 | `package-version-011` | Needs a network fetch | Ours | No fetch exists. `doc('')` names the containing module; `fn:document` already has the exemption and `fn:doc` does not. |
 | `regex-syntax-xslt20-0987` | Unicode drift | Ours | No category moved. Our `\c` is XML 1.0 5e where XSD 1.0 2e Appendix F is 4e; the test data is 4e's `CombiningChar` to the codepoint (72 of them, `0300-0345` and `0360-0361`). |
 | `validation-0201` | Implementation-defined | Harness | The catalog schema licenses drivers to ignore serialization differences "capable of being produced by a conformant implementation" and says the assertion "should not be used except where the purpose of the test is to test the serializer". |
