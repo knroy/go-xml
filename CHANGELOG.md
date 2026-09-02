@@ -6,9 +6,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
-### XQuery conformance: 99.61% to 99.85%
+### XQuery conformance: 99.61% to 99.98%
 
-29,759 of 29,803 QT3 cases in scope, up 70 across five passes. XPath 2.0/3.0/3.1 stay at 100% and
+29,796 of 29,803 QT3 cases in scope, up 107 across seven passes. XPath 2.0/3.0/3.1 stay at 100% and
 XSLT at 8,606 / 6,149.
 
 * **A constructed element no longer inherits its parent's namespace fixup.**

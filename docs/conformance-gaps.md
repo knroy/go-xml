@@ -9,13 +9,13 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,759 | 99.85% | **44** | ? | ? | ? | ? |
+| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
 | **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 0 | **20** | 99.77% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **179** | **0** | **0** | **126** | |
+| | **Total** | | | | **134** | **0** | **3** | **131** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -27,52 +27,18 @@ is no remaining open question against either XSLT suite: `validation-0006` and
 `validation-0201`, the last two, were settled against the spec text and the
 test sources and are recorded below.
 
-**XQuery's 53 are partly triaged.** Three passes have read them. Sixty-one cases
-were fixed: a kind test whose TypeName named no type, a PI test's
-string-literal target, a lifted primary evaluated without its context, an
-element's own-name prefix recorded as a namespace node, a range that could not
-be counted without materialising ten million items, a deep-equal that merged
-text across the comment separating it, a `distinct-values` that hashed a
-comparison F&O says is not transitive, three missing applications of the
-function conversion rules, and a serialization parameter accepted in one form
-and refused in the other.
+**XQuery's remaining 7**, all of them read:
 
-Two are settled as **not implementable**: `K2-NameTest-30` and `-31` each fail
-on one assertion, `empty(namespace-uri-for-prefix("b", $result[1]))`. The
-constructed `<e a:n1="..." b:n1="...">` must bind both prefixes -- its own
-attribute names require them -- and `$result[1]` is a child of it, so under XML
-namespace scoping `b` genuinely is in scope there. Passing would mean children
-of a directly-constructed element not inheriting their parent's bindings, which
-would break serialisation broadly; the sibling cases citing the same W3C bug
-22334 (`qischema064`/`065`) depend on the inheriting behaviour.
+| Cases | Verdict | Why |
+|---|---|---|
+| `app-Demos/sudoku`, `RexParser` | **Open** | `scanExprSingleSource` stops at the `let` in `if (…) then let $i as xs:integer := 1 return $i else ()`, so the XQuery-only detector never sees it and the typed `let` is never parsed. A `prevWord` guard fixed every reproducer but measured 0 gains against 2-5 regressions, `prod-AxisStep/Axes089` among them -- the case `parseIf`'s own comment documents. Needs more than the scan fix. |
+| `K2-BaseURIProlog-4`, `-5` | **Open** | Seeding the compile-time base URI fixed these and broke five others (`base-URI-12/14/23/24`, `K2-BaseURIFunc-30`). Requires separating "the base a prolog declaration resolves against" from "the base the query runs under", which the compiler does not distinguish. |
+| `same-key-023` | **Not implementable here** | 421,875 keys through O(n) map operations. The query consumes each intermediate map immediately, but the engine cannot know that without escape analysis; a persistent map (HAMT or copy-on-write) is the real answer, not a constant-factor change. |
+| `eqname-007` | **Not implementable** | Wants `FODF1280` not to be raised for a prefix that is genuinely unbound at the point the decimal format is named. |
+| `K2-sequenceExprTypeswitch-5` | **Not implementable** | Wants a static `XPST0008` for a variable named in an unreached `typeswitch` branch. Scoping resolves at evaluation time here, so an unreached branch is never examined; `checkBodyVars` documents why a partial static scope pass rejects valid queries. |
 
-Three fixes were implemented, **measured, and reverted** because each cost more
-than it gained. They are recorded so the next attempt starts from the finding
-rather than repeating it:
-
-* **Map constructor `map{b:2}`** (5 cases). `lexQName` consumes `b`, sees a
-  single `:`, consumes it, then fails demanding a name of `2`; a space is the
-  existing workaround. Backing the lexer off fixed all five and cost **12 XSLT
-  cases** -- `validation-16xx/17xx` assert `schema-element(Q{...}doc)` at XPath
-  2.0, where `Q{` is not extended-mode, and the old "expected a name" error was
-  accidentally load-bearing. The correct fix belongs in the map parser, but the
-  lexer pre-tokenizes `b:2` before it is reached.
-* **A typed `let` inside a conditional** (`app-Demos/sudoku`, `RexParser`).
-  `scanExprSingleSource` stops at the `let`, so the XQuery-only detector never
-  sees it. Guarding on the preceding word fixed every reproducer but measured
-  **zero gains and 2-5 regressions**, including the case `parseIf`'s own
-  comment documents.
-* **`Constr-docnode-nested-4` and `K2-BaseURIProlog-4`.** The first needs a
-  `ToTree` shared with XSLT, whose 11.10 requires the opposite behaviour (cost:
-  -10 XSLT 3.0). The second needs "the base a prolog declaration resolves
-  against" separated from "the base the query runs under"; seeding one fixed
-  this case and broke five others.
-
-**The rest are not triaged**, which is why its row carries `?` rather than
-zeros. The suite was not run by `tests/check.sh` until now, so unlike every
-other row here no one has read the failures to say which are engine defects and
-which are not. Do not read that row as "53 cannot be fixed" — it is unknown,
-and it is the one place in this document where real work may be hiding.
+**XQuery 3.1 ceiling: 29,799 / 29,803 = 99.99%**, the 29,796 that pass now plus
+the three open questions.
 
 The XSD split is taken from the suite's own `status` field rather than from
 judgement: `accepted` marks a settled expectation, while `queried` and
