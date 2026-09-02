@@ -130,6 +130,15 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 	for i < len(p.src) {
 		c := p.src[i]
 		switch c {
+		case '`':
+			if strings.HasPrefix(p.src[i:], "``[") {
+				end, err := skipStringConstructor(p.src, i)
+				if err != nil {
+					return 0, err
+				}
+				i = end + 1
+				continue
+			}
 		case '\'', '"':
 			end, err := skipString(p.src, i)
 			if err != nil {

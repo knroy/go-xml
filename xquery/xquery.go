@@ -437,6 +437,15 @@ func (p *parser) parseExprItem() (node, error) {
 	depth := 0
 	for !p.eof() {
 		switch p.src[p.pos] {
+		case '`':
+			if p.lookingAt("``[") {
+				end, err := skipStringConstructor(p.src, p.pos)
+				if err != nil {
+					return nil, err
+				}
+				p.pos = end + 1
+				continue
+			}
 		case '\'', '"':
 			end, err := skipString(p.src, p.pos)
 			if err != nil {
