@@ -515,14 +515,18 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 			kt.Name = &qn
 			kt.HasName = true
 			p.pos++
-			p.readTypeAnnotation(kt)
+			if err := p.readTypeAnnotation(kt); err != nil {
+				return nil, err
+			}
 		} else if p.cur().Kind == TokWildcard {
 			p.pos++ // element(*) is the same as element()
 			// element(*, type) and attribute(*, type) are as legal as
 			// the named forms; only the name may be a wildcard, not
 			// the whole second argument, so the annotation is read
 			// here too rather than only after a name.
-			p.readTypeAnnotation(kt)
+			if err := p.readTypeAnnotation(kt); err != nil {
+				return nil, err
+			}
 		}
 	default:
 		return nil, p.errorf("unknown kind test %q", name)
@@ -542,11 +546,25 @@ func (p *Parser) parseKindTest() (NodeTest, error) {
 // for every node made a DTD-declared attribute claim a type it does not have.
 // It is kept lexically because the comparison is against the node's own
 // annotation, which is likewise a name rather than a resolved component.
-func (p *Parser) readTypeAnnotation(kt *KindTest) {
+//
+// The name must also *denote* something. A TypeName in an ElementTest or
+// AttributeTest is resolved against the in-scope schema definitions, so a
+// name no schema and no built-in declares names nothing at all, and the
+// error is static rather than a test that quietly matches nothing. The two
+// ways of failing are distinct and are reported in order: an unbound prefix
+// is XPST0081, because the name could not be resolved to begin with, and a
+// resolved name that denotes no type is XPST0008. K2-NameTest-67 and -73
+// pin the first (notBound:untypedAtomic, notBound:type); -69, -70, -74, -75
+// and -87..-90 pin the second, both prefixed (xs:doesNotExist) and not
+// (doesNotExistExampleCom).
+func (p *Parser) readTypeAnnotation(kt *KindTest) error {
 	if _, ok := p.acceptOp(","); !ok {
-		return
+		return nil
 	}
 	if p.cur().Kind == TokName {
+		if err := p.checkAnnotationTypeName(p.cur().Val); err != nil {
+			return err
+		}
 		// Resolved to the annotation key here, while the static context that
 		// binds the prefix is still reachable. Keeping it lexical meant the
 		// comparison against the node's annotation had to fall back to local
@@ -565,6 +583,56 @@ func (p *Parser) readTypeAnnotation(kt *KindTest) {
 	if _, ok := p.acceptOp("?"); ok {
 		kt.TypeNillable = true
 	}
+	return nil
+}
+
+// checkAnnotationTypeName reports whether lex names a type that is in scope,
+// as the TypeName of an ElementTest or AttributeTest requires.
+//
+// The order of the two checks is the point. An unbound prefix is XPST0081 and
+// has to be reported before anything is asked about the name, because a name
+// whose prefix binds to nothing has no expanded form to look up: the same
+// reasoning parseSequenceType already applies to a type name written in
+// "instance of".
+//
+// What counts as in scope is the built-in XSD type table plus whatever an
+// imported schema contributes. The built-in check is deliberately wider than
+// atomicTypeByName: a TypeName in a kind test may name a COMPLEX type, which
+// no atomic table holds, and element(b, xs:anyType) (K2-NameTest-71, -76) is
+// required to compile. So a name in the XSD namespace is accepted when the
+// atomic table knows it, when it is one of the non-atomic built-ins, or when
+// it is a built-in list type.
+//
+// A name that is neither is XPST0008 — it denotes no type in the static
+// context. Where no schema is imported this rejects every non-XSD name, which
+// is correct rather than merely convenient: with an empty in-scope schema
+// definitions component there is nothing for such a name to denote.
+func (p *Parser) checkAnnotationTypeName(lex string) error {
+	if prefix, _, found := strings.Cut(lex, ":"); found {
+		if _, bound := p.ns.ResolvePrefix(prefix); !bound {
+			return p.errorf("XPST0081: unbound namespace prefix %q", prefix)
+		}
+	}
+	if _, ok := atomicTypeByName(lex, p.ns); ok {
+		return nil
+	}
+	if _, ok := listTypeName(lex, p.ns); ok {
+		return nil
+	}
+	// The types above xs:anyAtomicType in the hierarchy, plus xs:untyped and
+	// xs:numeric. They are legal in type position here but carry no single
+	// primitive, so the atomic table does not and should not list them.
+	if prefix, local := xdm.SplitQName(lex); inXSDNamespace(prefix, p.ns) {
+		switch local {
+		case "anyType", "anySimpleType", "anyAtomicType", "untyped", "numeric":
+			return nil
+		}
+	}
+	if _, _, ok := schemaTypeOf(lex, p.ns); ok {
+		return nil
+	}
+	return p.errorf(
+		"XPST0008: %q is not a type in the in-scope schema definitions", lex)
 }
 
 func (p *Parser) parsePredicates() ([]Expr, error) {
@@ -1573,6 +1641,21 @@ func (p *Parser) finishOccurrence(st SequenceType) (SequenceType, error) {
 
 // atomicTypeByName maps a lexical type name to a TypeCode. Only the xs:
 // namespace is recognised; a prefix bound elsewhere is not a built-in type.
+// inXSDNamespace reports whether a type name written with this prefix lands in
+// the XSD namespace. An empty prefix takes the default element/type namespace,
+// on the same rule atomicTypeByName applies: an unprefixed type name is not in
+// no namespace.
+func inXSDNamespace(prefix string, ns NamespaceResolver) bool {
+	if ns == nil {
+		return false
+	}
+	if prefix == "" {
+		return ns.DefaultElementNamespace() == xdm.NSXS
+	}
+	uri, ok := ns.ResolvePrefix(prefix)
+	return ok && uri == xdm.NSXS
+}
+
 // isErrorTypeName reports whether a lexical name is xs:error.
 func isErrorTypeName(lex string, ns NamespaceResolver) bool {
 	prefix, local := xdm.SplitQName(lex)
