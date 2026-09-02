@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -146,6 +147,12 @@ func (p *parser) parseConstructorItem() (node, bool, error) {
 func (p *parser) scanToStop(stops []string) (int, error) {
 	i := p.pos
 	depth := 0
+	// FLWORs opened at depth zero within the scan and not yet closed by their
+	// own "return". A FLWOR is not one of the forms parseXQueryOnly parses
+	// ahead of this scan, so an unparenthesised one is scanned over here, and
+	// its "return" belongs to it rather than to whatever enclosed the caller.
+	// Only when the count is zero does a "return" end the expression.
+	open := 0
 	for i < len(p.src) {
 		c := p.src[i]
 		switch c {
@@ -189,18 +196,95 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 		default:
 			if depth == 0 && len(stops) > 0 && isNameByte(c) &&
 				(i == p.pos || !isNameByte(p.src[i-1])) {
-				for _, kw := range stops {
-					if strings.HasPrefix(p.src[i:], kw) &&
-						(i+len(kw) == len(p.src) || !isNameByte(p.src[i+len(kw)])) {
-						return i, nil
+				// The whole word is taken at once, so that a keyword's tail
+				// is never rescanned as a word of its own.
+				j := i
+				for j < len(p.src) && isNameByte(p.src[j]) {
+					j++
+				}
+				w := p.src[i:j]
+				switch {
+				// A binding keyword opens a FLWOR whose own "return" will
+				// close it. startsBindingClause tells the clause from a call
+				// to a function of the same name: none of the four is
+				// reserved, so "let(1)" binds nothing and opens nothing. It
+				// answers only about the text after the word, so the word
+				// itself is checked here -- it takes "return $v" for a
+				// binding otherwise.
+				case bindingKeywords[w] && startsBindingClause(w, p.src[j:]):
+					open++
+				// A "return" closes the innermost FLWOR still open. Only when
+				// none is open does it belong to whatever enclosed the
+				// caller, and end this expression.
+				case w == "return" && open > 0:
+					open--
+				default:
+					for _, kw := range stops {
+						if w == kw {
+							return i, nil
+						}
 					}
 				}
+				i = j
+				continue
 			}
 		}
 		i++
 	}
 	return i, nil
 }
+
+// enclosingClauseStops are the keywords that end an ExprSingle because they
+// begin a clause of an enclosing FLWOR, rather than anything belonging to the
+// construct being parsed.
+//
+// The last branch of a typeswitch, a switch or an if has no sibling keyword
+// after it -- there is no clause left inside the construct -- so it used to be
+// scanned with no stops at all and ran to the end of the source. That is right
+// only when the construct is the whole expression. Written as the value of a
+// clause, as in
+//
+//	let $v as xs:string := typeswitch(...) ... default return "no" return $v
+//
+// the trailing "return $v" is the let's, and swallowing it left
+// '"no" return $v' to be compiled as one expression, which is the XPST0003
+// letexprwith-24 and whereClause-5 report.
+//
+// bindingKeywords are the four words that can open a FLWOR or a quantified
+// expression by binding a variable.
+//
+// startsBindingClause is about the text after such a word and takes the word
+// on trust, so a caller that has not already established which word it holds
+// must say so here: "return $v" has the shape of a binding and is not one.
+var bindingKeywords = map[string]bool{
+	"for": true, "let": true, "some": true, "every": true,
+}
+
+// A "return" is the enclosing clause's only when the branch has not opened a
+// FLWOR of its own. parseXQueryOnly does not handle a FLWOR, so one written
+// unparenthesised in the branch --
+//
+//	typeswitch(1) case $i as xs:string return "s" default return let $q := 5 return $q
+//
+// reaches this scan itself, and its "return" closes its own "let". The scan
+// therefore counts binding keywords against returns rather than stopping at
+// the first one; see scanToStop, which does the counting because only it
+// knows the nesting depth and what it has already stepped over.
+//
+// "for" and "let" are not stops for the same reason -- either may open that
+// FLWOR -- while the rest can only continue a clause list already open, which
+// inside a branch means an enclosing one.
+var enclosingClauseStops = func() []string {
+	stops := make([]string, 0, len(stopWords))
+	for w := range stopWords {
+		if w == "for" || w == "let" || w == "some" || w == "every" {
+			continue
+		}
+		stops = append(stops, w)
+	}
+	sort.Strings(stops)
+	return stops
+}()
 
 // consumeKeyword consumes a keyword if it is the next thing, whitespace and
 // comments having been skipped first. A keyword is only a keyword when it is
