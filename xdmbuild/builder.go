@@ -672,7 +672,7 @@ func (b *Builder) ToTree() *xdm.Node {
 					tree.Root.BaseURI = n.BaseURI
 				}
 				for _, ch := range n.Children {
-					tree.Root.AppendChild(DeepCopy(ch))
+					appendMergingText(tree.Root, ch)
 				}
 				prevAtomic = false
 				continue
@@ -683,13 +683,7 @@ func (b *Builder) ToTree() *xdm.Node {
 			// instructions in a variable — contributes one text child, not
 			// two. AppendText already merges this way inside an element;
 			// a document node is complex content by the same rule.
-			if kids := tree.Root.Children; n.Kind == xdm.KindText &&
-				len(kids) > 0 && kids[len(kids)-1].Kind == xdm.KindText {
-				kids[len(kids)-1].Value += n.Value
-				prevAtomic = false
-				continue
-			}
-			tree.Root.AppendChild(DeepCopy(n))
+			appendMergingText(tree.Root, n)
 			prevAtomic = false
 		} else if a, ok := it.(*xdm.Atomic); ok {
 			text := a.String()
@@ -697,11 +691,14 @@ func (b *Builder) ToTree() *xdm.Node {
 			switch {
 			case prevAtomic:
 				kids[len(kids)-1].Value += " " + text
-			case sep != nil && len(kids) > 0 &&
-				kids[len(kids)-1].Kind == xdm.KindText:
-				// The separator just written is a text node, and XDM forbids
-				// adjacent text nodes, so this value joins it rather than
-				// becoming a second one.
+			case len(kids) > 0 && kids[len(kids)-1].Kind == xdm.KindText:
+				// The child beside it is text and XDM forbids two adjacent
+				// text nodes, so this value joins it rather than becoming a
+				// second one. It takes no separator: prevAtomic is false, so
+				// the previous run ended -- at a separator text node written
+				// above, or at the text a nested document node contributed,
+				// which "document {'abc', document {'def'}, 'ghi'}" ends with
+				// and which Constr-cont-document-5 counts as one child.
 				kids[len(kids)-1].Value += text
 			default:
 				tree.Root.AppendChild(&xdm.Node{Kind: xdm.KindText, Value: text})
@@ -749,4 +746,24 @@ func (b *Builder) AppendOpaque(it xdm.Item) error {
 	b.lastAtomic = false
 	b.items = append(b.items, it)
 	return nil
+}
+
+// appendMergingText adds one child to a node being built as complex content,
+// merging it into the text beside it when both are text.
+//
+// XDM forbids two adjacent text children, and complex content is where that
+// has to be enforced: "document {text {'te'}, text {'xt'}}" contributes one
+// text child, not two. The rule holds across a nested document node's
+// absorption too, which is what Constr-cont-document-4 and -5 test:
+// "document {'abc', 'def', document {'ghi', 'jkl'}, 'mno'}" has one child,
+// and appending the absorbed children without merging gave three.
+func appendMergingText(parent, n *xdm.Node) {
+	if n.Kind == xdm.KindText {
+		if kids := parent.Children; len(kids) > 0 &&
+			kids[len(kids)-1].Kind == xdm.KindText {
+			kids[len(kids)-1].Value += n.Value
+			return
+		}
+	}
+	parent.AppendChild(DeepCopy(n))
 }

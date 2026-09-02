@@ -238,6 +238,18 @@ func appendSequence(out *builderRef, seq xdm.Sequence, sc *staticContext) error 
 			if v.Kind == xdm.KindElement && out.b.Open() != nil {
 				srcScope = v.InScopeNamespaces()
 			}
+			if out.b.Open() != nil {
+				// §3.9.1.3 step 4: a node in the content sequence
+				// contributes a *copy* of itself, with a new identity, and
+				// that is so however the node came about. The builder copies
+				// what already belongs to a tree, because re-parenting would
+				// otherwise mutate the source; a freshly constructed
+				// parentless node is safe to adopt and was adopted, which is
+				// right for XSLT's sequence rules and wrong here.
+				// Constr-cont-nodeid-1 binds <a/> to $x, puts $x in
+				// <elem>{$x}</elem>, and requires the child not to be $x.
+				v = xdmbuild.DeepCopy(v)
+			}
 			out.b.AppendNode(v)
 			if el := out.b.Open(); el != nil && len(el.Children) > before {
 				applyCopyNamespaces(el.Children[len(el.Children)-1], srcScope, sc)
