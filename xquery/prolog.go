@@ -838,11 +838,22 @@ func (p *parser) parseURILiteral() (string, error) {
 // string- and comment-aware walk parseExprItem does, stopping at a top-level
 // ";" instead of a top-level ",".
 //
-// A "," at depth zero is *not* a terminator here, because an initialiser is an
-// ExprSingle in the grammar but every processor and the suite accept a
-// sequence: "declare variable $x := 1, 2;" is not written, but
-// "declare variable $x := (1, 2);" is, and the parenthesis puts the comma at
-// depth one either way.
+// A "," at depth zero is a *syntax error*, not a terminator. The grammar is
+// exact about what an initialiser may be:
+//
+//	VarDecl ::= "declare" Annotation* "variable" "$" VarName TypeDeclaration?
+//	            ((":=" VarValue) | ("external" (":=" VarDefaultValue)?))
+//	VarValue ::= ExprSingle
+//	VarDefaultValue ::= ExprSingle
+//
+// ExprSingle is the branch of Expr *below* the comma, so "declare variable
+// $x := 1, 2;" has no parse: the comma can start neither a continuation of
+// VarValue nor the ";" the declaration needs. Writing the sequence as
+// "declare variable $x := (1, 2);" is how the grammar admits it, and the
+// parenthesis puts the comma at depth one, where this scan ignores it.
+// Accepting the bare comma silently swallowed a second expression and bound
+// the wrong value, which is err:XPST0003 — "it is a static error if an
+// expression is not a valid instance of the grammar".
 func (p *parser) scanDeclExpr() (string, error) {
 	start := p.pos
 	depth := 0
@@ -880,6 +891,13 @@ func (p *parser) scanDeclExpr() (string, error) {
 			// skipDirConstructor advances past the constructor itself.
 			if err := p.skipDirConstructor(); err == nil {
 				continue
+			}
+		case ',':
+			if depth == 0 {
+				return "", p.errorf(
+					"XPST0003: the initialiser of a declaration is an "+
+						"ExprSingle, so a %q may not appear here; write the "+
+						"sequence in parentheses", ",")
 			}
 		case ';':
 			if depth == 0 {

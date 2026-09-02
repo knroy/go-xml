@@ -179,6 +179,23 @@ func (p *parser) parseDirElement() (node, error) {
 					"attribute for prefix %q may not be empty", pfx)
 		}
 		if pfx == "" {
+			// A default namespace declaration binds *no* prefix, and
+			// §3.9.1.2 reserves the XML and xmlns namespaces against exactly
+			// that: "the following namespace URIs must not be used ... in a
+			// namespace declaration attribute: the XML namespace ... and the
+			// XMLNS namespace", each being err:XQST0070. The check in bind is
+			// phrased per prefix, so the default declaration — which is not a
+			// prefix binding and so must not enter sc.ns — is checked here
+			// against the same two reserved URIs.
+			switch uri {
+			case xdm.NSXML:
+				return nil, p.errorAt(startPos,
+					"XQST0070: only the prefix %q may be bound to %q",
+					"xml", xdm.NSXML)
+			case xdm.NSXMLNS:
+				return nil, p.errorAt(startPos,
+					"XQST0070: no prefix may be bound to %q", xdm.NSXMLNS)
+			}
 			inner.defaultElementNS = uri
 		} else if err := inner.bind(pfx, uri); err != nil {
 			return nil, p.errorAt(startPos, "%v", err)
