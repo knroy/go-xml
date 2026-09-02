@@ -367,15 +367,19 @@ func valueKey(ctx *Context, a *xdm.Atomic) (string, error) {
 		}
 		return fmt.Sprintf("d\x00%d\x00%s",
 			d.SignedMonths(), d.SignedSeconds().RatString()), nil
-	case isCalendarLike(a.Type) && !xdm.IsGregorian(a.Type):
+	case isCalendarLike(a.Type):
 		// Two dates or times are the same value when they name the same
 		// instant, which the lexical form does not show: a dateTime with no
 		// timezone takes the implicit one, so "2008-01-01T13:00:00" and
 		// "2008-01-01T13:00:00Z" are one value under the default UTC. Keying
 		// on the lexical form kept them apart.
 		//
-		// The Gregorian types are excluded because they are partial — a
-		// gMonthDay names no instant — and keep their lexical key.
+		// The Gregorian types are included even though they are partial. They
+		// have no ordering, but they do have equality, and compareValues
+		// answers it with exactly this CompareDT-on-ToSeconds rule: an
+		// xs:gYear with no timezone takes the implicit one, so xs:gYear("2015")
+		// and xs:gYear("2015Z") are one value under the default UTC. The type
+		// name stays in the key, so a gYear never collides with a gMonth.
 		dt := a.DateTimeVal()
 		if dt == nil {
 			break

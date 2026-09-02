@@ -133,11 +133,11 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		cur = xdm.One(ctx.Item)
 	}
 
-	for _, step := range e.Steps {
+	for i, step := range e.Steps {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		next, err := evalStepOver(ctx, cur, step)
+		next, err := evalStepOver(ctx, cur, step, i == len(e.Steps)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +152,7 @@ func (e *PathExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 // The result must be sorted into document order and deduplicated: two distinct
 // context nodes can select the same node (as in "a/../b"), and the spec
 // requires the path's value to be a node sequence in document order.
-func evalStepOver(ctx *Context, input xdm.Sequence, step Expr) (xdm.Sequence, error) {
+func evalStepOver(ctx *Context, input xdm.Sequence, step Expr, last bool) (xdm.Sequence, error) {
 	var out xdm.Sequence
 	size := len(input)
 	allNodes := true
@@ -225,10 +225,21 @@ func evalStepOver(ctx *Context, input xdm.Sequence, step Expr) (xdm.Sequence, er
 		// A mixed result is also unsortable, which is why the check precedes
 		// the sort: document order is not defined over atomic values.
 		for _, r := range out {
-			if _, ok := r.(*xdm.Node); ok {
-				return nil, xdm.Errorf("XPTY0018",
-					"the result of a path step contains both nodes and atomic values")
+			if _, ok := r.(*xdm.Node); !ok {
+				continue
 			}
+			// XPTY0018 is the *last* step's error. A step with another after
+			// it has produced the left operand of the next "/", and a
+			// non-node there is XPTY0019 — the same complaint the operand
+			// loop above makes, reached one step earlier. Reporting XPTY0018
+			// for both named the wrong fault whenever the mixture appeared
+			// mid-path, as in "$x/b/(f(position()))/a".
+			if !last {
+				return nil, xdm.Errorf("XPTY0019",
+					"the left operand of a path step contains a non-node")
+			}
+			return nil, xdm.Errorf("XPTY0018",
+				"the result of a path step contains both nodes and atomic values")
 		}
 		return out, nil
 	}
@@ -599,11 +610,11 @@ func stepNeedsFocus(e Expr) bool {
 
 // evalRemainingSteps runs the steps after a self-rooted first step.
 func evalRemainingSteps(ctx *Context, cur xdm.Sequence, steps []Expr) (xdm.Sequence, error) {
-	for _, step := range steps {
+	for i, step := range steps {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		next, err := evalStepOver(ctx, cur, step)
+		next, err := evalStepOver(ctx, cur, step, i == len(steps)-1)
 		if err != nil {
 			return nil, err
 		}

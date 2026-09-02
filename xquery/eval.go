@@ -22,12 +22,19 @@ type evalContext struct {
 // clause, resolving a relative reference against the static base URI as §5.2
 // requires.
 //
-// The empty URI means the clause said nothing, and the default collation is
-// then whatever the evaluation context carries — nil, which every caller
-// reads as codepoint.
+// The empty URI means the clause said nothing, in which case the comparison
+// is made under the query's default collation — the one a "declare default
+// collation" set, or nil, which every caller reads as codepoint. Falling
+// straight to nil here made "group by" compare by codepoint in a query whose
+// prolog had declared a case-blind default, so it formed three groups from
+// "ABC", "abc" and "aBc" where distinct-values, which does consult the
+// default, formed one.
 func (ctx *evalContext) collation(uri string) (xpath.Collation, error) {
 	if uri == "" {
-		return nil, nil
+		if ctx.sc == nil || ctx.sc.defaultCollation == "" {
+			return nil, nil
+		}
+		uri = ctx.sc.defaultCollation
 	}
 	c, err := xpath.ResolveCollation(uri)
 	if err != nil {

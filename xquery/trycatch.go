@@ -203,7 +203,7 @@ func (n *tryCatch) run(ctx *evalContext) (xdm.Sequence, error) {
 	// so an error the spec raises statically arrives here looking dynamic;
 	// the code is what distinguishes the two, and it is enough. Letting it
 	// through unchanged reports it as the static error it is.
-	if isStaticErrorCode(code) {
+	if isStaticErrorCode(code) && !raisedByErrorFunction(err) {
 		return nil, err
 	}
 	for _, c := range n.catches {
@@ -303,6 +303,18 @@ func bindErrorVars(ctx *xpath.Context, err error, code xdm.QName) *xpath.Context
 // no static typing feature to raise them earlier. The two static families are
 // the whole of what is excluded here; every other code, including the FO*
 // function errors, is dynamic and catchable.
+// raisedByErrorFunction reports whether fn:error produced this error.
+//
+// fn:error raises a dynamic error whichever QName it is given, so the code
+// heuristic below must not speak for it: "try { fn:error(xs:QName(
+// \"err:XPST0008\")) } catch err:XPST0008 { 0 }" is required to answer 0,
+// and reading XPST as "static, therefore uncatchable" reported the error
+// instead.
+func raisedByErrorFunction(err error) bool {
+	var e *xdm.Error
+	return errors.As(err, &e) && e.Raised
+}
+
 func isStaticErrorCode(code xdm.QName) bool {
 	if code.URI != xdm.NSErr {
 		// fn:error may raise a code in a namespace of its own, and such a

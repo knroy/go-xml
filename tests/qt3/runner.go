@@ -2,6 +2,7 @@ package qt3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -780,7 +781,8 @@ func check(a Assertion, res *outcome) (bool, string) {
 		// raise FOO.
 		got := xdm.ErrorCode(evalErr)
 		if got == "" || a.Code == "" || a.Code == "*" ||
-			got == a.Code || sameErrorCode(got, a.Code) {
+			got == a.Code || sameErrorCode(got, a.Code) ||
+			matchesQualifiedCode(evalErr, a.Code) {
 			return true, ""
 		}
 		return false, fmt.Sprintf("error %s, want %s", got, a.Code)
@@ -2080,6 +2082,29 @@ func significantChildren(n *xdm.Node) []*xdm.Node {
 // name alone. They are one name written two ways.
 func sameErrorCode(got, want string) bool {
 	return strings.TrimPrefix(got, "Q{}") == strings.TrimPrefix(want, "Q{}")
+}
+
+// matchesQualifiedCode compares a "Q{uri}local" expectation against the full
+// QName of the error's code.
+//
+// xdm.ErrorCode returns the local name alone, which is all a spec code ever
+// needs — they are unique across the specs and all live in one namespace. A
+// code fn:error was handed does not: try-catch-fn-error-1 raises
+// Q{http://www.example.com/}EXER3141, and comparing its local name against
+// the catalog's expanded form scored the right code as the wrong one.
+func matchesQualifiedCode(err error, want string) bool {
+	if !strings.HasPrefix(want, "Q{") {
+		return false
+	}
+	end := strings.Index(want, "}")
+	if end < 0 {
+		return false
+	}
+	var e *xdm.Error
+	if !errors.As(err, &e) || e.CodeName == nil {
+		return false
+	}
+	return e.CodeName.URI == want[2:end] && e.CodeName.Local == want[end+1:]
 }
 
 // xqueryOptions turns the namespaces an environment declared into the static

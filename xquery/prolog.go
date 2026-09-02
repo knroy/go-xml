@@ -86,6 +86,16 @@ func (p *parser) parseProlog() error {
 
 		if kw == "import" {
 			what := p.peekKeyword()
+			if what != "module" && what != "schema" {
+				// §4.11 admits only "import schema" and "import module".
+				// Anything else means this "import" was never a declaration:
+				// "import ne import" is a comparison of two element name
+				// tests, and belongs to the query body. Refusing it here as a
+				// malformed import robbed it of the XPDY0002 it owes for an
+				// absent context item.
+				p.pos = save
+				return nil
+			}
 			// The faults an import's own syntax settles are reported before
 			// the resolver is missed. They are decided by the declaration as
 			// written, so a processor that cannot fetch the target still owes
@@ -112,13 +122,28 @@ func (p *parser) parseProlog() error {
 			// "declare %eg:sequential variable $foo := 'bar'" fail with
 			// "expected function", though the grammar admits it and the
 			// annotation is one nothing here interprets.
-			var private bool
-			if private, err = p.parseAnnotations(); err == nil {
+			var private, conflict bool
+			if private, conflict, err = p.parseAnnotationList(); err == nil {
 				p.skipSpaceAndComments()
 				inSecond = true
-				if p.peekKeyword() == "variable" {
+				isVar := p.peekKeyword() == "variable"
+				// §4.15 admits at most one of %public and %private on a
+				// declaration, so %public %public breaks the rule as surely
+				// as %public %private. The code names the declaration rather
+				// than the annotation — XQST0106 for a function, XQST0116 for
+				// a variable — which is why the conflict is reported here and
+				// not where it is detected: the keyword that settles which
+				// one this is has only just been read.
+				switch {
+				case conflict && isVar:
+					err = p.errorf("XQST0116: a variable declaration may "+
+						"carry at most one of %s and %s", "%public", "%private")
+				case conflict:
+					err = p.errorf("XQST0106: a function declaration may "+
+						"carry at most one of %s and %s", "%public", "%private")
+				case isVar:
 					err = p.parseVarDecl()
-				} else {
+				default:
 					err = p.parseFunctionDeclBody(private)
 				}
 			}
@@ -1013,6 +1038,14 @@ func (p *parser) checkImportSyntax(what string) error {
 	p.pos += len(what)
 	p.skipSpaceAndComments()
 	if !p.consume("namespace") {
+		// "import module URI" binds no prefix. The URI is still the target
+		// namespace, and §4.11's zero-length rule still applies to it.
+		if what == "module" {
+			if uri, err := p.parseStringLiteral(); err == nil && uri == "" {
+				return p.errorf("XQST0088: the target namespace of a " +
+					"module import may not be a zero-length string")
+			}
+		}
 		return nil
 	}
 	p.skipSpaceAndComments()
@@ -1037,20 +1070,24 @@ func (p *parser) checkImportSyntax(what string) error {
 		return p.errorf(
 			"XQST0070: the prefix %q may not be bound by an import", prefix)
 	}
-	if what != "schema" {
-		return nil
-	}
 	p.skipSpaceAndComments()
 	uri, err := p.parseStringLiteral()
 	if err != nil {
 		return nil
 	}
-	// §4.11: a schema import binding a prefix must name a target namespace,
-	// because the prefix is bound to it. An empty one leaves the prefix
-	// bound to no namespace, which XQST0057 refuses outright.
-	if uri == "" {
-		return p.errorf("XQST0057: a schema import that binds the prefix %q "+
-			"must name a target namespace", prefix)
+	if uri != "" {
+		return nil
 	}
-	return nil
+	// A zero-length target namespace is refused by both imports, under
+	// different codes. §4.11 gives the module import XQST0088 outright: a
+	// library module's namespace may not be empty, so no module could ever
+	// satisfy the import. The schema import's complaint is narrower — it is
+	// about the prefix, which the empty URI would leave bound to no
+	// namespace — and is XQST0057.
+	if what == "module" {
+		return p.errorf("XQST0088: the target namespace of a module import " +
+			"may not be a zero-length string")
+	}
+	return p.errorf("XQST0057: a schema import that binds the prefix %q "+
+		"must name a target namespace", prefix)
 }
