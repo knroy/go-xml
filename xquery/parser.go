@@ -465,6 +465,14 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
+	// %public and %private have to be refused before the strip removes them.
+	// stripAnnotations exists because xpath has no syntax for an annotation
+	// and the value of one is implementation-defined; these two are the
+	// exception §4.18 makes, and once stripped there is nothing left to
+	// object to.
+	if err := rejectAnnotatedInlineFunction(src); err != nil {
+		return nil, err
+	}
 	stripped, err := p.stripAnnotations(src)
 	if err != nil {
 		return nil, err
