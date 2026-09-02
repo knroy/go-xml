@@ -79,6 +79,11 @@ func (p *parser) parseVarDecl() error {
 	if !p.consume("$") {
 		return p.errorf("XPST0003: expected %q after %q", "$", "declare variable")
 	}
+	// VarRef is "$" VarName [131]: two terminals, so the default whitespace
+	// rule lets explicit whitespace and comments sit between them.
+	// "declare variable $ name := 3; $ name" binds and reads the same
+	// variable and returns 3 (K2-ExternalVariablesWithout-8).
+	p.skipSpaceAndComments()
 	prefix, local, err := p.parseEQName()
 	if err != nil {
 		return err

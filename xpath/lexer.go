@@ -150,6 +150,14 @@ func (l *Lexer) next() (Token, error) {
 	switch {
 	case c == '$':
 		l.pos++
+		// VarRef is "$" VarName [59] and VarName is a separate terminal, so
+		// the default whitespace rule permits explicit whitespace and
+		// comments between the two. "declare variable $ name := 3; $ name"
+		// binds and reads one variable and returns 3
+		// (K2-ExternalVariablesWithout-8).
+		if err := l.skipSpace(); err != nil {
+			return Token{}, err
+		}
 		name, err := l.lexQName()
 		if err != nil {
 			return Token{}, err

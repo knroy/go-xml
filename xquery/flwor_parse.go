@@ -95,6 +95,9 @@ func (p *parser) parseVarName() (xdm.QName, error) {
 	if !p.consume("$") {
 		return xdm.QName{}, p.errorf("XPST0003: expected %q", "$")
 	}
+	// See parseVarDecl: "$" and VarName are separate terminals, so whitespace
+	// between them is permitted wherever a variable is named.
+	p.skipSpaceAndComments()
 	prefix, local, uri, braced, err := p.parseEQNameParts()
 	if err != nil {
 		return xdm.QName{}, err
