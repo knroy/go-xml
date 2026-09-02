@@ -991,11 +991,51 @@ func startsMarkup(src string, i int, prev byte) bool {
 	switch {
 	case prev == 0:
 		return true
-	case isNameByte(prev), prev == ')', prev == ']', prev == '"',
-		prev == '\'', prev == '*':
+	case isNameByte(prev):
+		// A name ends where an operand ends, so "$x < 3" is a comparison —
+		// unless the name is one of the keywords an operand *follows*, and
+		// "if ($c) then <a/> else <b/>" is two constructors rather than four
+		// comparisons of the word "then". The words are exactly those that
+		// end a clause or an operator and hand the grammar back to an
+		// ExprSingle; every other bare word before a "<" is an operand.
+		return endsWithOperandKeyword(src[:i])
+	case prev == ')', prev == ']', prev == '"', prev == '\'', prev == '*':
 		return false
 	}
 	return true
+}
+
+// endsWithOperandKeyword reports whether src ends with a keyword after which
+// an operand begins.
+//
+// "return", "then", "else", "in", "satisfies" and "at" end a clause or an
+// operator; the value comparisons and the sequence and arithmetic operators
+// spelled as words are the same case, since each takes an operand on the
+// right. A word is only one of these when it stands alone: "myelse" is a name
+// and so is "a:else".
+func endsWithOperandKeyword(src string) bool {
+	j := len(src)
+	for j > 0 && (src[j-1] == ' ' || src[j-1] == '\t' ||
+		src[j-1] == '\r' || src[j-1] == '\n') {
+		j--
+	}
+	src = src[:j]
+	for j > 0 && isNameByte(src[j-1]) {
+		j--
+	}
+	if j > 0 && (src[j-1] == ':' || src[j-1] == '$' || src[j-1] == '@') {
+		return false
+	}
+	switch src[j:] {
+	case "return", "then", "else", "in", "satisfies", "at", "to",
+		"eq", "ne", "lt", "le", "gt", "ge", "is",
+		"and", "or", "div", "idiv", "mod", "union", "intersect", "except",
+		"treat", "castable", "cast", "instance", "of", "as", "where",
+		"by", "ascending", "descending", "empty", "collation", "let",
+		"for", "some", "every", "case", "default", "if":
+		return true
+	}
+	return false
 }
 
 // lastSignificant returns the last non-space byte of s, or 0 when there is
