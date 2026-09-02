@@ -1343,6 +1343,20 @@ func (p *parser) stripAnnotations(src string) (string, error) {
 				return src, nil
 			}
 			i = end
+		case 'Q':
+			// A braced URI literal is a third region whose bytes are not
+			// grammar: "%" is an ordinary character of a URI, and percent
+			// escapes are the recommended spelling for one that cannot be
+			// written literally. Without this, "$Q{%7D}a" had its "%7D" read
+			// as the head of an annotation and the whole expression was
+			// rejected — eqname-032 and eqname-033 write exactly that.
+			// The step is a scan for the closing brace rather than a parse
+			// because nothing inside the literal can nest.
+			if i+1 < len(src) && src[i+1] == '{' {
+				if end := strings.IndexByte(src[i+2:], '}'); end >= 0 {
+					i = i + 2 + end
+				}
+			}
 		case '%':
 			// A sub-parser gives the annotation grammar, the name resolution
 			// and the reserved-namespace check from the one implementation

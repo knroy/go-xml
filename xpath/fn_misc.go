@@ -285,6 +285,17 @@ func lookupByID(ctx *Context, args []xdm.Sequence, wantID bool) (xdm.Sequence, e
 		}
 		root = n.Root()
 	}
+	// Both functions are defined over "the tree containing $node", and a tree
+	// is only searchable by ID if it has a document node at its root: IDs are
+	// unique within a document, and a bare element ripped out of one — or
+	// built by a constructor, as "fn:id('id', <a/>)" does — is not a document
+	// and has no ID space to look in. §14.5.1 gives that its own error rather
+	// than an empty result, because returning nothing would say the ID was
+	// absent when in truth there was nowhere to look.
+	if root == nil || root.Kind != xdm.KindDocument {
+		return nil, xdm.Errorf("FODC0001",
+			"the root of the tree containing the node is not a document node")
+	}
 
 	// fn:id splits each argument on whitespace: its argument is defined as a
 	// sequence of IDREFS values, and an IDREFS value is a whitespace-separated

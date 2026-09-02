@@ -260,6 +260,20 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 					"a variable declaration does not convert %s",
 				what, t.src, a.TypeName())
 		}
+		// The conversion rules stop short of a namespace-sensitive type.
+		// Casting an xs:untypedAtomic to xs:QName means resolving whatever
+		// prefix its string happens to carry, and the only namespaces in
+		// scope at a call are the callee's, which have nothing to do with
+		// where the value was written. §3.1.5 therefore excludes the case
+		// outright and gives it its own code, XPTY0117, rather than letting
+		// it read as an ordinary type mismatch: nothing the caller could
+		// write would have made the conversion succeed.
+		if a.Type == xdm.TypeUntypedAtomic && t.namespaceSensitive() {
+			return nil, fmt.Errorf(
+				"XPTY0117: %s is namespace-sensitive, so an %s value may "+
+					"not be converted to its declared type %s",
+				what, a.TypeName(), t.src)
+		}
 		conv, err := t.castOne(a)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -327,4 +341,19 @@ func promotes(from, to xdm.TypeCode) bool {
 		return from == xdm.TypeAnyURI
 	}
 	return false
+}
+
+// namespaceSensitive reports whether t's item type is one whose value space is
+// the QName one: xs:QName, xs:NOTATION, and the types derived from either.
+//
+// The distinction matters only for the conversion rules, which refuse such a
+// target with XPTY0117 where any other target would merely be cast. xs:NOTATION
+// and its derivations are recognised by FacetName because the sequence-type
+// parser resolves them onto xs:string and records the real name there, the
+// atomic type code having no NOTATION of its own.
+func (t *sequenceType) namespaceSensitive() bool {
+	if t.stype.AtomicType == xdm.TypeQName {
+		return true
+	}
+	return t.stype.FacetName == "NOTATION"
 }
