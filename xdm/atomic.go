@@ -474,11 +474,18 @@ func formatDouble(v float64, isFloat bool) string {
 		return "0"
 	}
 	bitSize := 64
+	lo, hi := 1e-6, 1e6
 	if isFloat {
 		bitSize = 32
+		// The bounds are stated as decimal magnitudes, so for xs:float they
+		// must be read at xs:float precision. float32(1e-6) widens to
+		// 9.99999997e-7, a hair under the double 1e-6; comparing against the
+		// double bound would push every xs:float whose shortest rendering is
+		// "0.000001" into scientific notation a whole decade too early.
+		lo, hi = float64(float32(1e-6)), float64(float32(1e6))
 	}
 	abs := math.Abs(v)
-	if abs >= 1e-6 && abs < 1e6 {
+	if abs >= lo && abs < hi {
 		s := strconv.FormatFloat(v, 'f', -1, bitSize)
 		return s
 	}
