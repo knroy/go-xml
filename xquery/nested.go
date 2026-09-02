@@ -219,7 +219,10 @@ type nestedCall struct {
 }
 
 func (n *nestedCall) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
+	xp, err := n.fn.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i, a := range n.args {
 		v, err := (&enclosed{items: []node{a}}).sequence(ctx)
 		if err != nil {
@@ -235,7 +238,7 @@ func (n *nestedCall) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
 
 // pathOver rewrites "E S" — a value this parser had to read, followed by a
@@ -323,8 +326,12 @@ func (n *parenPath) sequence(ctx *evalContext) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	xp, err := n.rest.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return n.rest.compiled.Eval(
-		ctx.xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
+		xp.WithVar(xdm.QName{URI: nsLocal, Local: parenVar}, v))
 }
 
 func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
@@ -332,5 +339,5 @@ func (n *parenPath) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }

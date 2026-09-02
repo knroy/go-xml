@@ -44,6 +44,61 @@ func (p *parser) expandStringLiterals(src string) (string, error) {
 				}
 				i = end
 			}
+		case 'Q':
+			// A braced URI literal. §3.1.1's PredefinedEntityRef and CharRef
+			// are admitted inside one exactly as they are inside a string
+			// literal — eqname-029 writes Q{http:&#x2F;&#x2F;…}pi() and
+			// expects the function it names to be found — and xpath, whose
+			// grammar has neither, would otherwise carry the reference into
+			// the URI as the characters it is spelled with.
+			//
+			// The "Q" must open a braced URI and not merely be the first
+			// letter of a name: Qname is an NCName, and rewriting inside it
+			// would corrupt an ordinary identifier. A preceding name
+			// character is the test, since Q{ can only start a braced URI
+			// where a name could not already be running.
+			if i+1 >= len(src) || src[i+1] != '{' {
+				continue
+			}
+			if i > 0 && isNameByte(src[i-1]) {
+				continue
+			}
+			end := strings.IndexByte(src[i+2:], '}')
+			if end < 0 {
+				// Unterminated; let the expression parser say so.
+				return src, nil
+			}
+			end += i + 2
+			if strings.IndexByte(src[i+2:end], '&') < 0 {
+				i = end
+				continue
+			}
+			// No quote character closes a braced URI, so nothing expanded
+			// needs re-escaping.
+			text, err := p.expandLiteral(src[i+2:end], 0)
+			if err != nil {
+				return "", err
+			}
+			// A brace cannot be smuggled in as a reference. eqname-909 writes
+			// Q{&#x7D;http://…}pi() and requires an error: the expansion is
+			// not a way to put a "}" inside a braced URI, because the literal
+			// ends at the first one however it is spelled. Writing the
+			// expanded brace through would instead have quietly produced a
+			// *different*, well-formed URI and found the function.
+			//
+			// XQST0046 is the code for a braced URI that is not a valid URI,
+			// and the one the case admits alongside the XPST0017 an unknown
+			// function would give.
+			if strings.ContainsAny(text, "{}") {
+				return "", p.errorAt(i,
+					"XQST0046: a brace in a braced URI literal cannot be "+
+						"written as a character reference")
+			}
+			out.WriteString(src[copied:i])
+			out.WriteString("Q{")
+			out.WriteString(text)
+			copied = end
+			i = end - 1
 		case '\'', '"':
 			end, err := skipString(src, i)
 			if err != nil {

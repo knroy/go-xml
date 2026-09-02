@@ -91,6 +91,27 @@ type compiledExpr struct {
 	// context holds only the module's, the declarations having gone out of
 	// scope with the parser that made them.
 	sc *staticContext
+	// ops are XQuery-only primaries lifted out of src so that xpath could
+	// compile the rest. Each one's value is bound to "$local:xq-opN" before
+	// compiled is evaluated. See substituteOperands.
+	ops []node
+}
+
+// bind returns the context compiled must be evaluated in, with every lifted
+// operand's value bound to the variable that replaced it.
+//
+// It is the ordinary context wherever nothing was lifted, which is the common
+// case; the loop only runs for an expression compileExpr had to rewrite.
+func (e *compiledExpr) bind(ctx *evalContext) (*xpath.Context, error) {
+	xp := ctx.xp
+	for i, op := range e.ops {
+		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xp = xp.WithVar(xdm.QName{URI: nsLocal, Local: opVar(i)}, v)
+	}
+	return xp, nil
 }
 
 // eval evaluates the expression, whichever half of it is set.
@@ -102,7 +123,11 @@ func (e *compiledExpr) eval(ctx *evalContext) (xdm.Sequence, error) {
 		}
 		return applyCheck(e.check, seq, ctx)
 	}
-	seq, err := e.compiled.Eval(ctx.xp)
+	xp, err := e.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seq, err := e.compiled.Eval(xp)
 	if e.typed {
 		err = retypeError(err)
 	}
@@ -438,13 +463,34 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 	if err := rejectNamespaceAxis(src); err != nil {
 		return nil, err
 	}
+	if err := rejectAnnotatedInlineFunction(src); err != nil {
+		return nil, err
+	}
 	expanded, err := p.expandStringLiterals(src)
 	if err != nil {
 		return nil, err
 	}
+	var opsOut []node
 	c, err := xpath.CompileVersion(expanded, p.sc, p.version)
 	if err != nil {
-		return nil, err
+		// The source handed here is XQuery this parser has already rewritten
+		// around — the trailing half of "(...)/S", a call's rewritten
+		// argument list — and the rewriting only lifted out the primary it
+		// was aimed at. An XQuery-only primary further in is still there:
+		// "<e/>/(a union text {()})" leaves a computed constructor as the
+		// operand of "union", which is exactly the shape operand.go lifts.
+		// Substituting those and recompiling is the same split applied once
+		// more, so it is tried before the error is reported. Failing that,
+		// xpath's own error stands, because it names the construct.
+		ops, rewritten, serr := p.substituteOperands(expanded)
+		if serr != nil || len(ops) == 0 {
+			return nil, err
+		}
+		sub, serr := xpath.CompileVersion(rewritten, p.sc, p.version)
+		if serr != nil {
+			return nil, err
+		}
+		c, opsOut = sub, ops
 	}
 	// The static base URI and the default collation are properties of the
 	// expression, not of the evaluation, and xpath models them that way. They
@@ -462,7 +508,7 @@ func (p *parser) compileExpr(src string) (*compiledExpr, error) {
 		}
 		c = c.WithDefaultCollation(coll)
 	}
-	return &compiledExpr{src: src, compiled: c, sc: p.sc}, nil
+	return &compiledExpr{src: src, compiled: c, sc: p.sc, ops: opsOut}, nil
 }
 
 // rejectNamespaceAxis refuses the namespace axis, which XQuery does not have.
@@ -577,4 +623,47 @@ func (p *parser) parseEQNameParts() (prefix, local, uri string, braced bool, err
 	}
 	prefix, local, err = p.parseQName()
 	return prefix, local, "", false, err
+}
+
+// rejectAnnotatedInlineFunction reports XQST0125 for "%public function(...)"
+// and its %private counterpart.
+//
+// §4.18: "it is a static error if an inline function expression is annotated
+// as %public or %private" — the two say where a *declared* function is
+// visible, and an inline one is an expression with no declaration to be
+// visible from. Every other annotation on an inline function is admitted by
+// the grammar and ignored, as it is on a declaration.
+//
+// The test is lexical because an annotated inline function never reaches a
+// parse: xpath's grammar has no annotation, so its lexer refuses the "%" and
+// the error has to be recognised before the source is handed over. Only the
+// head of the expression is read, which is where an annotation may stand.
+func rejectAnnotatedInlineFunction(src string) error {
+	rest := strings.TrimLeft(src, " \t\r\n")
+	for strings.HasPrefix(rest, "%") {
+		name := rest[1:]
+		i := 0
+		for i < len(name) && (isNameByte(name[i]) || name[i] == ':') {
+			i++
+		}
+		local := name[:i]
+		if j := strings.LastIndex(local, ":"); j >= 0 {
+			local = local[j+1:]
+		}
+		rest = strings.TrimLeft(name[i:], " \t\r\n")
+		// The error is only about an annotation on an *inline function*, so
+		// it needs the "function" that follows the annotation list. A
+		// prefixed %eg:public is a vendor annotation that merely ends in the
+		// same word, and resolveDeclaredName is what settles that for a
+		// declaration; here an unprefixed name is the whole of what §4.18
+		// names, since an unprefixed annotation is always in the fn
+		// namespace.
+		if strings.HasPrefix(rest, "function") &&
+			!strings.Contains(name[:i], ":") &&
+			(local == "public" || local == "private") {
+			return fmt.Errorf(
+				"XQST0125: an inline function may not be annotated %%%s", local)
+		}
+	}
+	return nil
 }

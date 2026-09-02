@@ -52,6 +52,10 @@ func (p *parser) parseOperandSubst() ([]node, bool, error) {
 	if err != nil || len(ops) == 0 {
 		return nil, false, err
 	}
+	// compileExpr substitutes again where xpath still refuses the source,
+	// and its numbering restarts at zero. Here that would rebind the
+	// variables this pass just chose, so the source it is given must have
+	// nothing left to lift; substituteOperands scans to the end, so it does.
 	c, err := p.compileExpr(rewritten)
 	if err != nil {
 		// The rewrite is only worth attempting; where it produces something
@@ -231,11 +235,11 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
-		// only be the construct — the same test parseXQueryOnly makes. The
-		// lookahead parses the construct for real, so it needs this parser's
-		// static context and version: the enclosed expressions inside it are
-		// compiled during the trial parse, and a sub-parser without an sc
-		// dereferences nil the moment one of them is reached.
+		// only be the construct — the same test parseXQueryOnly makes.
+		// The probe compiles the construct's subexpressions to decide
+		// whether it is one, so it needs this parser's static context and
+		// version: compileExpr reads the declared base URI and collation off
+		// them, and a bare parser has neither.
 		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
 			depth: p.depth + 1}
 		_, ok, _ := sub.parseXQueryOnly()
@@ -258,7 +262,10 @@ type operandExpr struct {
 }
 
 func (n *operandExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
-	xp := ctx.xp
+	xp, err := n.rest.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i, op := range n.ops {
 		v, err := (&enclosed{items: []node{op}}).sequence(ctx)
 		if err != nil {
@@ -274,5 +281,5 @@ func (n *operandExpr) eval(out *builderRef, ctx *evalContext) error {
 	if err != nil {
 		return err
 	}
-	return appendSequence(out, seq)
+	return appendSequence(out, seq, ctx.sc)
 }
