@@ -663,9 +663,14 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// gets the content-type meta, and writing "<head></head>" from the
 	// no-children branch below would have dropped it. Serialization-html-33
 	// and -xhtml-33 build exactly that document.
+	// The namespace test matches the one the head branch below applies, and
+	// for the same reason: no namespace counts as XHTML's, a foreign one does
+	// not. Serialization-xhtml-36 writes <html><head/></html> with no
+	// namespace and asks to see the content-type meta, which the
+	// no-children branch would have written away as "<head></head>".
 	emptyHead := len(n.Children) == 0 && s.html &&
 		strings.EqualFold(n.Name.Local, "head") &&
-		(!s.xhtml || n.Name.URI == nsXHTML) &&
+		(!s.xhtml || n.Name.URI == nsXHTML || n.Name.URI == "") &&
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
 	if len(n.Children) == 0 && !emptyHead {
