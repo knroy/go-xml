@@ -870,10 +870,15 @@ func eqLiteral(got xdm.Sequence, want string) (bool, string) {
 	if len(got) != 1 || len(exp) != 1 {
 		return false, fmt.Sprintf("expected a single item %q, got %s", want, seqString(got))
 	}
-	ga, ok1 := got[0].(*xdm.Atomic)
-	ea, ok2 := exp[0].(*xdm.Atomic)
+	// "eq" atomizes its operands, so a node is compared by its typed value
+	// rather than refused. string-constructor-027 is the case that shows the
+	// difference: its result is an element, and the assertion
+	// "Today is `2012-05-05`" is that element's string value. Requiring an
+	// atomic here failed eight cases the engine answered correctly.
+	ga, ok1 := singleAtomic(got)
+	ea, ok2 := singleAtomic(exp)
 	if !ok1 || !ok2 {
-		return false, "assert-eq on a non-atomic value"
+		return false, "assert-eq operand does not atomize to a single value"
 	}
 	if atomicEqual(ga, ea) {
 		return true, ""
@@ -2093,4 +2098,18 @@ func xqueryOptions(ns xpath.NamespaceResolver) xquery.Options {
 		opts.Namespaces = m.Bindings()
 	}
 	return opts
+}
+
+// singleAtomic atomizes a one-item sequence for an "eq" comparison.
+//
+// A node atomizes to its typed value, which for an untyped node is its string
+// value; anything that atomizes to other than exactly one value cannot be an
+// operand of "eq" and is reported rather than guessed at.
+func singleAtomic(seq xdm.Sequence) (*xdm.Atomic, bool) {
+	atoms := xdm.Atomize(seq)
+	if len(atoms) != 1 {
+		return nil, false
+	}
+	a, ok := atoms[0].(*xdm.Atomic)
+	return a, ok
 }
