@@ -298,11 +298,11 @@ func (p *parser) parseValidate() (node, bool, error) {
 			"XPST0003: a %q expression needs an expression to validate",
 			"validate")
 	}
-	return &validateExpr{}, true, nil
+	return &validateExpr{body: body}, true, nil
 }
 
 // validateExpr is a parsed validate expression, which fails when it runs.
-type validateExpr struct{}
+type validateExpr struct{ body *enclosed }
 
 func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 	_, err := n.sequence(ctx)
@@ -310,6 +310,23 @@ func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
 }
 
 func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
+	// §3.21 requires the operand to be exactly one element or document node.
+	// That is a property of the operand alone, so it is answered here even
+	// though the validation it precedes cannot be: "validate { 1 }" is
+	// XQTY0030 in a processor with every schema in the world imported.
+	seq, err := n.body.sequence(ctx)
+	if err == nil {
+		if len(seq) != 1 {
+			return nil, xdm.Errorf("XQTY0030",
+				"validate requires exactly one element or document node, "+
+					"and its operand is a sequence of %d items", len(seq))
+		}
+		if node, ok := seq[0].(*xdm.Node); !ok ||
+			(node.Kind != xdm.KindElement && node.Kind != xdm.KindDocument) {
+			return nil, xdm.Errorf("XQTY0030",
+				"validate requires an element or document node")
+		}
+	}
 	return nil, xdm.Errorf("XQDY0084",
 		"validate has no in-scope schema definitions to validate against: "+
 			"schema import is not implemented")
