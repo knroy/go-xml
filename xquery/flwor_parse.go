@@ -667,7 +667,12 @@ func (p *parser) parseOrderByClause() ([]clause, error) {
 		return nil, p.errorf("XPST0003: expected %q", "order by")
 	}
 	for {
-		var s orderSpec
+		// The spec starts at the module's default empty-order, which
+		// "declare default order empty greatest|least" (§4.7) sets, and
+		// which an "empty greatest|least" written on this spec then
+		// overrides. Defaulting to false here instead would silently make
+		// every prolog that declared "greatest" mean "least".
+		s := orderSpec{emptyGreatest: p.sc.emptyOrder == EmptyGreatest}
 		key, err := p.parseClauseExpr()
 		if err != nil {
 			return nil, err
@@ -683,6 +688,7 @@ func (p *parser) parseOrderByClause() ([]clause, error) {
 			case p.consumeWord("greatest"):
 				s.emptyGreatest = true
 			case p.consumeWord("least"):
+				s.emptyGreatest = false
 			default:
 				return nil, p.errorf("XPST0003: expected %q or %q after %q",
 					"greatest", "least", "empty")

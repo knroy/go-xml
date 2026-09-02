@@ -93,10 +93,14 @@ func TestOrderByEmptyAndNaN(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
 		{src + `empty least return string($x/k)`, " 1 2"},
 		{src + `empty greatest return string($x/k)`, "1 2 "},
-		// "descending" reverses the keys and not the empty-order, so the
-		// empty one stays first under "empty least".
-		{src + `descending empty least return string($x/k)`, " 2 1"},
-		{src + `descending empty greatest return string($x/k)`, "2 1 "},
+		// "descending" reverses the whole order, the empty key with it, so
+		// the empty one that sorted first ascending under "empty least"
+		// sorts last descending. prod-EmptyOrderDecl 10-13 and 18-21 are
+		// the suite cases that fix this; an earlier reading of §3.10.6 had
+		// the empty-order as a position the direction left alone, which
+		// inverted all eight.
+		{src + `descending empty least return string($x/k)`, "2 1 "},
+		{src + `descending empty greatest return string($x/k)`, " 2 1"},
 		// NaN orders where the empty sequence does.
 		{`for $x in (2, xs:double("NaN"), 1) order by $x empty least ` +
 			`return string($x)`, "NaN 1 2"},
