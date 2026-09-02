@@ -80,6 +80,20 @@ func (p *parser) parseSequenceType() (*sequenceType, error) {
 			if depth == 0 {
 				goto done
 			}
+		case '*', '+', '?':
+			// An occurrence indicator is the last thing a sequence type can
+			// carry, so at depth zero the type ends here whatever follows.
+			// Without this the scan ran on through the space after a detached
+			// one and swallowed the next word: "as xs:string *external" gave
+			// the type "xs:string *external", which does not compile, in place
+			// of the type "xs:string*" and an external declaration.
+			// K2-ExternalVariablesWith-7 writes it exactly that way and wants
+			// XPDY0002 for the unsupplied value. Inside brackets the character
+			// is a wildcard or a quantifier and is left alone.
+			if depth == 0 {
+				p.pos++
+				goto done
+			}
 		case ':':
 			// "Q{...}" and "p:local" both contain characters this loop would
 			// otherwise treat as structure; a lone ":" is neither, and ":="
@@ -186,9 +200,15 @@ func (t *sequenceType) convert(seq xdm.Sequence, what string) (xdm.Sequence, err
 // parameters and result; §4.14 says only that the value must *match* the
 // declared type.
 //
-// Promotion is not affected: subtype substitution and numeric promotion apply
-// to a variable binding as they do everywhere, so "as xs:double := 1" is a
-// double. Only the cast from untypedAtomic is withheld.
+// Promotion is withheld for the same reason the cast is. "Match" is the
+// SequenceType matching relation of §2.5.5, which admits subtype substitution
+// — an xs:integer *is* an xs:decimal, so "as xs:decimal := 1" binds — but not
+// numeric promotion, which is a conversion the function rules add on top. The
+// suite pins all three directions: K2-ExternalVariablesWith-13 makes "as
+// xs:float := 1.1" XPTY0004, -15 makes "as xs:float := 1" XPTY0004, and -19
+// refuses the xs:anyURI to xs:string promotion, each described as "variable
+// declarations doesn't cause ... promotion". So a variable declaration takes
+// the value it is given or refuses it, and never rebuilds it.
 func (t *sequenceType) match(seq xdm.Sequence, what string) (xdm.Sequence, error) {
 	return t.convertWith(seq, what, false)
 }
@@ -230,7 +250,11 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 			out = append(out, a)
 			continue
 		}
-		if a.Type == xdm.TypeUntypedAtomic && !cast {
+		if !cast {
+			// A variable declaration matches; it does not convert. Neither
+			// the untypedAtomic cast nor a numeric or xs:anyURI promotion is
+			// available to it, so an item that failed MatchesItem above has
+			// already failed for good.
 			return nil, fmt.Errorf(
 				"XPTY0004: %s does not match its declared type %s: "+
 					"a variable declaration does not convert %s",

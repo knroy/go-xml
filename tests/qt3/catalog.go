@@ -64,13 +64,26 @@ type TestSet struct {
 	Dir string `xml:"-"`
 }
 
+// ContextItem is an environment's "context-item", whose select attribute is
+// an XPath expression evaluated to produce the item.
+type ContextItem struct {
+	Select string `xml:"select,attr"`
+}
+
 type Environment struct {
-	Name       string      `xml:"name,attr"`
-	Ref        string      `xml:"ref,attr"`
-	Sources    []Source    `xml:"source"`
-	Params     []Param     `xml:"param"`
-	Namespaces []Namespace `xml:"namespace"`
-	Schemas    []Schema    `xml:"schema"`
+	Name    string   `xml:"name,attr"`
+	Ref     string   `xml:"ref,attr"`
+	Sources []Source `xml:"source"`
+	Params  []Param  `xml:"param"`
+	// ContextItem supplies the context item as an expression to evaluate,
+	// rather than as a document to load the way a "." source does. A handful
+	// of environments set an atomic or an array this way — "declare context
+	// item as xs:integer external" against a supplied 'London' is how
+	// contextDecl-020 asks for XPTY0004 — and without it the item is absent
+	// and the case gets XPDY0002 instead.
+	ContextItem []ContextItem `xml:"context-item"`
+	Namespaces  []Namespace   `xml:"namespace"`
+	Schemas     []Schema      `xml:"schema"`
 	// Collations and a declared default collation appear on a few
 	// environments; a test needing a non-codepoint one is unsupported here.
 	Collations []Collation `xml:"collation"`
@@ -133,6 +146,23 @@ type Param struct {
 	Name   string `xml:"name,attr"`
 	Select string `xml:"select,attr"`
 	As     string `xml:"as,attr"`
+	// A param's name may carry a prefix, and the binding for it is declared
+	// on the param element rather than on the environment — extvardeclwithtype-24
+	// writes xmlns:test on the <param> and names "test:x". Capturing the
+	// element's own attributes is the only way to see it, since the
+	// environment's <namespace> children do not mention it.
+	Attrs []xml.Attr `xml:",any,attr"`
+}
+
+// nsFor resolves the param's prefix against the xmlns attributes written on
+// the param element itself, returning the empty string when there is none.
+func (p Param) nsFor(prefix string) string {
+	for _, a := range p.Attrs {
+		if a.Name.Space == "xmlns" && a.Name.Local == prefix {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 type Namespace struct {

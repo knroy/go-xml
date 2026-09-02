@@ -58,8 +58,12 @@ type funcParam struct {
 
 // contextItemDecl is "declare context item" (§4.16).
 type contextItemDecl struct {
-	typ      *sequenceType
+	typ *sequenceType
+	// init and body are the two shapes the initialiser can have, exactly as
+	// they are on varDecl: one compiled expression, or a node list when the
+	// initialiser is or contains a constructor. At most one is non-nil.
 	init     *compiledExpr
+	body     []node
 	external bool
 }
 
@@ -657,17 +661,61 @@ func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context) (x
 //
 // The order is the one §4.14 forces and no other: a variable's initialiser may
 // name a variable declared after it, so the declarations form a dependency
-// graph that has to be walked rather than a list that can be run down. A cycle
-// in that graph is XQST0054, which is a *static* error even though it is found
-// here, because it is a property of the text.
+// graph that has to be walked rather than a list that can be run down.
+//
+// A cycle in that graph is XQST0054 only when it runs from one variable
+// straight to another. XQuery 3.0 split the error in two: a circularity that
+// passes through a *function* body is XQDY0054, a dynamic error, because a
+// function body is not necessarily entered. "declare variable $v :=
+// f(); declare function f() { if (never()) then $v else 22 };" names $v inside
+// f, so the text has a cycle, but the branch that closes it is not taken and
+// the query has an answer — K2-InternalVariablesWithout-1b asserts 22. Only
+// evaluation can tell the two apart, so this walk uses the function closure
+// for *ordering* alone and leaves the error to be raised, if it is raised at
+// all, when a reference actually reaches a variable still being initialised.
+// See cyclicVarError for the other half.
 //
 // The dependencies are read off the compiled initialisers by name. An
 // initialiser that names a variable the module does not declare is not a
 // dependency at all — it is a reference to one the caller supplied, or an
 // error the expression itself will raise.
 func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
-	if len(q.vars) == 0 {
+	b := q.newVarBinder(ctx)
+	if b == nil {
 		return ctx, nil
+	}
+	// The declarations are visited in source order so that an error is
+	// reported for the first one that has it, which is what a reader expects.
+	for _, d := range q.vars {
+		if err := b.visit(d); err != nil {
+			return nil, err
+		}
+	}
+	return b.ctx, nil
+}
+
+// varBinder carries the state of one walk over the global variables: the
+// context the bindings accumulate on, and how far each declaration has got.
+//
+// It is a value rather than a set of locals because the walk happens in two
+// places. bindContextItem runs it first, over only the variables the context
+// item's initialiser names, so that "declare context item := $y[3]" sees $y;
+// bindVariables then runs it to completion over the rest. Sharing the state
+// between them is what keeps a variable from being initialised twice — and an
+// initialiser may call fn:current-dateTime or read a document, so twice is not
+// the same as once.
+type varBinder struct {
+	q      *Query
+	ctx    *xpath.Context
+	byName map[string]*varDecl
+	state  map[string]int
+}
+
+// newVarBinder prepares a walk, or returns nil when the module declares no
+// global variables and there is nothing to walk.
+func (q *Query) newVarBinder(ctx *xpath.Context) *varBinder {
+	if len(q.vars) == 0 {
+		return nil
 	}
 	// Keyed by the name *as it would be written*, because the dependency scan
 	// is lexical and has no static context to resolve a prefix with. Within
@@ -685,65 +733,177 @@ func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
 		}
 	}
 
-	// state is per-variable: 0 unvisited, 1 in progress, 2 done. The
-	// in-progress mark is what detects the cycle, and it has to be a third
-	// state rather than a boolean, because reaching a *finished* variable
-	// twice is ordinary sharing and reaching an unfinished one is the error.
-	const (
-		unvisited = iota
-		inProgress
-		done
-	)
-	state := make(map[string]int, len(q.vars))
-	out := ctx
+	return &varBinder{
+		q:      q,
+		ctx:    ctx,
+		byName: byName,
+		state:  make(map[string]int, len(q.vars)),
+	}
+}
 
-	var visit func(d *varDecl) error
-	visit = func(d *varDecl) error {
+// visit initialises one variable, and everything it depends on, first.
+func (b *varBinder) visit(d *varDecl) error {
+	q, state, byName := b.q, b.state, b.byName
+	{
 		key := d.name.Clark()
 		switch state[key] {
-		case done:
+		case doneState:
 			return nil
-		case inProgress:
+		case inProgressState:
 			return fmt.Errorf(
 				"XQST0054: the variable %s depends on itself", d.name.Lexical())
 		}
-		state[key] = inProgress
-		// The dependency graph runs through functions as well as variables:
-		// "declare variable $v := f(); declare function f() { $v };" is
-		// XQST0054 even though no variable names another. Every variable a
-		// declared function can *transitively* reach is therefore a
-		// dependency of anything that calls it, which is what reachableVars
-		// computes.
-		for _, ref := range q.reachableVars(d.references(), d.calls()) {
-			if dep, ok := byName[ref]; ok {
-				if dep == d {
-					return fmt.Errorf(
-						"XQST0054: the variable %s depends on itself",
-						d.name.Lexical())
+		state[key] = inProgressState
+		// A variable that names itself, or names a variable that names it
+		// back, is the static case: no function stands between them, so no
+		// branch can be left untaken and the text alone settles it.
+		//
+		// Unless one of the two is external. An external declaration's
+		// initialiser is only a *default*, evaluated when the host supplies
+		// no value and skipped when it does, so a cycle running through one
+		// is no more certain than a cycle running through a function body and
+		// is dynamic for the same reason. extvardef-011 writes the plainest
+		// possible version -- "$a := $x" against "$x external := $a + 2" --
+		// and still wants XQDY0054.
+		for _, ref := range d.references() {
+			dep, ok := byName[ref]
+			if !ok {
+				continue
+			}
+			deferred := d.external || dep.external
+			if dep == d {
+				if deferred {
+					continue
 				}
-				if err := visit(dep); err != nil {
+				return fmt.Errorf(
+					"XQST0054: the variable %s depends on itself",
+					d.name.Lexical())
+			}
+			if state[dep.name.Clark()] == inProgressState {
+				if deferred {
+					continue
+				}
+				return fmt.Errorf(
+					"XQST0054: the variable %s depends on itself",
+					dep.name.Lexical())
+			}
+			if state[dep.name.Clark()] != unvisitedState {
+				continue
+			}
+			if err := b.visit(dep); err != nil {
+				return err
+			}
+		}
+		// The variables reachable *through* a function call are ordered but
+		// not judged. Initialising them first is what lets a legal query like
+		// K2-InternalVariablesWithout-1b run at all; a cycle among them is
+		// simply skipped here, because whether it is an error depends on which
+		// branches the evaluation takes.
+		for _, ref := range q.reachableVars(nil, d.calls()) {
+			if dep, ok := byName[ref]; ok && dep != d {
+				if state[dep.name.Clark()] != unvisitedState {
+					continue
+				}
+				if err := b.visit(dep); err != nil {
 					return err
 				}
 			}
 		}
-		v, err := q.evalVar(d, out)
+		v, err := q.evalVar(d, q.withCycleTrap(b.ctx, byName, state))
 		if err != nil {
 			return err
 		}
-		out = out.WithVar(d.name, v)
-		state[key] = done
+		b.ctx = b.ctx.WithVar(d.name, v)
+		state[key] = doneState
 		return nil
 	}
+}
 
-	// The declarations are visited in source order so that an error is
-	// reported for the first one that has it, which is what a reader expects.
-	for _, d := range q.vars {
-		if err := visit(d); err != nil {
-			return nil, err
+// rebase moves the accumulated bindings onto a new parent context, which is
+// how the variables bound for the context item's sake survive the context the
+// item itself is installed on.
+func (b *varBinder) rebase(ctx *xpath.Context) {
+	for _, d := range b.q.vars {
+		if b.state[d.name.Clark()] != doneState {
+			continue
+		}
+		if v, ok := b.ctx.LookupVar(d.name); ok {
+			ctx = ctx.WithVar(d.name, v)
 		}
 	}
-	return out, nil
+	b.ctx = ctx
 }
+
+// bindNamed initialises every declared global the given source text names,
+// leaving the rest alone. It is how the context item's initialiser gets the
+// variables it refers to without forcing the whole prolog to be evaluated
+// before the context item exists.
+func (b *varBinder) bindNamed(refs []string) error {
+	for _, ref := range refs {
+		if dep, ok := b.byName[ref]; ok {
+			if err := b.visit(dep); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// withCycleTrap installs the hook that turns a reference to a not-yet-bound
+// global into XQDY0054.
+//
+// This is the dynamic half of the split described on bindVariables. Once the
+// static walk has stopped rejecting cycles that pass through a function body,
+// such a cycle shows up at evaluation as a variable reference that resolves to
+// nothing: $v is being initialised, so it is not in the context yet, and the
+// function body that names it looks it up and misses. Without the hook that
+// surfaces as XPST0008 "undeclared variable", which is both the wrong code and
+// a lie — the variable *is* declared, it is only unfinished.
+//
+// The hook fires only for a name the module declares and whose state is
+// inProgress. A name it does not declare keeps the ordinary XPST0008, and a
+// name already bound never reaches the hook at all, because the lookup that
+// precedes it succeeds. The state map is read live rather than copied, so a
+// nested initialisation that completes while this one is still running is seen
+// as finished.
+func (q *Query) withCycleTrap(ctx *xpath.Context, byName map[string]*varDecl,
+	state map[string]int) *xpath.Context {
+	if len(byName) == 0 {
+		return ctx
+	}
+	sub := *ctx
+	prev := sub.MissingVar
+	sub.MissingVar = func(c *xpath.Context, name xdm.QName) error {
+		for _, d := range byName {
+			if d.name.Clark() != name.Clark() {
+				continue
+			}
+			if state[d.name.Clark()] == inProgressState {
+				return fmt.Errorf(
+					"XQDY0054: the variable %s depends on itself",
+					d.name.Lexical())
+			}
+			break
+		}
+		if prev != nil {
+			return prev(c, name)
+		}
+		return nil
+	}
+	return &sub
+}
+
+// The states a global variable passes through while bindVariables walks the
+// dependency graph. The in-progress mark is what detects a cycle, and it has
+// to be a third state rather than a boolean, because reaching a *finished*
+// variable twice is ordinary sharing and reaching an unfinished one is the
+// error. They are package-level rather than local to bindVariables because
+// withCycleTrap reads the same map from inside the evaluation.
+const (
+	unvisitedState = iota
+	inProgressState
+	doneState
+)
 
 // reachableVars closes the dependency set over the declared functions.
 //
@@ -985,6 +1145,19 @@ func (d *varDecl) references() []string {
 	}
 	// Sorted so that a query with a cycle reports the same variable every
 	// run: map iteration order would otherwise make the message vary.
+	return sortedKeys(set)
+}
+
+// references returns the names of the variables the context item's
+// initialiser mentions, by the same lexical scan a variable declaration uses.
+func (d *contextItemDecl) references() []string {
+	set := map[string]bool{}
+	if d.init != nil {
+		scanVarRefs(d.init.src, set)
+	}
+	for _, n := range d.body {
+		collectNodeSources(n, set)
+	}
 	return sortedKeys(set)
 }
 

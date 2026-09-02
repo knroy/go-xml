@@ -519,6 +519,26 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		}
 	}
 
+	// An environment may name the context item as an expression rather than a
+	// document — "<context-item select=\"'London'\"/>" — which is how a case
+	// supplies an atomic where "." would only supply a node. It is evaluated
+	// against no context of its own, since nothing it can name needs one.
+	for _, ci := range env.ContextItem {
+		if strings.TrimSpace(ci.Select) == "" {
+			continue
+		}
+		seq, err := xpath.Eval(ci.Select,
+			xpath.NewContext(nil, xpath.Builtins()), ns)
+		if err != nil {
+			rep.Outcome, rep.Reason = Skip,
+				"context-item unavailable: "+err.Error()
+			return rep
+		}
+		if len(seq) == 1 {
+			ctxItem = seq[0]
+		}
+	}
+
 	runCtx, cancel := context.WithTimeout(context.Background(), CaseTimeout)
 	defer cancel()
 
@@ -600,7 +620,20 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			rep.Outcome, rep.Reason = Skip, "param "+p.Name+": "+err.Error()
 			return rep
 		}
-		ctx = ctx.WithVar(xdm.QName{Local: p.Name}, v)
+		// A prefixed param name binds under its expanded name, or the query
+		// that declares "$test:x external" looks for the URI and finds
+		// nothing bound under the literal "test:x".
+		name := xdm.QName{Local: p.Name}
+		if prefix, local, ok := strings.Cut(p.Name, ":"); ok {
+			uri := p.nsFor(prefix)
+			if uri == "" {
+				uri = ns.prefixes[prefix]
+			}
+			if uri != "" {
+				name = xdm.QName{Prefix: prefix, Local: local, URI: uri}
+			}
+		}
+		ctx = ctx.WithVar(name, v)
 	}
 
 	// A case is given a deadline of its own. An expression that does not
