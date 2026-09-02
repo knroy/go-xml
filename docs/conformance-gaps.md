@@ -9,13 +9,13 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,805 | 29,719 | 99.71% | **86** | ? | ? | ? | ? |
+| **xquery** | QT3 — XQuery 3.1 | 29,805 | 29,750 | 99.82% | **53** | ? | ? | ? | ? |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
 | **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 0 | **20** | 99.77% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **212** | **0** | **0** | **126** | |
+| | **Total** | | | | **179** | **0** | **0** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -27,7 +27,7 @@ is no remaining open question against either XSLT suite: `validation-0006` and
 `validation-0201`, the last two, were settled against the spec text and the
 test sources and are recorded below.
 
-**XQuery's 86 are partly triaged.** Two passes have read them. Thirty cases
+**XQuery's 53 are partly triaged.** Three passes have read them. Sixty-one cases
 were fixed: a kind test whose TypeName named no type, a PI test's
 string-literal target, a lifted primary evaluated without its context, an
 element's own-name prefix recorded as a namespace node, a range that could not
@@ -46,10 +46,32 @@ of a directly-constructed element not inheriting their parent's bindings, which
 would break serialisation broadly; the sibling cases citing the same W3C bug
 22334 (`qischema064`/`065`) depend on the inheriting behaviour.
 
+Three fixes were implemented, **measured, and reverted** because each cost more
+than it gained. They are recorded so the next attempt starts from the finding
+rather than repeating it:
+
+* **Map constructor `map{b:2}`** (5 cases). `lexQName` consumes `b`, sees a
+  single `:`, consumes it, then fails demanding a name of `2`; a space is the
+  existing workaround. Backing the lexer off fixed all five and cost **12 XSLT
+  cases** -- `validation-16xx/17xx` assert `schema-element(Q{...}doc)` at XPath
+  2.0, where `Q{` is not extended-mode, and the old "expected a name" error was
+  accidentally load-bearing. The correct fix belongs in the map parser, but the
+  lexer pre-tokenizes `b:2` before it is reached.
+* **A typed `let` inside a conditional** (`app-Demos/sudoku`, `RexParser`).
+  `scanExprSingleSource` stops at the `let`, so the XQuery-only detector never
+  sees it. Guarding on the preceding word fixed every reproducer but measured
+  **zero gains and 2-5 regressions**, including the case `parseIf`'s own
+  comment documents.
+* **`Constr-docnode-nested-4` and `K2-BaseURIProlog-4`.** The first needs a
+  `ToTree` shared with XSLT, whose 11.10 requires the opposite behaviour (cost:
+  -10 XSLT 3.0). The second needs "the base a prolog declaration resolves
+  against" separated from "the base the query runs under"; seeding one fixed
+  this case and broke five others.
+
 **The rest are not triaged**, which is why its row carries `?` rather than
 zeros. The suite was not run by `tests/check.sh` until now, so unlike every
 other row here no one has read the failures to say which are engine defects and
-which are not. Do not read that row as "86 cannot be fixed" — it is unknown,
+which are not. Do not read that row as "53 cannot be fixed" — it is unknown,
 and it is the one place in this document where real work may be hiding.
 
 The XSD split is taken from the suite's own `status` field rather than from
