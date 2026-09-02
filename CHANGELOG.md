@@ -4,6 +4,42 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed — found by real-world stylesheets
+
+Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and
+[XSpec](https://github.com/xspec/xspec), two XSLT 3.0 codebases large enough to
+exercise combinations the W3C suites do not reach. 544 of DocBook's 593 test
+documents now render, byte-identical to the Saxon reference output once the
+timestamp and generator metadata are normalised, and all 225 applicable XSpec
+descriptions compile. Most of the remaining 49 need a Saxon-Java extension
+function for XInclude.
+
+* **`xsl:copy` over a non-node context item** no longer raises `XTTE0945`.
+  11.9.1 raises it only when the context item is *absent*; one that is present
+  but is an atomic value returns that value. Conflating absent with
+  not-a-node made `xsl:copy` inside `xsl:for-each` over atomics an error.
+* **`fn:key` resolves its name against every binding of the prefix**, not just
+  the first. The name is a lexical QName expanded at run time, so keeping one
+  URI per prefix let whichever module was included last decide what it meant —
+  XSpec binds `local` to 19 different URIs, one per module, and
+  `key('local:scenarios', …)` failed purely by include order.
+* **`xsl:evaluate` can call the stylesheet's own functions** outside an
+  `xsl:package`. §10.4.1 excludes *private* functions and the default is
+  private, but visibility is a property of a component of a package and a plain
+  `xsl:stylesheet` is not one. Inside an `xsl:package` declared visibility is
+  honoured as before. This costs W3C `evaluate-045` (XSLT 3.0: 8,607 → 8,606
+  of 8,626); Saxon's own results report that case as `wrongError` too.
+* **`tests/check.sh` gates on both corpora.** A new *real-world stylesheets*
+  section transforms every DocBook and XSpec input and ratchets the number that
+  succeeds, so a future change that breaks them fails the build rather than
+  being noticed by hand. Both are skipped, not failed, when absent.
+* **The CLI passes base URIs as `file:` URIs** rather than filesystem paths.
+  `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986
+  references, so `resolve-uri(rel, static-base-uri())` — the idiom a stylesheet
+  uses to find a file beside itself — raised `FORG0002` on every run.
+
 ## v1.1.0 — 2026-09-01
 
 Additive throughout: nothing exported by v1.0.0 was removed or changed shape,

@@ -150,7 +150,25 @@ func functionVisibilityKey(name xdm.QName, arity int) string {
 //
 // A name the map does not know is not a stylesheet function at all -- it is a
 // builtin, which this rule says nothing about -- so it is callable.
+//
+// The rule is confined to a real xsl:package, for the reason
+// eligibleInitialTemplate and the mode rule are: visibility is a property of a
+// COMPONENT of a package, and a plain xsl:stylesheet has no package boundary
+// for anything to be private with respect to. Applying the private default
+// outside one makes every function a stylesheet declares unreachable from its
+// own xsl:evaluate, which is not a boundary the author drew -- they simply did
+// not write an attribute that has nothing to govern.
+//
+// This is also what the reference implementation does: Saxon's own XSLT 3.0
+// results report evaluate-045 as "wrongError", so no released processor
+// enforces the default outside a package, and the real stylesheets that drive
+// xsl:evaluate from data -- DocBook xslTNG calls its own fp: functions from
+// every one of its 613 test documents -- depend on that reading. Inside an
+// xsl:package the declared visibility is still honoured exactly as before.
 func (s *Stylesheet) evaluateMayCall(name xdm.QName, arity int) bool {
+	if !s.isPackage {
+		return true
+	}
 	vis, ok := s.functionVisibility[functionVisibilityKey(name, arity)]
 	if !ok {
 		return true

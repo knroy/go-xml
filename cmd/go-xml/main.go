@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,7 +275,7 @@ func compileStylesheet(path string, resolver *xslt.FileResolver,
 	if err != nil {
 		return nil, err
 	}
-	abs, _ := filepath.Abs(path)
+	abs := fileURI(path)
 	tree, err := xdm.ParseString(string(data), xdm.ParseOptions{BaseURI: abs})
 	if err != nil {
 		return nil, fmt.Errorf("parsing stylesheet: %w", err)
@@ -321,7 +322,7 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		if err != nil {
 			return err
 		}
-		abs, _ := filepath.Abs(inPath)
+		abs := fileURI(inPath)
 		popts := xdm.ParseOptions{
 			BaseURI: abs,
 			// The document URI is what fn:document-uri returns, and it is a
@@ -485,4 +486,27 @@ func parseXPathVersion(s string) (*xpath.Version, error) {
 		return nil, fmt.Errorf("-xpath-version %q: expected 2.0, 3.0 or 3.1", s)
 	}
 	return &v, nil
+}
+
+// fileURI turns a filesystem path into an absolute file: URI.
+//
+// A base URI is a URI, not a path. XPath's fn:resolve-uri and fn:static-base-uri
+// are defined over RFC 3986 references, so handing them a bare path like
+// /home/u/s.xsl makes resolve-uri(rel, static-base-uri()) raise FORG0002 —
+// the path has no scheme, so it is not an absolute URI. Real stylesheets do
+// exactly that to locate a file beside themselves, so the path has to be
+// spelled as a URI before it ever reaches the evaluator.
+//
+// url.URL does the escaping, so a directory containing a space or any other
+// character that is not URI-safe survives the round trip.
+func fileURI(path string) string {
+	if path == "" || strings.HasPrefix(path, "file:") {
+		return path
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	return u.String()
 }

@@ -139,12 +139,43 @@ ratchetXSD() {
 	fi
 }
 
+# ratchetCount is ratchet for a driver that reports a bare number rather than
+# a suite summary line. The number that may not go down is passed directly.
+ratchetCount() {
+	_t=$1
+	_n=$2
+	[ -n "$_n" ] || return 0
+	case "${GOXSLT_RATCHET:-on}" in
+	off) return 0 ;;
+	esac
+	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
+	if [ -n "$_best" ] && [ "$_n" -lt "$_best" ]; then
+		fail "$_t: $_n transformed, down from $_best.
+    A count that went down is a regression. If this is deliberate, record it:
+        GOXSLT_RATCHET=update tests/check.sh"
+		return 0
+	fi
+	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
+		{ [ -n "$_n" ] && [ -z "$_best" ]; } ||
+		{ [ -n "$_best" ] && [ "$_n" -gt "$_best" ]; }; then
+		touch "$RATCHET_FILE"
+		_tmp="$RATCHET_FILE.tmp"
+		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
+		printf '%s %s\n' "$_t" "$_n" >> "$_tmp"
+		sort -o "$RATCHET_FILE" "$_tmp"
+		rm -f "$_tmp"
+		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_n"
+	fi
+}
+
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
 RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
 XSLTS=$(abspath "${GOXSLT_XSLTS:-testdata/xslt30-test}")
 UBL="${GOXSLT_UBL:-}"
 CII="${GOXSLT_CII:-}"
+XSLTNG=$(abspath "${GOXSLT_XSLTNG:-testdata/xsltng}")
+XSPEC=$(abspath "${GOXSLT_XSPEC:-testdata/xspec}")
 [ -n "$UBL" ] && UBL=$(abspath "$UBL")
 [ -n "$CII" ] && CII=$(abspath "$CII")
 
@@ -275,6 +306,59 @@ if [ -n "$CII" ] && [ -d "$CII" ]; then
 	corpus CII walk "$CII"
 else
 	skip "CII not set — GOXSLT_CII=<dir of .xsd files>"
+fi
+
+section "real-world stylesheets"
+# The W3C suites test the language a rule at a time; these test what a large
+# stylesheet does with it. Four defects survived both suites and were found
+# only here -- xsl:copy over a non-node context item, fn:key with a prefix
+# bound to different URIs per module, xsl:evaluate calling the stylesheet's own
+# functions, and a base URI spelled as a filesystem path rather than a URI.
+#
+# The number that may not go down is how many inputs transform without error.
+# Upstream can add or remove documents, so only a DROP is a regression.
+#
+# Only stderr decides the outcome: both stylesheets write progress comments to
+# stdout, and a comment is not a failure.
+stylesheetCorpus() { # name, stylesheet, glob, extra flags
+	_name=$1 _xsl=$2 _glob=$3 _flags=${4:-}
+	if [ ! -f "$_xsl" ]; then
+		skip "$_name not at $_xsl"
+		return 0
+	fi
+	_ok=0 _bad=0
+	for _f in $_glob; do
+		[ -f "$_f" ] || continue
+		if _err=$("$BIN" -timeout 120s -xsl "$_xsl" $_flags -o /dev/null "$_f" \
+			2>&1 >/dev/null) && [ -z "$_err" ]; then
+			_ok=$((_ok + 1))
+		else
+			_bad=$((_bad + 1))
+		fi
+	done
+	if [ "$((_ok + _bad))" -eq 0 ]; then
+		skip "$_name matched no inputs"
+		return 0
+	fi
+	printf '%-8s %s transformed, %s failed\n' "$_name" "$_ok" "$_bad"
+	ratchetCount "$_name" "$_ok"
+}
+
+# One build, reused for every input: `go run` per document would dominate the
+# runtime of the whole script.
+BIN=$(mktemp -t goxml.XXXXXX) || BIN=""
+if [ -n "$BIN" ] && $GO build -o "$BIN" ./cmd/go-xml; then
+	stylesheetCorpus DocBook \
+		"$XSLTNG/src/main/xslt/docbook.xsl" \
+		"$XSLTNG/src/test/resources/xml/*.xml" \
+		"-allow-dir $XSLTNG -allow-unparsed-text"
+	stylesheetCorpus XSpec \
+		"$XSPEC/src/compiler/compile-xslt-tests.xsl" \
+		"$XSPEC/test/*.xspec" \
+		"-allow-dir $XSPEC -allow-unparsed-text"
+	rm -f "$BIN"
+else
+	skip "could not build ./cmd/go-xml for the stylesheet corpora"
 fi
 
 printf '\n'

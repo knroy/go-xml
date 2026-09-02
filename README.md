@@ -57,6 +57,24 @@ tests/check.sh fast                                  # no external suites
 GOXSLT_UBL=<dir> GOXSLT_CII=<dir> tests/check.sh     # everything
 ```
 
+The real-world stylesheet corpora are found under `testdata/` by default, or
+pointed at a checkout of your own:
+
+```
+git clone --depth 1 https://github.com/docbook/xslt3ng testdata/xsltng
+git clone --depth 1 https://github.com/xspec/xspec     testdata/xspec
+```
+
+DocBook needs its localisation files generated first — the build compiles them
+from `src/main/locale/`, and this engine can do it:
+
+```
+for f in testdata/xsltng/src/main/locale/*.xml; do
+  go run ./cmd/go-xml -xsl testdata/xsltng/src/main/xslt/modules/xform-locale.xsl \
+    -allow-dir testdata/xsltng -o testdata/xsltng/src/main/xslt/locale/"$(basename "$f")" "$f"
+done
+```
+
 A missing suite is reported as skipped; a suite that is present but produces no
 result is a **failure**. A check that did not run must not look like one that
 succeeded.
@@ -74,7 +92,7 @@ Requires Go 1.26 or later.
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.61% of the W3C QT3 suite (29,689 of 29,805 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails) |
+| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (8,606 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -784,6 +802,47 @@ forms. Both use `golang.org/x/text`. A `@lang` naming a language with no
 collation data is refused rather than quietly falling back to codepoint order,
 and `@collation` accepts only the codepoint URI — a language-sensitive
 collation is spelled with `@lang`.
+
+## Real-world stylesheets
+
+The W3C suites test the language a rule at a time. They do not test what a
+large stylesheet does with it, and two codebases that are widely used as the
+practical bar for an XSLT 3.0 processor found four defects the suites did not
+reach:
+
+* **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
+  modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
+  a multi-stage `fn:transform` pipeline. 544 of its 593 test documents render,
+  and the HTML is byte-identical to the Saxon-produced reference output once
+  the timestamp and generator metadata (both environment-dependent) are
+  normalised. Of the 49 that do not, 42 need `ext:xinclude` — a Saxon-Java
+  extension function DocBook ships as a `.jar`, whose absence the stylesheet's
+  own `function-available()` fallback handles. Three more raise `XTDE0420`,
+  which is an open question rather than a known defect: DocBook builds a
+  temporary tree from a sequence that contains an attribute, the spec says
+  that is an error, and Saxon nonetheless produces the expected output. Its 75
+  localisation files are generated with this engine too.
+* **[XSpec](https://github.com/xspec/xspec)** — an XSLT compiler written in
+  XSLT. All 225 of its `.xspec` test descriptions that target a stylesheet
+  compile; the other 59 declare no `@stylesheet` because they drive the
+  Schematron and XQuery compilers instead.
+
+What they found, none of which the suites covered:
+
+| | |
+|---|---|
+| `xsl:copy` over a non-node context item | XTTE0945 is raised only when the context item is **absent**; one that is present but atomic returns the value. Conflating the two made `xsl:copy` inside `xsl:for-each` over atomics an error |
+| `fn:key` with a prefix bound per-module | The key name is a lexical QName resolved at run time. Keeping one binding per prefix let the last module included decide what every such name expanded to — XSpec binds `local` to 19 different URIs |
+| `xsl:evaluate` calling the stylesheet's own functions | §10.4.1 excludes *private* functions, and the default is private — but visibility is a property of a component of an `xsl:package`, and a plain `xsl:stylesheet` is not one. See below |
+| A base URI that is a filesystem path | `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986 references, so a bare path made `resolve-uri(rel, static-base-uri())` raise `FORG0002`. The CLI now spells it as a `file:` URI |
+
+**One deliberate divergence.** Confining the private-function default to a real
+`xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — so
+the XSLT 3.0 figure is 8,606 rather than 8,607. Saxon does not enforce it
+either: its own XSLT 3.0 results report `evaluate-045` as `wrongError`. Inside
+an `xsl:package`, declared visibility is honoured exactly as before. The
+alternative was that no stylesheet outside a package can call its own
+functions from its own `xsl:evaluate`, which is not a boundary its author drew.
 
 ## Where it fails
 

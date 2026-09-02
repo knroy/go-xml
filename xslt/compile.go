@@ -293,7 +293,7 @@ func (c *compiler) compileModule(doc *xdm.Node, precedence int, fixed bool) erro
 		c.lowPrecedence = c.nextPrecedence
 		defer func() { c.lowPrecedence = saved }()
 	}
-	collectPrefixes(doc, c.sheet.prefixes)
+	collectPrefixesAll(doc, c.sheet.prefixes, c.sheet.prefixesAll)
 	if err := c.checkInputTypeAnnotations(doc); err != nil {
 		return err
 	}
@@ -2064,6 +2064,22 @@ func isXSL(n *xdm.Node, local string) bool {
 // time can be expanded at all, and a stylesheet that binds one prefix two ways
 // and then computes a name with it has not said which it meant.
 func collectPrefixes(n *xdm.Node, into map[string]string) {
+	collectPrefixesAll(n, into, nil)
+}
+
+// collectPrefixesAll is collectPrefixes with the every-binding map as well.
+//
+// into keeps the first binding of each prefix, which is what the callers that
+// want one answer read. all keeps every distinct URI a prefix is ever bound
+// to, in document order, and may be nil for a caller that does not need them.
+//
+// One prefix bound to several URIs across modules is not an edge case: XSpec
+// gives "local" nineteen different URIs, one per module, so that each module's
+// private names cannot collide with another's. A single map necessarily
+// records one of them, and a name resolved against the wrong one names a
+// component that does not exist -- which made key('local:scenarios', ...)
+// raise XTDE1260 purely because of the order the modules were included in.
+func collectPrefixesAll(n *xdm.Node, into map[string]string, all map[string][]string) {
 	if n.Kind == xdm.KindElement {
 		for _, ns := range n.Namespaces {
 			p := ns.Name.Local
@@ -2073,10 +2089,22 @@ func collectPrefixes(n *xdm.Node, into map[string]string) {
 			if _, seen := into[p]; !seen {
 				into[p] = ns.Value
 			}
+			if all != nil {
+				dup := false
+				for _, u := range all[p] {
+					if u == ns.Value {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					all[p] = append(all[p], ns.Value)
+				}
+			}
 		}
 	}
 	for _, c := range n.Children {
-		collectPrefixes(c, into)
+		collectPrefixesAll(c, into, all)
 	}
 }
 

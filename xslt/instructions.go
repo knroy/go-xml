@@ -607,11 +607,20 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	node, ok := item.(*xdm.Node)
 	if !ok {
-		// "When the selected item is an atomic value or function item, the
-		// xsl:copy instruction returns this value. The sequence constructor
-		// is not evaluated." With no select there is no selected item to be
-		// anything but a node, so the absent context item is still XTTE0945.
-		if i.sel == nil {
+		// 11.9.1: "It is a type error to use the xsl:copy instruction with no
+		// select attribute when the context item is ABSENT." Absent is the
+		// whole of that rule -- a context item that is present but is an
+		// atomic value or a function item falls under the sentence that
+		// follows instead: "When the selected item is an atomic value or
+		// function item, the xsl:copy instruction returns this value."
+		//
+		// The selected item is "the item selected by @select if present, or
+		// the context item otherwise", so that sentence is indifferent to
+		// which of the two supplied it. Treating a non-node context item as
+		// XTTE0945 conflated absent with not-a-node, and it made
+		// <xsl:for-each select="$map"><xsl:copy/></xsl:for-each> an error --
+		// the shape DocBook xslTNG iterates a map with.
+		if item == nil {
 			return fmt.Errorf(
 				"XTTE0945: xsl:copy requires a node as the context item")
 		}

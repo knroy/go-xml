@@ -70,6 +70,11 @@ type Stylesheet struct {
 	// is the safe direction to err: it can only make a name resolve that a
 	// stricter reading would have rejected, never the reverse.
 	prefixes map[string]string
+	// prefixesAll holds every distinct URI each prefix is bound to anywhere
+	// in the stylesheet, in document order, where prefixes holds only the
+	// first. A name computed at run time resolves against whichever of them
+	// names a declaration that exists; see fnKey.
+	prefixesAll map[string][]string
 	// decimalFormats holds xsl:decimal-format declarations by Clark name;
 	// the unnamed default is stored under "".
 	decimalFormats map[string]*DecimalFormat
@@ -607,6 +612,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			named:            map[string]*Template{},
 			keys:             map[string][]*keyDef{},
 			prefixes:         map[string]string{},
+			prefixesAll:      map[string][]string{},
 			decimalFormats:   map[string]*DecimalFormat{},
 			attributeSets:    map[string][]*attributeSet{},
 			namespaceAliases: map[string]nsAlias{},

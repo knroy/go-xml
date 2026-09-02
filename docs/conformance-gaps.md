@@ -10,7 +10,7 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 2 | **17** | 99.80% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 3 | **17** | 99.80% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -148,7 +148,13 @@ three failures involves `\w`, `\d` or `\c` membership. Only these three
 2012-era XSLT 2.0 cases disagree, each exactly where Unicode moved underneath
 them.
 
-## XSLT 3.0 — 19 failures
+## XSLT 3.0 — 20 failures
+
+### Deliberate divergence — 1
+
+| Cases | Verdict | Why |
+|---|---|---|
+| `evaluate-045` | **Won't fix** | It asserts that a stylesheet function with no `visibility` attribute is private, and so unreachable from `xsl:evaluate`. §10.4.1 does exclude private functions, and the default is private — but visibility is a property of a *component of an `xsl:package`*, and a plain `xsl:stylesheet` is not one. Enforcing it there means no stylesheet outside a package can call its own functions from its own `xsl:evaluate`, which is not a boundary its author drew. Saxon does not enforce it either: its own XSLT 3.0 submission records this case as `wrongError`. Inside an `xsl:package`, declared visibility is honoured in full. Found by DocBook xslTNG, which does this in all 613 of its test documents. |
 
 ### Package composition — 5
 
@@ -204,7 +210,7 @@ is its own investigation.
 | `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
-**XSLT 3.0 ceiling: 8,609 / 8,626 = 99.80%**, the 8,607 that pass now plus the
+**XSLT 3.0 ceiling: 8,609 / 8,626 = 99.80%**, the 8,606 that pass now plus the
 two open questions.
 
 The seventeen that cannot be fixed: `accept-913`, `package-200`,

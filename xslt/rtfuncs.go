@@ -807,10 +807,19 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 	// compile time. An unresolvable prefix and a resolvable one naming no key
 	// are the same error, so failing to find a binding falls through to the
 	// lookup rather than being reported separately.
-	uri := ""
+	// A prefix may be bound to different URIs in different modules, so there
+	// can be several candidate expansions. They are tried in document order
+	// and the first that names a declared key wins; with no prefix there is
+	// the single unprefixed candidate.
+	candidates := []string{""}
 	if prefix != "" {
-		bound := false
-		if uri, bound = rt.sheet.prefixes[prefix]; !bound {
+		candidates = rt.sheet.prefixesAll[prefix]
+		if len(candidates) == 0 {
+			if uri, bound := rt.sheet.prefixes[prefix]; bound {
+				candidates = []string{uri}
+			}
+		}
+		if len(candidates) == 0 {
 			// An unbound prefix is XTDE1260 in its own right. Falling through
 			// with the empty URI instead made key("your:k", ...) find the key
 			// declared as "k" in no namespace, which is a different key.
@@ -819,11 +828,19 @@ func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, 
 					"the prefix %q", lexName, prefix)
 		}
 	}
-	keyName := xdm.QName{URI: uri, Local: local}.Clark()
 	// 3.5.5 scopes a key to the package that declares it, so which
 	// declarations answer this call is decided by where the call is WRITTEN.
 	// The context carries that; see packageOf.
-	defs := rt.sheet.keyDefsFor(packageOf(ctx), keyName)
+	pkg := packageOf(ctx)
+	var keyName string
+	var defs []*keyDef
+	for _, uri := range candidates {
+		n := xdm.QName{URI: uri, Local: local}.Clark()
+		if d := rt.sheet.keyDefsFor(pkg, n); len(d) > 0 {
+			keyName, defs = n, d
+			break
+		}
+	}
 	if len(defs) == 0 {
 		return nil, fmt.Errorf("XTDE1260: no xsl:key named %q", lexName)
 	}
