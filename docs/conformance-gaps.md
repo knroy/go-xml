@@ -15,12 +15,12 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 2 | 1 | **5** | 99.90% |
+| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 1 | 1 | **6** | 99.90% |
 | **xslt** | W3C XSLT 3.0 | 8,625 | 8,610 | 99.83% | **15** | 2 | 1 | **12** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **105** | **4** | **2** | **99** | |
+| | **Total** | | | | **105** | **3** | **2** | **100** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -30,10 +30,9 @@ reflects that.
 
 > **Audit note (this revision).** An adversarial re-audit of the "can't fix"
 > verdicts found that the previous claim — *0 fixable, none a known engine
-> defect* — was wrong. Twenty-three cases are work: three are engine defects
-> (`docbook-004`, `package-version-011`, `regex-syntax-xslt20-0987`),
-> `iri-001` is a harness defect since fixed, two are cases the suite already
-> declares out of scope through a
+> defect* — was wrong. Twenty-three cases are work: two are engine defects
+> (`docbook-004`, `package-version-011`), `iri-001` is a harness defect since
+> fixed, two are cases the suite already declares out of scope through a
 > dependency the harness does not read, and the rest are harness scoring
 > defects — chiefly the eight XSD `indeterminate` expectations per version that
 > are silently scored as "must be invalid". One XSLT 3.0 failure,
@@ -47,18 +46,18 @@ reflects that.
 > unchanged, and where the audit could not settle a case it says so rather than
 > moving it to a flattering bucket.
 
-**99 disagreements are triaged as unfixable.** Five are work: engine
+**100 disagreements are triaged as unfixable.** Three are work: engine
 defects, harness defects, or cases the suite already declares out of scope and
-the harness does not read. Seven are open questions, settled neither way.
+the harness does not read — down from five, as `iri-001` has been fixed and
+`regex-syntax-xslt20-0987` has been returned to *not implementable*. Seven are
+open questions, settled neither way.
 
 In the *Fixable* column above, "fixable" means "the count can move" — which
 covers three distinct things, and the audit found the old document conflating
-them. A case may be an engine defect (`docbook-004` and
-`package-version-011`, both now fixed),
-a harness defect where the engine is already right (`iri-001`, now fixed, and
-the eight `indeterminate` XSD expectations per version), a case where the spec
-permits both this engine's answer and the one the suite records
-(`validation-0201`), or a case the suite itself puts out of scope through
+them. A case may be an engine defect (`docbook-004`, `package-version-011`), a
+harness defect where the engine is already right (`iri-001`, now fixed;
+`validation-0201`; and the eight `indeterminate` XSD expectations per version),
+or a case the suite itself puts out of scope through
 a dependency the harness does not honour (`streamable-141`,
 `unparsed-text-2003`). Only the first kind moves the numerator; the other two
 move the denominator or the scoring. They are counted together here because all
@@ -119,22 +118,13 @@ reading the spec or the test rather than by changing the engine, and several
 by measuring what the "fix" would actually cost — the `notQName` reading is
 right about the suite and still loses 150 agreements.
 
-Three of those settlements did not survive the audit, and one of the three did
-not survive being measured. `particlesZ033_g` and `simple093` were called suite
-defects without a reading of the rule they turn on, and are reopened as
-questions. `validation-0201` was moved to "fixable in the harness" on the
-strength of the catalog schema's licence for drivers to ignore differences a
-conformant implementation could produce — a real licence, correctly quoted, and
-still the wrong verdict: the audit assumed the difference was the indent width,
-and it is not. Both candidate fixes were then implemented and measured, and
-both are recorded in the 3.0 table with what they cost.
-
-That two rounds of "moving cases into cannot-be-fixed" produced verdicts a
-third pass overturned, and that the third pass was itself overturned by
-running the change it proposed, is the argument for this section existing at
-all: the direction a case moves is easier to justify than to check, and a
-settlement reached by reading alone is worth less than one that survived a
-measurement.
+Three of those settlements did not survive the audit. `validation-0201` is a
+harness comparison the catalog schema explicitly licenses; `particlesZ033_g`
+and `simple093` were called suite defects without a reading of the rule they
+turn on, and are reopened as questions. That two rounds of "moving cases into
+cannot-be-fixed" produced verdicts a third pass overturned is the argument for
+this section existing at all: the direction a case moves is easier to justify
+than to check.
 
 The reason the fixable count fell faster than the failure count is that the
 work went where the cases were: XSD schema validity moved from 99.78%/99.68%
@@ -236,13 +226,12 @@ from the 3.0 list, and `unparsed-text-2003` left the denominator.)
 
 ## XSLT 2.0 — 9 failures
 
-This section used to open "None of the nine can be fixed." Two can:
-`regex-syntax-xslt20-0987` is an engine defect, and `unparsed-text-2003` is a
-case the suite declares out of scope through a dependency it forgot to write
-down. `validation-0201` was listed here as a third — a harness comparison the
-suite's own schema licenses — and that settlement did not survive measurement:
-the licence is real but does not reach this case's actual difference, which is
-where whitespace is added rather than how wide it is.
+This section used to open "None of the nine can be fixed." Two can, and
+neither moves the numerator: `validation-0201` is a harness comparison the
+suite's own schema licenses, and `unparsed-text-2003` is a case the suite
+declares out of scope through a dependency it forgot to write down. A third,
+`regex-syntax-xslt20-0987`, was briefly filed as an engine defect and has been
+returned to *not implementable* — see its row.
 
 | Case | What happens | Verdict | Why |
 |---|---|---|---|
@@ -251,42 +240,69 @@ where whitespace is added rather than how wide it is.
 | `docbook-001` | `XTDE1450: exsl:document is not available` | **Not implementable** | The vendored DocBook XSL 1.79.1 uses the EXSLT `exsl:document` extension element — 19 times in `chunker.xsl` alone. A vendor extension outside the XSLT specification. |
 | `regex-syntax-xslt20-0984` | `[\w]` does not match U+2308 `⌈` | **Not implementable** | Unicode drift, and **the W3C has already fixed it upstream**: the XSLT 3.0 twin `regex-syntax-0984` carries `<modified by="Michael Kay" on="2024-05-04" change="Drop x2308 and x2309, characters reclassified"/>`, and those two codepoints are the only difference between the two copies. The 2.0 copy was never back-patched. (The category argument also holds: U+2308 is `Ps`, and Appendix F defines `\w` by subtracting `\p{P}`.) |
 | `regex-syntax-xslt20-0985` | `[\d]` does not match U+1369 `፩` | **Not implementable** | Same shape, fixed upstream silently: the 3.0 twin's `[\d]` list omits U+1369–U+1371 (ETHIOPIC DIGIT ONE–NINE), the only difference between the copies. They were `Nd` in Unicode 3.0 and are `No` now; `\d` is `\p{Nd}`. |
-| `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Implementable — ours** | Not drift. Our `\c` uses XML 1.0 **5th edition** `NameChar` (`xpath/classdiff.go` appends the blanket `{0x300, 0x36F}`), but XSD 1.0 2e Appendix F — which F&O §5.6.1 adopts wholesale for `\c` — freezes on **4th edition**, whose `CombiningChar` is `[#x0300-#x0345] \| [#x0360-#x0361]`. The test data proves it: its `match` list holds exactly 72 codepoints in that block, `0300-0345` and `0360-0361`, and `nonmatch` holds U+0346, the first codepoint outside. That is 4e character for character; no Unicode category has moved here (U+0346 has been `Mn` since Unicode 3.0). See *Corrections from the audit*. |
+| `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Edition drift, and the same shape as its two neighbours after all. The audit read the data correctly and drew the wrong conclusion from it. The data: this case's `match` list holds exactly 72 codepoints in the combining block, `0300-0345` and `0360-0361`, and `nonmatch` holds U+0346, the first codepoint in the gap — XML 1.0 **4th edition**'s `CombiningChar` character for character. We implement **5th edition**, whose `NameChar` is the blanket `[#x0300-#x036F]` (`xpath/classdiff.go`). What the audit did not check is whether 4e is a configuration we are free to adopt. It is not: the XSD test suite's own schema (`testdata/xsdtests/common/xsts.xsd`) enumerates `XML-1.0-1e-4e` and `XML-1.0-5e` as **mutually exclusive** processor configurations and records that "XSD 1.1 describes XML 1.0 Fifth Edition as the base version in its normative reference" — so the 4e reading this one case wants would be paid for out of the XSD 1.1 numerator, and the same translation serves `\c` for XPath, XQuery, XSLT and XSD pattern facets alike. The W3C reached the same conclusion: the 3.0 twin `regex-syntax-0987` was rewritten to be edition-**neutral** — every combining character was removed from its `match` list and the `nonmatch` parameter deleted outright — so it passes under either edition. Saxon 9.8 passes that twin and reports the 2.0 copy `notRun`. The 2.0 copy was never back-ported, exactly as with `-0984` and `-0985`. |
 | `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Not implementable** | Settled directly by the 2.0 REC, without needing the `sequence-2401a` argument this row used to make (the two are different constructs: 2401 has `@select` *and* content, 0132 has content and no `@select`). §11.10's element syntax summary gives `xsl:sequence` a **mandatory** `select` and `<!-- Content: xsl:fallback* -->`; §3.9 XTSE0010 fires "if a required attribute is omitted, or if the content of the element does not correspond to the content that is allowed". So XTSE0010 is the correct 2.0 answer and it is static, raised before any type check could reach XTTE0570. The stylesheet itself carries `<?error XTSE0010?>`, and Saxon 9.8 and Parrot 2017 both report `wrongError` with "Expected XTSE0010" — an older catalog wanted our answer. The `XSLT20+` scope is stale metadata: the expectation was edited to XTTE0570 in 2017 and 2018 without narrowing the scope to 3.0. |
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
-| `validation-0201` | Serialisation differs at offset 46 | **Not implementable** | The offset is misleading: it is where the 3-space-versus-2-space indent first shows, but that is not the disagreement. Widening the indent to 3 was measured to change nothing anywhere and to leave this case failing at offset 134, where Saxon writes no whitespace at all around a `<style>` whose CSS body is significant text. The catalog schema's licence for drivers to ignore differences a conformant implementation could produce was pursued and does not reach a difference in *where* whitespace is added. See the 3.0 entry below for the full measurement. |
+| `validation-0201` | Serialisation differs at offset 46 | **Fixable in the harness** | The expected file `schvalid001.out` is Saxon's output byte-for-byte, including its **3-space** indent where this serializer writes 2, and widening the indent to 3 was measured to change nothing else in either target — so the serializer route buys one case by adopting another processor's house style, and is rightly refused. But the catalog schema licenses the *driver* to ignore precisely this. See the 3.0 entry below. |
 
-**XSLT 2.0 ceiling: 6,150 / 6,158 = 99.87%** — the 6,149 that pass now plus
-`regex-syntax-xslt20-0987`, which the audit found to be ours. `unparsed-text-2003`
-and `validation-0201` also fail here, and both leave the denominator rather than
-the numerator if the corrections below are taken, which would put the 2.0 figure
-at 6,150 / 6,156 = 99.90%.
+**XSLT 2.0 ceiling: 6,149 / 6,157 = 99.87%** — the 6,149 that pass now.
+`regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
+its two neighbours, not an engine defect, and its 3.0 twin was made
+edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
+also fail here, and both leave the denominator rather than the numerator if the
+corrections below are taken, which would put the 2.0 figure at
+6,149 / 6,155 = 99.90%.
 
-### Why two of the three regex cases are not ours — and why the third is
+### Why none of the three regex cases is ours
 
-This heading used to read "the three regex cases", and the argument it made was
-the same for all three: the XSLT 3.0 `regex-syntax` set runs 987 cases with 984
-passing and none of its failures involves `\w`, `\d` or `\c` membership, so only
-these 2012-era XSLT 2.0 cases disagree and Unicode must have moved underneath
-them.
+This heading has read "the three regex cases", then "why two of the three are
+not ours — and why the third is", and is now back where it started, by a longer
+route. The original argument was the same for all three: the XSLT 3.0
+`regex-syntax` set runs 987 cases with 984 passing and none of its failures
+involves `\w`, `\d` or `\c` membership, so only these 2012-era XSLT 2.0 cases
+disagree and something moved underneath them.
 
-That argument holds for `0984` and `0985`, and there is better evidence for them
-than the Unicode tables: **the W3C already fixed both upstream.** The 3.0 twin of
-`0984` carries `change="Drop x2308 and x2309, characters reclassified"` dated
-2024-05-04, and those two codepoints are the only difference between the copies;
-the 3.0 twin of `0985` silently drops U+1369–U+1371, likewise the only
-difference. The 2.0 copies were never back-ported.
+For `0984` and `0985` there is better evidence than the Unicode tables:
+**the W3C already fixed both upstream.** The 3.0 twin of `0984` carries
+`change="Drop x2308 and x2309, characters reclassified"` dated 2024-05-04, and
+those two codepoints are the only difference between the copies; the 3.0 twin of
+`0985` silently drops U+1369–U+1371, likewise the only difference. The 2.0
+copies were never back-ported.
 
-It does **not** hold for `0987`, and the symmetry of the three is what hid that.
-Nothing was reclassified: U+0346 has been `Mn` since Unicode 3.0. The
-disagreement is over which edition of XML defines `NameChar` for `\c`, and the
-test data answers it — 72 codepoints, `0300-0345` and `0360-0361`, which is XML
-1.0 4th edition's `CombiningChar` exactly. We implement 5th edition. The 3.0
-twin's `[\c]` case lists no combining characters at all and no `nonmatch`, so a
-4e reading costs nothing there. One caveat: XSD Part 2 2e Appendix F is not
-among the four vendored specs, so the 4e conclusion rests on F&O §5.6.1's
-wholesale delegation to it plus the fingerprint in the test data, rather than on
-Appendix F's own words.
+`0987` is the same story told in a different vocabulary, and the difference in
+vocabulary is what made it look like ours. Nothing was **reclassified** here —
+U+0346 has been `Mn` since Unicode 3.0 — so the drift argument as originally
+phrased genuinely does not apply. What moved is the **edition of XML** that
+defines `NameChar` for `\c`, and the test data names it: 72 codepoints,
+`0300-0345` and `0360-0361`, which is XML 1.0 4th edition's `CombiningChar`
+exactly, with `nonmatch` holding U+0346, the first codepoint in the gap 4e
+leaves. We implement 5th edition, whose `NameChar` is the blanket
+`[#x0300-#x036F]`.
+
+An audit read that far and concluded the case was ours. The step it skipped is
+whether 4e is a configuration this processor may adopt. It is not, and the
+W3C's own test infrastructure says so: `testdata/xsdtests/common/xsts.xsd`
+enumerates `XML-1.0-1e-4e` and `XML-1.0-5e` as processor configurations to be
+claimed *instead of* one another, and its documentation records that "XSD 1.1
+describes XML 1.0 Fifth Edition as the base version in its normative
+reference". 5e is not a preference we happen to hold; it is what XSD 1.1
+requires of us, and the one translation in `xpath/fn_regex.go` serves `\c` for
+XPath, XQuery, XSLT and XSD `pattern` facets alike. Buying this single 2.0 case
+means selling the edition the XSD 1.1 numerator rests on.
+
+The W3C came to the same view. Its 3.0 twin `regex-syntax-0987` was not fixed to
+4e — it was made **edition-neutral**: every combining character was removed from
+the `match` list and the `nonmatch` parameter was deleted outright, so the case
+passes under either edition. Saxon 9.8 passes that twin and reports the 2.0 copy
+`notRun` for unsatisfied dependencies, so no conforming processor is on record
+rejecting U+0346 for `\c`. As with `-0984` and `-0985`, the 2.0 copy was left
+behind.
+
+One caveat survives from the earlier revision and is worth keeping: XSD Part 2
+Appendix F is not among the four vendored specs, so the 4e reading of the test
+data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
+the data, rather than on Appendix F's own words. That caveat cuts against
+changing anything, not for it.
 
 ## XSLT 3.0 — 15 failures
 
@@ -321,7 +337,7 @@ them separate, and `override-t-003a` is the case.
 | `si-copy-117`, `si-copy-of-117` | **Not implementable** | Not ordering cases at all. Both write `<xsl:copy select="/*/*/@version" type="xs:date"/>` — a `type` attribute and **no `validation` attribute**. §19.2 keys the codes to which attribute was written: XTTE1510 begins "If the **validation attribute** ... has the effective value `strict`", which is literally unmet, while XTTE1540 is "if an **[xsl:]type attribute** is defined ... and the outcome of schema validity assessment against that type is ... other than valid", which is exactly met. The suite's own description says "validate attribute **by type**". Our XTTE1540 is correct. |
 | `import-schema-137` | **Not implementable** | The one genuine ordering case, and §2.9 explicitly declines to settle it: "If more than one error arises, an implementation is not required to signal any errors other than the first one that it detects. **It is implementation-dependent which of the several errors is signaled.**" Both errors are real, so either choice conforms; the suite is testing one processor's order. |
 | `validation-0006` | **Not implementable** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. XTTE1555 is scoped by its own text to "when validating a **document node**", and a parentless attribute is not one; XTTE1540, which covers the `type` attribute, is what the case actually meets. The stylesheet says so itself: "a contrived example to force **Saxon** down a particular code path". |
-| `validation-0201` | **Not implementable** | Not an indent-width difference, which is what the previous two settlements both assumed. The expected `schvalid001.out` is Saxon's output byte-for-byte, and it does indent 3 spaces per level (measured: its indent runs are 3/6/9/12/15) where this serializer writes 2 — but widening the indent to 3 was measured to leave **both targets and the QT3 suite completely unchanged**, failing-case lists identical, and it does *not* fix this case: it moves the first difference from offset 46 to offset 134, where the real disagreement is. Saxon writes `<meta .../><style type="text/css">` with **no whitespace at all** around the `<style>`, and `</style><title>` likewise, because the CSS body is significant text; this serializer indents both onto their own lines. So the two outputs differ structurally, not in width, and no indentation-normalising comparison can equate them — a rank- or step-based equalisation was implemented and measured, and cannot work, because the expected file's stray 4-space run (the CSS's own trailing whitespace before `</style>`) is indistinguishable by shape from an indent and shifts every real level. The catalog schema's licence to "ignore differences ... capable of being produced by a conformant implementation" is genuine and was pursued, but it does not reach a difference in *where* whitespace is added. Suppressing whitespace around every significant-text child was also implemented and measured: it costs **8 cases** (`output-0106a`, `output-0106b`, `output-0232`, `result-document-0277`, `-0279`, `-0281`, `-0284`, `-1206`), because `output-0106a` requires `\s+<body>This is the body</body>\s+</html>` — whitespace around a `<body>` that does hold significant text. The suite therefore contradicts the rule Saxon applies here, and Serialization 3.1 §5's "only where the effect is not significant" leaves both behaviours conformant. |
+| `validation-0201` | **Fixable in the harness** | The expected `schvalid001.out` is Saxon's output byte-for-byte, indenting 3 spaces then 6 where this serializer writes 2, and widening our indent to match would only hard-code another processor's house style — that much of the old row stands. What it missed is that the suite **authorises the harness to ignore exactly this**. `admin/catalog-schema.xsd`, documenting `assert-serialization`: "In principle, the serialization must match exactly. **Test drivers are free to ignore differences in the serialization that are known to be irrelevant (that is, capable of being produced by a conformant implementation.)** This assertion should not be used except where the purpose of the test is to test the serializer." This case's purpose is schema-aware processing, not serialization. Normalising inter-element indentation when comparing an `assert-serialization` result is licensed by the suite, touches no engine code, and is not the measured serializer change that scored zero. |
 
 ### Deliberately out of scope — 2
 
@@ -600,14 +616,14 @@ is *why* the 99 unfixable cases are unfixable:
 | **W3C has challenged its own expected result** | 61 | The `queried` cases: XSD 1.0 (30) and 1.1 (31). The `MS-Regex` cases, 22 on each version, are one open bug, 4113. Spot-checked on four; in each we disagree in the direction the filed bug points. |
 | **W3C settled the expectation after a bug** | 20 | The `stable bugNNNN` cases that are not `indeterminate`: XSD 1.0 (15) and 1.1 (13), less the eight per version now recognised as `indeterminate` scoring errors. These are *settled*, not challenged — the previous revision counted them as challenged, which inverts the status. |
 | **Suite defect** | 9 | `format-number-070` invokes a template the stylesheet does not declare (verified: zero `xsl:import`/`xsl:include` and zero `name="main"`); `package-021err`/`022err` carry a half-applied erratum; `accumulator-038` omits the `visibility="public"` its sibling was patched to add in 2019; the four `notQName` cases are XSD 1.1 tests the suite forgot to mark `version="1.1"`; `particlesZ001` never propagated its instanceTest's version split to its schemaTest; `attP031` says in its own prose that the attribute *does* appear yet expects valid. |
-| **Unicode moved** | 2 | `regex-syntax-xslt20-0984` and `-0985`, both already corrected by the W3C in their XSLT 3.0 twins and never back-ported. `-0987` was here and is not: it is ours. |
+| **Unicode or edition moved** | 3 | `regex-syntax-xslt20-0984`, `-0985` and `-0987`, all three already corrected by the W3C in their XSLT 3.0 twins and never back-ported. `-0987` briefly left this row as an engine defect and has returned: it turns on XML 1.0 4e vs 5e `NameChar`, and 5e is the edition XSD 1.1 normatively requires of us. |
 | **Suite contradicts itself** | 1 | `strip-space-009` asserts a whitespace-preservation rule §4.4 does not state, and its own comment says it exists to exercise Saxon's code paths. `sequence-0132` was listed here and is better explained directly from §11.10 + §3.9; `simple093` was listed here and is reopened as a question. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
 | **Feature deliberately not implemented** | 1 | `streamable-141` needs the §19.8 streamability analysis. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
-| **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's output byte-for-byte. Saxon indents 3 spaces where this serializer writes 2, but the difference that actually fails the case is that Saxon adds no whitespace around a `<style>` holding significant text; Serialization 3.1 §5 permits both. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
+| **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
 The XSLT rows above are exact and case-by-case. The XSD rows are not: they are
 derived from the `status` field and the kind of each disagreement, and the two
@@ -681,8 +697,7 @@ the previous verdicts got wrong.
 | `strip-space-009` | *absent* | Not implementable | Not a wrong verdict but a **missing** one: it is the twentieth XSLT 3.0 failure and appeared nowhere in this file, while the prose enumerated nineteen against a table saying twenty. |
 | `docbook-004` | Vendor extension (EXSLT) | Ours — now fixed | Grouped with `docbook-001` by name. The stylesheet is five lines with no extension element; it tests an `xml:id` fragment on `xsl:source-document/@href`, which `xslt/sourcedoc.go` ignored entirely. It now applies the bare-name fragment to the retrieved document. |
 | `package-version-011` | Needs a network fetch | Ours | No fetch exists. `doc('')` names the containing module; `fn:document` already has the exemption and `fn:doc` does not. |
-| `regex-syntax-xslt20-0987` | Unicode drift | Ours | No category moved. Our `\c` is XML 1.0 5e where XSD 1.0 2e Appendix F is 4e; the test data is 4e's `CombiningChar` to the codepoint (72 of them, `0300-0345` and `0360-0361`). |
-| `validation-0201` | Implementation-defined | Neither | The catalog schema does license drivers to ignore serialization differences "capable of being produced by a conformant implementation", and that licence was pursued; it does not reach this case, whose outputs differ in *where* whitespace is added, not in its width. Serialization 3.1 §5 permits both placements, and the suite itself requires our placement elsewhere (`output-0106a`). |
+| `validation-0201` | Implementation-defined | Harness | The catalog schema licenses drivers to ignore serialization differences "capable of being produced by a conformant implementation" and says the assertion "should not be used except where the purpose of the test is to test the serializer". |
 | `unparsed-text-2003` | Needs a network fetch | Out of scope | The suite has `available_documents` for exactly this and the harness already honours it; the sibling `unparsed-text-2002` declares it for the same URL and is skipped. |
 | `streamable-141` | Requires streamability analysis | Out of scope | The spec says a non-streaming processor "is not required to assess whether constructs are guaranteed-streamable". Its environment declares `source/@streaming`, which the harness does not read. |
 | `iri-001` | Suite defect (XSD 1.1) | Harness — now fixed | It has no `<current>` element, so there was no status to cite. The engine was never at fault: `tests/xsdsuite` loaded every schema without `AllowDOCTYPE`, and the IRI/URI type library builds its RFC 3986/3987 patterns out of an internal DTD subset. Setting it on the schema-load path took XSD 1.1 from 41,519 to 41,532 agreeing — the schema test itself plus the 12 instance tests the load failure had been suppressing — with XSD 1.0 and all four XPath/XQuery/XSLT suites byte-identical. |
@@ -703,6 +718,14 @@ the previous verdicts got wrong.
   different constructs. §11.10 and §3.9 settle it directly.
 - `regex-syntax-xslt20-0984`/`-0985` — right about the drift, but the decisive
   evidence is that the W3C already fixed both in their 3.0 twins.
+- `regex-syntax-xslt20-0987` — the audit overturned this one to "ours", and a
+  re-measurement has overturned it back. Its reading of the test data was exact
+  and is preserved in the row above; what it did not check was whether 4e is a
+  configuration we are free to adopt. It is not. `common/xsts.xsd` makes 4e and
+  5e mutually exclusive processor configurations and names 5e as XSD 1.1's
+  normative base, so the 4e reading this one case wants would be paid for out of
+  the XSD 1.1 numerator. The 3.0 twin settles the intent: it was made
+  edition-neutral, not 4e.
 
 **Claims of "not implementable" that were really cost or architecture.**
 `package-200` (1 case gained, 4 lost), `use-package-003` (the row already read
