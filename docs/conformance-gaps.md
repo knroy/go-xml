@@ -17,10 +17,10 @@ therefore no longer a measured figure.
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 2 | 1 | **6** | 99.90% |
 | **xslt** | W3C XSLT 3.0 | 8,626 | 8,608 | 99.79% | **18** | 4 | 1 | **13** | 99.84% |
-| **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 8 | 0 | **43** | 99.89% |
-| **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 9 | 2 | **36** | 99.94% |
+| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
+| **xsd** | W3C xsdtests 1.1 | 41,558 | 41,519 | 99.91% | **39** | 1 | 2 | **36** | 99.94% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **132** | **23** | **7** | **102** | |
+| | **Total** | | | | **114** | **7** | **7** | **100** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -438,7 +438,7 @@ is the claim the audit most clearly overturned.
 | Case | Version | Verdict |
 |---|---|---|
 | `iri-001` | 1.1 | **Ours.** `wgData/iri/ElementDeclarations.xsd` is expected valid and we reject it: the type-library schemas it imports carry an internal DTD subset, and the harness never sets `AllowDOCTYPE`, so `TypeLibrary-URI-RFC3986.xsd` fails to parse. Nothing is wrong with those schemas. This is an engine/harness policy choice, and there is no W3C status to appeal to because the group has no `<current>` element. It also masks 12 downstream instance tests in the same group. |
-| 8 `indeterminate` cases per version | both | **Ours — a harness scoring bug.** `schZ012_a`, `schZ015`, `schG14`, `schA2.i`, `schA5.i`, `addC002`, `addB071` and `elemZ031` carry `<expected validity="indeterminate"/>`; `schZ012_a`'s own annotation says "The WG decided the spec. is underspecified in this area, so implementations may reasonably differ." `expectedValidity` in `tests/xsdsuite/main.go` does `schemaValid = w == "valid"`, so `indeterminate` silently becomes "must be invalid" and any acceptance scores as a false accept. These should be skipped, not counted. Correcting it removes 8 disagreements per version — but it also means the published 51/47 and the 99.87%/99.89% figures rest on a wrong denominator. |
+| `indeterminate` cases | both | **Was ours — a harness scoring bug, now fixed.** `schZ012_a`, `schZ015`, `schG14`, `schA2.i`, `schA5.i`, `addC002`, `addB071`, `elemZ031` and, on 1.0 only, `particlesZ026` and `particlesZ026.v` carry `<expected validity="indeterminate"/>`; `schZ012_a`'s own annotation says "The WG decided the spec. is underspecified in this area, so implementations may reasonably differ," and `particlesZ026` records that the TSTF found its validity implementation-determined. `expectedValidity` in `tests/xsdsuite/main.go` read the attribute as `w == "valid"`, so `indeterminate` silently became "must be invalid" and our acceptance scored as a false accept. The driver now treats it as a third outcome, skips the case, and reports the count on its own `indeterminate` column. This removed **10** disagreements on 1.0 and **8** on 1.1 — the earlier estimate of 8 per version missed the two 1.0-only `particlesZ026` cases. Because the cases leave the denominator as well as the numerator, the agreeing counts fell by 6 per version (39,353 → 39,347 and 41,525 → 41,519) while the percentages rose; `tests/ratchet.txt` was lowered to match. |
 | `simple093` | 1.1 | **Open, not a settled suite defect.** Expected invalid, we accept; the schema unions `xs:QName` with `xs:NOTATION` and the test title is "xs:NOTATION not allowed as member type of union type". The file previously called this a suite defect on the strength of `particlesZ007.xsd` writing a similar union, but gave no reading of the 1.1 rule. Status is `accepted`. It looks more like a missing schema-validity rule than a defect. |
 | `particlesZ033_g` | 1.1 | **Open, not a settled suite defect.** Expected invalid, we accept. The schema uses very large `maxOccurs` (up to 45,678,363) and the test concerns implementation limits on occurrence counts. Arguably ours for enforcing no limit; not established either way from the suite alone. |
 
@@ -467,13 +467,14 @@ child is itself repeating is decided wrongly in both directions, which no W3C
 case covers because they all use two or more distinct child names. A suite
 reaching its ceiling bounds what the suite asks, not what the code does.
 
-**XSD measured now: 1.0 — 39,353 / 39,404 = 99.87%. 1.1 — 41,525 / 41,572 =
-99.89%.** These are no longer also the ceilings. Skipping the `indeterminate`
-expectations removes 8 disagreements per version from the denominator, and
-`iri-001` plus its 12 masked instance tests are recoverable on 1.1, so the
-attainable figures are **1.0 — 39,353 / 39,396 = 99.89%** and **1.1 — 41,538 /
-41,564 = 99.94%**. Both depend on harness corrections that have not been made,
-so they are stated as attainable rather than measured.
+**XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,519 / 41,558 =
+99.91%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
+on 1.1 have left both sides of the ratio; the driver prints their count so the
+denominator is legible rather than assumed. On 1.0 that is now also the ceiling
+— everything remaining is a suite defect or a `queried` disagreement. On 1.1
+`iri-001` and its 12 masked instance tests are still recoverable, which would
+give **41,532 / 41,558 = 99.94%**; that one depends on a harness change not yet
+made, so it is stated as attainable rather than measured.
 
 ---
 

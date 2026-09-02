@@ -6,6 +6,32 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### An indeterminate expectation is not a demand to reject
+
+`<expected validity="indeterminate"/>` prescribes no result. The W3C uses it
+where the working group left an area underspecified: `schZ012_a`'s annotation
+says "The WG decided the spec. is underspecified in this area, so
+implementations may reasonably differ", and `particlesZ026` records that the
+TSTF found its validity implementation-determined.
+
+`expectedValidity` in `tests/xsdsuite` read the attribute as `w == "valid"`,
+which collapsed three outcomes into two and turned "no answer is prescribed"
+into "must be invalid". Accepting such a schema then scored as a false accept.
+The driver now treats `indeterminate` as its own outcome, skips the case
+entirely, and prints the skipped count beside agree and disagree so the
+denominator stays legible rather than silently shrinking.
+
+Sixteen cases on 1.0 and fourteen on 1.1 leave the ratio. Ten of the 1.0 and
+eight of the 1.1 had been counted as disagreements; the rest had been agreeing
+by accident, which is why the agreeing counts fall by six on each version even
+as the percentages rise:
+
+    XSD 1.0  39,353 / 39,404 (99.87%)  ->  39,347 / 39,388 (99.90%)
+    XSD 1.1  41,525 / 41,572 (99.89%)  ->  41,519 / 41,558 (99.91%)
+
+`tests/ratchet.txt` is lowered to the new agreeing counts. No engine behaviour
+changed; only what the harness counts.
+
 ### The gate no longer runs the conformance suites twice
 
 `tests/check.sh` ran its `unit tests` and `race` steps without

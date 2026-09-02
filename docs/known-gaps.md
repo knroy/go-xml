@@ -163,7 +163,7 @@ floor is silently not enforced, so a schema believed to require a minimum
 count does not require it.
 
 A group with two or more distinct child names is decided correctly, which is
-why 39,353 XSD 1.0 agreements and 41,525 on 1.1 do not cover it. Verified
+why 39,347 XSD 1.0 agreements and 41,519 on 1.1 do not cover it. Verified
 present at `06e8a75`, before the bracket existed, so this is long-standing
 rather than a regression — the bracket's commit message documents the
 false-reject half and not the false-accept half.
@@ -619,8 +619,11 @@ as U+1D7A8 moved between general categories. Passing them means freezing a
 Unicode 3.1 table and being wrong about modern text. **They are a reason to
 stop short of 100%, not a defect to fix.**
 
-So the ceiling is **99.87% on 1.0 and 99.89% on 1.1**, not 100 — and both are
-where the engine already stands, since none of what remains is fixable.
+So the ceiling is **99.90% on 1.0 and 99.91% on 1.1**, not 100 — and both are
+where the engine already stands, since none of what remains is fixable. Those
+figures rose without any behaviour changing, when the driver stopped scoring the
+suite's `indeterminate` expectations: 16 cases on 1.0 and 14 on 1.1 prescribe no
+result, so they now leave the ratio instead of being counted as failures.
 
 ### XPath: no failures; one case refused by default until the harness enabled it
 
@@ -751,10 +754,10 @@ but each is questionable on the suite's own evidence:
 | | now | reachable | what stands in the way |
 |---|---|---|---|
 | XPath 2.0 | **100.00%** | 100.00% | reached |
-| XSD 1.0 instance | **99.87%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
-| XSD 1.1 instance | **99.89%** | ~99.9% | same |
-| XSD 1.0 schema | **99.86%** | **~99.87%** | 11 addressable false accepts and 6 false rejects |
-| XSD 1.1 schema | **99.88%** | **~99.87%** | 37 addressable false accepts and 11 false rejects |
+| XSD 1.0 instance | **99.89%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
+| XSD 1.1 instance | **99.90%** | ~99.9% | same |
+| XSD 1.0 schema | **99.91%** | **~99.91%** | 13 disagreements, all queried or suite defects |
+| XSD 1.1 schema | **99.92%** | **~99.92%** | 12 disagreements; `iri-001` is the one addressable case |
 
 The two schema rows once read `~99.9%`, which contradicted the ceiling derived
 under *What 100% would take* above and could not be reached. The reachable

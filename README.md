@@ -93,8 +93,8 @@ Requires Go 1.26 or later.
 | **XQuery 3.1** | 99.98% of the W3C QT3 suite (29,796 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.79% of the W3C XSLT suite filtered to 3.0 (8,608 of 8,626 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
-| **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
-| **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
+| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
+| **XSD 1.1** | 99.90% instance (26,177 of 26,204); **99.92%** schema-validity (15,342 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 1,070, clean under `-race` (a few subtests skip without the corpora below) |
@@ -104,13 +104,16 @@ Requires Go 1.26 or later.
 **Read this before adopting it.** Three things are commonly assumed and are not
 true here:
 
-1. **Schema-validity is the weaker half of the XSD numbers**, at 99.86% (1.0)
-   and 99.88% (1.1) — a schema invalid in one of the remaining ways is
-   accepted rather than reported. Instance validation, which is what most
-   callers actually do, is 99.88% and 99.89%. The remaining disagreements are
+1. **Both halves of the XSD numbers carry a residue of disagreements** — 41 on
+   1.0 and 39 on 1.1 — and where they are schema-validity failures, a schema
+   invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 89 of 98 — are cases the W3C itself has queried**, including
-   every one of the 44 `MS-Regex` disagreements, which are a single open bug.
+   of them — 71 of 80 — are cases the W3C itself has queried or filed a bug
+   against**, including every one of the 44 `MS-Regex` disagreements, which
+   are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
+   from both sides of the ratio because the suite marks them
+   `indeterminate` — the working group left the area underspecified, so no
+   result is prescribed and none is scored.
 2. **A backreference to a variable-width group is refused, by design.** RE2
    has no backreferences, which is also why no pattern can hang this engine.
    Where the group has a *fixed* width the backreference is resolved exactly,
@@ -939,8 +942,8 @@ Two figures, and the second is the one that matters.
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,405 (99.86%) | 24,968 / 24,999 (99.88%) |
-| XSD 1.1 | 15,347 / 15,365 (99.88%) | 26,178 / 26,207 (99.89%) |
+| XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
+| XSD 1.1 | 15,342 / 15,354 (99.92%) | 26,177 / 26,204 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1554,8 +1557,8 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,385 / 14,405 (99.86%) | 24,968 / 24,999 (99.88%) |
-| XSD 1.1 | 15,347 / 15,365 (99.88%) | 26,178 / 26,207 (99.89%) |
+| XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
+| XSD 1.1 | 15,342 / 15,354 (99.92%) | 26,177 / 26,204 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

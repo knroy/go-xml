@@ -176,9 +176,9 @@ That brings in `xs:assert`, conditional type assignment with
 `xs:alternative` and inheritable attributes, `xs:openContent` and
 `xs:defaultOpenContent`, `xs:override`, the `notNamespace` and `notQName`
 wildcard forms, `explicitTimezone`, conditional inclusion through the
-versioning attributes, and the 1.1 built-ins. It measures **99.89%** on the
-26,207 instance tests that apply to a 1.1 processor and **99.88%** on the
-15,365 schema-validity tests. An earlier revision claimed 100%; that was
+versioning attributes, and the 1.1 built-ins. It measures **99.90%** on the
+26,204 instance tests that apply to a 1.1 processor and **99.92%** on the
+15,354 schema-validity tests. An earlier revision claimed 100%; that was
 measured over the explicitly-marked 1.1 groups only, about a sixteenth of the
 tests a 1.1 processor is meant to run. See [xsd.md](xsd.md).
 

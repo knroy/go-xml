@@ -99,6 +99,15 @@ func appliesAND(v string, tok map[string]bool) bool {
 // speaks for. The most specific applicable one wins: an expectation carrying
 // tokens is preferred over a bare one, which is the fallback for processors no
 // qualified expectation matched.
+//
+// The validity attribute has three values, not two. Besides "valid" and
+// "invalid" the suite uses "indeterminate", which prescribes no result at all:
+// the annotation on schZ012_a reads "The WG decided the spec. is underspecified
+// in this area, so implementations may reasonably differ", and particlesZ026
+// records that the TSTF concluded the schema's validity was
+// implementation-determined. Callers must test for that value explicitly.
+// Reading the attribute as (w == "valid") turns "no answer is prescribed" into
+// "must be rejected", which scores a defensible acceptance as a false accept.
 func expectedValidity(parent *xdm.Node, tok map[string]bool) (string, string) {
 	want, status := "", ""
 	qualified := false
@@ -182,6 +191,12 @@ func main() {
 	}
 
 	var sOK, sBad, iOK, iBad int
+	// Tests expecting "indeterminate" leave both the numerator and the
+	// denominator: the suite prescribes no result, so neither outcome is
+	// agreement or disagreement, and scoring one would be scoring a coin
+	// toss. They are counted here so the number stays visible in the
+	// summary rather than silently vanishing from the totals.
+	var sSkip, iSkip int
 
 	for _, set := range sets {
 		f, err := os.Open(set)
@@ -217,6 +232,7 @@ func main() {
 
 			var schemaPaths []string
 			schemaValid, sStatus, sTestName := false, "", ""
+			sIndet := false
 			haveSchemaTest := false
 			for _, st := range g.ChildElements() {
 				if st.Name.Local != "schemaTest" {
@@ -234,6 +250,7 @@ func main() {
 				}
 				w, s := expectedValidity(st, tok)
 				schemaValid = w == "valid"
+				sIndet = w == "indeterminate"
 				sStatus = s
 			}
 			if len(schemaPaths) == 0 {
@@ -246,9 +263,15 @@ func main() {
 			// Score the schema test itself.
 			if haveSchemaTest {
 				gotValid := loadErr == nil
-				if gotValid == schemaValid {
+				switch {
+				case sIndet:
+					// The schema is still loaded, because
+					// the group's instance tests need it,
+					// but neither outcome is scored.
+					sSkip++
+				case gotValid == schemaValid:
 					sOK++
-				} else {
+				default:
 					sBad++
 					kind := "SFALSEACCEPT"
 					detail := ""
@@ -280,6 +303,16 @@ func main() {
 				}
 				want, status := expectedValidity(it, tok)
 				if docPath == "" || want == "" {
+					continue
+				}
+				if want == "indeterminate" {
+					// An instance carries the value in its
+					// own right, independent of its schema:
+					// schA2.i and schA5.i are indeterminate
+					// under schemas the suite calls valid.
+					// No result being prescribed, the
+					// document is not validated at all.
+					iSkip++
 					continue
 				}
 				df, err := os.Open(docPath)
@@ -333,7 +366,7 @@ func main() {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "SCHEMA  agree %d  disagree %d  (%.2f%%)\n", sOK, sBad, 100*float64(sOK)/float64(sOK+sBad))
-	fmt.Fprintf(os.Stderr, "INSTANCE agree %d  disagree %d  (%.2f%%)\n", iOK, iBad, 100*float64(iOK)/float64(iOK+iBad))
-	fmt.Fprintf(os.Stderr, "TOTAL   agree %d  disagree %d  (%.2f%%)\n", sOK+iOK, sBad+iBad, 100*float64(sOK+iOK)/float64(sOK+iOK+sBad+iBad))
+	fmt.Fprintf(os.Stderr, "SCHEMA  agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", sOK, sBad, sSkip, 100*float64(sOK)/float64(sOK+sBad))
+	fmt.Fprintf(os.Stderr, "INSTANCE agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", iOK, iBad, iSkip, 100*float64(iOK)/float64(iOK+iBad))
+	fmt.Fprintf(os.Stderr, "TOTAL   agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", sOK+iOK, sBad+iBad, sSkip+iSkip, 100*float64(sOK+iOK)/float64(sOK+iOK+sBad+iBad))
 }
