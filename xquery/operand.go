@@ -132,9 +132,21 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 				// "1 * <a/>" and "3 - <a/>" substitute their right operand,
 				// which the name reading refused. prev is whitespace-stripped
 				// and cannot answer this, so the source is looked at.
-				if (c == '-' || c == '*') && isOperandBreak(src, i) {
+				switch {
+				case (c == '-' || c == '*') && isOperandBreak(src, i):
 					prev = operatorPrev
-				} else {
+				case c == ':' && isSeparatorColon(src, i):
+					// A colon that separates a map entry's key from its value
+					// is operand position: "map {"k": element e {}}" opens a
+					// computed constructor after it. startsOperand refuses a
+					// keyword after a colon because of "foo:bar" and
+					// "child::node()", where the colon is part of a name or
+					// an axis; this one is neither, so it is reported as the
+					// operator position it is. Serialization-json-65 and its
+					// neighbours put an element constructor in a map value
+					// and could not be read at all without this.
+					prev = operatorPrev
+				default:
 					prev = c
 				}
 			}
@@ -166,6 +178,26 @@ func (p *parser) substituteOperands(src string) ([]node, string, error) {
 	}
 	out.WriteString(src[copied:])
 	return ops, out.String(), nil
+}
+
+// isSeparatorColon reports whether the ":" at src[i] separates two
+// expressions rather than belonging to a name or an axis.
+//
+// Three colons appear in the grammar and only one of them is a separator. A
+// prefixed name -- "fn:count", "xs:integer" -- has its colon abutting the
+// name byte before it. An axis step -- "child::node()" -- spells its colon
+// twice. What is left is the map constructor's "key : value" and the
+// conditional-free ":=" of a "let", and in both of those an expression may
+// begin after the colon. ":=" is excluded explicitly, since the "=" makes it
+// an operator whose right side this function is not being asked about.
+func isSeparatorColon(src string, i int) bool {
+	if i > 0 && (isNameByte(src[i-1]) || src[i-1] == ':') {
+		return false
+	}
+	if i+1 < len(src) && (src[i+1] == ':' || src[i+1] == '=') {
+		return false
+	}
+	return true
 }
 
 // isOperandBreak reports whether the "-" or "*" at src[i] is a binary
