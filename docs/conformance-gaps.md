@@ -9,13 +9,13 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,805 | 29,689 | 99.61% | **116** | ? | ? | ? | ? |
+| **xquery** | QT3 — XQuery 3.1 | 29,805 | 29,699 | 99.64% | **106** | ? | ? | ? | ? |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
 | **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 0 | **20** | 99.77% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **242** | **0** | **0** | **126** | |
+| | **Total** | | | | **232** | **0** | **0** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -27,10 +27,26 @@ is no remaining open question against either XSLT suite: `validation-0006` and
 `validation-0201`, the last two, were settled against the spec text and the
 test sources and are recorded below.
 
-**XQuery's 116 are not triaged**, which is why its row carries `?` rather than
+**XQuery's 106 are partly triaged.** A first pass located seven root causes,
+each to a file and line, and none of them is a shallow miss:
+
+| Cases | Cause | Where |
+|---|---|---|
+| `fn-count/cbcl-count-002` and 2 more | `1 to 10000000` is materialised eagerly, so `count`/`empty`/`exists` blow the 5M item cap before the function is entered. Needs a lazy range, not a bigger cap. | `xpath/operators.go` `evalRange`, `xpath/fn_seq.go` |
+| `K2-SeqDeepEqualFunc-20`, `-22` | `significantChildren` drops comments/PIs and *then* merges adjacent text, so `te`+PI+`xt` collapses to one node and compares equal to `text`. Merge must happen before the filter, not after. | `xpath/fn_misc.go` |
+| `fn-distinct-values-1`, `cbcl-distinct-values-002b` | Hashing on a string key forces transitivity onto `eq`, which F&O says is *not* transitive across numeric types; one `xs:float` anywhere also degrades every numeric to float precision. | `xpath/fn_seq.go` `fnDistinctValues` |
+| `fn-filter/filter-006` | `fn:filter` rejects a non-boolean return instead of applying function coercion first, so an untyped node that casts to boolean is refused. | `xpath/fn_hof.go` `singleBoolean` |
+| `rdb-queries-results-q9` | `month-from-date` and its siblings never apply the function conversion rules, so `xs:untypedAtomic` from an unvalidated document is rejected rather than cast. | `xpath/fn_date.go` `dateComponent` |
+| `app-XMark/XMark-All` | Synthetic call arguments are emitted as `$local:xq-arg0` and bound by URI; a prolog that rebinds the `local` prefix breaks the round trip. | `xquery/nested.go` |
+| `app-Walmsley/d1e78807h` | The element form of the serialization parameters rejects `method="json"` that the map form already accepts — the JSON writer exists. | `xpath/fn_serialize.go` |
+
+That leaves roughly 90 unexamined. The `?` in the row above stands until they
+are read; none of the seven above is yet fixed.
+
+**The rest are not triaged**, which is why its row carries `?` rather than
 zeros. The suite was not run by `tests/check.sh` until now, so unlike every
 other row here no one has read the failures to say which are engine defects and
-which are not. Do not read that row as "116 cannot be fixed" — it is unknown,
+which are not. Do not read that row as "106 cannot be fixed" — it is unknown,
 and it is the one place in this document where real work may be hiding.
 
 The XSD split is taken from the suite's own `status` field rather than from
