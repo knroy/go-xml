@@ -356,6 +356,29 @@ func (p *Parser) tryParseNodeTest(axis Axis) (NodeTest, bool, error) {
 		p.pos++
 		return p.wildcardTest(t.Val)
 
+	case TokOp:
+		// A "*" spelled as an operator is still a wildcard here. The lexer
+		// alternates the two spellings across a run of stars -- it clears
+		// its operand flag on one it has classified as an operator, so
+		// "* * *" after an occurrence indicator arrives as operator,
+		// wildcard, operator -- and only the parser knows which position it
+		// is in. This function is reached only where a node test is
+		// EXPECTED, which is operand position, so a star arriving here is a
+		// wildcard whatever the lexer called it.
+		//
+		// This is the same dual-spelling accommodation parseSequenceType
+		// makes for the occurrence indicator and parseLookup makes for "?*",
+		// applied to the third position the run can reach. Without it
+		// "1 instance of element(*)* * *" -- the indicator, a
+		// multiplication, and a wildcard operand -- failed with a bare
+		// operator in operand position. K2-NameTest-5 is built out of such a
+		// run.
+		if t.Val != "*" {
+			return nil, false, nil
+		}
+		p.pos++
+		return p.wildcardTest(t.Val)
+
 	case TokName:
 		if isKindTestName(t.Val) && p.pos+1 < len(p.toks) &&
 			p.toks[p.pos+1].Kind == TokOp && p.toks[p.pos+1].Val == "(" {

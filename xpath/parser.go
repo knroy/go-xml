@@ -362,7 +362,23 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 	if t.Kind == TokName {
 		switch t.Val {
 		case "for":
-			return p.parseFor()
+			// "for" is only the for expression when a variable follows;
+			// otherwise it is an element name, as in the path "for/x" or the
+			// step "for" standing alone. This is the same test "let" and
+			// "if" already carry, and for the same reason: XPath has no
+			// reserved words, so every keyword needs it. Without it
+			// "for $x in for return 1" -- where the "in" clause selects a
+			// child named "for" -- was a syntax error complaining that a
+			// variable was expected, rather than a path with no context
+			// item. K2-NameTest-5 is built out of exactly this trick.
+			//
+			// A window clause ("for sliding"/"for tumbling") is XQuery's, not
+			// XPath's, and is parsed by the xquery package before the
+			// expression reaches here, so a name is the only other thing
+			// "for" can be at this point.
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokVar {
+				return p.parseFor()
+			}
 		case "let":
 			// "let" is only the let expression under 3.0 and when followed by
 			// a variable; otherwise it is an element name, as in "let/x".
@@ -372,7 +388,12 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 				return p.parseLet()
 			}
 		case "some", "every":
-			return p.parseQuantified()
+			// Likewise: a quantified expression names its variable straight
+			// away, so "some" or "every" not followed by one is an element
+			// name and the path "some/x" must parse as such.
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokVar {
+				return p.parseQuantified()
+			}
 		case "if":
 			// "if" is only the conditional when followed by "("; otherwise it
 			// is an element name, as in the path "if/then".

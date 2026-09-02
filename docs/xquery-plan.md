@@ -4,7 +4,7 @@
 > design rationale in it — in particular why the parser reads source rather
 > than a token stream, which is still the shape of the implementation. The
 > forecasts below have been overtaken: XQuery 3.1 now exists in
-> [`xquery`](../xquery/) at **99.66%** of the QT3 suite. For what the package
+> [`xquery`](../xquery/) at **99.67%** of the QT3 suite. For what the package
 > does today, read [xquery.md](xquery.md); for what it still cannot do, read
 > [known-gaps.md](known-gaps.md).
 >
