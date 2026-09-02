@@ -50,7 +50,9 @@ go test -race ./...
 ```
 
 `tests/check.sh` runs everything that has to pass before a change is done —
-build, vet, unit tests, race, both W3C suites and the production corpora:
+build, vet, unit tests, race, every W3C suite and the production corpora.
+[docs/testing.md](docs/testing.md) covers the layers, the environment
+variables, the ratchet, and how to read a result:
 
 ```
 tests/check.sh fast                                  # no external suites
@@ -1183,13 +1185,14 @@ DTD-declared IDs gets an empty result rather than a wrong one.
 
 ## How this was tested
 
-Five methods, each catching a class the others miss. That is the point: no
+Six methods, each catching a class the others miss. That is the point: no
 single one of them was sufficient, and each was added because the previous set
-had let something through.
+had let something through. How to run any of them, and how to read what comes
+back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (671) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,082) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

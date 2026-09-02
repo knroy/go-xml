@@ -18,6 +18,9 @@
 * **[Security](security.md)** — the threat model, what is verified safe (XXE,
   entity expansion, regex backtracking), what a caller must still do, and the
   findings from the audit that produced them.
+* **[Testing](testing.md)** — how the engine is tested, how to run any layer of
+  it, what the ratchet is for, and how to read a result without being misled by
+  a count that did not move.
 * **[Conformance gaps](conformance-gaps.md)** — the current figures, and a
   case-by-case verdict on every failure: fixable, open, or unreachable, with
   the reason. This is where the numbers live.
