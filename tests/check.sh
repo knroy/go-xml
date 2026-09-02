@@ -17,6 +17,8 @@
 #   GOXSLT_XSLTS=<dir>  github.com/w3c/xslt30-test (default testdata/xslt30-test)
 #   GOXSLT_RNG=<file>   spectest.xml from relaxng/jing-trang
 #                                                  (default testdata/relaxng/spectest.xml)
+#   GOXSLT_XSLTNG=<dir> docbook/xslTNG        (default testdata/xsltng)
+#   GOXSLT_XSPEC=<dir>  xspec/xspec           (default testdata/xspec)
 #   GOXSLT_UBL=<dir>    UBL 2.1, the directory holding maindoc/
 #   GOXSLT_CII=<dir>    UN/CEFACT CII or EN 16931 schemas
 #
@@ -25,6 +27,15 @@
 # that succeeded — which is exactly what happened the first time this script
 # ran: a relative GOXSLT_QT3 resolved against ./qt3/ rather than the repository
 # root, the test skipped itself, and `go test` reported PASS.
+#
+# The last four of those are expected to be absent in CI, which fetches only
+# the four W3C suites. UBL and CII are licensed corpora that cannot be cloned
+# in a workflow at all; DocBook xslTNG and XSpec could be, and are not, because
+# each needs a build step of its own before it yields anything to transform.
+# They are measured locally instead, and their ratchet lines exist so that a
+# developer who does have them cannot lose ground silently. Four skips in a CI
+# log are therefore the normal reading, not a broken checkout — the failure
+# mode to look for is a corpus that is present and reports nothing.
 
 set -eu
 
@@ -331,12 +342,12 @@ corpus() { # name, mode, dir
 if [ -n "$UBL" ] && [ -d "$UBL/maindoc" ]; then
 	corpus UBL maindoc "$UBL"
 else
-	skip "UBL not set — GOXSLT_UBL=<dir holding maindoc/>"
+	skip "UBL not set (expected in CI) — GOXSLT_UBL=<dir holding maindoc/>"
 fi
 if [ -n "$CII" ] && [ -d "$CII" ]; then
 	corpus CII walk "$CII"
 else
-	skip "CII not set — GOXSLT_CII=<dir of .xsd files>"
+	skip "CII not set (expected in CI) — GOXSLT_CII=<dir of .xsd files>"
 fi
 
 section "real-world stylesheets"
@@ -354,7 +365,7 @@ section "real-world stylesheets"
 stylesheetCorpus() { # name, stylesheet, glob, extra flags
 	_name=$1 _xsl=$2 _glob=$3 _flags=${4:-}
 	if [ ! -f "$_xsl" ]; then
-		skip "$_name not at $_xsl"
+		skip "$_name not at $_xsl (expected in CI; it fetches only the W3C suites)"
 		return 0
 	fi
 	_ok=0 _bad=0
