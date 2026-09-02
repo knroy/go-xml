@@ -81,6 +81,20 @@ type staticContext struct {
 	// FLWOR clause because the prolog sets a module-wide default.
 	emptyOrder EmptyOrder
 
+	// ctorNS records only those bindings that came from a namespace
+	// declaration attribute on an enclosing direct element constructor.
+	//
+	// It is a strict subset of ns, and the distinction matters because the two
+	// kinds of declaration reach the constructed tree differently. A prolog
+	// "declare namespace foo" resolves names and stops there: Constr-inscope-13
+	// declares foo, never uses it, and expects a bare <new/>. An xmlns:p
+	// written on a constructor is a namespace declaration attribute, and
+	// §3.9.1.3 puts its binding into the in-scope namespaces of the element
+	// *and of every element constructed within it* -- so the inner <e/> of
+	// K2-InScopePrefixesFunc-18 reports p even though nothing in it uses p,
+	// and even before it is attached to anything.
+	ctorNS map[string]string
+
 	// preserveNS and inheritNS are the two independent halves of
 	// copy-namespaces (§4.8), which xdmbuild's Policy models the same way.
 	// Both default to the specification's preserve/inherit.
@@ -165,6 +179,10 @@ func (sc *staticContext) child() *staticContext {
 	c.ns = make(map[string]string, len(sc.ns))
 	for k, v := range sc.ns {
 		c.ns[k] = v
+	}
+	c.ctorNS = make(map[string]string, len(sc.ctorNS)+1)
+	for k, v := range sc.ctorNS {
+		c.ctorNS[k] = v
 	}
 	return &c
 }

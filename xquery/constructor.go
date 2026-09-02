@@ -54,6 +54,15 @@ type element struct {
 	// been applied to the static context while parsing.
 	namespaces []nsBinding
 
+	// inherited are the bindings that namespace declaration attributes on
+	// enclosing direct element constructors put in scope, including this
+	// element's own. §3.9.1.3 makes them part of the in-scope namespaces of
+	// every element constructed within their reach, whether or not the
+	// element's own name or attributes use them, so they are carried here and
+	// applied at evaluation to whichever of them an ancestor does not already
+	// supply.
+	inherited map[string]string
+
 	attrs   []attribute
 	content []node
 
@@ -174,6 +183,11 @@ func (p *parser) parseDirElement() (node, error) {
 		} else if err := inner.bind(pfx, uri); err != nil {
 			return nil, p.errorAt(startPos, "%v", err)
 		}
+		if uri == "" {
+			delete(inner.ctorNS, pfx)
+		} else {
+			inner.ctorNS[pfx] = uri
+		}
 		bindings = append(bindings, nsBinding{prefix: pfx, uri: uri})
 	}
 
@@ -186,7 +200,12 @@ func (p *parser) parseDirElement() (node, error) {
 		return nil, p.errorAt(startPos, "%v", err)
 	}
 
-	el := &element{name: name, namespaces: bindings, baseURI: inner.baseURI}
+	el := &element{
+		name:       name,
+		namespaces: bindings,
+		inherited:  inner.ctorNS,
+		baseURI:    inner.baseURI,
+	}
 
 	// Pass two: resolve and compile the attributes that are not namespace
 	// declarations.

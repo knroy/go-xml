@@ -92,7 +92,7 @@ func (p *parser) parseComputed() (node, bool, error) {
 	switch kw {
 	case "element":
 		el := &element{nameExpr: nameExpr, baseURI: p.sc.baseURI,
-			content: content}
+			inherited: p.sc.ctorNS, content: content}
 		if nameExpr == nil {
 			// A braced URI names the namespace outright, so there is no
 			// prefix to look up and the default element namespace does not

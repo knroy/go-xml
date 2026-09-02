@@ -2,6 +2,7 @@ package xquery
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -472,6 +473,26 @@ func (n *element) eval(out *builderRef, ctx *evalContext) error {
 			return err
 		}
 		sub.b.NoteDeclared(ns.prefix, ns.uri)
+	}
+	// The namespace declaration attributes of enclosing direct constructors
+	// are in scope here too (§3.9.1.3), so a binding an ancestor does not
+	// already supply is written on this element. A constructed element is
+	// often asked about before it is attached to anything — count(in-scope-
+	// prefixes(<e/>)) inside <e xmlns:p="..."> is exactly that — and a node
+	// with no parent cannot inherit through a tree it is not yet in.
+	//
+	// Bindings an ancestor already carries are left alone, so an element that
+	// *is* nested in the tree does not repeat its parent's declarations.
+	if el := sub.b.Open(); el != nil {
+		for _, prefix := range sortedPrefixes(n.inherited) {
+			uri := n.inherited[prefix]
+			if cur, ok := el.LookupPrefix(prefix); ok && cur == uri {
+				continue
+			}
+			if err := sub.b.AddNamespace(prefix, uri); err != nil {
+				return err
+			}
+		}
 	}
 	if err := declareOwnName(sub.b); err != nil {
 		return err
@@ -1118,4 +1139,16 @@ func describePrefix(prefix string) string {
 		return "the default namespace"
 	}
 	return fmt.Sprintf("the prefix %q", prefix)
+}
+
+// sortedPrefixes returns a map's keys in a fixed order, so that the namespace
+// nodes a constructor writes come out the same on every run rather than in
+// Go's randomised map order.
+func sortedPrefixes(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
