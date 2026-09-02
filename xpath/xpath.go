@@ -109,6 +109,16 @@ func CompileVersion(src string, ns NamespaceResolver, v Version) (*Compiled, err
 	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
 }
 
+// CompileXQuery is CompileVersion for an expression taken from an XQuery
+// module; see ParseXQuery for the one rule that differs.
+func CompileXQuery(src string, ns NamespaceResolver, v Version) (*Compiled, error) {
+	e, err := ParseXQuery(src, ns, v)
+	if err != nil {
+		return nil, err
+	}
+	return &Compiled{expr: optimize(e), src: src, ns: ns, version: v}, nil
+}
+
 // CompileVersionRefFloor is CompileVersion with the named-function-reference
 // floor raised; see ParseVersionRefFloor and refversion.go.
 func CompileVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version) (*Compiled, error) {

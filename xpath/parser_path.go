@@ -56,6 +56,14 @@ func (p *Parser) parsePath() (Expr, error) {
 
 // startsStep reports whether the current token can begin a step. Used to
 // distinguish "/" as a complete expression from "/" as a path separator.
+//
+// This is the decision xgc:leading-lone-slash rests on: "if the token
+// immediately following the slash can also occur as the first token of a
+// RelativePathExpr, then the slash must be treated as the beginning of a path
+// expression". Saying yes here is therefore not a claim that a step will
+// parse — only that the slash is not the whole expression, which is why "/ <"
+// in XQuery ends as a syntax error rather than as a comparison: the "<" is
+// committed to as the start of a step, and "< 5" is not one.
 func (p *Parser) startsStep() bool {
 	t := p.cur()
 	switch t.Kind {
@@ -65,6 +73,20 @@ func (p *Parser) startsStep() bool {
 		switch t.Val {
 		case "@", "(", ".", "..":
 			return true
+		case "<":
+			// A DirElemConstructor is a PrimaryExpr in XQuery and so can
+			// begin a RelativePathExpr; in XPath there is no such production
+			// and "<" can only be the comparison operator. The constraint
+			// names this case outright: "/ * 5" is (/) * 5, but "/ < 5" is a
+			// syntax error, since "<" can begin a DirElemConstructor. Reading
+			// it as a comparison instead compared the root to 5 and returned
+			// a value for a query the grammar does not have. (PathExpr-5,
+			// -7, -8 and Steps-leading-lone-slash-3, which write "/ < 5",
+			// "/ < a", "/ < /b" and "/<5".)
+			//
+			// Writing "(/) < 5" is how the comparison is spelled, and the
+			// parenthesis keeps it out of this branch entirely.
+			return p.xquery
 		case "[", "?":
 			// A square-bracket array constructor and a unary lookup both begin
 			// an expression in 3.1. Neither can be confused with a predicate

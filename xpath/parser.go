@@ -42,6 +42,15 @@ type Parser struct {
 	// refFloor raises the version at which a named function reference is
 	// accepted, without admitting any other 3.0 construct. See refversion.go.
 	refFloor Version
+	// xquery records that the expression came from an XQuery module rather
+	// than from a standalone XPath expression.
+	//
+	// The two languages share this grammar but not the set of tokens that can
+	// begin a step: XQuery's RelativePathExpr may start with a direct
+	// constructor and XPath's may not. Exactly one rule turns on the
+	// difference — xgc:leading-lone-slash, in startsStep — so this is a flag
+	// rather than a second parser.
+	xquery bool
 }
 
 // maxParseDepth bounds expression nesting.
@@ -101,11 +110,26 @@ func ParseVersionRefFloor(src string, ns NamespaceResolver, v, refFloor Version)
 	return parseWith(src, ns, false, v, refFloor)
 }
 
+// ParseXQuery is ParseVersion for an expression taken from an XQuery module.
+//
+// It differs from ParseVersion in one rule. XQuery's RelativePathExpr may
+// begin with a direct constructor and XPath's may not, so the two languages
+// disagree about whether "<" can be the first token of a step — which is what
+// xgc:leading-lone-slash consults to decide whether a "/" is a whole
+// expression or the head of a path. See Parser.xquery and startsStep.
+func ParseXQuery(src string, ns NamespaceResolver, v Version) (Expr, error) {
+	return parseHost(src, ns, false, v, 0, true)
+}
+
 func parse(src string, ns NamespaceResolver, extended bool, v Version) (Expr, error) {
 	return parseWith(src, ns, extended, v, 0)
 }
 
 func parseWith(src string, ns NamespaceResolver, extended bool, v, refFloor Version) (Expr, error) {
+	return parseHost(src, ns, extended, v, refFloor, false)
+}
+
+func parseHost(src string, ns NamespaceResolver, extended bool, v, refFloor Version, xquery bool) (Expr, error) {
 	if ns == nil {
 		ns = defaultResolver{}
 	}
@@ -121,7 +145,8 @@ func parseWith(src string, ns NamespaceResolver, extended bool, v, refFloor Vers
 	if len(lex.bracedURIs) > 0 {
 		ns = wrapBraced(ns, lex.bracedURIs)
 	}
-	p := &Parser{toks: toks, src: src, ns: ns, version: v, refFloor: refFloor}
+	p := &Parser{toks: toks, src: src, ns: ns, version: v, refFloor: refFloor,
+		xquery: xquery}
 	e, err := p.parseExpr()
 	if err != nil {
 		return nil, err
