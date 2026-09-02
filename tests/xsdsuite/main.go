@@ -257,8 +257,24 @@ func main() {
 				continue
 			}
 
+			// AllowDOCTYPE is off by default because a schema document
+			// arriving from an untrusted source should not be able to
+			// pull in external entities. A conformance corpus on disk is
+			// not that, and two of its schema documents need it: the
+			// IRI/URI type library (wgData/iri/TypeLibrary-URI-RFC3986.xsd
+			// and TypeLibrary-IRI-RFC3987.xsd) builds its RFC 3986/3987
+			// patterns out of an internal DTD subset, declaring one entity
+			// per ABNF non-terminal so the regexes can be assembled
+			// bottom-up instead of written out by hand. Refusing the
+			// DOCTYPE made both documents unparseable, so iri-001 — whose
+			// ElementDeclarations.xsd imports the library through
+			// TypeLibrary-IRI-URI-driver.xsd — was scored SFALSEREJECT
+			// against a schema the engine accepts once it can read it.
+			// External entities stay off: the library needs only the
+			// internal subset.
 			sch, loadErr := xsd.LoadFiles(schemaPaths,
-				xsd.Options{Resolver: &xsd.FileResolver{}, Version: version})
+				xsd.Options{Resolver: &xsd.FileResolver{}, Version: version,
+					ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
 
 			// Score the schema test itself.
 			if haveSchemaTest {

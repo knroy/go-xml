@@ -163,7 +163,7 @@ floor is silently not enforced, so a schema believed to require a minimum
 count does not require it.
 
 A group with two or more distinct child names is decided correctly, which is
-why 39,347 XSD 1.0 agreements and 41,519 on 1.1 do not cover it. Verified
+why 39,347 XSD 1.0 agreements and 41,532 on 1.1 do not cover it. Verified
 present at `06e8a75`, before the bracket existed, so this is long-standing
 rather than a regression — the bracket's commit message documents the
 false-reject half and not the false-accept half.

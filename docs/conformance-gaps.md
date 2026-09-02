@@ -18,9 +18,9 @@ therefore no longer a measured figure.
 | **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 2 | 1 | **5** | 99.90% |
 | **xslt** | W3C XSLT 3.0 | 8,625 | 8,610 | 99.83% | **15** | 2 | 1 | **12** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
-| **xsd** | W3C xsdtests 1.1 | 41,558 | 41,519 | 99.91% | **39** | 1 | 0 | **38** | 99.91% |
+| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **106** | **5** | **2** | **99** | |
+| | **Total** | | | | **105** | **4** | **2** | **99** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -30,9 +30,10 @@ reflects that.
 
 > **Audit note (this revision).** An adversarial re-audit of the "can't fix"
 > verdicts found that the previous claim — *0 fixable, none a known engine
-> defect* — was wrong. Twenty-three cases are work: four are engine defects
-> (`docbook-004`, `package-version-011`, `regex-syntax-xslt20-0987`,
-> `iri-001`), two are cases the suite already declares out of scope through a
+> defect* — was wrong. Twenty-three cases are work: three are engine defects
+> (`docbook-004`, `package-version-011`, `regex-syntax-xslt20-0987`),
+> `iri-001` is a harness defect since fixed, two are cases the suite already
+> declares out of scope through a
 > dependency the harness does not read, and the rest are harness scoring
 > defects — chiefly the eight XSD `indeterminate` expectations per version that
 > are silently scored as "must be invalid". One XSLT 3.0 failure,
@@ -52,10 +53,11 @@ the harness does not read. Seven are open questions, settled neither way.
 
 In the *Fixable* column above, "fixable" means "the count can move" — which
 covers three distinct things, and the audit found the old document conflating
-them. A case may be an engine defect (`docbook-004`, `package-version-011`,
-`regex-syntax-xslt20-0987`, `iri-001`), a harness defect where the engine is
-already right (the eight `indeterminate` XSD expectations per version), a case
-where the spec permits both this engine's answer and the one the suite records
+them. A case may be an engine defect (`docbook-004` and
+`package-version-011`, both now fixed),
+a harness defect where the engine is already right (`iri-001`, now fixed, and
+the eight `indeterminate` XSD expectations per version), a case where the spec
+permits both this engine's answer and the one the suite records
 (`validation-0201`), or a case the suite itself puts out of scope through
 a dependency the harness does not honour (`streamable-141`,
 `unparsed-text-2003`). Only the first kind moves the numerator; the other two
@@ -473,7 +475,7 @@ is the claim the audit most clearly overturned.
 
 | Case | Version | Verdict |
 |---|---|---|
-| `iri-001` | 1.1 | **Ours.** `wgData/iri/ElementDeclarations.xsd` is expected valid and we reject it: the type-library schemas it imports carry an internal DTD subset, and the harness never sets `AllowDOCTYPE`, so `TypeLibrary-URI-RFC3986.xsd` fails to parse. Nothing is wrong with those schemas. This is an engine/harness policy choice, and there is no W3C status to appeal to because the group has no `<current>` element. It also masks 12 downstream instance tests in the same group. |
+| `iri-001` | 1.1 | **Was the harness — now fixed.** `wgData/iri/ElementDeclarations.xsd` is expected valid and we rejected it: the type-library schemas it imports carry an internal DTD subset — `TypeLibrary-URI-RFC3986.xsd` declares one entity per ABNF non-terminal of RFC 3986 so its patterns can be assembled bottom-up — and `tests/xsdsuite` loaded every schema with the default `ParseOptions`, where `AllowDOCTYPE` is off. Nothing was wrong with those schemas and nothing was wrong with the engine: `xsd/assemble.go` already threads the caller's `ParseOptions` through `xs:include` and `xs:import`, so the schema loads once the driver asks for it. The driver now sets `AllowDOCTYPE` on the schema-load path only, leaving external entities off. That recovered the schema test **and** the 12 instance tests the load failure had been suppressing: XSD 1.1 agree 41,519 → 41,532, disagree 39 → 38, with XSD 1.0 and the XPath, XQuery, XSLT 2.0 and XSLT 3.0 suites unchanged case for case. |
 | `indeterminate` cases | both | **Was ours — a harness scoring bug, now fixed.** `schZ012_a`, `schZ015`, `schG14`, `schA2.i`, `schA5.i`, `addC002`, `addB071`, `elemZ031` and, on 1.0 only, `particlesZ026` and `particlesZ026.v` carry `<expected validity="indeterminate"/>`; `schZ012_a`'s own annotation says "The WG decided the spec. is underspecified in this area, so implementations may reasonably differ," and `particlesZ026` records that the TSTF found its validity implementation-determined. `expectedValidity` in `tests/xsdsuite/main.go` read the attribute as `w == "valid"`, so `indeterminate` silently became "must be invalid" and our acceptance scored as a false accept. The driver now treats it as a third outcome, skips the case, and reports the count on its own `indeterminate` column. This removed **10** disagreements on 1.0 and **8** on 1.1 — the earlier estimate of 8 per version missed the two 1.0-only `particlesZ026` cases. Because the cases leave the denominator as well as the numerator, the agreeing counts fell by 6 per version (39,353 → 39,347 and 41,525 → 41,519) while the percentages rose; `tests/ratchet.txt` was lowered to match. |
 | `simple093` | 1.1 | **Not implementable — the suite contradicts itself.** Expected invalid; the schema unions `xs:QName` with `xs:NOTATION`, and Part 2 §3.2.19 does forbid NOTATION being "used directly in a schema", so the case is a correct reading. But `msData particlesZ007` declares a schema containing `<xsd:union memberTypes="xsd:NOTATION"/>` **valid**, and both carry `status="accepted"`. The rule was implemented and measured: 1.1 trades one for the other (agree 41,519 → 41,518) and 1.0 loses two outright (39,347 → 39,345), because particlesZ007 has a dependent instance test and simple093 is not run under 1.0 at all. Reverted; `xsd/facet_check.go` enforces §3.2.19 in the three places the suite is consistent about. |
 | `particlesZ033_g` | 1.1 | **Not implementable — magnitude is not what the family tests.** Expected invalid; the test's own note says "validates as xs:any if maxOccurs greater than 4096", which describes a 2006 vendor behaviour rather than a rule. No threshold can satisfy the family: sibling `particlesZ033_a` carries `maxOccurs="79228162514264337593543950335"` — 7.9×10²⁸, far larger than `_g`'s 45,678,363 — and is expected **valid**. What actually separates `_g` from the `_f` we correctly reject is that `_f`'s substitution-group member beside `<xsd:element ref='head'>` was replaced by a local element, removing the UPA conflict; accepting `_g` follows from getting UPA right. Where the WG did adjudicate implementation limits, in `elemZ031`, it resolved the expectation to `indeterminate` rather than invalid (bug 4059). |
@@ -503,13 +505,13 @@ child is itself repeating is decided wrongly in both directions, which no W3C
 case covers because they all use two or more distinct child names. A suite
 reaching its ceiling bounds what the suite asks, not what the code does.
 
-**XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,519 / 41,558 =
+**XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,532 / 41,570 =
 99.91%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
 on 1.1 have left both sides of the ratio; the driver prints their count so the
 denominator is legible rather than assumed. On 1.0 that is now also the ceiling
 — everything remaining is a suite defect or a `queried` disagreement. On 1.1
-`iri-001` and its 12 masked instance tests are still recoverable, which would
-give **41,532 / 41,558 = 99.94%**; that one depends on a harness change not yet
+`iri-001` and its 12 masked instance tests have since been recovered; they are
+in the figures above.
 made, so it is stated as attainable rather than measured.
 
 ---
@@ -603,7 +605,7 @@ is *why* the 99 unfixable cases are unfixable:
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
-| **Feature deliberately not implemented** | 1 | `streamable-141` needs the §19.8 streamability analysis. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours. |
+| **Feature deliberately not implemented** | 1 | `streamable-141` needs the §19.8 streamability analysis. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's output byte-for-byte. Saxon indents 3 spaces where this serializer writes 2, but the difference that actually fails the case is that Saxon adds no whitespace around a `<style>` holding significant text; Serialization 3.1 §5 permits both. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
@@ -683,7 +685,7 @@ the previous verdicts got wrong.
 | `validation-0201` | Implementation-defined | Neither | The catalog schema does license drivers to ignore serialization differences "capable of being produced by a conformant implementation", and that licence was pursued; it does not reach this case, whose outputs differ in *where* whitespace is added, not in its width. Serialization 3.1 §5 permits both placements, and the suite itself requires our placement elsewhere (`output-0106a`). |
 | `unparsed-text-2003` | Needs a network fetch | Out of scope | The suite has `available_documents` for exactly this and the harness already honours it; the sibling `unparsed-text-2002` declares it for the same URL and is skipped. |
 | `streamable-141` | Requires streamability analysis | Out of scope | The spec says a non-streaming processor "is not required to assess whether constructs are guaranteed-streamable". Its environment declares `source/@streaming`, which the harness does not read. |
-| `iri-001` | Suite defect (XSD 1.1) | Ours | It has no `<current>` element, so there was no status to cite. We reject a valid schema because the harness never sets `AllowDOCTYPE`; it also masks 12 instance tests. |
+| `iri-001` | Suite defect (XSD 1.1) | Harness — now fixed | It has no `<current>` element, so there was no status to cite. The engine was never at fault: `tests/xsdsuite` loaded every schema without `AllowDOCTYPE`, and the IRI/URI type library builds its RFC 3986/3987 patterns out of an internal DTD subset. Setting it on the schema-load path took XSD 1.1 from 41,519 to 41,532 agreeing — the schema test itself plus the 12 instance tests the load failure had been suppressing — with XSD 1.0 and all four XPath/XQuery/XSLT suites byte-identical. |
 | 8 `indeterminate` XSD cases per version | counted as disagreements | Harness | `expectedValidity` collapses `indeterminate` to "must be invalid". The WG's own annotation says implementations may reasonably differ. |
 
 **Verdicts whose outcome stands but whose reasoning was wrong.**
