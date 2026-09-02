@@ -536,7 +536,17 @@ func (s *serializer) node(n *xdm.Node, depth int) {
 		if n.Value != "" {
 			s.writeString(" " + n.Value)
 		}
-		s.writeString("?>")
+		// The html method closes a processing instruction with ">" alone,
+		// which is the same rule the SERE0015 check above is written for: if
+		// ">" ends the instruction then that is also how it must be ended.
+		// Writing XML's "?>" left an extra "?" in the output, which
+		// Serialization-html-48, -58 and -59 catch. XHTML is XML and keeps
+		// "?>", as does every other method.
+		if s.html && !s.xhtml {
+			s.writeString(">")
+		} else {
+			s.writeString("?>")
+		}
 
 	case xdm.KindAttribute, xdm.KindNamespace:
 		// An attribute or namespace node reaching the top level of a result
@@ -646,15 +656,29 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 		(s.opts.IncludeContentType == nil || *s.opts.IncludeContentType)
 
 	if len(n.Children) == 0 && !emptyHead {
+		// htmlNativeElement rather than s.html: an element in a namespace of
+		// its own is an XML island, and Serialization 3.1 §9 has the html
+		// method write foreign content with XML syntax. The self-closing
+		// spelling is part of that -- an HTML parser meeting <magic/> inside
+		// an island reads it as XML, which is the point of the island.
+		// Serialization-html-5 and -6 embed <magic xmlns="..."/> and ask to
+		// see it come back self-closed; writing "<magic></magic>" for it
+		// applied HTML's rule to markup HTML was never going to parse.
 		if s.html && !s.xhtml {
-			// HTML has no self-closing syntax. A void element takes no end
-			// tag; every other empty element takes an explicit one, because
-			// "<div/>" is parsed by HTML parsers as an unclosed "<div>".
-			if s.isVoidElement(n.Name.Local) {
-				s.writeString(">")
-			} else {
-				s.writeString("></" + name + ">")
+			if !s.htmlIsland(n) {
+				// HTML has no self-closing syntax. A void element takes no
+				// end tag; every other empty element takes an explicit one,
+				// because "<div/>" is parsed by HTML parsers as an unclosed
+				// "<div>".
+				if s.isVoidElement(n.Name.Local) {
+					s.writeString(">")
+				} else {
+					s.writeString("></" + name + ">")
+				}
+				return
 			}
+			// An island is XML, and XML self-closes an empty element.
+			s.writeString("/>")
 			return
 		}
 		if s.xhtml {
@@ -900,6 +924,24 @@ func (s *serializer) indent(depth int) {
 // -0138 ask for one around XHTML's own <example> and <h1>.
 func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
 	return s.html && !s.xhtml && n.Name.URI == ""
+}
+
+// htmlIsland reports whether the html method must write n with XML syntax
+// rather than HTML's.
+//
+// Serialization 3.1 §9 has the html method treat an element in a namespace
+// that is neither absent nor XHTML's as foreign content -- an "XML island" --
+// and write it as XML. The distinction matters for the one place the two
+// syntaxes disagree about an empty element: HTML has no self-closing form, so
+// a native <spin> is written "<spin></spin>", while an island's <magic/> keeps
+// the XML spelling a reader of the island expects. Serialization-html-5 and
+// -6 embed <magic xmlns="http://example.org/magic"/> and ask for the
+// self-closed form; -4 and -8 write XHTML-namespace elements and ask for the
+// HTML one, which is why the XHTML namespace counts as native here and not
+// as an island.
+func (s *serializer) htmlIsland(n *xdm.Node) bool {
+	return s.html && !s.xhtml &&
+		n.Name.URI != "" && n.Name.URI != nsXHTML
 }
 
 func (s *serializer) suppressed(n *xdm.Node) bool {
