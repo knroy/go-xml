@@ -1,6 +1,7 @@
 package xquery
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -81,14 +82,54 @@ func (p *parser) parseOperandSubst() ([]node, bool, error) {
 	// nothing left to lift; substituteOperands scans to the end, so it does.
 	c, err := p.compileExpr(rewritten)
 	if err != nil {
-		// The rewrite is only worth attempting; where it produces something
-		// xpath still cannot read, the caller's own error is the better one,
-		// because it names the construct rather than a variable this package
-		// invented.
+		// A static error about a name the query itself wrote survives the
+		// rewrite and is the better diagnosis. The substitution replaces only
+		// the XQuery-only primaries; every type name, prefix and schema
+		// reference around them is copied through byte for byte, so a
+		// complaint about one of those describes the user's own text and not
+		// anything this package invented.
+		//
+		// "<a/> instance of element(*, test:unknownType)" is XPST0008 —
+		// the name denotes no type in the in-scope schema definitions
+		// (misc-StaticContext/static-context-1). Swallowing it left the
+		// caller reporting XPST0003 against the "instance" keyword, which
+		// blames the one part of the expression that was well formed.
+		if isSubstitutionSafeError(err) {
+			return nil, false, err
+		}
+		// Any other failure may be an artifact of the rewrite rather than a
+		// fault in the source, so the caller's own error is the better one:
+		// it names the construct that stopped it.
 		return nil, false, nil
 	}
 	p.pos = len(p.src)
 	return []node{&operandExpr{ops: ops, rest: c}}, true, nil
+}
+
+// isSubstitutionSafeError reports whether a compile error from the rewritten
+// source describes the original query rather than the rewrite.
+//
+// The operand substitution lifts XQuery-only primaries to variables and
+// leaves everything else untouched, so the errors that can only come from the
+// untouched part are safe to report as they stand. All three are about a name
+// written in type position: XPST0008 for a name that denotes no type in the
+// in-scope schema definitions, XPST0051 for a name that is in scope as no
+// item type, and XPST0081 for a prefix that is bound to nothing.
+//
+// XPST0003 is deliberately absent. A grammar error is exactly the failure the
+// rewrite can cause on its own — a lifted span that was not self-contained
+// leaves source xpath cannot read — so there it is the caller, which still
+// has the original text in view, that gives the better message.
+func isSubstitutionSafeError(err error) bool {
+	var e *xdm.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Code {
+	case "XPST0008", "XPST0051", "XPST0081":
+		return true
+	}
+	return false
 }
 
 // substituteOperands scans src for XQuery-only primaries, parsing each and
