@@ -21,6 +21,7 @@ func jsonParams(opts OutputSettings, charMap map[rune]string) xpath.SerializePar
 		AllowDuplicateNames:  opts.AllowDuplicateNames,
 		JSONNodeOutputMethod: opts.JSONNodeOutputMethod,
 		CharMap:              charMap,
+		Normalize:            normalizerFor(opts.NormalizationForm),
 		Encoding:             opts.Encoding,
 	}
 	if opts.ItemSeparator != nil {
@@ -62,6 +63,16 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 			// a QName compares as a whole struct, and the prefix a result
 			// element happens to carry is not part of its identity.
 			s.noIndentElems[xdm.QName{URI: q.URI, Local: q.Local}] = true
+			// The html method's case-insensitive lookup in suppressed() asks
+			// for the lower-cased name, so a parameter written in any case
+			// has that spelling in the set too. Only for a name in no
+			// namespace: an HTML element has none, and lower-casing a
+			// namespaced one would answer for a vocabulary whose names are
+			// case-sensitive.
+			if q.URI == "" {
+				s.noIndentElems[xdm.QName{
+					Local: strings.ToLower(q.Local)}] = true
+			}
 		}
 	}
 	if len(opts.CDataElements) > 0 {
@@ -106,15 +117,17 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if err != nil {
 			return err
 		}
-		// Unicode normalisation is the last step of the pipeline for every
-		// method, this one included (Serialization 3.1 §7). It is applied to
-		// the finished text rather than to each string as it is written,
-		// because a form like NFC composes across a boundary: a base
-		// character at the end of one value and a combining mark at the
-		// start of the next are one character after normalisation, and
-		// normalising them apart would leave them two. JSON's own escapes
-		// are all ASCII and no normalisation form touches those.
-		s.writeString(s.normalized(out))
+		// Unicode normalisation has already been applied, inside each JSON
+		// string, by the code that applies the character map there. It has to
+		// happen at that depth rather than to the finished document: a
+		// character map's replacement string is exempt from normalisation,
+		// and there is no way to tell a replacement from ordinary text once
+		// the two have been concatenated. Serialization-json-35 maps "z" to
+		// a decomposed "c"+cedilla under normalization-form="NFC" and asks
+		// for the decomposed spelling back. The structural characters
+		// between the strings -- braces, commas, digits -- are ASCII, which
+		// no normalisation form touches.
+		s.writeString(out)
 		return s.err
 	case "adaptive":
 		out, err := xpath.SerializeAdaptive(seq, jsonParams(opts, charMap))
@@ -969,16 +982,36 @@ func (s *serializer) htmlNativeElement(n *xdm.Node) bool {
 // the XML spelling a reader of the island expects. Serialization-html-5 and
 // -6 embed <magic xmlns="http://example.org/magic"/> and ask for the
 // self-closed form; -4 and -8 write XHTML-namespace elements and ask for the
-// HTML one, which is why the XHTML namespace counts as native here and not
-// as an island.
+// HTML one, which is why the XHTML namespace does not count as an island.
+//
+// That last exemption holds only for HTML5, and for the same reason
+// htmlNativeElement gives: HTML5 absorbed XHTML's namespace, while HTML 4 did
+// not know it. So under version="4.0" an XHTML-namespace element is foreign
+// after all, and Serialization-html-3 -- the same list of empty elements as
+// html-4, differing only in asking for 4.0 -- wants every one of them written
+// as the self-closed XML the island rule produces, where html-4 at 5.0 wants
+// the bare HTML start tag.
 func (s *serializer) htmlIsland(n *xdm.Node) bool {
-	return s.html && !s.xhtml &&
-		n.Name.URI != "" && n.Name.URI != nsXHTML
+	return s.html && !s.xhtml && n.Name.URI != "" &&
+		!(s.html5 && n.Name.URI == nsXHTML)
 }
 
 func (s *serializer) suppressed(n *xdm.Node) bool {
 	if s.noIndentElems[xdm.QName{URI: n.Name.URI, Local: n.Name.Local}] {
 		return true
+	}
+	// The html method matches an element name without regard to case, here as
+	// everywhere else it recognises one: HTML's own names are
+	// case-insensitive, and a serialiser that took "TABLE" in
+	// suppress-indentation to name something other than <table> would be
+	// reading the parameter by XML's rules inside the one method that is not
+	// XML. Serialization-html-56 writes the parameter in upper case and the
+	// element in lower. XHTML is XML, where the two are different names.
+	if s.html && !s.xhtml && n.Name.URI == "" {
+		if s.noIndentElems[xdm.QName{
+			Local: strings.ToLower(n.Name.Local)}] {
+			return true
+		}
 	}
 	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
 		return true
@@ -1311,12 +1344,23 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 		// cannot hold — element text goes through representable() and comes
 		// out as "&#776;", while the same character in an attribute did not.
 		// normalize-unicode-017/018 are exactly that asymmetry.
-		if len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() {
+		switch {
+		case s.rawText:
+			// Inside <script> and <style> nothing is escaped, and that
+			// includes the attributes of any element the content happens to
+			// contain: the whole element is CDATA to an HTML parser, which
+			// will never read those characters as markup in the first place,
+			// so an entity reference written there is the literal text of one
+			// rather than the character it names. Serialization-html-9 puts
+			// <p class="Bill&amp;Ben"/> inside a <script> and asks to read
+			// back "Bill&Ben" -- while the script element's own
+			// language="Jack&amp;Jill", written before the raw content
+			// begins, keeps its escape.
+			sb.WriteString(run)
+		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll():
 			sb.WriteString(escapeAttr(run))
-		} else {
-			for _, r := range run {
-				sb.WriteString(s.escapeAttrRune(r))
-			}
+		default:
+			s.writeAttrRuns(&sb, run)
 		}
 		if seg.has {
 			sb.WriteString(seg.repl)
@@ -1324,6 +1368,30 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 		}
 	}
 	return sb.String(), mapped
+}
+
+// writeAttrRuns escapes an attribute value a character at a time, with the
+// one place the html method needs to see two.
+//
+// Serialization 3.1 section 9.5: "if the character is an ampersand and the
+// following character is a left curly brace, the ampersand is output
+// unescaped". The convention predates the specification -- an attribute value
+// of "&{expression};" was Netscape's way of computing an attribute at parse
+// time, and escaping the ampersand turns a macro into the literal text of
+// one. Serialization-html-11 writes class="&{entspannend}" and asks to read
+// exactly that back.
+//
+// The rule is the html method's alone. XHTML is XML, where a bare ampersand
+// is not well formed whatever follows it.
+func (s *serializer) writeAttrRuns(sb *strings.Builder, run string) {
+	for i, r := range run {
+		if r == '&' && s.html && !s.xhtml &&
+			i+1 < len(run) && run[i+1] == '{' {
+			sb.WriteByte('&')
+			continue
+		}
+		sb.WriteString(s.escapeAttrRune(r))
+	}
 }
 
 // escapeAttrRunes escapes a whole attribute value one character at a time,
