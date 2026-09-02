@@ -560,6 +560,21 @@ func (p *parser) parseExprItem() (node, error) {
 				p.pos = end + 1
 				continue
 			}
+			// [105] Pragma ::= "(#" S? EQName (S PragmaContents)? "#)", whose
+			// PragmaContents is "(Char* - (Char* '#)' Char*))" -- arbitrary
+			// text that no rule parses. So a quote, a bracket or a comma in a
+			// pragma is an ordinary character, and the whole pragma has to be
+			// stepped over rather than scanned. Without this the quote of
+			// "1 eq (#p:x \" #) {1}" opened a literal that ran to the end of
+			// the query and was reported here as unterminated.
+			if p.pos+1 < len(p.src) && p.src[p.pos+1] == '#' {
+				j := strings.Index(p.src[p.pos+2:], "#)")
+				if j < 0 {
+					return nil, p.errorf("XPST0003: unterminated pragma")
+				}
+				p.pos += 2 + j + 2
+				continue
+			}
 			depth++
 		case ')', ']', '}':
 			if depth == 0 {

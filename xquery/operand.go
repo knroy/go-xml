@@ -264,6 +264,14 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// XPath has no backtick, so "``[" can only be one wherever it stands.
 		return strings.HasPrefix(src[i:], "``[")
 	}
+	if strings.HasPrefix(src[i:], "(#") {
+		// [104] ExtensionExpr ::= Pragma+ EnclosedExpr, a PrimaryExpr. XPath
+		// has no pragma, so "(#" can only be one, and lifting it out is what
+		// keeps its contents away from the operator scan: PragmaContents is
+		// unparsed text, and a quote in it is an ordinary character rather
+		// than the start of a literal.
+		return true
+	}
 	if src[i] == '<' {
 		return startsMarkup(src, i, prev)
 	}

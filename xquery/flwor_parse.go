@@ -907,6 +907,22 @@ func needsXQueryParser(src string) bool {
 					return false
 				}
 				i = end
+				continue
+			}
+			// [104] ExtensionExpr ::= Pragma+ EnclosedExpr
+			// [105] Pragma        ::= "(#" S? EQName (S PragmaContents)? "#)"
+			//
+			// XPath's grammar has no pragma at all, so "(#" settles it the way
+			// "``[" does, and answering here also stops the scan before the
+			// contents. PragmaContents is "(Char* - (Char* '#)' Char*))" --
+			// arbitrary text that is never parsed, so a quote or a bracket in
+			// it is an ordinary character. Falling through to the scan below
+			// let the quote of "1 eq (#p:x \" #) {1}" open a string literal
+			// that never closed, so the scan gave up and sent the expression
+			// to xpath, which cannot read a pragma, to be refused there as an
+			// unterminated string.
+			if i+1 < len(src) && src[i+1] == '#' {
+				return true
 			}
 		case '`':
 			// [177] StringConstructor. Two backticks and a bracket are not
