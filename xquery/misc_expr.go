@@ -32,12 +32,18 @@ func (p *parser) parseOrderedUnordered() (node, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	// [136] and [137] write the operand as "{ Expr }" with Expr required, so
-	// "ordered {}" is a syntax error rather than the empty sequence.
-	if body.expr == nil && body.items == nil {
-		return nil, true, p.errorAt(save,
-			"XPST0003: %q needs an expression", kw)
-	}
+	// The operand is an EnclosedExpr, not a braced Expr:
+	//
+	//	[136] OrderedExpr   ::= "ordered" EnclosedExpr
+	//	[137] UnorderedExpr ::= "unordered" EnclosedExpr
+	//	[5]   EnclosedExpr  ::= "{" Expr? "}"
+	//
+	// XQuery 1.0 wrote both operands as "{" Expr "}" with Expr required; 3.1
+	// routes them through EnclosedExpr, whose Expr is optional. So "ordered{}"
+	// is well-formed and its value is the empty sequence — the operand is
+	// absent, and both keywords return their operand's value unchanged.
+	// K-OrderExpr-1a and -2a assert exactly that, under an XQ31+ dependency
+	// and citing the bug that made the change.
 	return body, true, nil
 }
 
