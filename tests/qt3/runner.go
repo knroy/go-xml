@@ -2106,6 +2106,7 @@ func splitAttrs(s string) ([]string, bool) {
 
 func normalizeXML(s string) string {
 	s = strings.ReplaceAll(s, " />", "/>")
+	s = foldEmptyPIs(s)
 	// Rewrite every empty-element tag to the long form, so the two spellings
 	// meet in the middle. The name ends at the first space or slash.
 	var sb strings.Builder
@@ -2134,6 +2135,53 @@ func normalizeXML(s string) string {
 		i += end + 1
 	}
 	return collapseWS(sb.String())
+}
+
+// foldEmptyPIs rewrites a processing instruction with no data to the single
+// spelling "<?target?>", so that the two ways of writing one compare equal.
+//
+// XML 1.0 section 2.6 --
+//
+//	PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
+//
+// -- makes the space part of the data's delimiter, so it is present only when
+// there is data: "<?y?>" and "<?y ?>" are the same processing instruction with
+// no data, differing only in a separator that delimits nothing. The suite's
+// hand-written assert-xml values use both spellings -- K2-FilterExpr-7 writes
+// "<?y?>" while Constr-comppi-empty-1 writes "<?pi ?>" -- and neither is a
+// difference in the document, so both sides are folded to the short form
+// before they are compared.
+//
+// Only an all-whitespace data part is folded. A PI whose data is genuinely
+// empty and one whose data is a space are the same node here because the
+// serialiser above writes the separator unconditionally, which is the reason
+// the two spellings need reconciling at all.
+func foldEmptyPIs(s string) string {
+	var sb strings.Builder
+	for i := 0; i < len(s); {
+		if !strings.HasPrefix(s[i:], "<?") {
+			sb.WriteByte(s[i])
+			i++
+			continue
+		}
+		end := strings.Index(s[i:], "?>")
+		if end < 0 {
+			sb.WriteString(s[i:])
+			break
+		}
+		inner := s[i+2 : i+end]
+		i += end + 2
+		// The target ends at the first whitespace; what follows is the data.
+		// An XML declaration is not a processing instruction in the data
+		// model, and its pseudo-attributes are never empty, so it falls
+		// through the trim below unchanged.
+		if j := strings.IndexAny(inner, " \t\n\r"); j >= 0 &&
+			strings.TrimSpace(inner[j:]) == "" {
+			inner = inner[:j]
+		}
+		sb.WriteString("<?" + inner + "?>")
+	}
+	return sb.String()
 }
 
 // writeNodeXMLTop writes n as a standalone result, declaring the namespaces in
