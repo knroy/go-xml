@@ -287,15 +287,27 @@ func xpathVersion(v TargetVersion) xpath.Version {
 // failure. This is the same pairing the exact "XP20" and "XP30" values below
 // mark between XPath versions, one language apart instead of one version.
 //
-// Only a case naming no "XQ" alternative is dropped. The 300-odd cases marked
-// "XP20+ XQ10+" and the like are in scope as before: naming both is the
-// suite's way of saying the two languages agree.
+// A case naming no "XQ" alternative is dropped, and so is one whose only XQ
+// alternatives are the exact "XQ10" or "XQ30" — the version pairing described
+// at the switch below, which is the same idiom one version apart rather than
+// one language apart. The 300-odd cases marked "XP20+ XQ10+" and the like are
+// in scope as before: naming both is the suite's way of saying the two
+// languages agree.
 
 func specInScope(v string, target TargetVersion) bool {
 	if target == XQuery31 {
 		for _, alt := range strings.Fields(v) {
 			switch alt {
-			case "XQ10", "XQ10+", "XQ30", "XQ30+", "XQ31", "XQ31+":
+			// Exact "XQ10" and "XQ30" are excluded for the same reason exact
+			// "XP20" and "XP30" are below: they mark a reading a later version
+			// changed, and the suite pairs them with a case asserting the new
+			// answer over identical source. K-InternalVariablesWith-6a is
+			// "XQ10" and wants XPST0008 for a forward reference between
+			// globals; -6b is "XQ30+", is the same query character for
+			// character, and wants it to succeed, because 3.0 legalised it.
+			// Running the 1.0 case against a 3.1 processor asserts the
+			// superseded answer and cannot pass.
+			case "XQ10+", "XQ30+", "XQ31", "XQ31+":
 				return true
 			}
 		}
