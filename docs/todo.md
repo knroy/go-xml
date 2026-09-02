@@ -12,9 +12,9 @@ Current position:
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,244 of 19,244 in scope |
 | XPath 3.1 | 100.00% — 21,786 of 21,786 in scope (0 failing) |
-| XQuery 3.1 | 99.98% — 29,796 of 29,803 in scope (7 failing) |
-| XSLT 2.0 | 99.85% — 6,149 of 6,158 in scope (9 failing) |
-| XSLT 3.0 | 99.79% — 8,608 of 8,626 in scope (18 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
+| XQuery 3.1 | 99.99% — 29,800 of 29,803 in scope (3 failing) |
+| XSLT 2.0 | 99.87% — 6,149 of 6,157 in scope (8 failing) |
+| XSLT 3.0 | 99.83% — 8,610 of 8,625 in scope (15 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
 | Tests | 1,070, clean under `-race` |

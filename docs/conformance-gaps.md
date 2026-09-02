@@ -14,13 +14,13 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,797 | 99.98% | **6** | 0 | 3 | **3** | 99.99% |
+| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 2 | 1 | **5** | 99.90% |
-| **xslt** | W3C XSLT 3.0 | 8,625 | 8,609 | 99.81% | **16** | 3 | 1 | **12** | 99.85% |
+| **xslt** | W3C XSLT 3.0 | 8,625 | 8,610 | 99.83% | **15** | 2 | 1 | **12** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,558 | 41,519 | 99.91% | **39** | 1 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **110** | **6** | **5** | **99** | |
+| | **Total** | | | | **106** | **5** | **2** | **99** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -46,7 +46,7 @@ reflects that.
 > unchanged, and where the audit could not settle a case it says so rather than
 > moving it to a flattering bucket.
 
-**99 disagreements are triaged as unfixable.** Six are work: engine
+**99 disagreements are triaged as unfixable.** Five are work: engine
 defects, harness defects, or cases the suite already declares out of scope and
 the harness does not read. Seven are open questions, settled neither way.
 
@@ -62,18 +62,31 @@ move the denominator or the scoring. They are counted together here because all
 three are work, but they are not the same claim and are labelled individually
 below.
 
-**XQuery's remaining 7**, all of them read:
+**XQuery's remaining 3**, all of them read:
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `app-Demos/sudoku`, `RexParser` | **Open** | `scanExprSingleSource` stops at the `let` in `if (…) then let $i as xs:integer := 1 return $i else ()`, so the XQuery-only detector never sees it and the typed `let` is never parsed. A `prevWord` guard fixed every reproducer but measured 0 gains against 2-5 regressions, `prod-AxisStep/Axes089` among them -- the case `parseIf`'s own comment documents. Needs more than the scan fix. |
-| `K2-BaseURIProlog-4`, `-5` | **Open** | Seeding the compile-time base URI fixed these and broke five others (`base-URI-12/14/23/24`, `K2-BaseURIFunc-30`). Requires separating "the base a prolog declaration resolves against" from "the base the query runs under", which the compiler does not distinguish. |
-| `same-key-023` | **Not implementable here** | 421,875 keys through O(n) map operations. The query consumes each intermediate map immediately, but the engine cannot know that without escape analysis; a persistent map (HAMT or copy-on-write) is the real answer, not a constant-factor change. |
-| `eqname-007` | **Not implementable** | Wants `FODF1280` not to be raised for a prefix that is genuinely unbound at the point the decimal format is named. |
-| `K2-sequenceExprTypeswitch-5` | **Not implementable** | Wants a static `XPST0008` for a variable named in an unreached `typeswitch` branch. Scoping resolves at evaluation time here, so an unreached branch is never examined; `checkBodyVars` documents why a partial static scope pass rejects valid queries. |
+| `app-Demos/RexParser` | **Not implementable here** | The sibling `sudoku` was fixed by making a FLWOR in a conditional branch belong to that branch; this one still fails to parse at offset 0 for a different reason in the same family, and is a large real-world query rather than a targeted case. |
+| `same-key-023` | **Not implementable here** | 421,875 keys through O(n) `map:put` and `map:remove`. Measured rather than estimated: per-key cost scales linearly with map size (66µs at n=1,000 to 1.28ms at n=40,000), so the whole case extrapolates to 1.5–2 hours — four to five orders of magnitude from the deadline, which no constant-factor work reaches. A persistent map would fix it, but `MapItem` has 58 references across 15 files and its entries order is load-bearing for serialization stability, which a HAMT does not preserve. `same-key-024` covers the same semantics at 11,250 keys and passes. |
+| `K2-sequenceExprTypeswitch-5` | **Not implementable without a parser change** | Wants a static `XPST0008` for a variable named in an unreached `typeswitch` branch. A check restricted to sibling-clause variables was built and passed eleven tests, then broke `K2-ForExprWithout-8`, where a `default $d return ()` sits inside a `for` clause binding `$d`: a sibling's name may be shadowed by an outer binding, so seeing it free proves nothing. The counts stayed net-neutral, and only the case-list diff caught it. A sound check needs the parser to track in-scope variables, which it does not do today. |
 
-**XQuery 3.1 ceiling: 29,799 / 29,803 = 99.99%**, the 29,796 that pass now plus
-the three open questions.
+Three left this list. `sudoku` went when a FLWOR in a conditional branch was
+made to belong to that branch — an earlier attempt had guarded on the
+preceding word and measured 0 gains against 2-5 regressions, where tracking
+the nesting costs nothing. `K2-BaseURIProlog-4` and `-5` went when a *relative*
+base-URI declaration was resolved and an absolute one taken verbatim: the five
+cases a previous attempt broke declare absolute URIs containing a quote, `#`
+or a trailing space, which `url.ResolveReference` was re-encoding. The
+`staticContext.declBase` field the fix needed already existed and was never
+read or written.
+
+`eqname-007` went, and the verdict recorded here was wrong: it said the prefix
+was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on the
+enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
+of its content. The suite was right and this engine was not.
+
+**XQuery 3.1 ceiling: 29,800 / 29,803 = 99.99%** — what passes now. Nothing is
+left that is both fixable and worth the change.
 
 The XSD split is taken largely from the suite's own `status` field rather than
 from judgement: `accepted` marks a settled expectation and `queried` marks one
@@ -201,13 +214,13 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 27 failures across the two targets
+# xslt — 23 failures across the two targets
 
-Nine at the 2.0 target and eighteen at the 3.0 target. Four cases fail at both —
-`import-schema-137`, `validation-0201`, `unparsed-text-2003` and `docbook-001` —
-so the distinct case count is twenty-three. (This heading read "28" before the
-audit, which was the figure before `strip-space-009` was found missing from the
-3.0 list, and "29" before `xsl:assert` cleared `catalog-006b`.)
+Eight at the 2.0 target and fifteen at the 3.0 target. Three cases fail at
+both — `import-schema-137`, `validation-0201` and `docbook-001` — so the
+distinct case count is twenty. (This heading has read 29, 28 and 27 in turn as
+`xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009` missing
+from the 3.0 list, and `unparsed-text-2003` left the denominator.)
 
 ## XSLT 2.0 — 9 failures
 
@@ -260,7 +273,7 @@ among the four vendored specs, so the 4e conclusion rests on F&O §5.6.1's
 wholesale delegation to it plus the fingerprint in the test data, rather than on
 Appendix F's own words.
 
-## XSLT 3.0 — 18 failures
+## XSLT 3.0 — 15 failures
 
 ### Deliberate divergence — 1
 
@@ -295,48 +308,58 @@ them separate, and `override-t-003a` is the case.
 | `validation-0006` | **Not implementable** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. XTTE1555 is scoped by its own text to "when validating a **document node**", and a parentless attribute is not one; XTTE1540, which covers the `type` attribute, is what the case actually meets. The stylesheet says so itself: "a contrived example to force **Saxon** down a particular code path". |
 | `validation-0201` | **Fixable in the harness** | The expected `schvalid001.out` is Saxon's output byte-for-byte, indenting 3 spaces then 6 where this serializer writes 2, and widening our indent to match would only hard-code another processor's house style — that much of the old row stands. What it missed is that the suite **authorises the harness to ignore exactly this**. `admin/catalog-schema.xsd`, documenting `assert-serialization`: "In principle, the serialization must match exactly. **Test drivers are free to ignore differences in the serialization that are known to be irrelevant (that is, capable of being produced by a conformant implementation.)** This assertion should not be used except where the purpose of the test is to test the serializer." This case's purpose is schema-aware processing, not serialization. Normalising inter-element indentation when comparing an `assert-serialization` result is licensed by the suite, touches no engine code, and is not the measured serializer change that scored zero. |
 
-### Deliberately out of scope — 4
+### Deliberately out of scope — 2
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,646 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
-| `docbook-001` | **Not implementable** | EXSLT `exsl:document`, as above. |
-| `docbook-004` | **Fixed** | *Not* an EXSLT case, though it was filed as one on the strength of its neighbour's name. Its stylesheet is five lines with no extension element at all: it extracts part of a document with `xsl:source-document` and an `xml:id` fragment identifier. The resolver strips the fragment before the filesystem sees it, and nothing applied it afterwards, so the whole document came back. `xslt/sourcedoc.go` now resolves the bare-name fragment. See *Corrections from the audit*. |
-| `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
+| `streamable-141` | **Not implementable** | Requires the §19.8 streamability analysis. Streaming is not implemented — 2,646 cases are skipped as out of scope, and 92% of them pass anyway; see *The streaming row* below. Carrying the set's unsupported feature down onto the one case that declares a feature of its own was built and measured at −4 on the 2.0 target and −177 on 3.0, so the gate stays as it is. |
+| `docbook-001` | **Not implementable** | EXSLT `exsl:document`, 19 times in `chunker.xsl` alone. |
 
-### Long tail — 3
+Two left this list. `docbook-004` was never an EXSLT case — it was filed as one
+on the strength of its neighbour's name, and its stylesheet is five lines with
+no extension element, testing `xsl:source-document` with an `xml:id` fragment
+identifier. The fragment was being dropped, so the whole document came back
+where a section was wanted. `package-version-011` went when the static phase
+was given the module resolver: §9.7 makes available documents
+implementation-defined at 3.0 where 2.0's §3.13 fixes them at none, and Saxon
+9.8 passes the case.
+
+### Long tail — 2
 
 Rounds two and three cleared the rest, and `catalog-005b`,
-`type-available-0151` and `catalog-006b` have since joined them. What is left
-shares no cause, so each is its own investigation.
+`type-available-0151`, `catalog-006b` and `unparsed-text-2003` have since
+joined them — the last of those by leaving the denominator rather than the
+failures, since it reads a URL its own neighbour declares a dependency for and
+it does not. What is left shares no cause, so each is its own investigation.
 
 | Case | Verdict | Note |
 |---|---|---|
 | `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. |
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file when the audit found it.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
-| `unparsed-text-2003` | **Out of scope — suite defect** | Not "the catalog assumes live internet". The suite has a purpose-built dependency for this, and the harness already honours it: `available_documents`, documented as "the test is dependent on the availability of external documents that are not part of the test suite, for example pages on the W3C web site", is listed in `tests/xslts/deps.go` among the dependencies that put a case out of scope. **`unparsed-text-2002`, the case immediately above `2003` in the same file and needing the same URL, declares `<available_documents value="https://www.w3.org/Consortium/mission.html"/>` and is correctly skipped.** `2003` declares only `<spec value="XSLT20+"/>`. One missing attribute, exactly the shape of the `accumulator-038`/`-039` omission accepted as a suite defect above. The case belongs out of the denominator, not in the failure list. |
 
-**XSLT 3.0 ceiling: 8,608 / 8,626 = 99.79%** — what passes now. `base-uri-052`
+**XSLT 3.0 ceiling: 8,610 / 8,625 = 99.83%** — what passes now. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
 are settled above as not implementable, so no headroom is left against this
-suite. The eighteen that cannot be fixed: `accept-913`, `package-200`,
-`use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
-`unparsed-text-2003`, `streamable-141`, `docbook-001`,
-`docbook-004`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
+suite. The fifteen that cannot be fixed: `accept-913`, `package-200`,
+`use-package-003`, `package-021err`, `package-022err`, `streamable-141`,
+`docbook-001`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
 and `evaluate-045` (the last given up deliberately; see *Deliberate
 divergence* above).
 
-Four entries left this list as the features behind them landed. `base-uri-052`
-went with XInclude, as above. `catalog-006b` went with `xsl:assert`: it reports
-every XSLT element the processor recognises, so an absent one was visible in
-it. The three `regex-syntax` ambiguous-dash cases went when `XSD_1.1` was
-scoped to the version being measured rather than to the engine, and
-`catalog-005b` and `type-available-0151` with them. `strip-space-009` is the
-one addition, having been counted in the prose here but omitted from the list
+Seven entries left this list as the work behind them landed. `base-uri-052`
+went with XInclude. `catalog-006b` went with `xsl:assert`: it reports every
+XSLT element the processor recognises, so an absent one was visible in it. The
+three `regex-syntax` ambiguous-dash cases went when `XSD_1.1` was scoped to the
+version being measured rather than to the engine, and `catalog-005b` and
+`type-available-0151` with them. `package-version-011` went when the static
+phase was given the module resolver, `docbook-004` when the fragment on an
+`xsl:source-document` href stopped being dropped, and `unparsed-text-2003` by
+leaving the denominator. `strip-space-009` is the one addition, having been
+counted in the prose here but omitted from the list
 until the audit found it.
 
 ---

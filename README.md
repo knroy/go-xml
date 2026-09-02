@@ -90,9 +90,9 @@ Requires Go 1.26 or later.
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,244 of 19,244 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.98% of the W3C QT3 suite (29,796 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
-| **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.79% of the W3C XSLT suite filtered to 3.0 (8,608 of 8,626 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XQuery 3.1** | 99.99% of the W3C QT3 suite (29,800 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
+| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 99.83% of the W3C XSLT suite filtered to 3.0 (8,610 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
 | **XSD 1.1** | 99.90% instance (26,177 of 26,204); **99.92%** schema-validity (15,342 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -122,10 +122,10 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.79%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.83%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
-   now 5 of 18, all five documented as unreachable rather than outstanding.
+   now 5 of 15, all five documented as unreachable rather than outstanding.
    What is left is a long tail of one or two cases across thirty test sets,
    which is harder to summarise but easier to live with — no single feature is
    systematically weak. The corpus differential against Saxon remains stronger
@@ -879,7 +879,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 8,608 is not 8,609. Saxon
+case the engine gives up on purpose, and the reason 8,610 is not 8,611. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call
