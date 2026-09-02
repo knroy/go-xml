@@ -851,6 +851,18 @@ func (s *serializer) element(n *xdm.Node, depth int) {
 	// point is that the content comes out as it went in, and re-indenting a
 	// grandchild disturbs it exactly as much as re-indenting a child.
 	indentChildren := s.opts.Indent && !hasTextChild(n) && !s.suppressed(n)
+	// The html method adds no whitespace before or after a comment or a
+	// processing instruction, which is what Serialization-html-48 is titled.
+	// The reason is that neither is markup an HTML parser skips over on its
+	// way to the content: the characters around them are part of the
+	// element's text, so a newline the serialiser inserts there is a newline
+	// the document did not have. html-48 catches the case where the element
+	// also holds text, which hasTextChild already suppresses; -58 and -59
+	// hold nothing but the instruction -- "<p><?pi data></p>" -- and need the
+	// rule stated for its own sake.
+	if indentChildren && s.html && !s.xhtml && hasCommentOrPIChild(n) {
+		indentChildren = false
+	}
 	for _, c := range n.Children {
 		if indentChildren {
 			s.node(c, depth+1)
@@ -1015,6 +1027,18 @@ func (s *serializer) suppressed(n *xdm.Node) bool {
 	}
 	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
 		return true
+	}
+	return false
+}
+
+// hasCommentOrPIChild reports whether any child of n is a comment or a
+// processing instruction, which the html method will not put whitespace
+// beside.
+func hasCommentOrPIChild(n *xdm.Node) bool {
+	for _, c := range n.Children {
+		if c.Kind == xdm.KindComment || c.Kind == xdm.KindPI {
+			return true
+		}
 	}
 	return false
 }
