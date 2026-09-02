@@ -214,12 +214,24 @@ func (l *Lexer) next() (Token, error) {
 			return Token{Kind: TokOp, Val: "*", Pos: start}, nil
 		}
 		l.pos++
-		// *:local is a wildcard with a fixed local name.
-		if l.pos < len(l.src) && l.src[l.pos] == ':' {
+		// *:local is a wildcard with a fixed local name. Like a QName, it is
+		// a single terminal -- XPath 3.1 A.2.1 gives Wildcard as
+		//
+		//   Wildcard ::= "*" | (NCName ":*") | ("*:" NCName) | (BracedURILiteral "*")
+		//
+		// -- so "*:" with no NCName after it is not a wildcard at all, and
+		// the scan backs up to leave the ':' for the parser. That is what
+		// makes "map{*:*}" the entry whose key and value are both the
+		// wildcard step, which is MapConstructor-033.
+		if l.pos < len(l.src) && l.src[l.pos] == ':' &&
+			!strings.HasPrefix(l.src[l.pos:], "::") {
+			mark := l.pos
 			l.pos++
 			local, err := l.lexNCName()
 			if err != nil {
-				return Token{}, err
+				l.pos = mark
+				l.prevOperand = true
+				return Token{Kind: TokWildcard, Val: "*", Pos: start}, nil
 			}
 			l.prevOperand = true
 			return Token{Kind: TokWildcard, Val: "*:" + local, Pos: start}, nil
@@ -464,6 +476,20 @@ func (l *Lexer) lexQName() (string, error) {
 	// A braced URI literal, Q{uri}local. Recognised only in extended mode;
 	// otherwise "Q" is an ordinary name and the "{" that follows is the
 	// syntax error XPath 2.0 says it is.
+	//
+	// That error is stated here rather than left to fall out of the scan.
+	// XPath 2.0 has no BracedURILiteral -- it arrives in 3.0 A.2.1 -- and no
+	// 2.0 production lets a "{" follow a name, so "Q{" is a syntax error
+	// wherever a name may begin. It used to become one only by accident: the
+	// scan read "Q", then "{", then took "http" for a prefix, consumed the
+	// ":", and failed on the "//" of the URI with "expected a name". Any URI
+	// without a colon, or a lexer that declines to consume that colon, lost
+	// the error and left "Q" as a bare name -- which is a different, later
+	// diagnosis (XPST0008) rather than the XPST0003 the grammar requires.
+	if !(l.extended || l.version.atLeast30()) && strings.HasPrefix(l.src[l.pos:], "Q{") {
+		return "", fmt.Errorf(
+			"XPST0003: a braced URI literal requires XPath 3.0 (at offset %d)", l.pos)
+	}
 	if (l.extended || l.version.atLeast30()) && strings.HasPrefix(l.src[l.pos:], "Q{") {
 		l.pos += 2
 		end := strings.IndexByte(l.src[l.pos:], '}')
@@ -521,13 +547,38 @@ func (l *Lexer) lexQName() (string, error) {
 	if l.pos < len(l.src) && l.src[l.pos] == ':' &&
 		!strings.HasPrefix(l.src[l.pos:], "::") &&
 		!strings.HasPrefix(l.src[l.pos:], ":=") {
+		mark := l.pos
 		l.pos++
 		if l.pos < len(l.src) && l.src[l.pos] == '*' {
 			return first + ":", nil // caller consumes the '*'
 		}
 		second, err := l.lexNCName()
 		if err != nil {
-			return "", err
+			// A QName is a single terminal -- XPath 3.1 A.2.1 spells it
+			//
+			//   QName ::= PrefixedName | UnprefixedName
+			//   PrefixedName ::= Prefix ':' LocalPart
+			//
+			// -- so a ':' with no NCName after it was never part of this
+			// name. The scan backs up and hands the ':' to the parser as
+			// its own token instead of failing here.
+			//
+			// This is what lets a map constructor spell its entries without
+			// a space: MapConstructorEntry is
+			//
+			//   MapKeyExpr ':' MapValueExpr
+			//
+			// where the key is a full ExprSingle, so "map{b:2}" is the step
+			// "b" bound to 2, not a QName "b:2" -- MapConstructor-015. The
+			// same holds for "map{self:2}" (-021) and "map{*:*}" (-033),
+			// where an axis name or a wildcard ends the key.
+			//
+			// The parser is still the one that decides a stray ':' is an
+			// error, and it reports XPST0003 wherever the grammar has no
+			// place for it, so nothing that was a syntax error stops being
+			// one -- only the message and the offset move.
+			l.pos = mark
+			return first, nil
 		}
 		return first + ":" + second, nil
 	}
