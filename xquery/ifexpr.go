@@ -37,7 +37,21 @@ type ifExpr struct {
 // ExprSingle.
 func (p *parser) parseIf() (node, bool, error) {
 	save := p.pos
-	if !needsXQueryParser(p.src[p.pos:]) {
+	// Only this conditional's own text decides whether this parser has to
+	// read it. Asking about the rest of the source instead answered yes for
+	// a conditional that is merely followed by a constructor -- "let $x := if
+	// (...) then 'a' else 'b' return <td/>", which Axes089 writes -- and the
+	// conditional was then parsed here, leaving the "return" that belongs to
+	// the enclosing FLWOR as an unreadable tail.
+	//
+	// The extent is the enclosing scan's: an ExprSingle, which ends at the
+	// "return" the same way it ends at a comma.
+	probe := *p
+	extent, err := probe.scanExprSingleSource()
+	if err != nil {
+		extent = p.src[p.pos:]
+	}
+	if !needsXQueryParser(extent) {
 		// Every branch is ordinary XPath, and xpath reads the whole
 		// expression — including the laziness, which is its own.
 		return nil, false, nil
