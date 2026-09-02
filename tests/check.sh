@@ -372,10 +372,15 @@ if [ -n "$BIN" ] && $GO build -o "$BIN" ./cmd/go-xml; then
 	# sequence containing an attribute -- correct to refuse by 5.8.1, which is
 	# why the relaxation is opt-in rather than the default. Measuring without
 	# these reported 544 where the engine could already do 549.
+	#
+	# -xinclude is there for the same reason: the corpus assembles documents
+	# from parts, so a run without it measures the engine against inputs no
+	# reader of this corpus would use. It was worth 28 documents when the
+	# flag landed, and leaving it off held the count at 549.
 	stylesheetCorpus DocBook \
 		"$XSLTNG/src/main/xslt/docbook.xsl" \
 		"$XSLTNG/src/test/resources/xml/*.xml" \
-		"-allow-dir $XSLTNG -allow-unparsed-text -allow-doctype \
+		"-allow-dir $XSLTNG -allow-unparsed-text -allow-doctype -xinclude \
 		 -compat-drop-attributes-on-document"
 	stylesheetCorpus XSpec \
 		"$XSPEC/src/compiler/compile-xslt-tests.xsl" \

@@ -92,7 +92,7 @@ Requires Go 1.26 or later.
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.98% of the W3C QT3 suite (29,796 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.79% of the W3C XSLT suite filtered to 3.0 (8,608 of 8,626 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -133,7 +133,7 @@ true here:
    each test's declared version dependency — a different kind of measurement
    from running a suite written for the version under test.
 
-   **Streaming is not implemented**, and its 2,716 cases are out of scope
+   **Streaming is not implemented**, and its 2,646 cases are out of scope
    rather than counted as failures. That is the single largest gap, and it is
    architectural rather than a matter of filling in instructions: streaming
    wants a pull parser and a streamability static analysis, not another
@@ -834,8 +834,8 @@ reach:
 
 * **[DocBook xslTNG](https://github.com/docbook/xslt3ng)** — 97 stylesheet
   modules using `xsl:evaluate`, accumulators, maps, higher-order functions and
-  a multi-stage `fn:transform` pipeline. **572** of its 593 test documents
-  render (544 before XInclude), and the HTML is byte-identical to the
+  a multi-stage `fn:transform` pipeline. **577** of its 593 test documents
+  render (549 before XInclude), and the HTML is byte-identical to the
   Saxon-produced reference output once the timestamp and generator metadata
   (both environment-dependent) are normalised.
 
@@ -848,7 +848,8 @@ reach:
   extension function**: the pipeline stage is guarded by `test="exists(//xi:include)"`,
   so once the inclusions are already resolved the stage does not run at all and
   the extension is never asked for. `-xinclude` therefore fixes 28 of the 42
-  outright. The remaining 14 fail on `xpointer` schemes that are **not part of
+  outright, and `tests/check.sh` passes it for that reason: measured without
+  it the corpus scores 549, against inputs no reader of DocBook would use. The remaining 14 fail on `xpointer` schemes that are **not part of
   XInclude**: Saxon's `xpath()` scheme, and RFC 5147 text fragments (`line=`,
   `char=`, `search=`) layered on `parse="text"`. Those are DocBook conventions,
   and implementing them to move a number is not the same as conforming to a
@@ -880,6 +881,10 @@ either: its own XSLT 3.0 results report `evaluate-045` as `wrongError`. Inside
 an `xsl:package`, declared visibility is honoured exactly as before. The
 alternative was that no stylesheet outside a package can call its own
 functions from its own `xsl:evaluate`, which is not a boundary its author drew.
+
+The figure is 8,608 rather than 8,607 since attribute values stopped being
+read with their surrounding whitespace attached; `evaluate-045` still fails,
+and is still meant to.
 
 ## Where it fails
 
@@ -1394,7 +1399,7 @@ but "how much 3.0 works without costing 2.0".
 
 The filter decides what the number means, so each run prints its own
 exclusions: at the 2.0 target 6,027 cases need XSLT 3.0, 1,580 depend on a
-Unicode version and 421 need packages; at the 3.0 target 2,716 need streaming,
+Unicode version and 421 need packages; at the 3.0 target 2,646 need streaming,
 1,580 depend on a Unicode version and 1,098 are XSLT 2.0 only. A dependency the
 runner does not model excludes the test rather than being ignored — running a test under conditions it did not ask for reports
 the mismatch as a failure of the engine.

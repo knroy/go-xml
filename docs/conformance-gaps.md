@@ -15,11 +15,11 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 0 | **19** | 99.78% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,608 | 99.79% | **18** | 0 | 0 | **18** | 99.79% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **134** | **25** | **7** | **102** | |
+| | **Total** | | | | **132** | **25** | **7** | **100** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -200,13 +200,13 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 29 failures across the two targets
+# xslt — 27 failures across the two targets
 
-Nine at the 2.0 target and twenty at the 3.0 target. Four cases fail at both —
+Nine at the 2.0 target and eighteen at the 3.0 target. Four cases fail at both —
 `import-schema-137`, `validation-0201`, `unparsed-text-2003` and `docbook-001` —
-so the distinct case count is twenty-five. (This heading read "28" before the
+so the distinct case count is twenty-three. (This heading read "28" before the
 audit, which was the figure before `strip-space-009` was found missing from the
-3.0 list.)
+3.0 list, and "29" before `xsl:assert` cleared `catalog-006b`.)
 
 ## XSLT 2.0 — 9 failures
 
@@ -259,7 +259,7 @@ among the four vendored specs, so the 4e conclusion rests on F&O §5.6.1's
 wholesale delegation to it plus the fingerprint in the test data, rather than on
 Appendix F's own words.
 
-## XSLT 3.0 — 20 failures
+## XSLT 3.0 — 18 failures
 
 ### Deliberate divergence — 1
 
@@ -304,7 +304,7 @@ them separate, and `override-t-003a` is the case.
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,716 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
+| `streamable-141` | **Not implementable** | Requires streamability analysis. Streaming is not implemented — 2,646 cases are skipped as out of scope. This one is in scope only because it also depends on `backwards_compatibility`. |
 | `docbook-001`, `docbook-004` | **Not implementable** | EXSLT `exsl:document`, as above. |
 | `package-version-011` | **Not implementable** | `xsl:package/@_package-version` names a document to fetch, and no resolver is configured by default — a deliberate refusal, not a gap. |
 
@@ -322,7 +322,7 @@ is its own investigation.
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file and is the twentieth XSLT 3.0 failure.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 | `unparsed-text-2003` | **Out of scope — suite defect** | Not "the catalog assumes live internet". The suite has a purpose-built dependency for this, and the harness already honours it: `available_documents`, documented as "the test is dependent on the availability of external documents that are not part of the test suite, for example pages on the W3C web site", is listed in `tests/xslts/deps.go` among the dependencies that put a case out of scope. **`unparsed-text-2002`, the case immediately above `2003` in the same file and needing the same URL, declares `<available_documents value="https://www.w3.org/Consortium/mission.html"/>` and is correctly skipped.** `2003` declares only `<spec value="XSLT20+"/>`. One missing attribute, exactly the shape of the `accumulator-038`/`-039` omission accepted as a suite defect above. The case belongs out of the denominator, not in the failure list. |
 
-**XSLT 3.0 ceiling: 8,607 / 8,626 = 99.78%** — what passes now. `base-uri-052`
+**XSLT 3.0 ceiling: 8,608 / 8,626 = 99.79%** — what passes now. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
@@ -331,10 +331,15 @@ are settled above as not implementable, so no headroom is left against this
 suite. The eighteen that cannot be fixed: `accept-913`, `package-200`,
 `use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
 `unparsed-text-2003`, `streamable-141`, `docbook-001`,
-`docbook-004`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
+`docbook-004`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
 and `evaluate-045` (the last given up deliberately; see *Deliberate
 divergence* above).
+
+`catalog-006b` left this list when `xsl:assert` was implemented: it reports
+every XSLT element the processor recognises, and the absence was visible there.
+`strip-space-009` takes its place, having been counted in the prose above but
+omitted from this list.
 
 The three `regex-syntax` ambiguous-dash cases are no longer among them: they
 pass now that `XSD_1.1` is scoped to the version being measured rather than to
@@ -491,7 +496,7 @@ excluded by *declared dependency*, not by failure:
 
 | Skipped | Reason |
 |---:|---|
-| 2,716 | **streaming** — not implemented, deliberately |
+| 2,646 | **streaming** — not implemented, deliberately (but see below) |
 | 1,580 | depends on a specific Unicode version |
 | 1,098 | scoped `XSLT20` only |
 | 107 | numbering combinations |
@@ -506,12 +511,56 @@ excluded by *declared dependency*, not by failure:
 Counting these as failures would understate the engine; counting them as passes
 would overstate it. They are reported separately for that reason.
 
+## The streaming row is the one that overstates the gap
+
+Measured with the streaming gate lifted and nothing else changed, 2,424 of the
+2,646 pass — 92%. That is not an accident: XSLT 3.0 §19.1 lets a processor
+answer a request for streamed evaluation by building the tree instead, and this
+engine does exactly that. `xsl:source-document`, `xsl:merge`, `xsl:fork`,
+`xsl:accumulator` and the streamable forms are all implemented; what is absent
+is streaming, not the vocabulary.
+
+The 222 that fail divide cleanly:
+
+| Cases | What they want |
+|---:|---|
+| 150 | **XTSE3430** — reject a stylesheet as non-streamable. 136 read "expected error, the transform succeeded": the engine computes the right answer, and the test wants a refusal |
+| ~65 | An unrelated long tail; several are missing test-data files rather than engine defects |
+| 25 | Two real bugs, now fixed — see below |
+
+Only the first group needs streaming work, and specifically the §19.8 posture
+and sweep analysis: a static classifier over the compiled tree that assigns
+each construct a posture and rejects the combinations that cannot stream. It
+changes no runtime behaviour. Streamed *execution* — an incremental parser and
+pull evaluator — is a separate and much larger project, and it would buy
+almost no conformance, because the cases it would serve already pass.
+
+Flipping the feature on without §19.8 would claim streaming while never
+refusing a non-streamable stylesheet, which is why the flag stays off.
+
+### Two bugs the gate was hiding
+
+Both were invisible while every case that exercises them sat behind the
+streaming dependency:
+
+* **Attribute whitespace was not ignored.** §3.2 ignores leading and trailing
+  whitespace unless the allowed values are given as *string* or *char*. The
+  element table trimmed before checking a value against its enumeration, so
+  `validation=" lax "` passed that check and was refused by the instruction
+  behind it, which read the attribute again untrimmed. 27 cases; the whole
+  `source-document/stream-*` set is written with the spaces.
+* **XTSE3195 was over-enforced.** The code excluded `for-each-item` from
+  `streamable` — a constraint in no version of the spec — and from
+  `use-accumulators`, which the working draft states but which `merge-073` and
+  `merge-082` contradict: both are success cases in the suite and both pass in
+  Saxon 9.8's report. 4 cases.
+
 ---
 
 # Summary
 
 The per-suite counts are in the table at the top. What that table cannot show
-is *why* the 102 unfixable cases are unfixable:
+is *why* the 100 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
