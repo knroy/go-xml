@@ -42,6 +42,28 @@ type parser struct {
 	// are in there from the start, and rebinding one of those is legal.
 	declaredNS map[string]bool
 
+	// ctorPrefixes records every prefix bound by an xmlns declaration
+	// attribute on a direct element constructor, anywhere in the module.
+	//
+	// It exists for one name that is resolved after parsing and cannot reach
+	// the static context that was in force where it was written:
+	// fn:format-number's third argument. §4.7 resolves that lexical QName
+	// against the statically known namespaces, which inside a direct
+	// constructor include that element's own declarations -- but the function
+	// is a closure over the Query, and by evaluation time the constructor's
+	// context is gone, leaving only the module's. eqname-007 is the case:
+	// "<a xmlns:ex='...'>{format-number(..., 'ex:format')}</a>" named a
+	// format whose prefix we reported as unbound though the constructor binds
+	// it.
+	//
+	// Resolving against the union of every constructor binding rather than
+	// against the one in force at the call is the same approximation xslt's
+	// registerFormatNumber makes for the same reason, and is exact whenever a
+	// prefix is bound consistently -- which is what a query actually writes.
+	// The prolog's own prefixes are consulted first, so this only ever
+	// answers for a prefix the module level does not have.
+	ctorPrefixes map[string]string
+
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration
 	// later in the prolog may name one earlier — a function body calling

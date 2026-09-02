@@ -159,6 +159,11 @@ func Compile(src string, opts Options) (*Query, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The constructor prefixes are handed to the module context now that the
+	// whole module has been read, so that fn:format-number's third argument
+	// can name a format through a prefix a constructor bound. See
+	// parser.ctorPrefixes and staticContext.resolveFormatName.
+	sc.ctorPrefixes = p.ctorPrefixes
 	q := &Query{body: body, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization}

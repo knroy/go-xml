@@ -130,6 +130,17 @@ type staticContext struct {
 	// and even before it is attached to anything.
 	ctorNS map[string]string
 
+	// ctorPrefixes is the union of every constructor namespace declaration in
+	// the module, set on the module's context once the whole module has been
+	// read. Only resolveFormatName consults it, and only after the module's
+	// own prefixes have failed; see parser.ctorPrefixes for why it exists.
+	//
+	// Unlike ctorNS it is deliberately NOT copied by the child() below: it is
+	// a module-wide summary rather than a property of a scope, and a nested
+	// context inherits ctorNS, which is the accurate answer wherever one is
+	// available.
+	ctorPrefixes map[string]string
+
 	// preserveNS and inheritNS are the two independent halves of
 	// copy-namespaces (§4.8), which xdmbuild's Policy models the same way.
 	// Both default to the specification's preserve/inherit.

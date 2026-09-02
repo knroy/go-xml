@@ -204,6 +204,13 @@ func (p *parser) parseDirElement() (node, error) {
 			delete(inner.ctorNS, pfx)
 		} else {
 			inner.ctorNS[pfx] = uri
+			// Also recorded module-wide, for the one name resolved after the
+			// constructor's context has gone out of scope. See
+			// parser.ctorPrefixes.
+			if p.ctorPrefixes == nil {
+				p.ctorPrefixes = map[string]string{}
+			}
+			p.ctorPrefixes[pfx] = uri
 		}
 		bindings = append(bindings, nsBinding{prefix: pfx, uri: uri})
 	}

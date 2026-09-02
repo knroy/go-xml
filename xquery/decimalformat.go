@@ -305,6 +305,19 @@ func (sc *staticContext) resolveFormatName(lex string) (xdm.QName, error) {
 	}
 	uri, ok := sc.ns[prefix]
 	if !ok {
+		// A prefix the module level does not have may still have been bound
+		// by an xmlns declaration attribute on a direct element constructor,
+		// which §3.9.1.3 puts into the statically known namespaces of that
+		// element's content -- and §4.7 resolves this name against those.
+		// The call is a closure over the Query, so the constructor's own
+		// context is long gone by the time it runs; ctorPrefixes is what the
+		// module recorded of it. eqname-007 is the case:
+		// "<a xmlns:ex='...'>{format-number(..., 'ex:format')}</a>", whose ex
+		// we reported as unbound though the constructor enclosing the call
+		// binds it.
+		uri, ok = sc.ctorPrefixes[prefix]
+	}
+	if !ok {
 		return xdm.QName{}, fmt.Errorf(
 			"FODF1280: the prefix %q is not bound to a namespace", prefix)
 	}
