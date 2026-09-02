@@ -1028,6 +1028,28 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 			fmt.Fprintf(sb, "&#%d;", r)
 			continue
 		}
+		// Characters that a parser would not hand back unchanged are written
+		// as references by the XML-based methods. A literal CR is turned into
+		// LF by the line-ending normalisation every XML parser performs
+		// before the document reaches an application, so a text node holding
+		// one comes back holding something else; U+2028 (LINE SEPARATOR) and
+		// the C1 block, which includes U+0085 (NEL), are line endings or
+		// controls to an XML 1.1 parser and get the same treatment. A
+		// reference names the code point unambiguously and is the only
+		// spelling that survives. K2-Serialization-5 and -11 assert the CR
+		// and NEL cases and -10 the whole C1 range.
+		//
+		// The html method is excluded, and not because it disagrees about
+		// these characters: it has its own rule for the C1 range a few lines
+		// above, which is stricter still and makes writing one an error under
+		// HTML 4. What it does not share is XML's line-ending normalisation,
+		// so a CR there is an ordinary character.
+		if !s.html || s.xhtml {
+			if r == '\r' || r == '\u2028' || (r >= 0x7F && r <= 0x9F) {
+				fmt.Fprintf(sb, "&#%d;", r)
+				continue
+			}
+		}
 		switch r {
 		case '&':
 			sb.WriteString("&amp;")
@@ -1035,23 +1057,6 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 			sb.WriteString("&lt;")
 		case '>':
 			sb.WriteString("&gt;")
-		case '\r', '\u0085', '\u2028':
-			// Three characters survive a round trip only as references.
-			// A literal CR is turned into LF by the line-ending
-			// normalisation every XML parser performs before the document
-			// reaches an application, so a text node holding one comes back
-			// holding something else. U+0085 (NEL) and U+2028 (LINE
-			// SEPARATOR) are line endings to an XML 1.1 parser and get the
-			// same treatment. Serialization 3.1 §5 requires the reference
-			// for exactly this reason, and K2-Serialization-5 and -10 assert
-			// it. The html method is excluded: its escaping is HTML's, where
-			// none of the three is a line ending and CR carries no such
-			// rule.
-			if s.html && !s.xhtml {
-				sb.WriteRune(r)
-				continue
-			}
-			fmt.Fprintf(sb, "&#%d;", r)
 		case '\u00a0':
 			// The HTML method writes a no-break space as the named entity, so
 			// that it survives a transport that mangles non-ASCII bytes and
@@ -1505,13 +1510,19 @@ func escapeAttr(v string) string {
 			sb.WriteString("&#13;")
 		case '\t':
 			sb.WriteString("&#9;")
-		case '\u0085', '\u2028':
-			// NEL and LINE SEPARATOR are line endings to an XML 1.1 parser
-			// and would be normalised away, so they survive only as
-			// references -- the same reason CR and LF above are escaped.
-			// K2-Serialization-6 and -9 assert it for attribute values.
-			fmt.Fprintf(&sb, "&#%d;", r)
+		case '\u2028':
+			// LINE SEPARATOR is a line ending to an XML 1.1 parser and would
+			// be normalised away, so it survives only as a reference -- the
+			// same reason CR, LF and TAB above are escaped.
+			// K2-Serialization-6 asserts it for attribute values.
+			sb.WriteString("&#8232;")
 		default:
+			if r >= 0x7F && r <= 0x9F {
+				// The C1 block, U+0085 among it, for the same reason.
+				// K2-Serialization-9 asserts the whole range.
+				fmt.Fprintf(&sb, "&#%d;", r)
+				continue
+			}
 			sb.WriteRune(r)
 		}
 	}
