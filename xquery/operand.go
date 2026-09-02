@@ -238,6 +238,16 @@ func (p *parser) startsOperand(src string, i int, prev byte) bool {
 		// "namespace::" is the axis, which is refused elsewhere.
 		k := skipSpaceFrom(src, j)
 		return k < len(src) && (src[k] == '{' || isNameStartByte(src[k]))
+	case "function":
+		// An inline function is an operand this package owns only when its
+		// body needs the XQuery parser, and only parsing it says whether it
+		// does. Lifting one out matters more than lifting out a constructor:
+		// substituting the body would evaluate it outside the scope the
+		// parameters are bound in. See inlineFunc.
+		sub := &parser{src: src, pos: i, sc: p.sc, version: p.version,
+			depth: p.depth + 1}
+		_, ok, _ := sub.parseInlineFunc()
+		return ok
 	case "try", "switch", "typeswitch", "validate":
 		// None is reserved, so each only commits where what follows it can
 		// only be the construct — the same test parseXQueryOnly makes.

@@ -121,6 +121,9 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization}
 	q.lib = q.registerFunctions(nil)
+	if err := q.checkStaticCalls(); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
@@ -141,6 +144,9 @@ func Eval(src string, ctx *xpath.Context, opts Options) (xdm.Sequence, error) {
 func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	if ctx == nil {
 		ctx = xpath.NewContext(nil, xpath.Builtins())
+	}
+	if err := q.checkBodyVars(ctx); err != nil {
+		return nil, err
 	}
 	ctx, err := q.prepare(ctx)
 	if err != nil {
