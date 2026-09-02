@@ -92,7 +92,7 @@ Requires Go 1.26 or later.
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.98% of the W3C QT3 suite (29,796 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.85% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,158 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.77% of the W3C XSLT suite filtered to 3.0 (8,606 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.78% of the W3C XSLT suite filtered to 3.0 (8,607 of 8,626 in scope). Streaming is not implemented, and its 2,716 cases are out of scope rather than failing — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.88% of the W3C xsdtests *instance* tests (24,968 of 24,999); **99.86%** of its *schema-validity* tests (14,385 of 14,405) |
 | **XSD 1.1** | 99.89% instance (26,178 of 26,207); **99.88%** schema-validity (15,347 of 15,365); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -855,7 +855,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — so
-the XSLT 3.0 figure is 8,606 rather than 8,607. Saxon does not enforce it
+the XSLT 3.0 figure is 8,607 rather than 8,608. Saxon does not enforce it
 either: its own XSLT 3.0 results report `evaluate-045` as `wrongError`. Inside
 an `xsl:package`, declared visibility is honoured exactly as before. The
 alternative was that no stylesheet outside a package can call its own

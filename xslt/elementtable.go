@@ -548,6 +548,22 @@ var xsltElements = map[string]elementDef{
 		// processor sees.
 		"error-code": {avt: true},
 	}},
+	// xsl:assert, 22.2. The syntax summary is
+	//
+	//	<xsl:assert test="expression" select?="expression"
+	//	            error-code?="{eqname}">
+	//
+	// and the element is new in XSLT 3.0, so since30 keeps a 2.0 module from
+	// using it: catalog-006's element-available scan is scoped XSLT30+, and
+	// try-013 shows what the flag is for -- an element a later version added
+	// must not be reported available to a stylesheet that could not use it.
+	"assert": {since30: true, attrs: map[string]attrDef{
+		"test":   {required: true},
+		"select": {},
+		// Written as {eqname} in the summary, so an attribute value template
+		// exactly as it is on xsl:message.
+		"error-code": {avt: true},
+	}},
 	"fallback": {attrs: map[string]attrDef{}},
 	"try": {since30: true, attrs: map[string]attrDef{
 		"select":          {},
@@ -725,6 +741,7 @@ var contentModels = map[string]contentModel{
 	"key":                    {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"matching-substring":     {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"message":                {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
+	"assert":                 {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"namespace":              {seqCtor: true, pcdata: false, kids: nil, model: "sequence-constructor"},
 	"mode":                   {seqCtor: false, pcdata: false, kids: nil, model: ""},
 	"namespace-alias":        {seqCtor: false, pcdata: false, kids: nil, model: ""},
@@ -770,9 +787,13 @@ var contentModels = map[string]contentModel{
 // as declarations, because both are also permitted in a sequence constructor
 // where they bind a local name.
 var xsltInstructions = map[string]bool{
+	// xsl:assert is here because 22.2 heads its syntax summary with
+	// "<!-- Category: instruction -->", so it may appear anywhere a sequence
+	// constructor may.
 	"analyze-string":         true,
 	"apply-imports":          true,
 	"apply-templates":        true,
+	"assert":                 true,
 	"attribute":              true,
 	"call-template":          true,
 	"choose":                 true,

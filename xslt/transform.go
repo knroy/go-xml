@@ -45,6 +45,25 @@ type TransformOptions struct {
 	// legal 500-deep document could be parsed and not transformed.
 	MaxDepth int
 
+	// DisableAssertions turns off xsl:assert checking for the whole
+	// transformation. The zero value leaves assertions enabled, which is what
+	// XSLT 3.0 section 22.2 requires: "By default, assertions are enabled."
+	//
+	// The same section asks for this switch: "An implementation should provide
+	// an external mechanism to disable assertion checking for the stylesheet
+	// as a whole (either statically or dynamically). The detail of such
+	// mechanisms is implementation-defined." It lives here rather than on
+	// CompileOptions because dynamic is the more useful of the two readings —
+	// one compiled stylesheet can then be run with assertions on in test and
+	// off in production, without recompiling — and because a caller who wants
+	// the static reading already has use-when, which 22.2 names first.
+	//
+	// A disabled assertion is skipped before its @test is evaluated, so it
+	// cannot fail and costs nothing. Note that this is the only thing that may
+	// skip one: the section closes by asking implementations to "avoid
+	// optimizing xsl:assert instructions away".
+	DisableAssertions bool
+
 	// InitialMode names the mode for the initial apply-templates.
 	InitialMode string
 

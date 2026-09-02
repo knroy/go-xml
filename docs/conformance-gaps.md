@@ -11,11 +11,11 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,796 | 99.98% | **7** | 0 | 3 | **4** | 99.99% |
 | **xslt** | W3C XSLT 2.0 | 6,158 | 6,149 | 99.85% | **9** | 0 | 0 | **9** | 99.85% |
-| **xslt** | W3C XSLT 3.0 | 8,626 | 8,606 | 99.77% | **20** | 0 | 0 | **20** | 99.77% |
+| **xslt** | W3C XSLT 3.0 | 8,626 | 8,607 | 99.78% | **19** | 0 | 0 | **19** | 99.78% |
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **134** | **0** | **3** | **131** | |
+| | **Total** | | | | **133** | **0** | **3** | **130** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -223,19 +223,23 @@ is its own investigation.
 | `catalog-005b` | **Fixed** | Reported `XTTE1512` for `as-3102.xsl` where the suite wants a clean result. Loading the schema for schemas needed a DOCTYPE the host may now permit, `resolveAttributes` no longer skipping the document's own types because their names sit in the schema namespace, and a `Choice:Sequence` cell in the derivation table; merging the environment schema and atomising a union of lists finished it. `catalog-009` came with it. |
 | `type-available-0151` | **Fixed** | Wants XSD 1.1 *absent*. Scoping `XSD_1.1` to the XSLT version being measured — present for 3.0, absent for 2.0 — settles it without the cost either earlier attempt carried, and brought the three `regex-syntax` cases with it. |
 | `accumulator-038` | **Not implementable** | Suite defect: its `main` template lacks `visibility="public"`, so a transform may not start at it. The sibling `accumulator-039` was patched for exactly this in 2019 and 038 was missed. |
-| `catalog-006b` | **Not implementable** | Needs `xsl:assert`. |
+| `catalog-006b` | **Fixed** | It was listed as needing `xsl:assert`, which is a feature gap rather than an impossibility. §22.2 defines the instruction almost entirely by reference to `xsl:message` — "the effect of the instruction is governed by the rules for evaluation of an `xsl:message` instruction with the same `select` attribute, `error-code` attribute, and contained sequence constructor, and with the value `terminate="yes"`" — so implementing it is one new `@test`, the `XTMM9001` default code, and registering the element. |
 | `unparsed-text-2003` | **Not implementable** | Network access. |
 
-**XSLT 3.0 ceiling: 8,606 / 8,626 = 99.77%** — what passes now. The two cases
+**XSLT 3.0 ceiling: 8,607 / 8,626 = 99.78%** — what passes now. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
 are settled above as not implementable, so no headroom is left against this
-suite. The nineteen that cannot be fixed: `accept-913`, `package-200`,
+suite. The eighteen that cannot be fixed: `accept-913`, `package-200`,
 `use-package-003`, `package-021err`, `package-022err`, `package-version-011`,
 `unparsed-text-2003`, `streamable-141`, `base-uri-052`, `docbook-001`,
-`docbook-004`, `catalog-006b`, `si-copy-117`, `si-copy-of-117`,
+`docbook-004`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
 and `evaluate-045` (the last given up deliberately; see *Deliberate
 divergence* above).
+
+`catalog-006b` is no longer among them. It was listed as needing `xsl:assert`,
+which was a feature gap rather than an impossibility, and the instruction is
+implemented now.
 
 The three `regex-syntax` ambiguous-dash cases are no longer among them: they
 pass now that `XSD_1.1` is scoped to the version being measured rather than to
@@ -394,7 +398,7 @@ cannot show is *why* the 124 unfixable cases are unfixable:
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 3 | `docbook-001` (both targets) and `docbook-004` need EXSLT `exsl:document`. |
-| **Feature deliberately not implemented** | 4 | `streamable-141` (streaming), `base-uri-052` (XInclude), `catalog-006b` (`xsl:assert`), and XSD `iri-001`, which needs a DOCTYPE this parser refuses by default. |
+| **Feature deliberately not implemented** | 3 | `streamable-141` (streaming), `base-uri-052` (XInclude), and XSD `iri-001`, which needs a DOCTYPE this parser refuses by default. `catalog-006b` was here for `xsl:assert`, which is implemented now. |
 | **Costs more than it gains** | 3 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (would cost 4 cases to gain 1), `use-package-003` (a name-based rename cannot separate two arities of one name). |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 

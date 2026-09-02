@@ -181,10 +181,13 @@ uses EXSLT `exsl:document` — 19 times in `chunker.xsl` alone.
 
 - **`streamable-141`** — needs streamability analysis.
 - **`base-uri-052`** — needs XInclude.
-- **`catalog-006b`** — needs `xsl:assert`.
 
-Of these, **`xsl:assert` is the cheapest real feature on the list** and worth
-doing on its own merits.
+`catalog-006b` was the third. It needed `xsl:assert`, which this section called
+"the cheapest real feature on the list" — and it was: §22.2 defines the
+instruction by reference to `xsl:message`, so the work was one `@test`
+evaluation, the `XTMM9001` default code in place of `XTMM9000`, and registering
+the element name in the four tables the compiler reads. It is implemented, and
+the case passes.
 
 ### 3 — costs more than it gains
 
@@ -229,10 +232,11 @@ What remains is not conformance work but engineering the suites cannot see:
 the content-model matcher's nested-occurrence bug above, and whatever else
 fuzzing turns up. That is the better use of the next round.
 
-Three larger items are defensible as *features* rather than conformance work,
-and should be judged that way: **`xsl:assert`** (cheapest), **XInclude**, and
-**a package-aware XPath static context** (unlocks `use-package-003` and removes
-a known structural limit). Streaming is the largest of all — 2,716 cases
+Two larger items are defensible as *features* rather than conformance work,
+and should be judged that way: **XInclude**, and **a package-aware XPath static
+context** (unlocks `use-package-003` and removes a known structural limit).
+`xsl:assert` was the third and the cheapest, and is done. Streaming is the
+largest of all — 2,716 cases
 currently out of scope, a 31% larger denominator — and would be a project in
 itself.
 

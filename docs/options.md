@@ -311,6 +311,7 @@ res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
 | `Documents` | `xpath.DocumentResolver` | disabled | Resolves `fn:doc` and `fn:document`. **Nil disables them**, which is the default: a stylesheet that can open arbitrary URIs is an SSRF and file-disclosure vector. |
 | `Collections` | `xpath.CollectionResolver` | disabled | Resolves `fn:collection`. **Nil disables it**, and setting `Documents` does not set this — the two are separate switches on purpose. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Template recursion limit. Catches a stylesheet with no base case. |
+| `DisableAssertions` | `bool` | `false` — assertions enabled | Turns off `xsl:assert` checking for the whole transformation. XSLT 3.0 §22.2: "By default, assertions are enabled." |
 | `InitialMode` | `string` | default mode | Mode for the initial `apply-templates`. |
 | `InitialTemplate` | `string` | match the root | Invokes a named template instead, which is how a stylesheet of only named templates is entered. |
 | `Now` | `time.Time` | wall clock | Fixes what `fn:current-dateTime` returns. Set it to make a transform reproducible — the same input gives the same output, which is what makes golden-file tests possible. |
@@ -322,6 +323,30 @@ It is not only "a template calling itself". An identity transform recurses once
 per level of the document, so a limit below the parser's would refuse documents
 you had just successfully parsed. The default matches `xdm.DefaultMaxDepth` for
 that reason. Raise it only alongside the parser's.
+
+### DisableAssertions
+
+XSLT 3.0 §22.2 asks for it: "An implementation *should* provide an external
+mechanism to disable assertion checking for the stylesheet as a whole (either
+statically or dynamically). The detail of such mechanisms is
+implementation-defined."
+
+This is the dynamic reading, so one compiled stylesheet can be run with
+assertions on in test and off in production without recompiling:
+
+```go
+res, err := sty.Transform(ctx, doc.Root, xslt.TransformOptions{
+    DisableAssertions: true,
+})
+```
+
+A disabled assertion is skipped before its `@test` is evaluated, so it cannot
+fail and costs nothing. It is also the *only* thing that skips one — §22.2
+closes by asking implementations to "avoid optimizing `xsl:assert` instructions
+away", so nothing else in this engine elides them.
+
+The static reading is `use-when`, which §22.2 names first and which needs no
+option: a `use-when="false()"` removes the element before compilation.
 
 ### Cancellation
 

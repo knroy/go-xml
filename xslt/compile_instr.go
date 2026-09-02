@@ -501,6 +501,8 @@ func (c *compiler) compileXSLInstruction(n *xdm.Node) (Instruction, error) {
 		return &sequenceInstr{sel: sel}, nil
 	case "message":
 		return c.compileMessage(n, ns)
+	case "assert":
+		return c.compileAssert(n, ns)
 	case "try":
 		return c.compileTry(n, ns)
 	case "merge":
@@ -1127,6 +1129,44 @@ func (c *compiler) compileMessage(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 	}
 	instr.body = body
 	return instr, nil
+}
+
+// compileAssert compiles xsl:assert, XSLT 3.0 section 22.2.
+//
+// The element syntax summary is
+//
+//	<xsl:assert test="expression" select?="expression" error-code?="{eqname}">
+//	  <!-- Content: sequence-constructor -->
+//	</xsl:assert>
+//
+// and 22.2 defines the failure behaviour by reference: "the effect of the
+// instruction is governed by the rules for evaluation of an xsl:message
+// instruction with the same select attribute, error-code attribute, and
+// contained sequence constructor, and with the value terminate='yes'." So
+// everything but @test is compiled by compileMessage, and the two differences
+// 22.2 names -- unconditional termination and the XTMM9001 default code -- are
+// carried by the assert flag it sets.
+func (c *compiler) compileAssert(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
+	// @test is written without a question mark in the summary, so it is
+	// required. requiredExpr reports its absence rather than letting an
+	// assertion with nothing to assert compile into an instruction that could
+	// never fail -- which would be the silent-wrong-answer case.
+	test, err := requiredExpr(n, "test", ns)
+	if err != nil {
+		return nil, err
+	}
+	msg, err := c.compileMessage(n, ns)
+	if err != nil {
+		return nil, err
+	}
+	mi := msg.(*messageInstr)
+	// The two differences 22.2 names, both carried by one flag: termination is
+	// unconditional and the default code is XTMM9001. mi.terminate stays nil
+	// -- @terminate is not in xsl:assert's syntax summary, so the element
+	// table rejects it as XTSE0090 before this runs -- and the assert branch
+	// of messageInstr.Execute is taken ahead of the terminate branch anyway.
+	mi.assert = true
+	return &assertInstr{test: test, msg: mi}, nil
 }
 
 // --- small helpers ----------------------------------------------------------

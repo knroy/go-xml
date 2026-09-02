@@ -67,17 +67,30 @@ func xsltBoolean(v string) (b bool, ok bool) {
 	return false, false
 }
 
-// terminateError builds the error a terminating xsl:message raises.
+// The default error codes for the two instructions that terminate with a
+// message. 23.1 gives xsl:message XTMM9000; 22.2 gives xsl:assert XTMM9001,
+// stating the difference as the only one between them: "the default error code
+// if the error-code attribute is omitted is XTMM9001 rather than XTMM9000."
+const (
+	messageDefaultCode = "XTMM9000"
+	assertDefaultCode  = "XTMM9001"
+)
+
+// terminateError builds the error a terminating xsl:message or a failed
+// xsl:assert raises.
 //
-// XTMM9000 is the code unless @error-code named another. The message text
-// becomes the description and the constructed content becomes the error
-// value, so an enclosing xsl:catch can report all three — which is what
-// message-0501 does, reading $err:code, $err:description and $err:value from a
-// message it terminated on.
-func terminateError(code xdm.QName, text string, value xdm.Sequence) error {
+// defaultCode is the code unless @error-code named another: XTMM9000 for
+// xsl:message, XTMM9001 for xsl:assert. The message text becomes the
+// description and the constructed content becomes the error value, so an
+// enclosing xsl:catch can report all three — which is what message-0501 does,
+// reading $err:code, $err:description and $err:value from a message it
+// terminated on. 22.2 makes the same available to an assertion: "As with any
+// other dynamic error, an error caused by an assertion failing may be trapped
+// using xsl:try."
+func terminateError(code xdm.QName, defaultCode, text string, value xdm.Sequence) error {
 	name := code
 	if name.Local == "" {
-		name = xdm.QName{Prefix: "err", URI: xdm.NSErr, Local: "XTMM9000"}
+		name = xdm.QName{Prefix: "err", URI: xdm.NSErr, Local: defaultCode}
 	}
 	// The rendered message names the code in full when it is not one of the
 	// standard err: codes. A bare local name is how every spec code is

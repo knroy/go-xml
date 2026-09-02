@@ -1331,6 +1331,16 @@ type messageInstr struct {
 	// xslt30 enables the 3.0 readings: the wider @terminate vocabulary, and
 	// surviving a dynamic error raised while building the content.
 	xslt30 bool
+	// assert marks the instruction as the failure half of an xsl:assert.
+	//
+	// 22.2: the effect of a failed assertion "is governed by the rules for
+	// evaluation of an xsl:message instruction with the same select attribute,
+	// error-code attribute, and contained sequence constructor, and with the
+	// value terminate='yes'. However, the default error code if the error-code
+	// attribute is omitted is XTMM9001 rather than XTMM9000." Those are the
+	// only two differences from an ordinary xsl:message, and this flag is both
+	// of them: terminate is unconditional and the default code is XTMM9001.
+	assert bool
 }
 
 func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -1346,22 +1356,47 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// the error is not propagated"; the transformation carries on
 			// with whatever the message would have said left unsaid.
 			// message-0404 requires the result tree to be produced anyway.
-			return nil
+			//
+			// Not for an assertion, though. 22.2 has already decided that the
+			// assertion FAILED before this code runs, and a failed assertion
+			// raises a dynamic error; swallowing an error in the text of that
+			// error would turn the failure into a success. The message is left
+			// empty instead and the assertion still terminates.
+			if !i.assert {
+				return nil
+			}
+		} else {
+			value, text = seq, stringJoin(seq, " ")
 		}
-		value, text = seq, stringJoin(seq, " ")
 	} else {
 		sub := newOutputBuilder()
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			if !i.xslt30 {
 				return err
 			}
-			return nil
+			if !i.assert {
+				return nil
+			}
+		} else {
+			value, text = sub.Sequence(), constructedText(sub.Sequence(), " ")
 		}
-		value, text = sub.Sequence(), constructedText(sub.Sequence(), " ")
 	}
 	// Messages are collected rather than printed: a library writing to stderr
 	// is a nuisance, and the caller may want them alongside the result.
 	*rt.messages = append(*rt.messages, text)
+
+	if i.assert {
+		// 22.2: a failed assertion behaves as an xsl:message "with the value
+		// terminate='yes'", which is unconditional -- xsl:assert has no
+		// @terminate to read, so there is nothing to evaluate or to reject.
+		// The only other difference is the default code, "XTMM9001 rather
+		// than XTMM9000", which terminateError takes as its first argument.
+		code, err := i.resolveErrorCode(rt)
+		if err != nil {
+			return err
+		}
+		return terminateError(code, assertDefaultCode, text, value)
+	}
 
 	if i.terminate != nil {
 		v, err := i.terminate.eval(rt)
@@ -1390,7 +1425,7 @@ func (i *messageInstr) Execute(rt *runtime, out *outputBuilder) error {
 			if err != nil {
 				return err
 			}
-			return terminateError(code, text, value)
+			return terminateError(code, messageDefaultCode, text, value)
 		}
 	}
 	return nil
