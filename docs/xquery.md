@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **98.37%** of the W3C QT3 suite (29,443 of 29,930 in
+XQuery 3.1, measured at **99.07%** of the W3C QT3 suite (29,521 of 29,797 in
 scope). What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
@@ -177,9 +177,10 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 487 failures are a long tail rather than a missing feature. The
-largest single group is `prod-NameTest` (18 cases), which needs type-name
-resolution inside the XPath parser; see
+The remaining 276 failures are a long tail rather than a missing feature. The
+largest groups are JSON parsing and the serialization methods, then
+`prod-NameTest` (16 cases), which needs type-name resolution inside the XPath
+parser; see
 [known-gaps.md](known-gaps.md) for that and for the variable-name/subtraction
 defect, which the suite does not cover.
 
