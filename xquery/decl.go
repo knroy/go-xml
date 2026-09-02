@@ -757,21 +757,41 @@ func (b *varBinder) visit(d *varDecl) error {
 		// A variable that names itself, or names a variable that names it
 		// back, is the static case: no function stands between them, so no
 		// branch can be left untaken and the text alone settles it.
+		//
+		// Unless one of the two is external. An external declaration's
+		// initialiser is only a *default*, evaluated when the host supplies
+		// no value and skipped when it does, so a cycle running through one
+		// is no more certain than a cycle running through a function body and
+		// is dynamic for the same reason. extvardef-011 writes the plainest
+		// possible version -- "$a := $x" against "$x external := $a + 2" --
+		// and still wants XQDY0054.
 		for _, ref := range d.references() {
-			if dep, ok := byName[ref]; ok {
-				if dep == d {
-					return fmt.Errorf(
-						"XQST0054: the variable %s depends on itself",
-						d.name.Lexical())
+			dep, ok := byName[ref]
+			if !ok {
+				continue
+			}
+			deferred := d.external || dep.external
+			if dep == d {
+				if deferred {
+					continue
 				}
-				if state[dep.name.Clark()] == inProgressState {
-					return fmt.Errorf(
-						"XQST0054: the variable %s depends on itself",
-						dep.name.Lexical())
+				return fmt.Errorf(
+					"XQST0054: the variable %s depends on itself",
+					d.name.Lexical())
+			}
+			if state[dep.name.Clark()] == inProgressState {
+				if deferred {
+					continue
 				}
-				if err := b.visit(dep); err != nil {
-					return err
-				}
+				return fmt.Errorf(
+					"XQST0054: the variable %s depends on itself",
+					dep.name.Lexical())
+			}
+			if state[dep.name.Clark()] != unvisitedState {
+				continue
+			}
+			if err := b.visit(dep); err != nil {
+				return err
 			}
 		}
 		// The variables reachable *through* a function call are ordered but
