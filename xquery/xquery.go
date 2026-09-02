@@ -121,6 +121,9 @@ func Compile(src string, opts Options) (*Query, error) {
 		contextItem: p.contextItem, formats: p.formats,
 		serialization: p.serialization}
 	q.lib = q.registerFunctions(nil)
+	if err := q.checkStaticCalls(); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
