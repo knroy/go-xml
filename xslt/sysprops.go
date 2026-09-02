@@ -1,11 +1,57 @@
 package xslt
 
 import (
+	"runtime/debug"
 	"sort"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
+
+// productVersion is what fn:system-property('xsl:product-version') answers.
+//
+// It is read from the build rather than written here, because a constant in
+// this file is a constant nobody edits: the property said "0.1" through the
+// 1.0, 1.1 and 1.2 releases, and a stylesheet dispatching on it -- which is
+// the only reason section 18.2 defines it -- got an answer that had been
+// wrong for three tags. It was reported from the field, against 1.2.0.
+//
+// debug.ReadBuildInfo reports the module version when the binary was built
+// by `go install module@version` or `go build` inside a module that has a
+// tag. A build from a working tree reports "(devel)", and one from a GOPATH
+// checkout reports nothing at all; both fall back to the VCS revision the
+// toolchain stamps, and only failing that to "unreleased". None of those is
+// a version number a stylesheet should branch on, and each says truthfully
+// that it is not one, which "0.1" did not.
+func productVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unreleased"
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		return strings.TrimPrefix(v, "v")
+	}
+	var rev, modified string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if rev == "" {
+		return "unreleased"
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if modified == "true" {
+		return "unreleased+" + rev + ".dirty"
+	}
+	return "unreleased+" + rev
+}
 
 // systemProperties is every system property this processor defines, keyed by
 // its local name in the XSLT namespace.
@@ -21,7 +67,7 @@ var systemProperties = map[string]string{
 	"vendor":                           "go-xml",
 	"vendor-url":                       "https://github.com/knroy/go-xml",
 	"product-name":                     "go-xml",
-	"product-version":                  "0.1",
+	"product-version":                  productVersion(),
 	"is-schema-aware":                  "no",
 	"supports-serialization":           "yes",
 	"supports-backwards-compatibility": "yes",

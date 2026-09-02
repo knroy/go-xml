@@ -222,7 +222,7 @@ sty, err := xslt.Compile(sheet.Root, xslt.CompileOptions{
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
 | `BaseURI` | `string` | none | What relative `xsl:include` and `xsl:import` resolve against. |
-| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name. |
+| `Resolver` | `ModuleResolver` | disabled | Loads included and imported modules. **Nil means a stylesheet cannot pull in another file** — the safe default. `xslt.NewFileResolver(roots...)` confines it to directories you name, each covering its subdirectories to any depth; a symlink out of a root is resolved before the containment check, so it does not escape. |
 | `StaticParams` | `map[string]xdm.Sequence` | none | Values for `xsl:param static="yes"`, keyed by the parameter's `{uri}local` name. A static parameter is bound before static analysis begins, so its value must come from the caller rather than from `Transform`'s runtime `Params`. |
 | `SchemaResolver` | `xsd.Resolver` | disabled | Loads schemas for `xsl:import-schema`. |
 | `XPathVersion` | `*xpath.Version` | derive | Pins the XPath version for every expression in the stylesheet, overriding what the stylesheet declares. Nil derives it from the `version` attribute. See [Choosing a language version](#choosing-a-language-version). |

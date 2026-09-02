@@ -6,6 +6,26 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### system-property('xsl:product-version') was answering 0.1
+
+It was a constant nobody edited, so it said `0.1` through the 1.0, 1.1 and
+1.2 releases -- and a stylesheet dispatching on it, which is the only reason
+section 18.2 defines the property, got an answer three tags out of date. It
+is read from the build now: the module version where the binary was built
+from a tagged module, otherwise the VCS revision the toolchain stamps, and
+`unreleased` where there is neither. None of those can go stale by being left
+alone.
+
+Reported from the field against 1.2.0, alongside the base-URI defect below.
+
+### -allow-dir says where, not what
+
+The flag's help named only `xsl:include` and `document()`. It also governs
+`xsl:import`, `fn:doc`, `fn:unparsed-text`, external entities and XInclude --
+one root list for every reader, each of the riskier ones gated by its own flag
+on top. A root covers its subdirectories to any depth, which the text did not
+say either, and which is the question a user asked after reading it.
+
 ### An indeterminate expectation is not a demand to reject
 
 `<expected validity="indeterminate"/>` prescribes no result. The W3C uses it

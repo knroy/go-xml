@@ -352,7 +352,7 @@ go-xml -xsl split.xsl -result-dir ./out catalogue.xml
 | `-xsl` | the stylesheet to apply (required) |
 | `-o` | write to a file instead of stdout |
 | `-p name=value` | supply a top-level `xsl:param`; repeatable |
-| `-allow-dir` | open `xsl:include`/`doc()`/`document()` to further directories; the stylesheet's own directory is always readable |
+| `-allow-dir` | open `xsl:include`/`xsl:import`/`doc()`/`document()` to further directories, each covering its subdirectories to any depth; the stylesheet's own directory is always readable. It says *where*, not *what*: raw text, external entities and XInclude each need their own flag as well |
 | `-allow-doctype` | permit a `DOCTYPE` in the source |
 | `-timeout` | bound the transform (default 60s) |
 | `-initial-template` | start at a named template instead of matching the root; no input document is then needed |

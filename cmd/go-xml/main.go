@@ -51,8 +51,11 @@ func run() error {
 		sheetPath = flag.String("xsl", "", "stylesheet to apply (required)")
 		outPath   = flag.String("o", "", "write output to this file instead of stdout")
 		allowDirs = flag.String("allow-dir", "",
-			"comma-separated directories that xsl:include and document() may read; "+
-				"empty disables both")
+			"comma-separated roots that xsl:include, xsl:import, fn:doc and "+
+				"fn:document may read, each covering its subdirectories to any "+
+				"depth; empty disables all of them. It says where, not what: "+
+				"reading raw text, an external entity or an xi:include also "+
+				"needs the flag for that")
 		allowDoctype = flag.Bool("allow-doctype", false,
 			"permit a DOCTYPE in the source document and expand the entities it "+
 				"declares internally; external entities still require "+
