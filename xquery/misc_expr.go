@@ -74,8 +74,16 @@ func (p *parser) parseExtension() (node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// An empty enclosed expression is still an enclosed expression, so this
-	// is the empty sequence rather than XQST0079.
+	// §3.17 requires a *fallback expression* where no pragma is recognised,
+	// and "{}" supplies none: [104]'s EnclosedExpr has an optional Expr, and
+	// with it absent there is nothing for the processor to evaluate instead
+	// of the pragmas. The suite tests all four spellings of it — prefixed,
+	// unprefixed and in no namespace — and expects XQST0079 for each.
+	if len(body.items) == 0 {
+		return nil, p.errorAt(start,
+			"XQST0079: an extension expression whose pragmas are all "+
+				"unrecognised must have a fallback expression")
+	}
 	return body, nil
 }
 
@@ -86,22 +94,37 @@ func (p *parser) parsePragma() error {
 		return p.errorf("XPST0003: expected %q", "(#")
 	}
 	p.skipSpace()
-	prefix, local, err := p.parseQName()
-	if err != nil {
+	// "Q{uri}local" names the namespace outright. It is read before the
+	// QName because parseQName would take the "Q" for a local name and stop
+	// at the brace.
+	var prefix, local string
+	if _, ok, err := p.parseBracedURI(); err != nil {
 		return err
-	}
-	if prefix != "" {
-		if _, ok := p.sc.ResolvePrefix(prefix); !ok {
-			return p.errorAt(start,
-				"XPST0081: the prefix %q is not bound to a namespace", prefix)
+	} else if ok {
+		// A braced URI may be empty — "Q{}name" is a name in no namespace,
+		// which 3.1 admits; see below.
+		if local = p.scanNCName(); local == "" {
+			return p.errorAt(start, "XPST0003: expected a local name after %q", "Q{...}")
 		}
-	} else if p.sc.defaultElementNS == "" {
-		// [105] requires the name to be in a namespace, and an unprefixed
-		// pragma name takes the default element namespace. With none, the
-		// name is in no namespace, which the grammar does not admit.
-		return p.errorAt(start,
-			"XPST0081: the pragma name %q is in no namespace", local)
+	} else {
+		var err error
+		if prefix, local, err = p.parseQName(); err != nil {
+			return err
+		}
+		if prefix != "" {
+			if _, ok := p.sc.ResolvePrefix(prefix); !ok {
+				return p.errorAt(start,
+					"XPST0081: the prefix %q is not bound to a namespace", prefix)
+			}
+		}
 	}
+	// An unprefixed name, or one written with an empty braced URI, is a name
+	// in no namespace. XQuery 3.0 did not admit that; 3.1 does, and says the
+	// pragma is then simply one nothing recognises — which is the state every
+	// pragma is in here anyway. So there is nothing to report: the name is
+	// well-formed, and whether the extension expression is an error is
+	// decided by parseExtension, on whether an enclosed expression follows.
+	//
 	// The content runs to the first "#)". It is not parsed: a pragma's
 	// contents are whatever the implementation that recognises it says they
 	// are, and this one recognises none.
