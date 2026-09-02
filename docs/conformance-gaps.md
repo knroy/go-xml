@@ -15,7 +15,7 @@ commit `6fa4150` with `tests/check.sh`. Nothing is estimated.
 | **xsd** | W3C xsdtests 1.0 | 39,404 | 39,353 | 99.87% | **51** | 0 | 0 | **51** | 99.87% |
 | **xsd** | W3C xsdtests 1.1 | 41,572 | 41,525 | 99.89% | **47** | 0 | 0 | **47** | 99.89% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **232** | **0** | **0** | **126** | |
+| | **Total** | | | | **225** | **0** | **0** | **126** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -27,7 +27,7 @@ is no remaining open question against either XSLT suite: `validation-0006` and
 `validation-0201`, the last two, were settled against the spec text and the
 test sources and are recorded below.
 
-**XQuery's 106 are partly triaged.** A first pass located seven root causes,
+**XQuery's 99 are partly triaged.** A first pass located seven root causes,
 each to a file and line, and none of them is a shallow miss:
 
 | Cases | Cause | Where |
@@ -40,13 +40,25 @@ each to a file and line, and none of them is a shallow miss:
 | `app-XMark/XMark-All` | Synthetic call arguments are emitted as `$local:xq-arg0` and bound by URI; a prolog that rebinds the `local` prefix breaks the round trip. | `xquery/nested.go` |
 | `app-Walmsley/d1e78807h` | The element form of the serialization parameters rejects `method="json"` that the map form already accepts — the JSON writer exists. | `xpath/fn_serialize.go` |
 
-That leaves roughly 90 unexamined. The `?` in the row above stands until they
-are read; none of the seven above is yet fixed.
+Two cases are settled as **not implementable**: `K2-NameTest-30` and `-31`
+each fail on one assertion, `empty(namespace-uri-for-prefix("b", $result[1]))`.
+The constructed `<e a:n1="..." b:n1="...">` must bind both prefixes -- its own
+attribute names require them -- and `$result[1]` is a child of it, so under XML
+namespace scoping `b` genuinely is in scope there. Passing would mean children
+of a directly-constructed element not inheriting their parent's bindings, which
+would break serialisation broadly; the sibling cases citing the same W3C bug
+22334 (`qischema064`/`065`) show the inheriting behaviour being relied on.
+
+Those seven are located but **not fixed**. Seventeen other cases were fixed in
+the same pass -- the kind-test TypeName that named no type, a PI test's
+string-literal target, a lifted primary evaluated without its context, and an
+element's own-name prefix recorded as a namespace node -- which is what took
+the row from 116 to 99. Roughly 75 remain unexamined.
 
 **The rest are not triaged**, which is why its row carries `?` rather than
 zeros. The suite was not run by `tests/check.sh` until now, so unlike every
 other row here no one has read the failures to say which are engine defects and
-which are not. Do not read that row as "106 cannot be fixed" — it is unknown,
+which are not. Do not read that row as "99 cannot be fixed" — it is unknown,
 and it is the one place in this document where real work may be hiding.
 
 The XSD split is taken from the suite's own `status` field rather than from
