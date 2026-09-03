@@ -429,6 +429,41 @@ XSLT 2.0, XSLT 3.0 and XQuery unchanged. `BenchmarkValidateInstance` is
 unmoved — the check reads a bool from a struct already in cache, and allocations
 per operation are identical.
 
+### Saturating occurrence arithmetic is exact below occursHuge, and not above it (open, deliberate)
+
+Occurrence bounds saturate at `occursHuge` = 4611686018427387903, and the
+derivation arithmetic in `restrict.go` now saturates rather than wraps. That
+fixes the wrap, and it leaves one thing it cannot fix.
+
+Two bounds that both exceed `occursHuge` compare equal, because both clamp to
+it. A base `maxOccurs="1000000000000000000000000000000"` restricted by three
+members each at the same value has a true effective total of 3e30 against a
+base of 1e30 — the restriction is invalid and this engine accepts it. Verified,
+not inferred.
+
+An external review proposed the general fix: parse occurrence values into
+`big.Int`, keep an `Occurs`/`OccursRange` type carrying `unbounded` as a
+separate flag rather than a magnitude, do the derivation arithmetic exactly,
+and narrow to a bounded `int` only when compiling the runtime matcher. That is
+the right architecture, and the reasoning behind it is correct: "too large for
+an int" is not the same proposition as "semantically equal to MaxInt".
+
+It is not done, for a reason worth stating rather than leaving as an omission.
+The collapse needs a schema author to write **two** separate bounds above
+4.6×10^18 and to depend on their ordering. `occursHuge` is a quarter of the int
+range rather than a half, which leaves real headroom: a base of 2N against a
+derived 3N stays exact for every N a document could approach, and the probes
+that fail are ones where both numbers are already past anything an instance can
+reach. Against that, `MinOccurs`/`MaxOccurs` are `int` on the `Particle` struct
+and are read by the runtime matcher, the UPA checker, the subsumption checker
+and `nfa.go`'s counter vectors, so the change is a type migration through the
+whole package rather than a local repair.
+
+The failure it would fix is a false accept, which is the direction that matters,
+so this is a deferral rather than a dismissal. What makes it safe to defer is
+that the wrap — the case reachable with ordinary numbers, and the one that
+produced a *negative* bound — is closed.
+
 ### A depth bound stood in for cycle detection on four schema walks (fixed)
 
 The counterpart to the entry above, and the opposite verdict: a bound that

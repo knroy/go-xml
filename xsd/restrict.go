@@ -1342,11 +1342,11 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 					continue
 				}
 				rMin, rMax := effectiveTotalRange(rp)
-				spent[i].min += rMin
+				spent[i].min = addOccurs(spent[i].min, rMin)
 				if spent[i].max == Unbounded || rMax == Unbounded {
 					spent[i].max = Unbounded
 				} else {
-					spent[i].max += rMax
+					spent[i].max = addOccurs(spent[i].max, rMax)
 				}
 				matched = true
 				break
@@ -1379,12 +1379,12 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			if cover := unionCovers(rp, bg.Particles); len(cover) > 1 {
 				var uMin, uMax int
 				for _, i := range cover {
-					uMin += bg.Particles[i].MinOccurs
+					uMin = addOccurs(uMin, bg.Particles[i].MinOccurs)
 					if uMax == Unbounded || bg.Particles[i].MaxOccurs == Unbounded {
 						uMax = Unbounded
 						continue
 					}
-					uMax += bg.Particles[i].MaxOccurs
+					uMax = addOccurs(uMax, bg.Particles[i].MaxOccurs)
 				}
 				rMin, rMax := effectiveTotalRange(rp)
 				if rangeOK(rMin, rMax, uMin, uMax) == nil {
@@ -1580,10 +1580,13 @@ func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expande
 	}
 	// Clause 2: the pair is (min occurs × length, max occurs × length),
 	// with unbounded propagating. An empty sequence has length zero, and
-	// the product is zero rather than the particle's own range.
+	// the product is zero rather than the particle's own range. The
+	// product saturates rather than wraps: a bound written large enough to
+	// saturate in the parser, times a three-member sequence, overflowed an
+	// int and put a negative minOccurs into the diagnostic below.
 	n := len(rg.Particles)
-	min := r.MinOccurs * n
-	max := r.MaxOccurs * n
+	min := mulOccurs(r.MinOccurs, n)
+	max := mulOccurs(r.MaxOccurs, n)
 	if r.MaxOccurs == Unbounded {
 		max = Unbounded
 	}
@@ -1644,9 +1647,9 @@ func effectiveTotalRange(p *Particle) (int, int) {
 				max = cMax
 			}
 		} else {
-			min += cMin
+			min = addOccurs(min, cMin)
 			if !maxUnbounded {
-				max += cMax
+				max = addOccurs(max, cMax)
 			}
 		}
 		first = false
@@ -1656,7 +1659,7 @@ func effectiveTotalRange(p *Particle) (int, int) {
 		return 0, 0
 	}
 
-	min *= p.MinOccurs
+	min = mulOccurs(min, p.MinOccurs)
 	switch {
 	case maxUnbounded:
 		max = Unbounded
@@ -1667,7 +1670,7 @@ func effectiveTotalRange(p *Particle) (int, int) {
 			max = 0
 		}
 	default:
-		max *= p.MaxOccurs
+		max = mulOccurs(max, p.MaxOccurs)
 	}
 	return min, max
 }
@@ -2009,12 +2012,12 @@ func (c branchCount) add(name xdm.QName, min, max int) {
 		cur = &occRange{}
 		c[name] = cur
 	}
-	cur.min += min
+	cur.min = addOccurs(cur.min, min)
 	if cur.max == Unbounded || max == Unbounded {
 		cur.max = Unbounded
 		return
 	}
-	cur.max += max
+	cur.max = addOccurs(cur.max, max)
 }
 
 // allBranchCounts enumerates the branches through a derived particle, each as
@@ -2053,7 +2056,7 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 		for _, br := range inner {
 			scaled := branchCount{}
 			for name, rng := range br {
-				min := rng.min * p.MinOccurs
+				min := mulOccurs(rng.min, p.MinOccurs)
 				max := rng.max
 				switch {
 				case max == Unbounded || p.MaxOccurs == Unbounded:
@@ -2061,7 +2064,7 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 						max = Unbounded
 					}
 				default:
-					max *= p.MaxOccurs
+					max = mulOccurs(max, p.MaxOccurs)
 				}
 				scaled[name] = &occRange{min: min, max: max}
 			}
@@ -2160,11 +2163,11 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 			name0[bud] = name
 			continue
 		}
-		cur.min += rng.min
+		cur.min = addOccurs(cur.min, rng.min)
 		if cur.max == Unbounded || rng.max == Unbounded {
 			cur.max = Unbounded
 		} else {
-			cur.max += rng.max
+			cur.max = addOccurs(cur.max, rng.max)
 		}
 		// br is a map, so which name arrives first is not stable across
 		// runs. The name only labels the diagnostic, but a diagnostic

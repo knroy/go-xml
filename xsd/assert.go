@@ -484,18 +484,31 @@ func (v *validator) selectAlternativeType(el *xdm.Node, decl *ElementDecl) Type 
 // of a descendant is reachable because each child's declaration names its type,
 // and that type carries its own content model.
 //
-// The depth bound is what makes a recursive schema safe: a type whose content
-// model reaches itself is legal, and an instance of it is finite, but the walk
-// follows declarations rather than nodes and would otherwise not terminate.
+// A recursive schema is safe here without a depth bound, because the walk is
+// driven by the instance rather than by the schema: it descends into a child
+// only where the document actually has one, so it runs out of nodes before it
+// runs out of declarations. A type whose content model reaches itself is
+// legal, but an instance of it is finite and acyclic, and how deep any
+// instance may be is already bounded by the parser
+// (xdm.ParseOptions.MaxDepth).
+//
+// This was a `depth > 32` bound, which conflated "cyclic" with "deep" the way
+// the schema-graph walks did. Nothing cyclic reaches it, so the bound only
+// truncated: past 32 the descendants were left unannotated, and an unannotated
+// node atomises as xs:untypedAtomic — exactly what the annotation exists to
+// prevent. Since an evaluation error is a false assertion result and not a
+// separate outcome, the truncation turned a satisfied assertion into a
+// violated one. "every $x in .//d satisfies $x gt xs:date('1900-01-01')" over
+// a recursive type held at nesting 32 and failed at 33, on documents that
+// differ only in how deep they are.
 func annotateForAssertion(el *xdm.Node, t *ComplexType) {
-	annotateSubtree(el, t, 0)
+	annotateSubtree(el, t, true)
 }
 
-// maxAnnotateDepth bounds the descent through declared types.
-const maxAnnotateDepth = 32
-
-func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
-	if el == nil || t == nil || depth > maxAnnotateDepth {
+// annotateSubtree labels el and its descendants. isRoot marks the assertion
+// root, which is the one element that keeps no type of its own.
+func annotateSubtree(el *xdm.Node, t *ComplexType, isRoot bool) {
+	if el == nil || t == nil {
 		return
 	}
 	for _, use := range t.AttributeUses {
@@ -518,7 +531,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		//
 		// $value carries the typed value instead, which is how an
 		// assertion reaches it.
-		if depth > 0 && el.TypeAnnotation == "" {
+		if !isRoot && el.TypeAnnotation == "" {
 			el.SetTypeAnnotation(annotationName(t.SimpleContent))
 		}
 		return
@@ -539,7 +552,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 				c.SetTypeAnnotation(annotationName(dt))
 			}
 		case *ComplexType:
-			annotateSubtree(c, dt, depth+1)
+			annotateSubtree(c, dt, false)
 		}
 	}
 }

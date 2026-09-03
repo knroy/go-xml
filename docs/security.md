@@ -122,6 +122,61 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ---
 
+## Fixed in the sixth audit
+
+### Occurrence arithmetic wrapped negative, and a bound was compared against garbage
+
+`occursHuge` — `int(^uint(0) >> 2)`, roughly a quarter of the int range — is
+what an occurrence bound too large for an `int` saturates to, so a schema may
+write `minOccurs="79228162514244337593543950335"` and get a workable number.
+It survives being doubled but not tripled: `occursHuge*3` is negative, and the
+Go compiler rejects it outright as a constant expression.
+
+The derivation checks in `restrict.go` multiply a particle's bounds by a model
+group's length and sum bounds across its members, with no guard. A sequence of
+three members at a saturated `minOccurs`, restricting a choice, produced
+
+    minOccurs -4611686018427387907 is below the base's 0
+
+A wrapped bound in a diagnostic is the visible half. The dangerous half is that
+a negative bound can satisfy an inequality it should fail, which would admit an
+invalid restriction.
+
+Sixteen sites now go through saturating `mulOccurs`/`addOccurs`. The reported
+multiplication was three of them; the other thirteen were found by sweeping for
+the pattern, and the sums in `effectiveTotalRange` are the worse find — they
+overflow at *two* saturated members rather than three, and they feed the
+wildcard-restriction path independently. `xsd/occurs_overflow_test.go` asserts
+positively on the saturated value rather than merely on the absence of a minus
+sign, and it caught a second distinct wrap the reported case never reaches.
+
+### An assertion rejected a valid document 33 elements deep
+
+`maxAnnotateDepth = 32` bounded the walk that labels an element and its
+descendants with their types before an XSD 1.1 assertion is evaluated. Past it
+the descendants went unannotated, and an unannotated node atomises as
+`xs:untypedAtomic` — precisely what the annotation exists to prevent. Since
+XSD 1.1 makes an XPath evaluation error a *false* assertion result rather than
+a distinct outcome, the truncation did not degrade to "unknown": it produced a
+definite `cvc-assertion.3` violation. A schema whose assertion holds was
+**valid at nesting 32 and invalid at 33**, on documents differing in nothing
+but depth.
+
+The bound's own comment claimed the walk "follows declarations rather than
+nodes and would otherwise not terminate". That was wrong, and checking it is
+what settled the fix: the recursion descends `el.ChildElements()`, so it enters
+a child only where the *instance* has one. A recursive type is legal but its
+instance is finite, and document nesting is already bounded by
+`xdm.ParseOptions.MaxDepth`. The bound never prevented a loop — it could only
+truncate. It is gone rather than raised, and a self-referential type still
+terminates at instance depth 900.
+
+Worth recording for anyone calibrating severity: a `sum(.//n) ge 1` variant
+stayed valid at every depth, because `untypedAtomic` casts to double and the
+comparison survives. The bug needs a type that will not silently coerce —
+`xs:date` comparison, or `instance of`. That is likely why no suite case caught
+it.
+
 ## Fixed in the fifth audit
 
 ### A depth bound on four schema-graph walks accepted documents the schema forbids

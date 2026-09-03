@@ -1016,6 +1016,42 @@ func occursValue(v string) (int, bool) {
 // equal to it cannot change the outcome of validating a real document.
 const occursHuge = int(^uint(0) >> 2)
 
+// mulOccurs and addOccurs combine occurrence bounds without wrapping.
+//
+// occursHuge is roughly a quarter of the int range, so it survives being
+// doubled but not tripled: occursHuge*3 is negative. That matters because the
+// derivation checks in restrict.go multiply a particle's bounds by the length
+// of a model group and sum bounds across a group's members, and a schema is
+// free to write minOccurs="79228162514244337593543950335" — which saturates to
+// occursHuge — on a sequence of three elements. The product wrapped negative
+// and leaked into a diagnostic reading "minOccurs -4611686018427387907 is
+// below the base's 0"; worse, a wrapped bound can satisfy an inequality it
+// should fail, which would let an invalid restriction through.
+//
+// Saturating at occursHuge keeps the arithmetic in the same territory the
+// parser already established: a bound at or above occursHuge is one no
+// document can reach, and clamping there cannot change any outcome that a
+// faithful big-integer computation would have produced. Unbounded is left to
+// the callers, which already special-case it before reaching here — it is a
+// sentinel (-1), not a magnitude, and folding it in silently would turn "no
+// limit" into a very large limit.
+func mulOccurs(a, b int) int {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	if a > occursHuge/b {
+		return occursHuge
+	}
+	return a * b
+}
+
+func addOccurs(a, b int) int {
+	if a > occursHuge-b {
+		return occursHuge
+	}
+	return a + b
+}
+
 // occurs reads minOccurs and maxOccurs from a particle-bearing element.
 //
 // Both default to 1. maxOccurs additionally accepts "unbounded".
