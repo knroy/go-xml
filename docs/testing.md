@@ -256,6 +256,16 @@ nothing* is a failure. That distinction exists because the first time this
 script ran, a relative `GOXSLT_QT3` resolved against the wrong directory, the
 test skipped itself, and `go test` printed PASS.
 
+**Point the variables at a real path, not a symlink.** XSpec reports 224
+instead of 225 when `GOXSLT_XSPEC` reaches the corpus through a symlink, and
+the cause is not this engine misbehaving. `issue-987_parent.xspec` is a
+deliberate circular import — its own comment reads "Circular import. Should be
+discarded" — which XSpec breaks by deduping on document URI. Reached through a
+symlink the same file acquires two URIs, the dedupe misses, and `global-param`
+is declared twice. The baseline binary fails identically, so a count that
+disagrees with CI by exactly one here is a path artifact rather than a
+regression. Document URIs are not canonicalised across symlinks.
+
 **Skipped is not failed.** The suites skip cases by declared dependency —
 streaming, a specific Unicode version, a spec version not being measured. The
 XSLT 3.0 suite has 14,601 cases and 8,625 in scope; counting the difference as

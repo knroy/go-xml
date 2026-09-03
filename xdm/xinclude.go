@@ -463,8 +463,15 @@ func copySubtree(n *Node, base string) *Node {
 		c.BaseURI = n.BaseURI
 	}
 	for _, a := range n.Attrs {
+		// UnionMember travels with TypeAnnotation, exactly as it does on the
+		// element above. The annotation names the type; for a union the member
+		// names what the value IS, and atomisation needs it because a union's
+		// own derivation chain runs to xs:anySimpleType and stops. Carrying one
+		// without the other is what silently untyped a validated document at
+		// three copy sites in xslt and xdmbuild.
 		c.AddAttr(&Node{Kind: KindAttribute, Name: a.Name, Value: a.Value,
-			IsID: a.IsID, IsIDREFS: a.IsIDREFS, TypeAnnotation: a.TypeAnnotation})
+			IsID: a.IsID, IsIDREFS: a.IsIDREFS, TypeAnnotation: a.TypeAnnotation,
+			UnionMember: a.UnionMember})
 	}
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)
