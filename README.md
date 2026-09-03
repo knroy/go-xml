@@ -1603,16 +1603,15 @@ include.
 
 ## Where this is going
 
-The conformance tail is no longer the interesting work. QT3 is down to a single
-failure, and it passes with `xpath.SetBacktrackingRegex(true)`. Of the 23 XSLT
-failures, 9 are the same story — they pass with that switch on — 7 are cases
-where the suite disagrees with the specification or where matching it would
-cost XSD tests, and 5 need XSLT 3.0 features, the network, or byte-identical
-reproduction of another processor's indentation. That leaves **none genuinely
-open**: the last two were `validation-0201` on both targets, and the engine
-defect behind them — a union's selected member type dropped on every tree copy,
-so that `xsl:strip-space` silently untyped a validated document — is fixed. The
-case still fails, on the indent width alone, which is implementation-defined.
+The conformance tail is no longer the interesting work. XPath is at 100% on all
+three versions, XQuery has 3 failures left and XSLT 21 across both targets —
+cases where the suite disagrees with the specification, where matching it would
+cost XSD tests, or which want byte-identical reproduction of another
+processor's indentation. That leaves **none genuinely open**: the last two were
+`validation-0201` on both targets, and the engine defect behind them — a
+union's selected member type dropped on every tree copy, so that
+`xsl:strip-space` silently untyped a validated document — is fixed. The case
+still fails, on the indent width alone, which is implementation-defined.
 The full catalogue is [docs/known-gaps.md](docs/known-gaps.md). Three larger
 things are open, in rough order of how much they would change:
 
@@ -1621,14 +1620,17 @@ things are open, in rough order of how much they would change:
   and would cut peak memory on large documents — it is the one change here that
   is architectural rather than additive.
 * **Schema-aware atomisation.** `xsl:import-schema` loads a schema and makes
-  its type names available, but a validated `<price>10.50</price>` still
-  atomises as untyped: the typed value would have to be carried on the node
-  rather than its name. Stylesheets relying on type assertions work; ones
-  relying on schema-aware arithmetic do not.
-* **An XSLT conformance run.** The absence of one is the largest gap in the
-  evidence. Adapting the XSLT 3.0 catalog to the subset this engine claims is
-  tractable and would replace corpus-shaped confidence with systematic
-  coverage.
+  its type names available, and a value's selected union member now survives a
+  tree copy, so type assertions hold across `xsl:strip-space` and `xsl:copy-of`.
+  What is still missing is the typed value itself: a validated
+  `<price>10.50</price>` atomises as untyped, because the value would have to be
+  carried on the node rather than its name. Stylesheets relying on type
+  assertions work; ones relying on schema-aware arithmetic do not.
+* **A differential harness as a standing target.** The suites feed well-formed
+  input and measure what happens after. The nested-occurrence defect — a schema
+  admitting 5 children where only 10 were valid, and rejecting 10 — was found by
+  generating models and comparing against an oracle, and no suite agreement
+  reached it. That technique is still a one-off rather than something CI runs.
 
 Contributions are welcome, particularly a differential against a corpus this
 has not seen — that is how most of the bugs above were found, and the failure
