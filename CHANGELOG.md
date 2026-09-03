@@ -4,6 +4,43 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
+## Unreleased
+
+### Fixed
+
+- **XSD: nested occurrence bounds are decided exactly.** A repeated group whose
+  only child is itself repeating was decided wrongly in *both* directions. For
+  `<sequence minOccurs="5" maxOccurs="5">` over
+  `<element c minOccurs="2" maxOccurs="2"/>` the only valid document is ten `c`
+  and it was refused, while five `c` — which no reading admits — was accepted.
+  The false accept is the serious half: a `minOccurs` floor was silently not
+  enforced, so a schema believed to require a minimum count did not require it.
+
+  The matcher tracked a *low* and a *high* reading of each occurrence count
+  independently, and consulted them in opposite directions, so a document was
+  admitted when different readings satisfied different bounds though no single
+  consistent reading satisfied all of them. It now carries a set of whole count
+  vectors — every reading consistent from the first child to the current one —
+  so each bound is answered from one execution. The walk stays deterministic on
+  the positions, which Unique Particle Attribution guarantees; only the counts
+  are searched.
+
+  Found by differential fuzzing against a brute-force reference, and invisible
+  to both W3C suites: a group with two or more distinct child names was always
+  decided correctly, which is why 39,347 XSD 1.0 agreements and 41,532 on 1.1
+  did not cover it. Both suites are unchanged after the fix, case for case.
+
+  Validating an instance costs about 2.7% more time and 3.1% more memory;
+  compiling a schema is unchanged.
+
+### Added
+
+- `xsd.DefaultMaxMatchStates` (4,096) bounds the readings the content-model
+  matcher carries at once. Exceeding it fails the element with an error naming
+  the limit rather than allocating without a ceiling. Each occurrence maximum is
+  also narrowed per document to what that document can reach, which keeps
+  ordinary schemas — and `maxOccurs="100000000"` — in single digits.
+
 ## v1.2.1 — 2026-09-03
 
 Conformance, correctness, and the honesty of the numbers reporting them.

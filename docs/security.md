@@ -520,6 +520,29 @@ This matters because real callers must set `AllowDOCTYPE: true` — UBL depends 
 the W3C XML Signature schema, which carries a DOCTYPE. **That escape hatch does
 not reopen XXE.**
 
+### A content model cannot make the matcher allocate without a ceiling
+
+Deciding whether an element's children match a content model needs the *set* of
+readings the children admit, because nested occurrence bounds cannot be settled
+one reading at a time — see *Nested occurrence bounds were wrong in both
+directions* in [known-gaps.md](known-gaps.md). A set is a thing a schema could
+try to grow, and a schema is untrusted input: a `.xsd` arriving over the wire is
+as hostile as a `.xml`.
+
+Two things bound it. Each occurrence maximum is narrowed per document to what
+that document can actually reach, so a scope cannot contribute distinguishable
+readings it has no children to fill — `maxOccurs="100000000"` against a thousand
+children behaves as `unbounded` does, and readings past the minimum merge
+instead of multiplying. That alone holds both W3C suites, UBL 2.1 and the
+DocBook corpus to single-digit set sizes. Above it sits `DefaultMaxMatchStates`,
+a hard ceiling of 4,096 readings per element, and crossing it fails the element
+with an error naming the limit rather than continuing to allocate.
+
+The limit refuses rather than approximates, deliberately. A matcher that fell
+back to a heuristic on a large set would be least exact precisely on the inputs
+constructed to make it so, which is a validator that can be talked out of
+validating.
+
 ### Billion laughs is impossible
 
 Same cause. A 9-level, fan-10 entity bomb fails in 10 µs with `invalid character

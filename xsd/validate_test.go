@@ -921,7 +921,9 @@ func TestAssertionNamedCollectionIsStillUnavailable(t *testing.T) {
 // ends of the repetition, so the automaton cannot tell a step forward through
 // the group from a wraparound into a fresh repetition. Both readings are legal
 // attributions, and the two occurrence bounds want opposite ones: maxOccurs is
-// satisfied if the fewest repetitions fit, minOccurs if the most reach it.
+// satisfied if the fewest repetitions fit, minOccurs if the most reach it. The
+// matcher no longer picks between them — it carries every reading as a whole
+// count vector — so both bounds are answered from one execution.
 const optionalSeqSchema = `
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="doc">
@@ -948,15 +950,14 @@ func TestRepeatedOptionalSequence(t *testing.T) {
 	assertValid(t, optionalSeqSchema, `<doc><b/><b/><b/></doc>`)
 	assertInvalid(t, optionalSeqSchema,
 		`<doc><b/><b/><b/><b/><b/><b/><b/></doc>`, "cvc-complex-type.2.4")
-	// Known shortfall, and the same before this pair of counts as after:
-	// b twice per iteration and three iterations is six, but the low count
-	// stops at three. The wraparound from b back to b is the outer scope's
-	// own loop-back edge and not also a step within one iteration, so it
-	// has no second reading to prefer, and the two scopes' remaining room
-	// is approximated apart rather than searched together. Nothing in the
-	// W3C suite turns on it.
-	assertInvalid(t, optionalSeqSchema,
-		`<doc><b/><b/><b/><b/></doc>`, "cvc-complex-type.2.4")
+	// Four b was the shortfall the bracketed counts left behind, and the
+	// vector set closes it: b twice per iteration over two iterations is a
+	// single consistent reading, and the inner and outer scopes' remaining
+	// room is now searched together rather than approximated apart. Six is
+	// the true ceiling — three iterations of b twice — and seven above is
+	// still refused.
+	assertValid(t, optionalSeqSchema, `<doc><b/><b/><b/><b/></doc>`)
+	assertValid(t, optionalSeqSchema, `<doc><b/><b/><b/><b/><b/><b/></doc>`)
 }
 
 // The mirror of the case above: here the ambiguous transition has to be read

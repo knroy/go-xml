@@ -282,6 +282,7 @@ like any other:
 | `ParseOptions.MaxDepth` | 1000 | nesting, and so parser stack use |
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
+| `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
 
 `MaxDocuments` exists because a schema that includes a generator of schemas
 would otherwise be a way to spend the process. `MaxErrors` exists because a
@@ -294,6 +295,17 @@ of `<a/>` elements measures 53 times the heap of a megabyte of text — a byte c
 says little about what a document will cost. `MaxBytes` bounds the read;
 `MaxNodes` bounds what the read can allocate. Every limit takes `-1` to disable
 it, for input this process produced itself.
+
+`DefaultMaxMatchStates` is a constant rather than an option, because no schema
+anyone has measured comes close to it. Matching an element's children against a
+content model carries the *set* of readings the content admits — a position and
+a whole vector of occurrence counts each — since nested occurrence bounds cannot
+be decided one reading at a time; `xsd/nfa.go` has the argument. Merging
+converged readings and narrowing each maximum to what the document can actually
+reach keeps the set in single digits on both W3C suites, UBL 2.1 and the DocBook
+corpus. A schema contrived to nest repetitions deeply enough to grow it is
+refused with an error naming the limit, rather than being answered by an
+approximation or allowed to allocate without a ceiling.
 
 `ValidateOptions.MaxDepth` is deliberately separate from the parser's. The
 validator recurses once per element depth, and exceeding Go's stack limit is a

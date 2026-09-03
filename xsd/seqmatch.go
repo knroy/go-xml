@@ -36,51 +36,16 @@ func NewSequenceMatcher(p *Particle) (*SequenceMatcher, error) {
 // A rejection at index len(names) means the sequence ended early — every name
 // was placed but the model required more.
 func (s *SequenceMatcher) Match(names []xdm.QName) (bool, int) {
-	m := s.model
-	if len(m.positions) == 0 {
-		return len(names) == 0, 0
+	ok, at, err := matchNames(s.model, func(i, pos int) bool {
+		return s.model.positions[pos].matches(names[i], nil)
+	}, len(names), DefaultMaxMatchStates)
+	if err != nil {
+		// The caller wants a yes-or-no and has nowhere to put an error.
+		// A model too tangled to decide is not one this can call a
+		// match, so it is a rejection at the point the walk gave up.
+		return false, at
 	}
-
-	// The walk mirrors the schema validator's: one position is chosen per
-	// name rather than a set, because the counters that stand in for bounded
-	// repetition are per-scope state and only make sense along a single path.
-	// The model is deterministic — Unique Particle Attribution guarantees at
-	// most one position can match — so there is nothing to backtrack over.
-	counts := make([]int, len(m.counters))
-	high := make([]int, len(m.counters))
-	current := m.first
-	prevIdx := -1
-
-	for i, name := range names {
-		next := -1
-		for _, idx := range current {
-			if !m.positions[idx].matches(name, nil) {
-				continue
-			}
-			if !counterAllows(m, counts, high, prevIdx, idx) {
-				continue
-			}
-			next = idx
-			break
-		}
-		if next < 0 {
-			return false, i
-		}
-		advanceCounters(m, counts, high, prevIdx, next)
-		prevIdx = next
-		current = m.follow[next]
-	}
-
-	// The sequence must be able to end here: either nothing was required, or
-	// the last position reached is a valid ending point and every counter has
-	// met its minimum.
-	if prevIdx < 0 {
-		return m.nullable, 0
-	}
-	if !contains(m.last, prevIdx) || !countersSatisfied(m, high, prevIdx) {
-		return false, len(names)
-	}
-	return true, 0
+	return ok, at
 }
 
 // CheckBuiltinValue reports whether lexical is a legal value of the built-in

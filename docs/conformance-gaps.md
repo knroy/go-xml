@@ -548,18 +548,21 @@ part:
 
 | Case | Version | Outcome |
 |---|---|---|
-| `MS-Particles2006-07-15/particlesZ040` | both | **Fixed.** Bracketing a repetition count into a low and a high reading, since one number cannot answer both bounds. |
+| `MS-Particles2006-07-15/particlesZ040` | both | **Fixed.** First by bracketing a repetition count into a low and a high reading; the bracket has since been replaced by a set of whole count vectors, which decides it exactly rather than by approximation. |
 | `MS-Wildcards2006-07-15/wildZ013` | 1.0 | **Fixed.** Attribute-wildcard intersection under errata E1-10. |
 | `MS-Particles2006-07-15/particlesK006` | 1.1 | **Fixed.** Particle derivation. |
 | `MS-Attribute2006-07-15/attP031` | 1.0 | **Suite defect.** It names its instance test `.i`, says in its own prose that the attribute *does* appear, and still expects valid; its sibling `attP029`, byte-identical but for the instance, is consistent. |
 
-A short list is not the same as the engine being exact. The content-model
-matcher is still not, and the case that shows it was found by fuzzing rather
-than by either suite — see *Nested occurrence bounds are wrong in both
-directions* in [known-gaps.md](known-gaps.md). A repeated group whose only
-child is itself repeating is decided wrongly in both directions, which no W3C
-case covers because they all use two or more distinct child names. A suite
-reaching its ceiling bounds what the suite asks, not what the code does.
+A short list is not the same as the engine being exact, and the case that made
+the point was found by fuzzing rather than by either suite: a repeated group
+whose only child is itself repeating was decided wrongly in *both* directions,
+which no W3C case covers because they all use two or more distinct child names.
+It is fixed — the matcher now carries a set of whole occurrence-count vectors,
+so every bound is answered from one execution — and the suite numbers did not
+move by a single case in either direction, which is exactly the point. A suite
+reaching its ceiling bounds what the suite asks, not what the code does. See
+*Nested occurrence bounds were wrong in both directions* in
+[known-gaps.md](known-gaps.md).
 
 **XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,532 / 41,570 =
 99.91%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14

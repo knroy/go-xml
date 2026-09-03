@@ -47,7 +47,7 @@ The last four to fall are worth recording, because they are the shape of what
 
 | Case | Suite | Outcome |
 |---|---|---|
-| `particlesZ040` | XSD, both | Fixed by bracketing a repetition count into a low and a high reading. |
+| `particlesZ040` | XSD, both | Fixed by bracketing a repetition count into a low and a high reading, and since decided exactly by a set of whole count vectors. |
 | `wildZ013` | XSD 1.0 | Fixed: attribute-wildcard intersection under errata E1-10. |
 | `particlesK006` | XSD 1.1 | Fixed: particle derivation. |
 | `catalog-005b` | XSLT 3.0 | Fixed, and `catalog-009` came with it. |

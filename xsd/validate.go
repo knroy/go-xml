@@ -1152,13 +1152,31 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 
 	var tables []icTables
 
-	// counts and high bracket the repetitions of each counter scope: the
-	// fewest the content so far can be read as, and the most. See
-	// advanceCounters for why one number will not do.
-	counts := make([]int, len(m.counters))
-	high := make([]int, len(m.counters))
+	// The walk is deterministic on the *positions* and nondeterministic on
+	// the counts. Unique Particle Attribution guarantees at most one element
+	// particle can match a name, and the one remaining ambiguity — an
+	// element against a wildcard — erratum E1-29 leaves to the processor,
+	// which is why a single position is still chosen per child and can be
+	// handed to validateChild for annotation.
+	//
+	// The occurrence counts are a different matter. Which repetition scope a
+	// transition restarts is not determined by the positions, so the counts
+	// are a *set* of whole vectors: every reading of the content so far that
+	// is consistent from the first child to this one. See nfa.go for why a
+	// per-scope bracket cannot answer this and a vector set can.
+	// A model with no occurrence bounds has nothing to search: every scope
+	// question is vacuous, so the walk is the plain automaton and none of
+	// the vector machinery is allocated. Most content models are this one,
+	// and it is the difference between the exact matcher costing nothing on
+	// them and costing an allocation per element.
+	nested := len(m.counters) > 0
+	var counts, reach []int
+	var vectors, stepped [][]int
+	if nested {
+		counts = make([]int, len(m.counters))
+		reach = reachable(m, len(kids))
+	}
 	current := m.first
-	var prev *position
 	prevIdx := -1
 
 	// inSuffix latches once a suffix-mode wildcard has matched. From then
@@ -1167,9 +1185,57 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 	// suffix mean interleave with extra steps.
 	inSuffix := false
 
+	// admits reports whether some live reading can take the transition into
+	// idx, leaving the resulting readings in stepped.
+	incomplete := false
+	admits := func(idx int) bool {
+		if !nested {
+			return true
+		}
+		stepped = stepped[:0]
+		if prevIdx < 0 {
+			enterCounts(m, reach, idx, counts)
+			stepped = append(stepped, append([]int(nil), counts...))
+			return true
+		}
+		for _, vec := range vectors {
+			stepCountsWhy(m, reach, prevIdx, idx, vec, &stepped, &incomplete)
+		}
+		return len(stepped) > 0
+	}
+
+	// keep installs the readings admits found, deduplicated so that two
+	// executions which have converged are not carried twice, and reports
+	// whether the set stayed inside the budget.
+	//
+	// The duplicate check is a linear scan rather than a set: the vectors
+	// are the readings one element's children admit, which stays in single
+	// digits on every schema measured, and a map costs more to build than
+	// the scan costs to run.
+	keep := func() bool {
+		vectors, stepped = stepped, vectors[:0]
+		for i := 0; i < len(vectors); i++ {
+			for j := 0; j < i; j++ {
+				if intsEqual(vectors[i], vectors[j]) {
+					vectors = append(vectors[:i], vectors[i+1:]...)
+					i--
+					break
+				}
+			}
+		}
+		return len(vectors) <= DefaultMaxMatchStates
+	}
+
 	for _, kid := range kids {
 		name := xdm.QName{URI: kid.Name.URI, Local: kid.Name.Local}
 		next := -1
+		// boundRefused records that a position matched the child by name
+		// and was refused only by an occurrence bound. The two failures
+		// read differently to a schema author — a name the model does
+		// not have here, against a name it has run out of room for — and
+		// the spec spells them as different clauses.
+		boundRefused := false
+		incomplete = false
 		for _, idx := range current {
 			p := m.positions[idx]
 			if inSuffix {
@@ -1178,7 +1244,8 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 			if !p.matches(name, v.elementDefined) {
 				continue
 			}
-			if !counterAllows(m, counts, high, prevIdx, idx) {
+			if !admits(idx) {
+				boundRefused = true
 				continue
 			}
 			if _, isWildcard := p.term.(*Wildcard); isWildcard {
@@ -1198,18 +1265,25 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				// erratum E1-29 leaves to the processor.
 				if next < 0 {
 					next = idx
+					if nested && !keep() {
+						v.fail(el, "", "%v", errMatchStates)
+						return tables
+					}
 				}
 				continue
 			}
 			next = idx
+			if nested && !keep() {
+				v.fail(el, "", "%v", errMatchStates)
+				return tables
+			}
 			break
 		}
 		if next < 0 {
 			// XSD 1.1 open content: an element the model does not
 			// name may still be permitted by the type's wildcard.
 			// In interleave mode it may appear anywhere; in suffix
-			// mode only once the model has been satisfied, which
-			// prevLast records.
+			// mode only once the model has been satisfied.
 			// Suffix mode admits the wildcard only once the content
 			// model has been satisfied: either nothing has matched
 			// and the model accepts the empty sequence, or the last
@@ -1228,6 +1302,20 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 				}
 				continue
 			}
+			if boundRefused && incomplete {
+				// The child names a particle the model has here,
+				// and the only thing standing in the way is a
+				// scope that would have to be left before it met
+				// its minimum. The content so far is incomplete,
+				// not wrongly named, so 2.4.b is the clause —
+				// <a minOccurs="5"/><b/> with four a and a b is
+				// the shape.
+				v.fail(kid, "cvc-complex-type.2.4.b",
+					"element content is incomplete: {%s}%s cannot follow "+
+						"until an earlier particle has met its minimum",
+					kid.Name.URI, kid.Name.Local)
+				return tables
+			}
 			v.fail(kid, "cvc-complex-type.2.4.a",
 				"element {%s}%s is not permitted here%s",
 				kid.Name.URI, kid.Name.Local, expected(m, current))
@@ -1235,19 +1323,17 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		}
 
 		p := m.positions[next]
-		advanceCounters(m, counts, high, prevIdx, next)
 		if t := v.validateChild(kid, p); t != nil {
 			tables = append(tables, t)
 		}
 
-		prev, prevIdx = p, next
+		prevIdx = next
 		current = m.follow[next]
 	}
-	_ = prev
 
 	// The sequence must be able to end here: either nothing was required,
-	// or the last position reached is a valid ending point and every
-	// counter has met its minimum.
+	// or the last position reached is a valid ending point and some single
+	// reading of the counts has every scope at its minimum.
 	if prevIdx < 0 {
 		if !m.nullable {
 			v.fail(el, "cvc-complex-type.2.4.b",
@@ -1255,199 +1341,38 @@ func (v *validator) matchSequence(el *xdm.Node, kids []*xdm.Node, m *contentMode
 		}
 		return tables
 	}
-	if !contains(m.last, prevIdx) || !countersSatisfied(m, high, prevIdx) {
+	if !contains(m.last, prevIdx) || nested && !someReadingSatisfies(m, vectors, prevIdx) {
 		v.fail(el, "cvc-complex-type.2.4.b",
 			"element content is incomplete%s", expected(m, m.follow[prevIdx]))
 	}
 	return tables
 }
 
-// counterAllows reports whether taking a transition to a position is permitted
-// by the repetition bounds.
-func counterAllows(m *contentModel, counts, high []int, from, to int) bool {
-	p := m.positions[to]
-	for _, c := range p.counters {
-		if from < 0 || !sharesScope(m.positions[from], c) {
-			// Entering the scope for the first time; nothing to bound.
-			continue
-		}
-		// The bound applies to a *restart*, not to every transition
-		// inside the scope. Consulting the count on a continuation —
-		// x1 to x2 within one repetition of a group — refused a legal
-		// step the moment the count reached its maximum, which is the
-		// same confusion the restart test exists to resolve.
-		if !isScopeRestart(m, c, from, to) {
-			continue
-		}
-		// A step that an inner counter can account for is a repetition
-		// of that counter, not of this one. <sequence maxOccurs="1">
-		// wrapping <element maxOccurs="2"/> puts the element at both
-		// ends of the outer scope, so following itself looks like an
-		// outer restart — and the outer bound of 1 then refused the
-		// element's own second occurrence.
-		if innerRepeats(m, counts, c, from, to) {
-			continue
-		}
-		if m.counters[c].max != Unbounded && counts[c] >= m.counters[c].max {
-			// c is spent, but an enclosing scope may still restart,
-			// and restarting it begins a fresh repetition of c.
-			// <choice maxOccurs="unbounded"> over branches with
-			// minOccurs="3" maxOccurs="5" is the shape: the sixth
-			// foo is not a sixth repetition of the inner counter
-			// but the first of a second choice, and refusing it
-			// treated the inner bound as a total.
-			if outerRestarts(m, counts, high, c, from, to) {
-				continue
-			}
-			return false
-		}
-	}
-	return true
-}
-
-// outerRestarts reports whether a scope enclosing c can begin another
-// repetition on this transition.
+// someReadingSatisfies reports whether any count vector still live has every
+// scope containing at at its minimum.
 //
-// It is the mirror of innerRepeats. That one says an inner counter accounts for
-// the step so the outer is merely continuing; this says the outer accounts for
-// it so the inner is starting over. Both exist because a position at the
-// boundary of one scope is at the boundary of every scope around it, and only
-// one of them is actually repeating.
-func outerRestarts(m *contentModel, counts, high []int, inner, from, to int) bool {
-	for _, c := range m.positions[to].counters {
-		if c == inner || !sharesScope(m.positions[from], c) {
-			continue
+// It is "some", not "every", on purpose: the vectors are the readings the
+// content admits, and a document is valid if one of them is. What the previous
+// runtime could not do is insist that the reading which meets a minimum is the
+// same reading that stayed inside every maximum — which the vectors give for
+// free, since a vector that broke a maximum was never created.
+func someReadingSatisfies(m *contentModel, vectors [][]int, at int) bool {
+	for _, vec := range vectors {
+		ok := true
+		for _, c := range m.positions[at].counters {
+			if vec[c] < m.counters[c].min {
+				ok = false
+				break
+			}
 		}
-		if !isNestedIn(m, inner, c) {
-			continue
-		}
-		if !isScopeRestart(m, c, from, to) {
-			continue
-		}
-		// The enclosing scope has to have a repetition left to give,
-		// and the inner one has to have met its minimum before it can
-		// be abandoned for a new round.
-		// The *most* repetitions c can be read as is what bounds this.
-		// counts is deliberately the fewest, and on a transition whose
-		// two readings the automaton cannot separate the fewest is one
-		// that has not restarted c at all — so consulting it here would
-		// offer a repetition of c that the reading now being taken has
-		// already spent. <sequence maxOccurs="2"> over <element
-		// minOccurs="2" maxOccurs="2"/> admits two b or four, and a
-		// third b was let through as the start of a second sequence
-		// that the first two b had already used up.
-		if m.counters[c].max != Unbounded && high[c] >= m.counters[c].max {
-			continue
-		}
-		if counts[inner] < m.counters[inner].min {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-func sharesScope(p *position, c int) bool {
-	for _, x := range p.counters {
-		if x == c {
+		// Scopes already left were checked against their minimum on the
+		// way out and reset to zero, so nothing outside the current
+		// chain can be short.
+		if ok {
 			return true
 		}
 	}
 	return false
-}
-
-// advanceCounters updates the repetition counts for a transition.
-//
-// Two counts are kept per scope, because how many repetitions a sequence of
-// elements represents is not always a single number. Once every member of a
-// repeated group is optional, every position in it can both begin and end a
-// repetition, so a step from one member to the next is a legal reading *and*
-// so is a wraparound into a fresh repetition — the automaton cannot tell them
-// apart from the positions alone, and both readings are attributions the spec
-// allows. counts is the fewest repetitions the content can be read as, high
-// the most.
-//
-// The two are consulted in opposite directions, which is what makes the pair
-// worth keeping. maxOccurs asks whether *some* reading fits inside the bound,
-// so it consults the low count; minOccurs asks whether *some* reading reaches
-// it, so it consults the high one. Conflating them into one number forces a
-// single reading on both questions and loses whichever the other needed:
-// counting every ambiguous step as a restart spends <sequence maxOccurs="3">
-// of three optional particles inside its first iteration, and counting none of
-// them leaves <sequence minOccurs="2"> over a repeating element short.
-func advanceCounters(m *contentModel, counts, high []int, from, to int) {
-	for _, c := range m.positions[to].counters {
-		if from < 0 || !sharesScope(m.positions[from], c) {
-			// Entering the scope: this is the first repetition.
-			counts[c], high[c] = 1, 1
-			continue
-		}
-		if !isScopeRestart(m, c, from, to) {
-			continue
-		}
-		high[c]++
-		// A transition the compiler also laid down as a step *within*
-		// one repetition of c has a reading that is not a restart, so
-		// the fewest-repetitions count does not charge it.
-		if m.scopeInner[c][[2]int{from, to}] {
-			continue
-		}
-		counts[c]++
-	}
-}
-
-// isScopeRestart reports whether a transition begins another repetition of a
-// scope rather than continuing the current one.
-//
-// A repetition restarts when the transition lands on a position that can *begin*
-// the scope, from one that can *end* it — which is exactly the edge the compiler
-// added to make the scope repeatable.
-//
-// The first version compared position indices, on the reasoning that a restart
-// goes backwards. That holds only while positions are numbered in the order
-// they appear, and a group reference breaks it: a choice of two groups numbers
-// the second group's positions after the first's, so moving from the first
-// group's end into the second group's start is a restart that runs *forwards*.
-// A repeated choice over two groups was then read as one long repetition and
-// rejected once it passed maxOccurs.
-func isScopeRestart(m *contentModel, scope, from, to int) bool {
-	return scopeCanEndAt(m, scope, from) && scopeCanBeginAt(m, scope, to)
-}
-
-// scopeCanBeginAt reports whether a position can start a repetition of a scope.
-func scopeCanBeginAt(m *contentModel, scope, at int) bool {
-	return m.scopeFirst[scope][at]
-}
-
-// scopeCanEndAt reports whether a position can finish a repetition of a scope.
-func scopeCanEndAt(m *contentModel, scope, at int) bool {
-	return m.scopeLast[scope][at]
-}
-
-// countersSatisfied reports whether every counter containing a position has met
-// its minimum.
-func countersSatisfied(m *contentModel, high []int, at int) bool {
-	for _, c := range m.positions[at].counters {
-		if high[c] < m.counters[c].min {
-			return false
-		}
-	}
-	// Every counter that was entered has to have met its minimum, not only
-	// those enclosing the final position. In <a minOccurs="5"/><b
-	// minOccurs="0"/> the last position is b, which is in none of a's
-	// scopes — so checking only the final position's counters never looked
-	// at a's minimum at all, and four <a/> passed.
-	//
-	// A counter still at zero is one whose particle was never entered, and
-	// that is not a shortfall: an optional repetition that did not occur is
-	// satisfied by the surrounding model accepting its absence, which the
-	// automaton has already decided by reaching an accepting position.
-	for c, n := range high {
-		if n > 0 && n < m.counters[c].min {
-			return false
-		}
-	}
-	return true
 }
 
 func contains(xs []int, x int) bool {
@@ -1951,44 +1876,6 @@ func optionalAllMembers(g *ModelGroup, particles []*Particle) []int {
 		}
 	}
 	return out
-}
-
-// innerRepeats reports whether a transition is already a repetition of some
-// counter nested inside c.
-//
-// The scopes are nested, so a position at the boundary of an inner one is at
-// the boundary of every scope around it too. Only the innermost counter that
-// can account for the step is repeating; the outer ones are being continued,
-// not restarted, and consulting their bounds refuses legal content.
-func innerRepeats(m *contentModel, counts []int, outer, from, to int) bool {
-	for _, c := range m.positions[to].counters {
-		if c == outer || !sharesScope(m.positions[from], c) {
-			continue
-		}
-		if !isNestedIn(m, c, outer) {
-			continue
-		}
-		if !isScopeRestart(m, c, from, to) {
-			continue
-		}
-		if m.counters[c].max == Unbounded || counts[c] < m.counters[c].max {
-			return true
-		}
-	}
-	return false
-}
-
-// isNestedIn reports whether counter c lies inside counter outer.
-func isNestedIn(m *contentModel, c, outer int) bool {
-	for i := c; i >= 0; i = m.counters[i].parent {
-		if m.counters[i].parent == outer {
-			return true
-		}
-		if m.counters[i].parent < 0 {
-			return false
-		}
-	}
-	return false
 }
 
 // substitutionBlocked applies cvc-elt.4.3's blocking half.

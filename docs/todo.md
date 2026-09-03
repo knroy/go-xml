@@ -296,17 +296,25 @@ cannot see:
   which killed the *process*, since a stack overflow is fatal in Go and
   `recover()` cannot catch it;
 - and, by differential fuzzing against a brute-force reference, a
-  content-model bug that decides a whole class of schemas wrongly in both
+  content-model bug that decided a whole class of schemas wrongly in both
   directions ([known-gaps.md](known-gaps.md)).
 
-The first two are fixed; the third is the one the paragraph above is about.
+All four are fixed. The last needed the matcher's counter runtime replaced —
+a set of whole count vectors rather than a bracketed reading per scope, so that
+every occurrence bound is answered from one execution. Both suites came through
+unmoved, case for case. The differential technique — generate a model, generate
+documents, compare against an independent oracle — is what found the one that
+mattered most, and it should be a standing target rather than a one-off, since
+it is the only method that reached a bug 80,879 suite agreements could not.
 
 ### 3.2 Deep-nesting and pathological schemas
 
-Limits exist for documents (`MaxDocuments`, `MaxErrors`, depth). Less certain:
-a content model with deeply nested counters, a substitution group closure over
-thousands of declarations, a union of unions. Worth a benchmark that fails
-loudly rather than an assumption.
+Limits exist for documents (`MaxDocuments`, `MaxErrors`, depth), and a content
+model with deeply nested counters now has one too: `DefaultMaxMatchStates`
+bounds the readings the matcher will carry at once, and exceeding it is an error
+naming the limit rather than an unbounded allocation. Still less certain: a
+substitution group closure over thousands of declarations, a union of unions.
+Worth a benchmark that fails loudly rather than an assumption.
 
 ### 3.3 Production corpora as a fixture
 

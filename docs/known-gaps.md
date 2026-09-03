@@ -104,89 +104,6 @@ Each of these has a diagnosed cause and at least one attempted fix that was
 measured and reverted. The attempts are recorded because the obvious patch is
 wrong in a way that is not obvious.
 
-### Content model matching is greedy, not backtracking
-
-`MS-Particles/particlesZ040` (instance, both versions).
-
-`matchSequence` walks the Glushkov automaton one path at a time and arbitrates
-nested occurrence counters with heuristics. It decides every content model in
-the suite and both production corpora except this one: a
-`<sequence maxOccurs="3">` holding an optional element, an unbounded wildcard
-and another optional element. Because the neighbours are optional, the wildcard
-is both a *first* and a *last* position of the outer scope, so every
-wildcard-to-wildcard step reads as a restart of the sequence. Twenty-three
-children drove the outer count to 14 against a maximum of 3.
-
-Two fixes were tried and both reverted:
-
-1. Skipping the outer increment when an inner counter accounts for the step —
-   restoring symmetry with `counterAllows`, which already excuses such a step
-   from the outer *bound*. Unit tests stayed green; the suite lost **6 cases on
-   both versions**.
-2. Additionally recording, per scope, the wrap-around follow edges the compiler
-   lays to make a scope repeatable, and treating only those as restarts. That
-   fixes `particlesZ040` and breaks `TestInnerBoundIsNotATotal`, where an outer
-   choice and an inner element are self-loops on the *same* position: the edge
-   serves both scopes and excluding it from either reading is wrong.
-
-The two pull in opposite directions because the ambiguity is real. Which scope
-repeats is only knowable from the rest of the input, which is a backtracking or
-subset-construction question, not something a per-edge compile-time label can
-answer.
-
-A third attempt did land: bracketing the repetition count into a low and a
-high reading, which carries `particlesZ040` in both versions and costs
-nothing elsewhere. It does not make the matcher exact, and the section below
-is the part it does not reach.
-
-### Nested occurrence bounds are wrong in both directions
-
-Not a suite case — found by differential fuzzing against a brute-force
-reference, and invisible to both W3C suites.
-
-A repeated group whose *only* child is itself repeating is decided wrongly in
-both directions. For `<sequence minOccurs="5" maxOccurs="5">` over
-`<element c minOccurs="2" maxOccurs="2"/>`, the only valid document is ten
-`c`, and it is **refused**; five `c`, which no reading admits, is **accepted**.
-For `<sequence 2..2>` over `c{2,4}` the valid range is four to eight, and the
-answers are inverted across the whole sweep.
-
-The cause is the bracket itself: `counterAllows` consults the low count and
-`countersSatisfied` the high one, so a document is admitted when *different*
-readings satisfy each bound though no single consistent reading satisfies
-both. When the group holds one particle its FIRST and LAST positions coincide,
-which is what makes the wraparound edge indistinguishable from the inner
-element's own repeat edge, so the bracket cannot be narrowed locally.
-
-The false-accept direction matters more than the arithmetic: a `minOccurs`
-floor is silently not enforced, so a schema believed to require a minimum
-count does not require it.
-
-A group with two or more distinct child names is decided correctly, which is
-why 39,347 XSD 1.0 agreements and 41,532 on 1.1 do not cover it. Verified
-present at `06e8a75`, before the bracket existed, so this is long-standing
-rather than a regression — the bracket's commit message documents the
-false-reject half and not the false-accept half.
-
-Fixing it means tracking the set of reachable count-**vectors**, and the
-emphasis is the point. A fourth attempt replaced the low/high pair with a set
-of reachable counts *per scope* and measured it: the false accept of five `c`
-disappeared, and so did the odd counts under an unbounded outer scope. But
-every valid document stayed refused, because a per-scope set still loses the
-correlation between scopes — when the outer sequence restarts, the inner
-element's count must restart *with it*, and two independent sets cannot say
-which inner count belongs to which outer reading. Resetting nested counters on
-an outer restart fires on the same transition that set them, and took
-`TestRepeatedOptionalSequence` and the substitution-group cases down with it.
-
-So the unit of tracking has to be a vector over all scopes at once — a set of
-whole readings, not a set per scope. That is a subset construction over the
-counter state, which is a different matcher rather than a patch to this one. `TestNestedOccursBoundsAreWrong` in
-`xsd/occurs_nested_test.go` records the case and is skipped.
-
-Fixing the matcher properly means replacing it — a deliberate project weighed
-against the 99.8% that already holds.
-
 ### An optional all group is a disjunction, not a scaled budget
 
 `MS-ModelGroups/mgO029` (schema, 1.1).
@@ -381,6 +298,71 @@ declaration, and falls back to the 1.0 table otherwise — sound, but
 conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
+
+### Nested occurrence bounds were wrong in both directions (fixed)
+
+Not a suite case — found by differential fuzzing against a brute-force
+reference, and invisible to both W3C suites. `MS-Particles/particlesZ040`, the
+one suite case the same machinery reached, had already been carried by an
+earlier approximation.
+
+A repeated group whose *only* child is itself repeating was decided wrongly in
+both directions. For `<sequence minOccurs="5" maxOccurs="5">` over
+`<element c minOccurs="2" maxOccurs="2"/>` the only valid document is ten `c`,
+and it was **refused**; five `c`, which no reading admits, was **accepted**. For
+`<sequence 2..2>` over `c{2,4}` the valid range is four to eight, and the
+answers were inverted across the whole sweep. The false-accept direction was the
+serious one: a `minOccurs` floor was silently not enforced, so a schema believed
+to require a minimum count did not require it.
+
+A group with two or more distinct child names was decided correctly, which is
+why 39,347 XSD 1.0 agreements and 41,532 on 1.1 never covered it. Verified
+present at `06e8a75`, so it was long-standing rather than a regression.
+
+**The cause.** `matchSequence` walked the Glushkov automaton one path at a time
+and arbitrated the nested occurrence counters with heuristics, tracking a *low*
+and a *high* reading of each count independently. `counterAllows` consulted the
+low count and `countersSatisfied` the high one, so a document was admitted when
+*different* readings satisfied each bound though no single consistent reading
+satisfied both. When a group holds one particle its FIRST and LAST positions
+coincide, which makes the group's wraparound edge indistinguishable from the
+inner element's own repeat edge, so the bracket could not be narrowed locally.
+Four attempts to narrow it are recorded in the history; each traded one case for
+another, because the ambiguity is real and no per-edge compile-time label can
+resolve it. Which scope repeats is only knowable from the rest of the input.
+
+**The fix.** The unit of tracking is now a *vector over every scope at once* —
+a set of whole readings, not a bracket per scope. `xsd/nfa.go` carries the set of
+states the input can have reached, each state a position together with a
+complete count vector, and a transition enumerates its alternatives rather than
+choosing one. The alternatives are few: occurrence scopes nest properly, so the
+scopes two positions share are a prefix of both chains, and the step's only
+freedom is how deep into that prefix the repetition falls. Counts inside one
+vector belong to one execution by construction, so no bound is ever met by a
+reading that another bound is not measured against.
+
+Two properties keep the set small. States that agree on position and counts are
+merged, and a scope left behind is reset to zero so that converged executions
+are recognised as converged. And each maximum is narrowed per document to what
+that document can actually reach: a scope cannot repeat more often than there
+are children to fill it, so `maxOccurs="100000000"` against a few thousand
+children behaves exactly as `unbounded` does, and every count past the minimum
+merges. Without that narrowing the suite's `particlesZ036` — a choice of 100,000
+over a sequence of 100,000,000 over an unbounded element — gives each step three
+readings that stay distinct forever and the set grows until the budget stops it.
+
+The walk is still deterministic on the *positions*: Unique Particle Attribution
+guarantees at most one element particle matches a name, and the one remaining
+ambiguity, an element against a wildcard, is what erratum E1-29 leaves to the
+processor. Only the counts are searched.
+
+`DefaultMaxMatchStates` bounds the set at 4,096; see
+[xsd.md](xsd.md#limits) and [security.md](security.md). Both W3C suites, UBL 2.1
+and the DocBook corpus stay in single digits.
+
+Measured: XSD 1.0 39,347 agreements and XSD 1.1 41,532 both unchanged, with
+disagreement lists identical case for case. `xsd/occurs_nested_test.go` covers
+the family and no longer skips.
 
 ### A choice is unordered under 1.1 (fixed)
 
@@ -750,12 +732,13 @@ language inclusion in *both* directions rather than the structural table.
 automaton subsumption engine, not a rule, and two rounds declined it
 deliberately rather than ship a partial one.
 
-### XSD instance: 2 addressable false rejects
+### XSD instance: 1 addressable false reject
 
-`attP031.i` and `particlesZ040.i`, in both versions.
+`attP031.i`, in both versions. `particlesZ040.i` stood here too and no longer
+does; the matcher that decides it is described under *Nested occurrence bounds
+were wrong in both directions* above.
 
-`particlesZ040` is the greedy content-model matcher, with two reverted attempts
-recorded above. `attP031` is a suite self-contradiction rather than a defect
+`attP031` is a suite self-contradiction rather than a defect
 here: it declares `use="prohibited"` with a `fixed` value and expects the
 instance supplying that value to be *valid*, while `attF001` — structurally
 identical but without `fixed` — expects invalid, and both carry status
