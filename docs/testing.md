@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,132 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,135 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -52,6 +52,22 @@ shapes whose language falls out of arithmetic; a choice whose branches repeat or
 differ in length needs the same interleaving argument the matcher does, and an
 oracle that reasons the same way is not independent, so those are left out
 deliberately rather than guessed at.
+
+**An unproven hypothesis is worth testing precisely because it is unproven.**
+The fifth audit could not demonstrate that the `depth > 32` guards on four
+schema-graph walks changed any answer, and said so — it filed them as "a
+high-value target for differential testing, not a confirmed vulnerability"
+rather than as a finding. Generating legal, acyclic schemas either side of the
+bound turned two of them into confirmed false accepts within minutes. The
+report was right to be tentative and right to point at them; what settled it
+was construction, not argument. `xsd/depth_acyclic_test.go` keeps both shapes.
+
+Worth recording how nearly it was missed: two of the first attempts to
+reproduce it showed no difference at all, because Element Declarations
+Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
+no-ops it. A baseline that reads "correct" for the wrong reason is the most
+expensive kind of wrong answer, which is why the test asserts the shallow case
+fails before it asserts anything about the deep one.
 
 **A test can also exist to stop a question being re-asked.**
 `xsd/occurs_boundary_test.go` walks `minOccurs` and `maxOccurs` through the

@@ -594,13 +594,21 @@ func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 // empty choice occurring at least once admits no sequence whatever — the empty
 // one included.
 //
-// The depth bound guards a model group that reaches itself, matching
-// particleMatchesOnlyEmpty. Running out of depth answers "emptiable", which
-// keeps the caller from failing a document on a model it could not analyse.
-func particleAcceptsEmpty(p *Particle, depth int) bool {
-	if p == nil || p.MinOccurs == 0 || depth > 32 {
+// A model group that reaches itself terminates on the visited set, matching
+// particleMatchesOnlyEmpty: a particle already on the path contributes no
+// requirement of its own, so a cycle is emptiable.
+//
+// This used to be a `depth > 32` bound. Its wrong answer was absorbed — the
+// only caller uses it to raise a more specific diagnostic, and a document that
+// slipped past still met the content-model automaton, so the verdict and the
+// error code were unchanged past the bound and only the message differed. It
+// is a visited set now because the other three walks in this package needed to
+// become one and a lone survivor invites the next reader to copy it.
+func particleAcceptsEmpty(p *Particle, seen map[*Particle]bool) bool {
+	if p == nil || p.MinOccurs == 0 || seen[p] {
 		return true
 	}
+	seen[p] = true
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
 		// An element or wildcard particle that must occur is not
@@ -611,7 +619,7 @@ func particleAcceptsEmpty(p *Particle, depth int) bool {
 		// Emptiable exactly when some member is: §3.9.6 clause 2.2.2.
 		// With no members, none is.
 		for _, child := range g.Particles {
-			if particleAcceptsEmpty(child, depth+1) {
+			if particleAcceptsEmpty(child, seen) {
 				return true
 			}
 		}
@@ -621,7 +629,7 @@ func particleAcceptsEmpty(p *Particle, depth int) bool {
 	// 2.2.1. An empty sequence or all group is emptiable, which is the
 	// vacuous case and the correct one.
 	for _, child := range g.Particles {
-		if !particleAcceptsEmpty(child, depth+1) {
+		if !particleAcceptsEmpty(child, seen) {
 			return false
 		}
 	}
@@ -839,7 +847,7 @@ func (v *validator) validateComplexType(el *xdm.Node, t *ComplexType, decl *Elem
 		// language is the empty *language* rather than the language
 		// containing the empty *string*. saxonData's complex022 says so
 		// outright — "empty content does not satisfy empty choice".
-		if !particleAcceptsEmpty(t.Particle, 0) && v.openContentFor(t) == nil &&
+		if !particleAcceptsEmpty(t.Particle, map[*Particle]bool{}) && v.openContentFor(t) == nil &&
 			len(el.ChildElements()) == 0 {
 			v.fail(el, "cvc-complex-type.2.4.b",
 				"element has no children, and the content model "+
@@ -1857,7 +1865,7 @@ func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
 		}
 		if base.Particle != nil {
 			decls := map[xdm.QName]*ElementDecl{}
-			collectElementDecls(base.Particle, decls, 0)
+			collectElementDecls(base.Particle, decls, map[*Particle]bool{})
 			if d, found := decls[name]; found && d.Type != nil {
 				return d.Type
 			}

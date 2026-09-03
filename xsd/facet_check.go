@@ -895,7 +895,7 @@ func (p *parser) checkListOfAtomic(t *SimpleType, el *xdm.Node) {
 	case VarietyAtomic:
 		return
 	case VarietyUnion:
-		if bad := nonAtomicUnionMember(item, 0); bad != nil {
+		if bad := nonAtomicUnionMember(item, map[*SimpleType]bool{}); bad != nil {
 			p.errs = append(p.errs, errorAt(el, "cos-list-of-atomic",
 				"the item type of a list must be atomic, or a union whose "+
 					"members are all atomic: member %q of %q is a list",
@@ -920,12 +920,20 @@ func (p *parser) checkListOfAtomic(t *SimpleType, el *xdm.Node) {
 // unions of atomic types is a union of atomic values, which is exactly what
 // cos-list-of-atomic permits.
 //
-// The depth bound guards a union whose member chain reaches itself. Such a
-// schema is ill-formed and reported elsewhere; this walk must not hang on it.
-func nonAtomicUnionMember(t *SimpleType, depth int) *SimpleType {
-	if t == nil || depth > 32 {
+// A union whose member chain reaches itself is ill-formed and reported
+// elsewhere, but this walk runs first and must not hang on it. The visited set
+// is what stops it: a type already on the path is one being examined already,
+// so re-entering it can find nothing new.
+//
+// This used to be a `depth > 32` bound, which conflated "cyclic" with "deep".
+// Returning nil means "no list member found", which is the same value as a
+// clean result, so a union chain longer than the bound had cos-list-of-atomic
+// silently pass and a list-of-lists load without error.
+func nonAtomicUnionMember(t *SimpleType, seen map[*SimpleType]bool) *SimpleType {
+	if t == nil || seen[t] {
 		return nil
 	}
+	seen[t] = true
 	switch t.Variety {
 	case VarietyAtomic:
 		return nil
@@ -933,7 +941,7 @@ func nonAtomicUnionMember(t *SimpleType, depth int) *SimpleType {
 		return t
 	}
 	for _, m := range unionMemberTypesOf(t) {
-		if bad := nonAtomicUnionMember(m, depth+1); bad != nil {
+		if bad := nonAtomicUnionMember(m, seen); bad != nil {
 			return bad
 		}
 	}

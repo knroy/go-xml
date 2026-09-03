@@ -1208,14 +1208,14 @@ func (r *nsResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
 	}
 	var out []string
 	seen := map[xdm.QName]bool{name: true}
-	var walk func(u *xsd.SimpleType, depth int)
-	walk = func(u *xsd.SimpleType, depth int) {
+	var walk func(u *xsd.SimpleType)
+	walk = func(u *xsd.SimpleType) {
 		// A union whose members form a cycle is not a schema this can answer
-		// for; the bound stops a malformed one from recursing forever rather
-		// than limiting a real one.
-		if depth > 32 {
-			return
-		}
+		// for. The seen set below already stops one from recursing forever —
+		// a member is entered once — so no depth bound is needed, and the
+		// `depth > 32` one that used to be here truncated legal chains
+		// instead: a node annotated with a member more than 32 links down
+		// stopped matching element(*, union), so count() went 1 to 0.
 		for _, m := range u.MemberTypes {
 			if m == nil || seen[m.Name] {
 				continue
@@ -1228,7 +1228,7 @@ func (r *nsResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
 			// its own members are atomic, and when they are not, the
 			// exclusion below is the point.
 			if m.Variety == xsd.VarietyUnion {
-				walk(m, depth+1)
+				walk(m)
 				continue
 			}
 			// ONLY AN ATOMIC MEMBER. Validation records the member that
@@ -1251,7 +1251,7 @@ func (r *nsResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
 			}
 		}
 	}
-	walk(st, 0)
+	walk(st)
 	if len(out) == 0 {
 		return nil, false
 	}
@@ -1297,14 +1297,20 @@ func (r *nsResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, boo
 	if !ok || st.Variety != xsd.VarietyUnion {
 		return nil, false
 	}
-	var walk func(u *xsd.SimpleType, depth int) ([]xdm.TypeCode, bool)
-	walk = func(u *xsd.SimpleType, depth int) ([]xdm.TypeCode, bool) {
+	seenType := map[*xsd.SimpleType]bool{}
+	var walk func(u *xsd.SimpleType) ([]xdm.TypeCode, bool)
+	walk = func(u *xsd.SimpleType) ([]xdm.TypeCode, bool) {
 		// A union whose members form a cycle is not a schema this can
-		// answer for, and the bound is what keeps a malformed one from
-		// recursing forever rather than being a limit on real schemas.
-		if depth > 32 || !u.Facets.IsEmpty() {
+		// answer for, and re-entering a member already on the path is what
+		// identifies one. This used to be a `depth > 32` bound, which also
+		// refused legal chains: returning (nil, false) reads as "not a union
+		// I can answer for", so `1 instance of t:U` went false for a union
+		// nested deeper than the bound, where 2.5.5's transitive membership
+		// makes true the only correct answer.
+		if seenType[u] || !u.Facets.IsEmpty() {
 			return nil, false
 		}
+		seenType[u] = true
 		var out []xdm.TypeCode
 		for _, m := range u.MemberTypes {
 			if m == nil {
@@ -1312,7 +1318,7 @@ func (r *nsResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, boo
 			}
 			switch m.Variety {
 			case xsd.VarietyUnion:
-				sub, pure := walk(m, depth+1)
+				sub, pure := walk(m)
 				if !pure {
 					return nil, false
 				}
@@ -1341,7 +1347,7 @@ func (r *nsResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, boo
 		}
 		return out, true
 	}
-	members, pure := walk(st, 0)
+	members, pure := walk(st)
 	if !pure || len(members) == 0 {
 		return nil, false
 	}

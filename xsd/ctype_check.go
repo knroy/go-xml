@@ -559,7 +559,7 @@ func (p *parser) checkOpenContentRestriction(t *ComplexType) {
 	// content} at all, but a base particle of any/lax over the same
 	// namespace). All three are valid, and a rule stated without this guard
 	// rejects them.
-	if !particleMatchesOnlyEmpty(t.Particle, 0) {
+	if !particleMatchesOnlyEmpty(t.Particle, map[*Particle]bool{}) {
 		if inherited == nil || inherited.Mode == OpenNone ||
 			inherited.Wildcard == nil {
 			p.errs = append(p.errs, errorAt(nil, "cos-ct-restricts.2",
@@ -647,7 +647,7 @@ func (p *parser) checkOpenContentExtension(t *ComplexType) {
 	// that matches only the empty sequence there is nothing to interleave
 	// among, so the two modes denote the same language.
 	if inherited.Mode == OpenInterleave && derived.Mode != OpenInterleave &&
-		!particleMatchesOnlyEmpty(base.Particle, 0) {
+		!particleMatchesOnlyEmpty(base.Particle, map[*Particle]bool{}) {
 		p.errs = append(p.errs, errorAt(nil, "cos-ct-extends.1.4.3.3",
 			"complex type %q opens its content only as a suffix, but its "+
 				"base %q interleaves it", t.Name, base.Name))

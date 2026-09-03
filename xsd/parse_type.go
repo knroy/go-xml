@@ -930,7 +930,7 @@ func (p *parser) readComplexContent(el *xdm.Node, t *ComplexType, mixed bool) {
 				// rather than ContentEmpty, so the
 				// isEmptyContent shortcut below does not
 				// intercept it, and the sequence is built.
-				if !particleMatchesOnlyEmpty(base.Particle, 0) {
+				if !particleMatchesOnlyEmpty(base.Particle, map[*Particle]bool{}) {
 					if merged := mergeAllExtension(base.Particle, own); merged != nil {
 						t.Particle = merged
 						return
@@ -1994,21 +1994,30 @@ func isEmptyContent(t *ComplexType) bool {
 	if t.Content != ContentElementOnly {
 		return false
 	}
-	return particleMatchesOnlyEmpty(t.Particle, 0)
+	return particleMatchesOnlyEmpty(t.Particle, map[*Particle]bool{})
 }
 
 // particleMatchesOnlyEmpty reports whether a particle admits nothing but the
 // empty sequence.
 //
-// The depth bound guards a model group that reaches itself, which is legal to
-// write; the content-model compiler reports it, but this runs first.
-func particleMatchesOnlyEmpty(p *Particle, depth int) bool {
+// A model group that reaches itself is legal to write; the content-model
+// compiler reports it, but this runs first, so the visited set is what keeps
+// this walk terminating. A particle already on the path is one whose emptiness
+// is being decided already, and a cycle contributes no content of its own.
+//
+// This used to be a `depth > 32` bound. Running out of depth answered "not
+// only-empty", which is a definite answer rather than a refusal, so a legal
+// acyclic model nested past the bound was decided wrongly: through
+// applyDefaultOpenContent it opened a type whose appliesToEmpty="false" says
+// not to, turning an invalid document valid.
+func particleMatchesOnlyEmpty(p *Particle, seen map[*Particle]bool) bool {
 	if p == nil {
 		return true
 	}
-	if depth > 32 {
-		return false
+	if seen[p] {
+		return true
 	}
+	seen[p] = true
 	if p.MaxOccurs == 0 {
 		return true
 	}
@@ -2019,7 +2028,7 @@ func particleMatchesOnlyEmpty(p *Particle, depth int) bool {
 		return false
 	}
 	for _, child := range g.Particles {
-		if !particleMatchesOnlyEmpty(child, depth+1) {
+		if !particleMatchesOnlyEmpty(child, seen) {
 			return false
 		}
 	}

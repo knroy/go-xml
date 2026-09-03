@@ -122,6 +122,50 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ---
 
+## Fixed in the fifth audit
+
+### A depth bound on four schema-graph walks accepted documents the schema forbids
+
+Four walks over the schema graph stopped at `depth > 32`. The bound was there
+for a real reason — a model group or union chain that reaches itself is legal
+to write, and these walks run before the compiler that reports it — but it
+conflated a graph that is *cyclic* with one that is merely *deep*, and three of
+the four returned a **definite answer** on running out of depth rather than a
+refusal. In each case the answer was the permissive one.
+
+| walk | truncated answer | what it decided |
+|---|---|---|
+| `collectElementDecls` | empty declaration map | Element Declarations Consistent skipped entirely |
+| `nonAtomicUnionMember` | `nil`, the same value as a clean result | `cos-list-of-atomic` passed; a list of lists loaded |
+| `particleMatchesOnlyEmpty` | `false` | a type with `appliesToEmpty="false"` was opened anyway |
+| `SchemaUnionMemberTypes` | `(nil, false)` | `1 instance of t:U` went false on a legal union chain |
+
+The first is the sharpest. Taking the suite's own `saxonData/wild068` — a base
+declaring `<e>` as a date/time union, a derived type replacing it with a lax
+wildcard, and a global `<e>` of type `xs:duration` matched through it — and
+nesting the base's declaration inside 32 sequences turns a document XSD 1.1
+requires rejecting into one this engine accepted. Nothing about that schema is
+recursive or malformed.
+
+**Reachable only from a schema, not from an instance.** For a deployment with a
+trusted schema and untrusted documents — the common shape, and the one
+[server.md](server.md) describes — the schema is fixed and this cannot be
+reached. It matters where schemas are themselves accepted from callers, and for
+machine-generated schemas, which reach nesting depths hand-written ones do not.
+
+Fixed by replacing each bound with a visited set keyed on the component
+pointer, which stops a cycle exactly and does not limit a legal chain. The
+XSLT-side `SchemaUnionMemberNames` already had a `seen` map by name, so its
+bound was pure truncation and simply went. Pinned by
+`xsd/depth_acyclic_test.go`, which checks both shapes at nesting 0, 31, 32, 33
+and 64, and separately that a genuinely cyclic union still terminates. Both
+regression tests fail against the previous code at exactly 32.
+
+The audit that found this reported it as *unproven* — "a high-value target for
+differential testing, not a confirmed vulnerability" — and it was right to.
+Two of my own first attempts to reproduce it showed no difference, because the
+rule is XSD 1.1 only and `Options{}` defaults to 1.0, which silently no-ops it.
+
 ## Fixed in the fourth audit
 
 ### A negative xsd.ValidateOptions.MaxErrors approved invalid documents

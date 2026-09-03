@@ -527,7 +527,7 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 		return
 	}
 	byName := map[xdm.QName]*ElementDecl{}
-	collectElementDecls(t.Particle, byName, 0)
+	collectElementDecls(t.Particle, byName, map[*Particle]bool{})
 	for _, c := range el.ChildElements() {
 		d, ok := byName[xdm.QName{URI: c.Name.URI, Local: c.Name.Local}]
 		if !ok || d.Type == nil {
@@ -546,26 +546,38 @@ func annotateSubtree(el *xdm.Node, t *ComplexType, depth int) {
 
 // collectElementDecls gathers the element declarations a particle can match.
 //
-// The depth bound is what makes a recursive model group safe here: a group that
-// reaches itself is legal, and the content-model compiler refuses it, but this
-// runs before that and would otherwise recurse without end.
-func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, depth int) {
-	if p == nil || depth > 32 {
+// A model group that reaches itself is legal to write, and the content-model
+// compiler refuses it, but this runs before that and would otherwise recurse
+// without end. What stops it is the visited set: a particle already on the
+// path is one whose declarations are being collected already, so re-entering
+// it can add nothing.
+//
+// This used to be a `depth > 32` bound, which conflated "cyclic" with "deep"
+// and was unsound in the accepting direction. The declarations feed
+// baseDeclaredType and so Element Declarations Consistent; truncating the walk
+// returned an empty map, which reads as "the base declares nothing here" and
+// skips the check. A base type nesting its declaration 32 groups deep — legal,
+// acyclic, and machine-generated schemas do reach it — had the suite's own
+// wild068 accepted rather than rejected. Cycle detection terminates on the
+// recursive case without capping the legal one.
+func collectElementDecls(p *Particle, out map[xdm.QName]*ElementDecl, seen map[*Particle]bool) {
+	if p == nil || seen[p] {
 		return
 	}
+	seen[p] = true
 	switch term := p.Term.(type) {
 	case *ElementDecl:
-		if _, seen := out[term.Name]; !seen {
+		if _, have := out[term.Name]; !have {
 			out[term.Name] = term
 		}
 		for _, sub := range term.substitutable {
-			if _, seen := out[sub.Name]; !seen {
+			if _, have := out[sub.Name]; !have {
 				out[sub.Name] = sub
 			}
 		}
 	case *ModelGroup:
 		for _, child := range term.Particles {
-			collectElementDecls(child, out, depth+1)
+			collectElementDecls(child, out, seen)
 		}
 	}
 }
