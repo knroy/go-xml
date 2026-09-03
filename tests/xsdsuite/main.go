@@ -35,10 +35,14 @@ func supportedTokens(only11 bool) map[string]bool {
 		// tokens today, but naming them keeps the rule complete.
 		"comments-and-PIs-included": true,
 		"CTR-all-runtime":           true,
-		// Datatypes are defined over XML 1.0 names.
-		"XML-1.0":       true,
-		"XML-1.0-1e-4e": true,
-		"XML-1.0-5e":    true,
+		// Datatypes are defined over XML 1.0 names. The two edition
+		// tokens name *mutually exclusive* processor configurations,
+		// exactly as full-xpath-in-CTA and its restricted twin do
+		// below, so claiming both is not generosity but a
+		// contradiction. This validator follows Fifth Edition names,
+		// so that is the only edition token it may claim.
+		"XML-1.0":    true,
+		"XML-1.0-5e": true,
 	}
 	if only11 {
 		t["1.1"] = true

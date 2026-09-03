@@ -244,6 +244,28 @@ quietly stops being true.
 
 ---
 
+## The Go version is a conformance dependency
+
+The module requires **Go 1.25**, and that is a measured floor rather than a
+tidy default. `regexp` learned the Unicode category `Cn` (unassigned) in 1.25;
+on 1.24 the pattern `^(?:\p{Cn}*)$` fails to compile, and `re00175` raises
+FORX0002 where it should match. The cost of building on 1.24 is four cases:
+XPath 3.0 and 3.1 fall off 100%, XQuery loses one, and XSD 1.0 loses two.
+
+That was found the hard way. The floor was lowered to 1.24 on the reasoning
+that nothing in the code imports anything newer — true, and irrelevant, because
+the dependency is on standard-library *behaviour* rather than on a symbol.
+Local runs did not catch it: `go.mod` said 1.24 while the installed toolchain
+was 1.26, and Go builds with what is installed. CI, which honours
+`go-version:`, was the only thing that saw it.
+
+**To test a version floor, install that toolchain and run the suites with it.**
+
+```sh
+go install golang.org/dl/go1.25.1@latest && go1.25.1 download
+GOXSLT_QT3=$PWD/testdata/qt3tests go1.25.1 test ./tests/qt3/ -count=1 -v
+```
+
 ## Related
 
 * [conformance-gaps.md](conformance-gaps.md) — the current figures and a
