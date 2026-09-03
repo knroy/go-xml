@@ -155,7 +155,6 @@ func TestValidateMaxErrorsBoundaries(t *testing.T) {
 // document that negative is not supported here -- but silently approving
 // invalid documents is not an acceptable reading of any value.
 func TestValidateMaxErrorsNegativeApprovesInvalidDocuments(t *testing.T) {
-	t.Skip("known bug: a negative MaxErrors makes Validate return nil for an invalid document; see the comment above")
 
 	s := loadBoundarySchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="r"><xs:complexType><xs:sequence/></xs:complexType></xs:element>

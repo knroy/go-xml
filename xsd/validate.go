@@ -64,7 +64,8 @@ func (e *ValidationErrors) Error() string {
 // ValidateOptions configure a validation run.
 type ValidateOptions struct {
 	// MaxErrors stops validation once this many failures are found. Zero
-	// means DefaultMaxErrors. A document that is wrong in every element
+	// means DefaultMaxErrors; a negative value means no limit, as it does
+	// for dtd.Options.MaxErrors. A document that is wrong in every element
 	// would otherwise produce an error for each, which helps nobody and
 	// costs memory proportional to the document.
 	MaxErrors int
@@ -394,7 +395,13 @@ func (v *validator) pathString() string {
 
 // fail records a validation failure.
 func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
-	if len(v.errs) >= v.opts.MaxErrors {
+	// The guard is > 0 because a negative MaxErrors means no limit, as it
+	// does for dtd.Options.MaxErrors. Without it, 0 >= -1 held on the first
+	// failure and validation stopped before recording anything, so a caller
+	// asking for unlimited errors got a validator that returned nil for a
+	// flagrantly invalid document -- a silent pass, which is the dangerous
+	// direction for a validator to fail in.
+	if v.opts.MaxErrors > 0 && len(v.errs) >= v.opts.MaxErrors {
 		v.stopped = true
 		return
 	}
