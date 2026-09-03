@@ -563,7 +563,7 @@ made, so it is stated as attainable rather than measured.
 
 # What is skipped, and why that is not a gap
 
-The XSLT 3.0 suite has 14,601 cases; 8,626 are in scope. The 5,975 skipped are
+The XSLT 3.0 suite has 14,601 cases; 8,625 are in scope. The 5,976 skipped are
 excluded by *declared dependency*, not by failure:
 
 | Skipped | Reason |

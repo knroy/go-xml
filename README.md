@@ -83,7 +83,9 @@ succeeded.
 
 One dependency: `golang.org/x/text`, for Unicode normalisation and
 language-sensitive collation. Nothing else is outside the standard library.
-Requires Go 1.26 or later.
+Requires Go 1.25 or later. The floor is measured, not nominal: `regexp`
+learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
+conformance cases. See [docs/testing.md](docs/testing.md).
 
 ## Status
 
@@ -96,7 +98,7 @@ Requires Go 1.26 or later.
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.84% of the W3C XSLT suite filtered to 3.0 (8,611 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
-| **XSD 1.1** | 99.90% instance (26,177 of 26,204); **99.92%** schema-validity (15,342 of 15,354); opt-in via `Version11` |
+| **XSD 1.1** | 99.90% instance (26,189 of 26,204); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
 | **Tests** | 1,070, clean under `-race` (a few subtests skip without the corpora below) |
@@ -945,7 +947,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,342 / 15,354 (99.92%) | 26,177 / 26,204 (99.90%) |
+| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,204 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1561,7 +1563,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,342 / 15,354 (99.92%) | 26,177 / 26,204 (99.90%) |
+| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,204 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether
