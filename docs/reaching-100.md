@@ -12,19 +12,19 @@ case by case; this file is about what buying them would cost.
 | | Failing | Fixable | Open | Cannot fix |
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
-| XQuery 3.1 | 7 | 0 | 3 | 4 |
-| XSLT 2.0 | 9 | 2 | 1 | 6 |
-| XSLT 3.0 | 18 | 4 | 1 | 13 |
-| XSD 1.0 | 51 | 8 | 0 | 43 |
-| XSD 1.1 | 47 | 9 | 2 | 36 |
-| **Total** | **132** | **23** | **7** | **102** |
+| XQuery 3.1 | 3 | 0 | 0 | 3 |
+| XSLT 2.0 | 8 | 0 | 1 | 7 |
+| XSLT 3.0 | 13 | 0 | 1 | 12 |
+| XSD 1.0 | 41 | 0 | 0 | 41 |
+| XSD 1.1 | 38 | 0 | 0 | 38 |
+| **Total** | **103** | **0** | **2** | **101** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
 For XSD the fixable/cannot-fix split is not a judgement call: it is the suite's
 own `status` field. A case marked `accepted` is a settled expectation and so is
 real work; one marked `queried` or `stable bugNNNN` is one the W3C has itself
-challenged, and 89 of the 98 XSD disagreements are of that kind — 44 of them
+challenged, and 71 of the 79 XSD disagreements are of that kind — 44 of them
 (22 per version) are the single open bug 4113.
 
 ---
@@ -40,7 +40,7 @@ two are cases the suite itself declares out of scope through a dependency the
 harness does not read, and the rest are harness scoring defects — chiefly the
 eight XSD `indeterminate` expectations per version that are silently scored as
 "must be invalid". Seven more are open questions, settled neither way. What
-stands between here and 100% is the 102 in Part 2.
+stands between here and 100% is the 101 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -76,13 +76,22 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 102 that are not work
+## Part 2 — the 101 that are not work
 
 Grouped by what would actually have to change.
 
-### 89 — the W3C disputes its own expected result
+### 71 — the W3C disputes its own expected result
 
-XSD 1.0 (45) and 1.1 (44). The suite records a `status` on each test:
+XSD 1.0 (35 of its 41 disagreements) and 1.1 (36 of its 38). Counted from the
+suite's own metadata rather than estimated: every disagreement whose `<current>`
+status is not `accepted`. The remaining 6 and 2 are `accepted` and are the only
+settled XSD expectations this validator disagrees with.
+
+These totals fell from 45 and 44 when two harness defects were fixed:
+`indeterminate` expectations stopped being scored as "must be invalid", and
+`iri-001`'s schema, which builds its RFC 3986 patterns from an internal DTD
+subset, stopped being loaded with `AllowDOCTYPE` off. The suite records a
+`status` on each test:
 `accepted` means settled, **`queried` means the W3C has itself challenged the
 expectation**, usually with a bugzilla number. 27 are `queried` in each
 version, the rest are `stable` but carry an open bug.
@@ -206,27 +215,36 @@ part of a resource rather than a different one — and nothing then applied it,
 so the whole document was returned. `xslt/sourcedoc.go` now resolves the
 bare-name fragment against the retrieved document.
 
-### 1 — features deliberately not implemented
+### 0 — features deliberately not implemented
 
-- **`streamable-141`** — **fixed.** §3.9.1 states the rule "notwithstanding anything stated in 19 Streamability", so it never needed that analysis.
+This list is empty. `streamable-141` was its last entry and is now **fixed**:
+§3.9.1 states its rule "notwithstanding anything stated in 19 Streamability",
+so it never needed the streamability analysis this file said it required. A
+verdict of "needs a feature we have not built" is worth re-deriving before it
+is believed, which is what emptied this list.
 
-Two cases used to be on this list and are now **fixed**. `base-uri-052` went
+Three cases used to be on it and are now **fixed**. `base-uri-052` went
 when XInclude was implemented (`xdm.ProcessXInclude`), and the harness honours
 the environment's `xinclude="true"`. `catalog-006b` went with `xsl:assert`,
 which was the cheapest feature here and is done: the case reports every XSLT
 element the processor recognises, so an absent one is visible in it.
 
-### 3 — costs more than it gains
+### 2 — costs more than it gains
 
 - `accept-913` — the case's own comment states a premise §3.6.3.2 contradicts.
   Built, instrumented, reverted.
-- `package-200` — would cost 4 cases to gain 1.
-- `use-package-003` — a private function must resolve inside its package and
-  not outside. Functions live in one flat `xpath.Library` resolved by name;
-  `FuncCall` carries only a QName. A lexical rename fixed this and broke
-  `override-f-026`, where one name exists at two arities. **A real fix needs
-  the package threaded through the XPath static context** — the single largest
-  structural change on this list.
+- `package-200` — a rule separating it from `use-package-291`–`294` exists but
+  rests on quoting, which neither grammar mentions, and would have exactly one
+  instance in the suite.
+
+`use-package-003` was the third entry, and it is now **fixed**. This file said
+a real fix needed the package threaded through the XPath static context and
+called it "the single largest structural change on this list". The narrow form
+of that turned out to be contained: the declaring package's visibility is
+carried on the function component and checked at the call site, through a
+`ScopedFunctionLibrary` paralleling the existing `DynamicFunctionLibrary`. The
+lexical-rename attempt that broke `override-f-026` is what made the whole
+direction look expensive; a rename was the wrong shape, not the idea.
 
 ---
 
@@ -254,8 +272,8 @@ match pattern.** That is conformance, and it is engine work — see
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** Of 132
-disagreements, 102 would require agreeing with a disputed result, shipping a
+**Reaching 100% is not a goal that survives contact with the suites.** Of 103
+disagreements, 101 would require agreeing with a disputed result, shipping a
 second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default. Seven more are open questions
 the spec does not settle.
@@ -264,10 +282,10 @@ the spec does not settle.
 rather than harness work.** The XSD `indeterminate` expectations are no longer
 scored as "must be invalid", `iri-001`'s schema is loaded with `AllowDOCTYPE`
 on, `docbook-004`, `package-version-011` and `use-package-003` are fixed, and
-the encoding half of `validation-0201` is fixed. Two cases remain in the
-fixable column, and both are ones the suite itself puts out of scope through a
-dependency the harness does not read: `streamable-141` and
-`unparsed-text-2003`.
+the encoding half of `validation-0201` is fixed. **The fixable column is now
+empty on every suite.** `streamable-141` was fixed rather than excluded, and
+`unparsed-text-2003` needed nothing: `remoteResource` already excludes it,
+derived from the environment's resource URIs rather than by naming the case.
 
 Two revisions of this file have now been overturned by re-derivation. The
 first claimed the fixable column had reached zero; the audit recorded in
@@ -281,11 +299,11 @@ Beyond that is engineering the suites cannot see:
 the content-model matcher's nested-occurrence bug above, and whatever else
 fuzzing turns up. That is the better use of the next round.
 
-One larger item is defensible as a *feature* rather than conformance work and
-should be judged that way: **a package-aware XPath static context** (unlocks
-`use-package-003` and removes a known structural limit). `xsl:assert` and
-**XInclude** were the other two and are both done -- XInclude took DocBook
-xslTNG from 549 to 577 of 593.
+The larger items on this list are now all done. **A package-aware XPath static
+context** was the last, and `use-package-003` fell to a contained form of it --
+visibility carried on the function component and checked at the call site.
+`xsl:assert` and **XInclude** were the other two; XInclude took DocBook xslTNG
+from 549 to 577 of 593.
 
 Streaming has the largest denominator, 2,646 cases out of scope, but it is not
 the project it looks like. Measured with the gate lifted and nothing else

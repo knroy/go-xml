@@ -613,9 +613,11 @@ fixed, **five were the QT3 harness rather than the engine**, two needed DTD
 attribute defaulting, two needed a document to be retrievable under the URI
 `fn:document-uri` reports for it, and one was a lexical form that disagreed
 with its own value. The adversarial audit of the XSLT and XSD verdicts found
-the same shape again: of the twenty-three cases now judged fixable, most are
+the same shape again: of the twenty-three cases it judged fixable, most were
 the harness — chiefly eight XSD `indeterminate` expectations per version
-silently scored as "must be invalid" — and only four are engine defects.
+silently scored as "must be invalid" — and only four were engine defects.
+All twenty-three have since been fixed or reclassified, and the fixable column
+is empty on every suite.
 
 A conformance number is only as honest as the harness producing it, and a
 verdict is only as good as the last time someone re-derived it.

@@ -418,7 +418,7 @@ until the audit found it.
 
 ---
 
-# xsd — 98 disagreements
+# xsd — 79 disagreements
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -439,12 +439,14 @@ two into one "ceiling" column and described both as challenged, which inverted
 
 | | Total | `accepted` | `queried` | `stable` | no status |
 |---|---:|---:|---:|---:|---:|
-| XSD 1.0 | 51 | **6** | 30 | 15 | 0 |
-| XSD 1.1 | 47 | **2** | 31 | 13 | **1** |
+| XSD 1.0 | 41 | **6** | 30 | 5 | 0 |
+| XSD 1.1 | 38 | **2** | 31 | 5 | 0 |
 
-Those totals are the measured ones. The previous revision printed 53 and 49
-here while the table at the top of this file printed 51 and 47; 51 and 47 are
-correct. The `accepted` counts were likewise given as 8 and 5 against a
+Those totals are the measured ones, counted from the `<current>` status of each
+disagreeing case. They fell from 51 and 47 when the `indeterminate` scoring bug
+and `iri-001`'s DOCTYPE were fixed; the `accepted` counts did not move, which is
+the point of splitting them out -- the cases that are real work were never the
+ones the harness was miscounting. The `accepted` counts were likewise given as 8 and 5 against a
 measured 6 and 2 — which mattered, because the file then named five "settled
 suite defects" on 1.0 against six accepted cases and three on 1.1 against two,
 i.e. it claimed to have settled more cases than existed in the bucket.
