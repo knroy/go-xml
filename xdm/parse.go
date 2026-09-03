@@ -167,7 +167,16 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	}
 	var counted *countingReader
 	if maxBytes > 0 {
-		counted = &countingReader{r: io.LimitReader(r, maxBytes+1), max: maxBytes}
+		// maxBytes+1 overflows to a negative limit at math.MaxInt64, and
+		// io.LimitReader treats that as "nothing left", so the largest limit a
+		// caller can name refused every document with "no root element". The
+		// saturating form keeps the over-read where it fits and drops it where
+		// no document can reach the limit anyway.
+		lim := maxBytes
+		if lim < math.MaxInt64 {
+			lim++
+		}
+		counted = &countingReader{r: io.LimitReader(r, lim), max: maxBytes}
 		r = counted
 	}
 

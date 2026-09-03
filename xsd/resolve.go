@@ -3,6 +3,7 @@ package xsd
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -147,9 +148,21 @@ type HTTPResolver struct {
 	MaxBytes int64
 
 	// AllowHost, when non-nil, reports whether a host may be fetched from.
-	// It runs before the request, so it is the place to refuse loopback,
-	// link-local and private ranges — the addresses an SSRF is usually
-	// aimed at.
+	// It runs before the request, and it is an allowlist of *names*.
+	//
+	// It is not an address check and must not be relied on as one. A name it
+	// admits may resolve to loopback, link-local or a private range, and a
+	// name checked here may resolve to something else by the time the
+	// connection is made — DNS rebinding defeats a name check by
+	// construction. Returning true for "schemas.example.com" says the name is
+	// permitted, not that the connection goes anywhere trustworthy.
+	//
+	// To refuse the addresses an SSRF is aimed at, filter them where they are
+	// known: a Transport with a DialContext (or Control) that inspects the
+	// resolved IP and refuses the ranges you do not want. That check sees the
+	// address actually being dialled, which is the only place the guarantee
+	// can be made. Use AllowHost to narrow the namespace and the dialler to
+	// enforce the boundary.
 	AllowHost func(host string) bool
 
 	// Files handles locations that are not remote. When nil, a FileResolver
@@ -257,7 +270,15 @@ func (r *HTTPResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 	}
 	// The limit is one byte over so that hitting it is distinguishable from
 	// a document that happens to be exactly the maximum size.
-	body := &limitedBody{r: io.LimitReader(resp.Body, max+1), c: resp.Body, max: max, url: abs}
+	// max+1 overflows to a negative limit at math.MaxInt64, which
+	// io.LimitReader reads as "nothing left": the largest limit a caller can
+	// name returned an empty body with a nil error, which is worse than
+	// refusing it. Saturate instead.
+	lim := max
+	if lim < math.MaxInt64 {
+		lim++
+	}
+	body := &limitedBody{r: io.LimitReader(resp.Body, lim), c: resp.Body, max: max, url: abs}
 	return body, abs, nil
 }
 

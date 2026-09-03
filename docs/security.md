@@ -122,6 +122,54 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ---
 
+## Fixed in the fourth audit
+
+### The largest byte limit a caller could name refused every document
+
+`ParseOptions.MaxBytes` and `HTTPResolver.MaxBytes` wrap the reader in
+`io.LimitReader(r, max+1)`, one byte over so that hitting the limit is
+distinguishable from a document exactly at it. At `math.MaxInt64` that addition
+overflows to `math.MinInt64`, and `io.LimitReader` reads a negative limit as
+"nothing left".
+
+So the setting a caller would pick to mean *do not limit me* was the setting
+that broke. `xdm.ParseString("<r/>", ParseOptions{MaxBytes: math.MaxInt64})`
+failed with "no root element"; the HTTP resolver was worse, returning an empty
+body with a **nil error** — a schema that silently loaded as empty rather than
+one that refused to load. Both saturate now, and
+`TestMaxBytesAtMaxInt64` pins the boundary along with the small-limit case that
+must still be refused.
+
+A third `max+1` at `xdm/dtd_external.go` is not affected: its budget is clamped
+to an internal constant that no caller can raise.
+
+### `AllowHost` is a name check, and said otherwise
+
+`HTTPResolver.AllowHost` was documented as "the place to refuse loopback,
+link-local and private ranges — the addresses an SSRF is usually aimed at". It
+cannot do that: it receives a hostname, and a permitted name may resolve to any
+of those ranges, or to a different address by the time the connection is made.
+The advice invited exactly the mental model that gets an allowlist bypassed.
+The field now says it is an allowlist of names, that DNS rebinding defeats a
+name check by construction, and that the boundary belongs in a `Transport`
+whose `DialContext` sees the resolved address.
+
+### Still open: two findings recorded rather than fixed
+
+**Filesystem resolver check-then-open.** The resolver calls `EvalSymlinks`,
+checks containment, then opens. An attacker able to mutate the filesystem
+between those steps can have the opened file differ from the checked path. It
+needs write access to the machine, so it is outside the threat model this
+library states — a hostile *document* cannot reach it — but a multi-tenant
+deployment that hands untrusted callers filesystem writes should assume the
+check is advisory. Eliminating it wants `openat`-style resolution.
+
+**`xslt.FileResolver` serialises cache misses.** `loadTracked` holds its mutex
+across `os.ReadFile` and the parse, so concurrent transforms sharing a resolver
+read and parse one at a time on a cold cache. It is a throughput ceiling rather
+than a correctness bug, and the fix is the usual one — look up under the lock,
+release, read and parse, then publish and resolve the duplicate.
+
 ## Fixed in the third audit
 
 Four issues, each with a regression test. Two of the three high-severity ones
