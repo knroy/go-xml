@@ -65,6 +65,19 @@ type FileResolver struct {
 
 	mu    sync.Mutex
 	cache map[string]*xdm.Tree
+	// inflight tracks a path being read and parsed right now, so that
+	// concurrent callers wait for that one parse rather than each doing their
+	// own. Node identity requires it: fn:doc is defined to return the *same*
+	// node for the same URI, and two goroutines that each parsed and each
+	// published would hand out two trees for one document.
+	inflight map[string]*loadCall
+}
+
+// loadCall is one in-progress parse. done is closed when tree and err are set.
+type loadCall struct {
+	done chan struct{}
+	tree *xdm.Tree
+	err  error
 }
 
 // resolverCacheMax bounds the parsed documents a resolver retains.
@@ -95,6 +108,77 @@ func NewFileResolver(roots ...string) (*FileResolver, error) {
 		r.Roots = append(r.Roots, resolved)
 	}
 	return r, nil
+}
+
+// readConfined reads a file that resolvePath has already placed inside a root,
+// re-checking containment at open time rather than trusting the earlier check.
+//
+// resolvePath calls filepath.EvalSymlinks and then compares against the roots,
+// which is correct for the threat this library states: a hostile *document*
+// cannot change the filesystem between the two. It is not correct against an
+// attacker who can, because the path checked and the path opened are resolved
+// at different moments, and a symlink swapped in between makes them different
+// files.
+//
+// os.Root closes that window. Opening through it resolves each path component
+// relative to the root's own descriptor and refuses to traverse out of it, so
+// containment is enforced by the kernel at the moment of the open instead of by
+// a string comparison beforehand. A symlink swapped in after resolvePath
+// returned is refused rather than followed.
+//
+// The earlier check is kept: it produces the error message that names the
+// permitted directories, and it is what decides *which* root a path belongs to.
+// This is the enforcement, not the diagnosis.
+func (r *FileResolver) readConfined(path string) ([]byte, error) {
+	for _, root := range r.Roots {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+			absRoot = resolved
+		}
+		// The path is made absolute on the same terms as the root. Its
+		// symlinks are deliberately NOT resolved here: that is the whole
+		// point -- os.Root below decides what the components mean, at open
+		// time. But the *root* must be compared like with like, and on macOS
+		// /var is itself a link to /private/var, so a root that resolved and
+		// a path that did not would never share a prefix.
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(absPath)); err == nil {
+			absPath = filepath.Join(dir, filepath.Base(absPath))
+		}
+		rel, err := filepath.Rel(absRoot, absPath)
+		if err != nil || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		rt, err := os.OpenRoot(absRoot)
+		if err != nil {
+			continue
+		}
+		f, err := rt.Open(filepath.ToSlash(rel))
+		if err != nil {
+			rt.Close()
+			return nil, err
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		rt.Close()
+		return data, err
+	}
+	// No root contains it. A resolver with no roots at all is the documented
+	// unconfined case, and reaching here means resolvePath admitted a path
+	// this loop did not, so fall back rather than refuse a file the caller
+	// was told was readable.
+	if len(r.Roots) == 0 {
+		return os.ReadFile(path)
+	}
+	return nil, fmt.Errorf("%q is outside the permitted directories %v",
+		path, r.Roots)
 }
 
 // resolvePath turns an href into a filesystem path inside an allowed root.
@@ -240,20 +324,92 @@ func (r *FileResolver) load(path string) (*xdm.Tree, error) {
 // settles it -- it reads several thousand stylesheets through fn:document,
 // and tracking positions on all of them pushed the run past its deadline.
 func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if t, ok := r.cache[path]; ok {
-		// A cached tree serves a request that does not need more than it
-		// has. Only a module asking for positions of a tree parsed without
-		// them has to go back to the file: node identity matters for fn:doc,
-		// which is the untracked side, and a module is compiled once before
-		// any expression can hold a node from it.
-		if !trackPos || t.HasPositions() {
-			return t, nil
-		}
+	// The lock covers the cache and the in-flight table, not the read and the
+	// parse. Holding it across those made concurrent transforms sharing one
+	// resolver load modules one at a time on a cold cache -- the mutex was
+	// protecting cache correctness but covering I/O as well.
+	//
+	// Releasing it alone would not be enough, because node identity is part of
+	// the contract: fn:doc must return the same node for the same URI, and two
+	// goroutines that each parsed and each published would break that. So a
+	// path being loaded is announced in inflight, and a second caller waits on
+	// it instead of starting its own parse.
+	//
+	// The key includes trackPos. A tree parsed without positions cannot serve
+	// a module that needs them, so the two are separate pieces of work; the
+	// cache lookup below keeps the existing rule that a tracked tree may serve
+	// an untracked request.
+	key := path
+	if trackPos {
+		key = path + "\x00pos"
 	}
-	data, err := os.ReadFile(path)
+	for {
+		r.mu.Lock()
+		if t, ok := r.cache[path]; ok {
+			// A cached tree serves a request that does not need more than it
+			// has. Only a module asking for positions of a tree parsed without
+			// them has to go back to the file: node identity matters for
+			// fn:doc, which is the untracked side, and a module is compiled
+			// once before any expression can hold a node from it.
+			if !trackPos || t.HasPositions() {
+				r.mu.Unlock()
+				return t, nil
+			}
+		}
+		if c, ok := r.inflight[key]; ok {
+			// Someone else is already reading this path. Wait for their
+			// result rather than duplicating the work and the tree.
+			r.mu.Unlock()
+			<-c.done
+			if c.err != nil {
+				return nil, c.err
+			}
+			// Re-check the cache rather than trusting c.tree directly: the
+			// loop re-applies the positions rule above, so a waiter that needs
+			// positions is not handed a tree parsed without them.
+			continue
+		}
+		call := &loadCall{done: make(chan struct{})}
+		if r.inflight == nil {
+			r.inflight = map[string]*loadCall{}
+		}
+		r.inflight[key] = call
+		r.mu.Unlock()
+
+		tree, err := r.parseUncached(path, trackPos)
+
+		r.mu.Lock()
+		if err == nil {
+			r.publish(path, tree)
+		}
+		delete(r.inflight, key)
+		r.mu.Unlock()
+
+		call.tree, call.err = tree, err
+		close(call.done)
+		return tree, err
+	}
+}
+
+// publish stores a parsed tree. The caller holds r.mu.
+func (r *FileResolver) publish(path string, tree *xdm.Tree) {
+	// The cache is created on first use. A FileResolver is documented as
+	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
+	// here is the ordinary case, not a caller's mistake, and writing to one
+	// panics.
+	//
+	// Cleared wholesale rather than evicted one at a time: there is no useful
+	// recency signal here, and the same choice is made for the regex cache.
+	if r.cache == nil || len(r.cache) >= resolverCacheMax {
+		r.cache = map[string]*xdm.Tree{}
+	}
+	r.cache[path] = tree
+}
+
+// parseUncached reads and parses a file. It holds no lock: this is the work
+// that used to run under r.mu.
+func (r *FileResolver) parseUncached(path string, trackPos bool) (*xdm.Tree, error) {
+	data, err := r.readConfined(path)
 	if err != nil {
 		return nil, err
 	}
@@ -283,17 +439,6 @@ func (r *FileResolver) loadTracked(path string, trackPos bool) (*xdm.Tree, error
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	// The cache is created on first use. A FileResolver is documented as
-	// usable as a plain literal — &FileResolver{Roots: ...} — so a nil map
-	// here is the ordinary case, not a caller's mistake, and writing to one
-	// panics.
-	//
-	// Cleared wholesale rather than evicted one at a time: there is no useful
-	// recency signal here, and the same choice is made for the regex cache.
-	if r.cache == nil || len(r.cache) >= resolverCacheMax {
-		r.cache = map[string]*xdm.Tree{}
-	}
-	r.cache[path] = tree
 	return tree, nil
 }
 
@@ -382,7 +527,7 @@ func (r *FileResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCl
 	// would leave a descriptor open for the length of a parse that may fail.
 	// xdm bounds what it reads regardless, so this cannot be made to read an
 	// unbounded file by the document.
-	data, err := os.ReadFile(path)
+	data, err := r.readConfined(path)
 	if err != nil {
 		return nil, "", err
 	}
@@ -412,7 +557,7 @@ func (r *FileResolver) ResolveText(uri, base, encoding string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := r.readConfined(path)
 	if err != nil {
 		return "", err
 	}
@@ -592,7 +737,7 @@ func (r *FileResolver) ResolveInclude(href, base, encoding string) ([]byte, stri
 	if err != nil {
 		return nil, "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := r.readConfined(path)
 	if err != nil {
 		return nil, "", err
 	}

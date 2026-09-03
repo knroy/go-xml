@@ -154,21 +154,48 @@ The field now says it is an allowlist of names, that DNS rebinding defeats a
 name check by construction, and that the boundary belongs in a `Transport`
 whose `DialContext` sees the resolved address.
 
-### Still open: two findings recorded rather than fixed
+### Filesystem confinement is enforced at open time, not before it
 
-**Filesystem resolver check-then-open.** The resolver calls `EvalSymlinks`,
-checks containment, then opens. An attacker able to mutate the filesystem
-between those steps can have the opened file differ from the checked path. It
-needs write access to the machine, so it is outside the threat model this
-library states — a hostile *document* cannot reach it — but a multi-tenant
-deployment that hands untrusted callers filesystem writes should assume the
-check is advisory. Eliminating it wants `openat`-style resolution.
+`resolvePath` called `filepath.EvalSymlinks`, compared the result against the
+roots, and the file was opened later. Those are two moments, and an attacker
+able to write to the filesystem between them can replace a checked path with a
+link pointing out of the root — the opened file is then not the checked one.
 
-**`xslt.FileResolver` serialises cache misses.** `loadTracked` holds its mutex
-across `os.ReadFile` and the parse, so concurrent transforms sharing a resolver
-read and parse one at a time on a cold cache. It is a throughput ceiling rather
-than a correctness bug, and the fix is the usual one — look up under the lock,
-release, read and parse, then publish and resolve the duplicate.
+Reads now go through `os.Root`, added in Go 1.24 and available because this
+module requires 1.25. Each path component is resolved against the root's own
+descriptor and traversal out of it is refused by the kernel, so containment
+holds at the moment of the open rather than resting on a string comparison
+taken earlier. The prior check is kept: it decides which root a path belongs to
+and produces the error naming the permitted directories. It is the diagnosis;
+`os.Root` is the enforcement.
+
+One subtlety in the implementation: the *parent* directory of a path is
+symlink-resolved so it can be compared with a resolved root — on macOS `/var`
+is itself a link to `/private/var`, and comparing a resolved root against an
+unresolved path matches nothing. The final component is deliberately left
+unresolved, because resolving it is precisely the check-then-open gap being
+closed.
+
+This needs filesystem write access and so was outside the threat model a
+hostile document reaches. It is fixed because a multi-tenant deployment can
+hand exactly that access to an untrusted caller.
+`TestReadConfinedRefusesSwappedSymlink` swaps a file for a link out of the root
+and asserts the read is refused.
+
+### The resolver no longer serialises cache misses
+
+`loadTracked` held its mutex across `os.ReadFile` and the parse, so concurrent
+transforms sharing one resolver loaded modules one at a time on a cold cache —
+the lock was protecting cache correctness but covering I/O as well.
+
+Simply releasing it would have been wrong. `fn:doc` is defined to return the
+same node for the same URI within one execution, so the cache is correctness
+rather than speed, and two goroutines that each parsed and each published would
+hand out two document nodes for one document. The lock now covers the cache and
+an in-flight table only: a path already being read is announced, and a second
+caller waits for that parse instead of starting its own.
+`TestFileResolverConcurrentLoadIdentity` runs sixteen readers against each of
+eight documents and asserts every reader gets the identical tree.
 
 ## Fixed in the third audit
 

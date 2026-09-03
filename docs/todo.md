@@ -184,25 +184,7 @@ expected file apart from whitespace; the case still fails on the indent width,
 which is implementation-defined, so it gains no suite case. Covered by
 `xslt/unionmember_test.go`.
 
-### 2.3 xslt.FileResolver serialises cache misses through its mutex
-
-`loadTracked` takes `r.mu` and holds it — `defer r.mu.Unlock()` — across
-`os.ReadFile` and `xdm.ParseString`. The lock is protecting cache correctness
-but is also covering I/O and parsing, so concurrent transforms sharing one
-resolver load modules one at a time whenever the cache is cold.
-
-Not a correctness bug, and invisible to every suite: the conformance runs are
-single-threaded per case. It matters for a server sharing one resolver across
-requests, which is the deployment `docs/server.md` recommends.
-
-The shape of the fix is standard — look up under the lock, release it, read and
-parse outside, then re-take it to publish and drop a duplicate that arrived
-meanwhile. `singleflight` is the tidier form if two requests for the same cold
-module should share one parse rather than race.
-
-Found by an external audit reading the source, not by a test.
-
-### 2.4 QName values do not resolve their prefix
+### 2.3 QName values do not resolve their prefix
 
 An `xs:QName` value is checked lexically: prefix and local name must be
 NCNames, and `xmlns` is rejected as a prefix because nothing can bind it. But a
@@ -214,7 +196,7 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.5 XPath: `$e-1` parses as a variable named `e-1`
+### 2.4 XPath: `$e-1` parses as a variable named `e-1`
 
 The one known defect the suite does not cover, in either language. `$e-1`
 reads the hyphen as part of the variable name instead of as subtraction, and
@@ -232,7 +214,7 @@ scheduled. The diagnosis is in
 **Workaround: write `$e - 1`.** Anything generating queries should space its
 binary operators.
 
-### 2.6 XPath: no in-scope failures
+### 2.5 XPath: no in-scope failures
 
 XPath 2.0, 3.0 and 3.1 are all at 100%. The last case to fall was
 `fn-matches-51`, the one shape this deliberately refuses by default, and it is
@@ -366,7 +348,7 @@ Recorded so they are not proposed again as oversights:
   exists behind `xpath.SetBacktrackingRegex(true)`; what remains a non-goal is
   turning it on by default, since patterns can come from document data. The
   fixed-width case is *not* in this list: it has one possible assignment, so
-  comparison is exact, and it is on always. See 2.6.
+  comparison is exact, and it is on always. See 2.5.
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.
