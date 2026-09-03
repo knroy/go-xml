@@ -364,6 +364,30 @@ Measured: XSD 1.0 39,347 agreements and XSD 1.1 41,532 both unchanged, with
 disagreement lists identical case for case. `xsd/occurs_nested_test.go` covers
 the family and no longer skips.
 
+### The 254 cap in `encodeCounts` is not a bound on `maxOccurs`
+
+The count vector is carried as a string of bytes, and `encodeCounts` caps each
+count at 254. Read on its own that looks like a ceiling: an audit predicted
+that `maxOccurs="300"` would accept a 301st child and that `minOccurs="300"`
+would reject a valid 300-child document, since 255 and 256 both encode as 254.
+
+Neither happens, and the reason is that a count never arrives at
+`encodeCounts` un-narrowed. `reachable()` runs first and replaces every bound
+above the document's own child count with `Unbounded` — a maximum a document
+has too few children to reach cannot be broken, so it behaves exactly as
+`unbounded` does. `capCount()` then clamps against that *narrowed* bound, and
+once the maximum is out of reach it returns at most `min+1`. So a stored count
+above 254 would require a scope with 255+ children still in play, and in that
+scope the bound is already `Unbounded` and the exact value has stopped
+deciding anything.
+
+That is three functions' worth of reasoning to re-derive, which is why it is
+pinned rather than argued: `xsd/occurs_boundary_test.go` walks `minOccurs` and
+`maxOccurs` through 126/127/128, 253/254/255/256/257, 300, 1000 and
+65535/65536, each at its bound and one either side, plus the nested-scope form
+where the outer counter is the one that would saturate, and `maxOccurs` values
+of 1,000,000 and 79228162514244337593543950335 which must behave as unbounded.
+
 **A remainder: an emptiable inner particle (fixed).** The vector rewrite settled
 every case with a non-nullable inner term, but a region survived it. Sweeping
 2,028 combinations of outer bounds, inner bounds and child count found 40 still

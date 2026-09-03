@@ -124,6 +124,30 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Fixed in the fourth audit
 
+### A negative xsd.ValidateOptions.MaxErrors approved invalid documents
+
+`schema.Validate(root, xsd.ValidateOptions{MaxErrors: -1})` returned `nil` for
+a document that is flagrantly invalid. Minimised: a schema declaring `<r>` with
+empty content, validated against `<r><nope/></r>`, passed.
+
+The stop check in `xsd/validate.go` had no `> 0` guard, so at a negative limit
+`0 >= -1` held on the very first failure: validation stopped before recording
+anything and the caller was told the document was valid.
+
+**Not reachable from hostile input** — it needed the *caller* to pass a
+negative value. But it was reachable by a caller following the documented
+idiom: `-1` means "no limit" in `xdm.ParseOptions.MaxBytes` and in
+`dtd.Options.MaxErrors`, whose validator implements it correctly with a
+`v.max > 0 &&` guard. A caller copying that idiom across got a validator that
+approved everything.
+
+The failure shape was the dangerous one — **a silent pass, not an error** — the
+same shape as the `HTTPResolver` overflow below. Fixed with the
+`v.opts.MaxErrors > 0 &&` guard matching `dtd`, so a negative value now means
+no limit as the idiom implies. Pinned by `xsd/limits_boundary_test.go`, which
+is where the bug was found: the boundary table was written first and recorded
+this as a skipped expectation.
+
 ### The largest byte limit a caller could name refused every document
 
 `ParseOptions.MaxBytes` and `HTTPResolver.MaxBytes` wrap the reader in
@@ -511,40 +535,6 @@ stylesheet with no base case is still caught.
 ---
 
 ## Open findings
-
-### Open: a negative xsd.ValidateOptions.MaxErrors approves invalid documents
-
-`schema.Validate(root, xsd.ValidateOptions{MaxErrors: -1})` returns `nil` for a
-document that is flagrantly invalid. Minimised: a schema declaring `<r>` with
-empty content, validated against `<r><nope/></r>`, passes.
-
-The stop check in `xsd/validate.go` is
-
-```go
-if len(v.errs) >= v.opts.MaxErrors {
-	v.stopped = true
-	return
-}
-```
-
-with no `> 0` guard, so at a negative limit `0 >= -1` holds on the very first
-failure: validation stops before recording anything and the caller is told the
-document is valid.
-
-**Not reachable from hostile input** — it needs the *caller* to pass a negative
-value. But it is reachable by a caller following the documented idiom: `-1`
-means "no limit" in `xdm.ParseOptions.MaxBytes` and in `dtd.Options.MaxErrors`,
-whose validator implements it correctly with a `v.max > 0 &&` guard. A caller
-copying that idiom across gets a validator that approves everything.
-
-The failure shape is the dangerous one — **a silent pass, not an error** —
-which is what makes it worth recording rather than shrugging at. It is the same
-shape as the `HTTPResolver` overflow fixed in the fourth audit, which returned
-an empty body with a nil error.
-
-The fix is a `v.opts.MaxErrors > 0 &&` guard, matching `dtd`. Recorded as a
-skipped test in `xsd/limits_boundary_test.go`; documented in
-[options.md](options.md). Until then, pass `0` or a large positive number.
 
 ### Open: identity constraints are quadratic on recursive elements
 

@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **99.98%** of the W3C QT3 suite (29,796 of 29,803 in
+XQuery 3.1, measured at **99.99%** of the W3C QT3 suite (29,800 of 29,803 in
 scope). What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
@@ -215,7 +215,7 @@ window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
 `ordered`/`unordered`; the extension expression; and the string constructor.
 
-The remaining 7 failures are a long tail rather than a missing feature, and
+The remaining 3 failures are a long tail rather than a missing feature, and
 each is understood:
 
 * **Pathological map cost.** `same-key-023` builds 421,875 keys and performs an
@@ -224,24 +224,23 @@ each is understood:
   constant factor is made; terminating needs a persistent map — a HAMT, or a
   copy-on-write overlay. Its sibling `same-key-024`, at 11,250 keys, passes.
 
-* **A prolog base URI that is not a URI.** `K2-BaseURIProlog-4` and `-5`
-  declare a base URI the spec expects to be rejected with `XPST0001`, and this
-  engine accepts it and answers `false`.
+* **`K2-sequenceExprTypeswitch-5`** wants a static `XPST0008` for a variable
+  named in an unreached `typeswitch` branch. A check restricted to
+  sibling-clause variables passed eleven tests and then broke
+  `K2-ForExprWithout-8`, where a sibling's name is shadowed by an outer
+  binding — so seeing it free proves nothing. A sound check needs the parser to
+  track in-scope variables, which it does not do today.
 
-* **`eqname-007`** uses a prefix in an EQName that the engine does not find
-  bound, reporting `FODF1280`.
+* **One demo query.** `app-Demos/RexParser` fails to parse at offset 0 with
+  `XPST0003`. Its sibling `sudoku` was fixed by making a FLWOR in a conditional
+  branch belong to that branch; this one still fails for a different reason in
+  the same family. It is a large real-world query rather than a targeted case,
+  which is what makes it worth keeping in view.
 
-* **`K2-sequenceExprTypeswitch-5`** wants `XPST0008` for an unbound name in a
-  `typeswitch`, and gets a successful evaluation.
-
-* **Two demo queries.** `sudoku` and `RexParser` fail to parse at offset 0
-  with `XPST0003`: a constructor or FLWOR expression where the parser does not
-  admit one. Both are large real-world queries rather than targeted cases,
-  which is what makes them worth keeping in view.
-
-The three groups this section used to list — schema-aware `validate lax`,
-namespace non-inheritance on constructed elements, and zero-length text in
-`document {}` — have all been fixed.
+The groups this section used to list have all been fixed: schema-aware
+`validate lax`, namespace non-inheritance on constructed elements, zero-length
+text in `document {}`, the `sudoku` demo, a prolog base URI that is relative,
+and `eqname-007`'s prefix bound by an enclosing element constructor.
 
 See [known-gaps.md](known-gaps.md) for the variable-name/subtraction defect,
 which the suite does not cover.
