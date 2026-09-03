@@ -279,13 +279,27 @@ component with the largest untrusted surface — but "found nothing in 150
 seconds" is a floor, not a ceiling, and the targets are worth running for hours
 rather than minutes when there is a machine to spare.
 
-**What is still missing is the differential technique, which is the part that
-found the defect that mattered.** The targets above assert that nothing
-crashes; none of them asserts that the answer is *right*. Generating a content
-model, generating documents, and comparing against a brute-force reference is
-what turned up the content-model bug in
-[known-gaps.md](known-gaps.md), and it remains a one-off rather than a standing
-target.
+**The differential technique is now a standing test, for occurrence bounds.**
+The fuzz targets above assert that nothing crashes; none of them asserts that
+the answer is *right*. Generating a content model, generating documents, and
+comparing against an independent reference is what turned up the content-model
+bug in [known-gaps.md](known-gaps.md), and it was a one-off in a scratch
+directory. It is now `xsd/occurs_oracle_test.go`: 8,397 documents over six
+shapes — a repeating sequence over one element, an emptiable inner particle, two
+children per iteration checked as *name sequences* rather than counts, a
+repeating two-branch choice, three levels of nesting, and `maxOccurs="0"` — each
+compared against a count derived from interval arithmetic over the bounds, never
+from the engine. It runs in 0.4s as part of `go test ./...`, and
+`GOXSLT_OCCURS_WIDE=1` widens every sweep to about 2s. Against the code before
+either occurrence fix it reports 1,474 wrong answers, 165 of them false accepts.
+
+**What remains** is that this covers occurrence arithmetic only. The oracle is
+stateable because the language of these shapes is a set of integers; it says
+nothing about wildcard weighting, substitution-group closure, type derivation,
+or a choice whose branches interleave — for those, an independent oracle would
+have to reimplement the matcher, and one that reasons the same way would inherit
+the same mistakes. Those regions still rest on the suites and on hand-written
+cases.
 
 The earlier round, before these targets existed, found three defects the suites
 cannot see:
@@ -304,9 +318,9 @@ a set of whole count vectors rather than a bracketed reading per scope, so that
 every occurrence bound is answered from one execution. Both suites came through
 unmoved, case for case. The differential technique — generate a model, generate
 documents, compare against an independent oracle — is what found the one that
-mattered most, and it should be a standing target rather than a one-off, since
-it is the only method that reached a bug 80,879 suite agreements could not. It
-earned its keep twice: a second sweep over the same family found a surviving
+mattered most, and it is the only method that reached a bug 80,879 suite
+agreements could not, which is why it is now committed rather than rerun by
+hand. It earned its keep twice: a second sweep over the same family found a surviving
 region — an emptiable inner particle, whose outer scope has to be credited for
 an iteration that consumed nothing — that the first fix had left rejecting valid
 documents, and again no suite case moved.

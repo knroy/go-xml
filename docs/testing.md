@@ -20,12 +20,13 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,095 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,102 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Fuzzing** | 5 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
+| **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
 | **The ratchet** | 7 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 
 **The suites are the weakest of these where it counts most.** Every one of
@@ -34,6 +35,22 @@ systematically checks that malformed input is refused. Fuzzing is what covers
 that, and it is why the row above exists: the targets feed the parser, the
 schema assembler and the stylesheet compiler input no author would write, and
 assert that a refusal arrives as an error rather than as a panic.
+
+**Fuzzing asks whether anything crashes; the generated oracle asks whether the
+answer is right.** That is the difference that matters for the content-model
+matcher, where two occurrence bugs survived 80,879 suite agreements — a
+repeating group with two or more distinct child names was always decided
+correctly, so no suite case went near the single-child shape. `xsd/occurs_oracle_test.go`
+generates the schema and the document and compares against a count derived from
+interval arithmetic over the occurrence bounds, never from the engine: an oracle
+that asked the engine would agree with the engine's bugs. Run against the code
+as it stood before either fix, it reports 1,474 wrong answers, 165 of them
+*false accepts* — a validator admitting documents no reading of the model
+allows, which is the direction that actually hurts a caller. It covers only the
+shapes whose language falls out of arithmetic; a choice whose branches repeat or
+differ in length needs the same interleaving argument the matcher does, and an
+oracle that reasons the same way is not independent, so those are left out
+deliberately rather than guessed at.
 
 **The production schema sets found the most per hour.** Pointing the validator
 at UBL 2.1 turned up two defects the entire W3C suite had not, and between them
@@ -162,6 +179,13 @@ GOXSLT_QT3_SET=fn-matches go test ./tests/qt3/ -count=1 -v
 # XSD, which has its own driver rather than a Go test
 go run ./tests/xsdsuite testdata/xsdtests        # 1.0
 go run ./tests/xsdsuite testdata/xsdtests -11    # 1.1
+
+# The generated content-model oracle, with its per-shape document counts
+go test ./xsd/ -run TestOccursOracle -count=1 -v
+
+# The same sweeps with wider bounds and longer documents — about 2s rather
+# than 0.4s, so it is opt-in rather than part of every `go test ./...`
+GOXSLT_OCCURS_WIDE=1 go test ./xsd/ -run TestOccursOracle -count=1 -v
 ```
 
 `GOXSLT_NO_SUITES=1` keeps the conformance suites out of a plain
