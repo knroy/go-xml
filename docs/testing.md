@@ -167,11 +167,24 @@ whole conformance job a second time — and under `-race` that is slow enough to
 pass `go test`'s ten-minute default and panic rather than report.
 
 `GOXSLT_CASE_TIMEOUT` overrides the 60-second per-case deadline for a slower
-machine. It is a measurement parameter, not a limit on the engine: three cases
+machine, in the QT3 driver as well as the XSLT one. It is a measurement parameter, not a limit on the engine: three cases
 in the `catalog` set parse every stylesheet in the suite inside one transform,
 and at the old 10s deadline the reported figure moved with whatever else was
 running on the box — 8,605 under a parallel build, 8,607 on a quiet machine.
 That is measurement noise presented as a conformance number.
+
+QT3 was left on a 10-second deadline when the XSLT driver was raised, and it
+failed the same way: CI reported XQuery 29,799 and 29,798 for the **same
+commit** in two runs minutes apart, and the ratchet correctly called the second
+a regression. Two different numbers for one commit cannot be a code change —
+only cases sitting near the deadline on a loaded runner. Both drivers now use
+60 seconds.
+
+One case does not pass at any deadline. `op:same-key-023` builds 75³ = 421,875
+keys and calls `map:put` and `map:remove` once for each; both are O(n) in this
+representation, so the case is quadratic and does not finish in ten minutes. It
+is a real performance defect and is recorded as one in
+[conformance-gaps.md](conformance-gaps.md) — not a timeout to be raised past.
 
 ---
 

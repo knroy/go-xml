@@ -25,9 +25,29 @@ import (
 // bug pass unnoticed.
 var SuiteClock = time.Date(2024, 1, 15, 9, 30, 0, 0, time.FixedZone("", -5*3600))
 
-// CaseTimeout bounds a single test case. It is generous: the point is to
-// contain a non-terminating expression, not to measure performance.
-const CaseTimeout = 10 * time.Second
+// caseTimeout bounds a single test case. The point is to contain a
+// non-terminating expression, not to measure performance.
+//
+// It is a property of the machine doing the measuring, not of the engine, so
+// it is set high enough that a loaded CI runner reports the same figure as an
+// idle laptop. At the 10s this was, it did not: CI reported XQuery 29,798 and
+// 29,799 for the same commit in two runs minutes apart -- a "regression" the
+// ratchet caught that was really the runner being busy, with same-key-023
+// timing out under load and passing on a quiet box. tests/xslts had already
+// been raised to 60s for this exact reason; QT3 was left behind.
+//
+// A case that genuinely does not terminate is still caught: the go test
+// -timeout covering the whole run is the backstop.
+//
+// GOXSLT_CASE_TIMEOUT takes a Go duration ("90s", "2m") for a slower box.
+func caseTimeout() time.Duration {
+	if v := os.Getenv("GOXSLT_CASE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
+}
 
 // Outcome is what happened to one test case.
 type Outcome int
@@ -589,7 +609,7 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		}
 	}
 
-	runCtx, cancel := context.WithTimeout(context.Background(), CaseTimeout)
+	runCtx, cancel := context.WithTimeout(context.Background(), caseTimeout())
 	defer cancel()
 
 	ctx := xpath.NewContext(ctxItem, xpath.Builtins())
