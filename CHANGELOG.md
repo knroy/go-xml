@@ -4,7 +4,86 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org): from 1.0.0 the exported API is stable, and a
 breaking change means 2.0 with a new module path. See *Stability* below.
 
-## Unreleased
+## v1.2.1 — 2026-09-03
+
+Conformance, correctness, and the honesty of the numbers reporting them.
+Measured with `tests/check.sh`: XPath 2.0, 3.0 and 3.1 all at 100%, XQuery
+3.1 at 99.99% (29,800 of 29,803), XSLT 2.0 at 99.87% (6,149 of 6,157), XSLT
+3.0 at 99.85% (8,612 of 8,625), XSD 1.0 and 1.1 at 99.90% and 99.91%
+agreeing, RELAX NG at 100%. DocBook xslTNG 577 of 593 and XSpec 225, with
+1,095 unit tests clean under `-race`.
+
+**The Go floor is lowered to 1.25**, from 1.26, so this builds on one more
+toolchain than v1.2.0 did. It is measured rather than nominal: `regexp`
+learned the Unicode category `Cn` in 1.25, and building on 1.24 costs four
+conformance cases -- the dependency is on standard-library behaviour, not on
+a symbol, which is why a local run with a newer toolchain installed could not
+see it.
+
+### A private function of a used package is not callable from outside it
+
+`use-package-003` asked for it and this file had recorded it as needing "the
+package threaded through the XPath static context", the single largest
+structural change on the list. The narrow form turned out to be contained:
+the declaring package's visibility is carried on the function component and
+checked at the call site, through a `ScopedFunctionLibrary` paralleling the
+existing `DynamicFunctionLibrary`. An earlier lexical-rename attempt broke
+`override-f-026`, where one name exists at two arities; a rename was the
+wrong shape, not the idea.
+
+### An instruction in 1.0 compatibility mode inside a streamable mode
+
+`XTSE3430`. Section 3.9.1 states the rule "notwithstanding anything stated in
+19 Streamability": an instruction processed with XSLT 1.0 behavior *is*
+roaming and free-ranging, by declaration rather than as something a posture
+and sweep analysis concludes. So `streamable-141`, filed here as needing the
+§19.8 analysis this engine does not implement, never needed it. The check is
+scoped to exactly that shape -- a template whose `@mode` names a mode
+declared `streamable="yes"`, containing an element that states
+`version="1.0"` -- because a processor that does not stream is not required
+to assess whether anything else is guaranteed-streamable.
+
+### The QT3 per-case deadline was measuring the runner
+
+CI reported XQuery 29,799 passing in one run and 29,798 in another, for the
+same commit, minutes apart, and the ratchet correctly called the second a
+regression. Two different numbers for one commit cannot come from a code
+change. `tests/qt3` was still on a 10-second per-case deadline that
+`tests/xslts` had been raised off for this exact reason; it is 60 seconds
+now, and honours `GOXSLT_CASE_TIMEOUT` as the XSLT driver already did.
+
+### Verdicts that were re-derived and found wrong
+
+`validation-0201` was filed as fixable in the harness -- the suite does
+license a driver to "ignore differences in the serialization that are known
+to be irrelevant", and the case is not a serializer test. Implementing that
+showed the indentation was the first of three differences and the case still
+failed. Behind it: an expected file declaring `iso-8859-1` with no
+`@encoding` for the harness to read, fixed here; and then an engine defect,
+`29 MAY 1917` where `29 May 1917` is wanted, because an imported schema's
+named simple type is invisible to `instance of` in a match pattern. That is
+now recorded in `docs/known-gaps.md` as an open gap rather than papered over
+as a harness fix.
+
+The XSD "disputed" counts had never been derived from the suite at all.
+Counted from the `<current>` status of every disagreeing case: 71 of 79 are
+ones the W3C itself challenged, and the remaining 8 are `accepted` -- the
+only settled XSD expectations this validator disagrees with.
+
+### Also in this release
+
+Two ratchet marks go **down** and neither is a regression. XSD 1.0 fell from
+39,353 to 39,347 and XSD 1.1 rose from 41,525 to 41,532: `indeterminate`
+expectations stopped being scored as "must be invalid", and those cases leave
+the denominator as well as the numerator, so the rate rose while 1.0's raw
+count fell. XSD 1.1 rose outright because `iri-001`'s schema, which builds
+its RFC 3986 patterns from an internal DTD subset, is now loaded with
+`AllowDOCTYPE` on -- recovering the schema case and the 12 instance tests its
+load failure had been suppressing.
+
+The entries below this line were written against `Unreleased` and all ship in
+v1.2.1.
+
 
 ### system-property('xsl:product-version') was answering 0.1
 
@@ -367,6 +446,29 @@ schemes that are not part of XInclude.
   `fn:resolve-uri` and `fn:static-base-uri` are defined over RFC 3986
   references, so `resolve-uri(rel, static-base-uri())` — the idiom a stylesheet
   uses to find a file beside itself — raised `FORG0002` on every run.
+
+## v1.2.0 — 2026-09-02
+
+XQuery 3.1 from 99.07% to 99.61% of the QT3 suite, and the second host
+language reached parity: constructors, FLWOR, the prolog, try/catch, switch,
+typeswitch and windows. `fn:transform` was added, so a stylesheet can run a
+stylesheet. Three bugs that DocBook xslTNG and XSpec found and the W3C suites
+did not were fixed with them.
+
+### generate-id() must tell apart the nodes of a built tree
+
+Reported from the field: a Schematron schema transpiled by SchXslt2 raised
+`XTDE3365` on a duplicate map key, in this engine *and* in Saxon, from a
+stylesheet this engine had generated. Both failing on the same generated file
+is what said the error was correct and the stylesheet producing it was not.
+
+`generate-id()` is built on `Node.Order()`, which combines a tree identity
+with the node's document-order index. A tree assembled by a sequence
+constructor is never finalized, so every node under one root still carried
+the index `0` it was built with: the identity told two trees apart, and
+nothing told the nodes within one tree apart. SchXslt2 keys a map on
+`generate-id()` of each `sch:assert` and `sch:report`, so two distinct nodes
+collided. `TestOrderDistinguishesUnfinalizedNodes` guards it.
 
 ## v1.1.0 — 2026-09-01
 
