@@ -266,6 +266,38 @@ no form for a backreference, so `xsd` still rejects `\1` under both versions.
 
 Real gaps with no work done. Ordered by how much they cost.
 
+### An imported schema's simple type is invisible to `instance of` in a match pattern (XSLT)
+
+`<xsl:template match="Date[data(.) instance of StandardDate]">` never matches,
+where `StandardDate` is a named simple type — `xs:string` restricted by a
+pattern — brought in by `xsl:import-schema`. The plain `match="Date"` template
+wins instead, and the source text is copied through unprocessed.
+
+Costs `validation-0201` on both the 2.0 and 3.0 targets: two cases.
+
+It was found behind a wrong verdict, which is the part worth recording. That
+row read **fixable in the harness**: the expected file is Saxon's indentation,
+and `admin/catalog-schema.xsd` does license a driver to "ignore differences in
+the serialization that are known to be irrelevant". Both halves are true, and
+the case is not a serializer test — its own description calls it "a 'system
+test' of schema-aware processing". So the normalisation was written and
+measured, and the case still failed. Collapsing the indentation only uncovered
+what was behind it: an encoding defect in the harness, since fixed, and then
+this.
+
+Diagnosed by elimination rather than by reading code. `format-date` is not at
+fault — called directly, `[MNn]` gives "May" and `[MN]` gives "MAY", both
+correct. An `xsl:message` added to the schema-typed template in a scratch copy
+of the stylesheet does not fire, so the pattern itself is false rather than the
+body being wrong.
+
+Not yet scoped. Two things are unestablished: whether the element carries the
+type annotation at all after schema validation, or whether it carries it and
+the pattern evaluator does not consult it; and whether a user-defined type name
+from an imported schema resolves in the static context a pattern is compiled
+in. It touches pattern matching and the schema type registry, so it is not a
+patch.
+
 ### A hyphen after a variable reference is read as part of the name (XPath, XQuery)
 
 `$e-1` evaluates as a reference to a variable named `e-1`, not as `$e - 1`.

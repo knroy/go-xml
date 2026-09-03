@@ -174,19 +174,21 @@ cases disagree.
 
 **To fix: accept invalid stylesheets.**
 
-### 2 — network access
+### 1 — network access
 
 `unparsed-text-2003` (both targets) asserts
-`unparsed-text-available('http://www.w3.org/Consortium/mission.html')` is true;
-`package-version-011` wants a document with no resolver configured.
+`unparsed-text-available('http://www.w3.org/Consortium/mission.html')` is true.
 
 Resolvers are nil by default so an untrusted stylesheet cannot fetch what it
 names, and making outbound HTTP the default would be a security regression
-rather than a conformance gain. Neither case needs that, though:
-`unparsed-text-2003` omits the `available_documents` dependency its own
-neighbour `unparsed-text-2002` declares and the harness already honours, and
-`package-version-011` is triaged as an engine defect. Both sit in the fixable
-column for those reasons.
+rather than a conformance gain. This case does not need that: it omits the
+`available_documents` dependency its own neighbour `unparsed-text-2002`
+declares and the harness already honours, which is why it sits in the fixable
+column.
+
+`package-version-011` was in this group and is now **fixed** — the static
+phase was given the module resolver, so it no longer wants a document with no
+resolver configured.
 
 ### 2 — vendor extension
 
@@ -228,16 +230,25 @@ element the processor recognises, so an absent one is visible in it.
 
 ---
 
-### 2 — implementation-defined
+### 2 — an engine defect behind an implementation-defined difference
 
 `validation-0201`, on both targets.
 
-It asserts Saxon's three-space indent byte-for-byte. Indentation is
-implementation-defined by §10 of the serialization spec, and this serializer
-writes a different amount of it. The suite's own `validation-0202` was
-rewritten in 2013 "to avoid serialization dependencies"; `0201` was not.
+It does assert Saxon's three-space indent byte-for-byte, and indentation is
+implementation-defined by §10 of the serialization spec — the suite's own
+`validation-0202` was rewritten in 2013 "to avoid serialization dependencies"
+and `0201` was not. That much of the earlier reading holds.
 
-**To fix: match another processor's whitespace.** That is not conformance.
+What it missed is that the indentation is only the first of three differences,
+and normalising it does not pass the case. Behind it: an expected file
+declaring `iso-8859-1` with no `@encoding` on the assertion for the harness to
+read, since fixed; and then a real defect, `29 MAY 1917` where `29 May 1917`
+is wanted, because `match="Date[data(.) instance of StandardDate]"` never
+matches and the plain `match="Date"` copies the source text through.
+
+**To fix: make an imported schema's simple type visible to `instance of` in a
+match pattern.** That is conformance, and it is engine work — see
+[known-gaps.md](known-gaps.md).
 
 ---
 
@@ -249,14 +260,21 @@ second language implementation, freezing a stale Unicode table, accepting
 invalid input, or weakening a security default. Seven more are open questions
 the spec does not settle.
 
-**Twenty-three are work, and most of that work is in the harness rather than
-the engine** — the eight XSD `indeterminate` expectations per version scored as
-"must be invalid", a Saxon-byte-exact serialisation comparison, and two cases
-the suite puts out of scope through a dependency the harness does not read.
-Four are engine defects. An earlier revision of this file claimed the fixable
-column had reached zero; the audit recorded in
-[conformance-gaps.md](conformance-gaps.md) overturned that, and the claim is
-worth remembering as the kind a document makes when its verdicts stop being
+**Most of that work has since landed, and what it left behind is engine work
+rather than harness work.** The XSD `indeterminate` expectations are no longer
+scored as "must be invalid", `iri-001`'s schema is loaded with `AllowDOCTYPE`
+on, `docbook-004`, `package-version-011` and `use-package-003` are fixed, and
+the encoding half of `validation-0201` is fixed. Two cases remain in the
+fixable column, and both are ones the suite itself puts out of scope through a
+dependency the harness does not read: `streamable-141` and
+`unparsed-text-2003`.
+
+Two revisions of this file have now been overturned by re-derivation. The
+first claimed the fixable column had reached zero; the audit recorded in
+[conformance-gaps.md](conformance-gaps.md) found twenty-three cases of work.
+The second called `validation-0201` a harness fix; implementing it showed the
+serialisation difference was hiding an engine defect. Both are worth
+remembering as the kind of claim a document makes when its verdicts stop being
 re-derived.
 
 Beyond that is engineering the suites cannot see:

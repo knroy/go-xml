@@ -125,19 +125,24 @@ a query gains the ability to fetch.
 
 ## 2. Bugs
 
-### 2.1 XSD: 51 disagreements on 1.0, 47 on 1.1 — none of them a defect
+### 2.1 XSD: 41 disagreements on 1.0, 38 on 1.1 — none of them a defect
 
 Both directions are closed. The ~700 schema false accepts this entry used to
 count are implemented, and the false rejects with them; schema-validity
-agreement is 99.86% on 1.0 and 99.88% on 1.1.
+agreement is 99.91% on 1.0 and 99.93% on 1.1.
 
-What is left is not work: 89 of the 98 are cases where the suite's own
+What is left is not work: the bulk of the 79 are cases where the suite's own
 `status` records that the W3C challenged the expected result, 44 of those (22
 per version) being the single open bug 4113 — the regex general-category tests
 written against Unicode 3.1, where passing means freezing a Unicode 3.1 table
 and being wrong about modern text. Check the metadata before assuming a
 disagreement is ours, and note the status is on the `<current>` element, not
 on `<expected>`.
+
+The counts here fell from 51 and 47 when two harness defects were fixed:
+`indeterminate` expectations stopped being scored as "must be invalid", and
+`iri-001`'s schema, which builds its RFC 3986 patterns from an internal DTD
+subset, stopped being loaded with `AllowDOCTYPE` off.
 
 The principle this entry argued for still holds and is worth keeping: **a
 false reject breaks a caller outright, a false accept only fails to catch
@@ -146,7 +151,27 @@ treats them as though they were. That is why the tables above split them.
 
 It also holds that a suite at its ceiling is not proof of exactness — see 3.1.
 
-### 2.2 QName values do not resolve their prefix
+### 2.2 XSLT: an imported schema's simple type is invisible to `instance of` in a pattern
+
+`<xsl:template match="Date[data(.) instance of StandardDate]">` never matches,
+where `StandardDate` is a simple type named by an `xsl:import-schema`. The
+plain `match="Date"` wins instead and copies the source text through.
+
+Found behind `validation-0201`, whose row in
+[conformance-gaps.md](conformance-gaps.md) had been filed as a harness fix.
+Normalising the serializer difference that row described was implemented and
+measured, and the case still failed; this is what sat behind it.
+
+Verified rather than inferred: an `xsl:message` added to that template in a
+scratch copy of the stylesheet does not fire. `format-date` is not implicated
+— called directly, `[MNn]` gives "May" and `[MN]` gives "MAY", which is
+correct.
+
+Costs one case on each of the 2.0 and 3.0 targets. Unscoped: it touches
+pattern matching and the schema type registry, and whether the annotation is
+absent or merely not consulted is not yet established.
+
+### 2.3 QName values do not resolve their prefix
 
 An `xs:QName` value is checked lexically: prefix and local name must be
 NCNames, and `xmlns` is rejected as a prefix because nothing can bind it. But a
@@ -158,7 +183,7 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.3 XPath: `$e-1` parses as a variable named `e-1`
+### 2.4 XPath: `$e-1` parses as a variable named `e-1`
 
 The one known defect the suite does not cover, in either language. `$e-1`
 reads the hyphen as part of the variable name instead of as subtraction, and
@@ -176,7 +201,7 @@ scheduled. The diagnosis is in
 **Workaround: write `$e - 1`.** Anything generating queries should space its
 binary operators.
 
-### 2.4 XPath: no in-scope failures
+### 2.5 XPath: no in-scope failures
 
 XPath 2.0, 3.0 and 3.1 are all at 100%. The last case to fall was
 `fn-matches-51`, the one shape this deliberately refuses by default, and it is
@@ -283,7 +308,7 @@ Recorded so they are not proposed again as oversights:
   exists behind `xpath.SetBacktrackingRegex(true)`; what remains a non-goal is
   turning it on by default, since patterns can come from document data. The
   fixed-width case is *not* in this list: it has one possible assignment, so
-  comparison is exact, and it is on always. See 2.3.
+  comparison is exact, and it is on always. See 2.5.
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.
