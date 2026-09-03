@@ -993,9 +993,36 @@ func serializationWant(a Assertion, set *TestSet) (string, error) {
 		return "", fmt.Errorf("expected-serialization file: %s",
 			firstLine(err.Error()))
 	}
+	enc := a.Encoding
+	if enc == "" {
+		// No @encoding on the assertion. The file still says what it is:
+		// validation-0201's schvalid001.out declares iso-8859-1 and holds a
+		// NBSP as the single byte xA0, which read as UTF-8 is not a character
+		// at all. Reading the declaration is what the file is for.
+		enc = declaredEncoding(data)
+	}
 	return strings.TrimSpace(
-		strings.ReplaceAll(decodeExpected(stripBOM(data), a.Encoding), "\r", "")), nil
+		strings.ReplaceAll(decodeExpected(stripBOM(data), enc), "\r", "")), nil
 }
+
+// declaredEncoding returns the encoding named by an expected-result file's own
+// XML declaration, or "" if it has none.
+//
+// The declaration is ASCII in every encoding the suite uses, so it can be read
+// off the bytes before any decoding decision has been made.
+func declaredEncoding(data []byte) string {
+	head := data
+	if len(head) > 128 {
+		head = head[:128]
+	}
+	m := declEncodingRE.FindSubmatch(head)
+	if m == nil {
+		return ""
+	}
+	return string(m[1])
+}
+
+var declEncodingRE = regexp.MustCompile(`<\?xml[^?>]*encoding\s*=\s*["']([^"']+)["']`)
 
 // decodeExpected converts an expected-result file's bytes to the UTF-8 the
 // engine's serialisation is compared as.
