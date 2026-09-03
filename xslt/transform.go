@@ -832,7 +832,20 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// the loss was not visible — removing that gate cost 115 tests.
 		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
 			TypeAnnotation: n.TypeAnnotation,
-			IsID:           n.IsID, IsIDREFS: n.IsIDREFS,
+			// UnionMember travels with the annotation, because it is the
+			// other half of the same fact. A union's annotation names the
+			// union; which MEMBER accepted this element's value is a
+			// property of the value, recorded separately (see
+			// xdm.Node.UnionMember), and it is what atomisation reads to
+			// decide what the typed value actually is. Copying the
+			// annotation without it left the element annotated as a union
+			// whose derivation chain runs to xs:anySimpleType and stops, so
+			// the copy atomised to xs:untypedAtomic and every "instance of"
+			// on the member answered false -- silently, on a document the
+			// caller had validated, purely because the stylesheet declared
+			// xsl:strip-space.
+			UnionMember: n.UnionMember,
+			IsID:        n.IsID, IsIDREFS: n.IsIDREFS,
 			IsNilled: n.IsNilled}
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
@@ -840,6 +853,7 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		for _, a := range n.Attrs {
 			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
 				TypeAnnotation: a.TypeAnnotation,
+				UnionMember:    a.UnionMember,
 				IsID:           a.IsID, IsIDREFS: a.IsIDREFS}
 			c.AddAttr(ac)
 			if a == want {

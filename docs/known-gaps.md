@@ -262,41 +262,56 @@ applied in exactly one place.
 The XML Schema pattern facet is unaffected: Appendix F's `atom` production has
 no form for a backreference, so `xsd` still rejects `\1` under both versions.
 
+### A union's selected member did not survive a tree copy (XSLT) — fixed
+
+`<xsl:template match="Date[data(.) instance of StandardDate]">` never matched,
+where `StandardDate` is a named simple type — `xs:string` restricted by a
+pattern — brought in by `xsl:import-schema`. The plain `match="Date"` template
+won instead, and the source text was copied through unprocessed.
+
+The cause was neither of the two this entry once named as the candidates. The
+element *did* carry its annotation after validation, and the type name *did*
+resolve in the pattern's static context. What was lost was the third fact, the
+one between them.
+
+`Date` has type `DateType`, a complex type with simple content extending
+`GeneralDate`, which is a union of `StandardDate` and `xs:string`. XSD 1.0
+§3.14.4 selects a union's member per *value*, so the annotation alone cannot
+say whether "29 MAY 1917" is a `StandardDate` or a plain string — the validator
+records the winning member separately, in `xdm.Node.UnionMember`, and
+atomisation reads it to decide what the typed value is. A union's own
+derivation chain runs to `xs:anySimpleType` and stops, so without the member
+there is nothing to build a typed value from and the node atomises to
+`xs:untypedAtomic`.
+
+Three copy sites carried `TypeAnnotation` and dropped `UnionMember` beside it:
+`stripCopyNode` in `xslt/transform.go`, `xdmbuild.DeepCopy`, and the parentless
+attribute copy in `xslt/copyfuncs.go`. `xdm/xinclude.go` already copied both,
+which is what made the omission visible as an inconsistency rather than a
+design.
+
+The failure was silent and selective. The same pattern answered *true* on any
+path that had not been through a copy, so `validation-0201` sorted its events
+by a key that saw the type and then dispatched on a pattern that did not.
+`xsl:strip-space` — a declaration about whitespace, with nothing to say about
+types — was what untyped the document.
+
+Diagnosed by measurement rather than by reading: a probe over the validated
+tree showed `union="StandardDate"` present on every `Date`, and a trace at the
+`instance of` match site showed the annotated value arriving 1614 times from
+the sort key and an *unannotated* one arriving twice, from `apply-templates` —
+the two calls that produce the output.
+
+With the fix, the case's output is byte-identical to Saxon's expected file
+apart from whitespace: all three dates now render "29 May 1917", "12 September
+1953", "22 November 1963". It still fails, on the indent width alone — see
+`validation-0201` in `docs/conformance-gaps.md`, where that difference is
+recorded as implementation-defined. So the fix costs and gains no suite case,
+and is covered by `xslt/unionmember_test.go` instead.
+
 ## Open
 
 Real gaps with no work done. Ordered by how much they cost.
-
-### An imported schema's simple type is invisible to `instance of` in a match pattern (XSLT)
-
-`<xsl:template match="Date[data(.) instance of StandardDate]">` never matches,
-where `StandardDate` is a named simple type — `xs:string` restricted by a
-pattern — brought in by `xsl:import-schema`. The plain `match="Date"` template
-wins instead, and the source text is copied through unprocessed.
-
-Costs `validation-0201` on both the 2.0 and 3.0 targets: two cases.
-
-It was found behind a wrong verdict, which is the part worth recording. That
-row read **fixable in the harness**: the expected file is Saxon's indentation,
-and `admin/catalog-schema.xsd` does license a driver to "ignore differences in
-the serialization that are known to be irrelevant". Both halves are true, and
-the case is not a serializer test — its own description calls it "a 'system
-test' of schema-aware processing". So the normalisation was written and
-measured, and the case still failed. Collapsing the indentation only uncovered
-what was behind it: an encoding defect in the harness, since fixed, and then
-this.
-
-Diagnosed by elimination rather than by reading code. `format-date` is not at
-fault — called directly, `[MNn]` gives "May" and `[MN]` gives "MAY", both
-correct. An `xsl:message` added to the schema-typed template in a scratch copy
-of the stylesheet does not fire, so the pattern itself is false rather than the
-body being wrong.
-
-Not yet scoped. Two things are unestablished: whether the element carries the
-type annotation at all after schema validation, or whether it carries it and
-the pattern evaluator does not consult it; and whether a user-defined type name
-from an imported schema resolves in the static context a pattern is compiled
-in. It touches pattern matching and the schema type registry, so it is not a
-patch.
 
 ### A hyphen after a variable reference is read as part of the name (XPath, XQuery)
 

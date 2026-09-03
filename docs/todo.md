@@ -151,25 +151,38 @@ treats them as though they were. That is why the tables above split them.
 
 It also holds that a suite at its ceiling is not proof of exactness — see 3.1.
 
-### 2.2 XSLT: an imported schema's simple type is invisible to `instance of` in a pattern
+### 2.2 XSLT: a union's selected member was lost on every tree copy — fixed
 
-`<xsl:template match="Date[data(.) instance of StandardDate]">` never matches,
+`<xsl:template match="Date[data(.) instance of StandardDate]">` never matched,
 where `StandardDate` is a simple type named by an `xsl:import-schema`. The
-plain `match="Date"` wins instead and copies the source text through.
+plain `match="Date"` won instead and copied the source text through.
 
 Found behind `validation-0201`, whose row in
 [conformance-gaps.md](conformance-gaps.md) had been filed as a harness fix.
 Normalising the serializer difference that row described was implemented and
 measured, and the case still failed; this is what sat behind it.
 
-Verified rather than inferred: an `xsl:message` added to that template in a
-scratch copy of the stylesheet does not fire. `format-date` is not implicated
-— called directly, `[MNn]` gives "May" and `[MN]` gives "MAY", which is
-correct.
+The two candidate causes this entry named — the annotation being absent, or the
+type name not resolving in the pattern's static context — were **both wrong**,
+and measurement was what settled it. A probe over the validated tree showed
+every `Date` carrying `TypeAnnotation="DateType"` and `UnionMember="StandardDate"`,
+and a trace at the `instance of` match site showed the type resolving correctly.
 
-Costs one case on each of the 2.0 and 3.0 targets. Unscoped: it touches
-pattern matching and the schema type registry, and whether the annotation is
-absent or merely not consulted is not yet established.
+The real cause is one line further out. `Date` has type `DateType`, a complex
+type with simple content extending a *union*; XSD §3.14.4 selects a union's
+member per value, so the winning member is recorded separately on the node and
+is what atomisation reads — a union's own derivation chain runs to
+`xs:anySimpleType` and stops. Three copy sites carried `TypeAnnotation` and
+dropped `UnionMember` beside it: `stripCopyNode` in `xslt/transform.go`,
+`xdmbuild.DeepCopy`, and the parentless attribute copy in `xslt/copyfuncs.go`.
+The stylesheet declares `<xsl:strip-space elements="*"/>`, so every `Date`
+reaching a template had been through a copy and atomised to `xs:untypedAtomic`.
+
+Fixed by carrying `UnionMember` at all three, which is what `xdm/xinclude.go`
+already did. The output for `validation-0201` is now byte-identical to the
+expected file apart from whitespace; the case still fails on the indent width,
+which is implementation-defined, so it gains no suite case. Covered by
+`xslt/unionmember_test.go`.
 
 ### 2.3 QName values do not resolve their prefix
 

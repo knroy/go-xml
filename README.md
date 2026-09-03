@@ -1608,8 +1608,12 @@ failure, and it passes with `xpath.SetBacktrackingRegex(true)`. Of the 23 XSLT
 failures, 9 are the same story — they pass with that switch on — 7 are cases
 where the suite disagrees with the specification or where matching it would
 cost XSD tests, and 5 need XSLT 3.0 features, the network, or byte-identical
-reproduction of another processor's indentation. That leaves 2 genuinely open,
-each catalogued in [docs/known-gaps.md](docs/known-gaps.md). Three larger
+reproduction of another processor's indentation. That leaves **none genuinely
+open**: the last two were `validation-0201` on both targets, and the engine
+defect behind them — a union's selected member type dropped on every tree copy,
+so that `xsl:strip-space` silently untyped a validated document — is fixed. The
+case still fails, on the indent width alone, which is implementation-defined.
+The full catalogue is [docs/known-gaps.md](docs/known-gaps.md). Three larger
 things are open, in rough order of how much they would change:
 
 * **Receiver-based output.** The runtime builds a result tree and serialises

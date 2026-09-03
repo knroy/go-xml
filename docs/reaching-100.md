@@ -13,11 +13,11 @@ case by case; this file is about what buying them would cost.
 |---|---:|---:|---:|---:|
 | XPath 3.1 | 0 | 0 | 0 | 0 |
 | XQuery 3.1 | 3 | 0 | 0 | 3 |
-| XSLT 2.0 | 8 | 0 | 1 | 7 |
-| XSLT 3.0 | 13 | 0 | 1 | 12 |
+| XSLT 2.0 | 8 | 0 | 0 | 8 |
+| XSLT 3.0 | 13 | 0 | 0 | 13 |
 | XSD 1.0 | 41 | 0 | 0 | 41 |
 | XSD 1.1 | 38 | 0 | 0 | 38 |
-| **Total** | **103** | **0** | **2** | **101** |
+| **Total** | **103** | **0** | **0** | **103** |
 
 XPath 2.0, XPath 3.0, XPath 3.1 and RELAX NG are already at 100%.
 
@@ -39,8 +39,8 @@ overturned that, and the detail is in
 two are cases the suite itself declares out of scope through a dependency the
 harness does not read, and the rest are harness scoring defects — chiefly the
 eight XSD `indeterminate` expectations per version that are silently scored as
-"must be invalid". Seven more are open questions, settled neither way. What
-stands between here and 100% is the 101 in Part 2.
+"must be invalid". Five more are open questions, settled neither way. What
+stands between here and 100% is the 103 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
 "fixable" meant:
@@ -57,11 +57,13 @@ The last four to fall are worth recording, because they are the shape of what
 
 ### The open questions
 
-Seven, spread across three suites: three in XQuery, one at each XSLT target,
-and two on XSD 1.1 (`simple093` and `particlesZ033_g`). Each asks for
-behaviour the checked-in spec text does not settle, so none is counted as a
-pass or as a defect. `validation-0006` and `strip-space-009` stood here until
-the audit settled both as not implementable.
+Five, spread across two suites: three in XQuery and two on XSD 1.1
+(`simple093` and `particlesZ033_g`). Each asks for behaviour the checked-in
+spec text does not settle, so none is counted as a pass or as a defect.
+`validation-0006` and `strip-space-009` stood here until the audit settled both
+as not implementable, and `validation-0201` — one at each XSLT target, so two
+of the original seven — left when the engine defect behind it was fixed and the
+case turned out to still fail on an implementation-defined indent width.
 
 ### What a zero here does not mean
 
@@ -76,7 +78,7 @@ A ceiling bounds what the suite asks, not what the code does.
 
 ---
 
-## Part 2 — the 101 that are not work
+## Part 2 — the 103 that are not work
 
 Grouped by what would actually have to change.
 
@@ -248,9 +250,9 @@ direction look expensive; a rename was the wrong shape, not the idea.
 
 ---
 
-### 2 — an engine defect behind an implementation-defined difference
+### 2 — an implementation-defined difference, and the engine defect that hid behind it (fixed)
 
-`validation-0201`, on both targets.
+`validation-0201`, on both targets. **Nothing is left to do here.**
 
 It does assert Saxon's three-space indent byte-for-byte, and indentation is
 implementation-defined by §10 of the serialization spec — the suite's own
@@ -262,28 +264,43 @@ and normalising it does not pass the case. Behind it: an expected file
 declaring `iso-8859-1` with no `@encoding` on the assertion for the harness to
 read, since fixed; and then a real defect, `29 MAY 1917` where `29 May 1917`
 is wanted, because `match="Date[data(.) instance of StandardDate]"` never
-matches and the plain `match="Date"` copies the source text through.
+matched and the plain `match="Date"` copied the source text through.
 
-**To fix: make an imported schema's simple type visible to `instance of` in a
-match pattern.** That is conformance, and it is engine work — see
+That defect is now fixed, and it was not the one this section predicted. An
+imported schema's simple type *was* visible to `instance of`, and the element
+*did* carry its annotation. `Date`'s type is a complex type with simple content
+extending a union, and XSD §3.14.4 selects a union's member per value — so the
+member that accepted the text is recorded separately on the node, and is what
+atomisation reads. Three tree-copy sites carried the annotation and dropped the
+member; the stylesheet's `<xsl:strip-space elements="*"/>` put every `Date`
+through one of them.
+
+**The case still fails**, on the indent width and nothing else — the output is
+now byte-identical to the expected file apart from whitespace. So the fix gains
+no suite case, and the original implementation-defined verdict is where this
+lands after all, by a route that had to be walked to be believed. See
 [known-gaps.md](known-gaps.md).
 
 ---
 
 ## Part 3 — the honest bottom line
 
-**Reaching 100% is not a goal that survives contact with the suites.** Of 103
-disagreements, 101 would require agreeing with a disputed result, shipping a
-second language implementation, freezing a stale Unicode table, accepting
-invalid input, or weakening a security default. Seven more are open questions
-the spec does not settle.
+**Reaching 100% is not a goal that survives contact with the suites.** All 103
+remaining disagreements would require agreeing with a disputed result, shipping
+a second language implementation, freezing a stale Unicode table, accepting
+invalid input, weakening a security default, or reproducing another
+implementation's choice where the spec declines to make one. None is now an
+open question about our own correctness — the last two, `validation-0201` on
+both targets, were settled by fixing the defect behind them, which turned out
+not to move the case.
 
 **Most of that work has since landed, and what it left behind is engine work
 rather than harness work.** The XSD `indeterminate` expectations are no longer
 scored as "must be invalid", `iri-001`'s schema is loaded with `AllowDOCTYPE`
 on, `docbook-004`, `package-version-011` and `use-package-003` are fixed, and
-the encoding half of `validation-0201` is fixed. **The fixable column is now
-empty on every suite.** `streamable-141` was fixed rather than excluded, and
+and both the encoding half and the engine half of `validation-0201` are fixed.
+**The fixable column is now empty on every suite, and so is the open column.**
+`streamable-141` was fixed rather than excluded, and
 `unparsed-text-2003` needed nothing: `remoteResource` already excludes it,
 derived from the environment's resource URIs rather than by naming the case.
 
@@ -291,9 +308,12 @@ Two revisions of this file have now been overturned by re-derivation. The
 first claimed the fixable column had reached zero; the audit recorded in
 [conformance-gaps.md](conformance-gaps.md) found twenty-three cases of work.
 The second called `validation-0201` a harness fix; implementing it showed the
-serialisation difference was hiding an engine defect. Both are worth
-remembering as the kind of claim a document makes when its verdicts stop being
-re-derived.
+serialisation difference was hiding an engine defect. The third — this one —
+named the wrong engine defect: it predicted an imported type invisible to
+`instance of`, and the cause was a union's selected member dropped on every
+tree copy. All three are worth remembering as the kind of claim a document
+makes when its verdicts stop being re-derived, and the third especially: a
+diagnosis reached by elimination is a hypothesis, not a finding.
 
 Beyond that is engineering the suites cannot see:
 the content-model matcher's nested-occurrence bug above, and whatever else

@@ -15,12 +15,12 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 1 | **7** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 8,625 | 8,612 | 99.85% | **13** | 0 | 1 | **12** | 99.85% |
+| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
+| **xslt** | W3C XSLT 3.0 | 8,625 | 8,612 | 99.85% | **13** | 0 | 0 | **13** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **103** | **0** | **2** | **101** | |
+| | **Total** | | | | **103** | **0** | **0** | **103** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -46,20 +46,21 @@ reflects that.
 > unchanged, and where the audit could not settle a case it says so rather than
 > moving it to a flattering bucket.
 
-**100 disagreements are triaged as unfixable.** Three are work: engine
-defects, harness defects, or cases the suite already declares out of scope and
-the harness does not read — down from five, as `iri-001` has been fixed and
-`regex-syntax-xslt20-0987` has been returned to *not implementable*. Seven are
-open questions, settled neither way.
+**All 103 disagreements are triaged as unfixable.** None is now work: the
+engine defects, harness defects and out-of-scope cases the audit found have all
+been settled — `iri-001` and `docbook-004` fixed, `regex-syntax-xslt20-0987`
+returned to *not implementable*, and `validation-0201` fixed at the engine
+without moving the case, which put its two entries in the can't-fix column
+where the first verdict had placed them.
 
 In the *Fixable* column above, "fixable" means "the count can move" — which
 covers three distinct things, and the audit found the old document conflating
 them. A case may be an engine defect (`docbook-004`, `package-version-011`), a
-harness defect where the engine is already right (`iri-001`, now fixed;
-`validation-0201`; and the eight `indeterminate` XSD expectations per version),
-or a case the suite itself puts out of scope through
-a dependency the harness does not honour (`streamable-141`,
-`unparsed-text-2003`). Only the first kind moves the numerator; the other two
+harness defect where the engine is already right (`iri-001`, now fixed, and
+the eight `indeterminate` XSD expectations per version), or a case the suite
+itself puts out of scope through a dependency the harness does not honour
+(`streamable-141`, `unparsed-text-2003`). Only the first kind moves the
+numerator; the other two
 move the denominator or the scoring. They are counted together here because all
 three are work, but they are not the same claim and are labelled individually
 below.
@@ -125,6 +126,16 @@ turn on, and are reopened as questions. That two rounds of "moving cases into
 cannot-be-fixed" produced verdicts a third pass overturned is the argument for
 this section existing at all: the direction a case moves is easier to justify
 than to check.
+
+`validation-0201` then moved twice more, and its full history is the sharpest
+illustration this document has. Called *fixable in the harness*, then *an
+engine defect stands behind it*, and now *implementation-defined* again — but
+arriving there by a different route, because each verdict was true of one layer
+and blind to the next. The engine defect was real and is fixed; the case still
+fails on the indent width alone, which is where the first verdict pointed. The
+lesson is not that the first answer was right but that a case can fail for
+several independent reasons at once, and fixing the visible one is what reveals
+whether there was another.
 
 The reason the fixable count fell faster than the failure count is that the
 work went where the cases were: XSD schema validity moved from 99.78%/99.68%
@@ -245,7 +256,7 @@ returned to *not implementable* — see its row.
 | `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Edition drift, and the same shape as its two neighbours after all. The audit read the data correctly and drew the wrong conclusion from it. The data: this case's `match` list holds exactly 72 codepoints in the combining block, `0300-0345` and `0360-0361`, and `nonmatch` holds U+0346, the first codepoint in the gap — XML 1.0 **4th edition**'s `CombiningChar` character for character. We implement **5th edition**, whose `NameChar` is the blanket `[#x0300-#x036F]` (`xpath/classdiff.go`). What the audit did not check is whether 4e is a configuration we are free to adopt. It is not: the XSD test suite's own schema (`testdata/xsdtests/common/xsts.xsd`) enumerates `XML-1.0-1e-4e` and `XML-1.0-5e` as **mutually exclusive** processor configurations and records that "XSD 1.1 describes XML 1.0 Fifth Edition as the base version in its normative reference" — so the 4e reading this one case wants would be paid for out of the XSD 1.1 numerator, and the same translation serves `\c` for XPath, XQuery, XSLT and XSD pattern facets alike. The W3C reached the same conclusion: the 3.0 twin `regex-syntax-0987` was rewritten to be edition-**neutral** — every combining character was removed from its `match` list and the `nonmatch` parameter deleted outright — so it passes under either edition. Saxon 9.8 passes that twin and reports the 2.0 copy `notRun`. The 2.0 copy was never back-ported, exactly as with `-0984` and `-0985`. |
 | `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Not implementable** | Settled directly by the 2.0 REC, without needing the `sequence-2401a` argument this row used to make (the two are different constructs: 2401 has `@select` *and* content, 0132 has content and no `@select`). §11.10's element syntax summary gives `xsl:sequence` a **mandatory** `select` and `<!-- Content: xsl:fallback* -->`; §3.9 XTSE0010 fires "if a required attribute is omitted, or if the content of the element does not correspond to the content that is allowed". So XTSE0010 is the correct 2.0 answer and it is static, raised before any type check could reach XTTE0570. The stylesheet itself carries `<?error XTSE0010?>`, and Saxon 9.8 and Parrot 2017 both report `wrongError` with "Expected XTSE0010" — an older catalog wanted our answer. The `XSLT20+` scope is stale metadata: the expectation was edited to XTTE0570 in 2017 and 2018 without narrowing the scope to 3.0. |
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
-| `validation-0201` | Serialisation differs at offset 46 | **Not fixable in the harness** | Same case as the 3.0 entry below, and the same correction: indentation is only the first of three differences, and behind them is an engine defect — a user-defined simple type from an imported schema is not visible to `instance of` in a match pattern, so the schema-typed `Date` template never matches. See the 3.0 row for the evidence. |
+| `validation-0201` | Serialisation differs at offset 46 | **Implementation-defined** | Same case as the 3.0 entry below, and now down to one difference. The engine defect that stood behind the indentation is **fixed**: a union's selected member type was dropped whenever the tree was copied, so `xsl:strip-space` untyped the document and `data(.) instance of StandardDate` went false. With that fixed the output is byte-identical to the expected file apart from whitespace. What remains is the indent width — Saxon writes 3 spaces, this serializer writes 2 — which §20 leaves implementation-defined. See the 3.0 row. |
 
 **XSLT 2.0 ceiling: 6,149 / 6,157 = 99.87%** — the 6,149 that pass now.
 `regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
@@ -253,7 +264,10 @@ its two neighbours, not an engine defect, and its 3.0 twin was made
 edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
 also fail here, and both leave the denominator rather than the numerator if the
 corrections below are taken, which would put the 2.0 figure at
-6,149 / 6,155 = 99.90%.
+6,149 / 6,155 = 99.90%. `validation-0201`'s remaining difference is the indent
+width and nothing else: the engine defect that used to stand behind it — a
+union's selected member lost on every tree copy — is fixed, and the output now
+matches the expected file byte for byte apart from whitespace.
 
 ### Why none of the three regex cases is ours
 
@@ -360,7 +374,7 @@ them separate, and `override-t-003a` is the case.
 | `si-copy-117`, `si-copy-of-117` | **Not implementable** | Not ordering cases at all. Both write `<xsl:copy select="/*/*/@version" type="xs:date"/>` — a `type` attribute and **no `validation` attribute**. §19.2 keys the codes to which attribute was written: XTTE1510 begins "If the **validation attribute** ... has the effective value `strict`", which is literally unmet, while XTTE1540 is "if an **[xsl:]type attribute** is defined ... and the outcome of schema validity assessment against that type is ... other than valid", which is exactly met. The suite's own description says "validate attribute **by type**". Our XTTE1540 is correct. |
 | `import-schema-137` | **Not implementable** | The one genuine ordering case, and §2.9 explicitly declines to settle it: "If more than one error arises, an implementation is not required to signal any errors other than the first one that it detects. **It is implementation-dependent which of the several errors is signaled.**" Both errors are real, so either choice conforms; the suite is testing one processor's order. |
 | `validation-0006` | **Not implementable** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. XTTE1555 is scoped by its own text to "when validating a **document node**", and a parentless attribute is not one; XTTE1540, which covers the `type` attribute, is what the case actually meets. The stylesheet says so itself: "a contrived example to force **Saxon** down a particular code path". |
-| `validation-0201` | **Not fixable in the harness — an engine defect stands behind it** | The old verdict was that this is Saxon's indentation (3 spaces then 6 where this serializer writes 2) and that `admin/catalog-schema.xsd` licenses a driver to ignore it: *"Test drivers are free to ignore differences in the serialization that are known to be irrelevant."* That licence is real and the quote is accurate, and the case does not test the serializer — its own description calls it *"a 'system test' of schema-aware processing"*, with the serialization requirement declared two years after the case was written. But normalising indentation was implemented and measured, and it does **not** pass the case; it only exposes what the offset-46 indentation difference was hiding. Two further differences follow it. The expected file declares `iso-8859-1` and carries a NBSP as the single byte `xA0`, while the assertion has no `@encoding` for the harness to read — fixed, by falling back to the encoding the file itself declares. Behind that is the real one: the output reads `29 MAY 1917` where `29 May 1917` is wanted, because `<xsl:template match="Date[data(.) instance of StandardDate]">` never matches. Verified directly, by adding an `xsl:message` to that template in a scratch copy of the stylesheet: it does not fire, so the schema-typed template loses to the plain `match="Date"` and the raw GEDCOM text is copied through. `format-date` itself is correct — `[MNn]` gives "May" and `[MN]` gives "MAY" on a direct call. The gap is that a user-defined simple type from an imported schema is not visible to `instance of` in a match pattern. That is an engine defect, it is not in the harness, and it is new to this document. |
+| `validation-0201` | **Implementation-defined — the engine defect behind it is fixed** | Three differences were stacked here and two are now gone. The first verdict was that this is Saxon's indentation (3 spaces then 6 where this serializer writes 2) and that `admin/catalog-schema.xsd` licenses a driver to ignore it: *"Test drivers are free to ignore differences in the serialization that are known to be irrelevant."* That licence is real and the case does not test the serializer — its own description calls it *"a 'system test' of schema-aware processing"*. But normalising indentation did not pass the case; it exposed what offset 46 was hiding. The second difference was an encoding one — the expected file declares `iso-8859-1` and carries a NBSP as the single byte `xA0` while the assertion has no `@encoding` — since fixed. The third was the real defect: the output read `29 MAY 1917` where `29 May 1917` is wanted, because `<xsl:template match="Date[data(.) instance of StandardDate]">` never matched. **That is now fixed.** The cause was not, as this row previously guessed, that an imported type is invisible to `instance of` — the type resolved fine and the element carried its annotation. `Date` has type `DateType`, a complex type with simple content extending a *union*, and XSD §3.14.4 selects a union's member per value, so which member accepted the text is recorded separately on the node (`xdm.Node.UnionMember`) and is what atomisation reads. Three copy sites carried the annotation and dropped the member: `stripCopyNode`, `xdmbuild.DeepCopy` and the parentless-attribute copy in `xslt/copyfuncs.go`. The stylesheet declares `<xsl:strip-space elements="*"/>`, so every `Date` reaching a template was a copy that had lost its member and atomised to `xs:untypedAtomic`. With the fix the output is **byte-identical to the expected file apart from whitespace** — all three dates now read "29 May 1917", "12 September 1953", "22 November 1963". Only the indent width remains, which §20 leaves implementation-defined, so the case still fails and the fix is covered by `xslt/unionmember_test.go` instead. |
 
 ### Deliberately out of scope — 2
 
@@ -396,8 +410,9 @@ left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
-are settled above as not implementable, so no headroom is left against this
-suite. The fourteen that cannot be fixed: `accept-913`, `package-200`,
+are settled above — the first as not implementable, the second as
+implementation-defined once the engine defect behind it was fixed — so no
+headroom is left against this suite. The fourteen that cannot be fixed: `accept-913`, `package-200`,
 `package-021err`, `package-022err`, `streamable-141`,
 `docbook-001`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
@@ -722,7 +737,7 @@ the previous verdicts got wrong.
 | `strip-space-009` | *absent* | Not implementable | Not a wrong verdict but a **missing** one: it is the twentieth XSLT 3.0 failure and appeared nowhere in this file, while the prose enumerated nineteen against a table saying twenty. |
 | `docbook-004` | Vendor extension (EXSLT) | Ours — now fixed | Grouped with `docbook-001` by name. The stylesheet is five lines with no extension element; it tests an `xml:id` fragment on `xsl:source-document/@href`, which `xslt/sourcedoc.go` ignored entirely. It now applies the bare-name fragment to the retrieved document. |
 | `package-version-011` | Needs a network fetch | Ours | No fetch exists. `doc('')` names the containing module; `fn:document` already has the exemption and `fn:doc` does not. |
-| `validation-0201` | Implementation-defined | Harness | The catalog schema licenses drivers to ignore serialization differences "capable of being produced by a conformant implementation" and says the assertion "should not be used except where the purpose of the test is to test the serializer". |
+| `validation-0201` | Implementation-defined | Harness, then **ours — now fixed**, and implementation-defined again | The catalog schema licenses drivers to ignore serialization differences "capable of being produced by a conformant implementation" and says the assertion "should not be used except where the purpose of the test is to test the serializer". Acting on that licence did not pass the case; it uncovered an encoding defect (fixed) and then an engine one (now fixed): a union's selected member type was dropped on every tree copy, so `xsl:strip-space` untyped the document and the schema-typed `Date` template never matched. The output now matches the expected file byte for byte apart from the indent width, which is where the original verdict pointed. Three verdicts, each true of one layer — see the note under *What each round of work changed*. |
 | `unparsed-text-2003` | Needs a network fetch | Out of scope | The suite has `available_documents` for exactly this and the harness already honours it; the sibling `unparsed-text-2002` declares it for the same URL and is skipped. |
 | `streamable-141` | Requires streamability analysis | Out of scope | The spec says a non-streaming processor "is not required to assess whether constructs are guaranteed-streamable". Its environment declares `source/@streaming`, which the harness does not read. |
 | `iri-001` | Suite defect (XSD 1.1) | Harness — now fixed | It has no `<current>` element, so there was no status to cite. The engine was never at fault: `tests/xsdsuite` loaded every schema without `AllowDOCTYPE`, and the IRI/URI type library builds its RFC 3986/3987 patterns out of an internal DTD subset. Setting it on the schema-load path took XSD 1.1 from 41,519 to 41,532 agreeing — the schema test itself plus the 12 instance tests the load failure had been suppressing — with XSD 1.0 and all four XPath/XQuery/XSLT suites byte-identical. |

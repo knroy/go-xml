@@ -22,8 +22,15 @@ func DeepCopy(n *xdm.Node) *xdm.Node {
 		Value:          n.Value,
 		BaseURI:        n.BaseURI,
 		TypeAnnotation: n.TypeAnnotation,
-		IsID:           n.IsID,
-		IsIDREFS:       n.IsIDREFS,
+		// The union member travels with the annotation, because the two are
+		// halves of one fact: the annotation names the union, and this names
+		// the member that actually accepted the value. Atomisation reads the
+		// member -- a union's own derivation chain runs to xs:anySimpleType
+		// and stops -- so a copy that kept only the annotation atomised to
+		// xs:untypedAtomic and lost every type the value really had.
+		UnionMember: n.UnionMember,
+		IsID:        n.IsID,
+		IsIDREFS:    n.IsIDREFS,
 		// dm:nilled travels with the annotation on a COPY. A copy of an
 		// assessed element is an element that was assessed: validation-1202
 		// copies a nilled element with validation="preserve" and requires
@@ -39,7 +46,8 @@ func DeepCopy(n *xdm.Node) *xdm.Node {
 	for _, a := range n.Attrs {
 		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
 			Value: a.Value, TypeAnnotation: a.TypeAnnotation,
-			IsID: a.IsID, IsIDREFS: a.IsIDREFS})
+			UnionMember: a.UnionMember,
+			IsID:        a.IsID, IsIDREFS: a.IsIDREFS})
 	}
 	for _, ch := range n.Children {
 		c.AppendChild(DeepCopy(ch))

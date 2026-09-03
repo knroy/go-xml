@@ -140,8 +140,13 @@ func copyItem(it xdm.Item) xdm.Item {
 			Name:           n.Name,
 			Value:          n.Value,
 			TypeAnnotation: n.TypeAnnotation,
-			IsID:           n.IsID,
-			IsIDREFS:       n.IsIDREFS,
+			// The union member travels with the annotation, for the reason
+			// given on xdm.Node.UnionMember: the union names the type, and
+			// the member names what the value IS. Dropping it here made a
+			// copied union-typed attribute atomise to xs:untypedAtomic.
+			UnionMember: n.UnionMember,
+			IsID:        n.IsID,
+			IsIDREFS:    n.IsIDREFS,
 			// A copy of an assessed element was assessed. fn:copy-of and
 			// fn:snapshot preserve type annotations, and dm:nilled is part
 			// of what they preserve — validation-1203 takes both of a nilled
@@ -213,7 +218,8 @@ func snapshotItem(it xdm.Item) xdm.Item {
 		for _, at := range a.Attrs {
 			c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: at.Name,
 				Value: at.Value, TypeAnnotation: at.TypeAnnotation,
-				IsID: at.IsID, IsIDREFS: at.IsIDREFS})
+				UnionMember: at.UnionMember,
+				IsID:        at.IsID, IsIDREFS: at.IsIDREFS})
 		}
 		parent.AppendChild(c)
 		parent = c
