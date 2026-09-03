@@ -15,12 +15,12 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
-| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 1 | 1 | **6** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 8,625 | 8,611 | 99.84% | **14** | 1 | 1 | **12** | 99.85% |
+| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 1 | **7** | 99.87% |
+| **xslt** | W3C XSLT 3.0 | 8,625 | 8,612 | 99.85% | **13** | 0 | 1 | **12** | 99.85% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **104** | **2** | **2** | **100** | |
+| | **Total** | | | | **103** | **0** | **2** | **101** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -366,7 +366,7 @@ them separate, and `override-t-003a` is the case.
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `streamable-141` | **Not implementable** | Requires the §19.8 streamability analysis. Streaming is not implemented — 2,646 cases are skipped as out of scope, and 92% of them pass anyway; see *The streaming row* below. Carrying the set's unsupported feature down onto the one case that declares a feature of its own was built and measured at −4 on the 2.0 target and −177 on 3.0, so the gate stays as it is. |
+| `streamable-141` | **Fixed** | It wanted XTSE3430 for `version="1.0"` on an `xsl:apply-templates` inside a `streamable="yes"` mode, and the old verdict was that this needs the §19.8 streamability analysis. It does not. §3.9.1 states the rule *"notwithstanding anything stated in 19 Streamability"*: an instruction processed with XSLT 1.0 behavior **is** roaming and free-ranging, by declaration rather than as a consequence of any posture inference. That makes it checkable without the analysis, and `checkStreamableCompat` in `xslt/staticerrors.go` now checks exactly it — a template whose `@mode` names a mode declared streamable, containing an element that states `version="1.0"`. Nothing wider: a processor that does not stream is not required to assess whether anything else is guaranteed-streamable. Measured at +1 on the 3.0 target (8,611 → 8,612) with the 2.0 failing list byte-identical. The earlier −4 and −177 measurement was a different change — skipping the case through the *set's* unsupported feature, which swept up cases that pass today. |
 | `docbook-001` | **Not implementable** | EXSLT `exsl:document`, 19 times in `chunker.xsl` alone. |
 
 Two left this list. `docbook-004` was never an EXSLT case — it was filed as one
@@ -391,7 +391,7 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. |
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file when the audit found it.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 
-**XSLT 3.0 ceiling: 8,611 / 8,625 = 99.84%** — what passes now. `base-uri-052`
+**XSLT 3.0 ceiling: 8,612 / 8,625 = 99.85%** — what passes now. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
@@ -644,7 +644,7 @@ is *why* the 99 unfixable cases are unfixable:
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
-| **Feature deliberately not implemented** | 1 | `streamable-141` needs the §19.8 streamability analysis. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
+| **Feature deliberately not implemented** | 0 | Empty. `streamable-141` was the last entry and is now **fixed**: §3.9.1 states its rule "notwithstanding anything stated in 19 Streamability", so it never needed the analysis its row claimed. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
 | **Costs more than it gains** | 2 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (a rule separating it from `use-package-291`–`294` exists but rests on quoting, which neither grammar mentions, and would have exactly one instance in the suite). `use-package-003` was here and is now **fixed**: the narrow form of the change its row called for — carrying the declaring package's visibility on the function component and checking it at the call site — turned out to be contained, and gained the case with no regression. |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 

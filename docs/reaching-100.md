@@ -208,7 +208,7 @@ bare-name fragment against the retrieved document.
 
 ### 1 — features deliberately not implemented
 
-- **`streamable-141`** — needs the §19.8 streamability analysis.
+- **`streamable-141`** — **fixed.** §3.9.1 states the rule "notwithstanding anything stated in 19 Streamability", so it never needed that analysis.
 
 Two cases used to be on this list and are now **fixed**. `base-uri-052` went
 when XInclude was implemented (`xdm.ProcessXInclude`), and the harness honours

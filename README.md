@@ -96,7 +96,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.99% of the W3C QT3 suite (29,800 of 29,803 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.84% of the W3C XSLT suite filtered to 3.0 (8,611 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (8,612 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
 | **XSD 1.1** | 99.90% instance (26,189 of 26,204); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
@@ -883,7 +883,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 8,611 is not 8,612. Saxon
+case the engine gives up on purpose, and the reason 8,612 is not 8,613. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call

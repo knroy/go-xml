@@ -58,6 +58,9 @@ func checkStaticErrors(root *xdm.Node) error {
 		if err := checkDeclaredModes(root); err != nil {
 			return err
 		}
+		if err := checkStreamableCompat(root); err != nil {
+			return err
+		}
 		// A package's own xsl:expose declarations are checked whether or not
 		// anybody uses the package. readUsePackage runs the same arithmetic
 		// on the way into a using package, for its answers; here it is run
@@ -1088,6 +1091,109 @@ func checkModuleAttrs(el *xdm.Node) error {
 		return fmt.Errorf(
 			"attribute %q is not allowed on xsl:%s (XTSE0090)",
 			a.Name.Local, el.Name.Local)
+	}
+	return nil
+}
+
+// checkStreamableCompat raises XTSE3430 for an instruction processed in XSLT
+// 1.0 compatibility mode inside a template belonging to a streamable mode.
+//
+// Section 3.9.1: "Processing an instruction with XSLT 1.0 behavior is not
+// compatible with streaming. More specifically, and notwithstanding anything
+// stated in 19 Streamability, an instruction that is processed with XSLT 1.0
+// behavior is roaming and free-ranging, which has the effect that any
+// construct containing such an instruction is not guaranteed-streamable."
+//
+// The "notwithstanding" is what makes this checkable here. Streaming is not
+// implemented and the §19.8 posture and sweep analysis does not exist, but
+// this rule is stated to hold regardless of that analysis rather than as a
+// consequence of it: an instruction in 1.0 mode is roaming by declaration, and
+// a roaming construct in a streamable mode is not guaranteed-streamable. No
+// posture needs to be inferred to see it.
+//
+// Only a template whose @mode names a mode declared streamable="yes" is
+// examined, and only version="1.0" reachable from it. That is the whole of
+// streamable-141, and it is deliberately no wider: a processor that does not
+// stream is not required to assess whether anything else is streamable, and
+// XSLT 3.0 §19.1 lets it answer a streaming request by building the tree.
+func checkStreamableCompat(root *xdm.Node) error {
+	streamable := map[string]bool{}
+	for _, d := range root.ChildElements() {
+		if !isXSL(d, "mode") || !isYes(d.AttrValue("streamable")) {
+			continue
+		}
+		name := ""
+		if na := d.Attr("", "name"); na != nil {
+			tok := strings.TrimSpace(na.Value)
+			switch tok {
+			case "", "#default", "#unnamed":
+			default:
+				qn, err := resolveQNameAttr(d, tok)
+				if err != nil {
+					// A malformed mode name is XTSE0020's business, not this
+					// check's. Skipping it here leaves that error to the pass
+					// that reports it properly.
+					continue
+				}
+				name = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
+			}
+		}
+		streamable[name] = true
+	}
+	if len(streamable) == 0 {
+		return nil
+	}
+	for _, d := range root.ChildElements() {
+		if !isXSL(d, "template") {
+			continue
+		}
+		ma := d.Attr("", "mode")
+		if ma == nil {
+			continue
+		}
+		for _, tok := range strings.Fields(ma.Value) {
+			name := ""
+			switch tok {
+			case "#default", "#unnamed":
+			case "#all":
+				// #all covers every declared mode, streamable ones included.
+			default:
+				qn, err := resolveQNameAttr(d, tok)
+				if err != nil {
+					continue
+				}
+				name = xdm.QName{URI: qn.URI, Local: qn.Local}.Clark()
+			}
+			if tok != "#all" && !streamable[name] {
+				continue
+			}
+			if el := firstCompatInstruction(d); el != nil {
+				return fmt.Errorf(
+					"xsl:%s is processed in XSLT 1.0 compatibility mode "+
+						"inside a streamable mode, which makes it roaming "+
+						"and free-ranging (XTSE3430)", el.Name.Local)
+			}
+			break
+		}
+	}
+	return nil
+}
+
+// firstCompatInstruction returns the first XSLT instruction at or below el that
+// states version="1.0" on itself, or nil if there is none.
+//
+// The version is read from the element rather than from compatModeAt, because
+// a template inside a version="3.0" module is only in 1.0 mode where an
+// element says so: streamable-141 writes version="1.0" on one
+// xsl:apply-templates and nowhere else.
+func firstCompatInstruction(el *xdm.Node) *xdm.Node {
+	for _, c := range el.ChildElements() {
+		if c.Name.URI == xdm.NSXSL && hasVersionAttr(c) && versionAt(c) < 2.0 {
+			return c
+		}
+		if found := firstCompatInstruction(c); found != nil {
+			return found
+		}
 	}
 	return nil
 }
