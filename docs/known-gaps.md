@@ -429,6 +429,53 @@ XSLT 2.0, XSLT 3.0 and XQuery unchanged. `BenchmarkValidateInstance` is
 unmoved — the check reads a bool from a struct already in cache, and allocations
 per operation are identical.
 
+### A depth bound stood in for cycle detection on four schema walks (fixed)
+
+The counterpart to the entry above, and the opposite verdict: a bound that
+*does* look wrong and *is*.
+
+Four walks over the schema graph stopped at `depth > 32` — `collectElementDecls`
+(`assert.go`), `nonAtomicUnionMember` (`facet_check.go`),
+`particleMatchesOnlyEmpty` (`parse_type.go`) and the two union walks in
+`xslt/stylesheet.go`. The reason was sound: a model group or union chain that
+reaches itself is legal to write, the content-model compiler reports it, and
+these walks run before that and would otherwise recurse forever.
+
+What made it a defect is that a depth bound cannot tell a *cyclic* graph from a
+merely *deep* one, and three of the four returned a definite answer on running
+out of depth rather than a refusal. Each of those answers was the permissive
+one, so the failure direction was acceptance:
+
+| walk | truncated answer | what it decided |
+|---|---|---|
+| `collectElementDecls` | empty declaration map | Element Declarations Consistent skipped |
+| `nonAtomicUnionMember` | `nil`, indistinguishable from a clean result | `cos-list-of-atomic` passed; a list of lists loaded |
+| `particleMatchesOnlyEmpty` | `false` | a type with `appliesToEmpty="false"` opened anyway |
+| `SchemaUnionMemberTypes` | `(nil, false)` | `1 instance of t:U` false on a legal chain |
+
+The demonstration is the suite's own `saxonData/wild068` with the base's `<e>`
+declaration nested inside 32 sequences: a document XSD 1.1 requires rejecting
+was accepted, and nothing in that schema is recursive or malformed.
+
+**Why not raise the constant.** 32 to 1024 moves the cliff without removing it,
+and leaves the same class of bug waiting at a depth nobody will test. Each
+bound is now a visited set keyed on the component pointer, which identifies a
+cycle exactly — the only thing the bound was ever trying to catch — and imposes
+no limit on a legal chain. `SchemaUnionMemberNames` already carried a `seen`
+map by name, so its bound was pure truncation and simply went.
+
+`particleAcceptsEmpty` converted too, though its wrong answer was harmless: its
+only caller uses it to raise a more specific diagnostic, so past the bound the
+verdict and the error code were both unchanged and only the message differed.
+It changed anyway, because a lone survivor of a pattern this one invites the
+next reader to copy it.
+
+Reachable from a schema, not from an instance — a trusted schema with untrusted
+documents cannot reach it. Measured: gate OK with all seven marks identical.
+`xsd/depth_acyclic_test.go` pins both confirmed shapes at nesting 0, 31, 32, 33
+and 64, and separately that a cyclic union still terminates; both fail against
+the previous code at exactly 32.
+
 ### A choice is unordered under 1.1 (fixed)
 
 `particlesT002`, `particlesT009`: the derived choice offers the base's
