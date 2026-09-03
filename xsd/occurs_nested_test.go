@@ -195,6 +195,48 @@ func TestNestedOccursBounds(t *testing.T) {
 		}
 	})
 
+	// An emptiable inner particle: an iteration that matches nothing is
+	// still an iteration.
+	//
+	// XSD satisfies a particle by partitioning the content into between
+	// minOccurs and maxOccurs consecutive parts each matching the term, and
+	// nothing in that rule requires a part to be non-empty. When the term is
+	// nullable — <element c minOccurs="0"/> — an empty part satisfies it, so
+	// the legal totals are still the union over i in [oMin, oMax] of
+	// [i*iMin, i*iMax], which for iMin=0 is simply [0, oMax*iMax].
+	//
+	// The first runtime advanced a count only on a transition between two
+	// matched positions, so a scope could reach its minimum only by
+	// consuming an element per iteration. <sequence 2..2> over
+	// <element c 0..2/> then refused a single c while accepting both zero
+	// and two of them — zero only because the empty document short-circuits
+	// through the model's own nullability and never consults a counter at
+	// all. Accepting 0 and 2 but not 1 is not the language of any particle,
+	// which is what made it a bug rather than a reading.
+	t.Run("emptiable-inner", func(t *testing.T) {
+		for _, oMin := range []int{2, 3} {
+			for _, oMax := range []int{oMin, oMin + 1} {
+				for iMax := 1; iMax <= 3; iMax++ {
+					body := fmt.Sprintf(
+						`<xs:sequence minOccurs="%d" maxOccurs="%d">
+					  <xs:element name="c" type="xs:string" minOccurs="0" maxOccurs="%d"/>
+					</xs:sequence>`, oMin, oMax, iMax)
+					name := fmt.Sprintf("seq%dx%d over c0x%d", oMin, oMax, iMax)
+					t.Run(name, func(t *testing.T) {
+						for n := 0; n <= 8; n++ {
+							// Union over i of [0, i*iMax]
+							// is [0, oMax*iMax].
+							want := n <= oMax*iMax
+							if got := valid(t, body, cs(n)); got != want {
+								t.Errorf("%d c: valid=%v want %v", n, got, want)
+							}
+						}
+					})
+				}
+			}
+		}
+	})
+
 	// Three scopes deep, to check that the vector really is a vector: the
 	// innermost count has to restart when the middle one does, and the
 	// middle when the outer does. Two repetitions of (two repetitions of

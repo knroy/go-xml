@@ -305,7 +305,11 @@ every occurrence bound is answered from one execution. Both suites came through
 unmoved, case for case. The differential technique — generate a model, generate
 documents, compare against an independent oracle — is what found the one that
 mattered most, and it should be a standing target rather than a one-off, since
-it is the only method that reached a bug 80,879 suite agreements could not.
+it is the only method that reached a bug 80,879 suite agreements could not. It
+earned its keep twice: a second sweep over the same family found a surviving
+region — an emptiable inner particle, whose outer scope has to be credited for
+an iteration that consumed nothing — that the first fix had left rejecting valid
+documents, and again no suite case moved.
 
 ### 3.2 Deep-nesting and pathological schemas
 

@@ -228,6 +228,22 @@ func stepCounts(m *contentModel, reach []int, from, to int, cur []int, out *[][]
 // to true if some alternative was refused because a scope had not yet met its
 // minimum — that is, because the content so far is incomplete rather than
 // over-full.
+// satisfied reports whether a scope with count n may be left or ended at.
+//
+// The plain reading is n >= min. An emptiable scope has one more way to reach
+// its minimum: a repetition of it may match nothing, and an iteration that
+// matches nothing is still an iteration. XSD satisfies a particle by
+// partitioning the content into between minOccurs and maxOccurs consecutive
+// parts each matching the term, and when the term is nullable an empty part
+// satisfies it, so the shortfall min-n can always be made up with empty parts.
+//
+// The maximum needs no corresponding relaxation: empty iterations are only ever
+// added to reach a floor, and a reading that would exceed the ceiling can
+// simply not add them.
+func satisfied(c *counter, n int) bool {
+	return n >= c.min || c.emptiable
+}
+
 func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[][]int, why *bool) {
 	a := m.positions[from].counters
 	b := m.positions[to].counters
@@ -241,7 +257,7 @@ func stepCountsWhy(m *contentModel, reach []int, from, to int, cur []int, out *[
 	// >= d, reporting whether every one had met its minimum.
 	leave := func(v []int, d int) bool {
 		for _, c := range a[d:] {
-			if v[c] < m.counters[c].min {
+			if !satisfied(m.counters[c], v[c]) {
 				if why != nil {
 					*why = true
 				}
@@ -312,7 +328,7 @@ func accepting(m *contentModel, st matchState, buf []int) bool {
 	}
 	decodeCounts(st.counts, buf)
 	for _, c := range m.positions[st.pos].counters {
-		if buf[c] < m.counters[c].min {
+		if !satisfied(m.counters[c], buf[c]) {
 			return false
 		}
 	}

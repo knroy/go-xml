@@ -560,9 +560,13 @@ which no W3C case covers because they all use two or more distinct child names.
 It is fixed — the matcher now carries a set of whole occurrence-count vectors,
 so every bound is answered from one execution — and the suite numbers did not
 move by a single case in either direction, which is exactly the point. A suite
-reaching its ceiling bounds what the suite asks, not what the code does. See
-*Nested occurrence bounds were wrong in both directions* in
-[known-gaps.md](known-gaps.md).
+reaching its ceiling bounds what the suite asks, not what the code does. A
+second sweep then found a remainder the vectors alone did not settle: an
+emptiable inner particle, where a scope has to be credited for an iteration that
+consumed nothing, was rejecting valid documents at 40 of 2,028 combinations.
+That is fixed too, and again moved no suite case — both disagreement lists stayed
+identical by name. See *Nested occurrence bounds were wrong in both directions*
+in [known-gaps.md](known-gaps.md).
 
 **XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,532 / 41,570 =
 99.91%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14

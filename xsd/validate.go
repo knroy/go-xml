@@ -1370,7 +1370,7 @@ func someReadingSatisfies(m *contentModel, vectors [][]int, at int) bool {
 	for _, vec := range vectors {
 		ok := true
 		for _, c := range m.positions[at].counters {
-			if vec[c] < m.counters[c].min {
+			if !satisfied(m.counters[c], vec[c]) {
 				ok = false
 				break
 			}

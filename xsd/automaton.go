@@ -103,6 +103,21 @@ type counter struct {
 	min, max int
 	// parent is the enclosing counter, or -1.
 	parent int
+	// emptiable records whether one repetition of this scope can match the
+	// empty sequence — that is, whether the scope's *body*, ignoring the
+	// scope's own occurrence bounds, is nullable.
+	//
+	// It is what lets the runtime credit an iteration that consumed
+	// nothing. A particle is satisfied by partitioning the content into
+	// between minOccurs and maxOccurs consecutive parts each matching the
+	// term, and nothing in that rule requires a part to be non-empty: when
+	// the term is emptiable an empty part is a legitimate one. Without
+	// this, a count could only ever advance on a transition between two
+	// matched positions, so a scope had no way to reach its minimum except
+	// by consuming an element per iteration — and
+	// <sequence 2..2> over <element c 0..2/> refused a single c while
+	// accepting both zero and two of them.
+	emptiable bool
 }
 
 // compileContentModel builds the automaton for a complex type's particle.
@@ -260,6 +275,11 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 	// The positions that begin and end one repetition are recorded so that
 	// the runtime can tell a restart from a continuation.
 	if scope != enclosing && scope >= 0 {
+		// inner.nullable here is the body's own nullability: this
+		// particle's minOccurs is not folded in until below, so an
+		// emptiable body is recorded without being confused with a
+		// scope that is merely optional.
+		m.counters[scope].emptiable = inner.nullable
 		for _, f := range inner.first {
 			m.scopeFirst[scope][f] = true
 		}

@@ -364,6 +364,47 @@ Measured: XSD 1.0 39,347 agreements and XSD 1.1 41,532 both unchanged, with
 disagreement lists identical case for case. `xsd/occurs_nested_test.go` covers
 the family and no longer skips.
 
+**A remainder: an emptiable inner particle (fixed).** The vector rewrite settled
+every case with a non-nullable inner term, but a region survived it. Sweeping
+2,028 combinations of outer bounds, inner bounds and child count found 40 still
+wrong, every one of them a false *rejection*, and every one with inner
+`minOccurs="0"` and outer `minOccurs` of two or more at a small child count.
+
+`<sequence minOccurs="2" maxOccurs="2">` over `<element c minOccurs="0"
+maxOccurs="2"/>` is the witness, and its answers were self-inconsistent: zero
+`c` accepted, one **refused**, two through four accepted. Accepting 0 and 2 but
+not 1 is not the language of any particle, which is what makes it a bug and not
+a defensible reading. That model describes exactly `c` occurring nought to four
+times.
+
+The cause is that a count advanced *only* on a transition between two matched
+positions. A scope could therefore reach its minimum only by consuming an
+element per iteration, and satisfying `minOccurs="2"` from a single `c` needs
+one iteration that matches the `c` and one that matches nothing. Zero `c` was
+accepted only because the empty document short-circuits through the model's own
+`nullable` flag and never consults a counter at all — so the two accepts came
+from two different code paths, neither of which modelled an empty iteration.
+
+XSD satisfies a particle by partitioning the content into between `minOccurs`
+and `maxOccurs` consecutive parts each matching the term, and nothing in that
+rule requires a part to be non-empty: when the term is nullable, an empty part
+satisfies it. An iteration that matches nothing is still an iteration. So the
+legal totals are the union over `i` in `[oMin, oMax]` of `[i*iMin, i*iMax]`,
+which for `iMin = 0` is just `[0, oMax*iMax]`.
+
+The fix records emptiability where it is known — the compiler already computes
+the body's nullability, so `counter.emptiable` is set from it in
+`automaton.go` — and the runtime's two minimum checks, on leaving a scope and
+on accepting, allow an emptiable scope to make up its shortfall with empty
+iterations. No maximum needs relaxing: empty iterations are only ever added to
+reach a floor, and a reading that would break a ceiling can decline to add them.
+
+Measured: 0 of 2,028 wrong, down from 40. XSD 1.0 39,347 and XSD 1.1 41,532
+unchanged with both disagreement lists identical *by name*, and all three of
+XSLT 2.0, XSLT 3.0 and XQuery unchanged. `BenchmarkValidateInstance` is
+unmoved — the check reads a bool from a struct already in cache, and allocations
+per operation are identical.
+
 ### A choice is unordered under 1.1 (fixed)
 
 `particlesT002`, `particlesT009`: the derived choice offers the base's
