@@ -18,6 +18,11 @@ err = schema.Validate(tree.Root, xsd.ValidateOptions{})
 Every error carries the spec's code and a path — `cvc-datatype-valid.1` at
 `/invoice/total` — not just "invalid".
 
+For a document you did not write, use `schema.ValidateContext(ctx, ...)`: it is
+the same call with a deadline, and identity-constraint checking is where an
+untrusted document can make validation expensive. See
+[docs/security.md](docs/security.md).
+
 ### The packages
 
 | | |

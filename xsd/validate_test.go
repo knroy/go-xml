@@ -1,9 +1,12 @@
 package xsd
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -990,4 +993,72 @@ func TestRepeatedSequenceMinOccurs(t *testing.T) {
 	assertValid(t, fixed, `<root><e/><e/></root>`)
 	assertInvalid(t, fixed, `<root><e/><e/><e/></root>`, "cvc-complex-type.2.4")
 	assertInvalid(t, fixed, `<root><e/><e/><e/><e/><e/></root>`, "cvc-complex-type.2.4")
+}
+
+// TestValidateContextCancels pins that a caller can bound how long validation
+// runs. The schema is the one docs/security.md names as the quadratic case: a
+// recursive element carrying a key with a ".//" selector, where the cost grows
+// as the square of the nesting depth.
+func TestValidateContextCancels(t *testing.T) {
+	const src = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	  <xs:element name="r" type="R">
+	    <xs:key name="k">
+	      <xs:selector xpath=".//r"/>
+	      <xs:field xpath="@id"/>
+	    </xs:key>
+	  </xs:element>
+	  <xs:complexType name="R">
+	    <xs:sequence><xs:element ref="r" minOccurs="0"/></xs:sequence>
+	    <xs:attribute name="id" type="xs:string"/>
+	  </xs:complexType></xs:schema>`
+	s := mustParseSchema(t, src)
+
+	const depth = 900
+	var b strings.Builder
+	for i := 0; i < depth; i++ {
+		fmt.Fprintf(&b, "<r id=\"v%d\">", i)
+	}
+	b.WriteString(strings.Repeat("</r>", depth))
+	dt, err := xdm.ParseString(b.String(), xdm.ParseOptions{
+		MaxDepth: depth + 10, MaxBytes: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ValidateOptions{MaxDepth: depth + 10}
+
+	// The document is valid, so a run that completes returns nil — which is
+	// what makes a context error here unambiguous evidence of cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = s.ValidateContext(ctx, dt.Root, opts)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ValidateContext returned %v, want context.DeadlineExceeded", err)
+	}
+	// A deadline nobody looks at until the end is not a bound: the whole point
+	// is to stop mid-walk, not to report afterwards that time had run out.
+	if elapsed > time.Second {
+		t.Errorf("cancellation took %v; the deadline was not honoured promptly",
+			elapsed)
+	}
+
+	// A live context still validates the document normally, and the
+	// no-context entry point is unchanged.
+	if err := s.ValidateContext(context.Background(), dt.Root, opts); err != nil {
+		t.Errorf("an uncancelled run should accept the document: %v", err)
+	}
+	if err := s.Validate(dt.Root, opts); err != nil {
+		t.Errorf("Validate should accept the document: %v", err)
+	}
+
+	// An already-cancelled context stops before any work at all.
+	dead, stop := context.WithCancel(context.Background())
+	stop()
+	if err := s.ValidateContext(dead, dt.Root, opts); !errors.Is(
+		err, context.Canceled) {
+		t.Errorf("a cancelled context gave %v, want context.Canceled", err)
+	}
 }

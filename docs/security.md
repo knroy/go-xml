@@ -428,6 +428,15 @@ below) where `buildNodeTable` must *report* them. A bottom-up rewrite would have
 to reproduce that difference exactly, along with per-target error reporting.
 That is a redesign of identity-constraint evaluation, not an optimisation.
 
+**A caller can now bound it.** `Schema.ValidateContext(ctx, root, opts)` takes a
+context and stops when it ends, returning `context.DeadlineExceeded` or
+`context.Canceled` rather than a `*ValidationErrors`. The check sits in the
+selected-node loop of `buildNodeTable` and `checkKeyref` — inside the walk whose
+cost this finding is about, not merely around it — so a deadline is honoured
+mid-run rather than reported afterwards. The quadratic curve is unchanged; what
+changes is that a service can put a ceiling on it that does not depend on
+`MaxDepth`. `Validate` without a context still runs to completion.
+
 ### INFO — `javascript:` URLs pass through
 
 `<a href="{/d/u}"/>` yields `href="javascript:alert(document.domain)"`. This is
@@ -619,9 +628,12 @@ No `unsafe`, no `cgo`, no `reflect` in any non-test file.
    your own code and has no such field: it receives the href with `..` intact
    and the scheme filled in, so it must do its own containment check. See the
    interface's documentation for measured examples.
-5. **Set a timeout** on the request. The identity-constraint finding above is
-   CPU exhaustion; the depth limit caps it, but a `context` deadline is what
-   bounds the general case.
+5. **Set a timeout** on the request, and pass the context in. The
+   identity-constraint finding above is CPU exhaustion; the depth limit caps it,
+   but a `context` deadline is what bounds the general case. Use
+   `xsd.Schema.ValidateContext` rather than `Validate`, and
+   `xslt.Stylesheet.Transform`, which already takes one — a deadline the
+   library never looks at bounds nothing.
 6. **Raise `MaxDepth` only deliberately.** Past a few hundred thousand levels
    the XSD validator trades a clean error for an uncatchable stack overflow,
    and raising it also removes the ceiling on the identity-constraint cost. In

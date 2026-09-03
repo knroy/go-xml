@@ -149,7 +149,7 @@ installed on a copy, so your client is not mutated.
 
 ## xsd.ValidateOptions
 
-Passed to `Schema.Validate`.
+Passed to `Schema.Validate` and `Schema.ValidateContext`.
 
 ```go
 err := schema.Validate(doc.Root, xsd.ValidateOptions{
@@ -163,6 +163,35 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{
 | `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Recursion limit for validation. |
 | `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, producing the part of the PSVI that XPath and XSLT consume. Off by default because it **mutates the tree you passed in**. |
+
+### Bounding a run with a context
+
+`Schema.ValidateContext(ctx, root, opts)` is `Validate` with a cancellable
+context. `Validate` itself is unchanged and delegates with
+`context.Background()`, so existing callers keep working.
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+defer cancel()
+err := schema.ValidateContext(ctx, doc.Root, xsd.ValidateOptions{})
+```
+
+A cancelled or expired context returns the context's **own** error —
+`context.Canceled` or `context.DeadlineExceeded`, matchable with `errors.Is` —
+and *not* a `*ValidationErrors`. That distinction is the point: "I ran out of
+time" is not a verdict on the document, and the failures found so far are
+discarded rather than handed back as a partial one.
+
+Cancellation is observed once per element of the tree walk and once per node
+selected by an identity constraint. Those are the two places a run can spend
+unbounded time; see [security.md](security.md) for the measured cost of the
+second. It is not observed inside a single element's content-model matching,
+which is bounded by that element's own declaration.
+
+`Schema.ValidateElement`, `ValidateElementLax` and `ValidateAgainstType` do not
+take a context. They exist for XSLT's `validation="strict"` on a *constructed*
+element, which is bounded by what the transform just built — and the transform
+already has the caller's context.
 
 ### Why validation has its own MaxDepth
 

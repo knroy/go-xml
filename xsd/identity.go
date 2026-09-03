@@ -110,7 +110,16 @@ func copyEntries(in map[string]*xdm.Node) map[string]*xdm.Node {
 func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint) *nodeTable {
 	tbl := &nodeTable{entries: map[string]*xdm.Node{}}
 
+	// A per-element check in validateElement does not reach this loop: one
+	// constraint at the top of a deeply recursive document selects the whole
+	// subtree, so the single outermost call is where most of the quadratic
+	// cost documented in docs/security.md is actually spent. The loop is over
+	// selected targets and each iteration builds a key sequence, so a check
+	// per target is cheap against the work it guards.
 	for _, target := range v.selectNodes(el, ic.Selector) {
+		if v.checkCancelled() {
+			return tbl
+		}
 		if v.inSkippedContent(target) {
 			continue
 		}
@@ -153,7 +162,12 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 	}
 	target := tables[ic.Refer]
 
+	// Same reasoning as buildNodeTable: one keyref at the top of a recursive
+	// document walks the whole subtree in this one call.
 	for _, node := range v.selectNodes(el, ic.Selector) {
+		if v.checkCancelled() {
+			return
+		}
 		if v.inSkippedContent(node) {
 			continue
 		}

@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -113,7 +114,29 @@ const DefaultMaxDepth = 1000
 //
 // It returns nil when the document is valid. The error, when there is one, is a
 // *ValidationErrors holding every failure found up to the limit.
+//
+// It cannot be cancelled. Use ValidateContext when the document comes from
+// somewhere you do not control: identity-constraint checking is quadratic in
+// nesting depth (see docs/security.md), and a deadline is what bounds it.
 func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
+	return s.ValidateContext(context.Background(), root, opts)
+}
+
+// ValidateContext is Validate with a cancellable context.
+//
+// A cancelled or expired context stops the run and is returned as the
+// context's own error — context.Canceled or context.DeadlineExceeded — rather
+// than as a *ValidationErrors, so errors.Is tells "I gave up" apart from "the
+// document is invalid". Whatever failures had been found are discarded: a
+// partial list from a document that was never fully assessed would read as a
+// verdict, and it is not one.
+//
+// A nil ctx is treated as context.Background().
+func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
+	opts ValidateOptions) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// A nil root is a caller's mistake rather than an attack, but a library
 	// that panics on one takes the caller's process down with it — and this
 	// one is meant to run inside servers, where a nil from a failed parse
@@ -129,7 +152,7 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 	if opts.MaxDepth == 0 {
 		opts.MaxDepth = DefaultMaxDepth
 	}
-	v := &validator{schema: s, opts: opts, ids: map[string]int{}}
+	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
 	// Whitespace-only text in an element whose declared content is
 	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
 	// stripping it unconditional — it outranks xsl:preserve-space, exactly as
@@ -188,6 +211,11 @@ func (s *Schema) Validate(root *xdm.Node, opts ValidateOptions) error {
 
 // validator carries the state of one validation run.
 type validator struct {
+	// ctx bounds the run. Validation is not incremental — it walks the whole
+	// tree before it can answer at all — so a caller's only way to put a
+	// ceiling on it is to have the walk itself look up and stop.
+	ctx context.Context
+
 	schema *Schema
 	opts   ValidateOptions
 	errs   []*ValidationError
@@ -257,8 +285,13 @@ type validator struct {
 	// how an ancestor's xml:lang can choose a nested element's type.
 	inherited []*xdm.Node
 
-	// stopped records that the error limit was reached.
+	// stopped records that the error limit was reached, or that the context
+	// ended.
 	stopped bool
+
+	// cancelled holds the context's error when the run was abandoned for
+	// that reason. It becomes the whole result: see ValidateContext.
+	cancelled error
 }
 
 // elementDefined answers ##defined for an element wildcard: whether the schema
@@ -305,10 +338,31 @@ type idref struct {
 }
 
 func (v *validator) result() error {
+	if v.cancelled != nil {
+		return v.cancelled
+	}
 	if len(v.errs) == 0 {
 		return nil
 	}
 	return &ValidationErrors{Errors: v.errs}
+}
+
+// checkCancelled reports whether the context has ended, and if so records it
+// and stops the run.
+//
+// It rides on the same stopped flag the error limit uses, because the walk it
+// has to unwind returns icTables rather than an error and already gives up on
+// that flag.
+func (v *validator) checkCancelled() bool {
+	if v.cancelled != nil {
+		return true
+	}
+	if err := v.ctx.Err(); err != nil {
+		v.cancelled = err
+		v.stopped = true
+		return true
+	}
+	return false
 }
 
 // pathString renders the path to the node being validated.
@@ -350,6 +404,13 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 // validateElement checks one element against a declaration.
 func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
 	if v.stopped {
+		return nil
+	}
+	// One check per element bounds the tree walk: every element passes
+	// through here exactly once, and the work between two visits is one
+	// element's content model. Checking inside the content-model loops as
+	// well would cost more than it buys.
+	if v.checkCancelled() {
 		return nil
 	}
 	// The validator recurses once per element depth, at roughly 3 kB of
