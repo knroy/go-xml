@@ -733,7 +733,7 @@ func checkAllGroupLimited(s *Schema) error {
 							where))
 					}
 					for _, deep := range inner.Particles {
-						errs = append(errs, badNestedAll(deep, where, s.Version)...)
+						errs = append(errs, badNestedAll(deep, where, s.Version, map[*ModelGroup]bool{})...)
 					}
 					continue
 				}
@@ -752,11 +752,11 @@ func checkAllGroupLimited(s *Schema) error {
 						where))
 					continue
 				}
-				errs = append(errs, badNestedAll(sub, where, s.Version)...)
+				errs = append(errs, badNestedAll(sub, where, s.Version, map[*ModelGroup]bool{})...)
 			}
 			continue
 		}
-		errs = append(errs, badNestedAll(ct.Particle, where, s.Version)...)
+		errs = append(errs, badNestedAll(ct.Particle, where, s.Version, map[*ModelGroup]bool{})...)
 	}
 	if len(errs) == 0 {
 		return nil
@@ -772,7 +772,20 @@ func checkAllGroupLimited(s *Schema) error {
 // The recursion stops descending into an offending all group: one report per
 // misplaced group is what a schema author needs, and the members of a group
 // that should not be there at all say nothing further about the fault.
-func badNestedAll(p *Particle, where string, version Version) []error {
+//
+// seen records the groups already walked. A <group ref> resolves to the
+// definition's own ModelGroup pointer, so a group reachable by several routes
+// is the same pointer each time and re-walking it can find nothing new. Two
+// references to one group used to be walked twice, which made this exponential
+// in the number of distinct paths rather than linear in the graph: a 3.0 KB
+// schema of 29 doubly-referencing groups spent 8% of a 35-second load here,
+// behind cycleFrom's 86%. Fixing only the larger one would have left this to
+// reach the same wall a few groups later.
+//
+// It also makes the duplicate reports go away, which is the visible change: a
+// misplaced all group reachable twice was reported twice, and is now reported
+// once. One report per fault is what the doc comment above already promised.
+func badNestedAll(p *Particle, where string, version Version, seen map[*ModelGroup]bool) []error {
 	if p == nil {
 		return nil
 	}
@@ -780,6 +793,10 @@ func badNestedAll(p *Particle, where string, version Version) []error {
 	if !ok {
 		return nil
 	}
+	if seen[g] {
+		return nil
+	}
+	seen[g] = true
 	if g.Compositor == CompositorAll {
 		return []error{fmt.Errorf(
 			"cos-all-limited.1: an xs:all group may only be the whole content "+
@@ -787,7 +804,7 @@ func badNestedAll(p *Particle, where string, version Version) []error {
 	}
 	var errs []error
 	for _, sub := range g.Particles {
-		errs = append(errs, badNestedAll(sub, where, version)...)
+		errs = append(errs, badNestedAll(sub, where, version, seen)...)
 	}
 	return errs
 }

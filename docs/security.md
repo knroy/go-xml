@@ -150,6 +150,34 @@ wildcard-restriction path independently. `xsd/occurs_overflow_test.go` asserts
 positively on the saturated value rather than merely on the absence of a minus
 sign, and it caught a second distinct wrap the reported case never reaches.
 
+### A 3 KB schema took 35 seconds to load, in two places
+
+A group referencing the next one twice, for 29 definitions, is acyclic and
+valid and has 2^28 distinct root-to-leaf paths in a 3.0 KB file. Loading it
+took 35.8 seconds. A CPU profile put 86% of that in `cycleFrom` and 8% in
+`badNestedAll` — not in group expansion, not in automaton construction, and not
+in UPA checking, none of which appear in the profile at all. A `<group ref>`
+resolves to the definition's own `ModelGroup` pointer, so the component graph
+is a genuine DAG with flat memory; validation against the same schema is
+linear. The entire cost was two graph walks at load enumerating paths.
+
+`cycleFrom` kept only the current descent, on the reasoning that a group
+reachable by two disjoint routes is not a cycle and marking it visited would
+misreport. That objection is correct against two-colour marking and does not
+apply to the three-colour form: a group explored to the bottom without a cycle
+stays acyclic whatever route reaches it next, so it can be pruned, while only a
+group on the *current* path is a back edge. `badNestedAll` had no memo at all.
+
+Both memoise now, and the shared `done` set spans every root so the pass is
+linear in the graph rather than per root. The same shape at n=40 — over five
+hundred billion paths — loads in 0.01 s, where before the fix n=32 did not
+finish in 90 seconds. `xsd/group_dag_test.go` pins that alongside three cycle
+shapes that must still be caught.
+
+Fixing only `cycleFrom` would have left an 8%-of-a-huge-number exponential
+behind, reaching the same wall a few groups later. That is why the profile
+mattered more than the documentation's account of the cause.
+
 ### An assertion rejected a valid document 33 elements deep
 
 `maxAnnotateDepth = 32` bounded the walk that labels an element and its
@@ -663,10 +691,36 @@ selector. Independently reproduced:
 
 Doubling the depth quadruples both.
 
-**The default `MaxDepth` of 1000 bounds it.** At that ceiling the worst case
-measured is 111 KB of input costing 1.2 s and 1.2 GB of allocation churn — bad,
-but finite, and peak *live* heap stays low, so this starves a service of CPU
-rather than OOM-killing it. Raising `MaxDepth` removes that bound.
+**`MaxDepth` bounds one of the two factors, not the cost.** This section used
+to claim the default `MaxDepth` of 1000 bounded the whole thing, at 111 KB
+costing 1.2 s and 1.2 GB. That is the worst case for a *chain*. The cost is
+depth times subtree size, and **width is the factor `MaxDepth` does not touch**.
+Re-measured at depth 990, varying the number of children per level:
+
+| width | nodes | input | time | churn | live heap |
+|---|---|---|---|---|---|
+| 0 | 990 | 16.3 KB | 291 ms | 151 MB | 2.4 MB |
+| 10 | 10,890 | 169.9 KB | 2.41 s | 2.19 GB | 9.7 MB |
+| 40 | 40,590 | 659.8 KB | 12.6 s | 8.71 GB | 43.8 MB |
+| 80 | 80,190 | 1.31 MB | **26.2 s** | **17.7 GB** | 73.8 MB |
+
+`DefaultMaxNodes` is 10,000,000, so the same shape goes further within default
+parse limits. What the old text got right is the *kind* of failure: live heap
+stays at 74 MB against 17.7 GB of churn, so this starves a service of CPU and
+hammers the collector rather than OOM-killing it.
+
+The per-depth figures in the table above are also stale — re-measured on the
+current tree, depth 480 costs 47 ms and 35 MB rather than 304 ms and 332 MB.
+The shape is right and the constants are an order of magnitude out; whether the
+code got faster or the original run was on slower hardware could not be
+established from the history.
+
+**The trigger is narrower than "a `.//` selector".** A control with the same
+document and the same selector, but the constraint declared on a
+*non-recursive* wrapper, is perfectly linear — 117 µs at depth 60, 1.72 ms at
+960. What costs is the constraint sitting on an element that is its own
+descendant, so `buildNodeTable` runs once per level and each run walks the whole
+remaining subtree. The recursion is the load-bearing half.
 
 Two fixes were tried and **both reverted**:
 

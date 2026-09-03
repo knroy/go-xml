@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
-| Tests | 1,142, clean under `-race` |
+| Tests | 1,145, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -196,23 +196,14 @@ Fixing it means threading the instance element's namespace context through
 correctness — a QName whose prefix does not resolve has no value — but it buys
 one test on the suite, so it has not been done for the number.
 
-### 2.4 XPath: `$e-1` parses as a variable named `e-1`
+### 2.4 XPath: `$e-1` names a variable — retracted, not a defect
 
-The one known defect the suite does not cover, in either language. `$e-1`
-reads the hyphen as part of the variable name instead of as subtraction, and
-`$e-$s` fails to parse outright. Saxon and BaseX both read them as
-subtraction.
-
-It is not a scanner bug — `-` is a legal `NameChar`, and `$a-b` genuinely
-*is* a single variable in XQuery, so the greedy match is right there. The two
-cases separate only on the grammar's whitespace rules, which puts the fix at
-the variable-reference site in the parser. That site is in `xpath/parser*.go`,
-which the XQuery design depends on not changing, so it is open rather than
-scheduled. The diagnosis is in
-[known-gaps.md](known-gaps.md).
-
-**Workaround: write `$e - 1`.** Anything generating queries should space its
-binary operators.
+Recorded here as the one known defect the suite does not cover. It is not a
+defect: the QT3 suite writes `$tz-10` and `$in-xml-1` itself and uses them as
+single variables, and `prod/NameTest.xml`'s `K-NameTest-3` (`foo- foo`,
+expecting `XPST0003`) states that a name takes a trailing hyphen even before
+whitespace. A fix that made `$e- 1` subtraction broke that case in all four
+suites. See [known-gaps.md](known-gaps.md); pinned by `xpath/hyphen_test.go`.
 
 ### 2.5 XPath: no in-scope failures
 
