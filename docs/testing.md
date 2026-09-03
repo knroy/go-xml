@@ -25,12 +25,15 @@ let something through, and the column that matters is the last one.
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
+| **Fuzzing** | 5 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **The ratchet** | 7 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 
 **The suites are the weakest of these where it counts most.** Every one of
 them feeds the parser *well-formed* input and measures what happens after; none
-systematically checks that malformed input is refused. That gap is recorded in
-[todo.md](todo.md), not papered over here.
+systematically checks that malformed input is refused. Fuzzing is what covers
+that, and it is why the row above exists: the targets feed the parser, the
+schema assembler and the stylesheet compiler input no author would write, and
+assert that a refusal arrives as an error rather than as a panic.
 
 **The production schema sets found the most per hour.** Pointing the validator
 at UBL 2.1 turned up two defects the entire W3C suite had not, and between them
@@ -185,6 +188,50 @@ keys and calls `map:put` and `map:remove` once for each; both are O(n) in this
 representation, so the case is quadratic and does not finish in ten minutes. It
 is a real performance defect and is recorded as one in
 [conformance-gaps.md](conformance-gaps.md) — not a timeout to be raised past.
+
+---
+
+## Fuzzing
+
+Five targets, using Go's native `testing.F` and no framework:
+
+| target | package | asserts |
+|---|---|---|
+| `FuzzParseNoPanic` | `xdm` | `ParseString` never panics; a refusal is an error and never a tree beside it; an accepted tree walks with its parent links intact |
+| `FuzzLoadSchemaNoPanic` | `xsd` | `Load` never panics at either XSD version, and every content model it accepts compiles to an automaton that answers total |
+| `FuzzSerializeRoundTrip` | `xslt` | parse → serialise → parse yields the same document, compared on expanded names, kinds and string values |
+| `FuzzCompileStylesheetNoPanic` | `xslt` | `Compile` never panics and never returns a stylesheet beside an error |
+| `FuzzCompileNoPanic` | `xpath` | the expression compiler never panics, and every parse error carries a spec code |
+
+A target lives in `zz_fuzz_test.go` in the package it exercises. The `zz_`
+prefix is only to sort it last.
+
+```sh
+# Run one target's search. -run '^$' suppresses the ordinary tests so that
+# only the fuzzing runs.
+GOXSLT_NO_SUITES=1 go test ./xdm/ -run '^$' -fuzz FuzzParseNoPanic -fuzztime 120s
+GOXSLT_NO_SUITES=1 go test ./xsd/ -run '^$' -fuzz FuzzLoadSchemaNoPanic -fuzztime 120s
+GOXSLT_NO_SUITES=1 go test ./xslt/ -run '^$' -fuzz FuzzSerializeRoundTrip -fuzztime 120s
+```
+
+Only one target may be fuzzed per `go test` invocation; that is Go's
+restriction, not this repository's.
+
+**A plain `go test` runs the seed corpus and nothing else.** That is why the
+seeds are kept short and few — a Go fuzz target replays every seed on every
+ordinary test run, so a large corpus is a tax on every build. The five targets
+together add well under a second.
+
+**A limit firing is not a failure.** The parser's `MaxDepth`, `MaxBytes` and
+`MaxNodes` exist precisely to refuse the input a fuzzer is good at generating,
+and the targets lower them so that a pathological case costs milliseconds. A
+target that treated a limit error as a crash would be asserting that the limits
+should not work.
+
+Crashers Go finds are written to `testdata/fuzz/<Target>/` inside the package
+directory. That path is this repository's own, unrelated to the third-party
+suite checkouts elsewhere under `testdata/`; a minimised crasher worth keeping
+is committed there and replays as a seed thereafter.
 
 ---
 

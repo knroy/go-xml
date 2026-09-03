@@ -1192,7 +1192,7 @@ DTD-declared IDs gets an empty result rather than a wrong one.
 
 ## How this was tested
 
-Six methods, each catching a class the others miss. That is the point: no
+Seven methods, each catching a class the others miss. That is the point: no
 single one of them was sufficient, and each was added because the previous set
 had let something through. How to run any of them, and how to read what comes
 back, is in [docs/testing.md](docs/testing.md).
@@ -1205,9 +1205,15 @@ back, is in [docs/testing.md](docs/testing.md).
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
 | **W3C xsdtests suite** | systematic XSD conformance across 25,003 instance and 14,405 schema-validity tests | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
+| **Fuzzing** (5 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 
-**The production schema sets are the newest of the five and found the most per
-hour.** Pointing the validator at UBL 2.1 turned up two bugs the entire W3C
+**Every suite feeds the parser well-formed input**, which is the gap fuzzing
+exists to close: the targets cover the XML parser, the schema assembler and its
+content-model compiler, the stylesheet compiler, and a parse → serialise →
+parse round trip, and they assert that a refusal arrives as an error rather
+than as a panic.
+
+**The production schema sets found the most per hour.** Pointing the validator at UBL 2.1 turned up two bugs the entire W3C
 suite had not: deduplication keyed on the `schemaLocation` as written rather
 than the resolved path, so a diamond in the import graph read one file twice
 and reported every global in it as a duplicate; and attribute inheritance

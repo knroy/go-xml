@@ -246,14 +246,36 @@ These are places where the tests are thinner than the claims.
 
 ### 3.1 Fuzzing beyond the parser
 
-There is one fuzz target in the tree, `FuzzCompileNoPanic` over the XPath
-expression compiler. Neither the XML parser, the schema assembler, nor the
-content-model compiler has one, and all three consume adversarial input — a
-`.xsd` is as untrusted as a `.xml` when it arrives over the wire.
+**Largely done.** There are now five targets, not one. Alongside
+`FuzzCompileNoPanic` over the XPath expression compiler:
 
-**This is now the highest-value item in this file, and it is no longer a
-hypothesis.** With every suite at its ceiling, fuzzing is the only method still
-finding defects, and a round of it found three the suites cannot see:
+- `FuzzParseNoPanic` (`xdm`) over `ParseString`, the front door for every
+  untrusted document the engine reads;
+- `FuzzLoadSchemaNoPanic` (`xsd`) over `Load`, at both XSD versions, which
+  reaches the content-model compiler through every complexType it accepts and
+  then compiles each one to an automaton;
+- `FuzzSerializeRoundTrip` (`xslt`), which asserts that parse → serialise →
+  parse yields the same document compared semantically rather than
+  byte-for-byte;
+- `FuzzCompileStylesheetNoPanic` (`xslt`) over the stylesheet compiler.
+
+Each was run for 150 seconds and found nothing: roughly 20 million executions
+against the parser alone with no crash. See [testing.md](testing.md#fuzzing)
+for how to run one. That the parser survives that is a real result — it is the
+component with the largest untrusted surface — but "found nothing in 150
+seconds" is a floor, not a ceiling, and the targets are worth running for hours
+rather than minutes when there is a machine to spare.
+
+**What is still missing is the differential technique, which is the part that
+found the defect that mattered.** The targets above assert that nothing
+crashes; none of them asserts that the answer is *right*. Generating a content
+model, generating documents, and comparing against a brute-force reference is
+what turned up the content-model bug in
+[known-gaps.md](known-gaps.md), and it remains a one-off rather than a standing
+target.
+
+The earlier round, before these targets existed, found three defects the suites
+cannot see:
 
 - a nil dereference on a named function reference with no function library,
   where the equivalent call correctly raised `XPST0017`;
@@ -264,10 +286,7 @@ finding defects, and a round of it found three the suites cannot see:
   content-model bug that decides a whole class of schemas wrongly in both
   directions ([known-gaps.md](known-gaps.md)).
 
-The first three are fixed. The differential technique — generate a model,
-generate documents, compare against an independent oracle — is what found the
-one that matters most, and it should be a standing target rather than a
-one-off.
+The first two are fixed; the third is the one the paragraph above is about.
 
 ### 3.2 Deep-nesting and pathological schemas
 

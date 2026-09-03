@@ -75,6 +75,53 @@ otherwise cost a thousand parses.
 
 ---
 
+## What fuzzing has ruled out, and what it has not
+
+Every audit finding below was reasoned about and then asserted by a regression
+test. Fuzzing is the complement: it searches for the input nobody reasoned
+about. Five targets now do that — over the XML parser, the schema assembler and
+its content-model compiler, the stylesheet compiler, the XPath expression
+compiler, and a parse → serialise → parse round trip. See
+[testing.md](testing.md#fuzzing) for how to run one.
+
+Each was run for 150 seconds and none found a crash. The parser alone took
+about 20 million executions, the schema assembler 4.4 million, and the round
+trip 3.6 million. What that buys, stated precisely:
+
+- **`xdm.ParseString` did not panic**, and every refusal came back as an error
+  value with no tree beside it. A panic on parse is a denial of service for any
+  host that parses input it did not write, which is every host that accepts a
+  document over the wire.
+- **`xsd.Load` did not panic** at either XSD version, and every content model
+  it accepted compiled to an automaton that answered every query. A `.xsd` is
+  as untrusted as a `.xml` when both arrive over the wire, and the assembler is
+  the larger and more recursive body of code.
+- **Serialisation is faithful.** A document that parses, serialises to
+  something that parses back to the same document — same kinds, same expanded
+  names, same string values. A serialiser that could emit text which reparses
+  differently is an injection primitive wherever output is handed to another
+  processor, and no input was found that does it.
+
+What this does **not** establish. A coverage-guided search finds what it
+reaches in the time it is given, and 150 seconds is a floor rather than a
+ceiling; these runs are evidence of absence only in proportion to their length.
+None of the targets asserts that an *answer* is correct, only that a refusal is
+a refusal — the one content-model defect that fuzzing did find here was found
+by comparing against an independent oracle, a technique still applied by hand
+rather than by a standing target ([todo.md](todo.md)).
+
+Nor does any of it bear on the two open **cost** findings — the quadratic
+identity constraints under *Open findings*, and the exponential group-reference
+cycle check under *Still open: XSD group references are exponential at schema
+load*. Both are unbounded time with flat memory, and a fuzzer is nearly blind
+to that shape: Go reports a hang only after ten seconds in a single execution,
+so an input merely expensive rather than non-terminating is recorded as slow
+and dropped. That the schema target ran 4.4 million executions without tripping
+the hang detector says the search did not happen to generate a deep enough
+reference DAG — not that one is hard to write by hand, because it is not.
+
+---
+
 ## Fixed in the third audit
 
 Four issues, each with a regression test. Two of the three high-severity ones
