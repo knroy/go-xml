@@ -476,6 +476,27 @@ documents cannot reach it. Measured: gate OK with all seven marks identical.
 and 64, and separately that a cyclic union still terminates; both fail against
 the previous code at exactly 32.
 
+Two further walks carried the same shape at a different constant, `depth > 64`:
+`walkParticleElements` in `upa.go` and `allDerivedDecls` in `restrict.go`. The
+first decides whether `checkTypeTables` ever visits a declaration, so a schema
+whose `xs:alternative` violates `src-type-alternative` loaded clean once that
+declaration sat 64 groups deep; the second feeds three restriction checks and
+dropped declarations the same way. `allDerivedDecls` is the instructive one: it
+already kept a `seen` set, but on *declarations*, which deduplicates the result
+without bounding the walk — a model group that reaches itself revisits the same
+particle forever without ever repeating a declaration. A visited set has to be
+keyed on what the recursion actually revisits.
+
+**Not every numeric bound in this package is the same defect.** Nine `seen > 64`
+and `seen > 256` counters remain, on *iterative* walks up a type's base chain
+rather than recursive descent through a graph. A legal restriction chain 300
+links long was checked in both directions — a document satisfying the base
+facet validates, one violating it is rejected — and the facet survives intact,
+so the derivation walks these counters bound are not truncating a real schema.
+They stay until something demonstrates otherwise; replacing a bound that has
+been probed and found unreachable would be churn, and the probe is the part
+worth keeping in mind rather than the constant.
+
 ### A choice is unordered under 1.1 (fixed)
 
 `particlesT002`, `particlesT009`: the derived choice offers the base's

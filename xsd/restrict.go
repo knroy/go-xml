@@ -1955,14 +1955,23 @@ func allWildcardShadow(rg, bg *ModelGroup, v Version) error {
 // Order and occurrence are irrelevant here — the caller only wants each
 // declaration once, to compare its type against the base's budget for the same
 // name.
+//
+// The seen set on declarations deduplicates the result but cannot terminate
+// the walk, because a model group that reaches itself revisits the same
+// particle without ever repeating a declaration. seenPart does that, replacing
+// a `depth > 64` bound that could not tell a cyclic model from a deep one and
+// silently dropped declarations past the bound from every restriction check
+// that reads this list.
 func allDerivedDecls(p *Particle) []*ElementDecl {
 	var out []*ElementDecl
 	seen := map[*ElementDecl]bool{}
-	var walk func(*Particle, int)
-	walk = func(p *Particle, depth int) {
-		if p == nil || depth > 64 {
+	seenPart := map[*Particle]bool{}
+	var walk func(*Particle)
+	walk = func(p *Particle) {
+		if p == nil || seenPart[p] {
 			return
 		}
+		seenPart[p] = true
 		switch t := p.Term.(type) {
 		case *ElementDecl:
 			if !seen[t] {
@@ -1971,11 +1980,11 @@ func allDerivedDecls(p *Particle) []*ElementDecl {
 			}
 		case *ModelGroup:
 			for _, c := range t.Particles {
-				walk(c, depth+1)
+				walk(c)
 			}
 		}
 	}
-	walk(p, 0)
+	walk(p)
 	return out
 }
 

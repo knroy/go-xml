@@ -166,6 +166,19 @@ differential testing, not a confirmed vulnerability" — and it was right to.
 Two of my own first attempts to reproduce it showed no difference, because the
 rule is XSD 1.1 only and `Options{}` defaults to 1.0, which silently no-ops it.
 
+**The same confusion at 64.** The follow-up audit noted two walks left at
+`depth > 64` — `walkParticleElements` and `allDerivedDecls` — and again filed
+them as unproven, "my highest-value XSD correctness probe". Again correct:
+`walkParticleElements` feeds `checkTypeTables`, and a declaration the walk does
+not reach is one whose type alternatives are never checked, so a schema
+violating `src-type-alternative` — a default alternative that is not last —
+loaded clean with its declaration 64 groups deep. `allDerivedDecls` feeds three
+restriction checks and dropped declarations the same way; its existing `seen`
+set deduplicates results but cannot terminate the walk, since a model group
+reaching itself revisits a particle without repeating a declaration. Both are
+visited sets now, and `TestDepthAcyclicTypeAlternatives` pins the first at
+nesting 0, 63, 64, 65 and 96.
+
 ## Fixed in the fourth audit
 
 ### A negative xsd.ValidateOptions.MaxErrors approved invalid documents

@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,135 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,136 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |

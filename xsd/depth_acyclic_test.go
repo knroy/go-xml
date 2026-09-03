@@ -99,6 +99,43 @@ func TestDepthAcyclicListOfAtomic(t *testing.T) {
 	}
 }
 
+// The same confusion at a different constant: two walks stopped at
+// `depth > 64` rather than 32. walkParticleElements feeds checkTypeTables,
+// and a declaration the walk does not reach is one whose type alternatives are
+// never checked — so a schema violating src-type-alternative (a default
+// alternative that is not last) loaded clean with its declaration 64 groups
+// deep.
+func TestDepthAcyclicTypeAlternatives(t *testing.T) {
+	for _, n := range []int{0, 63, 64, 65, 96} {
+		open, close := strings.Repeat("<xs:sequence>", n), strings.Repeat("</xs:sequence>", n)
+		src := fmt.Sprintf(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:t" targetNamespace="urn:t">
+  <xs:complexType name="B"><xs:sequence/></xs:complexType>
+  <xs:complexType name="D"><xs:complexContent><xs:extension base="t:B"><xs:sequence/></xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="holder"><xs:sequence>
+    %s
+    <xs:element name="e" type="t:B">
+      <xs:alternative type="t:D"/>
+      <xs:alternative test="true()" type="t:D"/>
+    </xs:element>
+    %s
+  </xs:sequence></xs:complexType>
+  <xs:element name="root" type="t:holder"/>
+</xs:schema>`, open, close)
+
+		st, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("nesting %d: parse: %v", n, err)
+		}
+		s, err := Load(st.Root, "", Options{Version: Version11})
+		if err != nil {
+			continue // refused at load is the correct outcome
+		}
+		if err := s.CheckConstraints(CheckOptions{}); err == nil {
+			t.Errorf("nesting %d: accepted, want src-type-alternative", n)
+		}
+	}
+}
+
 // A union chain that reaches itself must still terminate rather than hang,
 // which is what the depth bound was there for in the first place.
 func TestDepthCyclicUnionTerminates(t *testing.T) {

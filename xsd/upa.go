@@ -961,7 +961,7 @@ func checkTypeTables(s *Schema) []error {
 		if ct.Particle == nil {
 			continue
 		}
-		walkParticleElements(ct.Particle, 0, func(d *ElementDecl) {
+		walkParticleElements(ct.Particle, map[*Particle]bool{}, func(d *ElementDecl) {
 			visit(d, d.Name.Local)
 		})
 	}
@@ -971,18 +971,28 @@ func checkTypeTables(s *Schema) []error {
 // walkParticleElements calls fn for every element declaration a particle
 // reaches, descending through model groups.
 //
-// The depth bound is what makes a recursive model safe: a group may reach
-// itself, and following terms rather than nodes would otherwise not terminate.
-func walkParticleElements(p *Particle, depth int, fn func(*ElementDecl)) {
-	if p == nil || depth > 64 {
+// A group may reach itself, and following terms rather than nodes would
+// otherwise not terminate. The visited set is what stops that: a particle
+// already on the path has had its declarations delivered already.
+//
+// This used to be a `depth > 64` bound, which conflated "cyclic" with "deep"
+// the same way the `depth > 32` bounds elsewhere in this package did. Not
+// reaching a declaration means checkTypeTables never visits it, and an
+// unvisited declaration is an unchecked one: a schema whose xs:alternative
+// violates src-type-alternative loaded clean once its declaration sat 64
+// groups deep. Silence from a walk is indistinguishable from a clean result,
+// which is what makes the truncating form dangerous.
+func walkParticleElements(p *Particle, seen map[*Particle]bool, fn func(*ElementDecl)) {
+	if p == nil || seen[p] {
 		return
 	}
+	seen[p] = true
 	switch t := p.Term.(type) {
 	case *ElementDecl:
 		fn(t)
 	case *ModelGroup:
 		for _, c := range t.Particles {
-			walkParticleElements(c, depth+1, fn)
+			walkParticleElements(c, seen, fn)
 		}
 	}
 }
