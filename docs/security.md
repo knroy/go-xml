@@ -722,7 +722,7 @@ document and the same selector, but the constraint declared on a
 descendant, so `buildNodeTable` runs once per level and each run walks the whole
 remaining subtree. The recursion is the load-bearing half.
 
-Two fixes were tried and **both reverted**:
+Four fixes have been tried and **all four reverted**:
 
 - A narrower `selectNodes`, walking descendants once for a single-step `.//a`
   rather than re-walking from every descendant: cut allocations ~11% and left
@@ -730,6 +730,19 @@ Two fixes were tried and **both reverted**:
 - Memoising selector evaluation per (element, constraint): no effect at all,
   because each level of the recursion is a *different* element, so the cache
   never hits.
+- Matching each descendant *upward* against the step list — one subtree
+  traversal instead of a forward walk from every start. Correct, and the suites
+  agreed, but it only moves the cost: it halved the deep-chain case (27 ms to
+  13 ms at depth 960) and made the wide cases **1.6× slower** (177 ms to 284 ms
+  at depth 200, width 20), because re-walking a candidate's ancestors costs
+  more than the forward walk it replaced whenever the tree is broad.
+- Replacing `descendantsOrSelf` with a callback walk over child slices, to stop
+  materialising the subtree. An allocation profile had said `descendantsOrSelf`
+  was 90% of the churn, which made this look like the obvious win. It measured
+  **2.5× worse** — 35 MB per operation against 14 — because the per-level
+  slices the walk pushes cost more than the single flat slice they replace.
+  Being 90% of the allocation does not mean a cheaper way to allocate it
+  exists.
 
 The reason it resists a local fix is that **cross-level duplicate detection
 needs the whole-subtree walk**. A key at depth 1 and the same key at depth 2 must

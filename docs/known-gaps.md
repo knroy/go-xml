@@ -452,8 +452,10 @@ and narrow to a bounded `int` only when compiling the runtime matcher. That is
 the right architecture, and the reasoning behind it is correct: "too large for
 an int" is not the same proposition as "semantically equal to MaxInt".
 
-It is not done, for a reason worth stating rather than leaving as an omission.
-The collapse needs a schema author to write **two** separate bounds above
+A follow-up review proposed the same architecture and rated it "high
+confidence, a clean architectural fix". That is a fair description of the
+design; what it understates is the migration. The collapse needs a schema author
+to write **two** separate bounds above
 4.6×10^18 and to depend on their ordering. `occursHuge` is a quarter of the int
 range rather than a half, which leaves real headroom: a base of 2N against a
 derived 3N stays exact for every N a document could approach, and the probes
