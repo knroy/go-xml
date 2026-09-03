@@ -21,8 +21,24 @@ n    // your number
 -1   // no limit — for input you produced yourself
 ```
 
-`MaxDepth` is the exception: `0` and negative both mean the default, because a
-depth of zero would reject every document.
+Two sets of exceptions, both verified by the boundary tests described in
+[testing.md](testing.md):
+
+* **A negative `MaxDepth` means the default, not "no limit"**, in
+  `xdm.ParseOptions` and `xpath.Context` — a depth bound of zero or below would
+  reject every document, so there is no useful reading of a negative value
+  other than "the caller set nothing". Elsewhere — `xsd.ValidateOptions`,
+  `relaxng.ValidateOptions`, `xslt.TransformOptions` — a negative `MaxDepth`
+  really does mean no limit.
+* **`xsd.HTTPResolver.MaxBytes` has no unlimited setting.** A negative value
+  refuses every fetch, with an error naming the limit. That is deliberate: a
+  schema is not a stream, so an unbounded read is a way to be handed an
+  unbounded allocation. Use a large number, not `-1`.
+
+Every limit is tested at `0`, negative, `1`, exactly at the limit, exactly one
+over, and `MaxInt`/`MaxInt64`. The largest value a caller can name is always a
+*permissive* setting and never a refusal — it was briefly the opposite, when
+`maxBytes+1` overflowed to a negative `io.LimitReader` bound.
 
 ---
 
@@ -160,8 +176,16 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{
 
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
-| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. |
-| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Recursion limit for validation. |
+| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. **Do not pass a negative value** — see below. |
+| `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Recursion limit for validation. A negative value means no limit. |
+
+> **A negative `xsd.ValidateOptions.MaxErrors` reports an invalid document as
+> valid.** `Validate` returns `nil`. Unlike `dtd.Options.MaxErrors`, where a
+> negative value correctly means "no limit", the stop check here is
+> `len(v.errs) >= v.opts.MaxErrors` with no `> 0` guard, so `0 >= -1` holds on
+> the first failure and validation stops before recording anything. Recorded as
+> a skipped test in `xsd/limits_boundary_test.go`. Use `0` for the default or a
+> large positive number; there is no unlimited setting.
 | `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, producing the part of the PSVI that XPath and XSLT consume. Off by default because it **mutates the tree you passed in**. |
 
 ### Bounding a run with a context

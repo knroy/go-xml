@@ -20,7 +20,8 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,102 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,132 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
@@ -56,6 +57,30 @@ deliberately rather than guessed at.
 at UBL 2.1 turned up two defects the entire W3C suite had not, and between them
 they meant all 65 main-document schemas failed to load with 1,758 errors
 apiece. Neither defect was exotic.
+
+**The limit boundary tests exist because an audit found what unit tests should
+have.** `xdm.ParseString("<r/>", xdm.ParseOptions{MaxBytes: math.MaxInt64})`
+returned `parse XML: no root element`. The reader is wrapped in
+`io.LimitReader(r, maxBytes+1)`, one byte over so a document at the limit can be
+told from one past it; at `math.MaxInt64` that addition overflows to
+`math.MinInt64`, which `io.LimitReader` reads as "nothing left". The value a
+caller picks to mean *do not limit me* was the value that refused every
+document. The same arithmetic in `xsd.HTTPResolver` was worse — an empty body
+with a **nil error**, so a schema loaded silently as empty.
+
+Every caller-settable limit is now exercised at the values where that class of
+bug lives: `0`, negative, `1`, exactly at the limit, exactly one over, and
+`MaxInt`/`MaxInt64` with its neighbour. The at-limit / one-over pair is the
+load-bearing one — it pins the boundary in both directions, so neither
+loosening nor tightening the comparison passes. Each refusal is asserted to
+name the limit that fired, because `err != nil` alone also passes when the
+wrong limit trips or the document was malformed for an unrelated reason.
+
+Where a value's meaning is deliberate the test pins it rather than changing it,
+with a comment saying why: `0` means the default everywhere, and negative means
+"no limit" in most places but *the default* for `xdm.ParseOptions.MaxDepth` and
+`xpath.Context.MaxDepth`, since a depth bound of zero would refuse every
+document. See [options.md](options.md) for the field-by-field rule.
 
 ---
 
@@ -186,6 +211,10 @@ go test ./xsd/ -run TestOccursOracle -count=1 -v
 # The same sweeps with wider bounds and longer documents — about 2s rather
 # than 0.4s, so it is opt-in rather than part of every `go test ./...`
 GOXSLT_OCCURS_WIDE=1 go test ./xsd/ -run TestOccursOracle -count=1 -v
+
+# Every configurable limit at its boundaries, across all six packages
+go test ./xdm/ ./xsd/ ./xpath/ ./xslt/ ./relaxng/ ./dtd/ \
+  -run Boundaries -count=1 -v
 ```
 
 `GOXSLT_NO_SUITES=1` keeps the conformance suites out of a plain

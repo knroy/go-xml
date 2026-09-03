@@ -512,6 +512,40 @@ stylesheet with no base case is still caught.
 
 ## Open findings
 
+### Open: a negative xsd.ValidateOptions.MaxErrors approves invalid documents
+
+`schema.Validate(root, xsd.ValidateOptions{MaxErrors: -1})` returns `nil` for a
+document that is flagrantly invalid. Minimised: a schema declaring `<r>` with
+empty content, validated against `<r><nope/></r>`, passes.
+
+The stop check in `xsd/validate.go` is
+
+```go
+if len(v.errs) >= v.opts.MaxErrors {
+	v.stopped = true
+	return
+}
+```
+
+with no `> 0` guard, so at a negative limit `0 >= -1` holds on the very first
+failure: validation stops before recording anything and the caller is told the
+document is valid.
+
+**Not reachable from hostile input** — it needs the *caller* to pass a negative
+value. But it is reachable by a caller following the documented idiom: `-1`
+means "no limit" in `xdm.ParseOptions.MaxBytes` and in `dtd.Options.MaxErrors`,
+whose validator implements it correctly with a `v.max > 0 &&` guard. A caller
+copying that idiom across gets a validator that approves everything.
+
+The failure shape is the dangerous one — **a silent pass, not an error** —
+which is what makes it worth recording rather than shrugging at. It is the same
+shape as the `HTTPResolver` overflow fixed in the fourth audit, which returned
+an empty body with a nil error.
+
+The fix is a `v.opts.MaxErrors > 0 &&` guard, matching `dtd`. Recorded as a
+skipped test in `xsd/limits_boundary_test.go`; documented in
+[options.md](options.md). Until then, pass `0` or a large positive number.
+
 ### Open: identity constraints are quadratic on recursive elements
 
 Reachable from a hostile instance with default settings, but it needs a schema
