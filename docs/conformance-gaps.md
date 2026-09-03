@@ -20,7 +20,7 @@ therefore no longer a measured figure.
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
 | **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **105** | **3** | **2** | **100** | |
+| | **Total** | | | | **104** | **4** | **2** | **98** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
