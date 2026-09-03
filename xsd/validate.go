@@ -357,6 +357,16 @@ func (v *validator) checkCancelled() bool {
 	if v.cancelled != nil {
 		return true
 	}
+	// A validator built by the type-validation entry points carries no
+	// context: they are XSLT's validation="strict" path, bounded by what the
+	// transform just built, and the transform already honours the caller's
+	// context. Reading Err() off a nil interface there panicked every
+	// schema-aware stylesheet -- 53 cases on the XSLT 2.0 target and 77 on
+	// 3.0, none of them visible from the XSD suites the change was measured
+	// against.
+	if v.ctx == nil {
+		return false
+	}
 	if err := v.ctx.Err(); err != nil {
 		v.cancelled = err
 		v.stopped = true
