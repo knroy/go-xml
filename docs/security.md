@@ -133,12 +133,12 @@ a refusal — the one content-model defect that fuzzing did find here was found
 by comparing against an independent oracle, a technique still applied by hand
 rather than by a standing target ([todo.md](todo.md)).
 
-Nor does any of it bear on the two open **cost** findings — the quadratic
-identity constraints under *Open findings*, and the exponential group-reference
-cycle check under *Still open: XSD group references are exponential at schema
-load*. Both are unbounded time with flat memory, and a fuzzer is nearly blind
-to that shape: Go reports a hang only after ten seconds in a single execution,
-so an input merely expensive rather than non-terminating is recorded as slow
+Nor did any of it bear on the two **cost** findings — the quadratic identity
+constraints and the exponential group-reference cycle check. Both are fixed
+now, and neither was found by fuzzing: they are unbounded time with flat
+memory, and a fuzzer is nearly blind to that shape: Go reports a hang only
+after ten seconds in a single execution, so an input merely expensive rather
+than non-terminating is recorded as slow
 and dropped. That the schema target ran 4.4 million executions without tripping
 the hang detector says the search did not happen to generate a deep enough
 reference DAG — not that one is hard to write by hand, because it is not.
@@ -146,6 +146,49 @@ reference DAG — not that one is hard to write by hand, because it is not.
 ---
 
 ## Fixed in the sixth audit
+
+### Six base-chain counters accepted a duplicate xs:ID and rejected legal schemas
+
+The counterpart to the `depth > 32` and `depth > 64` findings below, and the
+one that took three audits to settle because a measurement recorded here
+cleared it wrongly.
+
+Eleven `seen > 64` and `seen > 256` counters remained on walks up a type's base
+chain. An earlier revision of `docs/known-gaps.md` recorded a legal 300-link
+restriction chain as evidence that they truncated nothing, and an external
+reviewer reasonably withdrew their claim on the strength of it. The measurement
+was real; it cleared the wrong walk. The probe drove a *facet* chain, and
+`SimpleType.Primitive` is filled in eagerly as each link is built — set on the
+deepest link at depth 1, 64 and 300 alike — so `primitiveOf` returns on its
+first iteration and a 300-link chain exercised the loop exactly once.
+
+The walks that do iterate are the ones asking what the parser did not
+pre-answer. Six truncated on a legal, acyclic chain:
+
+| walk | truncated to | consequence |
+|---|---|---|
+| `idKind` | `""`, not an ID | **a duplicate `xs:ID` was accepted** at 64 links |
+| `descendsFromInteger` | `false` | **`"1.5"` validated** as an integer descendant at 64 |
+| `derivedFrom` | `false` | `cvc-elt.4.3` refused a legal `xsi:type` at 257 |
+| `typeDerivedFrom` | `false` | schema-time derivation denied at 300 |
+| `derivationMethodsTo` | `(_, false)` | a legal schema failed to **load** at 65 |
+| `substitutionMemberBlocked` | `false` | reachable once the load above succeeded |
+
+The two false accepts are the ones that matter, and neither schema is recursive
+or malformed. **Reachable from a schema rather than an instance alone**, so a
+trusted schema with untrusted documents cannot reach it.
+
+That the cliffs land at 65, 257 and 300 rather than at one number is the
+argument against raising a constant: one walk counts links, another counts
+types, and no single bound is correct for both. All twelve counters are visited
+sets now, including the six that were already unreachable — a lone survivor of
+a pattern this one invites the next reader to copy it.
+
+`xsd/deep_derivation_test.go` pins all twelve at 1, 2, 31, 32, 63, 64, 65, 128,
+255, 256, 257, 300 and 512, asserting a semantic property at each — a deep type
+is still an ID, still derives for `xsi:type`, still honours `block=` — rather
+than that a call returned something. It also pins the collapsing walks, so the
+superseded negative result cannot be re-derived from the same shape.
 
 ### Occurrence arithmetic wrapped negative, and a bound was compared against garbage
 
@@ -625,15 +668,22 @@ so the transform silently produced wrong output on exactly the inputs where the
 answer was hardest to compute — the guess this package refuses to make
 everywhere else. It now raises `XTDE1140`.
 
-### Still open: XSD group references are exponential at schema load
+### XSD group references were exponential at schema load — fixed
 
 **Hostile schema only**, so materially lower severity than the above: a caller
 compiling an untrusted schema has already accepted more than a caller
-validating an untrusted document. A 3.8 KB acyclic schema takes over 30
-seconds. The cycle check enumerates paths rather than traversing the graph, so
-cost is exponential in the depth of the reference DAG while memory stays flat —
-invisible to a memory limit. The fix is mark-acyclic memoisation, which
-preserves the disjoint-route semantics the current code deliberately keeps.
+validating an untrusted document. A 3.0 KB acyclic schema took 35.8 seconds.
+The cycle check enumerated paths rather than traversing the graph, so cost was
+exponential in the depth of the reference DAG while memory stayed flat —
+invisible to a memory limit.
+
+Fixed by the mark-acyclic memoisation this entry proposed, in the sixth audit,
+along with a second exponential walk the diagnosis here had missed:
+`badNestedAll` carried no memo at all and accounted for 8% of the load against
+`cycleFrom`'s 86%, so fixing only the one named here would have moved the wall
+a few groups later rather than removing it. See *A 3 KB schema took 35 seconds
+to load, in two places* above. n=40 — over five hundred billion paths — now
+loads in 0.01 s.
 
 ---
 
