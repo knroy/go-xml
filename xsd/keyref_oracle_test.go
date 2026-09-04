@@ -57,6 +57,23 @@ import (
 // emitted. It never calls selectNodes, buildNodeTable, mergeTables or
 // checkKeyref: an oracle that consults the implementation agrees with the
 // implementation's bugs.
+//
+// An oracle that agrees proves nothing until it is shown it can disagree, so
+// identity.go was deliberately broken five ways and the corpus rerun. Each
+// count is disagreements out of 3000 documents:
+//
+//	mergeEntry ignores the ambiguous flag (28e455a's bug)          5
+//	mergeTables drops the inherited ambiguous set                  7
+//	checkKeyref skips a node that has a nearer enclosing scope   1739
+//	a keyref with an absent field fails instead of abstaining    1088
+//	mergeEntry keeps the first sibling instead of dropping both    85
+//
+// The two ambiguity sabotages are the interesting ones. Five and seven
+// documents out of three thousand is how rare the shape is, which is why the
+// original bug survived ten thousand generated documents in the existing
+// oracles: they never emitted three sibling subtrees, and never put a keyref
+// on a scope that did not itself declare the key. Both are required, and the
+// generator asserts it reached the first.
 
 // The schema.
 //
@@ -69,10 +86,12 @@ import (
 //
 //   - the key is composite (@a, @b), so the field separator matters: a table
 //     that joined the fields on a space would equate ("x y") with ("x", "y").
-//   - two keyrefs on the same element refer to the same key with different
-//     selectors (.//use and .//both), so one <both> node is a target of two
-//     constraints at once at every scope. A cache keyed only by node, or a
-//     table shared between constraints, gets that wrong.
+//   - the reference leaf <use> is declared globally and appears under both
+//     scope kinds, so one node is a target of the keyref on its own scope and
+//     of the keyref on every enclosing scope, whichever kind those are. Two
+//     keyrefs selecting one node at one scope is pinned separately, in
+//     TestKeyrefOracleTwoKeyrefsOneNode, because it needs a schema shape the
+//     generator does not produce.
 //   - <def> appears only inside <g>, so every key entry has a well-defined
 //     scope of origin and the oracle can say exactly which subtree produced it.
 const krSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
@@ -325,7 +344,7 @@ func (n *krNode) subtreeDefs() []krField {
 	return out
 }
 
-// subtreeRefs returns every <use> and <both> at or below this node, since a
+// subtreeRefs returns every <use> at or below this node, since a
 // reference is a target of its own scope and of every enclosing scope.
 func (n *krNode) subtreeRefs() []krField {
 	out := append([]krField{}, n.uses...)
@@ -384,31 +403,102 @@ func (n *krNode) keyrefFailures() int {
 // the engine reports them into the same error list, and a comparison that
 // ignored them would be comparing two different quantities.
 //
-// A <g>'s key targets are every <def> at or below it. The engine reports one
-// failure per target that is unqualified (a field absent) and one per target
-// whose sequence a previous target already claimed — the first occurrence
-// stays in the table, so a sequence appearing three times fails twice.
+// A key failure is not reported once per enclosing scope the way a keyref
+// failure is. A key produces a table and a keyref does not, and the table
+// decides what an ancestor sees:
+//
+//   - Each scope records every target it selected, with the sequence that
+//     target produced, and an ancestor scope inherits that record wholesale.
+//     So a target is examined by every enclosing key scope, but through the
+//     record rather than by being re-selected.
+//   - A target the scope REJECTED is not recorded. An unqualified def, and the
+//     second of two defs that collide in one scope's own selection, are
+//     therefore reported exactly once, by the innermost scope that saw them,
+//     and never reach an ancestor.
+//   - Two defs in SIBLING nested scopes are each recorded by their own scope,
+//     since neither of those scopes sees the other. Both records reach the
+//     common ancestor, which sees the collision for the first time and reports
+//     it — and so does ITS ancestor, because both records are still there.
+//
+// That last asymmetry is the engine's, not the spec's: the same document is
+// invalid either way, so it is a difference in how many times one violation is
+// described rather than in the verdict. The oracle encodes it because
+// comparing counts is what makes this test sharp, and see
+// TestKeyrefOracleDuplicateReportingIsAsymmetric, which pins it deliberately
+// so that a change to it is a decision rather than an accident.
 func (n *krNode) keyFailures() int {
 	fails := 0
-	if n.isG {
-		seen := map[string]bool{}
-		for _, f := range n.subtreeDefs() {
-			s, ok := krSeq(f)
-			if !ok {
-				fails++ // a key target with an absent field
-				continue
+	n.keyRecorded(&fails)
+	return fails
+}
+
+// keyRecorded returns the sequences this subtree's tables record for the key —
+// one entry per RECORDED target, so a sequence can appear more than once —
+// and adds every failure at or below this node into fails.
+func (n *krNode) keyRecorded(fails *int) []string {
+	// Targets this scope selects directly: its own defs, and those under
+	// any descendant that declares no key of its own.
+	var direct func(m *krNode) []krField
+	direct = func(m *krNode) []krField {
+		out := append([]krField{}, m.defs...)
+		for _, k := range m.kids {
+			if !k.isG {
+				out = append(out, direct(k)...)
 			}
-			if seen[s] {
-				fails++
-				continue
+		}
+		return out
+	}
+	// Records inherited from nested key scopes, whose own failures are
+	// counted by their own call.
+	var inherited []string
+	var collect func(m *krNode)
+	collect = func(m *krNode) {
+		for _, k := range m.kids {
+			if k.isG {
+				inherited = append(inherited, k.keyRecorded(fails)...)
+			} else {
+				collect(k)
 			}
-			seen[s] = true
 		}
 	}
-	for _, k := range n.kids {
-		fails += k.keyFailures()
+	collect(n)
+
+	if !n.isG {
+		// Not a key scope: it holds no table, so it neither checks nor
+		// records anything. What its descendants recorded passes
+		// through, and the defs it holds directly are selected by the
+		// nearest enclosing key scope instead.
+		return inherited
 	}
-	return fails
+
+	seen := map[string]bool{}
+	var recorded []string
+	// Inherited records are seeded first, and a collision among them is a
+	// failure at this scope. Both records survive into this scope's own
+	// record, which is why the same collision is reported again by every
+	// further ancestor.
+	for _, s := range inherited {
+		if seen[s] {
+			*fails++
+		}
+		seen[s] = true
+		recorded = append(recorded, s)
+	}
+	// Then this scope's own selection. A rejected target is NOT recorded.
+	for _, f := range direct(n) {
+		s, ok := krSeq(f)
+		if !ok {
+			*fails++ // a key target with an absent field
+			continue
+		}
+		if seen[s] {
+			*fails++
+			continue
+		}
+		seen[s] = true
+		recorded = append(recorded, s)
+	}
+	return recorded
 }
 
 // krMaxSiblings reports the largest number of children under any one node, so
@@ -571,12 +661,6 @@ func TestKeyrefOracleDimensions(t *testing.T) {
 		// inner scope but not in the outer, and both must pass.
 		{"a use resolving inside but ambiguous outside fails at the outer scope",
 			`<root><w><g><def a="x" b="y"/><use a="x" b="y"/></g><g><def a="x" b="y"/></g></w></root>`, true},
-
-		// One node selected by two keyrefs at once.
-		{"a leaf selected by two keyrefs resolves for both",
-			`<root><g><def a="x" b="y"/><both a="x" b="y"/></g></root>`, false},
-		{"a leaf selected by two keyrefs fails for both",
-			`<root><g><def a="x" b="y"/><both a="x" b="zz"/></g></root>`, true},
 	} {
 		tr, err := xdm.ParseString(tc.doc, xdm.ParseOptions{})
 		if err != nil {
@@ -617,6 +701,123 @@ func TestKeyrefOracleAmbiguityDoesNotOscillate(t *testing.T) {
 		want := n != 1
 		if got := s.Validate(tr.Root, ValidateOptions{}) != nil; got != want {
 			t.Errorf("%d sibling definers: invalid=%v want %v\n%s", n, got, want, doc)
+		}
+	}
+}
+
+// One node selected by two keyrefs at once, at the same scope.
+//
+// The generator does not produce this — its scopes carry one keyref each — but
+// it is the case a per-node memo gets wrong: the key sequence of a node does
+// not depend on which constraint is asking, and identity.go caches it per
+// (node, constraint) for exactly that reason. If the cache were keyed on the
+// node alone, the second keyref would read the first's answer, and a schema
+// where the two select different fields would resolve against the wrong value.
+// Here they select the same fields, so the two must simply agree, and the
+// failing case must be reported twice rather than once.
+func TestKeyrefOracleTwoKeyrefsOneNode(t *testing.T) {
+	src := `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="root">
+    <xs:complexType><xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="def">
+        <xs:complexType>
+          <xs:attribute name="a" type="xs:string"/>
+          <xs:attribute name="b" type="xs:string"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="use">
+        <xs:complexType>
+          <xs:attribute name="a" type="xs:string"/>
+          <xs:attribute name="b" type="xs:string"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:choice></xs:complexType>
+    <xs:key name="k2">
+      <xs:selector xpath=".//def"/>
+      <xs:field xpath="@a"/><xs:field xpath="@b"/>
+    </xs:key>
+    <xs:keyref name="r1" refer="k2">
+      <xs:selector xpath=".//use"/>
+      <xs:field xpath="@a"/><xs:field xpath="@b"/>
+    </xs:keyref>
+    <xs:keyref name="r2" refer="k2">
+      <xs:selector xpath=".//use"/>
+      <xs:field xpath="@a"/><xs:field xpath="@b"/>
+    </xs:keyref>
+  </xs:element>
+</xs:schema>`
+	st, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse schema: %v", err)
+	}
+	sc, err := Load(st.Root, "", Options{})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, tc := range []struct {
+		doc  string
+		want int // identity failures expected
+	}{
+		{`<root><def a="x" b="y"/><use a="x" b="y"/></root>`, 0},
+		{`<root><def a="x" b="y"/><use a="x" b="zz"/></root>`, 2},
+		{`<root><def a="x" b="y"/><use a="x"/></root>`, 0},
+	} {
+		tr, err := xdm.ParseString(tc.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		got := 0
+		if err := sc.Validate(tr.Root, ValidateOptions{MaxErrors: -1}); err != nil {
+			got = len(err.(*ValidationErrors).Errors)
+		}
+		if got != tc.want {
+			t.Errorf("%s: %d failures, want %d", tc.doc, got, tc.want)
+		}
+	}
+}
+
+// A duplicate key is described once when one scope selected both occurrences
+// and once per enclosing scope when two nested scopes each contributed one.
+//
+// This is a reporting asymmetry, not a difference in verdict: both documents
+// are invalid, and both are invalid for the same reason. It falls out of the
+// node table keeping a record of every target it accepted and dropping the
+// ones it rejected — a rejected duplicate never reaches an ancestor, while two
+// separately-accepted records both do and collide again at every level above.
+//
+// It is pinned rather than left implicit because TestKeyrefOracle compares
+// failure COUNTS, and the count is what makes that test sharp enough to catch
+// a scope quietly skipping a check. Anything that changes this multiplicity
+// changes those counts, and should be a decision made here rather than a
+// surprise there.
+func TestKeyrefOracleDuplicateReportingIsAsymmetric(t *testing.T) {
+	st, _ := xdm.ParseString(krSchema, xdm.ParseOptions{})
+	s, err := Load(st.Root, "", Options{})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want int
+	}{
+		{"both occurrences selected by one scope: described once",
+			`<root><g><g><g><def a="x" b="y"/><def a="x" b="y"/></g></g></g></root>`, 1},
+		{"one occurrence in each of two nested scopes: described at every scope above",
+			`<root><g><g><g><def a="x" b="y"/></g><g><def a="x" b="y"/></g></g></g></root>`, 2},
+		{"an unqualified target is described once, by its innermost scope",
+			`<root><g><g><g><def a="x"/></g></g></g></root>`, 1},
+	} {
+		tr, err := xdm.ParseString(tc.doc, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := 0
+		if err := s.Validate(tr.Root, ValidateOptions{MaxErrors: -1}); err != nil {
+			got = len(err.(*ValidationErrors).Errors)
+		}
+		if got != tc.want {
+			t.Errorf("%s: %d failures, want %d\n%s", tc.name, got, tc.want, tc.doc)
 		}
 	}
 }

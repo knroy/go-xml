@@ -2343,12 +2343,23 @@ func (p *parser) checkTypeBaseCycles() {
 			})
 			continue
 		}
-		// Walk the base chain looking for a return to t. The chain is
-		// finite in a well-formed schema — it ends at xs:anyType, whose
-		// base is itself — so the step cap only bounds the ill-formed
-		// case where the cycle does not pass through t.
+		// Walk the base chain looking for a return to t.
+		//
+		// Terminated on a repeated component rather than on a step
+		// count. A count cannot tell a cycle from a merely deep chain,
+		// and running out of it returned the permissive verdict — so a
+		// circular schema whose cycle was longer than the count loaded
+		// clean, which is the false accept this whole function exists
+		// to prevent. A 4097-type cycle reported nothing at all; a
+		// 4096-type one reported every link.
+		//
+		// `seen` also covers the ill-formed case where the cycle does
+		// not pass through t: the walk arrives at some type twice and
+		// stops, leaving the report to the pass over the type that is
+		// actually on the cycle.
+		seen := map[Type]bool{}
 		cur := baseOf(t)
-		for steps := 0; cur != nil && steps < 4096; steps++ {
+		for cur != nil {
 			if cur == t {
 				p.errs = append(p.errs, &ParseError{
 					Code: "ct-props-correct.3",
@@ -2359,6 +2370,10 @@ func (p *parser) checkTypeBaseCycles() {
 				})
 				break
 			}
+			if seen[cur] {
+				break
+			}
+			seen[cur] = true
 			next := baseOf(cur)
 			if next == cur {
 				// xs:anyType and xs:anySimpleType are their own

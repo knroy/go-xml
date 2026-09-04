@@ -128,21 +128,16 @@ type compiler struct {
 	// resolves. A grammar is flat: nested <grammar> elements each have their
 	// own scope, which parentRef reaches out of.
 	defines map[string]*xdm.Node
-	// depth bounds recursion through <ref>, which a schema may make
-	// self-referential.
+	// depth counts the <ref> expansions on the current descent. It is
+	// carried across a <parentRef> so that the enclosing grammar continues
+	// this descent rather than starting a fresh one; nothing bounds it —
+	// see maxRefDepth's removal note in compileRefNamed.
 	depth int
 }
 
 // startKey is the key under which a <start>'s inherited namespace is kept. It
 // cannot collide with a definition name, since a name is an NCName.
 const startKey = "<start>"
-
-// maxRefDepth bounds how deep a chain of <ref> may go while compiling.
-//
-// A recursive definition is legal and common — a list whose items may contain
-// lists — so the pattern is built lazily rather than expanded, and this bound
-// only catches a definition that refers to itself with nothing in between.
-const maxRefDepth = 500
 
 func (c *compiler) compileTop(root *xdm.Node) (pattern, error) {
 	if root.Name.Local == "grammar" {
@@ -685,10 +680,14 @@ func (c *compiler) compileRefNamed(name string) (pattern, error) {
 		}
 		return c.lazyRef(name), nil
 	}
-	if c.depth >= maxRefDepth {
-		return nil, fmt.Errorf(
-			"relaxng: definition %q recurses more than %d deep", name, maxRefDepth)
-	}
+	// No bound on c.depth. There was one — maxRefDepth = 500 — and because
+	// c.expanding above already catches every re-entry into a definition
+	// still being compiled, the count could only ever fire on a chain that
+	// was NOT recursive: 501 distinct definitions each <ref>ing the next,
+	// an entirely acyclic and perfectly legal grammar, was refused with
+	// "definition \"D500\" recurses more than 500 deep". Nor did it bound
+	// runtime recursion, which unfolds through lazyRef — that builds a
+	// fresh compiler with depth 0 each time.
 	if c.expandingAt == nil {
 		c.expandingAt = map[string]int{}
 	}
@@ -737,10 +736,6 @@ func (c *compiler) compileParentRef(n *xdm.Node) (pattern, error) {
 	if c.parent == nil {
 		return nil, fmt.Errorf(
 			"relaxng: <parentRef name=%q> has no enclosing <grammar>", name)
-	}
-	if c.depth >= maxRefDepth {
-		return nil, fmt.Errorf(
-			"relaxng: definition %q recurses more than %d deep", name, maxRefDepth)
 	}
 	// The definition is compiled in the *parent's* scope, so that a <ref>
 	// inside it resolves there rather than here.

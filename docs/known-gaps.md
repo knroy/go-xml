@@ -598,6 +598,56 @@ against the previous code at exactly 64, 65 or 257; `TestDeepFacetChainCollapses
 and `TestDeepUnionAndListCollapse` pin the collapsing walks so the superseded
 negative result above is not re-derived from the same shape.
 
+### The last two counters: a 4096-step cycle check and a 500-deep ref bound (fixed)
+
+Two guards survived the twelve above because neither sat on a walk this
+document had enumerated. Both were flagged as architectural debt rather than
+proven bugs, and both turned out to be bugs — one in each direction.
+
+`checkTypeBaseCycles` (`xsd/parse_type.go`) walks a type's `{base type
+definition}` chain looking for a return to the type itself, and gave up after
+`steps < 4096`. Running out of steps appended no error, which is the
+*permissive* verdict — so a schema whose base-type cycle was longer than the
+count loaded clean. That is a **false accept** of exactly the
+`ct-props-correct.3` violation the function was written to diagnose: the
+function that exists to catch circular types could not catch a large circular
+type. The cliff is sharp — a ring of 4096 types reports every link, a ring of
+4097 reports nothing at all — and it is reachable from a schema alone.
+
+The probe was built the way the section above demands. `TestBaseChainActually
+Iterates` measures the *built* component's chain length before anything is
+concluded, because a walk that collapses during parsing would clear the guard
+without approaching it. At n=4097 the chain really is 4098 links and the loop
+really does take one step per link.
+
+`maxRefDepth = 500` (`relaxng/compile.go`) is the mirror image. It could never
+do the job it was named for: immediately above it, `c.expanding` — the set of
+definitions currently being compiled, entered on descent and deleted on unwind —
+already catches every re-entry into a definition still on the stack and hands it
+to `lazyRef` or to the §4.19 refusal, so a recursive grammar never reached the
+count. Nor did it bound runtime recursion, which unfolds through `lazyRef`'s
+`resolve`, and that builds a fresh compiler with `depth` 0 each time. What the
+count *could* reach was the acyclic case: 501 distinct definitions each
+`<ref>`ing the next is a legal, entirely non-recursive grammar, and it was
+refused outright with `definition "D500" recurses more than 500 deep` — a
+**false reject** that made a valid schema uncompilable. Active-recursion state
+was already the more precise mechanism the counter was standing in for; the
+counter was removed rather than raised, and `c.expanding` is now the whole
+termination argument.
+
+Measured: both XSD suites unchanged, TOTAL agree 39347 (1.0) and 41532 (1.1);
+the RELAX NG spectest unchanged at 965 passed, 0 failed.
+`xsd/base_cycle_depth_test.go` pins depths 1, 2, 63, 64, 65, 128, 256, 512,
+1024, 4094, 4095, 4096 and 4097 — a legal acyclic chain must still load and
+still derive, a ring at each depth must still be rejected, and `xs:anyType`
+being its own base must still terminate the walk rather than read as a cycle.
+`relaxng/ref_depth_test.go` pins 1 through 4096 across the old bound, asserts
+that the deep chain's trailing `<text/>` is still *enforced* rather than merely
+that compilation succeeded, and separately that a genuinely recursive grammar
+still terminates — legal recursion across an `<element>` validating at nesting
+1000, and self-reference without an intervening `<element>` still refused under
+§4.19.
+
 ### A choice is unordered under 1.1 (fixed)
 
 `particlesT002`, `particlesT009`: the derived choice offers the base's

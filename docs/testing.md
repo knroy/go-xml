@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,173 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,195 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,23 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**A boolean oracle can be too weak to see anything.** The keyref oracle first
+compared valid against invalid, and roughly 85% of generated documents fail
+somehow — so "invalid" agreed with a constant and the comparison was nearly
+vacuous. Comparing the exact count of identity failures instead, with
+`MaxErrors: -1`, forced the oracle to model the engine's reporting multiplicity
+and made it sharp.
+
+How sharp is worth recording. Sabotaging the merge to reintroduce the
+three-sibling ambiguity bug produces **5 disagreements in 3,000 documents**;
+dropping the inherited ambiguity set produces 7. Two of the other three
+sabotages produce over a thousand each. That ratio is the whole reason the
+original bug survived 10,000 documents against the earlier oracles: the shape
+is rare, and a corpus that does not deliberately generate it will not stumble
+into it. The histogram is printed with the result — 3, 4 and 5 sibling scopes
+each occur in hundreds of documents — so a future generator change that stops
+producing them is visible rather than silent.
 
 **An oracle only covers the shapes its generator makes.** The identity oracles
 run 10,000 documents and agreed throughout while `mergeTables` had a bug that

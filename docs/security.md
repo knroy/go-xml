@@ -183,6 +183,42 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Fixed in the sixth audit
 
+### A circular type longer than 4096 links loaded clean
+
+`checkTypeBaseCycles` walks a global type's base chain looking for a return to
+itself, which is what `ct-props-correct.3` and `st-props-correct.2` forbid. It
+stopped at `steps < 4096`, and running out appended **no error** — the
+permissive verdict. So the circular-type check could not catch a large circular
+type: a ring of 4,097 types loaded without complaint, where 4,096 reported
+every link. A sharp cliff, and a false accept of exactly the violation the
+function exists to diagnose. Reachable from a schema alone.
+
+The loop was confirmed to iterate at that depth before anything was concluded —
+the built component's chain really is 4,098 links at n=4097, with nothing
+collapsing it at parse time the way `SimpleType.Primitive` collapses a facet
+chain and misled an earlier probe. The count is a visited set now, matching the
+twelve walks converted before it.
+
+### RELAX NG refused a legal chain of 501 definitions
+
+`maxRefDepth = 500` bounded `<ref>` expansion at compile time, and running out
+was a hard refusal — a valid schema became uncompilable with
+`definition "D500" recurses more than 500 deep`, when nothing recursed.
+
+The counter could never do its nominal job. `c.expanding` sits immediately above
+it, tracking the definitions currently being compiled, and already catches every
+re-entry into a name still on the stack — so a genuinely recursive grammar was
+routed to `lazyRef` or the §4.19 refusal long before the count mattered. Nor did
+it bound runtime recursion, which unfolds through `lazyRef`'s `resolve` with a
+fresh compiler at depth zero. The only thing it could reach was the acyclic
+case it had no business refusing.
+
+Removed rather than raised, because the active-recursion state that does the
+real work was already there. The test asserts the chain is still *enforced* at
+depth 4,096 — a trailing `<text/>` still rejects an element child — because a
+chain that silently collapsed to "anything goes" would otherwise pass a
+compiles-without-error check.
+
 ### A permitted file was read whole with no byte limit
 
 `FileResolver.readConfined` ended in a bare `io.ReadAll`. Every read the
