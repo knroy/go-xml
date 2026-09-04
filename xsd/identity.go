@@ -57,7 +57,7 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 		if ic.Kind == ICKeyref {
 			continue
 		}
-		tbl := v.buildNodeTable(el, ic)
+		tbl := v.buildNodeTable(el, ic, merged[ic])
 		merged[ic] = tbl
 	}
 	for _, ic := range decl.IdentityConstraints {
@@ -107,7 +107,7 @@ func copyEntries(in map[string]*xdm.Node) map[string]*xdm.Node {
 
 // buildNodeTable evaluates a key or unique constraint over an element's
 // subtree.
-func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint) *nodeTable {
+func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *nodeTable) *nodeTable {
 	tbl := &nodeTable{entries: map[string]*xdm.Node{}}
 
 	// A per-element check in validateElement does not reach this loop: one
@@ -116,11 +116,43 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint) *nodeTa
 	// cost documented in docs/security.md is actually spent. The loop is over
 	// selected targets and each iteration builds a key sequence, so a check
 	// per target is cheap against the work it guards.
+	//
+	// below is the table this same constraint already built for the subtree,
+	// merged from the children. Its targets are a subset of the ones selected
+	// here — the same constraint on a nested element selects out of a smaller
+	// subtree — so their key sequences are already computed and are seeded
+	// rather than recomputed. The scan still runs over every target, because
+	// a duplicate is only a failure within the scope that contains both
+	// occurrences and the inner scope cannot have reported it, but seeding
+	// lets the sequence work be skipped for anything already keyed.
+	seeded := map[*xdm.Node]string{}
+	if below != nil {
+		for k, n := range below.entries {
+			seeded[n] = k
+		}
+	}
+
 	for _, target := range v.selectNodes(el, ic.Selector) {
 		if v.checkCancelled() {
 			return tbl
 		}
 		if v.inSkippedContent(target) {
+			continue
+		}
+		if joined, ok := seeded[target]; ok {
+			// Already keyed for the subtree below. The duplicate
+			// check still has to run here, because this scope may
+			// contain a second occurrence the inner one did not.
+			if prev, dup := tbl.entries[joined]; dup && prev != target {
+				code := "cvc-identity-constraint.4.1"
+				if ic.Kind == ICKey {
+					code = "cvc-identity-constraint.4.2.2"
+				}
+				v.fail(target, code,
+					"%s %q: duplicate key sequence", ic.Kind, ic.Name.Local)
+				continue
+			}
+			tbl.entries[joined] = target
 			continue
 		}
 		seq, complete, ok := v.keySequence(target, ic)

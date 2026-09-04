@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,145 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,147 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,16 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**An oracle earns its keep by disagreeing.** The identity-constraint oracle in
+`xsd/identity_oracle_test.go` reported 0 disagreements over 6,000 generated
+documents the first time it ran, which says nothing on its own — a test that
+cannot fail is indistinguishable from one that always passes. It was then run
+against a `buildNodeTable` sabotaged to scan only direct children, which is
+precisely the bug a cheaper incremental implementation invites, and it found
+416 disagreements, all of them false accepts. That is what licensed the change
+that followed. Any oracle written here should be checked the same way before it
+is trusted: break the thing it watches, and confirm it notices.
 
 **A test can also exist to stop a question being re-asked.**
 `xsd/occurs_boundary_test.go` walks `minOccurs` and `maxOccurs` through the

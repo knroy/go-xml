@@ -722,7 +722,28 @@ document and the same selector, but the constraint declared on a
 descendant, so `buildNodeTable` runs once per level and each run walks the whole
 remaining subtree. The recursion is the load-bearing half.
 
-Four fixes have been tried and **all four reverted**:
+**A fifth was tried and kept.** The four below all attacked the traversal.
+This one leaves the traversal alone and removes the *recomputation*: the child
+tables already flowing up through `mergeTables` carry the key sequences for
+everything below, so `buildNodeTable` seeds from them and derives a sequence
+only for a target it has not seen. The duplicate scan still runs at every
+scope, because a collision that exists only in an outer scope cannot have been
+reported by an inner one. Allocations on the wide shape fall 3.8x at width 20
+(2,703,986 to 718,996) and 4.2x at width 40, with time down 25% and 15%; the
+deep-and-narrow shape is unchanged, and the W3C XSD corpus is unmoved at 35.1 s
+against a 35.6 s baseline with identical agreement counts. The curve is still
+quadratic — this lowers the constant on the factor that produced the 17.7 GB of
+churn rather than changing the shape.
+
+What made it safe to attempt is `xsd/identity_oracle_test.go`, which decides
+validity from the spec's definition over a generated tree and never calls
+`selectNodes`, `buildNodeTable` or `mergeTables`. It agrees with the engine on
+6,000 documents, and — the part that matters — it was checked against a
+deliberately broken `buildNodeTable` that only scans direct children, which is
+the mistake an incremental rewrite invites. It caught 416 disagreements, every
+one a false accept.
+
+The four earlier attempts, **all reverted**:
 
 - A narrower `selectNodes`, walking descendants once for a single-step `.//a`
   rather than re-walking from every descendant: cut allocations ~11% and left
