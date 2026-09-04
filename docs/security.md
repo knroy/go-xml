@@ -691,6 +691,10 @@ selector. Independently reproduced:
 
 Doubling the depth quadruples both.
 
+The figures below are what the shape cost *before* the fix above, kept because
+they are what the amplification looked like and because the width factor is the
+part every earlier account of this got wrong.
+
 **`MaxDepth` bounds one of the two factors, not the cost.** This section used
 to claim the default `MaxDepth` of 1000 bounded the whole thing, at 111 KB
 costing 1.2 s and 1.2 GB. That is the worst case for a *chain*. The cost is
@@ -722,6 +726,39 @@ document and the same selector, but the constraint declared on a
 descendant, so `buildNodeTable` runs once per level and each run walks the whole
 remaining subtree. The recursion is the load-bearing half.
 
+**Fixed.** The evaluator now visits each node a bounded number of times, and
+the quadratic is gone: doubling the depth doubles the work rather than
+quadrupling it, measured at 2.00x across 240, 480 and 960 where it was 3.98,
+3.99 and 4.00. `xsd/identity_stats_test.go` asserts that ratio, so a return to
+the old shape fails the build rather than being noticed in a profile later.
+
+What changed is which subtree gets walked. A descendant element that declares
+the same constraint is itself a scope, and its own table already holds every
+target beneath it — so the walk stops there instead of descending again. On the
+recursive shape that turns a whole-subtree walk per level into a walk of the
+gap between one scope and the next. The child tables now carry every target
+they selected, not only the entries that survived merging: an ancestor decides
+duplicates from those, and a sequence two siblings share has to survive here
+even though `entries` drops it for keyref resolution.
+
+| | before | after |
+|---|---:|---:|
+| depth 960 | 23.6 ms, 1,400,001 allocations | **1.2 ms, 15,423** |
+| depth 200 width 40 | 214 ms, 1,223,930 | **121 ms, 104,340** |
+
+The first attempt at this was wrong in the direction that matters, and the
+oracle caught it: seeding the subtree's targets into the table only when the
+walk revisited them meant a target from below was never seen at all, so a key
+at depth 1 and the same key at depth 2 stopped colliding. 771 disagreements
+across the two generated corpora, and the four hand-written cross-level cases
+failed with it. Seeding before the walk rather than during it fixes it. That is
+precisely the mistake the review predicted a bottom-up merge would make.
+
+**The four earlier attempts, all reverted.** They are kept because each one is
+a plausible idea that measurement refuted, and because the reason they failed
+is the reason the fix above works: they all tried to make the same traversal
+cheaper, and the traversal was not the thing to change.
+
 **A fifth was tried and kept.** The four below all attacked the traversal.
 This one leaves the traversal alone and removes the *recomputation*: the child
 tables already flowing up through `mergeTables` carry the key sequences for
@@ -743,7 +780,7 @@ deliberately broken `buildNodeTable` that only scans direct children, which is
 the mistake an incremental rewrite invites. It caught 416 disagreements, every
 one a false accept.
 
-The four earlier attempts, **all reverted**:
+The list:
 
 - A narrower `selectNodes`, walking descendants once for a single-step `.//a`
   rather than re-walking from every descendant: cut allocations ~11% and left

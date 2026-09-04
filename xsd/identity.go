@@ -24,7 +24,22 @@ type nodeTable struct {
 	// entries maps a key sequence to the element it was found on. The
 	// sequence is joined with a separator that cannot appear in a value,
 	// so that ("a", "b") and ("a b") are distinct keys.
+	//
+	// A sequence that two SIBLING subtrees both define is absent: the
+	// merge deletes it, because an ancestor's keyref cannot say which of
+	// them it should resolve to. That deletion is why entries alone cannot
+	// answer "did this sequence occur below me", which targets does.
 	entries map[string]*xdm.Node
+
+	// targets records every node this constraint selected in the subtree,
+	// with the key sequence it produced. Unlike entries it is not merged
+	// away on a clash, so an enclosing scope can decide duplicates from it
+	// without walking the subtree again.
+	//
+	// The two are kept apart because they answer different questions.
+	// entries is what a keyref resolves against and must drop ambiguity;
+	// targets is what a duplicate check counts and must not.
+	targets map[*xdm.Node]string
 }
 
 // keySep separates the fields of a key sequence.
@@ -115,7 +130,10 @@ func mergeTables(children []icTables) icTables {
 		for ic, tbl := range child {
 			existing, ok := out[ic]
 			if !ok {
-				out[ic] = &nodeTable{entries: copyEntries(tbl.entries)}
+				out[ic] = &nodeTable{
+					entries: copyEntries(tbl.entries),
+					targets: copyTargets(tbl.targets),
+				}
 				continue
 			}
 			for k, n := range tbl.entries {
@@ -125,7 +143,23 @@ func mergeTables(children []icTables) icTables {
 				}
 				existing.entries[k] = n
 			}
+			// targets is a union: a node selected in one subtree is
+			// still selected in the ancestor's, and a sequence two
+			// siblings share must survive here even though entries
+			// drops it, because the ancestor's scope contains both
+			// occurrences and has to see them.
+			for n, k := range tbl.targets {
+				existing.targets[n] = k
+			}
 		}
+	}
+	return out
+}
+
+func copyTargets(in map[*xdm.Node]string) map[*xdm.Node]string {
+	out := make(map[*xdm.Node]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }
@@ -141,7 +175,10 @@ func copyEntries(in map[string]*xdm.Node) map[string]*xdm.Node {
 // buildNodeTable evaluates a key or unique constraint over an element's
 // subtree.
 func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *nodeTable) *nodeTable {
-	tbl := &nodeTable{entries: map[string]*xdm.Node{}}
+	tbl := &nodeTable{
+		entries: map[string]*xdm.Node{},
+		targets: map[*xdm.Node]string{},
+	}
 
 	// A per-element check in validateElement does not reach this loop: one
 	// constraint at the top of a deeply recursive document selects the whole
@@ -158,14 +195,44 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 	// a duplicate is only a failure within the scope that contains both
 	// occurrences and the inner scope cannot have reported it, but seeding
 	// lets the sequence work be skipped for anything already keyed.
-	seeded := map[*xdm.Node]string{}
+	// below is the table this same constraint already built for the subtree,
+	// merged up from the children, and its targets carry the key sequence
+	// each one produced. Those are seeded rather than recomputed.
+	//
+	// It is not enough on its own to skip the walk. The tables that merge up
+	// come from every element child, but only a child that DECLARES this
+	// constraint contributes one for it, so a target sitting under a child
+	// that does not declare it is reachable from here and absent from below.
+	// The walk therefore still runs, and prunes: descending stops at any
+	// element that declares this same constraint, because everything under
+	// it is already in below.targets. On the recursive shape that turns the
+	// per-scope subtree walk into a walk of the gap between one scope and
+	// the next.
+	// The subtree's targets are carried in wholesale, keeping the sequence
+	// each one already produced. They are seeded into the table BEFORE the
+	// walk rather than being matched against it: the pruned walk returns
+	// only what this scope newly reaches, so a target from below is never
+	// visited here and would otherwise never enter the table at all. That
+	// is the cross-level duplicate case — a key at depth 1 and the same key
+	// at depth 2 collide in the scope that contains both, and the inner
+	// scope cannot have reported it.
 	if below != nil {
-		for k, n := range below.entries {
-			seeded[n] = k
+		for n, k := range below.targets {
+			tbl.targets[n] = k
+			if prev, dup := tbl.entries[k]; dup && prev != n {
+				code := "cvc-identity-constraint.4.1"
+				if ic.Kind == ICKey {
+					code = "cvc-identity-constraint.4.2.2"
+				}
+				v.fail(n, code,
+					"%s %q: duplicate key sequence", ic.Kind, ic.Name.Local)
+				continue
+			}
+			tbl.entries[k] = n
 		}
 	}
 
-	for _, target := range v.selectNodes(el, ic.Selector) {
+	for _, target := range v.selectNodesPruned(el, ic) {
 		if v.checkCancelled() {
 			return tbl
 		}
@@ -175,24 +242,12 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		if v.icStats != nil {
 			v.icStats.Targets++
 		}
-		if joined, ok := seeded[target]; ok {
+		if _, already := tbl.targets[target]; already {
+			// Carried in from below; its sequence is known and the
+			// collision check has already run for it.
 			if v.icStats != nil {
 				v.icStats.Seeded++
-				v.icStats.TableOps++
 			}
-			// Already keyed for the subtree below. The duplicate
-			// check still has to run here, because this scope may
-			// contain a second occurrence the inner one did not.
-			if prev, dup := tbl.entries[joined]; dup && prev != target {
-				code := "cvc-identity-constraint.4.1"
-				if ic.Kind == ICKey {
-					code = "cvc-identity-constraint.4.2.2"
-				}
-				v.fail(target, code,
-					"%s %q: duplicate key sequence", ic.Kind, ic.Name.Local)
-				continue
-			}
-			tbl.entries[joined] = target
 			continue
 		}
 		seq, complete, ok := v.keySequence(target, ic)
@@ -226,6 +281,7 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 			continue
 		}
 		tbl.entries[joined] = target
+		tbl.targets[target] = joined
 	}
 	return tbl
 }
@@ -329,6 +385,118 @@ func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq [
 // leading ".//", an optional trailing attribute step, and "|" alternatives.
 // Nothing here needs the XPath engine, and using it would accept expressions
 // the spec forbids.
+// selectNodesPruned selects a constraint's targets from el, skipping any
+// subtree an inner scope of the SAME constraint has already accounted for.
+//
+// A descendant element that declares this constraint is itself a scope: its
+// own table already holds every target beneath it, merged up as below. Walking
+// into it again is the repeated work that makes the whole evaluation
+// quadratic, and everything it would find is already keyed.
+//
+// Only a leading ".//" is pruned. Without one the path is anchored at el and
+// reaches a bounded number of nodes, so there is nothing to save and the
+// ordinary selection is used unchanged.
+func (v *validator) selectNodesPruned(el *xdm.Node, ic *IdentityConstraint) []*xdm.Node {
+	path := ic.Selector
+	if path == nil {
+		return nil
+	}
+	anyDescendant := false
+	for _, alt := range path.Alternatives {
+		if alt.DescendantOrSelf {
+			anyDescendant = true
+			break
+		}
+	}
+	if !anyDescendant {
+		return v.selectNodes(el, path)
+	}
+
+	// The frontier is el plus every element beneath it that is not inside a
+	// nested scope of this constraint. Selecting from the frontier with the
+	// ".//" already accounted for gives the same set the unpruned walk
+	// produces, minus what below already holds.
+	var out []*xdm.Node
+	seen := map[*xdm.Node]bool{}
+	for _, start := range v.frontier(el, ic) {
+		for _, alt := range path.Alternatives {
+			var hits []*xdm.Node
+			if alt.DescendantOrSelf {
+				hits = v.walkSteps(start, alt)
+			} else if start == el {
+				hits = v.walkSteps(start, alt)
+			}
+			for _, n := range hits {
+				if !seen[n] {
+					seen[n] = true
+					out = append(out, n)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// frontier returns el and the elements beneath it, stopping at any element
+// other than el that declares ic — that element's own scope covers what lies
+// below it.
+func (v *validator) frontier(el *xdm.Node, ic *IdentityConstraint) []*xdm.Node {
+	out := []*xdm.Node{el}
+	for i := 0; i < len(out); i++ {
+		for _, c := range out[i].ChildElements() {
+			if v.declaresConstraint(c, ic) {
+				continue
+			}
+			out = append(out, c)
+		}
+	}
+	if v.icStats != nil {
+		v.icStats.NodesVisited += uint64(len(out))
+	}
+	return out
+}
+
+// hasIdentityConstraints reports whether any declaration in the schema carries
+// an identity constraint, so that the per-element bookkeeping the walk needs
+// can be skipped entirely for the schemas that have none.
+func (s *Schema) hasIdentityConstraints() bool {
+	for _, d := range s.Elements {
+		if d != nil && len(d.IdentityConstraints) > 0 {
+			return true
+		}
+	}
+	for _, t := range s.Types {
+		ct, ok := t.(*ComplexType)
+		if !ok || ct.Particle == nil {
+			continue
+		}
+		found := false
+		walkParticleElements(ct.Particle, map[*Particle]bool{}, func(d *ElementDecl) {
+			if len(d.IdentityConstraints) > 0 {
+				found = true
+			}
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresConstraint reports whether the declaration governing el carries ic.
+func (v *validator) declaresConstraint(el *xdm.Node, ic *IdentityConstraint) bool {
+	decl := v.declFor[el]
+	if decl == nil {
+		return false
+	}
+	for _, d := range decl.IdentityConstraints {
+		if d == ic {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *validator) selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 	if path == nil {
 		return nil

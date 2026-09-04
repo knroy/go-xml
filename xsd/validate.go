@@ -160,6 +160,11 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 	if icStatsHook != nil {
 		v.icStats = icStatsHook()
 	}
+	// declFor is only consulted by the identity-constraint walk, so it is
+	// allocated only when the schema has a constraint to evaluate.
+	if s.hasIdentityConstraints() {
+		v.declFor = map[*xdm.Node]*ElementDecl{}
+	}
 	// Whitespace-only text in an element whose declared content is
 	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
 	// stripping it unconditional — it outranks xsl:preserve-space, exactly as
@@ -233,6 +238,13 @@ type validator struct {
 	// icStats counts identity-constraint work. Nil unless a test asks for
 	// it; see icStats for why elapsed time is not enough on its own.
 	icStats *icStats
+
+	// declFor records the declaration each element was validated against,
+	// so that an identity-constraint walk can tell whether a descendant is
+	// itself a scope of the same constraint and stop there. It is filled
+	// only when some declaration in the schema carries a constraint, which
+	// leaves the common case paying nothing.
+	declFor map[*xdm.Node]*ElementDecl
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
@@ -430,6 +442,9 @@ func (v *validator) fail(n *xdm.Node, code, format string, args ...any) {
 
 // validateElement checks one element against a declaration.
 func (v *validator) validateElement(el *xdm.Node, decl *ElementDecl) icTables {
+	if v.declFor != nil && decl != nil {
+		v.declFor[el] = decl
+	}
 	if v.stopped {
 		return nil
 	}

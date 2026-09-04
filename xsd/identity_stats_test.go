@@ -65,10 +65,18 @@ func TestIdentityConstraintWorkScales(t *testing.T) {
 	}
 }
 
-// Doubling the depth must not quadruple the nodes a selector walks, once the
-// evaluator visits each node a bounded number of times. It does today, which
-// is what the redesign has to change; this records the current ratio so the
-// change is measurable rather than asserted.
+// Doubling the depth must not quadruple the nodes a selector walks.
+//
+// It used to: the ratio was 3.98, 3.99, 4.00 as the depth went 240, 480, 960,
+// because a constraint on a recursive element was evaluated once per level and
+// each evaluation walked the whole remaining subtree. Pruning the walk at any
+// element that declares the same constraint made it 2.00 — each node visited a
+// bounded number of times, which is the complexity property rather than a
+// smaller constant.
+//
+// The assertion is deliberately loose at 2.5. The point is to catch a return
+// to quadratic, not to pin an exact figure that an unrelated change would
+// disturb.
 func TestIdentityConstraintAmplification(t *testing.T) {
 	st, _ := xdm.ParseString(identityBenchSchema(), xdm.ParseOptions{})
 	s, err := Load(st.Root, "", Options{})
@@ -84,6 +92,12 @@ func TestIdentityConstraintAmplification(t *testing.T) {
 			ratio = fmt.Sprintf("%.2fx", float64(stats.NodesVisited)/float64(prev))
 		}
 		t.Logf("depth=%-4d nodesVisited=%-9d growth on doubling: %s", depth, stats.NodesVisited, ratio)
+		if prev != 0 {
+			if g := float64(stats.NodesVisited) / float64(prev); g > 2.5 {
+				t.Errorf("depth %d: work grew %.2fx on a doubling, want linear (~2x); "+
+					"the per-scope subtree rescan is back", depth, g)
+			}
+		}
 		prev = stats.NodesVisited
 	}
 }
