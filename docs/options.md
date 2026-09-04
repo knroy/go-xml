@@ -503,6 +503,41 @@ hands back the raw bytes of any file inside the roots.
 implied by nothing else. On the command line it is `-allow-unparsed-text`,
 reading from the `-allow-dir` roots.
 
+### xslt.FileResolver
+
+`xslt.NewFileResolver(roots...)` is the one confinement every read goes
+through — `fn:doc` and `xsl:import`, external entities, `fn:unparsed-text` and
+XInclude alike. Its fields are set on the returned value; the constructor takes
+only the roots.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `Roots` | `[]string` | the constructor's arguments | The directories a path may resolve inside. A path escaping all of them is refused, and a symlink is resolved before the check. |
+| `AllowDOCTYPE` | `bool` | refuse | Permits a `DOCTYPE` in the documents this resolver parses. |
+| `ExternalEntities` | `bool` | refuse | Permits those documents to read external entities, through this same resolver. Separate from `AllowDOCTYPE`. |
+| `UnparsedText` | `bool` | refuse | Permits `fn:unparsed-text` to read through this resolver. |
+| `MaxBytes` | `int64` | `DefaultMaxResourceBytes` = 64 MB | Bounds **one file**, whichever way it is asked for. Zero means the default; negative means no limit. A file over the limit is refused, naming it — never truncated. |
+
+`MaxBytes` is one number rather than one per call path deliberately. The
+confinement is a property of the *file*: every root is readable by every path,
+so a stylesheet refused a large file through `fn:unparsed-text` would simply
+ask for it through `fn:doc`, and two limits would only mean the effective one
+is the larger of them. It is set to the same 64 MB as `xdm.DefaultMaxBytes`, so
+that a document refused at the read is refused before the bytes are spent and
+the parser's identical limit stays the backstop for input arriving another way.
+
+It bounds what `xdm.ParseOptions.MaxBytes` cannot. That limit bounds the
+*parse*; the resolver has the whole file in memory before the parser is handed
+anything, and `fn:unparsed-text` and XInclude `parse="text"` never reach a
+parser at all.
+
+```go
+r, err := xslt.NewFileResolver("/srv/xsl")
+if err != nil { return err }
+r.UnparsedText = true
+r.MaxBytes = 4 << 20   // this deployment's files are small
+```
+
 ### XInclude
 
 Off unless asked for, and asked for per call rather than per process. XInclude

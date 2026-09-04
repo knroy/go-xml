@@ -33,6 +33,42 @@ is only a defect once a legal, acyclic input crosses it and gets a wrong
 answer. Until then it is debt, and `docs/known-gaps.md` records which of the
 remaining ones have been probed and found sound.
 
+## Current status
+
+Seven audits have passed over this code and the record below is chronological,
+so what is *live* sits eight hundred lines after what was fixed in the first
+pass. This section is the index; everything it names is described in full
+further down.
+
+**Open.** Two, both cost rather than correctness, and both needing an
+attacker-controlled input the threat model already accounts for:
+
+| finding | reach | why it is still open |
+|---|---|---|
+| `keyref` is quadratic in scope count | hostile instance, recursive schema | inherent, not unfinished: a keyref builds no table for an ancestor to seed from, so every enclosing scope must check every target against its own key table. The field extraction is cached; the count of checks cannot be reduced by a traversal change. |
+| `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
+
+**Deliberate limits**, which are resource controls and not bugs — a request
+refused here is refused loudly, and the fallback is conservative in the
+rejecting direction:
+
+`xdm.ParseOptions` `MaxBytes` / `MaxDepth` / `MaxNodes` ·
+`xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
+`xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
+`DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
+`branchLimit` · `TransformOptions.MaxDepth` · the RELAX NG derivative bound ·
+the XPath regex step and depth budgets.
+
+The distinction that matters: each of those bounds *work*, at the point the
+work is done. A bound standing in for cycle detection is a different animal
+and has been a defect every time it appeared here — six `depth > 32` guards,
+two at 64, six base-chain counters, all converted to visited sets. See
+[known-gaps.md](known-gaps.md).
+
+**Withdrawn.** Two findings were reported, measured, and did not reproduce: a
+CR in a text node *does* survive a round trip, and `$e-1` naming a variable is
+required by the suite rather than a defect.
+
 ## The short version
 
 If you parse untrusted XML with default options, the dangerous classes are
@@ -147,6 +183,44 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Fixed in the sixth audit
 
+### A permitted file was read whole with no byte limit
+
+`FileResolver.readConfined` ended in a bare `io.ReadAll`. Every read the
+resolver performs goes through it — `fn:doc` and `xsl:import`, external
+entities, `fn:unparsed-text`, and XInclude `parse="text"` — so none of the four
+had a size bound.
+
+`xdm.ParseOptions.MaxBytes` did not cover this. It bounds the *parse*, and
+`readConfined` has the whole file in memory before the parser is handed
+anything; `fn:unparsed-text` and XInclude `parse="text"` never reach a parser at
+all, so for those two there was no limit anywhere. A 40 MB file was read
+whole through all four paths with a nil error.
+
+**Reachable from hostile input wherever a resolver is enabled.** The
+confinement decides *which* files may be read, not how large they may be, and
+the stylesheet chooses among them — so one large permitted file, a log or a
+data dump beside the code lists, is a memory-exhaustion primitive, and a
+stylesheet that reads it in a loop multiplies it.
+
+Fixed with `FileResolver.MaxBytes`, defaulting to `DefaultMaxResourceBytes` =
+64 MB — the same figure as `xdm.DefaultMaxBytes`, so that a document is refused
+at the read rather than after the bytes are spent, with the parser's identical
+limit left as the backstop. One field covers all four paths rather than one per
+path: every root is readable by every path, so per-path limits would only mean
+the effective limit is the largest of them.
+
+The over-read is the saturating form the entry below exists for — `lim := max;
+if lim < math.MaxInt64 { lim++ }` — so `math.MaxInt64` does not overflow to a
+limit that silently reads nothing. An oversized file is **refused, naming the
+limit**, never truncated: a half-read stylesheet is a different, smaller
+stylesheet that may well parse, and a half-read text resource is a string the
+stylesheet computes with. Both are silently wrong output.
+
+Pinned by `xslt/resolver_limits_test.go`, which runs the six-point boundary
+battery — zero, negative, one, exactly at the limit, one over, `math.MaxInt64`
+— against each of the four paths independently, and asserts the at-limit case
+returns the whole file rather than merely not erroring.
+
 ### A key ambiguous across three siblings became resolvable again
 
 `mergeTables` folds each child's key table into the ancestor's, and dropped a
@@ -172,7 +246,7 @@ Found by an external audit reading the merge, not by the oracle — the
 generated corpora put targets under one scope at a time, so a three-sibling
 ancestor never arose. The corpus has that shape now.
 
-### keyref could not be pruned, so its key sequences are cached instead
+### keyref could not be pruned, so its key sequences are cached instead (cost still open)
 
 The pruning that made `key` and `unique` linear does not transfer. A `key`
 builds a table its ancestor seeds from, so a pruned subtree is still accounted
@@ -186,8 +260,15 @@ half — a node's key sequence does not depend on which scope is asking.
 Memoising it per (node, constraint) leaves the quadratic count of map lookups
 and removes the quadratic count of `selectNodes` calls: at depth 960, 221 ms
 and 5,164,375 allocations become 158 ms and 2,863,754; at width 40, 324 ms and
-5,269,468 become 217 ms and 1,297,551. The curve is unchanged and that is
-inherent rather than unfinished.
+5,269,468 become 217 ms and 1,297,551.
+
+**The curve is unchanged, and this entry is therefore only half a fix.** The
+count of checks is nodes times enclosing keyref scopes, and that is what the
+semantics require rather than what the implementation happens to do — so it is
+listed under *Current status* as open. What was removed is the repeated field
+extraction inside each check. A caller exposed to hostile instances against a
+recursive schema carrying a keyref should bound the request with
+`ValidateContext`.
 
 ### The language-inclusion procedure declined any bound above 64
 

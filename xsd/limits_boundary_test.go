@@ -129,33 +129,26 @@ func TestValidateMaxErrorsBoundaries(t *testing.T) {
 	}
 }
 
-// A negative MaxErrors makes an invalid document validate as clean.
+// A negative MaxErrors means no limit, and must not approve an invalid
+// document.
 //
-// BUG, recorded rather than fixed: fixing it is engine code, and this task is
-// tests. The field's sibling in the dtd package -- dtd.Options.MaxErrors --
-// documents "a negative value means no limit" and implements it with a
-// `v.max > 0 &&` guard in dtd/validate.go. xsd/validate.go's fail() has no such
-// guard:
+// FIXED. This comment described a live bug when the test was written: the stop
+// check in xsd/validate.go had no lower guard, so with MaxErrors negative
+// `0 >= -1` held on the very first failure, validation stopped before
+// recording anything, and Validate returned nil. The caller was told an
+// invalid document was valid.
 //
-//	if len(v.errs) >= v.opts.MaxErrors {   // xsd/validate.go
-//		v.stopped = true
-//		return
-//	}
+// The failure shape is what made it worth chasing — a silent pass, the same
+// shape as the HTTPResolver overflow that returned an empty body with a nil
+// error. The dangerous outcome is not an error, it is the absence of one, and
+// a caller copying the "-1 means no limit" idiom that works in
+// xdm.ParseOptions and dtd.Options got a validator that approved everything.
 //
-// With MaxErrors negative, `0 >= -1` holds on the very first failure, so
-// validation stops before recording anything and Validate returns nil. The
-// caller is told the document is valid.
-//
-// This is a silent pass, the same failure shape as the HTTPResolver overflow:
-// the dangerous outcome is not an error, it is the absence of one. A caller
-// copying the "-1 means no limit" idiom that works in xdm.ParseOptions and in
-// dtd.Options gets a validator that approves everything.
-//
-// The fix is a `v.opts.MaxErrors > 0 &&` guard, matching dtd. Alternatively,
-// document that negative is not supported here -- but silently approving
-// invalid documents is not an acceptable reading of any value.
-func TestValidateMaxErrorsNegativeApprovesInvalidDocuments(t *testing.T) {
-
+// The guard is `v.opts.MaxErrors > 0 &&`, matching dtd's `v.max > 0 &&`. The
+// test stays as a regression: it fails against any revision that drops the
+// guard, and it is the reason this convention is now stated in
+// docs/options.md rather than left for the next caller to discover.
+func TestValidateMaxErrorsNegativeMeansNoLimit(t *testing.T) {
 	s := loadBoundarySchema(t, `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="r"><xs:complexType><xs:sequence/></xs:complexType></xs:element>
 </xs:schema>`)

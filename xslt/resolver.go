@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -59,6 +60,29 @@ type FileResolver struct {
 	// caller of NewFileResolver.
 	UnparsedText bool
 
+	// MaxBytes bounds a single file this resolver reads, whichever way the
+	// stylesheet asks for it: fn:doc and xsl:import, an external entity,
+	// fn:unparsed-text, and XInclude parse="text" all go through one read.
+	// Zero means DefaultMaxResourceBytes; a negative value means no limit,
+	// for a caller reading files it produced itself.
+	//
+	// It is one field rather than one per call path on purpose. The confinement
+	// above is a property of the *file*, not of the function that names it —
+	// every root is readable by every path, so a stylesheet refused a 200 MB
+	// file through unparsed-text would simply ask for it through doc(), and two
+	// numbers would only mean the effective limit is the larger of them while
+	// looking like it were the smaller. One number is the honest statement of
+	// what a resolver will put in memory for one resource.
+	//
+	// The bound is needed here and not only downstream. xdm.ParseOptions.MaxBytes
+	// bounds the *parse*, but readConfined has the whole file in memory before
+	// the parser is handed anything, and fn:unparsed-text and XInclude
+	// parse="text" never reach a parser at all. Once a caller enables a
+	// FileResolver the stylesheet chooses which permitted file is read, so an
+	// unbounded read makes any large readable file a memory-exhaustion
+	// primitive.
+	MaxBytes int64
+
 	// There is deliberately no network option. Adding one would mean this
 	// type could not be recommended without caveats, and a validator has no
 	// need to fetch rule sets at transform time.
@@ -88,6 +112,20 @@ type loadCall struct {
 // life of the process. The bound is generous enough that a normal validation
 // run never reaches it and cheap enough that reaching it costs one reparse.
 const resolverCacheMax = 256
+
+// DefaultMaxResourceBytes bounds one file read through a FileResolver when
+// MaxBytes is zero: 64 MB.
+//
+// It is deliberately the same number as xdm.DefaultMaxBytes. A document read
+// through fn:doc is handed straight to that parser, so a different figure here
+// would mean one of the two limits never binds — a smaller one would make the
+// parser's limit unreachable and a larger one would make this one decorative.
+// Matching it means the file is refused at the read, before the bytes are
+// spent, and the parser's identical limit remains the backstop for input that
+// arrives some other way. 64 MB is far above any real stylesheet, code list or
+// text resource while still bounding what a single resolved reference can
+// allocate.
+const DefaultMaxResourceBytes int64 = 64 << 20
 
 // NewFileResolver returns a resolver confined to the given directories.
 func NewFileResolver(roots ...string) (*FileResolver, error) {
@@ -165,7 +203,7 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 			rt.Close()
 			return nil, err
 		}
-		data, err := io.ReadAll(f)
+		data, err := r.readLimited(f, path)
 		f.Close()
 		rt.Close()
 		return data, err
@@ -175,10 +213,52 @@ func (r *FileResolver) readConfined(path string) ([]byte, error) {
 	// this loop did not, so fall back rather than refuse a file the caller
 	// was told was readable.
 	if len(r.Roots) == 0 {
-		return os.ReadFile(path)
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		return r.readLimited(f, path)
 	}
 	return nil, fmt.Errorf("%q is outside the permitted directories %v",
 		path, r.Roots)
+}
+
+// readLimited reads f whole, refusing a file larger than the resolver's byte
+// budget rather than truncating it.
+//
+// Truncation is not an option: a half-read stylesheet is a different, smaller
+// stylesheet that may well parse, and a half-read text resource is a string the
+// stylesheet computes with. Both are silently wrong output, which is the one
+// outcome this library declines to produce. The refusal names the limit so that
+// a caller who wants the file raises MaxBytes rather than guessing.
+func (r *FileResolver) readLimited(f io.Reader, path string) ([]byte, error) {
+	max := r.MaxBytes
+	if max == 0 {
+		max = DefaultMaxResourceBytes
+	}
+	if max < 0 {
+		return io.ReadAll(f)
+	}
+	// One byte over the limit is read deliberately, so that a file of exactly
+	// the maximum size is accepted and one byte more is distinguishable from
+	// it. The increment saturates: max+1 overflows to a negative limit at
+	// math.MaxInt64, and io.LimitReader reads a negative limit as "nothing
+	// left", so the largest limit a caller can name would silently return an
+	// empty file. An empty read is worse than a refusal, because nothing
+	// downstream can tell it from a genuinely empty resource.
+	lim := max
+	if lim < math.MaxInt64 {
+		lim++
+	}
+	data, err := io.ReadAll(io.LimitReader(f, lim))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("%s exceeds the %d byte limit", path, max)
+	}
+	return data, nil
 }
 
 // resolvePath turns an href into a filesystem path inside an allowed root.
@@ -525,8 +605,8 @@ func (r *FileResolver) ResolveEntity(systemID, publicID, base string) (io.ReadCl
 	// Read fully rather than handing back an open file: the caller charges
 	// the bytes against its expansion budget, and a resolver that streams
 	// would leave a descriptor open for the length of a parse that may fail.
-	// xdm bounds what it reads regardless, so this cannot be made to read an
-	// unbounded file by the document.
+	// The read is bounded by MaxBytes, so a document cannot name an entity
+	// whose file is larger than this resolver will hold.
 	data, err := r.readConfined(path)
 	if err != nil {
 		return nil, "", err

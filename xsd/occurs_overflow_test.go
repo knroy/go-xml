@@ -27,10 +27,15 @@ import (
 // with the operands the other way round, silently accept a restriction that
 // widens its base.
 //
-// The fix is to saturate the products and sums at occursHuge rather than let
-// them wrap, on the same reasoning the parser already uses: no document can
-// supply that many children, so a bound clamped there behaves exactly as the
-// true value would.
+// The first fix saturated the products and sums at occursHuge rather than
+// letting them wrap, on the same reasoning the parser already uses: no
+// document can supply that many children. That closed the wrap and left a
+// second defect — two bounds both past occursHuge clamped to the same value
+// and so compared equal — which is why the arithmetic is now exact rather than
+// merely saturating. `Particle` keeps its int bounds for the runtime matcher
+// and carries the true value in a *big.Int that stays nil unless clamping
+// actually lost something, so the diagnostics below quote what the author
+// wrote instead of the clamp.
 //
 // negativeNumber finds a wrapped bound in a diagnostic. A minus sign followed
 // by digits cannot appear in an occurrence diagnostic otherwise: minOccurs and
