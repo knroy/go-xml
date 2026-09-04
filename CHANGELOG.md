@@ -6,7 +6,111 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Changed
+
+- **A singleton parameter given two items is now a type error rather than a
+  wrong answer.** `fn:format-number`, `fn:format-integer`, `fn:format-date`
+  and its siblings, `fn:dateTime`, `fn:error`, `fn:key` and `fn:regex-group`
+  all read their argument as `xdm.Atomize(args[i])` followed by `atoms[0]`,
+  which takes the first item of whatever it is handed. Every one of those
+  parameters is declared as a singleton by the spec — `numeric?`,
+  `xs:integer?`, `xs:date?`, `xs:QName?`, `xs:string`, `xs:integer` — so a
+  two-item argument is XPTY0004 under the function conversion rules, not a
+  request to use the first item and discard the rest. `format-number((1,2),
+  '0')` answered `"1"`; it now raises. New helpers `argAtomicOptional` and
+  `argAtomicRequired` (`xpath/argcardinality.go`) express the two
+  cardinalities in one place, and atomise through `xdm.AtomizeChecked`, so a
+  function item reaching one of these arguments is FOTY0013 rather than being
+  silently dropped. Parameters genuinely declared `item()*` or
+  `xs:anyAtomicType*` — `fn:key`'s `$key-value`, `fn:id`'s argument — are
+  unchanged and still take a sequence.
+
+- **A resource refusal can be told apart from a malformed expression.** New
+  `xdm.ErrResourceLimit` is a sentinel that resource-exhaustion errors wrap
+  with `%w`, so a caller can ask `errors.Is(err, xdm.ErrResourceLimit)`. The
+  two conditions arrived indistinguishable: the parser's nesting guard reports
+  XPST0003 because that is the code the specs give for an unacceptable
+  expression, and an embedding caller reading the code alone told its user the
+  expression was invalid when in fact it was merely deeper than this processor
+  will parse. The specs give no code for "the processor declined", so the code
+  cannot carry this and a sentinel does. Wrapping **adds** the sentinel and
+  changes neither the code nor the leading message text, so `xdm.ErrorCode`,
+  the conformance suites and the tests that match on message text are all
+  unaffected. Wired up at the two limits in `xpath`: the parse-depth guard
+  (`xpath/parser.go`) and the evaluation item budget (`xpath/context.go`).
+
+- **One decimal magnitude primitive replaces three copies of the same
+  mathematics.** `decimalScale` (`xdm/atomic.go`) and `decimalMagnitudeOf`
+  (`xsd/facet.go`) each factored a `big.Rat` denominator into 2^a*5^b to find
+  a decimal scale, by slightly different routes, and `ratScale`
+  (`xpath/fn_node.go`) does it a third time. The first two now call
+  `xdm.DecimalMagnitudeOf`, which returns the exact coefficient and scale or
+  an explicit false; `ratScale` is left for a follow-up.
+
+  The primitive takes the *strict* contract, which is the point of the change
+  rather than a detail of it. The two callers deliberately differed at the
+  edges: the renderer answered 18 for a value with no finite expansion and 1
+  for an integer, while the facet check refused to answer at all, because its
+  answer decides validity and an invented digit count would let 1/3 pass a
+  `fractionDigits` facet it violates. Sharing the *approximating* contract
+  would have leaked a renderer's fallback into a validity decision, so the
+  fallbacks moved outward: they now sit visibly in `decimalScale`, where the
+  comment says which is a policy and why, and nothing else can pick them up by
+  accident. Behaviour at every existing call site is unchanged, pinned by
+  characterization tests written before the refactor.
+
+  `countDigits` counting the leading zeros of `0.001` as three total digits is
+  likewise pinned, with the citation. It looks like an off-by-one and is not:
+  §4.3.12.4 requires `fractionDigits <= totalDigits`, so total=1 frac=3 would
+  make `0.001` unrepresentable by any conforming schema.
+
 ### Fixed
+
+- **A resource guard on `fn:round` was changing answers, not just refusing
+  them.** `roundGuard` (`xpath/fn_node.go`) clamped the requested precision on
+  both sides, and its comment asserted that this "changes how long a hopeless
+  request takes to refuse, never an answer". That was false, and was the fixed
+  `±4096` clamp relocated rather than removed: `round-half-to-even(1 div
+  2^1048579, 1048577)` was answered at precision 1048576, a different number,
+  and `round-half-to-even(3e1048586, -1048581)` returned `0` where rounding
+  below a value's lowest significant digit discards only zeros and must return
+  the value unchanged. Both were silent — no error, just a wrong number. The
+  guard now applies only to a non-terminating rational, the sole case with no
+  finite scale to bound it; for a terminating value the work is already bounded
+  by the value's own scale (positive precision) or integer-digit count
+  (negative precision), which is proportional to the caller's own input, so no
+  constant belongs there. The asserted comment is replaced by the property that
+  actually holds, and `TestRoundGuardReductionPreservesValue`
+  (`xpath/round_guard_test.go`) enforces it over generated `xs:decimal` and
+  `xs:integer` values with scales and magnitudes on both sides of the guard.
+
+- **Four silent numeric narrowings: a wrong value, with no error raised.**
+  `big.Int.Int64` is *undefined* out of range rather than saturating, so an
+  unbounded `xs:integer` argument arrived as its low 64 bits and the result was
+  computed from that — and in each case the wrapped value was itself plausible,
+  so nothing failed. `round(1.55, 2^64+1)` wrapped the precision to `1` and
+  answered `1.6` instead of `1.55`; `codepoints-to-string(2^64+65)` wrapped to
+  `65` and returned `"A"` instead of raising FOCH0001; and
+  `function-available('name', 2^64+1)` wrapped to `1`, found `fn:name#1`, and
+  answered `true`. A fourth was a two's-complement trap rather than a wrap:
+  `roundPlaces` tested `-places > intDigits+1`, and negating `places` overflows
+  for `math.MinInt64`, so `round(1234.5, -2^63)` fell through the zero test and
+  was answered at precision 0, giving `1235` where the true answer is `0`. The
+  precision is now read through a saturating `saturateInt64`
+  (`xpath/fn_node.go`) — exact, not merely safe, since no `xs:decimal` has a
+  scale or integer-digit count near 2^63, so every out-of-range precision is
+  already past both of `roundPlaces`' bounds and the saturated value lands on
+  the same side; the comparison is written `places < -(intDigits+1)` so nothing
+  is negated; `fn:codepoints-to-string` (`xpath/fn_string.go`) checks
+  `FitsInt64` first, so an out-of-range codepoint is refused by its own digits
+  rather than by whatever its low 64 bits spell; and `fn:function-available`
+  (`xslt/rtfuncs.go`) both converts exactly and bounds the arity by
+  `maxAvailableArity`, mirroring `fn:function-lookup` — exact conversion alone
+  is insufficient, because an exactly-converted 2^62 still names no function.
+  `xpath/narrowing_test.go` and `xslt/functionavailable_arity_test.go` assert
+  the resulting values across the int32, float64-integer, int64 and pure-bignum
+  boundaries; every case asserts a value or a specific error code, since a test
+  that only checks for the absence of an error cannot see this class of bug.
 
 - **`xsl:number value=` rejected a finite `xs:integer` above the float64
   range, and silently narrowed one under `version="1.0"`.** The same defect as
@@ -685,6 +789,97 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
   Validating an instance costs about 2.7% more time and 3.1% more memory;
   compiling a schema is unchanged.
+
+- **An array position and a `fn:function-lookup` arity went through
+  `float64`.** The last three sites of the family fixed in cc17983, where an
+  arbitrary-precision `xs:integer` was routed through a `double` to answer a
+  question about itself. `float64` is exact only to 2^53 and saturates at
+  2^63, so the value that arrived was not always the value written.
+
+  `fn:function-lookup` (`xpath/fn_hof.go`) took `int(arity.Float64())`, which
+  made the defect a *wrong answer* rather than a wrong message:
+  `function-lookup(fn:concat, 10^32)` saturated the arity to `maxint`, and
+  because `fn:concat` is variadic the lookup **matched**, handing back a
+  function item for an arity no function can have. F&O 3.0 §16.1.1 has a
+  single catch-all — "if no known function can be identified by name and
+  arity, an empty sequence is returned" — and names no error for a negative
+  or an enormous arity, so an arity too large to name a callable function is
+  now simply unmatchable and yields the empty sequence.
+
+  The bound there is not just a guard on the conversion. `synthesizeVariadic`
+  builds an `fn:concat` entry at *any* arity at or above 2, so merely
+  converting exactly would still answer `2^63-1` with a function item
+  claiming that arity — the same wrong answer, since the narrowing saturated
+  every huge arity onto exactly that value. `maxLookupArity` bounds it at
+  what a function item could actually be called with.
+
+  The array lookup `$a?($k)` (`xpath/maparray.go`) called
+  `v.Member(int(k.Float64()))` instead of the package's existing
+  `integerPosition`, so `$a?(1000000000000000001)` reported itself as
+  `...000` and `$a?(10^32)` as `9223372036854775807`. The key's type check is
+  unchanged: `?(1.0)` is still `XPTY0004`.
+
+  The literal form `$a?3` was narrowed in the parser (`xpath/parser_path.go`),
+  which is why `LookupExpr.Index` is now the `*xdm.Atomic` the parser had
+  already built exactly, rather than an `int`. This is a smaller change than
+  it looks — the field had three consumers, all in these two files — and it
+  removes the conversion instead of choosing a width for it. `String()` prints
+  the literal's own digits, so an expression round-trips.
+
+  `maxArrayIndex` is deliberately **not** widened to `math.MaxInt`, and now
+  says why: `array:subarray` compares `start+n` against the array length, and
+  at `math.MaxInt` that sum wraps negative, the guard reads false, and an
+  out-of-range request is accepted rather than raising `FOAY0001`. The `1<<40`
+  bound keeps twice any accepted position inside an `int`. A test pins the
+  invariant.
+
+  Both W3C suites are unchanged, case for case. QT3 does not cover this
+  corner: its largest `function-lookup` arity is 5, and it has no negative
+  one.
+
+- **A timezone name was read off a saturated instant.** `applyPlace`
+  (`xpath/fn_misc.go`) has to put a value on the timeline before it can ask an
+  Olson zone which offset applied at that moment, and it took the second count
+  with `new(big.Float).SetRat(utc).Int64()`. `big.Float.Int64` saturates at
+  `MaxInt64` and reports the clamp only through an `Accuracy` result, which the
+  call discarded — so every instant past the `int64` second boundary had its
+  zone looked up at the *same* clamped moment, 292277026596-12-04T15:30:07Z,
+  and whatever name and offset applied there was attached to the value in hand.
+
+  Mostly this was masked downstream: `dateTimeFromSeconds` guards the shifted
+  count with its own `IsInt64` test and refused, leaving the value unnamed. But
+  a negative offset pulls the shifted count back under `MaxInt64`, so for a
+  value overflowing by less than the offset the guard passed and the fabricated
+  name survived. `format-dateTime(xs:dateTime("292277026596-12-04T15:30:08Z"),
+  "[Y] [H01]:[m01]:[s01] [ZN] [Z]", (), (), "America/New_York")` — one second
+  past the boundary — rendered `292277026596 10:30:08 EST -05:00`, a wall clock
+  and a zone belonging to a different instant entirely. No error: a wrong zone
+  name reads as a plausible result.
+
+  The count is now an exact `big.Int` quotient with an explicit `IsInt64`
+  guard. Outside that range there is no instant for the zone database to be
+  asked about, so no name is supplied and `[ZN]` falls back to the numeric
+  offset, which describes the value as it actually stands.
+  `TestFormatDateTimePlaceZoneNameIsExact` (`xpath/formatdate_exact_test.go`)
+  asserts the rendered text on both sides of the boundary, including the
+  ordinary daylight/standard cases that must keep working.
+
+- **The `[0,60)` second invariant is written down instead of re-derived.** The
+  `[s]` and `[f]` components of `fn:format-dateTime` each split `dt.Second`
+  into a whole part and a fraction, narrowing the whole part to `int64`. That
+  narrowing is safe, but only because of a range guarantee living in the
+  constructors, and each site re-derived it. New `splitSecond`
+  (`xpath/fn_misc.go`) does the split once and documents the precondition and
+  every path that upholds it: `ParseDateTime` and `ParseGregorian` run
+  `valid()`, which rejects a second outside `[0,60)`; `dateTimeFromSeconds`
+  builds it as a non-negative remainder modulo 60 plus a fraction below 1; the
+  cast and adjustment paths carry a checked field or reset it; and
+  `dateTimeFromGoTime` takes it from Go's clock. No behaviour change — this was
+  audited as a possible narrowing bug and found not to be one.
+  `TestSplitSecondPrecondition` pins the range across the parsers, the
+  arithmetic that borrows across a minute, and timezone adjustment, so the
+  assumption fails loudly if a constructor stops providing it.
+
 
 ### Added
 
@@ -1917,3 +2112,54 @@ rise; the internal representation behind every interface; and the default
 values of the resource limits, which may tighten if an audit finds a bound
 that does not bound — three such were found and fixed shortly before this
 release.
+
+## Four more exact values narrowed without a range proof
+
+The audit that produced the nine fixes in `cc17983` found four further sites of
+the same family in the date, duration, and cast paths. Each converted an exact
+value to a machine integer without first proving it fit, and each answered
+wrongly rather than reporting a failure.
+
+* **Ordering two year-month durations subtracted their month counts.** The
+  difference between the two extremes is nearly twice the int range, so it
+  wrapped and reversed the answer: `P768614336404564650Y gt
+  -P768614336404564650Y` was `false`, and `max()` over the pair returned the
+  negative one. The operands are now compared directly, which cannot overflow.
+  The day-time path already compared exact rationals and needed no change.
+
+* **The duration component accessors truncated before reducing.** Every
+  accessor but `days-from-duration` reduces its quotient modulo its own unit —
+  hours mod 24, minutes and seconds mod 60 — so the answer is small however
+  large the duration is. The quotient was narrowed to `int64` *before* that
+  reduction, discarding exactly the high bits the reduction needed:
+  `hours-from-duration(PT10000000000000000000H)` answered `0`, and
+  `days-from-duration(P10000000000000000000D)` came back negative. The modulo
+  is now taken in big arithmetic and only the reduced value is converted.
+  `days-from-duration` has no modulo to shrink its result, so it returns the
+  arbitrary-precision `xs:integer` it is; `seconds-from-duration` takes its
+  fraction against the exact quotient rather than the reduced one.
+
+* **The ±14:00 timezone bound was checked after the narrowing.** The second
+  argument to `adjust-dateTime-to-timezone` and its siblings was truncated to
+  `int64` and divided by 60 before the range test, so an offset whose low bits
+  landed inside the range was accepted: 129127208515966879312 seconds — some
+  four trillion years — was silently taken as `+05:00`. The comparison is now
+  made on the exact value.
+
+* **`roundRat` returned an `int64` from an unbounded quotient.** It now returns
+  the exact `*big.Int`, and its one caller — the month count of a scaled
+  year-month duration — range-checks that before narrowing. The check moved
+  from the truncated value to the rounded one, closing a gap of one: a product
+  half a month below the limit truncated inside the range and rounded outside
+  it.
+
+Two further sites in `fn:format-dateTime` were identified and left alone: they
+lie in a file another change was holding at the time. One converts a seconds
+value that is mathematically constrained to `[0, 60)`, so it is safe but its
+invariant is implicit; the other reaches `int64` through a `big.Float`, which
+is the wrong instrument for an exact conversion.
+
+The new tests assert results rather than the absence of an error, since the
+failure mode throughout this family is a confidently wrong answer. Each was
+confirmed to fail against a deliberate reintroduction of the narrowing it
+covers.

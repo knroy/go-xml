@@ -45,9 +45,18 @@ func registerMiscFuncs(l *Library) {
 	})
 
 	l.registerFn("dateTime", []int{2}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		da := xdm.Atomize(args[0])
-		ta := xdm.Atomize(args[1])
-		if len(da) == 0 || len(ta) == 0 {
+		// Both parameters are declared as singletons — xs:date? and xs:time?
+		// — so a two-item argument is XPTY0004 rather than a request to
+		// combine the first of each.
+		da, err := argAtomicOptional(args, 0, "dateTime")
+		if err != nil {
+			return nil, err
+		}
+		ta, err := argAtomicOptional(args, 1, "dateTime")
+		if err != nil {
+			return nil, err
+		}
+		if da == nil || ta == nil {
 			return xdm.Empty(), nil
 		}
 		// The parameters are declared xs:date? and xs:time?, so the function
@@ -56,11 +65,11 @@ func registerMiscFuncs(l *Library) {
 		// cast, which made dateTime(@date, time) over an unvalidated document
 		// — the ordinary way to build a timestamp from separate fields —
 		// XPTY0004 instead of a dateTime.
-		dv, err := dateTimeArg(da[0].(*xdm.Atomic), xdm.TypeDate)
+		dv, err := dateTimeArg(da, xdm.TypeDate)
 		if err != nil {
 			return nil, err
 		}
-		tv, err := dateTimeArg(ta[0].(*xdm.Atomic), xdm.TypeTime)
+		tv, err := dateTimeArg(ta, xdm.TypeTime)
 		if err != nil {
 			return nil, err
 		}
@@ -672,12 +681,17 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 			if err := checkFormatDateArgs(args); err != nil {
 				return nil, err
 			}
-			atoms := xdm.Atomize(args[0])
-			if len(atoms) == 0 {
+			// $value is declared xs:dateTime?/xs:date?/xs:time? — a
+			// singleton — so a two-item argument is XPTY0004 rather than a
+			// request to format the first.
+			a, err := argAtomicOptional(args, 0, name)
+			if err != nil {
+				return nil, err
+			}
+			if a == nil {
 				return xdm.Empty(), nil
 			}
-			a, ok := atoms[0].(*xdm.Atomic)
-			if !ok || a.DateTimeVal() == nil {
+			if a.DateTimeVal() == nil {
 				return nil, xdm.ErrType("%s: expected a date/time value", name)
 			}
 			pic, err := argString(args, 1)
@@ -725,13 +739,15 @@ func checkFormatDateArgs(args []xdm.Sequence) error {
 	// XPTY0004 — and it is checked before the picture, since an argument
 	// that does not typecheck is an error whatever the picture says.
 	if len(args[4]) > 0 {
-		atoms := xdm.Atomize(args[4])
-		if len(atoms) > 0 {
-			a, ok := atoms[0].(*xdm.Atomic)
-			if !ok || (a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic &&
-				a.Type != xdm.TypeAnyURI) {
-				return xdm.ErrType("XPTY0004: the place argument must be an xs:string")
-			}
+		// Declared xs:string?, so two items is XPTY0004 as much as a
+		// non-string one is.
+		a, err := argAtomicOptional(args, 4, "format-dateTime")
+		if err != nil {
+			return err
+		}
+		if a != nil && a.Type != xdm.TypeString && a.Type != xdm.TypeUntypedAtomic &&
+			a.Type != xdm.TypeAnyURI {
+			return xdm.ErrType("XPTY0004: the place argument must be an xs:string")
 		}
 	}
 	if len(args[3]) > 0 {
@@ -1022,7 +1038,7 @@ func formatComponent(dt *xdm.DateTime, marker string, fn string, v Version, zone
 	case 'm':
 		return num(int64(dt.Minute))
 	case 's':
-		whole := new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom()).Int64()
+		whole, _ := splitSecond(dt.Second)
 		return num(whole)
 	case 'f':
 		return fractionalSeconds(dt, pres, width, v)
@@ -1445,6 +1461,29 @@ func inDigitFamily(s string, zero rune) string {
 	return b.String()
 }
 
+// splitSecond separates dt.Second into its whole part and its fraction.
+//
+// The whole part is returned as an int64 rather than a big.Int because the
+// field is bounded: xdm.DateTime documents Second as [0,60), and every path
+// that writes it upholds that. ParseDateTime and ParseGregorian run valid(),
+// which rejects a second outside the range outright; dateTimeFromSeconds
+// builds it as rem%60 plus a fraction below 1, where rem is a non-negative
+// remainder modulo 86400; the casting and adjustment paths either carry a
+// field that was already checked or reset it to zero; and dateTimeFromGoTime
+// takes it from Go's own clock, which counts seconds 0-59 plus nanoseconds.
+//
+// So the int64 conversion here cannot lose anything -- but that is a fact
+// about the whole package, not about this line, which is why it is written
+// down once here rather than re-derived at each call site. The quotient is
+// still taken exactly, in big.Int: the fraction is defined as what remains
+// after subtracting the whole part, so a whole part that was rounded rather
+// than truncated would push the error into the fraction instead of removing
+// it.
+func splitSecond(sec *big.Rat) (whole int64, frac *big.Rat) {
+	w := new(big.Int).Quo(sec.Num(), sec.Denom())
+	return w.Int64(), new(big.Rat).Sub(sec, new(big.Rat).SetInt(w))
+}
+
 // fractionalSeconds renders the digits after the decimal point.
 //
 // Padding for this component is by *appending* zeroes rather than prepending
@@ -1507,8 +1546,7 @@ func fractionalSeconds(dt *xdm.DateTime, pres, width string, v Version) (string,
 		}
 	}
 
-	frac := new(big.Rat).Sub(dt.Second,
-		new(big.Rat).SetInt(new(big.Int).Quo(dt.Second.Num(), dt.Second.Denom())))
+	_, frac := splitSecond(dt.Second)
 
 	// Whether the fraction rounds or truncates at the maximum width depends
 	// on the version, and the two suites disagree because the rule changed
@@ -2522,8 +2560,21 @@ func applyPlace(dt *xdm.DateTime, place string) (*xdm.DateTime, string) {
 	// it, so the value has to be placed on the timeline before the zone can
 	// be asked which offset applies.
 	utc := dt.ToSeconds(0)
-	secs, _ := new(big.Float).SetRat(utc).Int64()
-	name, off := time.Unix(secs, 0).In(loc).Zone()
+	// The second count is taken as an exact integer quotient. Routing it
+	// through big.Float instead would answer the question with a rounded
+	// stand-in for the value, and past int64 that rounding does not merely
+	// blur the instant: big.Float.Int64 saturates at MaxInt64 and reports the
+	// clamp only through the Accuracy result. Discarding that produced a zone
+	// looked up for the year 292277026596 rather than for the value in hand,
+	// and time.Unix cannot be told the difference.
+	secsInt := new(big.Int).Quo(utc.Num(), utc.Denom())
+	if !secsInt.IsInt64() {
+		// Outside int64 seconds there is no instant for the zone database to
+		// be asked about, so no name can be supplied. "[ZN]" falls back to the
+		// numeric offset, which describes the value the caller actually holds.
+		return dt, ""
+	}
+	name, off := time.Unix(secsInt.Int64(), 0).In(loc).Zone()
 	shifted, err := dateTimeFromSeconds(utc, true, off/60)
 	if err != nil {
 		return dt, ""

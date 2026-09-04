@@ -132,7 +132,17 @@ func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, err
 			// by the value being rounded instead of by a constant, which is
 			// what keeps rounding 10^-5000 to 5000 places returning the value
 			// rather than zero.
-			requested = p.Int64()
+			// $precision is declared xs:integer, which is unbounded, so it
+			// can exceed int64. Int64() alone WRAPS there -- big.Int.Int64 is
+			// undefined out of range, not saturating -- and the wrap is
+			// silent and lands anywhere: round(1.55, 2^64+1) took the
+			// precision to be 1 and answered 1.6 instead of 1.55, and
+			// round(1.55, -10^10) took it to be far negative and answered 0.
+			// Saturating is exact rather than merely safe: no xs:decimal has
+			// a scale or an integer-digit count anywhere near 2^63, so every
+			// precision past int64 is already on the far side of both of
+			// roundPlaces' bounds, and MaxInt64/MinInt64 land on that side too.
+			requested = saturateInt64(p)
 		}
 	}
 
@@ -447,8 +457,13 @@ func registerContextFuncs(l *Library) {
 			// error. Ignoring a non-QName silently turned
 			// error('Wrong Argument Type') — which passes a string where a
 			// code belongs — into the generic FOER0000 rather than XPTY0004.
-			a, ok := args[0][0].(*xdm.Atomic)
-			if !ok || a.Type != xdm.TypeQName {
+			// xs:QName? is a singleton, so error((QName1, QName2)) is
+			// XPTY0004 rather than a call raising the first of them.
+			a, err := argAtomicOptional(args, 0, "fn:error")
+			if err != nil {
+				return nil, err
+			}
+			if a == nil || a.Type != xdm.TypeQName {
 				return nil, xdm.ErrType(
 					"fn:error: the first argument is xs:QName?, got %s",
 					args[0][0].TypeName())
@@ -568,9 +583,45 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // It only arises from the xs:double branch, where the value came from a float
 // and carries at most 1074 fractional bits, so ratScale's terminating answer
 // covers every value that reaches here; a non-terminating one is bounded by
-// roundGuard, which is a resource limit in the strict sense: changing it
+// roundGuard.
+//
+// roundGuard applies to that case and no other, and that restriction is the
+// whole of its correctness. It once also clamped a terminating value's
+// precision, on both sides, and that was the +-4096 defect relocated rather
+// than removed: round-half-to-even(1 div 2^(roundGuard+3), roundGuard+1)
+// was answered at precision roundGuard, a different number, and
+// round-half-to-even(3e(roundGuard+10), -(roundGuard+5)) returned zero where
+// the true answer is the value unchanged. Both were silent -- no error, just
+// a wrong number.
+//
+// The property that now holds, and that TestRoundGuardReductionPreservesValue
+// enforces over generated xs:decimal and xs:integer values with scales and
+// magnitudes on both sides of the guard: whenever roundPlaces reduces a
+// requested precision p to p' without reporting identity or zero,
+// round(x, p) == round(x, p'). For a terminating value it never reduces at
+// all, because the value's own scale (positive precision) or integer-digit
+// count (negative precision) already bounds the request to something
+// proportional to the input the caller supplied. Only for a non-terminating
+// rational is a constant a resource limit in the strict sense: changing it
 // changes how long a hopeless request takes to refuse, never an answer.
 const roundGuard = 1 << 20
+
+// saturateInt64 reads an xs:integer precision without wrapping.
+//
+// Atomic.Int64 goes through big.Int.Int64, whose result is undefined when the
+// value does not fit, so a precision of 2^64+1 comes back as 1 and a precision
+// of 10^1000 comes back as whatever its low 64 bits happen to be. Clamping to
+// the int64 bounds keeps the sign, which is the only thing roundPlaces needs
+// from a precision this large.
+func saturateInt64(a *xdm.Atomic) int64 {
+	if a.FitsInt64() {
+		return a.Int64()
+	}
+	if r := a.Rat(); r != nil && r.Sign() < 0 {
+		return math.MinInt64
+	}
+	return math.MaxInt64
+}
 
 // ratScale returns the number of fractional digits r needs to be written
 // exactly, and whether it terminates at all. A big.Rat is kept in lowest
@@ -622,10 +673,22 @@ func roundPlaces(r *big.Rat, places int64) (p int, identity, zero bool) {
 		return 0, true, false
 	}
 	if places >= 0 {
-		if scale, ok := ratScale(r); ok && places >= int64(scale) {
-			// At or above the value's own scale there is nothing to discard.
-			return 0, true, false
+		if scale, ok := ratScale(r); ok {
+			if places >= int64(scale) {
+				// At or above the value's own scale there is nothing to
+				// discard.
+				return 0, true, false
+			}
+			// Below the scale the request is meaningful, and it is already
+			// bounded by the scale -- which is the size of the value the
+			// caller supplied. No constant ceiling belongs here: clamping a
+			// meaningful precision answers a different question. Rounding
+			// 1/2^(roundGuard+3) to roundGuard+1 places is not the same value
+			// as rounding it to roundGuard places.
+			return int(places), false, false
 		}
+		// Only a non-terminating rational has no scale to bound it, and only
+		// there is a constant a resource limit rather than an answer.
 		if places > roundGuard {
 			return roundGuard, false, false
 		}
@@ -639,11 +702,20 @@ func roundPlaces(r *big.Rat, places int64) (p int, identity, zero bool) {
 	if new(big.Int).Abs(new(big.Int).Quo(r.Num(), r.Denom())).Sign() == 0 {
 		intDigits = 0
 	}
-	if -places > intDigits+1 {
+	// Compared as places < -(intDigits+1) rather than -places > intDigits+1,
+	// because negating places overflows for math.MinInt64 -- and MinInt64 is
+	// reachable, since saturateInt64 produces it for any precision below the
+	// int64 range. The overflowed comparison was false, so round(1234.5, -2^63)
+	// fell through and was answered at precision 0, giving 1235 for a request
+	// whose true answer is 0.
+	if places < -(intDigits + 1) {
 		return 0, false, true
 	}
-	if -places > roundGuard {
-		return 0, false, true
-	}
+	// Past this point -places <= intDigits+1, so the precision is already
+	// bounded by the number of digits the caller's own value has. A constant
+	// ceiling here would not be a resource limit, it would be a wrong answer:
+	// round(3e(roundGuard+10), -(roundGuard+5)) discards only zeros and must
+	// return the value unchanged, and returning zero because the request
+	// exceeds a constant is the same defect the fixed +-4096 clamp had.
 	return int(places), false, false
 }

@@ -288,6 +288,16 @@ func registerStringFuncs(l *Library) {
 			if err != nil {
 				return nil, err
 			}
+			// $arg is xs:integer*, which is unbounded, so a codepoint can
+			// exceed int64 -- and big.Int.Int64 is undefined out of range,
+			// not saturating. The wrap is silent and can land on a *valid*
+			// codepoint: codepoints-to-string(2^64+65) came back as "A".
+			// FitsInt64 first, so an out-of-range value is refused by its own
+			// digits rather than by whatever its low 64 bits happen to spell.
+			if !a.FitsInt64() {
+				return nil, fmt.Errorf(
+					"FOCH0001: %s is not a valid XML character", a.String())
+			}
 			cp := a.Int64()
 			if !isXMLChar(cp) {
 				return nil, fmt.Errorf(

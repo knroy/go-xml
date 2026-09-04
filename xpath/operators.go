@@ -590,7 +590,13 @@ func compareDurations(a, b *xdm.Atomic) (int, bool, error) {
 	}
 	switch {
 	case a.Type == xdm.TypeYearMonthDuration && b.Type == xdm.TypeYearMonthDuration:
-		return sign(da.SignedMonths() - db.SignedMonths()), true, nil
+		// Compared, not subtracted. Two month counts near opposite ends of
+		// the int range differ by more than the range holds, so the
+		// difference wrapped and reported the ordering backwards:
+		// P768614336404564650Y gt -P768614336404564650Y was false. The
+		// question is which is larger, and asking it directly cannot
+		// overflow.
+		return sign3(da.SignedMonths(), db.SignedMonths()), true, nil
 	case a.Type == xdm.TypeDayTimeDuration && b.Type == xdm.TypeDayTimeDuration:
 		return da.SignedSeconds().Cmp(db.SignedSeconds()), true, nil
 	}
@@ -608,6 +614,17 @@ func sign(n int) int {
 	case n < 0:
 		return -1
 	case n > 0:
+		return 1
+	}
+	return 0
+}
+
+// sign3 orders a against b without forming their difference.
+func sign3(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
 		return 1
 	}
 	return 0

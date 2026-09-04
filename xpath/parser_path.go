@@ -2047,7 +2047,7 @@ func (p *Parser) parseLookup(base Expr) (Expr, error) {
 		if lit.Type != xdm.TypeInteger {
 			return nil, p.errorf("a lookup by position needs an integer, got %s", p.cur().Val)
 		}
-		e.Index, e.HasIndex = int(lit.Float64()), true
+		e.Index, e.HasIndex = lit, true
 		p.pos++
 	case p.cur().Kind == TokWildcard && p.cur().Val == "*",
 		p.cur().Kind == TokOp && p.cur().Val == "*":

@@ -567,10 +567,13 @@ func (c *Context) countItems(n int) error {
 		return nil
 	}
 	if atomic.AddInt64(c.items, int64(n)) > MaxItems {
+		// The code is kept -- the suites and callers read it -- and the
+		// sentinel added, because this is the processor declining to
+		// allocate rather than anything wrong with the expression.
 		return fmt.Errorf(
 			"XPDY0130: evaluation materialised more than %d items; "+
-				"the expression is building a sequence too large to hold",
-			MaxItems)
+				"the expression is building a sequence too large to hold: %w",
+			MaxItems, xdm.ErrResourceLimit)
 	}
 	return nil
 }

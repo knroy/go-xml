@@ -122,9 +122,14 @@ type LookupExpr struct {
 	Base Expr
 	// Name, Index and Wildcard are the three shapes a key specifier takes;
 	// exactly one is set. Expr is the parenthesised form, "?($k)".
-	Name     string
-	HasName  bool
-	Index    int
+	Name    string
+	HasName bool
+	// Index is the literal position of "?3", held as the atomic the parser
+	// already built rather than re-encoded as a machine int. An integer
+	// literal is arbitrary-precision, so "?100000000000000000000000000000000"
+	// has to survive to evaluation intact and fail there as FOAY0001 with its
+	// own digits; narrowing it here saturated it to maxint.
+	Index    *xdm.Atomic
 	HasIndex bool
 	Wildcard bool
 	Expr     Expr
@@ -221,7 +226,15 @@ func (e *LookupExpr) lookupIn(ctx *Context, it xdm.Item) (xdm.Sequence, error) {
 				return nil, xdm.ErrType(
 					"an array is looked up by position, but the key is %s", k.TypeName())
 			}
-			m, err := v.Member(int(k.Float64()))
+			// integerPosition takes the position from the exact integer. Going
+			// through Float64 lost digits above 2^53 and saturated above
+			// 2^63, so "?(1000000000000000001)" reported itself as
+			// ...000 and a position of 10^32 reported itself as maxint.
+			n, err := integerPosition(k, "array lookup")
+			if err != nil {
+				return nil, err
+			}
+			m, err := v.Member(n)
 			if err != nil {
 				return nil, err
 			}
@@ -243,7 +256,7 @@ func (e *LookupExpr) keyValues(ctx *Context) ([]*xdm.Atomic, error) {
 		// same as "$m('name')".
 		return []*xdm.Atomic{xdm.NewString(e.Name)}, nil
 	case e.HasIndex:
-		return []*xdm.Atomic{xdm.NewInteger(int64(e.Index))}, nil
+		return []*xdm.Atomic{e.Index}, nil
 	case e.Expr != nil:
 		v, err := e.Expr.Eval(ctx)
 		if err != nil {
@@ -280,7 +293,7 @@ func (e *LookupExpr) String() string {
 	case e.HasName:
 		return base + "?" + e.Name
 	case e.HasIndex:
-		return fmt.Sprintf("%s?%d", base, e.Index)
+		return fmt.Sprintf("%s?%s", base, e.Index.String())
 	case e.Expr != nil:
 		return base + "?(" + e.Expr.String() + ")"
 	}

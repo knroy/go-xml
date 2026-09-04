@@ -593,82 +593,6 @@ func checkDigitFacets(steps []facetStep, v *big.Rat) error {
 	return nil
 }
 
-// decimalMagnitude is a terminating decimal split into an integer coefficient
-// and a decimal scale: the value is coefficient / 10^scale.
-type decimalMagnitude struct {
-	coefficient *big.Int // absolute value; never negative
-	scale       uint64   // number of fraction digits, exactly
-}
-
-// decimalMagnitudeOf converts a rational to its exact decimal form, reporting
-// false if the value has no terminating decimal expansion.
-//
-// big.Rat holds lowest terms, so 1.5 is 3/2 rather than 15/10. A value is an
-// exact decimal precisely when its denominator is 2^a * 5^b with nothing left
-// over, and then the scale is max(a, b) — no more digits are needed and no
-// fewer will do. Factoring the denominator is O(scale) cheap integer
-// divisions; the earlier code instead multiplied the whole rational by ten
-// once per digit and stopped at a fixed bound, which turned a value with more
-// fraction digits than the bound into a *smaller* count and so let it pass a
-// fractionDigits facet it violates.
-func decimalMagnitudeOf(r *big.Rat) (decimalMagnitude, bool) {
-	d := r.Denom()
-	// The power of two is the number of trailing zero bits, which big.Int
-	// already knows; dividing them out one at a time would cost a full
-	// division per digit.
-	a := uint64(d.TrailingZeroBits())
-	rest := new(big.Int).Rsh(d, uint(a))
-
-	// Strip powers of five in halving chunks rather than singly. Dividing
-	// by 5^k removes k factors for one division, so the exponent is found
-	// in a logarithmic number of divisions on a shrinking number instead of
-	// one division per digit on the full-width one.
-	var b uint64
-	five := big.NewInt(5)
-	q, m := new(big.Int), new(big.Int)
-	for k := uint64(1); ; {
-		p := new(big.Int).Exp(five, new(big.Int).SetUint64(k), nil)
-		if p.BitLen() > rest.BitLen() {
-			if k == 1 {
-				break
-			}
-			k = 1
-			continue
-		}
-		q.QuoRem(rest, p, m)
-		if m.Sign() != 0 {
-			if k == 1 {
-				break
-			}
-			k /= 2
-			continue
-		}
-		rest.Set(q)
-		b += k
-		k *= 2
-	}
-
-	if rest.Cmp(big.NewInt(1)) != 0 {
-		// A prime other than 2 or 5 survives: 1/3 and its kind have no
-		// finite decimal expansion, so no digit count describes them.
-		return decimalMagnitude{}, false
-	}
-	scale := a
-	if b > scale {
-		scale = b
-	}
-	// numerator * 2^(scale-a) * 5^(scale-b) is the value written with
-	// exactly `scale` fraction digits, an exact integer by construction.
-	coef := new(big.Int).Abs(r.Num())
-	if k := scale - a; k > 0 {
-		coef.Lsh(coef, uint(k))
-	}
-	if k := scale - b; k > 0 {
-		coef.Mul(coef, new(big.Int).Exp(five, new(big.Int).SetUint64(k), nil))
-	}
-	return decimalMagnitude{coefficient: coef, scale: scale}, true
-}
-
 // countDigits returns the total and fraction digit counts of a decimal value.
 //
 // The counts are of the value, not of the literal: 1.50 and 1.5 are the same
@@ -684,20 +608,26 @@ func countDigits(v *big.Rat) (total, frac uint64, ok bool) {
 		// Zero has one total digit and no fraction digits.
 		return 1, 0, true
 	}
-	m, ok := decimalMagnitudeOf(v)
+	m, ok := xdm.DecimalMagnitudeOf(v)
 	if !ok {
 		return 0, 0, false
 	}
-	digits := uint64(len(m.coefficient.String()))
+	digits := uint64(len(m.Coefficient.String()))
 	// A value such as 0.001 scales to 1, one digit, but the spec counts
 	// three: the leading zeros of the fraction are significant to
 	// totalDigits even though they are not to the value. The coefficient
 	// can only be shorter than the scale when the integer part is zero,
 	// and then the fraction digits are all the digits there are.
-	if digits < m.scale {
-		digits = m.scale
+	//
+	// This line is load-bearing, not a rounding-up to be tidied away.
+	// §4.3.12.4 requires fractionDigits <= totalDigits, and facet_check.go
+	// enforces it, so reporting total=1 frac=3 for 0.001 would make the
+	// value unrepresentable by any conforming schema. Pinned by
+	// TestCountDigitsLeadingZerosAreSignificant.
+	if digits < uint64(m.Scale) {
+		digits = uint64(m.Scale)
 	}
-	return digits, m.scale, true
+	return digits, uint64(m.Scale), true
 }
 
 // facetError builds the diagnostic for a failed facet, naming the type that

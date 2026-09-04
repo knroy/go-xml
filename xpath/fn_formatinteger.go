@@ -24,16 +24,17 @@ import (
 // registerFormatInteger adds fn:format-integer.
 func registerFormatInteger(l *Library) {
 	l.registerFnSince(XPath30, "format-integer", []int{2, 3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-		atoms := xdm.Atomize(seqArg(args, 0))
+		// $value is declared xs:integer? — a singleton — so two items is
+		// XPTY0004 rather than a request to format the first.
+		a, err := argAtomicOptional(args, 0, "fn:format-integer")
+		if err != nil {
+			return nil, err
+		}
 		// An empty $value is the zero-length string, not an error and not
 		// "0": the function is defined that way so a missing value formats to
 		// nothing.
-		if len(atoms) == 0 {
+		if a == nil {
 			return strSeq(""), nil
-		}
-		a, ok := atoms[0].(*xdm.Atomic)
-		if !ok {
-			return nil, xdm.ErrType("fn:format-integer: expected an xs:integer")
 		}
 		neg, digits, err := integerValueOf(a)
 		if err != nil {

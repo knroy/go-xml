@@ -402,64 +402,31 @@ func formatDecimal(r *big.Rat) string {
 // information the lexical form could otherwise have carried.
 const nonTerminatingScale = 18
 
-// decimalScale returns the number of fractional digits needed to render r
-// exactly, and whether r terminates at all.
+// decimalScale returns the number of fractional digits to render r with, and
+// whether r has a finite decimal expansion at all.
 //
-// A value that terminates is rendered in full, at whatever scale it needs.
-// There is deliberately no ceiling: capping the scale makes the lexical form
-// disagree with the value, and a definite wrong answer is worse than a slow
-// one. Capping at 18 printed a literal with 360 fractional digits as "0" while
-// it compared unequal to zero; raising the cap to 1024 moved that same
-// contradiction to 10^-1025, where 1/10^5000 likewise printed "0". The value
-// is the thing that must not move, so the scale follows it.
+// This is a renderer's helper, and unlike the primitive it wraps it may
+// approximate — but only where no exact answer exists, and only visibly. Both
+// fallbacks are here rather than inside DecimalMagnitudeOf so that a validity
+// decision, which must never be handed a guess, cannot pick one up by
+// accident:
 //
-// big.Rat keeps its denominator in lowest terms, so a terminating value has a
-// denominator of exactly 2^a*5^b and needs max(a,b) fractional digits. The
-// factor 2^a comes off in a single shift. The factor 5^b is stripped by
-// repeated squaring rather than one division per power: dividing off 5 at a
-// time is quadratic in b, which is the real cost the old ceiling was reacting
-// to — 907ms for a 50000-digit value against 415µs here.
+//   - a non-terminating value has no exact scale, so a precision policy is the
+//     only thing available and the flag says the answer is a policy;
+//   - an integer needs no fraction digits at all, but FloatString(0) would drop
+//     the point that some callers still want a digit after, so the floor is 1.
+//
+// There is deliberately no ceiling on a terminating value's scale; see
+// DecimalMagnitudeOf.
 func decimalScale(r *big.Rat) (int, bool) {
-	d := new(big.Int).Set(r.Denom())
-	a := int(d.TrailingZeroBits())
-	d.Rsh(d, uint(a))
-
-	// Powers 5^(2^i) up to the size of d, so the exponent is accumulated in
-	// O(log b) divisions of a shrinking number instead of b divisions.
-	pows := []*big.Int{big.NewInt(5)}
-	for {
-		next := new(big.Int).Mul(pows[len(pows)-1], pows[len(pows)-1])
-		if next.BitLen() > d.BitLen() {
-			break
-		}
-		pows = append(pows, next)
-	}
-	b := 0
-	rem := new(big.Int)
-	for i := len(pows) - 1; i >= 0; i-- {
-		for {
-			q, m := new(big.Int).QuoRem(d, pows[i], rem)
-			if m.Sign() != 0 {
-				break
-			}
-			d = q
-			b += 1 << uint(i)
-		}
-	}
-
-	// Anything left after the 2s and 5s means a factor of 3, 7, … and no
-	// finite decimal expansion.
-	if d.CmpAbs(big.NewInt(1)) != 0 {
+	m, ok := DecimalMagnitudeOf(r)
+	if !ok {
 		return nonTerminatingScale, false
 	}
-	n := a
-	if b > n {
-		n = b
-	}
-	if n == 0 {
+	if m.Scale == 0 {
 		return 1, true
 	}
-	return n, true
+	return int(m.Scale), true
 }
 
 // secondsScale is the fractional-digit count for a seconds field in a

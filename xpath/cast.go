@@ -467,20 +467,21 @@ func scaleDuration(d, n *xdm.Atomic, op string) (*xdm.Atomic, error) {
 	dv := d.DurationVal()
 	// Months must stay integral, so the scaled month count is rounded to the
 	// nearest month rather than silently truncated.
-	// roundRat returns an int64 from an unbounded big.Int, and narrowing that
-	// to int wrapped: a positive duration times a positive number came back
-	// negative. addDurations range-checks the same quantity; this path did
-	// not, so the check is made on the exact value before it is narrowed.
+	// roundRat returns the exact rounded value as a big.Int, and narrowing
+	// that to int wrapped: a positive duration times a positive number came
+	// back negative. addDurations range-checks the same quantity; this path
+	// did not, so the check is made on the exact value before it is narrowed.
+	//
+	// The check is on the ROUNDED value, not on the truncated one. Rounding
+	// can carry into the next integer, so a value one half below the limit
+	// truncates inside the range and rounds outside it.
 	scaled := new(big.Rat).Mul(new(big.Rat).SetInt64(int64(dv.SignedMonths())), factor)
-	if !ratFitsInt(scaled) {
-		return nil, fmt.Errorf("FODT0002: duration overflow")
-	}
 	months := roundRat(scaled)
-	if months > math.MaxInt || months < math.MinInt {
+	if !bigFitsInt(months) {
 		return nil, fmt.Errorf("FODT0002: duration overflow")
 	}
 	secs := new(big.Rat).Mul(dv.SignedSeconds(), factor)
-	return durationFromSigned(int(months), secs, d.Type), nil
+	return durationFromSigned(int(months.Int64()), secs, d.Type), nil
 }
 
 func divideDurations(a, b *xdm.Atomic) (*xdm.Atomic, error) {
@@ -591,7 +592,13 @@ func abs(n int) int {
 	return n
 }
 
-func roundRat(r *big.Rat) int64 {
+// roundRat rounds r to the nearest integer and returns it exactly.
+//
+// The result is a *big.Int because r is unbounded: a duration scaled by an
+// arbitrary factor can round to any magnitude, and returning an int64 here
+// wrapped that value silently. The caller narrows it only after proving it
+// fits.
+func roundRat(r *big.Rat) *big.Int {
 	// Half-up — toward positive infinity — which is what fn:round is defined
 	// to do and what the duration operators inherit. The rule is only visible
 	// on values that land exactly on a half, and there it is asymmetric:
@@ -601,7 +608,7 @@ func roundRat(r *big.Rat) int64 {
 	num, den := r.Num(), r.Denom()
 	q, rem := new(big.Int).QuoRem(num, den, new(big.Int))
 	if rem.Sign() == 0 {
-		return q.Int64()
+		return q
 	}
 
 	// Compare |rem| against half the denominator by doubling rather than
@@ -616,12 +623,12 @@ func roundRat(r *big.Rat) int64 {
 		if cmp > 0 {
 			q.Sub(q, big.NewInt(1))
 		}
-		return q.Int64()
+		return q
 	}
 	if cmp >= 0 {
 		q.Add(q, big.NewInt(1))
 	}
-	return q.Int64()
+	return q
 }
 
 // dateTimeFromSeconds converts a UTC-normalised second count back to a
@@ -1300,6 +1307,10 @@ func collapseXMLSpace(s string) string {
 // arbitrary factor can be any size, and every path that narrows one to an int
 // has to establish this first or it wraps silently.
 func ratFitsInt(r *big.Rat) bool {
-	q := new(big.Int).Quo(r.Num(), r.Denom())
-	return q.IsInt64() && q.Int64() < math.MaxInt && q.Int64() > math.MinInt
+	return bigFitsInt(new(big.Int).Quo(r.Num(), r.Denom()))
+}
+
+// bigFitsInt reports whether n is representable as an int.
+func bigFitsInt(n *big.Int) bool {
+	return n.IsInt64() && n.Int64() <= math.MaxInt && n.Int64() >= math.MinInt
 }

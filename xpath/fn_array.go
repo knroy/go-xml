@@ -676,6 +676,14 @@ func integerPosition(a *xdm.Atomic, fname string) (int, error) {
 // deliberately far narrower than an int64: an array with more members than
 // this cannot be built, so a position beyond them is out of range whatever the
 // array is.
+//
+// The narrowness is load-bearing, not merely tidy, so do not widen these to
+// math.MaxInt. array:subarray adds two positions ("start+n > a.Len()+1"), and
+// that sum must not overflow: at math.MaxInt it wraps negative, the guard
+// reads false, and an out-of-range request is accepted instead of raising
+// FOAY0001. Keeping the bound at 1<<40 leaves 2*maxArrayIndex comfortably
+// inside an int on every platform Go supports, so no sum of two accepted
+// positions can wrap.
 const (
 	maxArrayIndex = 1 << 40
 	minArrayIndex = -(1 << 40)

@@ -130,3 +130,25 @@ func looksLikeErrorCode(s string) bool {
 	}
 	return true
 }
+
+// ErrResourceLimit marks an error raised because the processor refused to do
+// the work, not because the input was wrong.
+//
+// "This XPath is malformed" and "this document would have cost more than the
+// processor is willing to spend" are different conditions with different
+// remedies, but they arrive looking alike: a nesting guard reports XPST0003
+// because that is the code the specs give for a syntactically unacceptable
+// expression, and an embedding caller reading the code alone concludes the
+// user's expression was invalid when in fact it was merely deep. The specs
+// give no code for "I gave up", so the code cannot say this; a sentinel can.
+//
+// Wrap with %w to add it, never to replace the code:
+//
+//	fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+//		maxParseDepth, ErrResourceLimit)
+//
+// The rendered message still begins with the code, so ErrorCode and the
+// conformance suites, which read the code out of the message, are unaffected,
+// while a caller can now ask errors.Is(err, ErrResourceLimit) and back off
+// rather than reporting a syntax error to its user.
+var ErrResourceLimit = errors.New("processor resource limit exceeded")

@@ -153,27 +153,49 @@ func registerDateFuncs(l *Library) {
 	durComponent("months-from-duration", func(d *xdm.Duration) xdm.Item {
 		return xdm.NewInteger(int64(d.SignedMonths() % 12))
 	})
+	// Every component but the day count is reduced modulo its own unit, so
+	// the answer is small however large the duration is. ratTrunc used to
+	// narrow to int64 BEFORE that modulo, which threw away exactly the bits
+	// the modulo needed: hours-from-duration of PT10000000000000000000H
+	// answered 0, and days-from-duration of P10000000000000000000D came back
+	// negative. The quotient now stays a big.Int until after the reduction.
 	durComponent("days-from-duration", func(d *xdm.Duration) xdm.Item {
-		return xdm.NewInteger(ratTrunc(d.SignedSeconds(), 86400))
+		// The day count has no modulo to shrink it, so it is returned as
+		// the arbitrary-precision xs:integer it is rather than narrowed.
+		return xdm.NewIntegerFromRat(
+			new(big.Rat).SetInt(ratTrunc(d.SignedSeconds(), 86400)))
 	})
 	durComponent("hours-from-duration", func(d *xdm.Duration) xdm.Item {
-		return xdm.NewInteger(ratTrunc(d.SignedSeconds(), 3600) % 24)
+		return xdm.NewInteger(bigMod(ratTrunc(d.SignedSeconds(), 3600), 24))
 	})
 	durComponent("minutes-from-duration", func(d *xdm.Duration) xdm.Item {
-		return xdm.NewInteger(ratTrunc(d.SignedSeconds(), 60) % 60)
+		return xdm.NewInteger(bigMod(ratTrunc(d.SignedSeconds(), 60), 60))
 	})
 	durComponent("seconds-from-duration", func(d *xdm.Duration) xdm.Item {
 		secs := d.SignedSeconds()
 		whole := ratTrunc(secs, 1)
-		frac := new(big.Rat).Sub(secs, new(big.Rat).SetInt64(whole))
-		return xdm.NewDecimal(new(big.Rat).Add(new(big.Rat).SetInt64(whole%60), frac))
+		// The fraction is what the truncation dropped, so it is taken
+		// against the exact quotient, not against the reduced one.
+		frac := new(big.Rat).Sub(secs, new(big.Rat).SetInt(whole))
+		return xdm.NewDecimal(new(big.Rat).Add(
+			new(big.Rat).SetInt64(bigMod(whole, 60)), frac))
 	})
 }
 
 // ratTrunc returns r divided by unit, truncated toward zero.
-func ratTrunc(r *big.Rat, unit int64) int64 {
+//
+// The quotient is exact: narrowing it here would discard the high bits that a
+// caller's modulo still needs.
+func ratTrunc(r *big.Rat, unit int64) *big.Int {
 	q := new(big.Rat).Quo(r, new(big.Rat).SetInt64(unit))
-	return new(big.Int).Quo(q.Num(), q.Denom()).Int64()
+	return new(big.Int).Quo(q.Num(), q.Denom())
+}
+
+// bigMod reduces n modulo unit, keeping the sign of n as Go's % does.
+//
+// The result is bounded by unit, so returning an int64 is safe whatever n is.
+func bigMod(n *big.Int, unit int64) int64 {
+	return new(big.Int).Rem(n, big.NewInt(unit)).Int64()
 }
 
 // registerTimezoneAdjust adds the three fn:adjust-*-to-timezone functions.
@@ -232,11 +254,16 @@ func registerTimezoneAdjust(l *Library) {
 					if !secs.IsInt() {
 						return nil, fmt.Errorf("FODT0003: timezone offset must be a whole number of minutes")
 					}
-					mins := secs.Num().Int64() / 60
-					if mins < -14*60 || mins > 14*60 {
-						return nil, fmt.Errorf("FODT0003: timezone offset %d minutes is out of range", mins)
+					// The range check comes BEFORE the narrowing. Dividing
+					// a narrowed second count by 60 let an offset of
+					// 129127208515966879312 seconds — four trillion years —
+					// wrap into +05:00 and be accepted as an ordinary zone.
+					bigMins := new(big.Int).Quo(secs.Num(), big.NewInt(60))
+					if bigMins.CmpAbs(big.NewInt(14*60)) > 0 {
+						return nil, fmt.Errorf(
+							"FODT0003: timezone offset %s minutes is out of range", bigMins)
 					}
-					targetTZ = int(mins)
+					targetTZ = int(bigMins.Int64())
 				}
 			}
 

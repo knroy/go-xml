@@ -381,8 +381,13 @@ func (p *Parser) parseExprSingle() (Expr, error) {
 	p.depth++
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
-		return nil, fmt.Errorf("XPST0003: expression nesting exceeds %d levels",
-			maxParseDepth)
+		// XPST0003 is kept because callers and the conformance suites match
+		// on it, but the condition is a resource refusal rather than a
+		// syntax fault: the expression is well-formed, merely deeper than
+		// this processor will parse. The sentinel is added alongside the
+		// code so an embedding caller can tell the two apart.
+		return nil, fmt.Errorf("XPST0003: expression nesting exceeds %d levels: %w",
+			maxParseDepth, xdm.ErrResourceLimit)
 	}
 	t := p.cur()
 	if t.Kind == TokName {

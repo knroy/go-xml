@@ -40,6 +40,40 @@ over, and `MaxInt`/`MaxInt64`. The largest value a caller can name is always a
 *permissive* setting and never a refusal — it was briefly the opposite, when
 `maxBytes+1` overflowed to a negative `io.LimitReader` bound.
 
+### Recognising a refusal: `xdm.ErrResourceLimit`
+
+"Your expression is malformed" and "this processor declined to do the work"
+are different conditions with different remedies, but they arrive looking
+alike. The specs define an error code for every *semantic* condition and none
+for "I gave up", so a limit has to borrow one: the parser's nesting guard
+reports `XPST0003`, which properly means a syntactically unacceptable
+expression. A caller reading the code alone would tell its user their
+expression was invalid, when in fact it was merely deeper than this processor
+will parse.
+
+`xdm.ErrResourceLimit` is a sentinel wrapped into those errors so the two can
+be told apart:
+
+```go
+seq, err := xpath.Eval(expr, ctx, nil)
+switch {
+case errors.Is(err, xdm.ErrResourceLimit):
+    // The input was refused, not rejected. Retry with a smaller request,
+    // shed load, or raise the limit — do not report a syntax error.
+case err != nil:
+    // A genuine fault in the expression or the document.
+}
+```
+
+The sentinel is **added** to the error, never substituted for it. The spec
+error code and the leading message text are unchanged, so `xdm.ErrorCode`
+still returns `XPST0003`, the conformance suites still match, and existing
+code that reads the message keeps working. Wrap a new limit the same way:
+
+```go
+return fmt.Errorf("XPDY0130: ... : %w", MaxItems, xdm.ErrResourceLimit)
+```
+
 ---
 
 ## xdm.ParseOptions

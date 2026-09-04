@@ -83,17 +83,19 @@ func FormatNumberArgStrict(args []xdm.Sequence, i int) (*xdm.Atomic, error) {
 }
 
 func formatNumberArg(args []xdm.Sequence, i int, strict bool) (*xdm.Atomic, error) {
-	atoms := xdm.Atomize(args[i])
-	if len(atoms) == 0 {
+	// $value is declared "numeric?", so two items is XPTY0004 rather than a
+	// request to format the first: format-number((1,2), '0') must fail, not
+	// answer "1".
+	a, err := argAtomicOptional(args, i, "format-number")
+	if err != nil {
+		return nil, err
+	}
+	if a == nil {
 		// An empty first argument formats as zero, per the spec's rule that
 		// it is treated as NaN and NaN renders as the NaN symbol; returning
 		// an error here would break every stylesheet that formats an optional
 		// element.
 		return xdm.NewDouble(math.NaN()), nil
-	}
-	a, ok := atoms[0].(*xdm.Atomic)
-	if !ok {
-		return nil, xdm.ErrType("format-number: expected a number")
 	}
 	if a.Type.IsNumeric() {
 		return a, nil
@@ -119,13 +121,17 @@ func formatNumberArg(args []xdm.Sequence, i int, strict bool) (*xdm.Atomic, erro
 }
 
 func FormatNumberString(args []xdm.Sequence, i int) (string, error) {
-	atoms := xdm.Atomize(args[i])
-	if len(atoms) == 0 {
-		return "", nil
+	// Both parameters this serves are singletons — $picture is xs:string and
+	// $decimal-format-name is xs:string? — so a two-item argument is
+	// XPTY0004. Only the upper bound is enforced here, because the same
+	// function reads both and the empty sequence is in the type of one of
+	// them; a missing $picture is caught by the picture parser instead.
+	a, err := argAtomicOptional(args, i, "format-number")
+	if err != nil {
+		return "", err
 	}
-	a, ok := atoms[0].(*xdm.Atomic)
-	if !ok {
-		return "", xdm.ErrType("format-number: expected a string")
+	if a == nil {
+		return "", nil
 	}
 	// The picture is declared xs:string. A number is not one, and the
 	// function conversion rules do not turn it into one, so writing

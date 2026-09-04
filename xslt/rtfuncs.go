@@ -601,7 +601,22 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 				if err != nil {
 					return nil, err
 				}
-				arity = int(n.Int64())
+				// $arity is xs:integer, which is unbounded, and Int64 is
+				// undefined out of range rather than saturating: an arity of
+				// 2^64+1 arrived as 1 and function-available('name', 2^64+1)
+				// answered true. Exact conversion alone is not enough either,
+				// because no function is registered above a modest arity, so
+				// an exactly-converted 2^62 would still be looked up. An arity
+				// outside the range anything can be registered at names no
+				// function, which XSLT 3.0 makes false rather than an error.
+				if !n.FitsInt64() {
+					return xdm.One(xdm.NewBoolean(false)), nil
+				}
+				v := n.Int64()
+				if v < 0 || v > maxAvailableArity {
+					return xdm.One(xdm.NewBoolean(false)), nil
+				}
+				arity = int(v)
 			}
 			_, ok = xpath.LookupDynamic(ctx, xdm.QName{URI: uri, Local: local}, arity)
 			return xdm.One(xdm.NewBoolean(ok)), nil
@@ -787,11 +802,25 @@ func stringArg(seq xdm.Sequence) string {
 }
 
 func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-	nameSeq := xdm.Atomize(args[0])
+	// $key-name is declared "xs:string" -- a singleton -- so a two-item
+	// argument is XPTY0004 rather than a lookup under the first name.
+	// ($key-value, by contrast, is xs:anyAtomicType* and stays a sequence.)
+	nameSeq, err := xdm.AtomizeChecked(args[0])
+	if err != nil {
+		return nil, err
+	}
 	if len(nameSeq) == 0 {
 		return xdm.Empty(), nil
 	}
-	lexName := nameSeq[0].(*xdm.Atomic).String()
+	if len(nameSeq) > 1 {
+		return nil, xdm.ErrType(
+			"fn:key: the key name expects at most one item, got %d", len(nameSeq))
+	}
+	nameAtom, ok := nameSeq[0].(*xdm.Atomic)
+	if !ok {
+		return nil, xdm.ErrType("fn:key: the key name is not an atomic value")
+	}
+	lexName := nameAtom.String()
 
 	// XTDE1260 covers three cases in one sentence: the name "is not a valid
 	// QName, or ... there is no namespace declaration in scope for the prefix
@@ -1323,11 +1352,24 @@ func registerGroupingFuncs(l *xpath.Library) {
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "regex-group"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			atoms := xdm.Atomize(args[0])
+			// $group-number is declared "xs:integer" -- a singleton -- so
+			// two items is XPTY0004, not a lookup of the first group.
+			atoms, err := xdm.AtomizeChecked(args[0])
+			if err != nil {
+				return nil, err
+			}
 			if len(atoms) == 0 {
 				return xdm.One(xdm.NewString("")), nil
 			}
-			idx, err := xpath.CastAtomic(atoms[0].(*xdm.Atomic), xdm.TypeInteger)
+			if len(atoms) > 1 {
+				return nil, xdm.ErrType(
+					"fn:regex-group: expects at most one item, got %d", len(atoms))
+			}
+			groupAtom, ok := atoms[0].(*xdm.Atomic)
+			if !ok {
+				return nil, xdm.ErrType("fn:regex-group: expects an xs:integer")
+			}
+			idx, err := xpath.CastAtomic(groupAtom, xdm.TypeInteger)
 			if err != nil {
 				return nil, err
 			}
@@ -1618,3 +1660,12 @@ func resolveDocumentIn(ctx *xpath.Context, uri, base string) (*xdm.Tree, error) 
 	}
 	return ctx.Docs.ResolveDocument(uri, base)
 }
+
+// maxAvailableArity bounds the arity fn:function-available will look up.
+//
+// It mirrors xpath's maxLookupArity, and exists for the same reason: no
+// function can be registered, let alone called, at an arity beyond what a Go
+// argument slice can hold, so a larger arity names nothing and the answer is
+// false. Bounding as well as converting exactly is the point -- an exactly
+// converted 2^62 is still not an arity anything is registered at.
+const maxAvailableArity = 1 << 20

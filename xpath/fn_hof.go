@@ -64,7 +64,31 @@ func registerHOFuncs(l *Library) {
 		if arity == nil {
 			return nil, xdm.ErrType("fn:function-lookup: arity is required")
 		}
-		n := int(arity.Float64())
+		// $arity is declared xs:integer, and the exact value decides the
+		// lookup: Float64 lost digits above 2^53 and saturated above 2^63,
+		// so an arity of 10^32 arrived as maxint.
+		r := arity.Rat()
+		if r == nil || !r.IsInt() {
+			return nil, xdm.ErrType("fn:function-lookup: arity must be an xs:integer")
+		}
+		// An arity that names no callable function matches nothing, which
+		// F&O 3.0 16.1.1 makes the empty sequence rather than an error.
+		//
+		// The upper bound is not merely a guard on the int conversion:
+		// synthesizeVariadic builds an fn:concat entry at any arity at or
+		// above 2, so converting exactly but leaving the range open would
+		// still answer "function-lookup(fn:concat, 2^63-1)" with a function
+		// item claiming an arity of 9223372036854775807 — the very value the
+		// Float64 narrowing saturated every huge arity onto.
+		n64 := r.Num()
+		if !n64.IsInt64() {
+			return xdm.Empty(), nil
+		}
+		v := n64.Int64()
+		if v < 0 || v > maxLookupArity {
+			return xdm.Empty(), nil
+		}
+		n := int(v)
 		fn, ok := LookupDynamic(ctx, name, n)
 		if !ok {
 			return xdm.Empty(), nil
@@ -287,3 +311,12 @@ func singleBoolean(seq xdm.Sequence, fn string) (bool, error) {
 	}
 	return a.Bool(), nil
 }
+
+// maxLookupArity bounds the arity fn:function-lookup will look up.
+//
+// No function item can be built, let alone called, at an arity beyond what a
+// Go argument slice can hold, so a larger arity names nothing and the lookup
+// is empty — which is what F&O 3.0 16.1.1 prescribes for a name and arity
+// that identify no function. The value is far above concatMaxArity, the
+// largest arity anything in the library is registered at.
+const maxLookupArity = 1 << 20
