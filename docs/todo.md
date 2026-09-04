@@ -29,9 +29,17 @@ to build next and what it would cost.
 
 ### 1.1 XML 1.1 documents — **the largest single win**
 
-`encoding/xml` refuses `version="1.1"`, so nine schemas do not parse and 38
-instance tests never run. This is the only remaining item that unlocks a whole
-block of the suite at once.
+This entry used to say `encoding/xml` refuses `version="1.1"`. Measured, it
+does not: `1.1` is **accepted** and parsed under 1.0 rules, while `1.2` and
+`2.0` are refused with "only version 1.0 is supported". That is the worse of
+the two behaviours — a 1.1 document is admitted and then silently misread,
+rather than declined.
+
+Two consequences visible immediately. `NEL` (U+0085) is a line ending in 1.1
+that must normalise to `#xA`, and it survives as a raw character. And a C1
+character reference such as `&#133;` is legal in 1.1 and illegal in 1.0, but is
+accepted under *both* — so the version gate is missing in the direction that
+admits invalid 1.0 documents as well.
 
 It is not a version-string rewrite. XML 1.1 changes what the *language* is:
 
@@ -43,8 +51,18 @@ It is not a version-string rewrite. XML 1.1 changes what the *language* is:
   translator becomes version-dependent — which reaches `xpath`, not just
   `xsd`.
 
-Cost: substantial. Buys: 38 tests and correctness for documents that really
-are 1.1.
+It also has a dependency worth recording before the work starts rather than
+after. `xsd/identity.go` joins a composite key sequence on `keySep = "\x1f"`,
+which is safe today only because U+001F cannot appear in XML 1.0 character
+data. Under 1.1 it can, and two different field tuples would then produce the
+same joined string — a false key match. The tuple representation has to stop
+being a joined string before 1.1 lands, not after.
+
+Cost: substantial. Buys: correctness for documents that really are 1.1, and
+an end to the silent misreading above. Scoping it properly needs the W3C
+`xmlconf` suite, which this repository does not currently vendor — the other
+corpora under `testdata/` do not exercise 1.1, so there is no measurement of
+the gap here, only the two defects named above.
 
 ### 1.2 DTD validation — done, internal subset only
 

@@ -992,8 +992,11 @@ they are the more serious kind: refusing valid input breaks a caller, while
 accepting invalid input only fails to catch their mistake.
 
 Two notes on the denominator. A handful of schemas still fail to load for
-reasons that are not bugs: nine are XML 1.1 documents, which this parser does
-not read, and two need a DOCTYPE, refused by default because it enables XXE.
+reasons that are not bugs: two need a DOCTYPE, refused by default because it
+enables XXE. The `XmlVersions` schemas are a different matter — they carry
+`version="1.1"` and this parser accepts and loads all of them, but reads them
+under XML 1.0 rules, so what they test is not what is measured. See
+[todo.md](docs/todo.md#11-xml-11-documents--the-largest-single-win).
 
 And some of the suite is disputed. `status="queried"` on a test means the W3C
 has challenged the expected result, usually with a bugzilla reference, so those

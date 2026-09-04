@@ -414,10 +414,13 @@ contradicts the expectation recorded for it. Twenty-seven such queried cases
 sit in the 1.0 instance tail.
 
 A further 20 test groups are skipped because their schema does not load, and
-most of those are correct behaviour rather than gaps: nine are XML 1.1
-documents, which the parser does not read; five use 1.1 constructs under 1.0
-and are *meant* to fail; two need a DOCTYPE, refused by default; and several
-name a document that is deliberately absent.
+most of those are correct behaviour rather than gaps: five use 1.1 constructs
+under 1.0 and are *meant* to fail; two need a DOCTYPE, refused by default; and
+several name a document that is deliberately absent. The `XmlVersions` group is
+not among them — those schemas carry `version="1.1"` and every one of them
+parses and loads, because the parser accepts the declaration and then applies
+XML 1.0 rules. They are measured, but what they measure is not what they
+test.
 
 Beyond the suite, the validator is run against production schema sets — UBL
 2.1, UN/CEFACT CII, Peppol BIS Billing 3.0, Factur-X/ZUGFeRD. Those found bugs

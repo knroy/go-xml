@@ -907,9 +907,12 @@ For what is currently fixable, open, or unreachable, and why, see
 [conformance-gaps.md](conformance-gaps.md). For what buying it would cost, see
 [reaching-100.md](reaching-100.md).
 
-XML 1.1 support sits outside all of this and unlocks 38 instance tests plus
-nine schemas that do not parse today; it is a larger piece of work and is
-described in [todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
+XML 1.1 support sits outside all of this. It is not a matter of schemas that
+fail to parse — measured, every schema in the suite's `XmlVersions` set parses
+and loads, because `version="1.1"` is accepted and then read under 1.0 rules.
+The gap is that the reading is wrong, not that it is refused. It is a larger
+piece of work and is described in
+[todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
 
 ---
 
