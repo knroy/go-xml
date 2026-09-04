@@ -10,6 +10,29 @@ document**. Where a finding needs more than that — a hostile schema, a hostile
 stylesheet, a caller-enabled option — it says so, because that changes who is
 exposed.
 
+## How to read a finding here
+
+Six audits have passed over this code, and the categories below are not
+interchangeable. Conflating them is how a fixed bug stayed filed as live for a
+release, and how an unproven suspicion was twice reported as a confirmed
+vulnerability.
+
+| category | what it means | what it needs to change category |
+|---|---|---|
+| **Fixed** | reproduced, then fixed, with a regression test that fails against the previous code | nothing; it stays as a record |
+| **Open — performance** | reproduced, and the cost is real, but no wrong answer is produced | an algorithm that changes the complexity, not a smaller constant |
+| **Deliberate limitation** | the behaviour is chosen, and the reasoning is written down | a spec citation showing the choice is wrong |
+| **Withdrawn** | recorded as a defect, then measured and found not to be one | nothing; it stays so the same reading is not repeated |
+| **Unverified** | a plausible reading of the code that nobody has demonstrated | a construction that produces a wrong answer, or a probe that shows it cannot |
+
+The last row is the one that costs the most time. Three separate audits have
+flagged a numeric bound in this package as a confirmed bug on the reading that
+"deeper than N" implies "recursive"; two were right and the third was not, and
+telling them apart took construction rather than argument every time. A guard
+is only a defect once a legal, acyclic input crosses it and gets a wrong
+answer. Until then it is debt, and `docs/known-gaps.md` records which of the
+remaining ones have been probed and found sound.
+
 ## The short version
 
 If you parse untrusted XML with default options, the dangerous classes are
@@ -149,6 +172,150 @@ overflow at *two* saturated members rather than three, and they feed the
 wildcard-restriction path independently. `xsd/occurs_overflow_test.go` asserts
 positively on the saturated value rather than merely on the absence of a minus
 sign, and it caught a second distinct wrap the reported case never reaches.
+
+### Identity constraints were quadratic on recursive elements
+
+Reachable from a hostile instance with default settings, but it needs a schema
+where a **recursive** element carries an identity constraint with a `.//`
+selector. Independently reproduced:
+
+| depth | input | time | allocated |
+|---|---|---|---|
+| 60 | 6.9 KB | 9 ms | 5 MB |
+| 120 | 14.0 KB | 25 ms | 20 MB |
+| 240 | 28.9 KB | 79 ms | 82 MB |
+| 480 | 58.7 KB | 304 ms | 332 MB |
+
+Doubling the depth quadruples both.
+
+The figures below are what the shape cost *before* the fix above, kept because
+they are what the amplification looked like and because the width factor is the
+part every earlier account of this got wrong.
+
+**`MaxDepth` bounds one of the two factors, not the cost.** This section used
+to claim the default `MaxDepth` of 1000 bounded the whole thing, at 111 KB
+costing 1.2 s and 1.2 GB. That is the worst case for a *chain*. The cost is
+depth times subtree size, and **width is the factor `MaxDepth` does not touch**.
+Re-measured at depth 990, varying the number of children per level:
+
+| width | nodes | input | time | churn | live heap |
+|---|---|---|---|---|---|
+| 0 | 990 | 16.3 KB | 291 ms | 151 MB | 2.4 MB |
+| 10 | 10,890 | 169.9 KB | 2.41 s | 2.19 GB | 9.7 MB |
+| 40 | 40,590 | 659.8 KB | 12.6 s | 8.71 GB | 43.8 MB |
+| 80 | 80,190 | 1.31 MB | **26.2 s** | **17.7 GB** | 73.8 MB |
+
+`DefaultMaxNodes` is 10,000,000, so the same shape goes further within default
+parse limits. What the old text got right is the *kind* of failure: live heap
+stays at 74 MB against 17.7 GB of churn, so this starves a service of CPU and
+hammers the collector rather than OOM-killing it.
+
+The per-depth figures in the table above are also stale — re-measured on the
+current tree, depth 480 costs 47 ms and 35 MB rather than 304 ms and 332 MB.
+The shape is right and the constants are an order of magnitude out; whether the
+code got faster or the original run was on slower hardware could not be
+established from the history.
+
+**The trigger is narrower than "a `.//` selector".** A control with the same
+document and the same selector, but the constraint declared on a
+*non-recursive* wrapper, is perfectly linear — 117 µs at depth 60, 1.72 ms at
+960. What costs is the constraint sitting on an element that is its own
+descendant, so `buildNodeTable` runs once per level and each run walks the whole
+remaining subtree. The recursion is the load-bearing half.
+
+**Fixed.** The evaluator now visits each node a bounded number of times, and
+the quadratic is gone: doubling the depth doubles the work rather than
+quadrupling it, measured at 2.00x across 240, 480 and 960 where it was 3.98,
+3.99 and 4.00. `xsd/identity_stats_test.go` asserts that ratio, so a return to
+the old shape fails the build rather than being noticed in a profile later.
+
+What changed is which subtree gets walked. A descendant element that declares
+the same constraint is itself a scope, and its own table already holds every
+target beneath it — so the walk stops there instead of descending again. On the
+recursive shape that turns a whole-subtree walk per level into a walk of the
+gap between one scope and the next. The child tables now carry every target
+they selected, not only the entries that survived merging: an ancestor decides
+duplicates from those, and a sequence two siblings share has to survive here
+even though `entries` drops it for keyref resolution.
+
+| | before | after |
+|---|---:|---:|
+| depth 960 | 23.6 ms, 1,400,001 allocations | **1.2 ms, 15,423** |
+| depth 200 width 40 | 214 ms, 1,223,930 | **121 ms, 104,340** |
+
+The first attempt at this was wrong in the direction that matters, and the
+oracle caught it: seeding the subtree's targets into the table only when the
+walk revisited them meant a target from below was never seen at all, so a key
+at depth 1 and the same key at depth 2 stopped colliding. 771 disagreements
+across the two generated corpora, and the four hand-written cross-level cases
+failed with it. Seeding before the walk rather than during it fixes it. That is
+precisely the mistake the review predicted a bottom-up merge would make.
+
+**The four earlier attempts, all reverted.** They are kept because each one is
+a plausible idea that measurement refuted, and because the reason they failed
+is the reason the fix above works: they all tried to make the same traversal
+cheaper, and the traversal was not the thing to change.
+
+**A fifth was tried and kept.** The four below all attacked the traversal.
+This one leaves the traversal alone and removes the *recomputation*: the child
+tables already flowing up through `mergeTables` carry the key sequences for
+everything below, so `buildNodeTable` seeds from them and derives a sequence
+only for a target it has not seen. The duplicate scan still runs at every
+scope, because a collision that exists only in an outer scope cannot have been
+reported by an inner one. Allocations on the wide shape fall 3.8x at width 20
+(2,703,986 to 718,996) and 4.2x at width 40, with time down 25% and 15%; the
+deep-and-narrow shape is unchanged, and the W3C XSD corpus is unmoved at 35.1 s
+against a 35.6 s baseline with identical agreement counts. The curve is still
+quadratic — this lowers the constant on the factor that produced the 17.7 GB of
+churn rather than changing the shape.
+
+What made it safe to attempt is `xsd/identity_oracle_test.go`, which decides
+validity from the spec's definition over a generated tree and never calls
+`selectNodes`, `buildNodeTable` or `mergeTables`. It agrees with the engine on
+6,000 documents, and — the part that matters — it was checked against a
+deliberately broken `buildNodeTable` that only scans direct children, which is
+the mistake an incremental rewrite invites. It caught 416 disagreements, every
+one a false accept.
+
+The list:
+
+- A narrower `selectNodes`, walking descendants once for a single-step `.//a`
+  rather than re-walking from every descendant: cut allocations ~11% and left
+  the curve quadratic.
+- Memoising selector evaluation per (element, constraint): no effect at all,
+  because each level of the recursion is a *different* element, so the cache
+  never hits.
+- Matching each descendant *upward* against the step list — one subtree
+  traversal instead of a forward walk from every start. Correct, and the suites
+  agreed, but it only moves the cost: it halved the deep-chain case (27 ms to
+  13 ms at depth 960) and made the wide cases **1.6× slower** (177 ms to 284 ms
+  at depth 200, width 20), because re-walking a candidate's ancestors costs
+  more than the forward walk it replaced whenever the tree is broad.
+- Replacing `descendantsOrSelf` with a callback walk over child slices, to stop
+  materialising the subtree. An allocation profile had said `descendantsOrSelf`
+  was 90% of the churn, which made this look like the obvious win. It measured
+  **2.5× worse** — 35 MB per operation against 14 — because the per-level
+  slices the walk pushes cost more than the single flat slice they replace.
+  Being 90% of the allocation does not mean a cheaper way to allocate it
+  exists.
+
+The reason it resists a local fix is that **cross-level duplicate detection
+needs the whole-subtree walk**. A key at depth 1 and the same key at depth 2 must
+collide, and only the ancestor's full walk sees both — verified: that document
+is correctly rejected today. `mergeTables` cannot be reused for this, because it
+*drops* conflicting entries by design (the spec's rule for tables merged from
+below) where `buildNodeTable` must *report* them. A bottom-up rewrite would have
+to reproduce that difference exactly, along with per-target error reporting.
+That is a redesign of identity-constraint evaluation, not an optimisation.
+
+**A caller can now bound it.** `Schema.ValidateContext(ctx, root, opts)` takes a
+context and stops when it ends, returning `context.DeadlineExceeded` or
+`context.Canceled` rather than a `*ValidationErrors`. The check sits in the
+selected-node loop of `buildNodeTable` and `checkKeyref` — inside the walk whose
+cost this finding is about, not merely around it — so a deadline is honoured
+mid-run rather than reported afterwards. The quadratic curve is unchanged; what
+changes is that a service can put a ceiling on it that does not depend on
+`MaxDepth`. `Validate` without a context still runs to completion.
 
 ### A 3 KB schema took 35 seconds to load, in two places
 
@@ -676,150 +843,6 @@ stylesheet with no base case is still caught.
 
 ## Open findings
 
-### Open: identity constraints are quadratic on recursive elements
-
-Reachable from a hostile instance with default settings, but it needs a schema
-where a **recursive** element carries an identity constraint with a `.//`
-selector. Independently reproduced:
-
-| depth | input | time | allocated |
-|---|---|---|---|
-| 60 | 6.9 KB | 9 ms | 5 MB |
-| 120 | 14.0 KB | 25 ms | 20 MB |
-| 240 | 28.9 KB | 79 ms | 82 MB |
-| 480 | 58.7 KB | 304 ms | 332 MB |
-
-Doubling the depth quadruples both.
-
-The figures below are what the shape cost *before* the fix above, kept because
-they are what the amplification looked like and because the width factor is the
-part every earlier account of this got wrong.
-
-**`MaxDepth` bounds one of the two factors, not the cost.** This section used
-to claim the default `MaxDepth` of 1000 bounded the whole thing, at 111 KB
-costing 1.2 s and 1.2 GB. That is the worst case for a *chain*. The cost is
-depth times subtree size, and **width is the factor `MaxDepth` does not touch**.
-Re-measured at depth 990, varying the number of children per level:
-
-| width | nodes | input | time | churn | live heap |
-|---|---|---|---|---|---|
-| 0 | 990 | 16.3 KB | 291 ms | 151 MB | 2.4 MB |
-| 10 | 10,890 | 169.9 KB | 2.41 s | 2.19 GB | 9.7 MB |
-| 40 | 40,590 | 659.8 KB | 12.6 s | 8.71 GB | 43.8 MB |
-| 80 | 80,190 | 1.31 MB | **26.2 s** | **17.7 GB** | 73.8 MB |
-
-`DefaultMaxNodes` is 10,000,000, so the same shape goes further within default
-parse limits. What the old text got right is the *kind* of failure: live heap
-stays at 74 MB against 17.7 GB of churn, so this starves a service of CPU and
-hammers the collector rather than OOM-killing it.
-
-The per-depth figures in the table above are also stale — re-measured on the
-current tree, depth 480 costs 47 ms and 35 MB rather than 304 ms and 332 MB.
-The shape is right and the constants are an order of magnitude out; whether the
-code got faster or the original run was on slower hardware could not be
-established from the history.
-
-**The trigger is narrower than "a `.//` selector".** A control with the same
-document and the same selector, but the constraint declared on a
-*non-recursive* wrapper, is perfectly linear — 117 µs at depth 60, 1.72 ms at
-960. What costs is the constraint sitting on an element that is its own
-descendant, so `buildNodeTable` runs once per level and each run walks the whole
-remaining subtree. The recursion is the load-bearing half.
-
-**Fixed.** The evaluator now visits each node a bounded number of times, and
-the quadratic is gone: doubling the depth doubles the work rather than
-quadrupling it, measured at 2.00x across 240, 480 and 960 where it was 3.98,
-3.99 and 4.00. `xsd/identity_stats_test.go` asserts that ratio, so a return to
-the old shape fails the build rather than being noticed in a profile later.
-
-What changed is which subtree gets walked. A descendant element that declares
-the same constraint is itself a scope, and its own table already holds every
-target beneath it — so the walk stops there instead of descending again. On the
-recursive shape that turns a whole-subtree walk per level into a walk of the
-gap between one scope and the next. The child tables now carry every target
-they selected, not only the entries that survived merging: an ancestor decides
-duplicates from those, and a sequence two siblings share has to survive here
-even though `entries` drops it for keyref resolution.
-
-| | before | after |
-|---|---:|---:|
-| depth 960 | 23.6 ms, 1,400,001 allocations | **1.2 ms, 15,423** |
-| depth 200 width 40 | 214 ms, 1,223,930 | **121 ms, 104,340** |
-
-The first attempt at this was wrong in the direction that matters, and the
-oracle caught it: seeding the subtree's targets into the table only when the
-walk revisited them meant a target from below was never seen at all, so a key
-at depth 1 and the same key at depth 2 stopped colliding. 771 disagreements
-across the two generated corpora, and the four hand-written cross-level cases
-failed with it. Seeding before the walk rather than during it fixes it. That is
-precisely the mistake the review predicted a bottom-up merge would make.
-
-**The four earlier attempts, all reverted.** They are kept because each one is
-a plausible idea that measurement refuted, and because the reason they failed
-is the reason the fix above works: they all tried to make the same traversal
-cheaper, and the traversal was not the thing to change.
-
-**A fifth was tried and kept.** The four below all attacked the traversal.
-This one leaves the traversal alone and removes the *recomputation*: the child
-tables already flowing up through `mergeTables` carry the key sequences for
-everything below, so `buildNodeTable` seeds from them and derives a sequence
-only for a target it has not seen. The duplicate scan still runs at every
-scope, because a collision that exists only in an outer scope cannot have been
-reported by an inner one. Allocations on the wide shape fall 3.8x at width 20
-(2,703,986 to 718,996) and 4.2x at width 40, with time down 25% and 15%; the
-deep-and-narrow shape is unchanged, and the W3C XSD corpus is unmoved at 35.1 s
-against a 35.6 s baseline with identical agreement counts. The curve is still
-quadratic — this lowers the constant on the factor that produced the 17.7 GB of
-churn rather than changing the shape.
-
-What made it safe to attempt is `xsd/identity_oracle_test.go`, which decides
-validity from the spec's definition over a generated tree and never calls
-`selectNodes`, `buildNodeTable` or `mergeTables`. It agrees with the engine on
-6,000 documents, and — the part that matters — it was checked against a
-deliberately broken `buildNodeTable` that only scans direct children, which is
-the mistake an incremental rewrite invites. It caught 416 disagreements, every
-one a false accept.
-
-The list:
-
-- A narrower `selectNodes`, walking descendants once for a single-step `.//a`
-  rather than re-walking from every descendant: cut allocations ~11% and left
-  the curve quadratic.
-- Memoising selector evaluation per (element, constraint): no effect at all,
-  because each level of the recursion is a *different* element, so the cache
-  never hits.
-- Matching each descendant *upward* against the step list — one subtree
-  traversal instead of a forward walk from every start. Correct, and the suites
-  agreed, but it only moves the cost: it halved the deep-chain case (27 ms to
-  13 ms at depth 960) and made the wide cases **1.6× slower** (177 ms to 284 ms
-  at depth 200, width 20), because re-walking a candidate's ancestors costs
-  more than the forward walk it replaced whenever the tree is broad.
-- Replacing `descendantsOrSelf` with a callback walk over child slices, to stop
-  materialising the subtree. An allocation profile had said `descendantsOrSelf`
-  was 90% of the churn, which made this look like the obvious win. It measured
-  **2.5× worse** — 35 MB per operation against 14 — because the per-level
-  slices the walk pushes cost more than the single flat slice they replace.
-  Being 90% of the allocation does not mean a cheaper way to allocate it
-  exists.
-
-The reason it resists a local fix is that **cross-level duplicate detection
-needs the whole-subtree walk**. A key at depth 1 and the same key at depth 2 must
-collide, and only the ancestor's full walk sees both — verified: that document
-is correctly rejected today. `mergeTables` cannot be reused for this, because it
-*drops* conflicting entries by design (the spec's rule for tables merged from
-below) where `buildNodeTable` must *report* them. A bottom-up rewrite would have
-to reproduce that difference exactly, along with per-target error reporting.
-That is a redesign of identity-constraint evaluation, not an optimisation.
-
-**A caller can now bound it.** `Schema.ValidateContext(ctx, root, opts)` takes a
-context and stops when it ends, returning `context.DeadlineExceeded` or
-`context.Canceled` rather than a `*ValidationErrors`. The check sits in the
-selected-node loop of `buildNodeTable` and `checkKeyref` — inside the walk whose
-cost this finding is about, not merely around it — so a deadline is honoured
-mid-run rather than reported afterwards. The quadratic curve is unchanged; what
-changes is that a service can put a ceiling on it that does not depend on
-`MaxDepth`. `Validate` without a context still runs to completion.
-
 ### INFO — `javascript:` URLs pass through
 
 `<a href="{/d/u}"/>` yields `href="javascript:alert(document.domain)"`. This is
@@ -827,11 +850,19 @@ spec-conformant — XSLT does not sanitise URLs, and the value *is* correctly
 `&`-escaped. **If you render transform output as HTML, sanitise URL-valued
 attributes yourself.**
 
-### LOW — a CR in a text node does not survive a round trip
+### Withdrawn — a CR in a text node *does* survive a round trip
 
-`escapeText` escapes `&`, `<` and `>` but not `\r`. XML parsers normalise a
-literal CR to LF, so an identity transform silently changes the data.
-`escapeAttr` handles this correctly with `&#13;`.
+Recorded here as an open defect on the reading that `escapeText` handles `&`,
+`<` and `>` but not `\r`. That missed the branch above the switch: a CR,
+U+2028 and the whole C1 range are written as numeric references before the
+named escapes are reached, which is what `K2-Serialization-5`, `-10` and `-11`
+assert, with `-6` covering the attribute case. Measured across a bare CR, a CR
+between characters, a doubled CR, a CRLF pair and an attribute value: every one
+round-trips byte-identical. Pinned by `xslt/cr_roundtrip_test.go`.
+
+The XSLT `html` method is deliberately excluded from that branch, and correctly
+— HTML has no line-ending normalisation, so a CR there is an ordinary
+character.
 
 ---
 
