@@ -33,3 +33,8 @@
 # of the library. Everything they say that a reader needs is in docs/.
 /CLAUDE.md
 /.claude/
+
+# Audit reports from external reviewers. Local working material: the
+# findings that survive review land in CHANGELOG.md and the docs, and the
+# reports themselves are not redistributed here.
+/docs/audits/

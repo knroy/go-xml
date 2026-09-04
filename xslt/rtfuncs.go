@@ -367,7 +367,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		l.Add(xpath.Function{
 			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 1,
 			Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				name := stringArg(args[0])
+				name, err := stringArg(args[0], "fn:"+fname)
+				if err != nil {
+					return nil, err
+				}
 				n, ok := ctx.Item.(*xdm.Node)
 				// XTDE1370 and XTDE1380 say the same thing of their own
 				// function: it is an error "when there is no context node, or
@@ -410,7 +413,10 @@ func registerRuntimeFuncs(l *xpath.Library, rt *runtime) {
 		l.Add(xpath.Function{
 			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 2,
 			Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				name := stringArg(args[0])
+				name, err := stringArg(args[0], "fn:"+fname)
+				if err != nil {
+					return nil, err
+				}
 				var n *xdm.Node
 				if len(args[1]) == 1 {
 					n, _ = args[1][0].(*xdm.Node)
@@ -475,7 +481,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "system-property"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := stringArg(args[0])
+			name, err := stringArg(args[0], "fn:system-property")
+			if err != nil {
+				return nil, err
+			}
 			// XTDE1390: the argument must be a valid QName. A malformed one
 			// would otherwise fall through to the empty string, which is
 			// what a *valid* name for an unknown property returns — so the
@@ -549,7 +558,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := stringArg(args[0])
+			name, err := stringArg(args[0], "fn:function-available")
+			if err != nil {
+				return nil, err
+			}
 			uri, local, ok, err := availableName(
 				ctx, "XTDE1400", "function-available", name, resolve)
 			if err != nil {
@@ -573,7 +585,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "function-available"}, Arity: 2,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := stringArg(args[0])
+			name, err := stringArg(args[0], "fn:function-available")
+			if err != nil {
+				return nil, err
+			}
 			uri, local, ok, err := availableName(
 				ctx, "XTDE1400", "function-available", name, resolve)
 			if err != nil {
@@ -637,7 +652,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "type-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := stringArg(args[0])
+			name, err := stringArg(args[0], "fn:type-available")
+			if err != nil {
+				return nil, err
+			}
 			// XTDE1428 is the type-available spelling of the condition
 			// XTDE1400 states for function-available: a name that is not a
 			// QName at all is an error, not a type that happens to be absent.
@@ -673,7 +691,10 @@ func registerStaticFuncs(l *xpath.Library, resolve, resolveType, resolveElement 
 	l.Add(xpath.Function{
 		Name: xdm.QName{URI: xdm.NSFN, Local: "element-available"}, Arity: 1,
 		Call: func(ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			name := stringArg(args[0])
+			name, err := stringArg(args[0], "fn:element-available")
+			if err != nil {
+				return nil, err
+			}
 			uri, local, resolved, err := availableName(
 				ctx, "XTDE1440", "element-available", name,
 				resolveElement)
@@ -790,15 +811,36 @@ func generateID(it xdm.Item) (xdm.Sequence, error) {
 // *xdm.Atomic instead panics on any node argument, and the XSLT suite calls
 // system-property() with one — a panic in a request handler is a denial of
 // service, so this is a safety fix rather than a conformance one.
-func stringArg(seq xdm.Sequence) string {
-	atoms := xdm.Atomize(seq)
-	if len(atoms) == 0 {
-		return ""
+//
+// The cardinality is exactly one. Every caller's parameter is declared
+// "as xs:string" with no occurrence indicator — fn:system-property,
+// fn:function-available, fn:type-available, fn:element-available,
+// fn:unparsed-entity-uri, fn:unparsed-entity-public-id and the one-argument
+// fn:current-merge-group — so under the function conversion rules a two-item
+// argument is XPTY0004 and an empty one is too. Reading atoms[0] and
+// discarding the rest answered system-property(('a','b')) as if 'b' had not
+// been written, which is a wrong answer rather than a refused one; that is
+// the same silent truncation argAtomicRequired was introduced to stop.
+//
+// This mirrors xpath.argAtomicRequired rather than calling it: that helper is
+// unexported and takes the whole argument list, so its shape and its error
+// wording are reproduced here instead. AtomizeChecked is the atomizer of the
+// pair, because a function item cannot be atomized at all and plain Atomize
+// drops it silently where AtomizeChecked reports FOTY0013.
+func stringArg(seq xdm.Sequence, fn string) (string, error) {
+	atoms, err := xdm.AtomizeChecked(seq)
+	if err != nil {
+		return "", err
 	}
-	if a, ok := atoms[0].(*xdm.Atomic); ok {
-		return a.String()
+	if len(atoms) != 1 {
+		return "", xdm.ErrType(
+			"%s: argument 1 expects exactly one item, got %d", fn, len(atoms))
 	}
-	return ""
+	a, ok := atoms[0].(*xdm.Atomic)
+	if !ok {
+		return "", xdm.ErrType("%s: argument 1 is not an atomic value", fn)
+	}
+	return a.String(), nil
 }
 
 func fnKey(rt *runtime, ctx *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {

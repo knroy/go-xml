@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // A backtracking matcher for the XPath 2.0 / XML Schema regular expression
@@ -98,9 +100,18 @@ const backtrackBudget = 40_000_000
 // that it does not would be an answer this engine did not compute. FORX0002 is
 // the code the rest of the regex layer uses for "this pattern cannot be
 // evaluated here", and that is exactly what has happened.
+//
+// The code is nonetheless a poor description of the condition -- FORX0002 is
+// "invalid regular expression", and the pattern here is perfectly valid; what
+// ran out was this processor's budget. The specs give no code for that, so the
+// code is kept (callers and the conformance suites read it) and
+// xdm.ErrResourceLimit wrapped in alongside, which is the thing a caller
+// should branch on to tell "your pattern is wrong" from "retry with a shorter
+// input or a raised budget".
 var errBacktrackBudget = fmt.Errorf(
-	"FORX0002: regular expression exceeded the backtracking step budget; " +
-		"the pattern may be exponential in the length of the input")
+	"FORX0002: regular expression exceeded the backtracking step budget; "+
+		"the pattern may be exponential in the length of the input: %w",
+	xdm.ErrResourceLimit)
 
 // ---------------------------------------------------------------------------
 // AST

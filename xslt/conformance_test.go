@@ -354,3 +354,89 @@ func TestBuiltinTypeNeedsNoImport(t *testing.T) {
 		t.Errorf("got %s, want the date element", got)
 	}
 }
+
+// A calendar this implementation does not have is refused rather than
+// rendered with Gregorian fields.
+//
+// "OS" is Old Style — the Julian calendar — and section 9.8.4.3 requires the
+// value be "converted to a value in the specified calendar", not merely
+// labelled with its name. There is no Julian arithmetic here, so accepting
+// "OS" and formatting the Gregorian fields silently reported 2026-08-24 for a
+// date the Julian calendar puts on 11 August, thirteen days out. Which
+// calendars are supported is implementation-defined, so declining it is the
+// conformant answer, and the supported set is exactly the two Gregorian
+// spellings the formatter actually implements.
+func TestFormatDateCalendarArgument(t *testing.T) {
+	const date = `xs:date('2026-08-24')`
+	// A calendar in a namespace names another implementation's extension and
+	// is left alone; a name in no namespace that is not supported is
+	// FOFD1340, whether or not it appears in the specification's list.
+	cases := []struct{ cal, want, errCode string }{
+		{`'AD'`, "2026-08-24", ""},
+		{`'ISO'`, "2026-08-24", ""},
+		{`'Q{}ISO'`, "2026-08-24", ""},
+		{`()`, "2026-08-24", ""},
+		{`'Q{http://example.com/cal}OS'`, "2026-08-24", ""},
+		{`'OS'`, "", "FOFD1340"},
+		{`'ZODIAC'`, "", "FOFD1340"},
+		{`':w'`, "", "FOFD1340"},
+	}
+	for _, c := range cases {
+		expr := `format-date(` + date + `, '[Y0001]-[M01]-[D01]', (), ` + c.cal + `, ())`
+		sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+		  <xsl:template match="/"><out><xsl:value-of select="` +
+			strings.ReplaceAll(expr, `'`, "&apos;") + `"/></out></xsl:template>
+		</xsl:stylesheet>`
+		got, err := runErr(t, sheet, `<r/>`)
+		if c.errCode != "" {
+			if err == nil {
+				t.Errorf("calendar %s: got %s, want %s", c.cal, got, c.errCode)
+			} else if !strings.Contains(err.Error(), c.errCode) {
+				t.Errorf("calendar %s: got %v, want %s", c.cal, err, c.errCode)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("calendar %s: %v", c.cal, err)
+			continue
+		}
+		if !strings.Contains(got, ">"+c.want+"<") {
+			t.Errorf("calendar %s: got %s, want it to contain %q", c.cal, got, c.want)
+		}
+	}
+}
+
+// The ISO calendar's week components follow ISO 8601 rather than a
+// locale-dependent convention.
+//
+// Section 9.8.4.3 fixes them: weeks run Monday to Sunday, week 1 of a year is
+// the one containing its first Thursday, and a week belongs to the month
+// containing its Thursday. 2005-01-01 is therefore week 53 of 2004, and
+// 2007-01-01 opens week 1 — the two dates that separate the ISO rule from
+// numbering weeks from 1 January.
+func TestFormatDateISOWeekNumbering(t *testing.T) {
+	cases := []struct{ date, pic, want string }{
+		{"2005-01-01", "[W]", "53"},
+		{"2007-01-01", "[W]", "1"},
+		{"2004-05-01", "[W]", "18"},
+		// Day of the week is numbered from 1 = Monday; 2004-01-01 is a
+		// Thursday.
+		{"2004-01-01", "[F01]", "04"},
+		// Week within the month: 2006-01-30 is in a week whose Thursday
+		// falls in February, so it is still January's fifth week.
+		{"2006-01-30", "[w]", "5"},
+		{"2005-12-04", "[w]", "1"},
+	}
+	for _, c := range cases {
+		expr := `format-date(xs:date('` + c.date + `'), '` + c.pic + `', (), 'ISO', ())`
+		sheet := `<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+		  xmlns:xs="http://www.w3.org/2001/XMLSchema" version="2.0">
+		  <xsl:template match="/"><out><xsl:value-of select="` +
+			strings.ReplaceAll(expr, `'`, "&apos;") + `"/></out></xsl:template>
+		</xsl:stylesheet>`
+		if got := run(t, sheet, `<r/>`); !strings.Contains(got, ">"+c.want+"<") {
+			t.Errorf("%s %s: got %s, want %q", c.date, c.pic, got, c.want)
+		}
+	}
+}

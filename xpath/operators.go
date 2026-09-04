@@ -770,8 +770,21 @@ func singleInteger(ctx *Context, e Expr) (*int64, error) {
 		return nil, xdm.ErrType("the operands of \"to\" must be integers")
 	}
 	if !a.FitsInt64() {
-		return nil, xdm.Errorf("FOAR0002",
-			"range bound %s is too large to enumerate", a.String())
+		// FOAR0002 is "numeric operation overflow/underflow", which is not
+		// quite what happened: nothing overflowed, the processor declined
+		// to enumerate a range this large. The code is kept because callers
+		// and the conformance suites read it, and xdm.ErrResourceLimit is
+		// wrapped in alongside so a refusal is distinguishable from an
+		// arithmetic fault. xdm.Errorf cannot carry the sentinel -- it
+		// Sprintf's its arguments -- so the Error is built directly, which
+		// renders identically and unwraps.
+		return nil, &xdm.Error{
+			Code: "FOAR0002",
+			Message: fmt.Sprintf(
+				"range bound %s is too large to enumerate: %s",
+				a.String(), xdm.ErrResourceLimit),
+			Err: xdm.ErrResourceLimit,
+		}
 	}
 	n := a.Int64()
 	return &n, nil

@@ -74,6 +74,58 @@ code that reads the message keeps working. Wrap a new limit the same way:
 return fmt.Errorf("XPDY0130: ... : %w", MaxItems, xdm.ErrResourceLimit)
 ```
 
+#### Which limits carry it
+
+Every limit below reports a **semantic** code that misdescribes what happened,
+and every one of them now also carries the sentinel. The rightmost column is
+why the code alone is misleading; the codes are kept because callers and the
+conformance suites read them, and changing one is spec-visible.
+
+| Limit | Site | Code | What the code actually means |
+|---|---|---|---|
+| `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
+| `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
+| `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
+| `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
+| `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
+| range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
+| `maxNestDepth` | `xquery/nested.go` | `XPST0003` | the query is syntactically invalid |
+| `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
+
+The XSD case reaches a caller through `xsd.ValidationErrors`, which now
+unwraps to the individual `*ValidationError`s, so `errors.Is` over the whole
+set finds a sentinel any one of them carries:
+
+```go
+if err := schema.Validate(root, opts); errors.Is(err, xdm.ErrResourceLimit) {
+    // Nothing was assessed. The document may well be valid.
+}
+```
+
+Note the asymmetry that makes this worth doing: a refusal says **nothing**
+about the input. A document refused for depth may be perfectly valid, and a
+pattern refused for its backtracking budget may well match. Reporting either
+as a fault tells the user something untrue.
+
+#### Limits that decline without an error at all
+
+`xsd/subsume.go` and `xsd/restrict.go` do not raise anything when their budgets
+run out. They return "declined", and the caller falls back to the conservative
+XSD 1.0 structural table, which may reject a derivation the exact procedure
+would have admitted. That is sound — `xsd/budget_soundness_test.go` proves the
+fallback never accepts what the exact answer rejects — but it is silent: a
+schema refused because a budget ran out looked exactly like one the table
+genuinely forbids.
+
+Those declines are now **counted** rather than raised, through the
+`budgetStats` hook in `xsd/subsume.go`, on the model of `icStats` in
+`xsd/identity.go`. Budget declines (fixable by raising `subsumeMaxStates`,
+`subsumeMaxProduct` or `branchLimit`) are counted separately from structural
+ones (a recursive model group, an all group, a wildcard — no budget affects
+these). The counters are a measurement tool for the package rather than API
+surface, and nothing reads them to make a decision: the verdicts are exactly
+what they were before the counting existed.
+
 ---
 
 ## xdm.ParseOptions

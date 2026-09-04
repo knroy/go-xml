@@ -1033,7 +1033,10 @@ func registerMergeFuncs(l *xpath.Library) {
 			if err != nil {
 				return nil, err
 			}
-			want := stringArg(args[0])
+			want, err := stringArg(args[0], "fn:current-merge-group")
+			if err != nil {
+				return nil, err
+			}
 			for i, n := range b.names {
 				// An invented name is not one the stylesheet may ask for:
 				// 15.6.1 says the key is "the value of the name attribute",

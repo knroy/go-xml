@@ -80,7 +80,10 @@ func registerOutputFuncs(l *xpath.Library) {
 			Name: xdm.QName{URI: xdm.NSFN, Local: fn.name}, Arity: 2,
 			Since: xpath.XPath31,
 			Call: func(_ *xpath.Context, args []xdm.Sequence) (xdm.Sequence, error) {
-				name := stringArg(args[0])
+				name, err := stringArg(args[0], "fn:"+fname)
+				if err != nil {
+					return nil, err
+				}
 				if len(args[1]) != 1 {
 					return nil, fmt.Errorf(
 						"XPTY0004: the second argument of %s() must be a single node",

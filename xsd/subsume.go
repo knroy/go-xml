@@ -24,7 +24,89 @@ package xsd
 // *unrolled* into ordinary states, under a hard size cap: a model that would
 // exceed the cap is declined rather than approximated.
 
-import "github.com/knroy/go-xml/xdm"
+import (
+	"sync/atomic"
+
+	"github.com/knroy/go-xml/xdm"
+)
+
+// budgetStats counts the times an exact procedure in this package DECLINED to
+// decide and the conservative fallback answered instead.
+//
+// The declines are sound -- a fallback never accepts what the exact answer
+// rejects, which TestSubsumeDeclineIsNotAcceptance and TestRestrictionBudget-
+// Soundness pin -- but until now they were also invisible. Nothing was
+// returned: particleSubsumes and allBranchCounts answer (nil, false), the
+// caller falls through to the structural table, and a schema that was refused
+// because a budget ran out is indistinguishable from one the table genuinely
+// forbids. A user asking "why was my legal XSD 1.1 restriction rejected?" had
+// no way to find out, and neither did a maintainer wondering whether a budget
+// is set anywhere near where real schemas need it.
+//
+// So the counters exist to report the decline, not to change it. Nothing reads
+// them to make a decision; raising or lowering a budget is the only thing that
+// changes an answer.
+//
+// The two kinds are separated because only one of them is a budget:
+//
+//   - Budget: the model is decidable, this processor declined to spend what
+//     deciding it costs. Raising subsumeMaxStates, subsumeMaxProduct or
+//     branchLimit would produce an exact answer. This is the number worth
+//     watching -- a nonzero count on a real schema means a budget is set below
+//     what that schema needs.
+//   - Structural: the shape is outside what the procedure can decide at all --
+//     a recursive model group, an all group, a wildcard with no per-name
+//     count. No budget affects these; the fallback is the design.
+//
+// Nil in ordinary use and allocated only by a test that asks for it, so the
+// counting costs one nil check on a path that is already allocating states.
+type budgetStats struct {
+	// SubsumeBudget counts particleSubsumes declines caused by
+	// subsumeMaxStates or subsumeMaxProduct.
+	SubsumeBudget atomic.Uint64
+	// SubsumeStructural counts particleSubsumes declines caused by the
+	// shape of the model rather than by a budget.
+	SubsumeStructural atomic.Uint64
+	// BranchBudget counts allBranchCounts declines caused by branchLimit.
+	BranchBudget atomic.Uint64
+	// BranchStructural counts allBranchCounts declines caused by a term
+	// that has no per-name count, such as a wildcard.
+	BranchStructural atomic.Uint64
+}
+
+// budgetStatsHook lets a caller observe the declines of the next schema loads.
+// It is nil in every ordinary build; xsd/budget_stats_test.go sets it, the way
+// identity.go's icStatsHook is set. Counting through a hook rather than an
+// option keeps this a measurement tool for this package rather than API
+// surface, which is the same call identity.go made.
+var budgetStatsHook func() *budgetStats
+
+// declined records one decline against the named counter. It never influences
+// the verdict: every caller returns exactly what it returned before.
+func declined(pick func(*budgetStats) *atomic.Uint64) {
+	if budgetStatsHook == nil {
+		return
+	}
+	if st := budgetStatsHook(); st != nil {
+		pick(st).Add(1)
+	}
+}
+
+func declineSubsumeBudget() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.SubsumeBudget })
+}
+
+func declineSubsumeStructural() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.SubsumeStructural })
+}
+
+func declineBranchBudget() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.BranchBudget })
+}
+
+func declineBranchStructural() {
+	declined(func(s *budgetStats) *atomic.Uint64 { return &s.BranchStructural })
+}
 
 // subsumeMaxStates caps the unrolled NFA for either side.
 //
@@ -105,6 +187,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		return []int{from}, true
 	}
 	if len(n.trans) > subsumeMaxStates {
+		declineSubsumeBudget()
 		return nil, false
 	}
 
@@ -147,6 +230,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// and the base then accepted a lone d1 that it does not allow.
 		entry := n.addState()
 		if len(n.trans) > subsumeMaxStates {
+			declineSubsumeBudget()
 			return nil, false
 		}
 		nfaEpsilon(n, cur, entry)
@@ -160,6 +244,7 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 		// because the next copy must start from exactly one.
 		join := n.addState()
 		if len(n.trans) > subsumeMaxStates {
+			declineSubsumeBudget()
 			return nil, false
 		}
 		for _, o := range outs {
@@ -184,6 +269,7 @@ func nfaOnce(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]int,
 	case *ElementDecl, *Wildcard:
 		to := n.addState()
 		if len(n.trans) > subsumeMaxStates {
+			declineSubsumeBudget()
 			return nil, false
 		}
 		n.trans[from] = append(n.trans[from], nfaEdge{term: t, particle: p, to: to})
@@ -193,12 +279,14 @@ func nfaOnce(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]int,
 		// A group that reaches itself describes a non-regular language;
 		// automaton.go refuses it and so does this.
 		if active[t] {
+			declineSubsumeStructural()
 			return nil, false
 		}
 		active[t] = true
 		defer delete(active, t)
 		return nfaGroup(n, t, from, active)
 	}
+	declineSubsumeStructural()
 	return nil, false
 }
 
@@ -213,6 +301,7 @@ func nfaGroup(n *nfa, g *ModelGroup, from int, active map[*ModelGroup]bool) ([]i
 			if len(cur) != 1 {
 				entry = n.addState()
 				if len(n.trans) > subsumeMaxStates {
+					declineSubsumeBudget()
 					return nil, false
 				}
 				for _, c := range cur {
@@ -246,8 +335,10 @@ func nfaGroup(n *nfa, g *ModelGroup, from int, active map[*ModelGroup]bool) ([]i
 		// only affordable for small k, and allSubsumes already decides
 		// the all-group cluster by counting rather than by language, so
 		// this declines and leaves that path in charge.
+		declineSubsumeStructural()
 		return nil, false
 	}
+	declineSubsumeStructural()
 	return nil, false
 }
 
@@ -341,6 +432,7 @@ func particleSubsumes(r, b *Particle) (error, bool) {
 
 	for len(queue) > 0 {
 		if len(seen) > subsumeMaxProduct {
+			declineSubsumeBudget()
 			return nil, false
 		}
 		p := queue[0]

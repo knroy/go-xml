@@ -8,6 +8,20 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Changed
 
+- **Dividing one duration by another now returns the same `xs:decimal` as
+  dividing the equivalent numbers.** `xs:dayTimeDuration("PT1S") div
+  xs:dayTimeDuration("PT3S")` kept the exact rational 1/3, while `1 div 3` is
+  normalized to the 18 fraction digits `xs:decimal` supports. The two printed
+  identically, compared unequal, and their difference printed as `0` without
+  being zero. F&O defines both duration-division operators by delegation to
+  `op:numeric-divide` -- the day/time ratio "by applying `op:numeric-divide` to
+  the two `xs:decimal` operands", the year/month ratio "according to the rules
+  of the `op:numeric-divide` function for integer operands" -- so they take
+  that function's precision, and §9.7.1 scopes duration arithmetic to what
+  happens when a processor limits the digits in an `xs:decimal`. Both paths now
+  round like ordinary division. Terminating ratios are unchanged: `PT1S div
+  PT2S` is still exactly `0.5`.
+
 - **A singleton parameter given two items is now a type error rather than a
   wrong answer.** `fn:format-number`, `fn:format-integer`, `fn:format-date`
   and its siblings, `fn:dateTime`, `fn:error`, `fn:key` and `fn:regex-group`
@@ -879,6 +893,57 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   `TestSplitSecondPrecondition` pins the range across the parsers, the
   arithmetic that borrows across a minute, and timezone adjustment, so the
   assumption fails loudly if a constructor stops providing it.
+
+- **Six resource limits reported semantic error codes that actively misled a
+  caller, and two more declined with no error at all.** `xdm.ErrResourceLimit`
+  was added in the previous release and wired into two of the eight sites; the
+  rest are done here, the same way -- the sentinel is APPENDED with `%w`, so
+  the spec code and the leading message stay byte-identical and the ~30 sites
+  that match on error text, plus every conformance suite, are unaffected.
+
+  What each code claimed, and what had actually happened: `XPDY0001` ("no
+  context item is defined") for `Context.Descend`'s recursion cap, which has a
+  context and is merely deep; `XPST0003` ("the expression is syntactically
+  invalid") for `parseSequenceType`'s type-nesting cap and for `xquery`'s
+  `maxNestDepth`, both of which refuse well-formed input; `FORX0002` ("invalid
+  regular expression") for a pattern that is valid and may well match, whose
+  backtracking budget ran out; `FOAR0002` ("numeric overflow") for a range
+  bound the enumerator declined, where nothing overflowed; and `cvc-elt.1`
+  ("the element is invalid against its declaration") for a `MaxDepth` refusal,
+  where nothing was assessed against any declaration at all.
+
+  The asymmetry is what makes these worth separating: a refusal says *nothing*
+  about the input. A document refused for depth may be perfectly valid, and the
+  code told its caller the opposite. Every code is kept -- callers and the
+  suites read them, and changing one is spec-visible -- so the distinction is
+  drawn by `errors.Is(err, xdm.ErrResourceLimit)` instead. The XSD case reaches
+  a caller through `xsd.ValidationErrors`, which now unwraps to the individual
+  failures so `errors.Is` over the whole set finds it.
+
+  `xsd/subsume.go` and `xsd/restrict.go` are the quiet pair: their budgets
+  raise nothing, returning "declined" so the caller falls back to the
+  conservative XSD 1.0 structural table. That fallback is SOUND -- the
+  differential suite in `xsd/budget_soundness_test.go` proves it never accepts
+  what the exact answer rejects, and no verdict here changes -- but it was
+  invisible, so a legal XSD 1.1 restriction refused because a budget ran out
+  was indistinguishable from one the table genuinely forbids. Those declines
+  are now counted through a `budgetStats` hook, on the model of `icStats` in
+  `xsd/identity.go`: nil in every ordinary build, read by nothing that makes a
+  decision. Budget declines, which raising `subsumeMaxStates`,
+  `subsumeMaxProduct` or `branchLimit` would turn into exact answers, are
+  counted separately from structural ones -- a recursive model group, an all
+  group, a wildcard with no per-name count -- which no limit affects.
+
+  Both halves were validated by sabotage. Unwrapping the type-nesting site,
+  substituting the XSD code instead of adding to it, mis-attributing a budget
+  decline as structural, and turning one decline into an acceptance each failed
+  a named test; the last was caught by the pre-existing soundness suite as well.
+
+  Noted, not changed: `xpath.singleInteger`, which holds the `FOAR0002` site,
+  currently has no caller -- `to` reads its bounds through `bigInteger`, which
+  keeps the arbitrary precision rather than narrowing. It is wrapped anyway and
+  covered by a test, because a limit that reports `FOAR0002` without the
+  sentinel is exactly the defect this contract exists to stop recurring.
 
 
 ### Added
@@ -2163,3 +2228,180 @@ The new tests assert results rather than the absence of an error, since the
 failure mode throughout this family is a confidently wrong answer. Each was
 confirmed to fail against a deliberate reintroduction of the narrowing it
 covers.
+
+### `roundGuard`: a test that named a branch it never entered
+
+The regression test shipped with the `roundGuard` fix did not exercise the
+branch it was named for. Instrumenting `roundPlaces` showed the whole `xpath`
+package test suite entering the non-terminating branch **zero** times: every
+generated value — `1/2^n`, `3*10^k`, `1/2` — terminates, so all 460 calls took
+the `ratScale(r) == true` path or the negative-precision path. The audit that
+raised this was correct.
+
+`roundGuard` is now a package-level `var`, matching the seam
+`xsd/budget_soundness_test.go` already uses for `maxPositions`, `branchLimit`,
+`subsumeMaxStates` and `subsumeMaxProduct`. Tests inject a small guard and
+restore it with `defer`; it is never assigned outside `_test.go`. Injection is
+the only way to reach the branch at all — at the shipped `1<<20` it needs a
+precision above a million, and `exactRound` would then build a bignum with a
+million digits.
+
+Four tests were added over genuinely non-terminating rationals (`1/3`, `1/7`,
+`22/7`, `1/6`, `2/11`). They assert the branch was **entered**, by the one
+observable no terminating value can produce: a precision above the guard
+coming back reduced to exactly the guard, while a precision at or below it
+passes through unchanged.
+
+**The guard's contract, now stated and tested.** A non-terminating rational has
+no finite decimal expansion, so for every precision `p` it lies *strictly*
+between the two adjacent multiples of `10^-p` — never on one, never on the
+halfway point. Rounding it is therefore decided by a strict inequality that no
+further digit can flip: a tie is unreachable, `round` and `round-half-to-even`
+must agree, and the result is never the identity and never zero. That is what
+makes reducing the precision safe. It does *not* claim `round(x, p)` equals
+`round(x, guard)` — those are different numbers — only that the reduced answer
+is the correctly rounded value at the reduced precision, computed without a
+fabricated tie.
+
+**Policy, previously undocumented.** The code reduces precision rather than
+raising an error, and that choice is now written down rather than left to be
+inferred. An `xdm.ErrResourceLimit` refusal was considered and rejected because
+the branch is **unreachable from production callers**: the `xs:integer` and
+`xs:decimal` branches of `fn:round` hold terminating values by construction,
+and the `xs:double` branch builds its value with `big.Rat.SetFloat64`, which
+yields a dyadic rational — also terminating. A resource error no caller can
+provoke would be untestable dead policy. A documented implementation precision
+limit is the honest description of a fallback reachable only by future callers,
+and the contract above is what such a caller would inherit.
+
+The terminating-value tests are kept and strengthened: one now forces the guard
+to 2, so a reintroduced clamp cannot hide behind `1<<20` exceeding any
+precision a test would otherwise use.
+
+Sensitivity was confirmed in both directions. Restoring the clamp on
+terminating values failed `TestRoundGuardReductionPreservesValue`,
+`TestRoundGuardKnownRegressions` and the new
+`TestRoundGuardTerminatingNeverClamped`. Three separate corruptions of the
+non-terminating branch — returning `identity` instead of a precision, an
+off-by-one clamp, and a wrong threshold with a halved result — each failed the
+new tests; the off-by-one and threshold variants passed every pre-existing
+test, which is the gap this change closes.
+
+## fn:format-date no longer claims the Julian calendar
+
+`supportedCalendar` accepted `OS` alongside `AD`, `ISO` and the default. `OS`
+is Old Style — the Julian calendar — not a third spelling of the Gregorian
+one. Section 9.8.4.3 of *XPath and XQuery Functions and Operators 3.0* lists it
+that way, and requires that the value "must be converted to a value in the
+specified calendar and then converted to a string using the conventions of that
+calendar"; its note formats the XML Schema date `1502-01-11` as *1 January
+1502* to make the point that the value is converted rather than relabelled.
+
+There is no Julian arithmetic anywhere in the engine. `formatDateTimePicture`
+takes no calendar argument at all, so every calendar it accepts is rendered
+from the same Gregorian fields. The result was that
+`format-date(xs:date('2026-08-24'), '[Y0001]-[M01]-[D01]', (), 'OS', ())`
+returned `2026-08-24` — the Gregorian date, thirteen days from the Julian one
+in 2026. That is a wrong date, not a wrong label, and it was returned silently.
+
+`OS` is therefore no longer claimed. Which calendars are supported is
+·implementation-defined· and the specification requires only that at least one
+be supported, so declining a calendar the formatter cannot compute is the
+conformant answer; the name now falls to the existing `FOFD1340` path. The
+supported set is exactly the two Gregorian spellings the formatter implements.
+
+The alternative — implementing Julian conversion — was rejected as
+disproportionate. It is not one function: the conversion interacts with the era
+component, with the year-zero convention (which the specification says differs
+between `OS` and `ISO`), and with the `$place` argument, since countries using
+Old Style began the year on different days and disagreed about leap years. None
+of that is exercised by any test in either suite.
+
+ISO week numbering was audited at the same time and needed no change.
+`weekOfYear`, `weekOfMonth` and the `[F]` component already implement the
+ISO 8601 rules the same section fixes — weeks running Monday to Sunday, week 1
+being the one containing the year's first Thursday, and a week belonging to the
+month containing its Thursday. These were untested from XSLT and now are:
+2005-01-01 is week 53 of the previous year and 2007-01-01 is week 1, which is
+what separates the ISO rule from numbering weeks from 1 January.
+
+Sensitivity was confirmed: restoring `"OS"` to `supportedCalendar` failed
+`TestFormatDateCalendarArgument` with `got 2026-08-24, want FOFD1340` — the
+wrong date the change removes.
+
+## xslt: a lossy grouping key merged distinct integers into one group
+
+`xsl:for-each-group group-by=` found a group by hashing the key value to a
+string and looking it up in a map. For an `xs:integer` or `xs:decimal` that
+string is `xpath.GroupingKey`, which formats the value through a `float64`, so
+it is lossy exactly where those two types hold a value no double can name:
+`9007199254740992` and `9007199254740993` produce the same string, as does
+every value past the double range once it formats as `+Inf`.
+
+The map lookup trusted a HIT. `groupByKey` already carried an exact rescan for
+erratum E25, but it runs only on a MISS, so a wrongly-matching key was never
+re-verified. Distinct `xs:integer`s above 2^53 were therefore put in one group,
+and a population above 1.8e308 collapsed into a single group — with a count
+that nothing in the result reveals as wrong. Grouping now verifies a numeric
+hit with `xpath.GroupingEqual` before joining, which is the same comparison the
+miss path already used.
+
+The fix is deliberately in the grouping code and not in the key. Making the key
+exact — appending the value's rational — was tried first and is wrong: grouping
+compares with `eq`, which is **not transitive** across the numeric types.
+`xs:decimal("1.00000000000000000001")` and `xs:decimal("1.00000000000000000002")`
+are unequal, yet each equals `xs:double("1.0")`, and no single string can
+express a non-transitive relation. The attempt also regressed four suite cases
+(`key-003`, `key-004`, `key-068`, `backwards-039`), because `xsl:key` and the
+accumulators index by the same string with no rescan at all and routinely store
+a key under one numeric type and seek it under another — `key-004` stores
+`number(q)` as `xs:double` 3.7 and seeks the `xs:decimal` literal 3.7. The key
+is a bucket; the comparison decides.
+
+`fn:distinct-values` was audited and needed no change: it compares numerics
+pairwise with `compareValues` and never reaches the lossy key.
+
+Sensitivity was confirmed: removing the hit verification failed
+`TestGroupByKeyIsExactBeyondDouble` on all three cases — 2^53 and 2^53+1 in one
+group of two, the two sub-precision decimals in one group of two, and the three
+values above 1.8e308 in a single group of three.
+
+## xslt: system-property and its neighbours truncated a sequence argument
+
+`stringArg` read `atoms[0]` of whatever it was given, so
+`system-property(('xsl:version','xsl:vendor'))` answered `"3.0"` as though the
+second item had not been written. Every parameter it reads is declared
+`as xs:string` in XSLT 3.0 — no occurrence indicator — so under the function
+conversion rules a two-item argument is `XPTY0004` and the empty sequence is
+too. The declared cardinality was checked against the vendored specification
+for all nine call sites before the behaviour was changed:
+`fn:system-property`, `fn:function-available` (both arities),
+`fn:type-available`, `fn:element-available`, `fn:unparsed-entity-uri`,
+`fn:unparsed-entity-public-id` (both arities) and the one-argument
+`fn:current-merge-group`. All nine are singletons; none is `xs:string*`, so
+none was spared.
+
+`stringArg` now returns an error and names the function in it. It mirrors
+`xpath.argAtomicRequired` rather than calling it — that helper is unexported
+and takes the whole argument list — including its use of `AtomizeChecked`,
+which reports `FOTY0013` for a function item where plain `Atomize` drops it.
+
+Sensitivity was confirmed: restoring the truncating read failed
+`TestStringArgIsASingleton` on all seven subtests, with
+`system-property(('xsl:version','xsl:vendor'))` again answering `"3.0"`.
+
+## xpath: [Y] on a BCE year is correct, and is now pinned
+
+`format-date`/`format-dateTime` with `[Y]` renders `xs:dateTime(
+"-1000000-06-15T12:00:00Z")` as `1000000`, with no minus. This was reported as
+a dropped sign. It is not one: the F&O 3.0 component table defines the
+specifier as "Y — year (absolute value)" and gives the sign its own specifier
+in the same table, "E — era". `[Y] [E]` answers `1000000 bc`, which is correct,
+and emitting a minus from `[Y]` would state the sign twice for every picture
+that already names `[E]`.
+
+No code changed. `TestFormatDateTimeYearIsAbsoluteValue` is a characterization
+test recording the rule, so that the next reader of the `if y < 0 { y = -y }`
+line finds it rather than the surprise. Sensitivity was confirmed by making
+`[Y]` emit the sign: the test failed with `-1000000 bc` and `bc -1000000`,
+which is the double-signed output the rule exists to prevent.

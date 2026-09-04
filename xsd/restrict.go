@@ -2108,6 +2108,7 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 		return out, true
 	}
 	// A wildcard cannot be counted per name.
+	declineBranchStructural()
 	return nil, false
 }
 
@@ -2137,6 +2138,7 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 			}
 			out = append(out, brs...)
 			if len(out) > branchLimit {
+				declineBranchBudget()
 				return nil, false
 			}
 		}
@@ -2154,6 +2156,7 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 			return nil, false
 		}
 		if len(out)*len(brs) > branchLimit {
+			declineBranchBudget()
 			return nil, false
 		}
 		next := make([]branchCount, 0, len(out)*len(brs))

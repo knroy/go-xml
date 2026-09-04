@@ -1,6 +1,8 @@
 package xpath
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
@@ -1360,6 +1362,31 @@ func (p *Parser) resolveFunctionName(lex string) (xdm.QName, error) {
 	return xdm.QName{Prefix: prefix, URI: uri, Local: local}, nil
 }
 
+// resourceLimit marks err as a refusal to do the work rather than a fault in
+// the input, without disturbing the error code it already carries.
+//
+// The wrap in parser.go can be written inline because that site builds its
+// error with fmt.Errorf, where %w does the job. A site that goes through
+// Parser.errorf cannot: errorf splits the leading code out into an xdm.Error
+// field, and xdm.Errorf formats its arguments with Sprintf, so a %w verb there
+// would render the sentinel's text and still leave errors.Is false. Rebuilding
+// the same Error with Err set gives the identical rendering — the sentinel's
+// message is appended exactly as %w would append it — and unwraps.
+func resourceLimit(err error) error {
+	var e *xdm.Error
+	if !errors.As(err, &e) {
+		return fmt.Errorf("%s: %w", err, xdm.ErrResourceLimit)
+	}
+	out := *e
+	out.Message = fmt.Sprintf("%s: %s", e.Message, xdm.ErrResourceLimit)
+	if out.Err == nil {
+		out.Err = xdm.ErrResourceLimit
+	} else {
+		out.Err = fmt.Errorf("%w: %w", out.Err, xdm.ErrResourceLimit)
+	}
+	return &out
+}
+
 // parseSequenceType parses a type annotation used by instance of, cast,
 // castable and treat.
 func (p *Parser) parseSequenceType() (SequenceType, error) {
@@ -1374,8 +1401,13 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 	p.depth++
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
-		return st, p.errorf("XPST0003: type nesting exceeds %d levels",
-			maxParseDepth)
+		// The exact twin of the expression-nesting guard in parser.go, and
+		// it is wrapped the same way: XPST0003 is kept because callers and
+		// the conformance suites match on it, but the type is well-formed
+		// and merely deeper than this processor will parse, so the sentinel
+		// is added alongside. See xdm.ErrResourceLimit.
+		return st, resourceLimit(p.errorf(
+			"XPST0003: type nesting exceeds %d levels", maxParseDepth))
 	}
 
 	t := p.cur()

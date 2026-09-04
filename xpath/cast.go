@@ -484,6 +484,31 @@ func scaleDuration(d, n *xdm.Atomic, op string) (*xdm.Atomic, error) {
 	return durationFromSigned(int(months.Int64()), secs, d.Type), nil
 }
 
+// divideDurations implements op:divide-yearMonthDuration-by-yearMonthDuration
+// and op:divide-dayTimeDuration-by-dayTimeDuration, both of which return an
+// xs:decimal.
+//
+// The quotient goes through roundToDecimalPrecision, the same normalization
+// ordinary division applies. F&O defines both operators by delegation rather
+// than independently: the dayTime ratio is computed "by applying
+// op:numeric-divide to the two xs:decimal operands", and the yearMonth ratio
+// "according to the rules of the op:numeric-divide function for integer
+// operands". Whatever precision op:numeric-divide has is therefore the
+// precision these have, so keeping the exact rational here was not a stricter
+// reading of the spec but a different one from the very function the spec
+// points at. (F&O 9.7.1 anticipates this directly, scoping duration arithmetic
+// to what happens "if a processor limits the number of digits allowed in the
+// representation of xs:integer and xs:decimal".)
+//
+// Independently of the spec text, one processor must not produce two different
+// decimals for the same mathematical quotient depending on which subsystem
+// computed it. Leaving this exact did exactly that: PT1S div PT3S and 1 div 3
+// printed identically, compared unequal, and their difference printed as "0"
+// while not being zero.
+//
+// Terminating ratios are unaffected -- rounding an exactly representable value
+// to 18 fraction digits returns it unchanged -- so PT1S div PT2S is still
+// exactly 0.5.
 func divideDurations(a, b *xdm.Atomic) (*xdm.Atomic, error) {
 	if a.Type != b.Type {
 		return nil, xdm.ErrType("cannot divide %s by %s", a.TypeName(), b.TypeName())
@@ -495,13 +520,14 @@ func divideDurations(a, b *xdm.Atomic) (*xdm.Atomic, error) {
 			// duration, so this is ordinary numeric division by zero.
 			return nil, fmt.Errorf("FOAR0001: division by a zero duration")
 		}
-		return xdm.NewDecimal(big.NewRat(
-			int64(da.SignedMonths()), int64(db.SignedMonths()))), nil
+		return xdm.NewDecimal(roundToDecimalPrecision(big.NewRat(
+			int64(da.SignedMonths()), int64(db.SignedMonths())))), nil
 	}
 	if db.SignedSeconds().Sign() == 0 {
 		return nil, fmt.Errorf("FOAR0001: division by a zero duration")
 	}
-	return xdm.NewDecimal(new(big.Rat).Quo(da.SignedSeconds(), db.SignedSeconds())), nil
+	return xdm.NewDecimal(roundToDecimalPrecision(
+		new(big.Rat).Quo(da.SignedSeconds(), db.SignedSeconds()))), nil
 }
 
 // addDurationToDate adds (or subtracts) a duration from a date/time value.

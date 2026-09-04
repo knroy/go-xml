@@ -549,7 +549,14 @@ func (c *Context) Err() error {
 // the limit.
 func (c *Context) Descend() (*Context, error) {
 	if lim := c.depthLimit(); c.Depth >= lim {
-		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels", lim)
+		// XPDY0001 is kept because callers and the conformance suites read
+		// it, but it properly means "no context item is defined" and this
+		// is nothing of the sort: the expression is well-formed and has a
+		// context, it is merely deeper than this processor will evaluate.
+		// The sentinel is added alongside so a caller can tell a refusal
+		// from a fault. See xdm.ErrResourceLimit.
+		return nil, fmt.Errorf("XPDY0001: recursion exceeded %d levels: %w",
+			lim, xdm.ErrResourceLimit)
 	}
 	n := *c
 	n.Depth++

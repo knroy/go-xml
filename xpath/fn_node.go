@@ -604,7 +604,43 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 // proportional to the input the caller supplied. Only for a non-terminating
 // rational is a constant a resource limit in the strict sense: changing it
 // changes how long a hopeless request takes to refuse, never an answer.
-const roundGuard = 1 << 20
+//
+// # Policy for the non-terminating case
+//
+// When a non-terminating rational is asked for more places than roundGuard,
+// this code REDUCES the precision rather than raising an error. That is
+// deliberate, and it is sound, because of the guard's contract:
+//
+//	A non-terminating rational has no finite decimal expansion, so for every
+//	precision p it is strictly between the two adjacent multiples of 10^-p --
+//	it can never sit exactly on one, and never on the halfway point between
+//	them. Rounding is therefore decided by a strict inequality that no
+//	additional digit can flip, and a tie is unreachable. Answering at
+//	precision g instead of p > g is a genuinely different number, but it is
+//	the correctly rounded value at g, produced without a tie-break the value
+//	does not have.
+//
+// So the reduction is not a wrong answer to the question asked, it is a
+// correct answer to a less precise question -- a declared implementation
+// precision limit, XQuery 3.1 4.4.4's "implementation of xs:decimal that
+// imposes no limits" being unachievable for a value with no finite expansion.
+// An error (xdm.ErrResourceLimit, which xpath uses for a refusal to compute)
+// would be the alternative policy, and it was rejected for one reason: this
+// branch is UNREACHABLE from the fn:round and fn:round-half-to-even callers.
+// Both the xs:integer and xs:decimal branches hold terminating values by
+// construction, and the xs:double branch builds its value with
+// big.Rat.SetFloat64, which yields a dyadic rational -- also terminating. A
+// resource error no caller can provoke would be untestable dead policy;
+// a documented precision limit is the honest description of a reachable-only-
+// -by-future-callers fallback. TestRoundGuardNonTerminating* pin the contract
+// above so a future caller that does reach here inherits a proven property
+// rather than an assertion.
+//
+// roundGuard is a var, not a const, only so those tests can inject a small
+// value and observe the branch; it is never assigned outside _test.go. This
+// matches how xsd/budget_soundness_test.go exercises maxPositions,
+// branchLimit, subsumeMaxStates and subsumeMaxProduct.
+var roundGuard int64 = 1 << 20
 
 // saturateInt64 reads an xs:integer precision without wrapping.
 //
@@ -690,7 +726,7 @@ func roundPlaces(r *big.Rat, places int64) (p int, identity, zero bool) {
 		// Only a non-terminating rational has no scale to bound it, and only
 		// there is a constant a resource limit rather than an answer.
 		if places > roundGuard {
-			return roundGuard, false, false
+			return int(roundGuard), false, false
 		}
 		return int(places), false, false
 	}

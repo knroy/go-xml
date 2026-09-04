@@ -287,6 +287,31 @@ func groupByKey(rt *runtime, seq xdm.Sequence, key *xpath.Compiled,
 				numericTypes[a.Type] = true
 			}
 			gi, ok := index[k]
+			if ok {
+				// The key is a hash, and for an xs:integer or xs:decimal it
+				// is a lossy one: GroupingKey formats the value through a
+				// float64, so 9007199254740992 and 9007199254740993 produce
+				// the same string, as does every value past the double range
+				// once it formats as +Inf. A HIT therefore has to be
+				// verified, exactly as the MISS below is: without this, two
+				// distinct integers above 2^53 silently joined one group and
+				// a population above 1.8e308 collapsed into a single group,
+				// with a count that nothing in the result reveals as wrong.
+				//
+				// The verification cannot be folded into the key instead.
+				// Grouping compares with "eq", which is NOT TRANSITIVE across
+				// the numeric types -- xs:decimal("1.00000000000000000001")
+				// and xs:decimal("1.00000000000000000002") are unequal, yet
+				// each equals xs:double("1.0") -- and no single string can
+				// express a non-transitive relation. That is erratum E25, and
+				// it is why the key is a bucket and the comparison decides.
+				if a, isAtomic := kv.(*xdm.Atomic); isAtomic && a.Type.IsNumeric() {
+					if gk, ok2 := groups[gi].key[0].(*xdm.Atomic); ok2 &&
+						!xpath.GroupingEqual(a, gk, coll, rt.ctx.ImplicitTimezone) {
+						ok = false
+					}
+				}
+			}
 			if !ok {
 				// The hash missed, but the value comparison grouping uses is
 				// not transitive across the numeric types — erratum E25

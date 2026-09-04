@@ -801,9 +801,16 @@ func calendarInNoNamespace(s string) (string, bool) {
 // list — the Hebrew, Islamic, Japanese and other calendars — would need its
 // own date arithmetic, and claiming one without implementing it would produce
 // Gregorian dates under another calendar's name.
+//
+// "OS" is Old Style, which is the Julian calendar rather than a third
+// spelling of the Gregorian one: section 9.8.4.3 lists it as such, and its
+// note formats 1502-01-11 as 1 January 1502 to make the point that the value
+// is converted rather than relabelled. Accepting it while formatting the
+// Gregorian fields would have reported a date thirteen days wrong in 2026, so
+// it is not claimed.
 func supportedCalendar(s string) bool {
 	switch s {
-	case "AD", "ISO", "OS", "":
+	case "AD", "ISO", "":
 		return true
 	}
 	return false

@@ -67,6 +67,26 @@ rejecting direction:
 `branchLimit` · `maxPositions` · `TransformOptions.MaxDepth` · the RELAX NG
 derivative bound · the XPath regex step and depth budgets.
 
+"Refused loudly" needed qualifying, and now it holds in both halves. A limit
+that raises an error has to borrow a *semantic* error code, because the specs
+define none for "I gave up" — `XPDY0001` for a depth cap, `FORX0002` for a
+valid pattern whose budget ran out, `cvc-elt.1` for a document that was never
+assessed. Read alone, each of those tells the caller something untrue about
+its input. Every such site now also wraps `xdm.ErrResourceLimit`, so
+`errors.Is` separates a refusal from a fault while the code and message stay
+byte-identical for the suites; `docs/options.md` tabulates the sites.
+
+The `subsumeMaxStates`, `subsumeMaxProduct` and `branchLimit` declines are the
+other half, and they are the quiet ones: they raise nothing at all, returning
+"declined" so the caller falls back to the conservative structural table. That
+is sound (below) but it was invisible — a schema refused because a budget ran
+out looked exactly like one the table genuinely forbids. Those declines are now
+counted through the `budgetStats` hook in `xsd/subsume.go`, on the model of
+`icStats` in `xsd/identity.go`, with budget declines (fixable by raising a
+limit) separated from structural ones (a recursive group, an all group, a
+wildcard — no limit affects those). The counters observe; they change no
+verdict, which `xsd/budget_stats_test.go` asserts alongside the counting.
+
 For four of these — `maxPositions`, `branchLimit`, `subsumeMaxStates` and
 `subsumeMaxProduct` — the claim that the fallback is conservative is no longer
 only a reading of the code. `xsd/budget_soundness_test.go` enforces it
@@ -371,7 +391,9 @@ choose how long the validation takes.
 Even enabled it is bounded. Every match attempt is counted against a step
 budget, and exhausting the budget raises `FORX0002` rather than returning a
 silent "no match" — a budget that guessed would do it precisely on the inputs
-where the answer was hardest to get. Measured from both ends: the hardest
+where the answer was hardest to get. `FORX0002` means "invalid regular
+expression", which this pattern is not; it also carries `xdm.ErrResourceLimit`
+so a caller can tell the two apart without reading the prose. Measured from both ends: the hardest
 honest pattern in either conformance suite answers in 525 steps, while
 `(a*)*\1b` against sixty `a`s exhausts the whole budget in about 200 ms. So the
 worst case is a fifth of a second of wasted work, not a hang — but it is still
