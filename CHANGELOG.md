@@ -8,6 +8,36 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+- **`keyref` rediscovered its targets once per enclosing scope.** A `keyref` on
+  a self-embedding element walked the whole remaining subtree once per level:
+  nodes visited grew 3.92x, 3.96x, 3.98x as depth doubled, so a hostile instance
+  against a recursive schema cost quadratic work.
+
+  The finding had been filed as *inherent, not unfinished*, on the reasoning
+  that a node under a nested keyref scope is a target of that scope and of every
+  enclosing one, each resolving against its own key table — so the count of
+  checks is nodes times scopes and no traversal change removes it. That part is
+  true, and it is still true. What it obscured is that the checks are map
+  lookups and were never the cost. Instrumentation separated the two quantities
+  the prose had run together: `fieldEvals` and `targets` were already linear,
+  and only `nodesVisited` grew quadratically — target *rediscovery*, which is
+  cacheable.
+
+  The premise that blocked the fix was "a `keyref` produces nothing for an
+  ancestor to seed from". Giving it a table of its own — a target cache, never
+  resolved against, since a keyref defines no keys — lets it prune and seed
+  exactly as `key` and `unique` do. Growth per doubling becomes 2.00x, held by
+  `TestIdentityKeyrefAmplification`. The number of checks is deliberately
+  unchanged; only the rediscovery went.
+
+  A second quadratic sat underneath, in allocation rather than traversal: every
+  level rebuilt maps holding every target below it, 225 MB per validation at
+  depth 960. Child tables are now adopted rather than copied, which is sound
+  because each has exactly one consumer. Elapsed time could not separate the
+  two — after the walk was made linear the benchmark still grew fourfold;
+  `-benchmem` is what showed bytes per operation growing 3.95x while the
+  allocation count grew 2.2x.
+
 - **Thirteen derivation walks stopped at 32 or 64 steps.** Twelve stopped at 32
   and one at 64, each walking a type's derivation chain or a node's copy
   lineage: five in `xdm`, five in `xpath`, two in `xslt`. A legal acyclic chain
@@ -26,6 +56,40 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   accumulator computes something else. Not a refusal and not a crash: a
   legal-looking wrong number nothing downstream can detect. Its own doc comment
   said "the chain is followed to its end", which the loop did not do.
+
+- **Nine node-copy sites each hand-picked which type properties to carry.**
+  `xdm.Node` records seven PSVI properties — `TypeAnnotation`, `UnionMember`,
+  `DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS`, `IsNilled` — and every
+  place that copied a node wrote its own field list. No two lists agreed. Four
+  sites dropped `DerivedPrimitive` and `ListItem` (recorded as knowingly
+  incomplete in `docs/security.md`): `xsl:copy-of` via `xdmbuild.DeepCopy`, the
+  `xsl:strip-space` tree copy, `fn:snapshot`'s ancestor spine, and
+  `fn:copy-of` on a parentless attribute. `xsd/assert.go` additionally dropped
+  `IsID`, `IsIDREFS` and `IsNilled`, so an XSD 1.1 assertion evaluated over a
+  clone the validator had annotated and the clone had not. `xdm/xinclude.go`
+  and the suite judge dropped the resolved pair too.
+
+  The loss is silent until a second schema defines the same QName differently,
+  because a copy holding only the annotation NAME asks the process-global
+  registries what it means — and they answer for whichever schema loaded last.
+  A list-typed value copied through `xsl:copy-of` then split into `xs:string`
+  items where the validating schema said `xs:decimal`: same lexical form, a
+  confidently wrong type, and `'10' lt '9'` true under string ordering where
+  the numeric answer is false.
+
+  Two `xsl:strip-space`-adjacent strip paths had the mirror defect: both
+  `stripAnnotationCopy` and `stripAnnotations` emptied `TypeAnnotation` by
+  assignment and left `DerivedPrimitive` and `ListItem` behind, describing a
+  type the node no longer claimed. Atomisation gates on the annotation being
+  non-empty, so the stale fields went unread until something re-annotated the
+  node.
+
+  All nine now go through one of two named operations on `xdm.Node`:
+  `CopyTypingFrom` carries all seven, `CopyTypingStrippedFrom` (and its
+  in-place spelling `StripTyping`) clears the four that make up the annotation
+  and keeps `IsID`/`IsIDREFS`, which XSLT 2.0 §3.5 exempts from stripping by
+  name, while clearing `IsNilled`, which the same section makes false for every
+  element in a stripped tree.
 
 - **A second schema silently retyped a document the first had validated.**
   `xdm` keyed `derivedPrimitives`, `listItems` and `unionMembers` by QName

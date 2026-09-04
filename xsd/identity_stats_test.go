@@ -101,3 +101,41 @@ func TestIdentityConstraintAmplification(t *testing.T) {
 		prev = stats.NodesVisited
 	}
 }
+
+// The same property for a keyref, which used to be the one path that kept it.
+//
+// buildNodeTable was made linear by pruning and seeding, but checkKeyref still
+// discovered its targets with an unpruned selectNodes, so a keyref on a
+// self-embedding element walked the whole remaining subtree once per level and
+// nodesVisited grew 3.92, 3.96, 3.98 as the depth doubled. Giving the keyref a
+// table of its own — a target cache, never resolved against, since a keyref
+// defines no keys — lets it prune and seed exactly as key and unique do, and
+// the growth becomes 2.00.
+//
+// What did NOT change is the number of CHECKS: a node under a nested keyref
+// scope is still resolved once per enclosing scope, against that scope's own
+// key table, because those checks can disagree. Only the rediscovery went.
+func TestIdentityKeyrefAmplification(t *testing.T) {
+	st, _ := xdm.ParseString(identityKeyrefBenchSchema(), xdm.ParseOptions{})
+	s, err := Load(st.Root, "", Options{})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	var prev uint64
+	for _, depth := range []int{120, 240, 480, 960} {
+		tr, _ := xdm.ParseString(identityKeyrefBenchDoc(depth, 1), xdm.ParseOptions{})
+		stats := validateWithStats(t, s, tr.Root)
+		ratio := "-"
+		if prev != 0 {
+			ratio = fmt.Sprintf("%.2fx", float64(stats.NodesVisited)/float64(prev))
+		}
+		t.Logf("depth=%-4d nodesVisited=%-9d growth on doubling: %s", depth, stats.NodesVisited, ratio)
+		if prev != 0 {
+			if g := float64(stats.NodesVisited) / float64(prev); g > 2.5 {
+				t.Errorf("depth %d: keyref work grew %.2fx on a doubling, want linear "+
+					"(~2x); the per-scope subtree rescan is back", depth, g)
+			}
+		}
+		prev = stats.NodesVisited
+	}
+}

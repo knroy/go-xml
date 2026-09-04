@@ -581,14 +581,16 @@ func stripAnnotations(n *xdm.Node) {
 	if n == nil {
 		return
 	}
-	n.TypeAnnotation = ""
-	// dm:nilled goes with the annotation. Stripping says the node is to be
-	// treated as though nothing had assessed it, and an unassessed element is
-	// not nilled however it is marked up — the xsi:nil attribute survives as
-	// an ordinary attribute, which is all it is once the type is gone.
-	n.IsNilled = false
+	// dm:nilled goes with the annotation, and so do the union member and the
+	// resolved meaning. Stripping says the node is to be treated as though
+	// nothing had assessed it, and an unassessed element is not nilled however
+	// it is marked up — the xsi:nil attribute survives as an ordinary
+	// attribute, which is all it is once the type is gone. Assigning
+	// TypeAnnotation directly left DerivedPrimitive and ListItem behind,
+	// describing a type the node no longer claims.
+	n.StripTyping()
 	for _, a := range n.Attrs {
-		a.TypeAnnotation = ""
+		a.StripTyping()
 	}
 	for _, c := range n.Children {
 		stripAnnotations(c)

@@ -338,31 +338,35 @@ func scopeForAssertion(el *xdm.Node) *xdm.Node {
 // a processor that has been told to expose them.
 func deepCopyNode(n *xdm.Node) *xdm.Node {
 	out := &xdm.Node{
-		Kind:           n.Kind,
-		Name:           n.Name,
-		Value:          n.Value,
-		BaseURI:        n.BaseURI,
-		TypeAnnotation: n.TypeAnnotation,
-		// UnionMember travels with the annotation. It is the second half of
-		// the same PSVI fact -- which member of a union accepted this value
-		// -- and the copy is what the assertion actually evaluates over, so
-		// dropping it left the assertion looking at a node the validator had
-		// annotated and the clone had not. It matters most where the winning
-		// member is a LIST: the union's own name carries no item type, so
-		// without the member the typed value collapsed from a sequence of
-		// tokens to one string holding all of them.
-		UnionMember: n.UnionMember,
-		// The resolved meaning of the annotation travels with it too, for
-		// exactly the reason above: the clone is what the assertion evaluates
-		// over, and a clone that kept only the name would fall back to the
-		// process-global registries to find out what the name means.
-		DerivedPrimitive: n.DerivedPrimitive,
-		ListItem:         n.ListItem,
+		Kind:    n.Kind,
+		Name:    n.Name,
+		Value:   n.Value,
+		BaseURI: n.BaseURI,
 	}
+	// The clone is what the assertion actually evaluates over, so it must
+	// answer every PSVI property as the validated node does.
+	//
+	// Three of the seven are inert here, and deliberately so rather than by
+	// oversight. IsNilled cannot be set on a node an assertion sees: the
+	// validator records it and returns immediately (see validate.go), so a
+	// nilled element never reaches the deferred checkAssertions at all.
+	// IsID and IsIDREFS have only fn:id and fn:idref as consumers, and both
+	// raise FODC0001 unless the tree root is a document node -- which this
+	// clone deliberately is not, since XSD 1.1 3.13.4.2 gives an assertion
+	// no document node. Copying them anyway is what makes the rule here
+	// "every property travels" rather than a list to re-audit whenever a
+	// property is added.
+	// Dropping any of
+	// them left the assertion looking at a node the validator had annotated
+	// and the clone had not. It matters most where a union's winning member is
+	// a LIST: the union's own name carries no item type, so without the member
+	// the typed value collapsed from a sequence of tokens to one string
+	// holding all of them.
+	out.CopyTypingFrom(n)
 	for _, a := range n.Attrs {
-		out.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value,
-			TypeAnnotation: a.TypeAnnotation, UnionMember: a.UnionMember,
-			DerivedPrimitive: a.DerivedPrimitive, ListItem: a.ListItem})
+		ac := &xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value}
+		ac.CopyTypingFrom(a)
+		out.AddAttr(ac)
 	}
 	for _, ns := range n.Namespaces {
 		out.AddNamespace(ns.Name.Local, ns.Value)

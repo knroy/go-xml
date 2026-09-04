@@ -66,10 +66,18 @@ type Options struct {
 
 // maxIncludeDepth bounds how deeply schemas may include one another.
 //
-// The bound is on the *chain*, not the count: a schema may include many
-// others, but a cycle — a includes b includes a — would not terminate, and a
-// resolver reading from the network makes that a request loop rather than
-// merely a hang.
+// It is a *resource* bound and nothing more. A cycle — a includes b includes
+// a — is a semantic defect in the schema, and it is detected as one, by the
+// active set of hrefs in activeHrefs: a depth counter cannot tell a cycle from
+// a legal chain that happens to be long, so using one to infer the other both
+// mislabels the deep chain and reports the cycle at the wrong href.
+//
+// The bound stays because it is genuinely earned here, unlike a bound that is
+// only standing in for cycle detection: an <include> reaches a Resolver that
+// may read a file or the network, and a chain deep enough to matter costs a
+// fetch per level even when every href is distinct. Exceeding it says
+// "resource limit exceeded", which is a different failure from a cycle and a
+// caller must be able to tell them apart.
 const maxIncludeDepth = 40
 
 // resolveHref turns the href written on n into the reference a Resolver sees.

@@ -45,20 +45,16 @@ attacker-controlled input the threat model already accounts for:
 
 | finding | reach | why it is still open |
 |---|---|---|
-| `keyref` is quadratic in scope count | hostile instance, recursive schema | inherent, not unfinished: a keyref builds no table for an ancestor to seed from, so every enclosing scope must check every target against its own key table. The field extraction is cached; the count of checks cannot be reduced by a traversal change. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
-**Knowingly incomplete.** One fix is not finished, and is recorded here rather
-than left for the next audit to find. The sixth audit moved the derived-primitive
-and list-item answers onto the node — `Node.DerivedPrimitive` and
-`Node.ListItem`, resolved against the schema being validated — because the
-process-global registries they replaced let the last schema to register a QName
-retype a document another schema had already validated. **Four literal
-node-copy sites in `xslt/transform.go` and `xslt/copyfuncs.go` drop those two
-fields**, the same way they already drop `UnionMember`, and fall back to the
-registry. That is harmless while the type annotation survives the copy, since
-the registry still answers — but it is the remaining gap in the guarantee, and
-the guarantee is that a node's type is fixed by the assessment that produced it.
+**Knowingly incomplete.** One narrowing remains, and it is in an API rather
+than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
+annotation as a **string**, so an attribute entering a result tree through the
+builder arrives carrying its annotation name and nothing else — `UnionMember`,
+`DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS` are all dropped there, on
+every path, and have been since the builder was written. It is the one place
+left where a node's typing is reconstructed from a name instead of copied. The
+node-copy sites themselves no longer do this; see *History*.
 
 **Deliberate limits**, which are resource controls and not bugs — a request
 refused here is refused loudly, and the fallback is conservative in the
@@ -68,8 +64,27 @@ rejecting direction:
 `xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
 `DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
-`branchLimit` · `TransformOptions.MaxDepth` · the RELAX NG derivative bound ·
-the XPath regex step and depth budgets.
+`branchLimit` · `maxPositions` · `TransformOptions.MaxDepth` · the RELAX NG
+derivative bound · the XPath regex step and depth budgets.
+
+For four of these — `maxPositions`, `branchLimit`, `subsumeMaxStates` and
+`subsumeMaxProduct` — the claim that the fallback is conservative is no longer
+only a reading of the code. `xsd/budget_soundness_test.go` enforces it
+differentially: the four are package-level `var`s (never assigned outside
+tests), and the suite computes each verdict twice — once normally, once with
+the budget forced so low that every input exceeds it — then asserts the one
+direction that matters,
+
+    the budgeted path ACCEPTS  =>  the exact path also ACCEPTS.
+
+The converse is allowed: a declined procedure may reject something a full
+computation would have admitted, and a false reject is safe. Both valid and
+invalid inputs are in the corpus, because a suite of valid inputs alone cannot
+tell a sound fallback from one that accepts everything — which is the whole
+failure mode. The harness was validated by sabotage: making the swallowed
+`modelFor` error, a declined subsumption, and a declined branch enumeration
+each report "no violation" was caught, with a concrete schema and document in
+the failure message.
 
 **The distinction that matters**, and the single most useful idea this file has
 produced — it decides whether a numeric constant in this code is a feature or a
@@ -118,8 +133,8 @@ Two further cautions, from the third audit. If you set `AllowDOCTYPE: true` —
 which some real formats require — the entity expansion bound now counts every
 *reference* rather than every distinct entity; before that fix a 70 KB document
 could allocate hundreds of megabytes. The exponential schema-load case that was
-open alongside it — the group-reference cycle check — has since been fixed; the
-one cost finding still open is `keyref`, under *Current status*.
+open alongside it — the group-reference cycle check — has since been fixed, as
+has the last open cost finding, `keyref`. See CHANGELOG.
 
 ---
 
@@ -161,11 +176,29 @@ every network scheme against a canary HTTP server that records **zero** hits,
 an end-to-end hostile document whose `xi:include` names an `http://` URL, and
 that an `xi:fallback` cannot be used to launder a refusal into a read.
 
-Two bounds hold the cost of one pass: at most 200 resources read in total, and
-at most 40 levels of nesting. Neither substitutes for the other, and neither
-substitutes for loop detection — a loop repeats a URI and is caught by name,
-while a fan-out of a thousand distinct files repeats nothing and would
-otherwise cost a thousand parses.
+Two **resource budgets** hold the cost of one pass: at most 200 resources read
+in total, and at most 40 levels of nesting. Both report `resource limit
+exceeded`, and neither substitutes for the other — a fan-out of a thousand
+distinct small files repeats nothing and would otherwise cost a thousand
+parses, while a chain recurses in Go.
+
+Neither is loop detection, and neither is allowed to stand in for it. A loop is
+a *semantic* defect and is detected as one: `includeProc.stack` holds the URIs
+of the inclusions currently in progress, and an inclusion whose URI is already
+on that path is refused as `circular xi:include loop`, naming the URI. The
+distinction matters in both directions. A loop is caught at depth one rather
+than after forty fetches, and it names the resource that actually closed it. A
+legal chain of forty-one distinct files is refused as the expense it is, not
+described as circular.
+
+The path is keyed on the URI the **resolver reports** rather than the `href` as
+written, so that two spellings of one file — `b.xml` and `../d/b.xml` — are one
+entry. Keyed on the raw reference, the loop above closes a lap later and blames
+the wrong resource; `TestXIncludeCycleThroughDifferentRelativePathsIsCaught`
+asserts exactly that difference. Entries are removed on the way out, which is
+what makes it an active path rather than a visited set: a diamond — two
+documents including a third — is legal and must be included twice, which
+`TestXIncludeDiamondIsLegal` pins.
 
 ---
 
@@ -217,29 +250,6 @@ reference DAG — not that one is hard to write by hand, because it is not.
 ---
 
 ## Open findings
-
-### PERFORMANCE — `keyref` is quadratic in the number of enclosing scopes
-
-Reachable from a hostile instance against a recursive schema carrying a
-`keyref`. The pruning that made `key` and `unique` linear does not transfer. A
-`key` builds a table its ancestor seeds from, so a pruned subtree is still
-accounted for; a `keyref` produces nothing, and a node under a nested keyref
-scope is a target of that scope *and* of every enclosing one, each resolving
-against its own key table. Both checks are required, so the count of checks
-really is nodes times enclosing scopes, and no traversal change removes it.
-
-What was repeated needlessly is the field extraction, which is the expensive
-half — a node's key sequence does not depend on which scope is asking.
-Memoising it per (node, constraint) leaves the quadratic count of map lookups
-and removes the quadratic count of `selectNodes` calls: at depth 960, 221 ms
-and 5,164,375 allocations become 158 ms and 2,863,754; at width 40, 324 ms and
-5,269,468 become 217 ms and 1,297,551.
-
-**The curve is unchanged, so that was only half a fix.** The count of checks is
-what the semantics require rather than what the implementation happens to do,
-which is why this stays open rather than being filed as fixed. A caller exposed
-to hostile instances against a recursive schema carrying a `keyref` should bound
-the request with `ValidateContext`.
 
 ### INFO — `javascript:` URLs pass through
 
@@ -387,6 +397,30 @@ The per-entity figure is measured rather than chosen: a first attempt used
 1 MB, and a five-level billion-laughs reaching 100,000 bytes parsed cleanly
 through it. The regression test that caught that is `TestEntityExpansionBlowupIsRefused`.
 
+### RELAX NG includes: a budget and a cycle check, separately
+
+`<include>` and `<externalRef>` reach a caller-supplied `Resolver`, which may
+read a file or the network, so a chain of them costs a fetch per level even
+when every href is distinct. `maxIncludeDepth` (40) is the budget for that, and
+exceeding it reports `resource limit exceeded`.
+
+A circular schema — `a` includes `b` includes `a` — is a different failure, and
+is detected separately by the set of hrefs on the active inclusion path. A
+schema that is its own ancestor is refused as `circular schema inclusion`,
+naming the href, at the depth where the loop actually closes rather than forty
+fetches later. The set is keyed on the href **resolved against the base in
+force**, so two spellings of one document are one entry, and it is shared
+across the compiler an `<externalRef>` builds for itself so that a cycle
+passing through one is still visible. Entries are removed on exit: a diamond,
+where two schemas include a third, is legal and compiles.
+
+This is the general rule the codebase follows: *a resource budget may reject an
+otherwise valid operation, but a semantic algorithm must never use a resource
+threshold to infer a semantic fact.* Before the split, a cycle here was caught
+only by the depth counter, and the error said the schemas nested too deeply —
+true of the counter, false of the schema. `relaxng/include_cycle_test.go` and
+`xdm/xinclude_limits_test.go` hold the two failures apart at both sites.
+
 ### All resolution defaults are closed
 
 `doc()`, `document()`, `collection()`, `xsl:include` and `xsl:import` all refuse
@@ -512,7 +546,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **A circular type longer than 4096 links loaded clean** — false accept, `checkTypeBaseCycles` counter, now a visited set. See CHANGELOG.
 - **RELAX NG refused a legal chain of 501 definitions** — false reject, `maxRefDepth`, removed. See CHANGELOG.
 - **A permitted file was read whole with no byte limit** — cost, `FileResolver.MaxBytes`. See CHANGELOG.
-- **`keyref` key sequences are cached rather than pruned** — cost, half-fixed; the remaining curve is under *Open findings*. See CHANGELOG.
+- **`keyref` rediscovered its targets once per enclosing scope** — cost, fixed: the walk is pruned and seeded like `key` and `unique`, and per-level table copying was removed. 3.98x per doubling becomes 2.00x. See CHANGELOG.
 - **A key ambiguous across three siblings became resolvable again** — false accept, identity-constraint scoping. See CHANGELOG.
 - **The language-inclusion procedure declined any bound above 64** — false reject, redundant cliff in front of `subsumeMaxStates`, removed. See CHANGELOG.
 - **Six base-chain counters accepted a duplicate `xs:ID` and rejected legal schemas** — false accept *and* false reject; all twelve counters are visited sets now. See CHANGELOG.

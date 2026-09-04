@@ -65,6 +65,13 @@ func CompileWithOptions(doc *xdm.Node, opts Options) (*Schema, error) {
 	c := &compiler{defines: map[string]*xdm.Node{},
 		combined: map[string][]*xdm.Node{}, how: map[string]string{},
 		opts: opts}
+	// The schema being compiled is itself on the inclusion path from the
+	// outset, when the caller said where it was read from. Without that, a
+	// schema including the file it is written in would be read a second time
+	// and only caught one level further down, naming the wrong href.
+	if opts.BaseURI != "" {
+		(*c.active())[opts.BaseURI] = true
+	}
 	p, err := c.compileTop(root)
 	if err != nil {
 		return nil, err
@@ -99,8 +106,20 @@ type compiler struct {
 	parent *compiler
 	// opts carries the Resolver and base URI.
 	opts Options
-	// includeDepth bounds a chain of includes, which may otherwise cycle.
+	// includeDepth counts the includes on the current chain. It is a
+	// resource bound only — see maxIncludeDepth — and says nothing about
+	// whether the chain is circular.
 	includeDepth int
+	// activeHrefs is the set of resolved hrefs currently being compiled: the
+	// path from the schema being compiled down to here, not everything seen.
+	// An href that is its own ancestor is a cycle; one reached twice by two
+	// different routes is a diamond, which is legal, so entries are removed
+	// on the way out rather than accumulated.
+	//
+	// It is a pointer because an <externalRef> compiles in a compiler of its
+	// own, and the chain it is on is the same chain. Sharing the map is what
+	// makes a cycle that passes through an externalRef visible.
+	activeHrefs *map[string]bool
 	// expanding names the definitions currently being compiled, so that one
 	// reaching itself becomes a lazy reference rather than an infinite
 	// expansion.
@@ -133,6 +152,20 @@ type compiler struct {
 	// this descent rather than starting a fresh one; nothing bounds it —
 	// see maxRefDepth's removal note in compileRefNamed.
 	depth int
+}
+
+// active returns the set of hrefs on the current inclusion path, creating it
+// on first use.
+//
+// A compiler built directly by Compile has none, and one is made here rather
+// than at every construction site so that the several places that build a
+// sub-compiler cannot each forget it in their own way.
+func (c *compiler) active() *map[string]bool {
+	if c.activeHrefs == nil {
+		m := map[string]bool{}
+		c.activeHrefs = &m
+	}
+	return c.activeHrefs
 }
 
 // startKey is the key under which a <start>'s inherited namespace is kept. It
@@ -610,7 +643,7 @@ func (c *compiler) compilePattern(n *xdm.Node) (pattern, error) {
 		sub := &compiler{defines: map[string]*xdm.Node{},
 			combined: map[string][]*xdm.Node{}, how: map[string]string{},
 			depth: c.depth, parent: c, opts: c.opts,
-			includeDepth: c.includeDepth}
+			includeDepth: c.includeDepth, activeHrefs: c.active()}
 		return sub.compileGrammar(n)
 
 	case "parentRef":
@@ -755,10 +788,21 @@ func (c *compiler) fetch(n *xdm.Node) (*xdm.Node, string, error) {
 			"relaxng: <%s href=%q> needs a Resolver; none was configured",
 			n.Name.Local, href)
 	}
+	// Cycle first, because it is the semantic answer: a schema that includes
+	// itself is defective however shallow the chain is, and reporting it as a
+	// depth overrun would both name the wrong href and take 40 fetches to do
+	// it. The key is the href resolved against the base in force, so that two
+	// spellings of one document — "sub/../a.rng" and "a.rng" — are one entry.
+	if c.activeHrefs != nil && (*c.activeHrefs)[href] {
+		return nil, "", fmt.Errorf(
+			"relaxng: circular schema inclusion: %q includes itself", href)
+	}
+	// Then the resource bound, which is a refusal to spend more rather than a
+	// statement about the schema.
 	if c.includeDepth >= maxIncludeDepth {
 		return nil, "", fmt.Errorf(
-			"relaxng: schemas include one another more than %d deep at %q",
-			maxIncludeDepth, href)
+			"relaxng: resource limit exceeded: schemas nest more than %d "+
+				"includes deep at %q", maxIncludeDepth, href)
 	}
 	doc, err := c.opts.Resolver.ResolveSchema(href)
 	if err != nil {
@@ -874,10 +918,16 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	wasNs := c.inheritedNs
 	c.opts.BaseURI = href
 	c.includeDepth++
+	// href joins the active path for exactly as long as it is being compiled,
+	// and leaves it again below. A set that only ever grew would refuse a
+	// diamond — two schemas including one third — which is legal.
+	active := c.active()
+	(*active)[href] = true
 	// The ns= written on the <include> reaches the definitions it brings in,
 	// the same way it reaches an <externalRef>'s schema.
 	c.inheritedNs = inheritedNs(inc, c.inheritedNs)
 	err = collect(&filtered)
+	delete(*active, href)
 	c.opts.BaseURI = was
 	c.includeDepth = wasDepth
 	c.inheritedNs = wasNs
@@ -914,7 +964,13 @@ func (c *compiler) compileExternalRef(n *xdm.Node) (pattern, error) {
 		combined: map[string][]*xdm.Node{}, how: map[string]string{},
 		opts:         Options{Resolver: c.opts.Resolver, BaseURI: href},
 		includeDepth: c.includeDepth + 1, depth: c.depth,
+		activeHrefs: c.active(),
 		inheritedNs: inheritedNs(n, c.inheritedNs)}
+	// The referenced schema is on the active path while it compiles, and off
+	// it again afterwards, so that a second externalRef to the same schema
+	// from a sibling is not mistaken for a cycle.
+	(*sub.activeHrefs)[href] = true
+	defer delete(*sub.activeHrefs, href)
 	return sub.compileTop(root)
 }
 
@@ -954,7 +1010,8 @@ func (c *compiler) lazyRef(name string) pattern {
 		sub := &compiler{
 			defines: c.defines, combined: c.combined, how: c.how,
 			parent: c.parent, opts: c.opts, includeDepth: c.includeDepth,
-			expanding: map[string]bool{}, expandingAt: map[string]int{},
+			activeHrefs: c.activeHrefs,
+			expanding:   map[string]bool{}, expandingAt: map[string]int{},
 			lazy: c.lazy,
 		}
 		return sub.compileRefNamed(name)

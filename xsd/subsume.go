@@ -34,11 +34,19 @@ import "github.com/knroy/go-xml/xdm"
 // the conformance suite and both production corpora actually spell (the
 // largest is maxOccurs="10"), and small enough that hitting it costs one
 // declined check rather than an unbounded allocation.
-const subsumeMaxStates = 4096
+// Exceeding it makes buildNFA return ok=false and particleSubsumes return
+// (nil, false), which means the check DECLINED — explicitly NOT "the
+// restriction is valid". restrict.go:360 must then fall through to the 1.0
+// structural table. Enforced by TestSubsumeDeclineIsNotAcceptance.
+//
+// A var only so tests may lower it; never assigned in production.
+var subsumeMaxStates = 4096
 
 // subsumeMaxProduct caps the product exploration, which is the determinised
 // base's subset space against the derived NFA's states.
-const subsumeMaxProduct = 20000
+// Exceeding it likewise DECLINES rather than accepting. A var only so tests
+// may lower it; never assigned in production.
+var subsumeMaxProduct = 20000
 
 // nfa is a plain nondeterministic automaton over particle positions, with
 // every occurrence range unrolled. Transitions carry the term they match

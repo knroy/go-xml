@@ -236,12 +236,23 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 				// this one did not, which is why copying attributes made
 				// fn:idref appear one-directional: the first copy stripped
 				// the annotations the later lookups needed.
+				// The node assessed below is an exact copy of the source's
+				// typing, which is what validation="preserve" then keeps and
+				// what every other mode overwrites or clears. Assessment and
+				// stripping both read more than the annotation name, so the
+				// node they are handed must carry more than the name.
+				//
+				// What reaches the RESULT is narrower than this, and not
+				// because of anything here: AddAttributeTyped below takes an
+				// annotation string, so only the name survives into the
+				// output tree. That narrowing is the builder's and is
+				// recorded in docs/security.md.
 				a := &xdm.Node{
-					Kind:           xdm.KindAttribute,
-					Name:           v.Name,
-					Value:          v.Value,
-					TypeAnnotation: v.TypeAnnotation,
+					Kind:  xdm.KindAttribute,
+					Name:  v.Name,
+					Value: v.Value,
 				}
+				a.CopyTypingFrom(v)
 				if err := i.validation.assess(rt, a); err != nil {
 					return err
 				}
@@ -393,7 +404,10 @@ func copyDocumentNode(n *xdm.Node) *xdm.Node {
 	tree := xdm.NewTree()
 	tree.Root.BaseURI = n.BaseURI
 	tree.CopyDTDFrom(n.Tree())
-	tree.Root.TypeAnnotation = n.TypeAnnotation
+	// A document node's typing is only ever an annotation in practice, but it
+	// is copied through the same operation as every other node so that a
+	// future property does not have to find this line to be added to it.
+	tree.Root.CopyTypingFrom(n)
 	for _, ch := range n.Children {
 		tree.Root.AppendChild(deepCopy(ch))
 	}

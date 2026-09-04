@@ -1623,6 +1623,97 @@ func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem 
 	n.ListItem = listItem
 }
 
+// CopyTypingFrom copies every PSVI property of src onto n, so that the copy
+// answers each of them exactly as the original does.
+//
+// It exists because there is no such thing as "the important half" of a node's
+// typing. Seven properties record what an assessment concluded --
+// TypeAnnotation, UnionMember, DerivedPrimitive, ListItem, IsID, IsIDREFS,
+// IsNilled -- and each one of them has, at some point in this repository, been
+// dropped by a copy site that hand-picked the fields it thought mattered. Each
+// omission was silent and each produced a confidently wrong answer rather than
+// a missing one: a union-typed value atomising to xs:untypedAtomic, fn:id
+// finding nothing, nilled() going false on a preserved copy, a list type
+// erased to the wrong primitive by the process-global registries. The failure
+// mode is always the same shape, so the fix is one operation rather than seven
+// more careful field lists.
+//
+// The fields are ASSIGNED rather than or-ed. The destination is a copy of the
+// source and holds no assessment of its own; anything already on it is either
+// identical or wrong.
+//
+// It deliberately does NOT go through SetTypeAnnotation. That setter is for a
+// PRODUCER of annotations -- schema assessment, DTD attribute types, the XSLT
+// validation instructions -- which knows a name and must derive the rest from
+// it. Here every property is already known, so deriving would be at best
+// redundant and at worst wrong: SetTypeAnnotation only ever turns is-id and
+// is-idrefs ON, which would make a copy of a non-ID node inherit a marking the
+// original does not have. The invariant SetTypeAnnotation protects is upheld
+// here by construction: the resolved fields cannot outlive their annotation,
+// because src is a coherent node and all seven fields travel together.
+func (n *Node) CopyTypingFrom(src *Node) {
+	n.TypeAnnotation = src.TypeAnnotation
+	n.UnionMember = src.UnionMember
+	n.DerivedPrimitive = src.DerivedPrimitive
+	n.ListItem = src.ListItem
+	n.IsID = src.IsID
+	n.IsIDREFS = src.IsIDREFS
+	n.IsNilled = src.IsNilled
+}
+
+// CopyTypingStrippedFrom copies onto n the PSVI properties of src that survive
+// input-type-annotations="strip" and validation="strip", and clears the rest.
+//
+// The split between the two groups is not a judgement call; XSLT 2.0 sections
+// 3.5 and 19.2 draw it explicitly, and it lands differently on each field:
+//
+//   - TypeAnnotation, UnionMember, DerivedPrimitive and ListItem are CLEARED.
+//     They are one fact in four parts -- the name of the type, which member of
+//     a union accepted the value, the built-in the type erases to, and the item
+//     type of a list -- and stripping removes that fact. Clearing the name
+//     alone is precisely the bug SetTypeAnnotation guards against: atomisation
+//     gates on TypeAnnotation != "", so a surviving ListItem would go unread
+//     until something else re-annotated the node, and then describe a type the
+//     node no longer claims. The four go together in both directions.
+//
+//   - IsID and IsIDREFS are KEPT. Section 3.5 says so in as many words: the
+//     setting "does not change the is-id and is-idrefs properties". They are
+//     separate state for exactly this reason (see Node.IsID), and fn:id and
+//     fn:idref are defined over them rather than over the annotation, so a
+//     stripped document whose ID attributes are not spelled "id" would
+//     otherwise become invisible to both.
+//
+//   - IsNilled is CLEARED. XDM 5.10 makes dm:nilled a property of an element
+//     that a schema assessment found nil, and a stripped tree is one nothing
+//     assessed. Section 3.5 states the consequence directly: after stripping,
+//     the nilled property of every element is false. It parts company with
+//     is-id here because is-id survives by explicit exemption and this does
+//     not; the xsi:nil attribute, being an ordinary attribute once the type is
+//     gone, is a separate question that belongs to whoever is doing the copy.
+//
+// Fields outside the PSVI set -- name, value, base URI, children -- are the
+// caller's business, exactly as in CopyTypingFrom.
+func (n *Node) CopyTypingStrippedFrom(src *Node) {
+	n.TypeAnnotation = ""
+	n.UnionMember = ""
+	n.DerivedPrimitive = ""
+	n.ListItem = ""
+	n.IsID = src.IsID
+	n.IsIDREFS = src.IsIDREFS
+	n.IsNilled = false
+}
+
+// StripTyping clears in place every PSVI property that stripping removes,
+// keeping the two it preserves.
+//
+// It is CopyTypingStrippedFrom applied to a node that is its own source, for
+// the callers that strip a tree they already own rather than building a copy.
+// Spelling it separately keeps those callers from writing n.CopyTypingStripped
+// From(n), which reads as though it might do something else.
+func (n *Node) StripTyping() {
+	n.CopyTypingStrippedFrom(n)
+}
+
 // HasSimpleTypeAnnotation reports whether an annotation names a simple type,
 // or a complex type with simple content.
 //

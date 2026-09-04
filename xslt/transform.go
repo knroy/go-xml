@@ -830,31 +830,21 @@ func (s *Stylesheet) stripCopyNode(pkg int, n *xdm.Node, preserving bool, want *
 		// document the caller had validated. This pass is gated on there
 		// being a strip-space declaration at all, which is the only reason
 		// the loss was not visible — removing that gate cost 115 tests.
-		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
-			TypeAnnotation: n.TypeAnnotation,
-			// UnionMember travels with the annotation, because it is the
-			// other half of the same fact. A union's annotation names the
-			// union; which MEMBER accepted this element's value is a
-			// property of the value, recorded separately (see
-			// xdm.Node.UnionMember), and it is what atomisation reads to
-			// decide what the typed value actually is. Copying the
-			// annotation without it left the element annotated as a union
-			// whose derivation chain runs to xs:anySimpleType and stops, so
-			// the copy atomised to xs:untypedAtomic and every "instance of"
-			// on the member answered false -- silently, on a document the
-			// caller had validated, purely because the stylesheet declared
-			// xsl:strip-space.
-			UnionMember: n.UnionMember,
-			IsID:        n.IsID, IsIDREFS: n.IsIDREFS,
-			IsNilled: n.IsNilled}
+		c := &xdm.Node{Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI}
+		// Every PSVI property travels, because stripping whitespace is not an
+		// assessment. Copying the annotation without the rest left the element
+		// annotated as a union whose derivation chain runs to
+		// xs:anySimpleType and stops, so the copy atomised to
+		// xs:untypedAtomic and every "instance of" on the member answered
+		// false -- silently, on a document the caller had validated, purely
+		// because the stylesheet declared xsl:strip-space.
+		c.CopyTypingFrom(n)
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
 		for _, a := range n.Attrs {
-			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
-				TypeAnnotation: a.TypeAnnotation,
-				UnionMember:    a.UnionMember,
-				IsID:           a.IsID, IsIDREFS: a.IsIDREFS}
+			ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+			ac.CopyTypingFrom(a)
 			c.AddAttr(ac)
 			if a == want {
 				*found = ac
@@ -1060,16 +1050,16 @@ func (s *Stylesheet) stripTypeAnnotationsFrom(root *xdm.Node) *xdm.Node {
 func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 	switch n.Kind {
 	case xdm.KindElement:
-		// IsID and IsIDREFS are carried over for the same reason they are on
-		// the attributes below: section 3.5 changes the annotation and the
-		// typed value but leaves is-id and is-idrefs alone. An element whose
-		// schema type derives from xs:ID holds the identity in its CONTENT,
-		// so dropping the property here made fn:id miss it — id('id1') found
-		// nothing for an <id-elem> of type xs:ID once the annotations went.
+		// Section 3.5 changes the annotation and the typed value but leaves
+		// is-id and is-idrefs alone, which is exactly the split
+		// CopyTypingStrippedFrom encodes. An element whose schema type
+		// derives from xs:ID holds the identity in its CONTENT, so dropping
+		// the property here made fn:id miss it — id('id1') found nothing for
+		// an <id-elem> of type xs:ID once the annotations went.
 		c := &xdm.Node{
 			Kind: xdm.KindElement, Name: n.Name, BaseURI: n.BaseURI,
-			IsID: n.IsID, IsIDREFS: n.IsIDREFS,
 		}
+		c.CopyTypingStrippedFrom(n)
 		for _, ns := range n.Namespaces {
 			c.AddNamespace(ns.Name.Local, ns.Value)
 		}
@@ -1083,10 +1073,11 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 			if a.Name.URI == xdm.NSXSI && a.Name.Local == "nil" {
 				continue
 			}
-			c.AddAttr(&xdm.Node{
+			ac := &xdm.Node{
 				Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value,
-				IsID: a.IsID, IsIDREFS: a.IsIDREFS,
-			})
+			}
+			ac.CopyTypingStrippedFrom(a)
+			c.AddAttr(ac)
 		}
 		for _, ch := range n.Children {
 			if cc := stripAnnotationCopy(ch); cc != nil {

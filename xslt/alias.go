@@ -282,14 +282,19 @@ type charMapInclusion struct {
 // them.
 //
 // The including map's own entries win, which is why they are applied over the
-// included ones rather than under. Inclusion is resolved transitively, with a
-// bound: a map that includes itself, directly or through a cycle, would
-// otherwise not terminate.
+// included ones rather than under. Inclusion is resolved transitively, and a
+// map that includes itself, directly or through a cycle, is reported as
+// XTSE1600 rather than followed forever.
 func (c *compiler) resolveCharacterMapIncludes() error {
+	byName := c.charMapIncludesByName()
 	for _, inc := range c.charMapIncludes {
 		own := c.sheet.characterMaps[inc.name]
 		merged := map[rune]string{}
-		if err := c.mergeCharMaps(merged, inc.includes, 0); err != nil {
+		// The map being resolved is on the active path from the start, so
+		// that a map reached again through its own includes is recognised as
+		// the cycle it is rather than as a fresh root.
+		active := map[string]bool{inc.name: true}
+		if err := c.mergeCharMaps(merged, inc.includes, byName, active); err != nil {
 			return err
 		}
 		for k, v := range own {
@@ -300,28 +305,50 @@ func (c *compiler) resolveCharacterMapIncludes() error {
 	return nil
 }
 
-// maxCharMapDepth bounds transitive inclusion.
-const maxCharMapDepth = 32
-
-func (c *compiler) mergeCharMaps(dst map[rune]string, names []string, depth int) error {
-	if depth > maxCharMapDepth {
-		return fmt.Errorf(
-			"XTSE1600: xsl:character-map inclusion nests more than %d deep, "+
-				"which means it is circular", maxCharMapDepth)
+// charMapIncludesByName indexes the recorded inclusions by including name, so
+// that resolving one name is a lookup rather than a scan of every inclusion.
+//
+// A name may appear more than once. compileCharacterMap records an inclusion
+// before it applies the XTSE1580 import-precedence rules, so a declaration
+// that is later discarded for being outranked has already contributed its
+// use-character-maps; the includes of every entry are therefore accumulated in
+// the order they were recorded, which is the order the scan this replaces
+// visited them in.
+func (c *compiler) charMapIncludesByName() map[string][]string {
+	byName := make(map[string][]string, len(c.charMapIncludes))
+	for _, inc := range c.charMapIncludes {
+		byName[inc.name] = append(byName[inc.name], inc.includes...)
 	}
+	return byName
+}
+
+// mergeCharMaps merges the named maps, and everything they transitively
+// include, into dst.
+//
+// active holds the names on the path currently being expanded -- the ancestors
+// of the name being visited, not every name ever visited. That distinction is
+// the whole point: re-entering a name that is still being expanded is a cycle,
+// while reaching a name that was already finished is the ordinary diamond of a
+// map included down two different branches, which is legal and whose entries
+// must be merged on each branch for the precedence below to come out right.
+func (c *compiler) mergeCharMaps(
+	dst map[rune]string, names []string, byName map[string][]string,
+	active map[string]bool) error {
 	for _, n := range names {
 		m, ok := c.sheet.characterMaps[n]
 		if !ok {
 			return fmt.Errorf("XTSE1590: no xsl:character-map named %q", n)
 		}
-		for _, inc := range c.charMapIncludes {
-			if inc.name != n {
-				continue
-			}
-			if err := c.mergeCharMaps(dst, inc.includes, depth+1); err != nil {
-				return err
-			}
+		if active[n] {
+			return fmt.Errorf(
+				"XTSE1600: xsl:character-map %q includes itself, directly or "+
+					"through the maps it uses", n)
 		}
+		active[n] = true
+		if err := c.mergeCharMaps(dst, byName[n], byName, active); err != nil {
+			return err
+		}
+		delete(active, n)
 		for k, v := range m {
 			dst[k] = v
 		}

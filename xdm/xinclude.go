@@ -69,7 +69,11 @@ const (
 	// counted across the whole recursion rather than per document.
 	maxIncludeFetches = 200
 
-	// maxIncludeDepth bounds how deeply inclusions may nest.
+	// maxIncludeDepth bounds how deeply inclusions may nest. Like the fetch
+	// count it is a resource budget, never a stand-in for the loop rule: a
+	// loop is caught by URI on p.stack at any depth, including depth zero,
+	// and exceeding this bound reports "resource limit exceeded" so that a
+	// caller can tell a defective document from an expensive one.
 	maxIncludeDepth = 40
 )
 
@@ -217,7 +221,9 @@ func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
 // expandInclude computes the replacement for one xi:include element.
 func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 	if depth >= maxIncludeDepth {
-		return nil, fatalInclude{fmt.Errorf("xi:include nesting exceeds %d levels", maxIncludeDepth)}
+		return nil, fatalInclude{fmt.Errorf(
+			"resource limit exceeded: xi:include nesting exceeds %d levels",
+			maxIncludeDepth)}
 	}
 
 	// Section 3.2: an include element may have "zero or one fallback"
@@ -393,7 +399,7 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) ([]*Node, error)
 // is reached both from the ordinary path and from the href-less one.
 func (p *includeProc) fetchText(target, base, encoding string) ([]*Node, error) {
 	if p.fetches >= maxIncludeFetches {
-		return nil, fatalInclude{fmt.Errorf("document performs more than %d inclusions", maxIncludeFetches)}
+		return nil, fatalInclude{fmt.Errorf("resource limit exceeded: document performs more than %d inclusions", maxIncludeFetches)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
@@ -448,30 +454,22 @@ func isAncestorOf(a, n *Node) bool {
 // name only one of them.
 func copySubtree(n *Node, base string) *Node {
 	c := &Node{
-		Kind:           n.Kind,
-		Name:           n.Name,
-		Value:          n.Value,
-		BaseURI:        base,
-		TypeAnnotation: n.TypeAnnotation,
-		UnionMember:    n.UnionMember,
-		IsID:           n.IsID,
-		IsIDREFS:       n.IsIDREFS,
-		IsNilled:       n.IsNilled,
+		Kind:    n.Kind,
+		Name:    n.Name,
+		Value:   n.Value,
+		BaseURI: base,
 	}
+	// XInclude splices a subtree into another document unchanged; nothing
+	// about that is an assessment, so every PSVI property travels.
+	c.CopyTypingFrom(n)
 	if n.BaseURI != "" {
 		// The node stated a base of its own, which travels with it.
 		c.BaseURI = n.BaseURI
 	}
 	for _, a := range n.Attrs {
-		// UnionMember travels with TypeAnnotation, exactly as it does on the
-		// element above. The annotation names the type; for a union the member
-		// names what the value IS, and atomisation needs it because a union's
-		// own derivation chain runs to xs:anySimpleType and stops. Carrying one
-		// without the other is what silently untyped a validated document at
-		// three copy sites in xslt and xdmbuild.
-		c.AddAttr(&Node{Kind: KindAttribute, Name: a.Name, Value: a.Value,
-			IsID: a.IsID, IsIDREFS: a.IsIDREFS, TypeAnnotation: a.TypeAnnotation,
-			UnionMember: a.UnionMember})
+		ac := &Node{Kind: KindAttribute, Name: a.Name, Value: a.Value}
+		ac.CopyTypingFrom(a)
+		c.AddAttr(ac)
 	}
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)
@@ -489,7 +487,7 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		return p.fetchText(target, base, encoding)
 	}
 	if p.fetches >= maxIncludeFetches {
-		return nil, fatalInclude{fmt.Errorf("document performs more than %d inclusions", maxIncludeFetches)}
+		return nil, fatalInclude{fmt.Errorf("resource limit exceeded: document performs more than %d inclusions", maxIncludeFetches)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
@@ -507,7 +505,8 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 	// without this the recursion below simply does not terminate.
 	for _, u := range p.stack {
 		if u == uri {
-			return nil, fatalInclude{fmt.Errorf("xi:include loop: %q includes itself", uri)}
+			return nil, fatalInclude{fmt.Errorf(
+				"circular xi:include loop: %q includes itself", uri)}
 		}
 	}
 

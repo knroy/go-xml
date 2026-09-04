@@ -195,7 +195,14 @@ type frag struct {
 // The bound exists because the follow relation is quadratic in the number of
 // positions, so an unbounded model is a way to be handed an unbounded
 // allocation — the failure Xerces and Saxon both hit.
-const maxPositions = 8192
+// The invariant on exceeding it: build returns an error, which means the
+// procedure DECLINED to decide — explicitly NOT "no violation was found".
+// Every caller must therefore take a conservative path. See
+// TestContentModelBudgetSoundness in budget_soundness_test.go, which enforces this
+// differentially by forcing the budget pathologically low.
+//
+// It is a var only so tests may lower it; it is never assigned in production.
+var maxPositions = 8192
 
 // build walks a particle, adding positions and follow edges, and returns the
 // fragment data for it.

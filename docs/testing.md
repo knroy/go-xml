@@ -170,6 +170,22 @@ one-pass evaluator holds that ratio flat. The counters are nil in every
 ordinary build and attach through a package-internal hook, so they cost a nil
 check: the benchmark is unchanged to within noise with them compiled in.
 
+The same counters later settled an argument the prose had got wrong. `keyref`
+was documented as inherently quadratic — every enclosing scope must check every
+target, which is true — and that was taken to mean nothing could be done. The
+counters separated the two quantities the prose had run together: `fieldEvals`
+and `targets` were already linear, so the *checks* were not the cost; only
+`nodesVisited` grew at 3.92, 3.96, 3.98, and that is target rediscovery, which
+is cacheable. `TestIdentityKeyrefAmplification` now holds it at 2.00x.
+
+Elapsed time would not have separated them, and did not: after the traversal
+was made linear the benchmark still grew fourfold, because two unrelated
+quadratics in allocation had been hidden underneath it. `-benchmem` is what
+showed those — bytes per operation growing 3.95x per doubling while the
+allocation *count* grew 2.2x, which says the copies were getting larger rather
+than more numerous, and pointed at the per-level table copying rather than at
+anything in the walk.
+
 **An oracle earns its keep by disagreeing.** The identity-constraint oracle in
 `xsd/identity_oracle_test.go` reported 0 disagreements over 6,000 generated
 documents the first time it ran, which says nothing on its own — a test that
@@ -226,7 +242,12 @@ document. See [options.md](options.md) for the field-by-field rule.
 ## The suites
 
 Third-party and not vendored. Point the variables at your own checkouts, or
-let the defaults find them under `testdata/`.
+let `tests/check.sh` find them under `testdata/`. The defaults in the table
+below are **check.sh's**, not the tests' own: the suite tests skip unless their
+variable is set, and a relative path resolves against the package directory
+rather than the repository root, so `GOXSLT_QT3=testdata/qt3tests go test
+./tests/qt3/` skips and prints PASS. Run `tests/check.sh`, which passes
+absolute paths and fails a suite that reports no summary.
 
 | suite | variable | default | what it measures |
 |---|---|---|---|
@@ -438,9 +459,16 @@ were caught only by diffing the names.
 
 ```sh
 GOXSLT_XSLTS_VERBOSE=1 go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v \
-  2>&1 | awk '/FAIL /{sub(/^.*FAIL /,"");print}' | sort > after.txt
+  2>&1 | sed -n 's/.*FAIL \([^:]*\):.*/\1/p' | sort -u > after.txt
 diff before.txt after.txt
 ```
+
+The extraction takes the case name only, up to the first colon. An earlier
+version of this snippet kept everything after `FAIL `, which is the name *and*
+the error text — so a reworded message read as a changed case list and the
+by-name diff stopped answering the question it exists for. `sort -u` is the
+other half: a failure is printed once by the subtest and once by its parent, so
+without it every name appears twice.
 
 **A check that did not run must never look like one that succeeded.** A suite
 that is missing is reported and skipped; a suite that is *present and reports

@@ -578,10 +578,19 @@ either; they are a DocBook convention layered on `parse="text"`, not part of
 XInclude, and an unsupported pointer part falls through by the XPointer
 Framework's own rule rather than being an error.
 
-Two bounds apply to one pass: at most 200 resources are read in total, and
-inclusions may nest at most 40 deep. Neither substitutes for the other — a
-loop repeats a URI and is caught by name, while a fan-out of a thousand
-distinct files repeats nothing.
+Two resource budgets apply to one pass: at most 200 resources are read in
+total, and inclusions may nest at most 40 deep. Both report `resource limit
+exceeded`, and neither substitutes for the other — a fan-out of a thousand
+distinct files repeats nothing and still costs a thousand parses.
+
+Neither is loop detection. An inclusion loop is caught by URI, on the path of
+inclusions currently in progress, and reported as `circular xi:include loop`
+naming the URI — at depth one for a document that includes itself, rather than
+after forty fetches. The path is keyed on the URI the resolver reports, so two
+spellings of one file are one entry, and it is popped on the way out, so a
+diamond of inclusions is legal. Neither budget is configurable: they bound one
+pass of an opt-in transformation, and the switch that decides whether
+inclusions happen at all is the resolver the caller supplies.
 
 The `go-xml` command exposes this as `-xinclude`, reading from the
 `-allow-dir` roots.

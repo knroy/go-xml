@@ -666,16 +666,14 @@ func spliceInto(parent, n *xdm.Node) {
 	// went from three to two because the node was no longer the one the
 	// engine built.
 	copied := &xdm.Node{
-		Kind:           n.Kind,
-		Name:           n.Name,
-		Value:          n.Value,
-		Attrs:          n.Attrs,
-		Namespaces:     n.Namespaces,
-		BaseURI:        n.BaseURI,
-		TypeAnnotation: n.TypeAnnotation,
-		IsID:           n.IsID,
-		IsIDREFS:       n.IsIDREFS,
+		Kind:       n.Kind,
+		Name:       n.Name,
+		Value:      n.Value,
+		Attrs:      n.Attrs,
+		Namespaces: n.Namespaces,
+		BaseURI:    n.BaseURI,
 	}
+	copied.CopyTypingFrom(n)
 	parent.AppendChild(copied)
 	for _, c := range n.Children {
 		spliceInto(copied, c)

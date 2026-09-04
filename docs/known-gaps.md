@@ -229,6 +229,13 @@ annotated value arriving 1614 times from the sort key and an *unannotated* one
 arriving twice, from `apply-templates` — the two calls that produce the output.
 Reading the copy sites would not have narrowed it; counting arrivals did.
 
+The general fix landed later: the seven PSVI properties are now carried by two
+named operations on `xdm.Node` -- `CopyTypingFrom` and
+`CopyTypingStrippedFrom`/`StripTyping` -- rather than by a hand-written field
+list at each of nine copy sites. `xslt/typingcopy_test.go` pins the preserving
+and stripping halves against a schema pair that redefines the same QName, which
+is the only arrangement in which the loss is observable. See CHANGELOG.md.
+
 `validation-0201` still fails, on indent width alone — recorded as
 implementation-defined in `docs/conformance-gaps.md` — so this costs and gains
 no suite case, and `xslt/unionmember_test.go` is what pins it instead.

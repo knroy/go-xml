@@ -41,6 +41,17 @@ type nodeTable struct {
 	// targets is what a duplicate check counts and must not.
 	targets map[*xdm.Node]string
 
+	// order lists the nodes of targets in the order they were found, which
+	// for a keyref is the order its failures are reported in.
+	//
+	// It exists only because "no key is in scope" is reported once per
+	// scope, at the first participating reference, and then the scope gives
+	// up. That makes which reference comes first observable, and a Go map
+	// iterates in a randomised order, so the target set alone cannot decide
+	// it. Only a keyref maintains this; key and unique report every
+	// duplicate independently and do not care.
+	order []*xdm.Node
+
 	// ambiguous records the sequences that two or more sibling subtrees
 	// each defined, and which were therefore removed from entries.
 	//
@@ -146,7 +157,7 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 		if ic.Kind != ICKeyref {
 			continue
 		}
-		v.checkKeyref(el, ic, merged)
+		merged[ic] = v.checkKeyref(el, ic, merged)
 	}
 	return merged
 }
@@ -158,17 +169,28 @@ func (v *validator) checkIdentityConstraints(el *xdm.Node, decl *ElementDecl, ch
 // merged table cannot say which the ancestor's keyref should resolve to. That
 // is only reachable through a unique or key that is itself scoped below, so a
 // conflict here is not a validity failure at this level.
+//
+// The first table seen for a constraint is ADOPTED rather than copied, and the
+// rest are folded into it. Copying it was the second quadratic in this file:
+// every level of a recursive document rebuilt maps holding everything below
+// it, so the traversal could be made linear and the evaluation would still
+// allocate O(targets x depth) bytes and spend all its time in the collector.
+// On the 960-level keyref benchmark that was 225 MB per validation.
+//
+// Adopting is sound because a child's table has exactly one consumer. It is
+// built by that child's own checkIdentityConstraints, appended to the parent's
+// slice once, and read only here; nothing retains it afterwards, so mutating
+// it in place is not observable. The one caller that goes on to use a table
+// after merging — checkIdentityConstraints, which passes merged[ic] to
+// buildNodeTable as below — is reading the merged table this returns, which is
+// the adopted one, and buildNodeTable does not write to it.
 func mergeTables(children []icTables) icTables {
 	out := icTables{}
 	for _, child := range children {
 		for ic, tbl := range child {
 			existing, ok := out[ic]
 			if !ok {
-				out[ic] = &nodeTable{
-					entries:   copyEntries(tbl.entries),
-					targets:   copyTargets(tbl.targets),
-					ambiguous: copyAmbiguous(tbl.ambiguous),
-				}
+				out[ic] = tbl
 				continue
 			}
 			// A sequence already ambiguous in the child stays ambiguous
@@ -189,37 +211,15 @@ func mergeTables(children []icTables) icTables {
 			// siblings share must survive here even though entries
 			// drops it, because the ancestor's scope contains both
 			// occurrences and has to see them.
+			for _, n := range tbl.order {
+				if _, dup := existing.targets[n]; !dup {
+					existing.order = append(existing.order, n)
+				}
+			}
 			for n, k := range tbl.targets {
 				existing.targets[n] = k
 			}
 		}
-	}
-	return out
-}
-
-func copyAmbiguous(in map[string]bool) map[string]bool {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func copyTargets(in map[*xdm.Node]string) map[*xdm.Node]string {
-	out := make(map[*xdm.Node]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func copyEntries(in map[string]*xdm.Node) map[string]*xdm.Node {
-	out := make(map[string]*xdm.Node, len(in))
-	for k, v := range in {
-		out[k] = v
 	}
 	return out
 }
@@ -269,8 +269,27 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 	// at depth 2 collide in the scope that contains both, and the inner
 	// scope cannot have reported it.
 	if below != nil {
-		for n, k := range below.targets {
-			tbl.targets[n] = k
+		// The subtree's table is ADOPTED rather than copied into a fresh
+		// one, for the reason mergeTables adopts: rebuilding maps that
+		// hold everything below at every level costs O(targets x depth)
+		// bytes, which left the evaluation quadratic in allocation after
+		// the traversal had been made linear.
+		//
+		// entries is rebuilt from targets rather than adopted with them.
+		// The two are not interchangeable: a sequence that two SIBLING
+		// subtrees each defined was deleted from entries by the merge,
+		// and this scope contains both occurrences, so it is a duplicate
+		// HERE even though neither inner scope could report it. Deriving
+		// entries from the full target set is what sees that; adopting
+		// the merged entries would silently accept it.
+		//
+		// order is deliberately NOT carried across. It records the
+		// order a keyref reports its failures in, and this is the key
+		// and unique path, whose walk below does not append to it — so
+		// carrying it would leave a table holding an order that covers
+		// only part of its targets, for a later reader to trust.
+		tbl.targets = below.targets
+		for n, k := range tbl.targets {
 			if prev, dup := tbl.entries[k]; dup && prev != n {
 				code := "cvc-identity-constraint.4.1"
 				if ic.Kind == ICKey {
@@ -338,55 +357,120 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 	return tbl
 }
 
-// checkKeyref resolves a keyref against the node table of the key it refers to.
-func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icTables) {
-	if ic.Refer == nil {
-		return
+// checkKeyref resolves a keyref against the node table of the key it refers to,
+// and returns the table of targets it found for this scope.
+//
+// The returned table is a target cache, not something a keyref resolves
+// against: a keyref defines no keys, so its entries map is never consulted.
+// What it carries is the set of nodes this scope selected, with the key
+// sequence each produced, so that an enclosing scope of the SAME keyref can
+// take them wholesale instead of rediscovering them.
+//
+// That is the whole of the change that made this linear. The number of CHECKS
+// is genuinely nodes times enclosing scopes and no traversal can reduce it — a
+// node under a nested keyref scope is a target of that scope and of every
+// enclosing one, each resolving against its own key table, and all of those
+// checks are required. But the checks are map lookups. What used to be
+// quadratic alongside them was REDISCOVERING the targets: selectNodes walked
+// the entire subtree once per enclosing scope, so a keyref on a self-embedding
+// element visited every node once per level. Seeding from below and pruning the
+// walk at any element that declares the same keyref leaves each node visited a
+// bounded number of times, and leaves the per-scope lookups untouched.
+func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icTables) *nodeTable {
+	// The table an inner scope of this same keyref already built is ADOPTED
+	// and extended, not copied into a fresh one. Copying was the other half
+	// of the quadratic: every level rebuilt a map and a slice holding every
+	// target below it, so the walk could be linear and the evaluation would
+	// still allocate O(targets x depth).
+	//
+	// The adoption is sound for the same reason it is in mergeTables — the
+	// table has a single consumer — and it is what makes the seeding free:
+	// the targets from below are already present and already in order, so
+	// this scope only appends what its own walk newly reaches.
+	tbl := tables[ic]
+	if tbl == nil {
+		tbl = &nodeTable{
+			entries: map[string]*xdm.Node{},
+			targets: map[*xdm.Node]string{},
+		}
 	}
-	target := tables[ic.Refer]
+	if v.icStats != nil {
+		v.icStats.Seeded += uint64(len(tbl.targets))
+	}
 
-	// Same reasoning as buildNodeTable: one keyref at the top of a recursive
-	// document walks the whole subtree in this one call.
-	for _, node := range v.selectNodes(el, ic.Selector) {
+	var refer *nodeTable
+	if ic.Refer != nil {
+		refer = tables[ic.Refer]
+	}
+
+	for _, node := range v.selectNodesPruned(el, ic) {
 		if v.checkCancelled() {
-			return
+			return tbl
 		}
 		if v.inSkippedContent(node) {
 			continue
 		}
+		if _, already := tbl.targets[node]; already {
+			continue
+		}
+		if v.icStats != nil {
+			v.icStats.Targets++
+		}
 		joined, complete, ok := v.cachedKeySequence(node, ic)
 		if !ok || !complete {
 			// A keyref whose fields are absent simply does not
-			// participate; only a key requires every field.
+			// participate; only a key requires every field. It is
+			// deliberately NOT recorded as a target: an enclosing
+			// scope would then seed it and resolve a sequence it
+			// should have ignored.
 			continue
 		}
-		if target == nil {
+		tbl.targets[node] = joined
+		tbl.order = append(tbl.order, node)
+	}
+
+	// Every target is resolved against THIS scope's referent table, the ones
+	// carried up from below as much as the ones newly found: the scopes hold
+	// different key tables, so a reference satisfied in an inner scope may
+	// have nothing to resolve to here, and one that failed there may succeed
+	// here. Both checks are required and neither stands in for the other.
+	if ic.Refer == nil {
+		return tbl
+	}
+	for _, node := range tbl.order {
+		if v.checkCancelled() {
+			return tbl
+		}
+		joined := tbl.targets[node]
+		if refer == nil {
+			// No table for the referent anywhere below: nothing can
+			// resolve, so this is reported once for the scope at the
+			// first participating reference and the scope gives up.
 			v.fail(node, "cvc-identity-constraint.4.3",
 				"keyref %q: no %s is in scope", ic.Name.Local, ic.Refer.Name.Local)
-			return
+			return tbl
 		}
-		if _, ok := target.entries[joined]; !ok {
+		if _, ok := refer.entries[joined]; !ok {
 			v.fail(node, "cvc-identity-constraint.4.3",
 				"keyref %q: no matching %s for %q",
 				ic.Name.Local, ic.Refer.Name.Local,
 				strings.ReplaceAll(joined, keySep, ", "))
 		}
 	}
+	return tbl
 }
 
 // cachedKeySequence is keySequence with the result kept per (node, constraint).
 //
-// Unlike a key or unique, a keyref cannot prune: it produces no table for an
-// ancestor to seed from, and a node under a nested keyref scope is a target of
-// that scope AND of every enclosing one, each resolving against its own key
-// table. Both checks are required, so the number of checks really is nodes
-// times enclosing scopes and no traversal change can remove it.
+// A node's key sequence does not depend on which scope is asking, and computing
+// it means running the field paths. A node under a nested keyref scope is a
+// target of that scope AND of every enclosing one, so without this the field
+// paths run once per enclosing scope for every node.
 //
-// What is repeated needlessly is the field extraction. A node's key sequence
-// does not depend on which scope is asking, and computing it means running the
-// field paths — the expensive half of the loop. Caching it leaves the
-// quadratic count of cheap map lookups and removes the quadratic count of
-// selectNodes calls.
+// The cache is still worth its keep now that checkKeyref prunes and seeds. The
+// pruned walk reaches each node in one scope only, but the same node may be
+// selected by two different constraints, and a target seeded from below is
+// re-examined by every scope above it.
 func (v *validator) cachedKeySequence(node *xdm.Node, ic *IdentityConstraint) (joined string, complete, ok bool) {
 	type key struct {
 		n  *xdm.Node

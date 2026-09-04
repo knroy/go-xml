@@ -17,47 +17,28 @@ import (
 // whether the instruction asked for it.
 func DeepCopy(n *xdm.Node) *xdm.Node {
 	c := &xdm.Node{
-		Kind:           n.Kind,
-		Name:           n.Name,
-		Value:          n.Value,
-		BaseURI:        n.BaseURI,
-		TypeAnnotation: n.TypeAnnotation,
-		// The union member travels with the annotation, because the two are
-		// halves of one fact: the annotation names the union, and this names
-		// the member that actually accepted the value. Atomisation reads the
-		// member -- a union's own derivation chain runs to xs:anySimpleType
-		// and stops -- so a copy that kept only the annotation atomised to
-		// xs:untypedAtomic and lost every type the value really had.
-		UnionMember: n.UnionMember,
-		// The resolved meaning of the annotation travels for the same reason
-		// the union member does, and losing it would be the same bug in a new
-		// place: a copy that kept only the name would have to ask the
-		// process-global registries what that name means, and they answer for
-		// whichever schema loaded last. A result tree built by XSLT out of
-		// validated input would then silently change type.
-		DerivedPrimitive: n.DerivedPrimitive,
-		ListItem:         n.ListItem,
-		IsID:             n.IsID,
-		IsIDREFS:         n.IsIDREFS,
-		// dm:nilled travels with the annotation on a COPY. A copy of an
-		// assessed element is an element that was assessed: validation-1202
-		// copies a nilled element with validation="preserve" and requires
-		// nilled() to stay true, and fn:copy-of and fn:snapshot in
-		// validation-1203 require the same. Only a NEWLY CONSTRUCTED element
-		// starts unnilled, which is xsl:copy's case in validation-1204 —
-		// there the annotation is preserved but the element itself is new.
-		IsNilled: n.IsNilled,
+		Kind:    n.Kind,
+		Name:    n.Name,
+		Value:   n.Value,
+		BaseURI: n.BaseURI,
 	}
+	// Every PSVI property travels, which is what "the copy is the same node"
+	// means. dm:nilled included: a copy of an assessed element is an element
+	// that was assessed — validation-1202 copies a nilled element with
+	// validation="preserve" and requires nilled() to stay true, and fn:copy-of
+	// and fn:snapshot in validation-1203 require the same. Only a NEWLY
+	// CONSTRUCTED element starts unnilled, which is xsl:copy's case in
+	// validation-1204: there the annotation is preserved but the element
+	// itself is new, and that is decided by the validation spec rather than
+	// here.
+	c.CopyTypingFrom(n)
 	for _, ns := range n.Namespaces {
 		c.AddNamespace(ns.Name.Local, ns.Value)
 	}
 	for _, a := range n.Attrs {
-		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
-			Value: a.Value, TypeAnnotation: a.TypeAnnotation,
-			UnionMember:      a.UnionMember,
-			DerivedPrimitive: a.DerivedPrimitive,
-			ListItem:         a.ListItem,
-			IsID:             a.IsID, IsIDREFS: a.IsIDREFS})
+		ac := &xdm.Node{Kind: xdm.KindAttribute, Name: a.Name, Value: a.Value}
+		ac.CopyTypingFrom(a)
+		c.AddAttr(ac)
 	}
 	for _, ch := range n.Children {
 		c.AppendChild(DeepCopy(ch))

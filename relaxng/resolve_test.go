@@ -166,8 +166,10 @@ func TestIncludeCycleTerminates(t *testing.T) {
 	if err == nil {
 		t.Fatal("a cycle of includes should be refused")
 	}
-	if !strings.Contains(err.Error(), "deep") {
-		t.Errorf("error = %v, want one naming the depth limit", err)
+	// It is reported as the cycle it is, not as a depth overrun: see
+	// include_cycle_test.go for the two failures held apart.
+	if !strings.Contains(err.Error(), "circular") {
+		t.Errorf("error = %v, want one naming the cycle", err)
 	}
 }
 

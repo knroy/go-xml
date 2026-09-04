@@ -2116,7 +2116,13 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 // The number of branches is the product of the choice arities on the path, so
 // a deeply nested model could in principle blow up; branchLimit caps it and
 // falls back to the structural table rather than spending unbounded time.
-const branchLimit = 4096
+// Exceeding it makes allBranchCounts return (nil, false), which means the
+// enumeration DECLINED — explicitly NOT "no violation was found". The caller
+// must fall back to the structural table, which is a conservative
+// approximation. Enforced by TestRestrictionBudgetSoundness and TestBranchCountsDeclineIsNotAcceptance.
+//
+// It is a var only so tests may lower it; it is never assigned in production.
+var branchLimit = 4096
 
 func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 	if g.Compositor == CompositorChoice {
