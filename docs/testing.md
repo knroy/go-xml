@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,147 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,149 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,24 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**Counters say what a stopwatch cannot.** The identity-constraint evaluator's
+problem is not that any one traversal is slow; it is that the same nodes are
+walked once per enclosing scope, and elapsed time cannot distinguish that from
+a large constant. `xsd/identity_stats_test.go` counts selector evaluations,
+field evaluations and nodes visited, and prints the ratio:
+
+    depth=120  nodesVisited=7260     growth on doubling: -
+    depth=240  nodesVisited=28920    growth on doubling: 3.98x
+    depth=480  nodesVisited=115440   growth on doubling: 3.99x
+    depth=960  nodesVisited=461280   growth on doubling: 4.00x
+
+Four times the work for twice the depth, and nodes-visited-per-node climbing
+30, 60, 120, 240 in step with it. That is the quadratic stated as a measurement
+rather than as an argument, and it is the number a redesign has to move — a
+one-pass evaluator holds that ratio flat. The counters are nil in every
+ordinary build and attach through a package-internal hook, so they cost a nil
+check: the benchmark is unchanged to within noise with them compiled in.
 
 **An oracle earns its keep by disagreeing.** The identity-constraint oracle in
 `xsd/identity_oracle_test.go` reported 0 disagreements over 6,000 generated

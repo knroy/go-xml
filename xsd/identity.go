@@ -38,6 +38,39 @@ const keySep = "\x1f"
 // they belong to.
 type icTables map[*IdentityConstraint]*nodeTable
 
+// icStats counts the work an identity-constraint evaluation actually does.
+//
+// Elapsed time says a run was slow; it does not say the same node was examined
+// once per enclosing scope, which is the specific thing wrong here. These
+// counters do, and they are what a redesign has to move: a one-pass evaluator
+// should hold SelectorEvals near NodesVisited, where the current one holds it
+// near NodesVisited times depth.
+//
+// It is nil in ordinary use and allocated only by a test that asks for it, so
+// the counting costs a nil check on paths that are already doing map work.
+type icStats struct {
+	// NodesVisited counts nodes reached by a selector or field walk,
+	// including those a step rejects.
+	NodesVisited uint64
+	// SelectorEvals counts calls to selectNodes for a constraint's
+	// selector — one per scope in the current design.
+	SelectorEvals uint64
+	// FieldEvals counts calls to selectNodes for a field.
+	FieldEvals uint64
+	// Targets counts selected nodes a key sequence was built for.
+	Targets uint64
+	// Seeded counts targets whose key sequence was reused from the
+	// subtree's table rather than rebuilt.
+	Seeded uint64
+	// TableOps counts entry reads and writes on a node table.
+	TableOps uint64
+}
+
+// icStatsHook lets a measurement test attach counters to the next validation.
+// It is nil in every ordinary build and set only by identity_stats_test.go,
+// which is why the counters cost a nil check rather than an option.
+var icStatsHook func() *icStats
+
 // checkIdentityConstraints evaluates the constraints declared on an element and
 // returns the node tables for its subtree.
 //
@@ -139,7 +172,14 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		if v.inSkippedContent(target) {
 			continue
 		}
+		if v.icStats != nil {
+			v.icStats.Targets++
+		}
 		if joined, ok := seeded[target]; ok {
+			if v.icStats != nil {
+				v.icStats.Seeded++
+				v.icStats.TableOps++
+			}
 			// Already keyed for the subtree below. The duplicate
 			// check still has to run here, because this scope may
 			// contain a second occurrence the inner one did not.
@@ -173,6 +213,9 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 		}
 
 		joined := strings.Join(seq, keySep)
+		if v.icStats != nil {
+			v.icStats.TableOps++
+		}
 		if prev, dup := tbl.entries[joined]; dup && prev != target {
 			code := "cvc-identity-constraint.4.1"
 			if ic.Kind == ICKey {
@@ -232,6 +275,10 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 // than one node (which is a failure of clause 3).
 func (v *validator) keySequence(target *xdm.Node, ic *IdentityConstraint) (seq []string, complete, ok bool) {
 	for _, field := range ic.Fields {
+		if v.icStats != nil {
+			v.icStats.FieldEvals++
+			v.icStats.SelectorEvals-- // counted as a field, not a selector
+		}
 		nodes := v.selectNodes(target, field)
 		switch len(nodes) {
 		case 0:
@@ -286,6 +333,9 @@ func (v *validator) selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 	if path == nil {
 		return nil
 	}
+	if v.icStats != nil {
+		v.icStats.SelectorEvals++
+	}
 	var out []*xdm.Node
 	seen := map[*xdm.Node]bool{}
 
@@ -293,6 +343,9 @@ func (v *validator) selectNodes(context *xdm.Node, path *ICPath) []*xdm.Node {
 		starts := []*xdm.Node{context}
 		if alt.DescendantOrSelf {
 			starts = descendantsOrSelf(context)
+		}
+		if v.icStats != nil {
+			v.icStats.NodesVisited += uint64(len(starts))
 		}
 		for _, start := range starts {
 			for _, n := range v.walkSteps(start, alt) {

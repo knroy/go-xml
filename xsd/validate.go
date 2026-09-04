@@ -154,6 +154,12 @@ func (s *Schema) ValidateContext(ctx context.Context, root *xdm.Node,
 		opts.MaxDepth = DefaultMaxDepth
 	}
 	v := &validator{ctx: ctx, schema: s, opts: opts, ids: map[string]int{}}
+	// icStatsHook is nil except under the package's own measurement tests.
+	// See icStats: the counters exist because elapsed time cannot show that
+	// the same node is walked once per enclosing scope.
+	if icStatsHook != nil {
+		v.icStats = icStatsHook()
+	}
 	// Whitespace-only text in an element whose declared content is
 	// element-only is ignorable (XML 1.0 §2.10), and XSLT 2.0 §4.4 makes
 	// stripping it unconditional — it outranks xsl:preserve-space, exactly as
@@ -223,6 +229,10 @@ type validator struct {
 
 	// path is the element path to the node being validated, for messages.
 	path []string
+
+	// icStats counts identity-constraint work. Nil unless a test asks for
+	// it; see icStats for why elapsed time is not enough on its own.
+	icStats *icStats
 
 	// stripIgnorable removes whitespace-only text from elements whose
 	// declared content is element-only, as XML 1.0 §2.10 and XSLT 2.0 §4.4
