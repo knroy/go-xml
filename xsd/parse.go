@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,6 +131,14 @@ func errorAt(n *xdm.Node, code, format string, args ...any) *ParseError {
 type parser struct {
 	schema *Schema
 	doc    *schemaDoc
+
+	// exactMin and exactMax hold the exact occurrence bounds read by the
+	// most recent occurs call, non-nil only when the bound was too large
+	// for an int and had to be clamped. readParticle passes them to the
+	// particle through takeExactOccurs. They live on the parser rather
+	// than in occurs's result so that the signature stays what its two
+	// callers already expect.
+	exactMin, exactMax *big.Int
 
 	// errs accumulates faults rather than stopping at the first, because a
 	// schema author fixing a file wants to see every fault in it.
@@ -988,68 +997,153 @@ func (p *parser) chameleonQName(local string) xdm.QName {
 // any bound at or above the saturation point behaves identically during
 // validation. Leading "+" and leading zeros are permitted by the lexical space
 // of xs:nonNegativeInteger, so they are accepted here too.
-func occursValue(v string) (int, bool) {
+//
+// The second result is the exact value, non-nil only when saturation actually
+// discarded information. Saturation is right for the runtime matcher and wrong
+// for the derivation checks, which compare two bounds against each other and
+// would find two distinct saturated values equal; restrict.go consults the
+// exact value where such a comparison is made.
+func occursValue(v string) (int, *big.Int, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return 0, false
+		return 0, nil, false
 	}
 	if v[0] == '+' {
 		v = v[1:]
 	}
 	if v == "" {
-		return 0, false
+		return 0, nil, false
 	}
 	for i := 0; i < len(v); i++ {
 		if v[i] < '0' || v[i] > '9' {
-			return 0, false
+			return 0, nil, false
 		}
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return occursHuge, true
+		// The digits were validated above, so the only way SetString
+		// can fail here is a bug in that loop.
+		exact, ok := new(big.Int).SetString(v, 10)
+		if !ok {
+			return 0, nil, false
+		}
+		return occursHuge, exact, true
 	}
-	return n, true
+	return n, nil, true
 }
 
 // occursHuge stands in for an occurrence bound too large to hold in an int.
-// It is far beyond any attainable child count, so treating a larger bound as
-// equal to it cannot change the outcome of validating a real document.
+//
+// It is far beyond any attainable child count, so for the runtime matcher
+// treating a larger bound as equal to it cannot change the outcome of
+// validating a real document — a schema-level bound of 1e30 and one of 3e30
+// both mean "more children than any document will ever have".
+//
+// The derivation checks are the exception, and the exact layer below is the
+// answer to it. Those checks compare two bounds against *each other* rather
+// than against a document, and there 1e30 and 3e30 are emphatically not equal.
+//
+// It is a quarter of the int range rather than a half, which is deliberate: a
+// value at the saturation point survives being doubled without wrapping, and
+// the arithmetic below leans on that to take an int fast path before reaching
+// for a big.Int.
 const occursHuge = int(^uint(0) >> 2)
 
-// mulOccurs and addOccurs combine occurrence bounds without wrapping.
+// The exact layer.
 //
-// occursHuge is roughly a quarter of the int range, so it survives being
-// doubled but not tripled: occursHuge*3 is negative. That matters because the
-// derivation checks in restrict.go multiply a particle's bounds by the length
-// of a model group and sum bounds across a group's members, and a schema is
-// free to write minOccurs="79228162514244337593543950335" — which saturates to
-// occursHuge — on a sequence of three elements. The product wrapped negative
-// and leaked into a diagnostic reading "minOccurs -4611686018427387907 is
-// below the base's 0"; worse, a wrapped bound can satisfy an inequality it
-// should fail, which would let an invalid restriction through.
+// Below, an occurrence bound is a pair: the clamped int that the runtime
+// matcher uses, and an optional *big.Int holding the true value when clamping
+// discarded information. The pair is never allowed to disagree — the big.Int is
+// nil exactly when the int is already right — so a caller may reason about
+// either and the two agree wherever both are meaningful.
 //
-// Saturating at occursHuge keeps the arithmetic in the same territory the
-// parser already established: a bound at or above occursHuge is one no
-// document can reach, and clamping there cannot change any outcome that a
-// faithful big-integer computation would have produced. Unbounded is left to
-// the callers, which already special-case it before reaching here — it is a
-// sentinel (-1), not a magnitude, and folding it in silently would turn "no
-// limit" into a very large limit.
-func mulOccurs(a, b int) int {
-	if a == 0 || b == 0 {
-		return 0
+// Unbounded is deliberately absent from this layer. It is a proposition, not a
+// magnitude, and every caller settles it before reaching here; folding it in
+// would recreate the very collapse this code exists to undo.
+//
+// big.Int values are mutable, so every operation below allocates its result
+// rather than writing through a shared pointer. A returned value is owned by
+// its caller and is never aliased into a particle.
+
+// exactOccurs widens a bound to its exact value. It allocates only for a
+// clamped bound; an ordinary one reuses no heap at all beyond the small-int
+// cache big.NewInt does not have, which is why the arithmetic helpers below
+// take the fast path first and never call this unless a clamp is in play.
+func exactOccurs(n int, exact *big.Int) *big.Int {
+	if exact != nil {
+		return exact
 	}
-	if a > occursHuge/b {
-		return occursHuge
-	}
-	return a * b
+	return big.NewInt(int64(n))
 }
 
-func addOccurs(a, b int) int {
-	if a > occursHuge-b {
-		return occursHuge
+// clamped is true when either operand carries an exact value, meaning int
+// arithmetic on the pair cannot be trusted.
+func clamped(a, b *big.Int) bool { return a != nil || b != nil }
+
+// mulExact multiplies two bounds, returning the clamped int and the exact
+// value when the product does not fit.
+//
+// The result's exact value is nil whenever the product is representable, so
+// that a chain of operations on ordinary bounds never allocates and never
+// leaves a redundant big.Int behind for a later comparison to consult.
+func mulExact(a int, ae *big.Int, b int, be *big.Int) (int, *big.Int) {
+	if !clamped(ae, be) {
+		if a == 0 || b == 0 {
+			return 0, nil
+		}
+		if a <= occursHuge/b {
+			return a * b, nil
+		}
 	}
-	return a + b
+	prod := new(big.Int).Mul(exactOccurs(a, ae), exactOccurs(b, be))
+	return narrowOccurs(prod)
+}
+
+// addExact sums two bounds under the same contract as mulExact.
+func addExact(a int, ae *big.Int, b int, be *big.Int) (int, *big.Int) {
+	if !clamped(ae, be) && a <= occursHuge-b {
+		return a + b, nil
+	}
+	sum := new(big.Int).Add(exactOccurs(a, ae), exactOccurs(b, be))
+	return narrowOccurs(sum)
+}
+
+// narrowOccurs splits an exact value into the pair the rest of the package
+// carries: the clamped int for the runtime, and the exact value kept only when
+// the clamp lost something.
+func narrowOccurs(v *big.Int) (int, *big.Int) {
+	if v.IsInt64() {
+		if n := v.Int64(); n <= int64(occursHuge) {
+			return int(n), nil
+		}
+	}
+	return occursHuge, v
+}
+
+// cmpExactOccurs orders two bounds, consulting the exact values only when one
+// of them exists. Two bounds that both clamped to occursHuge are the case the
+// int comparison gets wrong, and the case this function exists for.
+func cmpExactOccurs(a int, ae *big.Int, b int, be *big.Int) int {
+	if !clamped(ae, be) {
+		switch {
+		case a < b:
+			return -1
+		case a > b:
+			return 1
+		}
+		return 0
+	}
+	return exactOccurs(a, ae).Cmp(exactOccurs(b, be))
+}
+
+// occursText renders a bound for a diagnostic, preferring the exact value so
+// that a message about a huge bound quotes what the author wrote rather than
+// the saturation constant.
+func occursText(n int, exact *big.Int) string {
+	if exact != nil {
+		return exact.String()
+	}
+	return strconv.Itoa(n)
 }
 
 // occurs reads minOccurs and maxOccurs from a particle-bearing element.
@@ -1064,32 +1158,49 @@ func addOccurs(a, b int) int {
 // (maxOccurs="") and wildB022 (minOccurs="") loaded clean.
 func (p *parser) occurs(el *xdm.Node) (min, max int, err error) {
 	min, max = 1, 1
+	p.exactMin, p.exactMax = nil, nil
 	if a := el.Attr("", "minOccurs"); a != nil {
-		n, ok := occursValue(a.Value)
+		n, exact, ok := occursValue(a.Value)
 		if !ok {
 			return 0, 0, errorAt(el, "p-props-correct.1",
 				"minOccurs=%q is not a non-negative integer", a.Value)
 		}
-		min = n
+		min, p.exactMin = n, exact
 	}
 	if a := el.Attr("", "maxOccurs"); a != nil {
 		v := strings.TrimSpace(a.Value)
 		if v == "unbounded" {
 			max = Unbounded
 		} else {
-			n, ok := occursValue(v)
+			n, exact, ok := occursValue(v)
 			if !ok {
 				return 0, 0, errorAt(el, "p-props-correct.1",
 					"maxOccurs=%q is not a non-negative integer or \"unbounded\"", a.Value)
 			}
-			max = n
+			max, p.exactMax = n, exact
 		}
 	}
-	if max != Unbounded && min > max {
+	// Both bounds saturate at the same value, so a comparison of the
+	// clamped pair cannot see that 3e30 exceeds 1e30. It is compared
+	// exactly when either side was clamped.
+	if max != Unbounded && cmpExactOccurs(min, p.exactMin, max, p.exactMax) > 0 {
 		return 0, 0, errorAt(el, "p-props-correct.2.1",
-			"minOccurs %d is greater than maxOccurs %d", min, max)
+			"minOccurs %s is greater than maxOccurs %s",
+			occursText(min, p.exactMin), occursText(max, p.exactMax))
 	}
 	return min, max, nil
+}
+
+// takeExactOccurs hands the exact bounds recorded by the most recent occurs
+// call to the particle built from them, and clears them so that a particle
+// built without a preceding occurs cannot inherit another's.
+//
+// The values are almost always nil: a bound that fits in an int is exact
+// already, and only one carried past the saturation point produces a big.Int.
+func (p *parser) takeExactOccurs(part *Particle) *Particle {
+	part.exactMin, part.exactMax = p.exactMin, p.exactMax
+	p.exactMin, p.exactMax = nil, nil
+	return part
 }
 
 // boolAttr reads an attribute whose type is xs:boolean.

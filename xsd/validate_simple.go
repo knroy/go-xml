@@ -923,8 +923,9 @@ func idKind(t *SimpleType, value string) string {
 		return listItemKind(t.ItemType, value)
 	}
 
-	seen := 0
-	for cur := t; cur != nil; {
+	seen := map[*SimpleType]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		switch cur.Name.Local {
 		case "ID", "IDREF", "IDREFS":
 			if cur.Name.URI == NSSchema {
@@ -936,9 +937,6 @@ func idKind(t *SimpleType, value string) string {
 			return ""
 		}
 		cur = base
-		if seen++; seen > 64 {
-			return ""
-		}
 	}
 	return ""
 }
@@ -1148,8 +1146,9 @@ func checkIntegerLexical(normalized string, t *SimpleType) error {
 
 // descendsFromInteger reports whether xs:integer is on the type's base chain.
 func descendsFromInteger(t *SimpleType) bool {
-	seen := 0
-	for cur := t; cur != nil; {
+	seen := map[*SimpleType]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur.Name.URI == NSSchema && cur.Name.Local == "integer" {
 			return true
 		}
@@ -1158,9 +1157,6 @@ func descendsFromInteger(t *SimpleType) bool {
 			return false
 		}
 		cur = base
-		if seen++; seen > 64 {
-			return false
-		}
 	}
 	return false
 }

@@ -918,7 +918,7 @@ func isErrorType(t Type) bool {
 //
 // This is the schema-time twin of (*validator).derivedFrom: the same walk up
 // the base chain, with the same two terminations — a self-referential base
-// (xs:anyType is its own) and a depth bound, because a malformed schema can
+// (xs:anyType is its own) and a visited set, because a malformed schema can
 // build a cycle that is not a self-loop. It is a free function rather than a
 // validator method because the constraint it serves is a property of the
 // schema, checked before any document exists.
@@ -934,7 +934,9 @@ func typeDerivedFrom(t, want Type) bool {
 			}
 		}
 	}
-	for cur, seen := t, 0; cur != nil; seen++ {
+	seen := map[Type]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur == want {
 			return true
 		}
@@ -942,7 +944,7 @@ func typeDerivedFrom(t, want Type) bool {
 			return true
 		}
 		base := cur.BaseType()
-		if base == cur || base == nil || seen > 256 {
+		if base == cur || base == nil {
 			return false
 		}
 		cur = base

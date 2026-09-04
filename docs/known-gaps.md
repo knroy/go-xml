@@ -433,42 +433,51 @@ XSLT 2.0, XSLT 3.0 and XQuery unchanged. `BenchmarkValidateInstance` is
 unmoved — the check reads a bool from a struct already in cache, and allocations
 per operation are identical.
 
-### Saturating occurrence arithmetic is exact below occursHuge, and not above it (open, deliberate)
+### Two occurrence bounds past the saturation point compared equal (fixed)
 
 Occurrence bounds saturate at `occursHuge` = 4611686018427387903, and the
-derivation arithmetic in `restrict.go` now saturates rather than wraps. That
-fixes the wrap, and it leaves one thing it cannot fix.
+derivation arithmetic in `restrict.go` saturated rather than wrapped. That
+fixed the wrap and left a second defect standing, which this entry is about.
 
-Two bounds that both exceed `occursHuge` compare equal, because both clamp to
-it. A base `maxOccurs="1000000000000000000000000000000"` restricted by three
-members each at the same value has a true effective total of 3e30 against a
-base of 1e30 — the restriction is invalid and this engine accepts it. Verified,
-not inferred.
+Two bounds that both exceeded `occursHuge` compared **equal**, because both
+clamped to it. A base `maxOccurs="1000000000000000000000000000000"` (1e30)
+restricted by three members each at the same value has a true effective total
+of 3e30 against a base of 1e30 — the restriction is invalid, and the engine
+accepted it. The direction of the failure is what made this worth fixing rather
+than documenting: a false *accept*, not a false reject.
 
-An external review proposed the general fix: parse occurrence values into
-`big.Int`, keep an `Occurs`/`OccursRange` type carrying `unbounded` as a
-separate flag rather than a magnitude, do the derivation arithmetic exactly,
-and narrow to a bounded `int` only when compiling the runtime matcher. That is
-the right architecture, and the reasoning behind it is correct: "too large for
-an int" is not the same proposition as "semantically equal to MaxInt".
+Saturation is right for the runtime matcher and wrong for the derivation
+checks, and the distinction is the whole fix. The matcher compares a bound
+against a *document*, where 1e30 and 3e30 genuinely are the same proposition —
+more children than any document will ever have. The derivation checks compare
+two bounds against *each other*, where they are emphatically not.
 
-A follow-up review proposed the same architecture and rated it "high
-confidence, a clean architectural fix". That is a fair description of the
-design; what it understates is the migration. The collapse needs a schema author
-to write **two** separate bounds above
-4.6×10^18 and to depend on their ordering. `occursHuge` is a quarter of the int
-range rather than a half, which leaves real headroom: a base of 2N against a
-derived 3N stays exact for every N a document could approach, and the probes
-that fail are ones where both numbers are already past anything an instance can
-reach. Against that, `MinOccurs`/`MaxOccurs` are `int` on the `Particle` struct
-and are read by the runtime matcher, the UPA checker, the subsumption checker
-and `nfa.go`'s counter vectors, so the change is a type migration through the
-whole package rather than a local repair.
+So the exact value is carried alongside the clamped one rather than replacing
+it. `Particle` keeps `MinOccurs`/`MaxOccurs` as `int` — the automaton in
+`nfa.go`, the UPA checker and the matcher are untouched, and none of them needs
+exactness — and gains two `*big.Int` fields that are **nil unless clamping
+actually discarded something**. `occursValue` parses the lexical form once with
+`SetString` instead of losing it at `strconv.Atoi`; `restrict.go` does its
+arithmetic through `addExact`/`mulExact`/`cmpExactOccurs`, which take an int
+fast path and reach for a `big.Int` only when an operand carries one.
 
-The failure it would fix is a false accept, which is the direction that matters,
-so this is a deferral rather than a dismissal. What makes it safe to defer is
-that the wrap — the case reachable with ordinary numbers, and the one that
-produced a *negative* bound — is closed.
+`maxOccurs="unbounded"` stays the `Unbounded` sentinel and is never written as
+a magnitude. "No limit" and "a very large limit" are different propositions,
+and conflating them is precisely how the original defect arose; folding
+unbounded into the exact layer would have recreated it one level up.
+
+Two consequences worth recording. Diagnostics now quote what the author wrote
+rather than the saturation constant — a sequence of three 79228162514244337593543950335-bounded
+members repeated as many times reports its effective total as
+18831305206150534912005657748636404999181280307830839836675, not as
+4611686018427387903. And the cost is nil: `BenchmarkValidateInstance` shows an
+identical allocation count before and after, because no ordinary schema ever
+leaves the int path.
+
+What is *not* exact, deliberately: everything downstream of content-model
+compilation. A bound reaching the automaton is still the clamped int, because
+the runtime question is "did this document supply enough children", and no
+document can approach the saturation point.
 
 ### A depth bound stood in for cycle detection on four schema walks (fixed)
 
@@ -528,15 +537,66 @@ without bounding the walk — a model group that reaches itself revisits the sam
 particle forever without ever repeating a declaration. A visited set has to be
 keyed on what the recursion actually revisits.
 
-**Not every numeric bound in this package is the same defect.** Nine `seen > 64`
-and `seen > 256` counters remain, on *iterative* walks up a type's base chain
-rather than recursive descent through a graph. A legal restriction chain 300
-links long was checked in both directions — a document satisfying the base
-facet validates, one violating it is rejected — and the facet survives intact,
-so the derivation walks these counters bound are not truncating a real schema.
-They stay until something demonstrates otherwise; replacing a bound that has
-been probed and found unreachable would be churn, and the probe is the part
-worth keeping in mind rather than the constant.
+### The base-chain counters were the same defect after all (fixed)
+
+An earlier revision of this document argued the opposite, and the argument is
+worth preserving because the way it failed is the reusable part. It read:
+`seen > 64` and `seen > 256` counters remain on *iterative* walks up a type's
+base chain rather than recursive descent through a graph; a legal restriction
+chain 300 links long was checked in both directions and the facet survived
+intact, so these counters are not truncating a real schema.
+
+The measurement was real and the conclusion was wrong, because the probe drove
+a walk that does not iterate. A facet chain collapses during parsing:
+`SimpleType.Primitive` is filled in on every link as it is built, so
+`primitiveOf` returns on its *first* iteration whatever the chain length, and
+the facet is enforced from the merged `FacetSet` rather than by walking at all.
+A 300-link chain exercised the loop exactly once. The lesson is that a negative
+result on a bound needs to establish that the loop it bounds actually runs —
+a baseline that reads "correct" for the wrong reason is worse than no baseline.
+
+The walks that *do* iterate are the ones asking a question the parser did not
+pre-answer: which built-in a type descends from, and whether one type derives
+from another. Six of them truncated on a legal acyclic chain:
+
+| walk | truncated answer | what it decided | direction |
+|---|---|---|---|
+| `idKind` (`validate_simple.go`) | `""` — not an ID | ID/IDREF bookkeeping skipped the value | **false accept** |
+| `descendsFromInteger` (`validate_simple.go`) | `false` | the integer lexical check never ran | **false accept** |
+| `derivedFrom` (`validate.go`) | `false` | `cvc-elt.4.3` refused a legal `xsi:type` | false reject |
+| `typeDerivedFrom` (`upa.go`) | `false` | schema-time derivation denied | false reject |
+| `derivationMethodsTo` (`parse_decl.go`) | `(_, false)` | `e-props-correct.4` refused a legal schema at load | false reject |
+| `substitutionMemberBlocked` (`assemble.go`) | `false` | reachable only once the load above succeeds | — |
+
+The two false accepts are the ones that matter. A duplicate `xs:ID` was
+**accepted** once the restriction chain under `xs:ID` ran 64 links, and `"1.5"`
+validated against a type descending from `xs:integer` at the same depth.
+Neither schema is recursive or malformed.
+
+`derivationMethodsTo` was not on the original list of eleven; it surfaced
+because a legal schema stopped *loading* at depth 65, and its cliff sits at a
+different constant from the validation-time walks — 65 against 257 — because
+one counts links and the other types. That arbitrariness is the argument
+against raising a constant rather than removing it.
+
+All twelve counters are now visited sets keyed on the component pointer, which
+identifies a cycle exactly — the only thing the count was ever trying to catch —
+and imposes no limit on a legal chain. Six were already unreachable
+(`primitiveOf`, `unionMemberTypesOf`, `listItemTypeOf`,
+`inheritedSimpleContent`, `baseDeclaredType`, and the union arm of
+`substitutionBlocked`): their chains collapse during parsing the way the facet
+chain does. They were converted anyway, because a lone survivor of a pattern
+this one invites the next reader to copy it.
+
+Reachable from a schema, not from an instance alone — a trusted schema with
+untrusted documents cannot reach it. Measured: both suites unchanged, TOTAL
+agree 39347 (1.0) and 41532 (1.1). `xsd/deep_derivation_test.go` pins all
+twelve at depths 1, 2, 31, 32, 63, 64, 65, 128, 255, 256, 257, 300 and 512,
+asserts a semantic property at each rather than absence of a crash, and
+separately that a cyclic base chain still terminates. The six fixed shapes fail
+against the previous code at exactly 64, 65 or 257; `TestDeepFacetChainCollapses`
+and `TestDeepUnionAndListCollapse` pin the collapsing walks so the superseded
+negative result above is not re-derived from the same shape.
 
 ### A choice is unordered under 1.1 (fixed)
 

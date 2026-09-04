@@ -165,13 +165,27 @@ A wrapped bound in a diagnostic is the visible half. The dangerous half is that
 a negative bound can satisfy an inequality it should fail, which would admit an
 invalid restriction.
 
-Sixteen sites now go through saturating `mulOccurs`/`addOccurs`. The reported
-multiplication was three of them; the other thirteen were found by sweeping for
-the pattern, and the sums in `effectiveTotalRange` are the worse find — they
-overflow at *two* saturated members rather than three, and they feed the
-wildcard-restriction path independently. `xsd/occurs_overflow_test.go` asserts
-positively on the saturated value rather than merely on the absence of a minus
-sign, and it caught a second distinct wrap the reported case never reaches.
+Sixteen sites were the problem. The reported multiplication was three of them;
+the other thirteen were found by sweeping for the pattern, and the sums in
+`effectiveTotalRange` are the worse find — they overflow at *two* saturated
+members rather than three, and they feed the wildcard-restriction path
+independently. `xsd/occurs_overflow_test.go` asserts positively on the
+computed bound rather than merely on the absence of a minus sign, and it
+caught a second distinct wrap the reported case never reaches.
+
+Saturating those sites closed the wrap and left a second defect, since fixed:
+two bounds *both* past `occursHuge` clamped to the same value and so compared
+equal, which let a derived total of 3e30 pass against a base of 1e30. The
+inequality is now evaluated exactly. `Particle` keeps its `int` bounds for the
+runtime matcher and carries the true value in two `*big.Int` fields that stay
+nil unless clamping actually lost something, so `addExact`/`mulExact`/
+`cmpExactOccurs` take an int fast path on every schema that is not
+pathological — the allocation count in `BenchmarkValidateInstance` is
+unchanged. `maxOccurs="unbounded"` deliberately stays a sentinel rather than a
+magnitude: "no limit" and "a very large limit" are different propositions, and
+treating them alike is what produced the defect in the first place.
+`xsd/occurs_exact_test.go` pins the ordering in both directions, so a fix that
+merely rejected everything large would not pass it.
 
 ### Identity constraints were quadratic on recursive elements
 

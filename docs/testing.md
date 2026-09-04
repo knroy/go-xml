@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,151 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,170 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,26 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**A probe that clears a guard has to reach the guard.** This file recorded a
+300-link derivation chain as evidence that eleven remaining `seen > 64` and
+`seen > 256` counters were sound, and an external reviewer reasonably relied on
+it. The measurement was real and it cleared the wrong walk. The chain drove
+facets, and `SimpleType.Primitive` is filled in eagerly during parsing — set on
+the deepest link at depth 1, 64 and 300 alike — so `primitiveOf` returns on its
+first iteration and a 300-link chain exercised the loop exactly **once**.
+
+Six of those eleven turned out to be defects, two of them false accepts: a
+duplicate `xs:ID` is admitted once the chain under `xs:ID` runs 64 links, and
+`"1.5"` validates as a descendant of `xs:integer` at the same depth. Neither
+schema is recursive or malformed.
+
+Two habits follow. Assert a semantic property the walk decides — *this deep
+type is still an ID* — rather than that a function returned something. And
+before trusting a negative result, confirm the loop iterated: if the value is
+memoised or filled eagerly, depth is not reaching it. A first attempt to
+reproduce this independently also missed, by building n links where the bug
+needs 64 iterations — off by one, exactly at the cliff.
 
 **A corpus that cannot express the bug will not find it.** Widening the
 identity oracle to a two-step selector, `.//box/leaf`, appeared to cover the

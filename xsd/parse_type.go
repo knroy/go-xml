@@ -1077,7 +1077,9 @@ func (p *parser) readParticle(el *xdm.Node) *Particle {
 		}
 		return nil
 	}
-	part := &Particle{MinOccurs: min, MaxOccurs: max}
+	// takeExactOccurs carries across the exact bounds when one of them was
+	// too large for an int; they are nil for every ordinary particle.
+	part := p.takeExactOccurs(&Particle{MinOccurs: min, MaxOccurs: max})
 
 	switch el.Name.Local {
 	case "element":
@@ -2038,8 +2040,9 @@ func particleMatchesOnlyEmpty(p *Particle, seen map[*Particle]bool) bool {
 // inheritedSimpleContent walks a base chain for the simple type a complex type
 // with simple content is built on.
 func inheritedSimpleContent(t *ComplexType) *SimpleType {
-	seen := 0
-	for cur := Type(t); cur != nil; {
+	seen := map[Type]bool{}
+	for cur := Type(t); cur != nil && !seen[cur]; {
+		seen[cur] = true
 		switch b := cur.(type) {
 		case *SimpleType:
 			return b
@@ -2052,9 +2055,6 @@ func inheritedSimpleContent(t *ComplexType) *SimpleType {
 			}
 			cur = b.Base
 		default:
-			return nil
-		}
-		if seen++; seen > 64 {
 			return nil
 		}
 	}

@@ -1354,8 +1354,9 @@ func substitutionBlockedBy(head, member *ElementDecl) bool {
 		return false
 	}
 
-	seen := 0
-	for cur := member.Type; cur != nil && cur != head.Type; {
+	seen := map[Type]bool{}
+	for cur := member.Type; cur != nil && cur != head.Type && !seen[cur]; {
+		seen[cur] = true
 		ct, ok := cur.(*ComplexType)
 		if !ok {
 			return blocked.Has(DerivationRestriction)
@@ -1367,9 +1368,6 @@ func substitutionBlockedBy(head, member *ElementDecl) bool {
 			return false
 		}
 		cur = ct.Base
-		if seen++; seen > 64 {
-			return false
-		}
 	}
 	return false
 }

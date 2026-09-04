@@ -1673,11 +1673,14 @@ func (p *parser) checkSubstitutionGroupDerivation(el *xdm.Node, d *ElementDecl) 
 // derivations away from the head goes through an intermediate type, and clause
 // 4 asks about every method used along the way.
 //
-// The step count is bounded because a malformed base chain can be circular —
-// the type-level check for that lives elsewhere, and this must not hang while
-// waiting for it.
+// The walk terminates on a repeated component because a malformed base chain
+// can be circular — the type-level check for that lives elsewhere, and this
+// must not hang while waiting for it. A visited set identifies a cycle exactly,
+// where a step count could not tell one from a merely deep legal chain.
 func derivationMethodsTo(member, head Type) (used DerivationSet, reached bool) {
-	for cur, steps := member, 0; cur != nil && steps <= 64; steps++ {
+	seen := map[Type]bool{}
+	for cur := member; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur == head {
 			return used, true
 		}

@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/knroy/go-xml/xdm"
@@ -635,21 +636,30 @@ func particleIgnorable(p *Particle) bool {
 // occurrenceRangeOK is Occurrence Range OK (§3.9.6): R's range must fit inside
 // B's.
 func occurrenceRangeOK(r, b *Particle) error {
-	return rangeOK(r.MinOccurs, r.MaxOccurs, b.MinOccurs, b.MaxOccurs)
+	return rangeOK(occursOf(r), occursOf(b))
 }
 
-func rangeOK(rMin, rMax, bMin, bMax int) error {
-	if rMin < bMin {
-		return fmt.Errorf("minOccurs %d is below the base's %d", rMin, bMin)
+// rangeOK is the pair of inequalities Occurrence Range OK (§3.9.6) asks for.
+//
+// The comparisons go through cmpExactOccurs rather than through > and <
+// because both operands may have been clamped to occursHuge, and two clamped
+// bounds are equal as ints however far apart they truly are. That collapse is
+// not conservative: it accepts a derived total of 3e30 against a base of 1e30.
+func rangeOK(r, b occRange) error {
+	if cmpExactOccurs(r.min, r.eMin, b.min, b.eMin) < 0 {
+		return fmt.Errorf("minOccurs %s is below the base's %s",
+			occursText(r.min, r.eMin), occursText(b.min, b.eMin))
 	}
-	if bMax == Unbounded {
+	if b.max == Unbounded {
 		return nil
 	}
-	if rMax == Unbounded {
-		return fmt.Errorf("maxOccurs is unbounded but the base's is %d", bMax)
+	if r.max == Unbounded {
+		return fmt.Errorf("maxOccurs is unbounded but the base's is %s",
+			occursText(b.max, b.eMax))
 	}
-	if rMax > bMax {
-		return fmt.Errorf("maxOccurs %d exceeds the base's %d", rMax, bMax)
+	if cmpExactOccurs(r.max, r.eMax, b.max, b.eMax) > 0 {
+		return fmt.Errorf("maxOccurs %s exceeds the base's %s",
+			occursText(r.max, r.eMax), occursText(b.max, b.eMax))
 	}
 	return nil
 }
@@ -1132,8 +1142,7 @@ func nsRecurseCheckCardinality(r *Particle, rg *ModelGroup, b *Particle, bw *Wil
 	// inside the wildcard's occurrence range. This is the clause that
 	// distinguishes a group from a particle: repeating a two-member
 	// sequence twice contributes four elements, not two.
-	min, max := effectiveTotalRange(r)
-	if err := rangeOK(min, max, b.MinOccurs, b.MaxOccurs); err != nil {
+	if err := rangeOK(effectiveTotalRange(r), occursOf(b)); err != nil {
 		return fmt.Errorf("the group's total range does not fit the base wildcard: %w", err)
 	}
 	return nil
@@ -1293,15 +1302,13 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 			if v >= Version11 && wildcardCovers(rp, bp) {
 				used[i] = true
 				matched = true
-				rMin, rMax := effectiveTotalRange(rp)
-				spent[i] = occRange{min: rMin, max: rMax}
+				spent[i] = effectiveTotalRange(rp)
 				break
 			}
 			if particleRestricts(rp, bp, expanded, v) == nil {
 				used[i] = true
 				matched = true
-				rMin, rMax := effectiveTotalRange(rp)
-				spent[i] = occRange{min: rMin, max: rMax}
+				spent[i] = effectiveTotalRange(rp)
 				break
 			}
 		}
@@ -1341,13 +1348,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 					!wildcardCovers(rp, bp) {
 					continue
 				}
-				rMin, rMax := effectiveTotalRange(rp)
-				spent[i].min = addOccurs(spent[i].min, rMin)
-				if spent[i].max == Unbounded || rMax == Unbounded {
-					spent[i].max = Unbounded
-				} else {
-					spent[i].max = addOccurs(spent[i].max, rMax)
-				}
+				spent[i] = spent[i].add(effectiveTotalRange(rp))
 				matched = true
 				break
 			}
@@ -1377,17 +1378,11 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		// clause 2.3 emptiability check below.
 		if !matched && v >= Version11 {
 			if cover := unionCovers(rp, bg.Particles); len(cover) > 1 {
-				var uMin, uMax int
+				var union occRange
 				for _, i := range cover {
-					uMin = addOccurs(uMin, bg.Particles[i].MinOccurs)
-					if uMax == Unbounded || bg.Particles[i].MaxOccurs == Unbounded {
-						uMax = Unbounded
-						continue
-					}
-					uMax = addOccurs(uMax, bg.Particles[i].MaxOccurs)
+					union = union.add(occursOf(bg.Particles[i]))
 				}
-				rMin, rMax := effectiveTotalRange(rp)
-				if rangeOK(rMin, rMax, uMin, uMax) == nil {
+				if rangeOK(effectiveTotalRange(rp), union) == nil {
 					// The buckets are answered as a group, so
 					// none of them is left for clause 2.3 to
 					// call an omission.
@@ -1414,7 +1409,7 @@ func recurseUnordered(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, 
 		if _, ok := bp.Term.(*Wildcard); !ok {
 			continue
 		}
-		if err := rangeOK(spent[i].min, spent[i].max, bp.MinOccurs, bp.MaxOccurs); err != nil {
+		if err := rangeOK(spent[i], occursOf(bp)); err != nil {
 			return fmt.Errorf("sequence restricting an all group: wildcard: %w", err)
 		}
 	}
@@ -1584,13 +1579,11 @@ func mapAndSum(r *Particle, rg *ModelGroup, b *Particle, bg *ModelGroup, expande
 	// product saturates rather than wraps: a bound written large enough to
 	// saturate in the parser, times a three-member sequence, overflowed an
 	// int and put a negative minOccurs into the diagnostic below.
-	n := len(rg.Particles)
-	min := mulOccurs(r.MinOccurs, n)
-	max := mulOccurs(r.MaxOccurs, n)
+	total := occursOf(r).scaleInt(len(rg.Particles))
 	if r.MaxOccurs == Unbounded {
-		max = Unbounded
+		total.max, total.eMax = Unbounded, nil
 	}
-	if err := rangeOK(min, max, b.MinOccurs, b.MaxOccurs); err != nil {
+	if err := rangeOK(total, occursOf(b)); err != nil {
 		return fmt.Errorf("sequence restricting a choice: %w", err)
 	}
 	return nil
@@ -1605,8 +1598,7 @@ func particleEmptiable(p *Particle) bool {
 	if _, ok := p.Term.(*ModelGroup); !ok {
 		return false
 	}
-	min, _ := effectiveTotalRange(p)
-	return min == 0
+	return effectiveTotalRange(p).min == 0
 }
 
 // effectiveTotalRange is Effective Total Range (§3.8.6): the number of elements
@@ -1615,23 +1607,23 @@ func particleEmptiable(p *Particle) bool {
 // The distinction from the particle's own occurrence range is the point: a
 // sequence of three elements repeated twice contributes six, and it is that
 // total — not the two — that a wildcard restriction must accommodate.
-func effectiveTotalRange(p *Particle) (int, int) {
+func effectiveTotalRange(p *Particle) occRange {
 	g, ok := p.Term.(*ModelGroup)
 	if !ok {
-		return p.MinOccurs, p.MaxOccurs
+		return occursOf(p)
 	}
 
-	var min, max int
+	var acc occRange
 	first := true
 	maxUnbounded := false
 	anyNonZeroMax := false
 
 	for _, child := range g.Particles {
-		cMin, cMax := effectiveTotalRange(child)
-		if cMax == Unbounded {
+		c := effectiveTotalRange(child)
+		if c.max == Unbounded {
 			maxUnbounded = true
 			anyNonZeroMax = true
-		} else if cMax > 0 {
+		} else if c.max > 0 {
 			anyNonZeroMax = true
 		}
 
@@ -1640,39 +1632,41 @@ func effectiveTotalRange(p *Particle) (int, int) {
 			// alternatives' minima and the maximum of their maxima:
 			// the shortest path through it is the cheapest
 			// alternative.
-			if first || cMin < min {
-				min = cMin
+			if first || cmpExactOccurs(c.min, c.eMin, acc.min, acc.eMin) < 0 {
+				acc.min, acc.eMin = c.min, c.eMin
 			}
-			if cMax > max {
-				max = cMax
+			if acc.max != Unbounded &&
+				(c.max == Unbounded || cmpExactOccurs(c.max, c.eMax, acc.max, acc.eMax) > 0) {
+				acc.max, acc.eMax = c.max, c.eMax
 			}
 		} else {
-			min = addOccurs(min, cMin)
+			acc.min, acc.eMin = addExact(acc.min, acc.eMin, c.min, c.eMin)
 			if !maxUnbounded {
-				max = addOccurs(max, cMax)
+				acc.max, acc.eMax = addExact(acc.max, acc.eMax, c.max, c.eMax)
 			}
 		}
 		first = false
 	}
 	// An empty group contributes nothing, whatever its occurrence range.
 	if len(g.Particles) == 0 {
-		return 0, 0
+		return occRange{}
 	}
 
-	min = mulOccurs(min, p.MinOccurs)
+	out := occRange{}
+	out.min, out.eMin = mulExact(acc.min, acc.eMin, p.MinOccurs, p.exactMin)
 	switch {
 	case maxUnbounded:
-		max = Unbounded
+		out.max = Unbounded
 	case p.MaxOccurs == Unbounded:
 		if anyNonZeroMax {
-			max = Unbounded
+			out.max = Unbounded
 		} else {
-			max = 0
+			out.max = 0
 		}
 	default:
-		max = mulOccurs(max, p.MaxOccurs)
+		out.max, out.eMax = mulExact(acc.max, acc.eMax, p.MaxOccurs, p.exactMax)
 	}
-	return min, max
+	return out
 }
 
 // asSubstitutionChoice expands an element declaration particle into the choice
@@ -1807,11 +1801,11 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		if _, dup := budget[bd.Name]; dup {
 			return nil, false
 		}
-		bMin := bp.MinOccurs
+		bRange := occursOf(bp)
 		if baseSkippable {
-			bMin = 0
+			bRange.min, bRange.eMin = 0, nil
 		}
-		b := &occBudget{decl: bd, min: bMin, max: bp.MaxOccurs}
+		b := &occBudget{decl: bd, occRange: bRange}
 		budget[bd.Name] = b
 		// A base particle naming a substitution group head stands for a
 		// choice over the whole group (clause 2.1), so every member
@@ -1994,8 +1988,8 @@ func allDerivedDecls(p *Particle) []*ElementDecl {
 // occBudget is one base all-group particle seen as an occurrence budget for a
 // single element name.
 type occBudget struct {
-	decl     *ElementDecl
-	min, max int
+	decl *ElementDecl
+	occRange
 }
 
 // branchCount is the number of times each element name occurs along one branch
@@ -2003,21 +1997,71 @@ type occBudget struct {
 // contains its own optional and repeated particles.
 type branchCount map[xdm.QName]*occRange
 
-type occRange struct{ min, max int }
+// occRange is an occurrence range under the exact layer: the clamped ints the
+// runtime uses, plus the exact values for whichever of them was too large for
+// an int. eMin and eMax are nil for every range built from ordinary bounds,
+// which is all of them outside the pathological schemas this exists for.
+//
+// max stays Unbounded (-1) for "no limit", and eMax is nil in that case: an
+// unbounded maximum is a proposition rather than a magnitude, and the whole
+// point of the exact layer is to stop the two being confused.
+type occRange struct {
+	min, max   int
+	eMin, eMax *big.Int
+}
 
-// add accumulates n more occurrences of a name, propagating unbounded.
-func (c branchCount) add(name xdm.QName, min, max int) {
+// occursOf reads a particle's own range.
+func occursOf(p *Particle) occRange {
+	return occRange{min: p.MinOccurs, max: p.MaxOccurs, eMin: p.exactMin, eMax: p.exactMax}
+}
+
+// add sums two ranges exactly, propagating Unbounded through the maximum.
+func (r occRange) add(o occRange) occRange {
+	var out occRange
+	out.min, out.eMin = addExact(r.min, r.eMin, o.min, o.eMin)
+	if r.max == Unbounded || o.max == Unbounded {
+		out.max = Unbounded
+		return out
+	}
+	out.max, out.eMax = addExact(r.max, r.eMax, o.max, o.eMax)
+	return out
+}
+
+// scale multiplies a range by a particle's occurrence range, which is what
+// Effective Total Range does when a group repeats.
+//
+// Unbounded times zero is zero, not unbounded: a group whose members can
+// contribute nothing contributes nothing however often it repeats. The callers
+// that need the other reading of that product handle it themselves.
+func (r occRange) scale(by occRange) occRange {
+	var out occRange
+	out.min, out.eMin = mulExact(r.min, r.eMin, by.min, by.eMin)
+	switch {
+	case r.max == 0 || by.max == 0:
+		out.max = 0
+	case r.max == Unbounded || by.max == Unbounded:
+		out.max = Unbounded
+	default:
+		out.max, out.eMax = mulExact(r.max, r.eMax, by.max, by.eMax)
+	}
+	return out
+}
+
+// scaleInt multiplies a range by a plain count, such as a model group's
+// length, which is never large enough to need an exact value of its own.
+func (r occRange) scaleInt(n int) occRange {
+	return r.scale(occRange{min: n, max: n})
+}
+
+// add accumulates one more range of occurrences of a name, propagating
+// unbounded.
+func (c branchCount) add(name xdm.QName, r occRange) {
 	cur, ok := c[name]
 	if !ok {
 		cur = &occRange{}
 		c[name] = cur
 	}
-	cur.min = addOccurs(cur.min, min)
-	if cur.max == Unbounded || max == Unbounded {
-		cur.max = Unbounded
-		return
-	}
-	cur.max = addOccurs(cur.max, max)
+	*cur = cur.add(r)
 }
 
 // allBranchCounts enumerates the branches through a derived particle, each as
@@ -2040,7 +2084,7 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 	switch t := p.Term.(type) {
 	case *ElementDecl:
 		c := branchCount{}
-		c.add(t.Name, p.MinOccurs, p.MaxOccurs)
+		c.add(t.Name, occursOf(p))
 		return []branchCount{c}, true
 
 	case *ModelGroup:
@@ -2056,17 +2100,8 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 		for _, br := range inner {
 			scaled := branchCount{}
 			for name, rng := range br {
-				min := mulOccurs(rng.min, p.MinOccurs)
-				max := rng.max
-				switch {
-				case max == Unbounded || p.MaxOccurs == Unbounded:
-					if max != 0 {
-						max = Unbounded
-					}
-				default:
-					max = mulOccurs(max, p.MaxOccurs)
-				}
-				scaled[name] = &occRange{min: min, max: max}
+				r := rng.scale(occursOf(p))
+				scaled[name] = &r
 			}
 			out = append(out, scaled)
 		}
@@ -2120,10 +2155,11 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 			for _, add := range brs {
 				merged := branchCount{}
 				for n, r := range base {
-					merged[n] = &occRange{min: r.min, max: r.max}
+					c := *r
+					merged[n] = &c
 				}
 				for n, r := range add {
-					merged.add(n, r.min, r.max)
+					merged.add(n, *r)
 				}
 				next = append(next, merged)
 			}
@@ -2163,12 +2199,7 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 			name0[bud] = name
 			continue
 		}
-		cur.min = addOccurs(cur.min, rng.min)
-		if cur.max == Unbounded || rng.max == Unbounded {
-			cur.max = Unbounded
-		} else {
-			cur.max = addOccurs(cur.max, rng.max)
-		}
+		*cur = cur.add(*rng)
 		// br is a map, so which name arrives first is not stable across
 		// runs. The name only labels the diagnostic, but a diagnostic
 		// that changes between identical runs is a bug of its own, so
@@ -2188,7 +2219,7 @@ func branchFitsBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
 	})
 	for _, bud := range order {
 		rng := spend[bud]
-		if err := rangeOK(rng.min, rng.max, bud.min, bud.max); err != nil {
+		if err := rangeOK(*rng, bud.occRange); err != nil {
 			return fmt.Errorf("element %s: %w", name0[bud].Local, err)
 		}
 	}

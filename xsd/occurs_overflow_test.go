@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"math/big"
 	"regexp"
 	"strings"
 	"testing"
@@ -96,12 +97,15 @@ func TestOccursOverflowEffectiveTotalRange(t *testing.T) {
 		},
 	}
 	p := &Particle{MinOccurs: occursHuge, MaxOccurs: occursHuge, Term: group}
-	min, max := effectiveTotalRange(p)
-	if min != occursHuge {
-		t.Errorf("effective total minimum = %d, want %d", min, occursHuge)
+	// The particles are built by hand and carry no exact bounds, so
+	// occursHuge is taken at face value and the clamped result is the
+	// whole answer.
+	r := effectiveTotalRange(p)
+	if r.min != occursHuge {
+		t.Errorf("effective total minimum = %d, want %d", r.min, occursHuge)
 	}
-	if max != occursHuge {
-		t.Errorf("effective total maximum = %d, want %d", max, occursHuge)
+	if r.max != occursHuge {
+		t.Errorf("effective total maximum = %d, want %d", r.max, occursHuge)
 	}
 }
 
@@ -133,9 +137,17 @@ func TestOccursOverflowAgainstWildcard(t *testing.T) {
 		t.Fatal("a sequence of that size cannot restrict a 0..1 wildcard")
 	}
 	checkNoWrap(t, err)
-	// The saturated bound must survive into the diagnostic intact, which
-	// is the positive form of the same claim.
-	if !strings.Contains(err.Error(), "4611686018427387903") {
-		t.Errorf("diagnostic does not report the saturated bound: %v", err)
+	// The positive form of the same claim: the bound reaches the
+	// diagnostic intact. It is reported exactly — three members of
+	// hugeOccurs each, in a sequence repeated hugeOccurs times, is
+	// 3 × hugeOccurs² — rather than as the saturation constant, because
+	// the derivation checks now compute in exact arithmetic and quote
+	// what they computed.
+	want := new(big.Int).SetInt64(3)
+	h, _ := new(big.Int).SetString(hugeOccurs, 10)
+	want.Mul(want, h)
+	want.Mul(want, h)
+	if !strings.Contains(err.Error(), want.String()) {
+		t.Errorf("diagnostic does not report the exact bound %s: %v", want, err)
 	}
 }

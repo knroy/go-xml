@@ -737,8 +737,9 @@ func annotationName(t Type) string {
 // type's own field left an assertion on such a restriction with $value bound to
 // the whole literal as one item, so count($value) was always 1.
 func listItemTypeOf(t *SimpleType) *SimpleType {
-	seen := 0
-	for cur := t; cur != nil; {
+	seen := map[*SimpleType]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur.Variety != VarietyList {
 			return nil
 		}
@@ -750,9 +751,6 @@ func listItemTypeOf(t *SimpleType) *SimpleType {
 			return nil
 		}
 		cur = base
-		if seen++; seen > 64 {
-			return nil
-		}
 	}
 	return nil
 }
@@ -785,8 +783,9 @@ func inScopeNamespaces(el *xdm.Node) map[string]string {
 // field left every such restriction looking like a union with no members, so
 // nothing was registered and the node atomised untyped.
 func unionMemberTypesOf(t *SimpleType) []*SimpleType {
-	seen := 0
-	for cur := t; cur != nil; {
+	seen := map[*SimpleType]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur.Variety != VarietyUnion {
 			return nil
 		}
@@ -798,9 +797,6 @@ func unionMemberTypesOf(t *SimpleType) []*SimpleType {
 			return nil
 		}
 		cur = base
-		if seen++; seen > 64 {
-			return nil
-		}
 	}
 	return nil
 }

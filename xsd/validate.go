@@ -757,8 +757,11 @@ func (v *validator) derivedFrom(t, want Type) bool {
 		}
 	}
 
-	seen := 0
-	for cur := t; cur != nil; {
+	// A malformed schema can build a cycle that is not a self-loop, so the
+	// walk terminates on a repeated component rather than on a count.
+	seen := map[Type]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		if cur == want {
 			return true
 		}
@@ -772,10 +775,6 @@ func (v *validator) derivedFrom(t, want Type) bool {
 			return false
 		}
 		cur = base
-		// A malformed schema can build a cycle that is not a self-loop.
-		if seen++; seen > 256 {
-			return false
-		}
 	}
 	return false
 }
@@ -1882,8 +1881,9 @@ func flattenAllSeen(g *ModelGroup, seen map[*ModelGroup]bool) []*Particle {
 // wildcard in the derived model that picks up a different type for that name
 // is the inconsistency Element Declarations Consistent forbids.
 func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
-	seen := 0
-	for cur := t; cur != nil; {
+	seen := map[*ComplexType]bool{}
+	for cur := t; cur != nil && !seen[cur]; {
+		seen[cur] = true
 		base, ok := cur.Base.(*ComplexType)
 		if !ok || base == cur {
 			return nil
@@ -1896,9 +1896,6 @@ func (v *validator) baseDeclaredType(t *ComplexType, name xdm.QName) Type {
 			}
 		}
 		cur = base
-		if seen++; seen > 64 {
-			return nil
-		}
 	}
 	return nil
 }
@@ -1948,8 +1945,9 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 		return 0, false
 	}
 
-	seen := 0
-	for cur := t; cur != nil && cur != decl.Type; {
+	seen := map[Type]bool{}
+	for cur := t; cur != nil && cur != decl.Type && !seen[cur]; {
+		seen[cur] = true
 		ct, ok := cur.(*ComplexType)
 		if !ok {
 			// A simple type's derivation is always restriction.
@@ -1965,9 +1963,6 @@ func (v *validator) substitutionBlocked(t Type, decl *ElementDecl) (Derivation, 
 			break
 		}
 		cur = ct.Base
-		if seen++; seen > 64 {
-			break
-		}
 	}
 	return 0, false
 }

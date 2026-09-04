@@ -51,6 +51,7 @@ package xsd
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -580,6 +581,30 @@ type Particle struct {
 	// MaxOccurs is Unbounded for maxOccurs="unbounded".
 	MaxOccurs int
 	Term      Term
+
+	// exactMin and exactMax carry an occurrence bound too large to hold in
+	// an int, and are nil — the overwhelmingly common case — when the
+	// clamped fields above are already exact.
+	//
+	// MinOccurs and MaxOccurs saturate at occursHuge, which is what the
+	// runtime matcher wants: no instance document can supply that many
+	// children, so a clamped bound validates identically. The *derivation*
+	// checks are a different question. They are inequalities between two
+	// bounds, and clamping collapses every value past the saturation point
+	// onto a single one, so a base of 1e30 and a derived total of 3e30
+	// compare equal and an invalid restriction is accepted.
+	//
+	// The exact value is therefore kept beside the clamped one, and only
+	// for the particles that actually needed clamping. Allocating a
+	// big.Int for a bound that already fits would put a heap object on
+	// every particle in every schema to serve a case no ordinary schema
+	// reaches; restrict.go widens from the int field when these are nil.
+	//
+	// A nil exactMax is not "unbounded". Unbounded stays the MaxOccurs
+	// sentinel and is never written as a magnitude, because "no limit" and
+	// "a very large limit" are different propositions — conflating them is
+	// how the clamping defect arose to begin with.
+	exactMin, exactMax *big.Int
 }
 
 // ComponentKind implements Component.
