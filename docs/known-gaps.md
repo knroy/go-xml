@@ -15,6 +15,15 @@ Three categories run through the list:
   recorded so they are not retried.
 - **Open** — a genuine bug or unimplemented rule with no work done yet.
 
+Alongside those, and interleaved with them because they are the reasoning the
+open verdicts rest on, are three kinds of record that outlive the work that
+produced them: **constraints** a past fix turned out to need, and which any
+future change in the same area must still satisfy; **retractions**, where the
+reading recorded here was itself wrong; and **superseded measurements**, where
+a probe answered the wrong question convincingly. Those last are kept
+deliberately. A negative result that was believed for two revisions is more
+dangerous than an open bug, and deleting it invites the same probe again.
+
 A note on which direction matters. A **false reject** is valid input refused;
 a **false accept** is invalid input allowed. False rejects are the more serious
 kind — they break working documents — so they are listed first throughout.
@@ -33,6 +42,7 @@ What this file adds, and that one does not:
 - fixes that were attempted, measured and reverted — recorded so the obvious
   patch is not tried a second time;
 - what a real fix would cost, where the answer is a rewrite rather than a patch;
+- measurements that were made, believed, and later shown to have proved nothing;
 - DTD and XDM, which have no public suite and so appear in no percentage.
 
 ## Won't fix
@@ -179,56 +189,54 @@ applied in exactly one place.
 The XML Schema pattern facet is unaffected: Appendix F's `atom` production has
 no form for a backreference, so `xsd` still rejects `\1` under both versions.
 
-### A union's selected member did not survive a tree copy (XSLT) — fixed
+### A union's selected member is a third fact, beside the annotation
+
+Recorded as an invariant rather than as a fix, because the mistake it describes
+is available at every site that copies a node, and one of those sites is added
+whenever a new copying instruction is.
 
 `<xsl:template match="Date[data(.) instance of StandardDate]">` never matched,
-where `StandardDate` is a named simple type — `xs:string` restricted by a
-pattern — brought in by `xsl:import-schema`. The plain `match="Date"` template
-won instead, and the source text was copied through unprocessed.
-
-The cause was neither of the two this entry once named as the candidates. The
-element *did* carry its annotation after validation, and the type name *did*
-resolve in the pattern's static context. What was lost was the third fact, the
-one between them.
+where `StandardDate` is a named simple type brought in by `xsl:import-schema`.
+The cause was neither of the two candidates an earlier revision of this entry
+named. The element *did* carry its annotation after validation, and the type
+name *did* resolve in the pattern's static context. What was lost was the third
+fact, the one between them.
 
 `Date` has type `DateType`, a complex type with simple content extending
-`GeneralDate`, which is a union of `StandardDate` and `xs:string`. XSD 1.0
-§3.14.4 selects a union's member per *value*, so the annotation alone cannot
+`GeneralDate`, which is a union of `StandardDate` and `xs:string`. **XSD 1.0
+§3.14.4 selects a union's member per *value*,** so the annotation alone cannot
 say whether "29 MAY 1917" is a `StandardDate` or a plain string — the validator
 records the winning member separately, in `xdm.Node.UnionMember`, and
 atomisation reads it to decide what the typed value is. A union's own
-derivation chain runs to `xs:anySimpleType` and stops, so without the member
+derivation chain runs to `xs:anySimpleType` and stops, so **without the member
 there is nothing to build a typed value from and the node atomises to
-`xs:untypedAtomic`.
+`xs:untypedAtomic`.** Any copy that carries `TypeAnnotation` and drops
+`UnionMember` beside it therefore untypes the node silently.
 
-Three copy sites carried `TypeAnnotation` and dropped `UnionMember` beside it:
-`stripCopyNode` in `xslt/transform.go`, `xdmbuild.DeepCopy`, and the parentless
-attribute copy in `xslt/copyfuncs.go`. `xdm/xinclude.go` already copied both,
-which is what made the omission visible as an inconsistency rather than a
-design.
+Two things make this class of defect hard to see. The failure is **selective**:
+the same pattern answers *true* on any path that has not been through a copy,
+so `validation-0201` sorted its events by a key that saw the type and then
+dispatched on a pattern that did not — and `xsl:strip-space`, a declaration
+about whitespace with nothing to say about types, was what untyped the
+document. And the inconsistency is what exposed it: `xdm/xinclude.go` already
+copied both fields, which is what made the omission elsewhere read as an
+oversight rather than a design.
 
-The failure was silent and selective. The same pattern answered *true* on any
-path that had not been through a copy, so `validation-0201` sorted its events
-by a key that saw the type and then dispatched on a pattern that did not.
-`xsl:strip-space` — a declaration about whitespace, with nothing to say about
-types — was what untyped the document.
+It was diagnosed by measurement rather than by reading, which is the
+transferable part: a probe over the validated tree showed `union="StandardDate"`
+present on every `Date`, and a trace at the `instance of` match site showed the
+annotated value arriving 1614 times from the sort key and an *unannotated* one
+arriving twice, from `apply-templates` — the two calls that produce the output.
+Reading the copy sites would not have narrowed it; counting arrivals did.
 
-Diagnosed by measurement rather than by reading: a probe over the validated
-tree showed `union="StandardDate"` present on every `Date`, and a trace at the
-`instance of` match site showed the annotated value arriving 1614 times from
-the sort key and an *unannotated* one arriving twice, from `apply-templates` —
-the two calls that produce the output.
-
-With the fix, the case's output is byte-identical to Saxon's expected file
-apart from whitespace: all three dates now render "29 May 1917", "12 September
-1953", "22 November 1963". It still fails, on the indent width alone — see
-`validation-0201` in `docs/conformance-gaps.md`, where that difference is
-recorded as implementation-defined. So the fix costs and gains no suite case,
-and is covered by `xslt/unionmember_test.go` instead.
+`validation-0201` still fails, on indent width alone — recorded as
+implementation-defined in `docs/conformance-gaps.md` — so this costs and gains
+no suite case, and `xslt/unionmember_test.go` is what pins it instead.
 
 ## Open
 
-Real gaps with no work done. Ordered by how much they cost.
+Real gaps, together with the constraints and retractions that bound how they
+may be closed. Ordered by how much they cost.
 
 ### A hyphen after a variable reference is part of the name (XPath, XQuery) — not a defect, retracted
 
@@ -303,70 +311,58 @@ conservative, so these five valid schemas are refused. Extending it to cover
 wildcards means deciding how a wildcard's occurrences split between the names
 it spans, which `all244` shows is not a simple count.
 
-### Nested occurrence bounds were wrong in both directions (fixed)
+### Why the occurrence counters are a vector and not a bracket per scope
 
-Not a suite case — found by differential fuzzing against a brute-force
-reference, and invisible to both W3C suites. `MS-Particles/particlesZ040`, the
-one suite case the same machinery reached, had already been carried by an
-earlier approximation.
+Four attempts to fix nested occurrence bounds are recorded in the history, each
+of which traded one case for another. They are summarised here so a fifth is
+not made along the same lines.
 
-A repeated group whose *only* child is itself repeating was decided wrongly in
-both directions. For `<sequence minOccurs="5" maxOccurs="5">` over
-`<element c minOccurs="2" maxOccurs="2"/>` the only valid document is ten `c`,
-and it was **refused**; five `c`, which no reading admits, was **accepted**. For
-`<sequence 2..2>` over `c{2,4}` the valid range is four to eight, and the
-answers were inverted across the whole sweep. The false-accept direction was the
-serious one: a `minOccurs` floor was silently not enforced, so a schema believed
-to require a minimum count did not require it.
+**The bug they were attacking.** A repeated group whose *only* child is itself
+repeating was decided wrongly in both directions. For
+`<sequence minOccurs="5" maxOccurs="5">` over `<element c minOccurs="2"
+maxOccurs="2"/>` the only valid document is ten `c`, and it was **refused**;
+five `c`, which no reading admits, was **accepted**. The false-accept direction
+was the serious one: a `minOccurs` floor was silently not enforced.
 
-A group with two or more distinct child names was decided correctly, which is
-why 39,347 XSD 1.0 agreements and 41,532 on 1.1 never covered it. Verified
-present at `06e8a75`, so it was long-standing rather than a regression.
+**Why no suite saw it.** A group with two or more distinct child names was
+decided correctly, which is why 39,347 XSD 1.0 agreements and 41,532 on 1.1
+never covered it. It was found by differential fuzzing against a brute-force
+reference and is invisible to both W3C suites — a standing reminder that suite
+agreement is not coverage.
 
-**The cause.** `matchSequence` walked the Glushkov automaton one path at a time
-and arbitrated the nested occurrence counters with heuristics, tracking a *low*
-and a *high* reading of each count independently. `counterAllows` consulted the
-low count and `countersSatisfied` the high one, so a document was admitted when
-*different* readings satisfied each bound though no single consistent reading
-satisfied both. When a group holds one particle its FIRST and LAST positions
-coincide, which makes the group's wraparound edge indistinguishable from the
-inner element's own repeat edge, so the bracket could not be narrowed locally.
-Four attempts to narrow it are recorded in the history; each traded one case for
-another, because the ambiguity is real and no per-edge compile-time label can
-resolve it. Which scope repeats is only knowable from the rest of the input.
+**Why the obvious fixes all failed.** `matchSequence` walked the automaton one
+path at a time and arbitrated the nested counters with heuristics, tracking a
+*low* and a *high* reading of each count independently. `counterAllows`
+consulted the low count and `countersSatisfied` the high one, so a document was
+admitted when *different* readings satisfied each bound though no single
+consistent reading satisfied both. When a group holds one particle its FIRST
+and LAST positions coincide, which makes the group's wraparound edge
+indistinguishable from the inner element's own repeat edge, so the bracket
+cannot be narrowed locally. **No per-edge compile-time label can resolve
+this**, because the ambiguity is real: which scope repeats is only knowable
+from the rest of the input. Every attempt that tried to label the edge
+therefore had to trade one case for another.
 
-**The fix.** The unit of tracking is now a *vector over every scope at once* —
-a set of whole readings, not a bracket per scope. `xsd/nfa.go` carries the set of
-states the input can have reached, each state a position together with a
-complete count vector, and a transition enumerates its alternatives rather than
-choosing one. The alternatives are few: occurrence scopes nest properly, so the
-scopes two positions share are a prefix of both chains, and the step's only
-freedom is how deep into that prefix the repetition falls. Counts inside one
-vector belong to one execution by construction, so no bound is ever met by a
-reading that another bound is not measured against.
+**What the resolution requires.** The unit of tracking must be a *vector over
+every scope at once* — a set of whole readings, not a bracket per scope — so
+that counts inside one vector belong to one execution by construction and no
+bound is ever met by a reading another bound is not measured against. Two
+properties keep such a set small, and both are load-bearing: states agreeing on
+position and counts are merged with a scope left behind reset to zero, so
+converged executions are recognised as converged; and each maximum is narrowed
+per document to what that document can actually reach. Without that narrowing
+the suite's `particlesZ036` — a choice of 100,000 over a sequence of
+100,000,000 over an unbounded element — gives each step three readings that
+stay distinct forever and the set grows until the budget stops it.
 
-Two properties keep the set small. States that agree on position and counts are
-merged, and a scope left behind is reset to zero so that converged executions
-are recognised as converged. And each maximum is narrowed per document to what
-that document can actually reach: a scope cannot repeat more often than there
-are children to fill it, so `maxOccurs="100000000"` against a few thousand
-children behaves exactly as `unbounded` does, and every count past the minimum
-merges. Without that narrowing the suite's `particlesZ036` — a choice of 100,000
-over a sequence of 100,000,000 over an unbounded element — gives each step three
-readings that stay distinct forever and the set grows until the budget stops it.
-
-The walk is still deterministic on the *positions*: Unique Particle Attribution
-guarantees at most one element particle matches a name, and the one remaining
-ambiguity, an element against a wildcard, is what erratum E1-29 leaves to the
-processor. Only the counts are searched.
+**Only the counts are searched.** The walk stays deterministic on the
+*positions*: Unique Particle Attribution guarantees at most one element
+particle matches a name, and the one remaining ambiguity, an element against a
+wildcard, is what erratum E1-29 leaves to the processor.
 
 `DefaultMaxMatchStates` bounds the set at 4,096; see
 [xsd.md](xsd.md#limits) and [security.md](security.md). Both W3C suites, UBL 2.1
 and the DocBook corpus stay in single digits.
-
-Measured: XSD 1.0 39,347 agreements and XSD 1.1 41,532 both unchanged, with
-disagreement lists identical case for case. `xsd/occurs_nested_test.go` covers
-the family and no longer skips.
 
 ### The 254 cap in `encodeCounts` is not a bound on `maxOccurs`
 
@@ -392,10 +388,9 @@ pinned rather than argued: `xsd/occurs_boundary_test.go` walks `minOccurs` and
 where the outer counter is the one that would saturate, and `maxOccurs` values
 of 1,000,000 and 79228162514244337593543950335 which must behave as unbounded.
 
-**A remainder: an emptiable inner particle (fixed).** The vector rewrite settled
-every case with a non-nullable inner term, but a region survived it. Sweeping
-2,028 combinations of outer bounds, inner bounds and child count found 40 still
-wrong, every one of them a false *rejection*, and every one with inner
+**A related reading, worth stating because it is not obvious.** A sweep of
+2,028 combinations of outer bounds, inner bounds and child count once found 40
+answers wrong, every one a false *rejection*, and every one with inner
 `minOccurs="0"` and outer `minOccurs` of two or more at a small child count.
 
 `<sequence minOccurs="2" maxOccurs="2">` over `<element c minOccurs="0"
@@ -405,459 +400,207 @@ not 1 is not the language of any particle, which is what makes it a bug and not
 a defensible reading. That model describes exactly `c` occurring nought to four
 times.
 
-The cause is that a count advanced *only* on a transition between two matched
-positions. A scope could therefore reach its minimum only by consuming an
-element per iteration, and satisfying `minOccurs="2"` from a single `c` needs
-one iteration that matches the `c` and one that matches nothing. Zero `c` was
-accepted only because the empty document short-circuits through the model's own
-`nullable` flag and never consults a counter at all — so the two accepts came
-from two different code paths, neither of which modelled an empty iteration.
+The rule the engine had missed: XSD satisfies a particle by partitioning the
+content into between `minOccurs` and `maxOccurs` consecutive parts each
+matching the term, and **nothing in that rule requires a part to be
+non-empty**. When the term is nullable, an empty part satisfies it. An
+iteration that matches nothing is still an iteration. So the legal totals are
+the union over `i` in `[oMin, oMax]` of `[i*iMin, i*iMax]`, which for
+`iMin = 0` is just `[0, oMax*iMax]`.
 
-XSD satisfies a particle by partitioning the content into between `minOccurs`
-and `maxOccurs` consecutive parts each matching the term, and nothing in that
-rule requires a part to be non-empty: when the term is nullable, an empty part
-satisfies it. An iteration that matches nothing is still an iteration. So the
-legal totals are the union over `i` in `[oMin, oMax]` of `[i*iMin, i*iMax]`,
-which for `iMin = 0` is just `[0, oMax*iMax]`.
+The corollary constrains any future change here: **no maximum needs relaxing to
+accommodate this.** Empty iterations are only ever added to reach a floor, and
+a reading that would break a ceiling can decline to add them.
 
-The fix records emptiability where it is known — the compiler already computes
-the body's nullability, so `counter.emptiable` is set from it in
-`automaton.go` — and the runtime's two minimum checks, on leaving a scope and
-on accepting, allow an emptiable scope to make up its shortfall with empty
-iterations. No maximum needs relaxing: empty iterations are only ever added to
-reach a floor, and a reading that would break a ceiling can decline to add them.
+### Saturation is right for the matcher and wrong for the derivation checks
 
-Measured: 0 of 2,028 wrong, down from 40. XSD 1.0 39,347 and XSD 1.1 41,532
-unchanged with both disagreement lists identical *by name*, and all three of
-XSLT 2.0, XSLT 3.0 and XQuery unchanged. `BenchmarkValidateInstance` is
-unmoved — the check reads a bool from a struct already in cache, and allocations
-per operation are identical.
+Occurrence bounds saturate at `occursHuge` = 4611686018427387903. Two bounds
+that both exceeded it once compared **equal**, because both clamped to it: a
+base `maxOccurs="1000000000000000000000000000000"` (1e30) restricted by three
+members each at the same value has a true effective total of 3e30 against a
+base of 1e30, so the restriction is invalid and was accepted. A false *accept*,
+which is why it was fixed rather than documented.
 
-### Two occurrence bounds past the saturation point compared equal (fixed)
+**The distinction is the durable part, and it is a live constraint on anyone
+touching occurrence arithmetic.** The matcher compares a bound against a
+*document*, where 1e30 and 3e30 genuinely are the same proposition — more
+children than any document will ever have. The derivation checks compare two
+bounds against *each other*, where they are emphatically not. So the exact
+value is carried alongside the clamped one rather than replacing it:
+`Particle` keeps `MinOccurs`/`MaxOccurs` as `int`, since the automaton, the UPA
+checker and the matcher neither need exactness nor should pay for it, and gains
+`*big.Int` fields that are nil unless clamping actually discarded something.
 
-Occurrence bounds saturate at `occursHuge` = 4611686018427387903, and the
-derivation arithmetic in `restrict.go` saturated rather than wrapped. That
-fixed the wrap and left a second defect standing, which this entry is about.
+**`maxOccurs="unbounded"` stays the `Unbounded` sentinel and is never written
+as a magnitude.** "No limit" and "a very large limit" are different
+propositions, and conflating them is precisely how the original defect arose;
+folding unbounded into the exact layer would have recreated it one level up.
 
-Two bounds that both exceeded `occursHuge` compared **equal**, because both
-clamped to it. A base `maxOccurs="1000000000000000000000000000000"` (1e30)
-restricted by three members each at the same value has a true effective total
-of 3e30 against a base of 1e30 — the restriction is invalid, and the engine
-accepted it. The direction of the failure is what made this worth fixing rather
-than documenting: a false *accept*, not a false reject.
-
-Saturation is right for the runtime matcher and wrong for the derivation
-checks, and the distinction is the whole fix. The matcher compares a bound
-against a *document*, where 1e30 and 3e30 genuinely are the same proposition —
-more children than any document will ever have. The derivation checks compare
-two bounds against *each other*, where they are emphatically not.
-
-So the exact value is carried alongside the clamped one rather than replacing
-it. `Particle` keeps `MinOccurs`/`MaxOccurs` as `int` — the automaton in
-`nfa.go`, the UPA checker and the matcher are untouched, and none of them needs
-exactness — and gains two `*big.Int` fields that are **nil unless clamping
-actually discarded something**. `occursValue` parses the lexical form once with
-`SetString` instead of losing it at `strconv.Atoi`; `restrict.go` does its
-arithmetic through `addExact`/`mulExact`/`cmpExactOccurs`, which take an int
-fast path and reach for a `big.Int` only when an operand carries one.
-
-`maxOccurs="unbounded"` stays the `Unbounded` sentinel and is never written as
-a magnitude. "No limit" and "a very large limit" are different propositions,
-and conflating them is precisely how the original defect arose; folding
-unbounded into the exact layer would have recreated it one level up.
-
-Two consequences worth recording. Diagnostics now quote what the author wrote
-rather than the saturation constant — a sequence of three 79228162514244337593543950335-bounded
-members repeated as many times reports its effective total as
-18831305206150534912005657748636404999181280307830839836675, not as
-4611686018427387903. And the cost is nil: `BenchmarkValidateInstance` shows an
-identical allocation count before and after, because no ordinary schema ever
-leaves the int path.
-
-What is *not* exact, deliberately: everything downstream of content-model
+**What is deliberately not exact:** everything downstream of content-model
 compilation. A bound reaching the automaton is still the clamped int, because
 the runtime question is "did this document supply enough children", and no
 document can approach the saturation point.
 
-### A depth bound stood in for cycle detection on four schema walks (fixed)
+### A depth bound is not cycle detection
 
-The counterpart to the entry above, and the opposite verdict: a bound that
-*does* look wrong and *is*.
+The counterpart to the entry above on saturation, and the opposite verdict: a
+bound that *does* look wrong and *is*. Twenty-four guards across `xsd/`, `relaxng/`,
+`xdm/`, `xpath/` and `xslt/` stopped a graph walk at a step count — 32, 64,
+256, 500, 4096 — and every one of them was a defect. They are gone; what
+follows is why, because the shape is easy to reintroduce and was reintroduced
+six times before it was named.
 
-Four walks over the schema graph stopped at `depth > 32` — `collectElementDecls`
-(`assert.go`), `nonAtomicUnionMember` (`facet_check.go`),
-`particleMatchesOnlyEmpty` (`parse_type.go`) and the two union walks in
-`xslt/stylesheet.go`. The reason was sound: a model group or union chain that
-reaches itself is legal to write, the content-model compiler reports it, and
-these walks run before that and would otherwise recurse forever.
+**The reason each bound was written was sound.** A model group, a union chain
+or a base-type chain that reaches itself is legal to *write*; these walks run
+before the content-model compiler that reports it, and would otherwise recurse
+forever. The count terminated them.
 
-What made it a defect is that a depth bound cannot tell a *cyclic* graph from a
-merely *deep* one, and three of the four returned a definite answer on running
-out of depth rather than a refusal. Each of those answers was the permissive
-one, so the failure direction was acceptance:
+**What makes it a defect is that a count cannot tell a cyclic graph from a
+merely deep one.** A legal, acyclic, entirely ordinary schema — 33 user-defined
+restrictions over `xs:int`, or a base declaration nested inside 32 sequences,
+or 501 distinct definitions each `<ref>`ing the next — crosses the cliff and
+gets the truncated answer. Nothing in such a schema is recursive or malformed.
 
-| walk | truncated answer | what it decided |
-|---|---|---|
-| `collectElementDecls` | empty declaration map | Element Declarations Consistent skipped |
-| `nonAtomicUnionMember` | `nil`, indistinguishable from a clean result | `cos-list-of-atomic` passed; a list of lists loaded |
-| `particleMatchesOnlyEmpty` | `false` | a type with `appliesToEmpty="false"` opened anyway |
-| `SchemaUnionMemberTypes` | `(nil, false)` | `1 instance of t:U` false on a legal chain |
+**The dangerous part is returning a definite answer rather than a refusal.**
+Almost every one of these walks answers a yes/no question, and on running out
+of steps returned a `false`, a `nil` or an empty map that the caller could not
+distinguish from a completed walk. The failure directions were all three kinds:
 
-The demonstration is the suite's own `saxonData/wild068` with the base's `<e>`
-declaration nested inside 32 sequences: a document XSD 1.1 requires rejecting
-was accepted, and nothing in that schema is recursive or malformed.
+* **acceptance** — `collectElementDecls` returning an empty map skipped Element
+  Declarations Consistent entirely; `nonAtomicUnionMember` returning `nil` let
+  a list of lists load; a duplicate `xs:ID` was accepted once the restriction
+  chain under `xs:ID` ran 64 links, and `"1.5"` validated against a type
+  descending from `xs:integer` at the same depth; `checkTypeBaseCycles` giving
+  up after 4096 steps meant the function that exists to catch circular types
+  could not catch a large circular type.
+* **rejection** — `derivedFrom` refusing a legal `xsi:type`, and `relaxng`'s
+  `maxRefDepth = 500` refusing a legal 501-definition grammar outright.
+* **silent erasure**, the worst of the three, because nothing reports an error.
+  The five walks over `derivedPrimitives` in `xdm/node.go` simply delivered the
+  value untyped past 32 links, so a comparison that should have been numeric
+  became a string comparison and a transform produced a wrong answer rather
+  than a diagnostic. `accumulatorOrigin` in `xslt/accumulator.go` is sharper
+  still: past 64 links it returned the intermediate copy it had reached — a
+  node in a tree of its own, where the accumulator computes something else
+  entirely. A legal-looking wrong number that nothing downstream can detect.
 
-**Why not raise the constant.** 32 to 1024 moves the cliff without removing it,
-and leaves the same class of bug waiting at a depth nobody will test. Each
-bound is now a visited set keyed on the component pointer, which identifies a
-cycle exactly — the only thing the bound was ever trying to catch — and imposes
-no limit on a legal chain. `SchemaUnionMemberNames` already carried a `seen`
-map by name, so its bound was pure truncation and simply went.
+**Why not raise the constant.** 32 to 1024 moves the cliff without removing it
+and leaves the same bug waiting at a depth nobody will test. The arbitrariness
+is the argument: `derivationMethodsTo` surfaced only because a legal schema
+stopped *loading*, and its cliff sat at 65 where the validation-time walks sat
+at 257, because one counted links and the other types. `relaxng`'s bound is the
+sharpest case — the mechanism it was named for, `c.expanding`, sat immediately
+above it and already caught every re-entry, so the count could never do the job
+and could only refuse valid grammars.
 
-`particleAcceptsEmpty` converted too, though its wrong answer was harmless: its
-only caller uses it to raise a more specific diagnostic, so past the bound the
-verdict and the error code were both unchanged and only the message differed.
-It changed anyway, because a lone survivor of a pattern this one invites the
-next reader to copy it.
+**A visited set is the exact mechanism, and it must be keyed on what the
+recursion revisits.** Every bound is now a set keyed on the component pointer,
+or on the name string where the graph is a name-to-name registry. That
+identifies a cycle exactly — the only thing the count was ever trying to
+catch — and imposes no limit on a legal chain. `allDerivedDecls` is the
+instructive failure: it already kept a `seen` set, but on *declarations*, which
+deduplicates the result without bounding the walk, since a model group that
+reaches itself revisits the same particle forever without ever repeating a
+declaration.
 
-Reachable from a schema, not from an instance — a trusted schema with untrusted
-documents cannot reach it. Measured: gate OK with all seven marks identical.
-`xsd/depth_acyclic_test.go` pins both confirmed shapes at nesting 0, 31, 32, 33
-and 64, and separately that a cyclic union still terminates; both fail against
-the previous code at exactly 32.
+**Convert the unreachable ones too.** Several of these walks were already
+unreachable because their chains collapse during parsing. They were converted
+anyway: a lone survivor of a pattern this one invites the next reader to copy
+it.
 
-Two further walks carried the same shape at a different constant, `depth > 64`:
-`walkParticleElements` in `upa.go` and `allDerivedDecls` in `restrict.go`. The
-first decides whether `checkTypeTables` ever visits a declaration, so a schema
-whose `xs:alternative` violates `src-type-alternative` loaded clean once that
-declaration sat 64 groups deep; the second feeds three restriction checks and
-dropped declarations the same way. `allDerivedDecls` is the instructive one: it
-already kept a `seen` set, but on *declarations*, which deduplicates the result
-without bounding the walk — a model group that reaches itself revisits the same
-particle forever without ever repeating a declaration. A visited set has to be
-keyed on what the recursion actually revisits.
+**Reachable from a schema, not from an instance.** A trusted schema with
+untrusted documents cannot reach any of them, which is why none of this is a
+security bound and why removing the counts costs nothing there.
 
-### The base-chain counters were the same defect after all (fixed)
+**What such a test must assert.** Depths on either side of every old cliff, a
+*semantic* property at each rather than that a call returned; the negative, so
+that a visited set which widened the relation is caught; a genuinely cyclic
+input behind a watchdog, because the regression a visited set can introduce is
+a hang, which no assertion catches; and, where the registry is process-global,
+type names carrying the case's own depth and walk, since `go test` runs one
+process and two cases sharing a name would answer each other's questions.
 
-An earlier revision of this document argued the opposite, and the argument is
-worth preserving because the way it failed is the reusable part. It read:
-`seen > 64` and `seen > 256` counters remain on *iterative* walks up a type's
-base chain rather than recursive descent through a graph; a legal restriction
-chain 300 links long was checked in both directions and the facet survived
-intact, so these counters are not truncating a real schema.
+Above all, **a probe must establish that the loop it measures actually runs** —
+which is the subject of the next entry.
 
-The measurement was real and the conclusion was wrong, because the probe drove
-a walk that does not iterate. A facet chain collapses during parsing:
+### A negative result on a bound must prove the loop it bounds actually runs
+
+The most expensive lesson in this file, and the one most likely to be
+re-learned by anyone auditing a step count. An earlier revision of this
+document argued that a family of `seen > 64` and `seen > 256` counters were
+*not* defects, and the argument read:
+
+> These counters remain on *iterative* walks up a type's base chain rather than
+> recursive descent through a graph; a legal restriction chain 300 links long
+> was checked in both directions and the facet survived intact, so these
+> counters are not truncating a real schema.
+
+**The measurement was real and the conclusion was wrong, because the probe
+drove a walk that does not iterate.** A facet chain collapses during parsing:
 `SimpleType.Primitive` is filled in on every link as it is built, so
 `primitiveOf` returns on its *first* iteration whatever the chain length, and
 the facet is enforced from the merged `FacetSet` rather than by walking at all.
-A 300-link chain exercised the loop exactly once. The lesson is that a negative
-result on a bound needs to establish that the loop it bounds actually runs —
-a baseline that reads "correct" for the wrong reason is worse than no baseline.
+A 300-link chain exercised the loop exactly once. The probe proved nothing
+about the bound and everything about the parser.
+
+**A baseline that reads "correct" for the wrong reason is worse than no
+baseline**, because it is quoted afterwards as evidence. This one was, for two
+revisions.
 
 The walks that *do* iterate are the ones asking a question the parser did not
 pre-answer: which built-in a type descends from, and whether one type derives
-from another. Six of them truncated on a legal acyclic chain:
-
-| walk | truncated answer | what it decided | direction |
-|---|---|---|---|
-| `idKind` (`validate_simple.go`) | `""` — not an ID | ID/IDREF bookkeeping skipped the value | **false accept** |
-| `descendsFromInteger` (`validate_simple.go`) | `false` | the integer lexical check never ran | **false accept** |
-| `derivedFrom` (`validate.go`) | `false` | `cvc-elt.4.3` refused a legal `xsi:type` | false reject |
-| `typeDerivedFrom` (`upa.go`) | `false` | schema-time derivation denied | false reject |
-| `derivationMethodsTo` (`parse_decl.go`) | `(_, false)` | `e-props-correct.4` refused a legal schema at load | false reject |
-| `substitutionMemberBlocked` (`assemble.go`) | `false` | reachable only once the load above succeeds | — |
-
-The two false accepts are the ones that matter. A duplicate `xs:ID` was
-**accepted** once the restriction chain under `xs:ID` ran 64 links, and `"1.5"`
-validated against a type descending from `xs:integer` at the same depth.
+from another. Six of those truncated on a legal acyclic chain, and the two
+false accepts are what the superseded reasoning had licensed: a duplicate
+`xs:ID` was **accepted** once the restriction chain under `xs:ID` ran 64 links,
+because `idKind` returned `""` and the ID bookkeeping skipped the value; and
+`"1.5"` validated against a type descending from `xs:integer`, because
+`descendsFromInteger` returned `false` and the integer lexical check never ran.
 Neither schema is recursive or malformed.
 
-`derivationMethodsTo` was not on the original list of eleven; it surfaced
-because a legal schema stopped *loading* at depth 65, and its cliff sits at a
-different constant from the validation-time walks — 65 against 257 — because
-one counts links and the other types. That arbitrariness is the argument
-against raising a constant rather than removing it.
+So the rule for any future audit of a bound: **measure the chain length on the
+built component before concluding anything**, and show the loop taking one step
+per link. `TestBaseChainActuallyIterates` is written that way for exactly this
+reason, and `TestDeepFacetChainCollapses` and `TestDeepUnionAndListCollapse`
+pin the collapsing walks so that the superseded negative result above cannot be
+re-derived from the same shape.
 
-All twelve counters are now visited sets keyed on the component pointer, which
-identifies a cycle exactly — the only thing the count was ever trying to catch —
-and imposes no limit on a legal chain. Six were already unreachable
-(`primitiveOf`, `unionMemberTypesOf`, `listItemTypeOf`,
-`inheritedSimpleContent`, `baseDeclaredType`, and the union arm of
-`substitutionBlocked`): their chains collapse during parsing the way the facet
-chain does. They were converted anyway, because a lone survivor of a pattern
-this one invites the next reader to copy it.
+### Four constraints on the 1.1 restriction relaxations
 
-Reachable from a schema, not from an instance alone — a trusted schema with
-untrusted documents cannot reach it. Measured: both suites unchanged, TOTAL
-agree 39347 (1.0) and 41532 (1.1). `xsd/deep_derivation_test.go` pins all
-twelve at depths 1, 2, 31, 32, 63, 64, 65, 128, 255, 256, 257, 300 and 512,
-asserts a semantic property at each rather than absence of a crash, and
-separately that a cyclic base chain still terminates. The six fixed shapes fail
-against the previous code at exactly 64, 65 or 257; `TestDeepFacetChainCollapses`
-and `TestDeepUnionAndListCollapse` pin the collapsing walks so the superseded
-negative result above is not re-derived from the same shape.
+The relaxations themselves are done and are in the changelog. What must survive
+is the set of guards each one turned out to need, because every guard was found
+by breaking a case that the obvious version of the change had not considered.
 
-### The last two counters: a 4096-step cycle check and a 500-deep ref bound (fixed)
+**They are version-gated, not general.** `particlesT002`/`T009` (a reordered
+choice), `particlesHa161` (an optional element restricting an optional choice)
+and `particlesZ023`/`Z024` (a one-member choice) are all marked invalid under
+1.0 and valid under 1.1. 1.0's RecurseLax really is written as an
+order-preserving walk, and `stripPointless` removing a one-member choice is
+*correct* for the 1.0 table. Removing the strip unconditionally fixed the two
+1.1 cases and broke the same two under 1.0, for a net loss of three.
 
-Two guards survived the twelve above because neither sat on a walk this
-document had enumerated. Both were flagged as architectural debt rather than
-proven bugs, and both turned out to be bugs — one in each direction.
+**A range cannot serve both `recurseAsIfGroup` and `effectiveTotalRange`.**
+Moving an optional element's range onto the wrapper works only where the base
+does not repeat: in `effectiveTotalRange` a group of one repeating N times
+contributes N elements, so the same range means two different things. This is
+what broke `particlesV020`, and it is the same collision recorded in full under
+*the occurrence-carrying wrapper* below.
 
-`checkTypeBaseCycles` (`xsd/parse_type.go`) walks a type's `{base type
-definition}` chain looking for a return to the type itself, and gave up after
-`steps < 4096`. Running out of steps appended no error, which is the
-*permissive* verdict — so a schema whose base-type cycle was longer than the
-count loaded clean. That is a **false accept** of exactly the
-`ct-props-correct.3` violation the function was written to diagnose: the
-function that exists to catch circular types could not catch a large circular
-type. The cliff is sharp — a ring of 4096 types reports every link, a ring of
-4097 reports nothing at all — and it is reachable from a schema alone.
+**The derived minimum must already satisfy the base's.** Without that condition,
+moving a `minOccurs` of 0 onto the wrapper made it violate a base requiring 1,
+and `ctF007` became a false reject for exactly one case gained.
 
-The probe was built the way the section above demands. `TestBaseChainActually
-Iterates` measures the *built* component's chain length before anything is
-concluded, because a walk that collapses during parsing would clear the guard
-without approaching it. At n=4097 the chain really is 4098 links and the loop
-really does take one step per link.
+**The base's compositor decides whether a wrapper may be kept.** Keeping every
+one-member choice under 1.1 turned `particlesR001` into a false reject: a
+one-member choice restricting a sequence-with-wildcard is valid, and only
+reaches a cell of §3.9.6's table once the wrapper is gone. The wrapper is
+preserved only when *both* sides are choices, where the pair decides the cell.
 
-`maxRefDepth = 500` (`relaxng/compile.go`) is the mirror image. It could never
-do the job it was named for: immediately above it, `c.expanding` — the set of
-definitions currently being compiled, entered on descent and deleted on unwind —
-already catches every re-entry into a definition still on the stack and hands it
-to `lazyRef` or to the §4.19 refusal, so a recursive grammar never reached the
-count. Nor did it bound runtime recursion, which unfolds through `lazyRef`'s
-`resolve`, and that builds a fresh compiler with `depth` 0 each time. What the
-count *could* reach was the acyclic case: 501 distinct definitions each
-`<ref>`ing the next is a legal, entirely non-recursive grammar, and it was
-refused outright with `definition "D500" recurses more than 500 deep` — a
-**false reject** that made a valid schema uncompilable. Active-recursion state
-was already the more precise mechanism the counter was standing in for; the
-counter was removed rather than raised, and `c.expanding` is now the whole
-termination argument.
-
-Measured: both XSD suites unchanged, TOTAL agree 39347 (1.0) and 41532 (1.1);
-the RELAX NG spectest unchanged at 965 passed, 0 failed.
-`xsd/base_cycle_depth_test.go` pins depths 1, 2, 63, 64, 65, 128, 256, 512,
-1024, 4094, 4095, 4096 and 4097 — a legal acyclic chain must still load and
-still derive, a ring at each depth must still be rejected, and `xs:anyType`
-being its own base must still terminate the walk rather than read as a cycle.
-`relaxng/ref_depth_test.go` pins 1 through 4096 across the old bound, asserts
-that the deep chain's trailing `<text/>` is still *enforced* rather than merely
-that compilation succeeded, and separately that a genuinely recursive grammar
-still terminates — legal recursion across an `<element>` validating at nesting
-1000, and self-reference without an intervening `<element>` still refused under
-§4.19.
-
-### Five more 32-step walks, this time in the data model (fixed)
-
-The section above called two counters the last, and they were the last *in the
-schema layer*. Five more sat in `xdm/node.go`, walking a different graph: not
-the schema component tree but `derivedPrimitives`, the process-global
-annotation-name to annotation-name map that `xsd` populates as it loads and
-that atomisation reads on every typed value. Each stopped at `i < 32`.
-
-| walk | truncated answer | what it decided |
-|---|---|---|
-| `atomicForLexical` | `nil` | every token of a list fell back to `xs:untypedAtomic` |
-| `listItemType` | `""` | the annotation stopped being a list; `AtomizeList` refused it |
-| `atomicForDerivedAnnotation` | `nil` | the node atomised to `xs:untypedAtomic`, losing the annotation |
-| `annotationIDKind` | `(false, false)` | is-id and is-idrefs were never set; `fn:id` could not find the node |
-| `HasSimpleTypeAnnotation` | `false` | §4.4 whitespace-only text was stripped out of a validated typed value |
-
-The verdict is the same one this document reached six times before, and for the
-same reason: a step count cannot tell a cyclic chain from a merely deep one.
-The demonstration is a chain of 33 user-defined restrictions over `xs:int` —
-legal, acyclic, and nothing a schema author would think twice about. At 32 the
-value atomises to `xs:integer`; at 33 it does not atomise at all, and every
-`instance of` on it answers false.
-
-The failure direction here is not acceptance but **silent erasure**. Nothing
-reports an error; the value simply arrives untyped, so a comparison that should
-have been numeric becomes a string comparison and a transform produces a wrong
-answer rather than a diagnostic. `annotationIDKind` is the sharpest of the
-five, because the property it fails to set is one XSLT 2.0 §3.5 requires to
-survive `input-type-annotations="strip"` — a node that never got marked cannot
-have its marking preserved.
-
-**Why not raise the constant.** For the reason given at 32-to-1024 above, and
-one more specific to here: the registry is a name-to-name map, so a cycle is
-possible only if a schema registers one, and a visited set keyed on the name
-string identifies that condition exactly. All five now carry a `map[string]bool`
-and impose no limit on a legal chain. Two of them (`listItemType`,
-`HasSimpleTypeAnnotation`) already tested `next == annotation`, which caught a
-self-loop and nothing longer; the set subsumes it and the test stays as the
-cheap first check.
-
-Reachable from a schema, not from an instance alone. Measured: gate OK with all
-six marks identical. `xdm/derivation_depth_test.go` pins all five at depths 1,
-2, 31, 32, 33, 64, 65, 128, 256, 512 and 1024, asserting a semantic property at
-each — the value atomises to the right primitive and keeps its derived name,
-the list item type is recovered and its tokens are integers, the ID kind is
-still ID and is not confused with IDREFS, and an unregistered complex type is
-still not simple — rather than that a call returned non-nil. All five fail
-against the previous code, 88 assertions in total, at exactly 32. A separate
-case registers `A -> B` and `B -> A` and drives all five walks through the
-cycle behind a watchdog, because the regression a visited set could introduce
-is a hang, which no assertion catches.
-
-Each test case builds its type names in a namespace carrying its own depth and
-its own walk. The registries are process-global and `go test` runs one process,
-so two cases sharing an annotation name would answer each other's questions.
-
-### Seven more of the same walk, in the query and transform layers (fixed)
-
-The data-model entry above found five; the same shape sat seven more times
-above it, in `xpath/` and `xslt/`. All seven walked the derivation chain
-`xdm.DerivedBase` records, six with `for i := 0; i < 32 && a != ""; i++` and
-one, the odd member of the family, with `for i := 0; i < 64` over a chain of
-copies rather than of types.
-
-Every one of them answers a yes/no question, and every one returned a definite
-answer on running out of steps rather than refusing. That is the dangerous
-shape: the caller cannot tell a truncated walk from a completed one.
-
-| walk | truncated answer | what it decided |
-|---|---|---|
-| `derivedSubtypeOfThroughSchema` (`xpath/typeexpr.go`) | `false` | `data(e) instance of xs:decimal` false for a deep restriction of xs:integer |
-| `schemaTypeNameMatches` (`xpath/typeexpr.go`) | `false` | a value is not an instance of its own ancestor type |
-| `annotationDerivesFrom` (`xpath/fn_misc.go`) | `false` | `fn:id`/`fn:idref` blind to a deep restriction of xs:ID — the document has no IDs |
-| `nodeTypeMatches` (`xpath/ast_string.go`) | `false` | `element(*, T)` refuses a node the schema annotated with a restriction of T |
-| `declaredTypeMatches` (`xpath/ast_string.go`) | `false` | the same for `schema-element()` |
-| `isNamespaceSensitiveType` (`xslt/instructions.go`) | `false` | XTTE0950 unreported: a QName-derived attribute copied away from its binding |
-| `namespaceSensitiveType` (`xslt/validate.go`) | `false` | XTTE1545 unreported: a constructed attribute validated against xs:QName, which 19.2 forbids |
-
-The five subtype walks fail in the *restrictive* direction and the two XSLT
-ones in the *permissive* direction, which is worth stating plainly: the first
-five make a legal query answer wrongly, the last two let a stylesheet do what
-the specification says is an error.
-
-The cliff is at 33 links for six of them and at 32 for `annotationDerivesFrom`,
-which tests before it steps and so gets one fewer.
-
-`accumulatorOrigin` (`xslt/accumulator.go`) is the seventh and is not a subtype
-walk at all. It follows a node produced by a `copy-accumulators="yes"` copy
-back to the node it was copied from, and section 18.3 makes the *original* the
-only correct source for the accumulator's value. Past 64 links it stopped and
-returned the intermediate copy it had reached — a node in a tree of its own
-where the accumulator computes something else entirely. Not a refusal and not a
-crash: a legal-looking wrong number, from a stylesheet that copies a copy 65
-times. Its truncated answer is the most insidious of the eight because nothing
-downstream can detect it.
-
-**Verdict: all seven are cycle guards, none is a resource bound.** Each is
-protecting against a chain that reaches itself — a registry cycle for the seven
-type walks, a copy-origin cycle for the accumulator — and a repeated key
-identifies that exactly. None of them bounds work that grows with anything but
-the chain's own length, which is the schema author's to choose and not a
-resource this engine is rationing. They are now visited sets keyed on the
-annotation name, and on the `*xdm.Node` pointer for the accumulator.
-
-Measured: XSLT 2.0 6147 → **6149** and XSLT 3.0 8610 → **8612**, with the
-failing-case list diffed by name — `as/as-1811` and `as/as-3002` moved from
-failing to passing and nothing moved the other way. Both are schema-aware cases
-over sequences of user-defined atomic types, which is the family exactly. QT3
-unchanged and byte-identical by name: XPath 2.0 15183, 3.0 19244, 3.1 21786,
-XQuery 29800.
-
-`xpath/deep_annotation_chain_test.go` and `xslt/deep_chain_walk_test.go` pin
-depths 1, 2, 31, 32, 33, 64, 65, 128, 256 and 512. The assertions are
-semantic — `instance of` holds, `element(*, T)` matches, a deep QName-derived
-type is still namespace-sensitive, the accumulator reaches the original through
-512 copies — never that a call returned. Each also asserts the *negative*: an
-unrelated chain of the same depth must still not match, so a visited set that
-widened the relation would be caught. Every one fails against the previous code
-at its own cliff.
-
-Cyclic-input tests sit beside them, because the counts were nominally there for
-that and it must not regress into a hang: a genuine ring at 1, 2, 33, 64 and
-128 links, including a type that is its own base, and a cyclic copy-origin
-chain. Each must return the safe answer rather than spin.
-
-Test cases build their names in a namespace carrying their own depth and walk,
-for the reason the section above gives: the registry is process-global.
-
-### A choice is unordered under 1.1 (fixed)
-
-`particlesT002`, `particlesT009`: the derived choice offers the base's
-alternatives swapped. A choice imposes no order on what it admits, so the
-language is identical — but `recurseLax` walked the base list left to right and
-could not go back.
-
-1.0's RecurseLax really is written as an order-preserving walk, and the suite
-marks both cases invalid under 1.0 and valid under 1.1, so the relaxation is
-version-gated. Under 1.1 the assignment is a matching instead: each derived
-alternative must restrict *some* unused base alternative. Each base alternative
-backs at most one, since merging two would let the restriction admit a sequence
-twice where the base admits it once.
-
-### An optional element may restrict an optional choice (fixed)
-
-`particlesHa161`: `<element name="a" minOccurs="0"/>` restricting
-`<choice minOccurs="0">` whose branches are `1..1`. `recurseAsIfGroup` wrapped
-the element at a fixed `1..1`, so its optionality was compared against a
-branch's `1..1` and rejected — but the optionality belongs to the choice, not
-to the alternative inside it.
-
-Three conditions, and the third was learned the hard way:
-
-* **Version.** Marked invalid under 1.0, valid under 1.1, like the reorder.
-* **A non-repeating base.** Where the base repeats, moving the range is what
-  broke `particlesV020`: the wrapper's range also feeds `effectiveTotalRange`,
-  where a group of one repeating N times contributes N elements. One range
-  cannot serve both uses.
-* **The derived minimum must already satisfy the base's.** Without it, moving a
-  `minOccurs` of 0 onto the wrapper made it violate a base requiring 1, and
-  `ctF007` became a false reject for exactly one case gained.
-
-1.1 schema agreement 15,048 → 15,051 across these two entries, with 1.0 and
-both instance figures unchanged. (A figure from the run that measured it, not a
-current total — later rounds moved the baseline well past it.)
-
-### A nested all group is flattened before budgeting (fixed)
-
-`all206`: a base `<all>` holding `<group ref>` and an element, restricted by an
-`<all>` holding that element and a narrower group.
-
-`allSubsumes` gave up on any base particle that was not an element
-declaration, so a nested group sent the derivation to the 1.0 table, which
-calls it Forbidden. XSD 1.1 requires a group reference inside an all group to
-name a group whose model is itself an all group, and an all group of all groups
-admits exactly the interleaving of their members — so the nesting carries no
-information the flat list does not.
-
-Only a group occurring **exactly once** is inlined. A repeating one multiplies
-its members' occurrence ranges, and folding that into the parent would compare
-the wrong budgets — the ambiguity `allSubsumes` exists to refuse rather than
-guess at.
-
-1.1 schema agreement 15,047 → 15,048, with 1.0 and both instance figures
-unchanged.
-
-### A one-member choice is not pointless under 1.1 (fixed)
-
-`particlesZ023` and `particlesZ024`: a derived `<choice>` holding one
-three-element sequence, restricting a base `<choice>` of two such sequences —
-a valid dropping of one alternative.
-
-`stripPointless` removed *any* one-member group wrapper, choices included. That
-turned a choice-restricting-choice derivation into a sequence restricting a
-choice, a different cell of §3.9.6's table with a different rule, and it was
-rejected for "maxOccurs 3 exceeds the base's 1" — the three elements summed
-against a choice that admits one branch.
-
-Two conditions, both learned by measuring:
-
-* **Version.** The suite marks these invalid under 1.0 and valid under 1.1, so
-  the strip is *correct* for the 1.0 table and wrong only for 1.1's language
-  inclusion. Removing it unconditionally fixed two 1.1 cases and broke the same
-  two under 1.0, for a net loss of 3.
-* **The base's compositor.** Keeping every one-member choice under 1.1 then
-  turned `particlesR001` into a false reject: a one-member choice restricting a
-  sequence-with-wildcard is valid, and only reaches a cell once the wrapper is
-  gone. The wrapper is preserved only when *both* sides are choices, where the
-  pair decides the cell.
-
-1.1 schema agreement 15,045 → 15,047, with 1.0 unchanged.
+**Only a group occurring exactly once may be inlined into an all group.** An
+all group of all groups admits exactly the interleaving of their members, so
+the nesting carries no information the flat list does not — but a *repeating*
+group multiplies its members' occurrence ranges, and folding that into the
+parent would compare the wrong budgets. That is the ambiguity `allSubsumes`
+exists to refuse rather than guess at.
 
 ### Particle restriction: the occurrence-carrying wrapper (attempted, reverted)
 
@@ -896,50 +639,19 @@ Individually diagnosed cases in Particle Valid (Restriction) rather than one
 cluster. `particlesZ001` and `addB183` failing in both versions makes them the
 best entry point: they are bugs in the shared logic, not 1.1-specific gaps.
 
-### `fn:collection()` — fixed (XPath)
+### A collection URI resolves against the static base, not the context item
 
-All 7 QT3 `fn-collection` failures are closed; the set is 17 of 17.
+Recorded because the reading is not the obvious one. `fn:collection` once
+passed the *context item's* base URI to the resolver, so
+`collection("collection1")` asked about whichever document was in focus rather
+than about what the expression named. The spec resolves the argument against
+the **static** base URI. The item's base remains the fallback for a caller who
+set no static base, and resolving stays the resolver's job — the engine hands
+over the base and does not guess what a URI means to the caller.
 
-`xpath.CollectionResolver` and `Context.Collections` mirror
-`DocumentResolver`/`Docs`; `xslt.TransformOptions.Collections` threads it
-through a transform; and the harness parses `<collection>` environments,
-loading through `Runner.loadDoc` so node identity and collection stability hold
-across calls.
-
-The last two were a relative collection URI. `fn:collection` passed the
-*context item's* base URI to the resolver, so `collection("collection1")` asked
-about whichever document was in focus rather than what the expression named;
-the spec resolves the argument against the **static** base URI. The item's base
-remains the fallback for a caller who set no static base, and resolving stays
-the resolver's job — the engine hands over the base and does not guess what a
-URI means to the caller.
-
-Measured against the real suite, not inferred: 7 failures before, 0 after.
-
-`cta0022` is unaffected. With no resolver configured the default is still
-`FODC0002`, which is the point.
-
-### Harness source paths were resolved against the wrong directory (fixed)
-
-Not an engine bug, but it was suppressing 461 cases, so it belongs in the
-record.
-
-A `<source file="...">` path is relative to the document that names it. The
-catalog writes `docs/atomic.xml` from the suite root; a test-set writes
-`../docs/bib.xml` from its own directory. The runner joined every path against
-the root, so each test-set-relative path escaped above it, the document was not
-found, and the case was skipped as "source unavailable" rather than counted.
-
-Resolution now happens during the environment merge, where the origin is still
-known — after the merge a source no longer records which document named it.
-In-scope cases went from 14,720 to 15,181.
-
-Two consequences worth noting. `fn:doc` needed a resolver in the harness for
-the same reason `fn:collection` did — environments name documents by URI, and
-without one those cases failed closed. And two genuine `fn-doc` serialisation
-bugs are now visible that were never previously exercised: an empty element
-with a non-ASCII name, and namespace declarations on a document read through
-`fn:doc`.
+`cta0022` is unaffected either way. With no resolver configured the default is
+still `FODC0002`, which is the point, and the refusal is recorded under *Won't
+fix* above.
 
 ### Instance validation gaps (XSD)
 
@@ -960,43 +672,7 @@ Diagnosed individually rather than by cluster:
   `MS-SimpleType/stE054`, `MS-Regex/reK6`, `Complex/complex022`,
   `CTA/cta0006` — one-off cases, each needing its own diagnosis.
 
-### `xs:decimal` printed fewer digits than it kept (fixed)
-
-`K2-Literals-7` — a decimal literal with 359 leading zeros after the point.
-
-`decimalScale` capped rendering at 18 fractional digits, so the literal printed
-as `0` while the value kept full precision: `0.000…1 eq 0` was **false** and
-`string(0.000…1)` was `"0"`. Whichever answer a caller trusted, the other
-contradicted it.
-
-A terminating decimal is now rendered in full. The bound moved rather than
-disappearing — a rational that does not terminate, which is what division
-produces, is still rendered at the 18 digits XPath 2.0 requires, and so is one
-needing more than 1,024 digits, so formatting cannot be made to allocate
-without limit. The *value* did not move; only its lexical form now says what it
-is.
-
-### Singleton XPath failures (all fixed)
-
-Six remained here, one per set, each needing its own diagnosis: `fn-doc-29`
-(namespace declarations dropped on a document read through `fn:doc`),
-`op-concatenate-mix-args-019`, `fn-union-node-args-003`, `ForExpr013`,
-`CondExpr017` and `K2-Literals-7`, the decimal literal above. All are closed:
-XPath reports no in-scope failures at 2.0, 3.0 or 3.1.
-
-Two of the four listed here before them were fixed first:
-
-* **`fn-in-scope-prefixes-23`** — `in-scope-prefixes(/)` answered with the root
-  element's prefixes. The parameter is `element()`, so a document node is
-  `XPTY0004`; answering a different question hid the mistake.
-* **`CastableAs648`** — `for $var in "ABC" return $var castable as xs:QName`
-  answered true. Casting to `xs:QName` is defined only from a *literal* string,
-  because the namespace comes from the static context and only a literal is
-  folded where the prefix bindings are in scope. This is a static property of
-  the operand, so it is decided in `CastExpr.Eval` rather than in
-  `CastToDerived`, which sees a value and cannot tell a literal from a variable
-  holding one. A value that is already an `xs:QName` is exempt — it carries its
-  own binding — which `K-SeqExprCastable-18` pins.
+### XPath cases that are not engine bugs
 
 `fn-doc-available-5` and `functx-fn-doc-available-1` are **not** engine bugs:
 their environment declares no `uri` for the source, so `fn:document-uri`
@@ -1150,8 +826,8 @@ deliberately rather than ship a partial one.
 ### XSD instance: 1 addressable false reject
 
 `attP031.i`, in both versions. `particlesZ040.i` stood here too and no longer
-does; the matcher that decides it is described under *Nested occurrence bounds
-were wrong in both directions* above.
+does; the matcher that decides it is described under *Why the occurrence
+counters are a vector and not a bracket per scope* above.
 
 `attP031` is a suite self-contradiction rather than a defect
 here: it declares `use="prohibited"` with a `fixed` value and expects the
@@ -1233,6 +909,51 @@ than patched.
 records a dispute about; nineteen are the bug 4113 general-category tests,
 where passing means freezing a Unicode 3.1 table and being wrong about modern
 text.
+
+## Fixed
+
+Defects that were diagnosed here, fixed, and carry no lesson the entries above
+do not already state. Kept as one line each so a reader who remembers the
+symptom can find the change; the mechanism and the measurements are in the
+changelog. Direction is given because it is what decides how much a defect
+mattered: a false reject breaks working input, a false accept lets bad input
+through, and a silent erasure produces a wrong answer with no diagnostic.
+
+**Occurrence and particle handling (XSD).** Nested occurrence bounds decided
+wrongly in both directions for a repeated group with a single repeating child
+(false accept and false reject). An emptiable inner particle refused at small
+child counts (false reject). Two occurrence bounds past the saturation point
+comparing equal in the derivation checks (false accept). A reordered choice, an
+optional element restricting an optional choice, a nested all group, and a
+one-member choice all refused under 1.1 (false rejects). See CHANGELOG.
+
+**Graph walks bounded by a step count.** Twenty-four guards across `xsd/`,
+`relaxng/`, `xdm/`, `xpath/` and `xslt/` replaced by visited sets: four schema
+walks and twelve base-chain counters, a 4096-step base-cycle check, a 500-deep
+`relaxng` ref bound, five data-model walks and seven in the query and transform
+layers (false accepts, false rejects and silent erasure, one of each kind).
+See CHANGELOG.
+
+**Schema component constraints.** `checkContentModelConstraints` walking only
+*named* types, so UPA and Element Declarations Consistent never ran against an
+inline complex type (false accept). See CHANGELOG.
+
+**XSLT and XPath.** A union's selected member dropped by three copy sites
+(silent erasure). `fn:collection()` unimplemented, and then resolving a
+relative collection URI against the context item's base rather than the static
+base (capability gap). `xs:decimal` rendering capped at 18 fractional digits,
+so a value printed as `0` while comparing unequal to it (silent erasure).
+`in-scope-prefixes(/)` answering for the root element rather than raising
+`XPTY0004`, and `castable as xs:QName` answering true for a non-literal operand
+(false accepts). Four further singleton failures — `fn-doc-29`,
+`op-concatenate-mix-args-019`, `fn-union-node-args-003`, `ForExpr013`,
+`CondExpr017`. See CHANGELOG.
+
+**Harness, not engine.** `<source file="...">` paths resolved against the suite
+root rather than the document that named them, which skipped 461 cases as
+"source unavailable" rather than counting them; in-scope cases went from 14,720
+to 15,181. Recorded because a suppressed case is not a passing one, and the
+count moved without any engine behaviour changing. See CHANGELOG.
 
 ## Related
 

@@ -8,6 +8,407 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+- **Thirteen derivation walks stopped at 32 or 64 steps.** Twelve stopped at 32
+  and one at 64, each walking a type's derivation chain or a node's copy
+  lineage: five in `xdm`, five in `xpath`, two in `xslt`. A legal acyclic chain
+  of 33 user-defined types stopped atomising — chain=32 gave `xs:integer`,
+  chain=33 gave nothing. Nothing in such a schema is recursive or malformed;
+  the walks were bounded because a bound looks like cycle detection.
+
+  Seven fail restrictively: a legal query answers wrongly, `instance of` goes
+  false for a type's own ancestor, `fn:id` goes blind to a deep restriction of
+  `xs:ID`. Two fail permissively, which is worse — `XTTE0950` and `XTTE1545`
+  went unreported, so a stylesheet did what the specification forbids.
+
+  The accumulator's 64 was the worst. It follows a copy back to its origin,
+  which XSLT 3.0 18.3 makes the only correct source, and past 64 links it
+  returned an intermediate copy — a node in a tree of its own, where the
+  accumulator computes something else. Not a refusal and not a crash: a
+  legal-looking wrong number nothing downstream can detect. Its own doc comment
+  said "the chain is followed to its end", which the loop did not do.
+
+- **A second schema silently retyped a document the first had validated.**
+  `xdm` keyed `derivedPrimitives`, `listItems` and `unionMembers` by QName
+  alone, process-wide. Mutexes make that race-free, not isolated: the last
+  schema to register a name wins. A value atomised as `xs:decimal` became
+  `xs:string` once another schema registered the same name over a string
+  restriction, so `. lt '9'` answered true under string ordering where the
+  numeric answer is false — a wrong comparison with no error. Worse,
+  compile-time registration is not replayed per transform, so one compiled
+  `*Stylesheet` returned DECIMAL and then STRING for the same input because an
+  unrelated part of the process called `xsd.Load`.
+
+  The fix is the pattern the package had already chosen twice. `UnionMember`,
+  `IsID` and `IsIDREFS` record the assessment's answer on the node, and unions
+  were measurably immune to this bug for exactly that reason. `DerivedPrimitive`
+  and `ListItem` join them, resolved against the schema being validated, with
+  the registry kept as the fallback for nodes annotated another way. Additive:
+  `TypeAnnotation` stays public and no exported signature changed.
+
+  Two XSLT cases broke mid-work and were caught by the gate rather than by
+  review — `as/as-1811` and `as/as-3002`, taking XSLT 2.0 to 6147 and 3.0 to
+  8610 before the real cause was found. The resolved fields outlived their
+  annotation: `Atomize` gates on `TypeAnnotation != ""` and `AtomizeList` did
+  not, so a result-tree element arrived with an empty annotation and a live
+  `ListItem` and split into three tokens anyway. Replacing a derivation with two
+  independent fields turns a structural invariant into one maintained by hand.
+
+  Four literal copy sites in `xslt` still drop the new fields the way they
+  already drop `UnionMember`. That is harmless while the annotation survives —
+  the registry answers — and is recorded in `docs/security.md` rather than left
+  for the next audit.
+
+- **A circular type longer than 4096 links loaded clean.** Reachable from a
+  hostile *schema*, not from an instance. `checkTypeBaseCycles` walks a global
+  type's base chain looking for a return to itself, stopped at `steps < 4096`,
+  and appended **no** error on running out — the permissive verdict. A ring of
+  4,097 types loaded clean where 4,096 reported every link: a sharp cliff, and a
+  false accept of exactly the violation the function exists to diagnose. The
+  loop was confirmed to iterate at that depth before anything was changed, since
+  an earlier 300-link facet probe had cleared six counters without ever reaching
+  them.
+
+- **RELAX NG refused a legal chain of 501 definitions.** The mirror image of the
+  same mistake, failing in the other direction. `maxRefDepth = 500` was a hard
+  refusal, so a legal chain of 501 definitions became uncompilable with
+  "recurses more than 500 deep" when nothing recursed. The counter could never
+  do its nominal job: `c.expanding` sits immediately above it and already
+  catches every re-entry into a name still on the stack, and runtime recursion
+  unfolds through `lazyRef` with a fresh compiler at depth zero. The only thing
+  the count could reach was the acyclic case it had no business refusing.
+  Removed rather than raised, because the state doing the real work was already
+  there. The test asserts a semantic property rather than the absence of a
+  crash — the chain must still *enforce* its trailing `<text/>` at depth 4,096,
+  since a chain that collapsed to "anything goes" would pass a
+  compiles-without-error check.
+
+- **A permitted file was read whole with no byte limit.** `readConfined` ended
+  in a bare `io.ReadAll`, so every path through the filesystem resolver read a
+  file entirely into memory before anything could refuse it: `fn:doc`, external
+  entities, `fn:unparsed-text`, and XInclude `parse="text"`. The first looked
+  covered — the parse downstream has `MaxBytes` — but the bytes are already
+  spent by then, and the other three had no bound at all. Measured: a 40 MB file
+  returned 41,943,040 bytes with a nil error. Once a caller enables a resolver
+  the stylesheet chooses which permitted file is read, so a large permitted file
+  was a memory-exhaustion primitive.
+
+  Refusal rather than truncation: a half-read stylesheet is a smaller stylesheet
+  that may well parse, and a half-read text resource is a string the stylesheet
+  computes with. The increment saturates, matching `xdm/parse.go` and
+  `xsd/resolve.go`, so the largest limit a caller can name does not silently
+  return an empty file — that exact bug was an earlier audit's finding and the
+  silent-empty half was the dangerous one.
+
+- **An ambiguous key came back at three siblings.** `mergeTables` dropped a key
+  sequence that two children both defined, because an ancestor's keyref cannot
+  say which of them it resolves to. Deleting the entry was the whole record of
+  that, and a key is absent both before it is first seen and after it has been
+  dropped — the merge could not tell those apart, so a third sibling found
+  nothing there and put it back. It oscillated with the count: resolvable at
+  one, ambiguous at two, resolvable again at three, ambiguous at four. The wrong
+  direction was acceptance, with an outer keyref resolving against a key three
+  separate subtrees defined.
+
+  `nodeTable.ambiguous` makes the third state explicit and `mergeEntry` is the
+  single path every fold goes through, so ambiguity is terminal. Worth recording
+  how it survived: the identity oracles ran 10,000 documents and agreed
+  throughout, because both generators put targets under one scope at a time and
+  a three-sibling ancestor never arose. An external reader found it by reading
+  the merge, and the durable answer is the invariant rather than more documents.
+  A later independent keyref oracle — 3,000 documents, 0 disagreements — was
+  sharpened by comparing exact identity-failure counts rather than a boolean
+  verdict, and sabotaging the merge to reintroduce this bug produces 5
+  disagreements in 3,000 where two other sabotages produce over a thousand each.
+  That ratio is why the shape went unfound for so long.
+
+- **The language-inclusion procedure declined any bound above 64.** The
+  subsumption procedure fell back to the structural XSD 1.0 rules above
+  `maxOccurs="64"`, which can refuse a restriction whose language really is a
+  subset. That was a second cliff standing in front of `subsumeMaxStates`, which
+  the unroll loop already checks on every iteration — the budget bounds the cost
+  at the point it is incurred rather than at a number chosen in advance.
+  Removed; `1000000` and unbounded still load in milliseconds.
+
+- **Six base-chain counters were defects, two of them false accepts.**
+  Reachable from a schema rather than from an instance. Eleven remaining
+  `seen > 64` and `seen > 256` counters had been recorded as sound on the
+  strength of a 300-link derivation chain, and an external reviewer reasonably
+  relied on that and withdrew their claim. The measurement was real and it
+  cleared the wrong walk: the chain drove facets, and `SimpleType.Primitive` is
+  filled in eagerly during parsing — set on the deepest link at depth 1, 64 and
+  300 alike — so `primitiveOf` returns on its first iteration and a 300-link
+  chain exercised the loop once.
+
+  Six were defects:
+
+      idKind                a duplicate xs:ID is ACCEPTED at 64 links
+      descendsFromInteger   "1.5" validates as an integer descendant at 64
+      derivationMethodsTo   a legal schema fails to LOAD at 65
+      typeDerivedFrom       false reject at 300
+      derivedFrom           xsi:type false reject at 257
+      substitution block    unreachable until the load bug above was cleared
+
+  The cliffs sit at different constants because one walk counts links and
+  another counts types, which is the argument against raising a constant rather
+  than removing it. All twelve counters are visited sets now, and the five walks
+  that genuinely collapse at parse are pinned as such so the superseded negative
+  result is not re-derived from the same shape.
+
+- **Occurrence arithmetic is exact, not saturating.** Saturating arithmetic
+  fixed an earlier wrap and left two bounds above `occursHuge` comparing equal,
+  so a base of 1e30 restricted by three members of 1e30 was accepted. `Particle`
+  now carries an exact `*big.Int` alongside the int bounds, nil unless clamping
+  discarded something, and the derivation checks compare exactly. The diagnostic
+  quotes the true product: "maxOccurs 237684487542733012780631851005 exceeds the
+  base's 79228162514244337593543950335".
+
+  The int fields stay for the runtime. `nfa.go`, `upa.go`, the matcher and the
+  subsumption checker are untouched, because comparing a bound against a
+  document is a different question from comparing two bounds against each other
+  — 1e30 and 3e30 are the same proposition to an instance. Schema load is
+  unmoved and the allocation count is identical, 31,623 before and after: no
+  schema in either suite leaves the int fast path.
+
+- **Identity constraints are linear in the document, not quadratic.** Doubling
+  the depth now doubles the work rather than quadrupling it, measured at 2.00x
+  across 240, 480 and 960 where it was 3.98, 3.99 and 4.00.
+
+  The fix is not a cheaper traversal. Four attempts at that are recorded in
+  `docs/security.md` and all four were reverted, because the traversal was never
+  the thing to change. What was wrong is *which* subtree gets walked: a
+  descendant element declaring the same constraint is itself a scope, and its
+  table already holds every target beneath it, so the walk stops there rather
+  than descending again. On a recursive shape that turns a whole-subtree walk
+  per level into a walk of the gap between one scope and the next.
+
+  That needs the child tables to carry every target they selected, not only the
+  entries that survived merging. `entries` and `targets` answer different
+  questions and are now separate: `entries` is what a keyref resolves against
+  and must drop a sequence two siblings share, because an ancestor cannot say
+  which of them it resolves to; `targets` is what a duplicate check counts and
+  must keep it, because the ancestor's scope contains both occurrences.
+
+      depth 960           23.6 ms, 1,400,001 allocs  ->  1.2 ms, 15,423
+      depth 200 width 40   214 ms, 1,223,930 allocs  ->  121 ms, 104,340
+
+  Two earlier steps lowered the constant on the way. Seeding the key sequences
+  from the subtree's table rather than deriving them again at every level took
+  width 20 from 2,703,986 allocations to 718,996 and width 40 from 5,196,173 to
+  1,223,930, with time down 25% and 15%. And since keyref cannot use the pruning
+  that made key and unique linear — a keyref produces nothing for an ancestor to
+  seed from, and a node under a nested keyref scope is a target of that scope and
+  of every enclosing one — its field extraction is memoised per (node,
+  constraint) instead: depth 960 from 221 ms and 5,164,375 allocations to 158 ms
+  and 2,863,754, and width 40 from 324 ms and 5,269,468 to 217 ms and 1,297,551.
+  The curve there is unchanged because it cannot be.
+
+  The first attempt at the linear form was wrong in the direction that matters
+  and the oracle caught it: seeding the subtree's targets only when the walk
+  revisited them meant a target from below was never visited at all, so a key at
+  depth 1 and the same key at depth 2 stopped colliding — 771 disagreements
+  across the two generated corpora. `TestIdentityConstraintAmplification` now
+  asserts the growth ratio, so a return to the per-scope rescan fails the build
+  rather than being found in a profile later.
+
+- **A 3 KB schema took 35 seconds to load, in two places.** Reachable from a
+  hostile schema. A group referencing the next one twice, 29 times over, is
+  acyclic and valid and fits in 3.0 KB; loading it took 35.8 seconds. A CPU
+  profile put 86% in `cycleFrom` and 8% in `badNestedAll`, and nothing in group
+  expansion, automaton construction or UPA checking — a `<group ref>` resolves
+  to the definition's own `ModelGroup` pointer, so the graph is a DAG with flat
+  memory and validation against the same schema is linear. The whole cost was
+  two load-time walks enumerating 2^28 paths through a graph with 29 nodes.
+
+  `cycleFrom` kept only the current descent, reasoning that a group reachable by
+  two disjoint routes is not a cycle. That is a correct objection to two-colour
+  marking and not to three-colour: a group explored to the bottom without a
+  cycle stays acyclic whatever route reaches it next, so it prunes, while only a
+  group on the current path is a back edge. `badNestedAll` had no memo at all,
+  so fixing only the first would have left an 8%-of-a-huge-number exponential to
+  reach the same wall a few groups later. Both memoise, and the done set spans
+  every root rather than being rebuilt per root. n=40 — over five hundred
+  billion paths — now loads in 0.01s, where n=32 did not finish in 90 seconds.
+
+- **Occurrence arithmetic wrapped negative.** `occursHuge` is a quarter of the
+  int range, so it survives doubling but not tripling. The derivation checks
+  multiply a particle's bounds by a model group's length and sum them across its
+  members with no guard, so a sequence of three members at a saturated
+  `minOccurs` produced "minOccurs -4611686018427387907 is below the base's 0".
+  The wrapped diagnostic is the visible half; the half that matters is that a
+  negative bound can satisfy an inequality it should fail. Sixteen sites now
+  saturate. Three were the reported ones; the sums in `effectiveTotalRange` are
+  the worse find, overflowing at two saturated members rather than three and
+  feeding the wildcard path independently. (The saturating form is itself
+  superseded by the exact `big.Int` comparison above.)
+
+- **An assertion rejected a valid document 33 elements deep.**
+  `maxAnnotateDepth = 32` bounded the walk that types an element and its
+  descendants before an XSD 1.1 assertion runs. Past it the descendants went
+  unannotated, and an unannotated node atomises as `xs:untypedAtomic` — what the
+  annotation exists to prevent. XSD 1.1 makes an evaluation error a false
+  assertion result rather than a distinct outcome, so this did not degrade to
+  "unknown": a schema whose assertion holds was valid at nesting 32 and invalid
+  at 33, on documents differing only in depth.
+
+  The bound's comment claimed the walk follows declarations and would otherwise
+  not terminate. Checking that is what settled the fix: it descends
+  `el.ChildElements()`, entering a child only where the instance has one. A
+  recursive type is legal but its instance is finite, and depth is already
+  bounded by `xdm.ParseOptions.MaxDepth`. The bound never prevented a loop, only
+  truncated. Removed rather than raised; a self-referential type still
+  terminates at instance depth 900.
+
+- **Two depth-64 walks dropped declarations, and an invalid schema loaded
+  clean.** `walkParticleElements` feeds `checkTypeTables`, so a declaration the
+  walk does not reach is one whose type alternatives are never checked: a schema
+  violating `src-type-alternative` — a default alternative that is not last —
+  loaded without error once its declaration sat 64 model groups deep.
+  `allDerivedDecls` feeds three restriction checks and dropped declarations the
+  same way.
+
+  `allDerivedDecls` is the instructive one. It already kept a `seen` set, so it
+  looked like it had cycle detection; but the set was on *declarations*, which
+  deduplicates the result without bounding the walk. A model group that reaches
+  itself revisits the same particle forever without ever repeating a
+  declaration. A visited set has to be keyed on what the recursion actually
+  revisits, and that is the particle.
+
+- **Six walks stopped at depth 32 and accepted documents the schema forbids.**
+  Reachable from a schema, not from an instance: a deployment with a trusted
+  schema and untrusted documents cannot reach it. It matters where schemas are
+  accepted from callers, and for machine-generated schemas, which reach nesting
+  hand-written ones do not.
+
+  Four walks over the schema graph stopped at `depth > 32`. The bound had a real
+  reason — a model group or union chain that reaches itself is legal to write,
+  and these walks run before the content-model compiler that reports it — but it
+  conflated a graph that is cyclic with one that is merely deep, and three of
+  the four returned a definite answer on running out rather than a refusal.
+  Every one of those answers was the permissive one:
+
+  * `collectElementDecls` returned an empty map, which reads as "the base
+    declares nothing here" and skips Element Declarations Consistent.
+  * `nonAtomicUnionMember` returned nil, the same value as a clean result, so
+    `cos-list-of-atomic` passed and a list of lists loaded.
+  * `particleMatchesOnlyEmpty` returned false, which through
+    `applyDefaultOpenContent` opens a type whose `appliesToEmpty="false"` says
+    not to.
+  * `SchemaUnionMemberTypes` returned `(nil, false)` — "not a union I can answer
+    for" — so `1 instance of t:U` went false where 2.5.5's transitive membership
+    makes true the only correct answer.
+
+  The first is the sharpest. Take the suite's own `saxonData/wild068` — a base
+  declaring `<e>` as a date/time union, a derived type replacing it with a lax
+  wildcard, a global `<e>` of type `xs:duration` matched through it — and nest
+  the base's declaration inside 32 sequences. A document XSD 1.1 requires
+  rejecting was accepted. Nothing in that schema is recursive or malformed.
+
+  Each bound is now a visited set keyed on the component pointer, which stops a
+  cycle exactly and does not limit a legal chain. Raising the constant would
+  have moved the cliff without removing it. The audit that raised this reported
+  it as unproven — "a high-value target for differential testing, not a
+  confirmed vulnerability" — and was right to: two first attempts to reproduce
+  it showed no difference, because the rule is XSD 1.1 only and `Options{}`
+  defaults to 1.0, which silently no-ops it.
+
+- **An iteration that matches nothing is still an iteration.** A sweep of 2,028
+  combinations of outer bounds, inner bounds and child count found 40 still
+  wrong after the count-vector rewrite — every one a false rejection, every one
+  with inner `minOccurs="0"` and an outer `minOccurs` of two or more at a small
+  child count. `<sequence minOccurs="2" maxOccurs="2">` over `<element c
+  minOccurs="0" maxOccurs="2"/>` is the witness, and its answers were
+  self-inconsistent: zero `c` accepted, one refused, two through four accepted.
+  A language that admits 0 and 2 but not 1 is not the language of any particle.
+
+  A count advanced only on a transition between two matched positions, so a
+  scope could reach its minimum only by consuming an element per iteration, and
+  satisfying `minOccurs="2"` from a single `c` needs one iteration matching the
+  `c` and one matching nothing. Zero `c` was accepted only because the empty
+  document short-circuits through the model's own nullable flag and never
+  consults a counter, so the two accepts came from two different code paths,
+  neither of which modelled an empty iteration. XSD satisfies a particle by
+  partitioning the content into consecutive parts each matching the term, and
+  nothing in that rule requires a part to be non-empty. Measured: 0 of 2,028
+  wrong, down from 40, with `BenchmarkValidateInstance` unmoved and allocations
+  per operation identical.
+
+- **A negative `xsd.ValidateOptions.MaxErrors` approved invalid documents.**
+  `fail()` stopped recording once `len(v.errs) >= opts.MaxErrors`, with no guard
+  on the limit being positive. At `MaxErrors = -1` the comparison `0 >= -1`
+  holds on the very first failure, so validation stopped before recording
+  anything and `Validate` returned nil. A flagrantly invalid document —
+  `<r><nope/></r>` against a schema declaring `<r>` with empty content —
+  validated clean. That is a silent pass: the dangerous outcome is not an error,
+  it is the absence of one.
+
+  The convention was already established and already implemented correctly next
+  door. `dtd.Options.MaxErrors` documents "a negative value means no limit" and
+  guards it with `v.max > 0 &&`; `xsd`'s field documented only the zero case,
+  which is how the guard came to be missing, so a caller copying the working
+  idiom from `dtd` or from `xdm.ParseOptions.MaxBytes` got a validator that
+  approved everything.
+
+- **Filesystem confinement is enforced when the file is opened.**
+  `resolvePath` called `EvalSymlinks`, compared against the roots, and the file
+  was opened later; an attacker able to write to the filesystem between those
+  moments can replace a checked path with a link out of the root, and the opened
+  file is then not the checked one. Reads go through `os.Root` now, so each
+  component is resolved against the root's own descriptor and leaving the root
+  is refused by the kernel at open time. The earlier check is kept for what it
+  is good at: deciding which root a path belongs to, and producing the error
+  that names the permitted directories. The parent directory is
+  symlink-resolved so it can be compared with a resolved root — on macOS `/var`
+  is a link to `/private/var` — while the final component is deliberately left
+  unresolved, since resolving it would restore the gap being closed.
+
+- **The resolver no longer serialises cache misses.** `loadTracked` held its
+  mutex across `os.ReadFile` and the parse, so concurrent transforms sharing one
+  resolver loaded modules one at a time whenever the cache was cold. Releasing
+  it alone would have been wrong: `fn:doc` must return the same node for the
+  same URI, so the cache is correctness and not merely speed, and two goroutines
+  that each parsed and each published would hand out two document nodes for one
+  document. The lock now covers the cache and an in-flight table; a path already
+  being read is announced, and a second caller waits on that parse rather than
+  starting its own.
+
+- **The largest byte limit a caller can name is not a refusal.**
+  `ParseOptions.MaxBytes` and `xsd.HTTPResolver.MaxBytes` wrap the reader in
+  `io.LimitReader(r, max+1)`, one byte over so that hitting the limit is
+  distinguishable from a document exactly at it. At `math.MaxInt64` that
+  addition overflows to `math.MinInt64`, which `io.LimitReader` reads as
+  "nothing left" — so the setting a caller picks to mean "do not limit me" was
+  the setting that broke:
+
+      MaxBytes=9223372036854775806  ->  parses
+      MaxBytes=9223372036854775807  ->  "no root element"
+
+  The HTTP resolver failed worse: it returned an empty body with a nil error, so
+  a schema silently loaded as empty rather than refusing to load. Both saturate
+  now, and the small-limit path still refuses. `AllowHost`'s documentation is
+  corrected in the same pass — it claimed to be "the place to refuse loopback,
+  link-local and private ranges", which it cannot be: it receives a hostname, a
+  permitted name may resolve to any of those ranges, and DNS rebinding defeats a
+  name check by construction. The boundary belongs in a `Transport` whose
+  `DialContext` sees the resolved address.
+
+- **A schema-aware stylesheet panicked on every run.** `ValidateContext` gave
+  `validator` a `ctx` field and put a cancellation check on the validation walk.
+  `validateNodeAgainstType` builds the same struct without one — it is XSLT's
+  `validation="strict"` entry, bounded by what the transform just built, and the
+  transform already honours the caller's context — so `checkCancelled` read
+  `Err()` off a nil interface and panicked: 53 cases on the XSLT 2.0 target and
+  77 on 3.0, all of them "transform failed: panic: runtime error: invalid memory
+  address or nil pointer dereference". None of it was visible from the XSD
+  suites the change was measured against, which stayed at 39,347 and 41,532
+  because they never take that path.
+
+- **An XInclude copy dropped the union member on attributes.** `copySubtree`
+  carried `UnionMember` on the element and dropped it on the element's
+  attributes — an inconsistency inside one function, and the same half-omission
+  that silently untyped a validated document at three copy sites elsewhere.
+  Nothing exercises this path today, which is why no suite moved; it is fixed
+  because the next thing to walk an included subtree would inherit the bug.
+
 - **XSD: nested occurrence bounds are decided exactly.** A repeated group whose
   only child is itself repeating was decided wrongly in *both* directions. For
   `<sequence minOccurs="5" maxOccurs="5">` over
@@ -35,11 +436,78 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Added
 
+- `xslt.FileResolver.MaxBytes` bounds what the filesystem resolver reads, for
+  every path through it — `fn:doc`, external entities, `fn:unparsed-text` and
+  XInclude `parse="text"`. One limit rather than separate document and text
+  ones, because confinement is a property of the file and not of the method:
+  every root is readable by every path, so a stylesheet refused a large file
+  through `unparsed-text` would simply ask for it through `doc()`, and two
+  numbers would have looked like the smaller one bound while the effective limit
+  was the larger. The default is 64 MB, deliberately the same as
+  `xdm.DefaultMaxBytes` — a different number would make one of the two dead.
+
+- `xdm.NodeAnnotation` records a validated node's `DerivedPrimitive` and
+  `ListItem` alongside the `UnionMember`, `IsID` and `IsIDREFS` it already
+  carried, so a node's type is answered from the schema that validated it rather
+  than from a process-global registry. Additive: `TypeAnnotation` stays public,
+  no exported signature changed, and the registry remains the fallback for nodes
+  annotated another way.
+
 - `xsd.DefaultMaxMatchStates` (4,096) bounds the readings the content-model
   matcher carries at once. Exceeding it fails the element with an error naming
   the limit rather than allocating without a ceiling. Each occurrence maximum is
   also narrowed per document to what that document can reach, which keeps
   ordinary schemas — and `maxOccurs="100000000"` — in single digits.
+
+### Changed
+
+- **Every configurable limit is now tested at its edges.** An off-by-one or an
+  overflow at the boundary of a caller-settable limit is precisely what a unit
+  test should catch before an auditor does, and nothing covered the edges of any
+  limit before. Each is now exercised at 0, negative, 1, exactly at the limit,
+  exactly one over, and `MaxInt`/`MaxInt64` with its neighbour; each refusal is
+  asserted to name the limit that fired, because `err != nil` alone also passes
+  when the wrong limit trips. Where a value's meaning is deliberate the test
+  pins it rather than changing it: negative means "no limit" in most places but
+  the default for `xdm.ParseOptions.MaxDepth` and `xpath.Context.MaxDepth`,
+  since a depth bound of zero would refuse every document, and
+  `xsd.HTTPResolver.MaxBytes` has no unlimited setting at all, because a schema
+  is not a stream. The negative `MaxErrors` bug above is what this layer found.
+
+- **The content-model matcher and the identity-constraint evaluator are each
+  checked against a generated oracle.** Both oracles decide the answer from the
+  specification's own definition and never call the code under test, which is
+  the point — an oracle that asked the engine would agree with the engine's
+  bugs, and that is exactly how both W3C suites missed the nested-occurrence
+  defect across 80,879 agreeing cases.
+
+  The occurrence oracle is derived from arithmetic: for a sequence repeated *i*
+  times over a child occurring *iMin..iMax* times, the admissible totals are the
+  union over *i* in [*oMin*, *oMax*] of [*i·iMin*, *i·iMax*]. Six shapes, 8,397
+  documents, 0.4s as part of `go test ./...`; `GOXSLT_OCCURS_WIDE=1` widens
+  every sweep to about 2s. Run against the code as it stood before either
+  occurrence fix it reports 1,474 wrong answers, 165 of them false accepts.
+  Shapes whose language is an interleaving are left out rather than guessed at,
+  since an oracle for them would have to reimplement the matcher.
+
+  The identity oracle agrees with the engine on 6,000 documents, and against a
+  `buildNodeTable` sabotaged to scan only direct children it catches 416
+  disagreements, every one a false accept. Widening it to a two-step
+  `.//box/leaf` selector was nearly worthless at first — zero disagreements
+  across 4,000 documents under the same sabotage, because every generated leaf
+  sat inside a box, so `.//leaf` and `.//box/leaf` returned the same nodes and
+  the leading step was unobservable. Adding loose `<leaf>` elements sharing the
+  id space fixed that: the same sabotage now produces 841 disagreements. Worth
+  recording as a rule rather than an anecdote — **when a sabotage check comes
+  back clean, suspect the corpus before the implementation.**
+
+  Instrumentation came first and is what made the quadratic legible. Elapsed
+  time cannot tell "the same nodes walked once per enclosing scope" apart from a
+  large constant, which is how two of four reverted attempts came to look like
+  improvements; counters can. `nodesVisited` at depths 120, 240, 480 and 960 was
+  7,260, 28,920, 115,440 and 461,280 — four times the work for twice the depth.
+  The counters are nil in every ordinary build and attach through a
+  package-internal hook.
 
 ## v1.2.1 — 2026-09-03
 

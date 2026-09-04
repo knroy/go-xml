@@ -15,9 +15,15 @@
 * **[Options](options.md)** — every configuration field in the four packages,
   what its zero value means, and worked examples. Start here when you want to
   know what you can change.
-* **[Security](security.md)** — the threat model, what is verified safe (XXE,
-  entity expansion, regex backtracking), what a caller must still do, and the
-  findings from the audit that produced them.
+* **[CHANGELOG.md](../CHANGELOG.md)** — every fixed finding, with what was
+  wrong, why it mattered, how it was found and what it cost. The other
+  documents describe the engine as it is now; this one is where the record of
+  getting there lives, so neither has to carry both.
+* **[Security](security.md)** — the threat model, what is open today, the
+  deliberate resource limits, what is verified safe (XXE, entity expansion,
+  regex backtracking), and what a caller must still do. Opens with the current
+  status rather than the history; the fixed findings are one line each, with
+  the detail in [CHANGELOG.md](../CHANGELOG.md).
 * **[Testing](testing.md)** — how the engine is tested, how to run any layer of
   it, what the ratchet is for, and how to read a result without being misled by
   a count that did not move.
@@ -25,9 +31,11 @@
   case-by-case verdict on every failure: fixable, open, or unreachable, with
   the reason. This is where the numbers live.
 * **[Known gaps](known-gaps.md)** — why the hard gaps are hard: deliberate
-  refusals, the two engine limits with their reverted fix attempts, and the
-  unimplemented rules. The diagnosis behind the verdicts above, and
-  deliberately free of percentages so that no figure drifts between the two.
+  refusals, the reverted fix attempts and what each one measured, the
+  unimplemented rules, and the methodological lessons that cost the most to
+  learn. The diagnosis behind the verdicts above. A finding that is merely
+  *fixed* is not here — it is in [CHANGELOG.md](../CHANGELOG.md); what stays is
+  the reasoning that still guides a decision.
 * **[Reaching 100%](reaching-100.md)** — what the remaining distance to a
   perfect score actually consists of, and which parts of it are worth buying.
 * **[TODO](todo.md)** — what is left: features, the measured bug tail, and

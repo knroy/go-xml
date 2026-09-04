@@ -48,6 +48,11 @@ func NewValidator(stylesheetPath, rulesDir string) (*Validator, error) {
 	if err != nil {
 		return nil, err
 	}
+	// One permitted file is still a file the stylesheet chose. MaxBytes
+	// bounds each read -- 64 MB by default, lowered here because a rule set
+	// and its code lists are small and anything larger is a mistake or an
+	// attack. A file over the limit is refused, not truncated.
+	res.MaxBytes = 8 << 20
 	sheet, err := xslt.Compile(tree.Root, xslt.CompileOptions{Resolver: res})
 	if err != nil {
 		return nil, fmt.Errorf("compiling stylesheet: %w", err)

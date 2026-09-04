@@ -186,7 +186,7 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{
 > the first failure and validation stops before recording anything. Recorded as
 > a skipped test in `xsd/limits_boundary_test.go`. Use `0` for the default or a
 > large positive number; there is no unlimited setting.
-| `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, producing the part of the PSVI that XPath and XSLT consume. Off by default because it **mutates the tree you passed in**. |
+| `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, together with the resolved `DerivedPrimitive`, `ListItem` and `UnionMember` beside it, producing the part of the PSVI that XPath and XSLT consume. The resolved fields are recorded per node rather than looked up later, so a schema loaded afterwards cannot retype a document this one already validated. Off by default because it **mutates the tree you passed in**. |
 
 ### Bounding a run with a context
 

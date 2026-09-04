@@ -676,9 +676,14 @@ Every remote-reference mechanism is off unless you turn it on.
   stylesheet's own directory, because a rule set that includes a sibling module
   is the normal case. **That root is shared with `doc()`**, so a stylesheet can
   read any file beside it, not only include one — keep stylesheets in a
-  directory of their own if that matters. Everything outside stays refused. `xslt.FileResolver` confines reads to
-  directories you name, resolving symlinks *before* the containment check, and
-  refuses every non-`file` scheme. There is no network option.
+  directory of their own if that matters. Everything outside stays refused.
+  `xslt.FileResolver` confines reads to directories you name and refuses every
+  non-`file` scheme; there is no network option. Confinement is enforced by
+  `os.Root` at the moment of opening rather than by resolving a path and
+  checking it first, so a symlink swapped between the check and the open cannot
+  escape — the older resolve-then-check design had that gap. Each read is
+  bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
+  refused rather than truncated.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
   `CompileOptions.Resolver`.
 * **XInclude is off** unless a caller runs `xdm.ProcessXInclude` explicitly.
@@ -687,8 +692,8 @@ Every remote-reference mechanism is off unless you turn it on.
   only what an `xdm.IncludeResolver` hands it. `xslt.FileResolver` implements
   that through the **same** `resolvePath` that gates `fn:doc`, `xsl:include`
   and external entities, so an inclusion is confined to the named roots on
-  exactly the same terms: no non-`file` scheme, symlinks resolved before the
-  containment check, nothing outside the roots. This matters more here than
+  exactly the same terms: no non-`file` scheme, confinement enforced at the
+  open by `os.Root`, the same per-file byte limit, nothing outside the roots. This matters more here than
   elsewhere, because with XInclude it is the *source document* — the party the
   threat model already treats as hostile — that names what to read. The CLI
   exposes it as `-xinclude`.
