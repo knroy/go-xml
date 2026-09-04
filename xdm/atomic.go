@@ -378,10 +378,11 @@ func formatDecimal(r *big.Rat) string {
 	if r.IsInt() {
 		return r.Num().String()
 	}
-	// A denominator of 2^a*5^b terminates in at most max(a,b) digits; anything
-	// else (which cannot arise from a valid xs:decimal literal, but can arise
-	// from division) is rendered at 18 digits and trimmed.
-	scale := decimalScale(r)
+	// A denominator of 2^a*5^b terminates in max(a,b) digits and is rendered
+	// in full; anything else (which cannot arise from a valid xs:decimal
+	// literal, but can arise from division) has no exact form and is rendered
+	// at the required minimum precision and trimmed.
+	scale, _ := decimalScale(r)
 	s := r.FloatString(scale)
 	if strings.Contains(s, ".") {
 		s = strings.TrimRight(s, "0")
@@ -393,65 +394,79 @@ func formatDecimal(r *big.Rat) string {
 	return s
 }
 
-// maxDecimalScale bounds how many fractional digits are rendered for a value
-// whose denominator terminates.
-//
-// A terminating decimal is rendered in full up to this, so the lexical form
-// says what the value is. The bound exists only so that a rational built by
-// repeated division cannot make formatting allocate without limit; a value
-// needing more digits than this is rendered at the old 18 and is
-// indistinguishable from any other approximation, which is what the previous
-// unconditional cap made *every* long decimal.
-const maxDecimalScale = 1024
+// nonTerminatingScale is the precision used for a rational that has no finite
+// decimal expansion — 1/3 is the everyday case, arising from division. 18
+// digits is the minimum precision XPath 2.0 requires an implementation to
+// support for xs:decimal. Such a value has no exact lexical form, so a
+// precision policy is the only thing available and rounding is not a loss of
+// information the lexical form could otherwise have carried.
+const nonTerminatingScale = 18
 
 // decimalScale returns the number of fractional digits needed to render r
-// exactly, or 18 — the minimum precision XPath 2.0 requires an implementation
-// to support — when r does not terminate within maxDecimalScale digits.
+// exactly, and whether r terminates at all.
 //
-// Capping unconditionally at 18 made the lexical form disagree with the value:
-// a literal with 360 fractional digits printed as "0" while comparing unequal
-// to zero, so "0.000…1 eq 0" was false and "string(0.000…1)" was "0". The two
-// answers cannot both be right, and the value is the one that must not move.
-func decimalScale(r *big.Rat) int {
+// A value that terminates is rendered in full, at whatever scale it needs.
+// There is deliberately no ceiling: capping the scale makes the lexical form
+// disagree with the value, and a definite wrong answer is worse than a slow
+// one. Capping at 18 printed a literal with 360 fractional digits as "0" while
+// it compared unequal to zero; raising the cap to 1024 moved that same
+// contradiction to 10^-1025, where 1/10^5000 likewise printed "0". The value
+// is the thing that must not move, so the scale follows it.
+//
+// big.Rat keeps its denominator in lowest terms, so a terminating value has a
+// denominator of exactly 2^a*5^b and needs max(a,b) fractional digits. The
+// factor 2^a comes off in a single shift. The factor 5^b is stripped by
+// repeated squaring rather than one division per power: dividing off 5 at a
+// time is quadratic in b, which is the real cost the old ceiling was reacting
+// to — 907ms for a 50000-digit value against 415µs here.
+func decimalScale(r *big.Rat) (int, bool) {
 	d := new(big.Int).Set(r.Denom())
-	two, five := big.NewInt(2), big.NewInt(5)
-	zero, rem := new(big.Int), new(big.Int)
-	a, b := 0, 0
+	a := int(d.TrailingZeroBits())
+	d.Rsh(d, uint(a))
+
+	// Powers 5^(2^i) up to the size of d, so the exponent is accumulated in
+	// O(log b) divisions of a shrinking number instead of b divisions.
+	pows := []*big.Int{big.NewInt(5)}
 	for {
-		q, m := new(big.Int).QuoRem(d, two, rem)
-		if m.Cmp(zero) != 0 {
+		next := new(big.Int).Mul(pows[len(pows)-1], pows[len(pows)-1])
+		if next.BitLen() > d.BitLen() {
 			break
 		}
-		d = q
-		a++
-		if a > maxDecimalScale {
-			break
+		pows = append(pows, next)
+	}
+	b := 0
+	rem := new(big.Int)
+	for i := len(pows) - 1; i >= 0; i-- {
+		for {
+			q, m := new(big.Int).QuoRem(d, pows[i], rem)
+			if m.Sign() != 0 {
+				break
+			}
+			d = q
+			b += 1 << uint(i)
 		}
 	}
-	for {
-		q, m := new(big.Int).QuoRem(d, five, rem)
-		if m.Cmp(zero) != 0 {
-			break
-		}
-		d = q
-		b++
-		if b > maxDecimalScale {
-			break
-		}
+
+	// Anything left after the 2s and 5s means a factor of 3, 7, … and no
+	// finite decimal expansion.
+	if d.CmpAbs(big.NewInt(1)) != 0 {
+		return nonTerminatingScale, false
 	}
 	n := a
 	if b > n {
 		n = b
 	}
-	// A denominator with a factor other than 2 or 5 does not terminate — 1/3
-	// is the everyday case — and neither does one needing more digits than
-	// the bound. Both are rendered at the required minimum precision.
-	if d.Cmp(big.NewInt(1)) != 0 || n > maxDecimalScale {
-		return 18
-	}
 	if n == 0 {
-		return 1
+		return 1, true
 	}
+	return n, true
+}
+
+// secondsScale is the fractional-digit count for a seconds field in a
+// dateTime or duration lexical form, where the caller wants a single scale
+// rather than the terminating flag.
+func secondsScale(r *big.Rat) int {
+	n, _ := decimalScale(r)
 	return n
 }
 

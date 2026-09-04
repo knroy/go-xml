@@ -3,6 +3,7 @@ package xsd
 import (
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,13 +51,32 @@ func TestCountDigits(t *testing.T) {
 
 		// Leading zeros of a fraction do count toward totalDigits.
 		{"0.001", 3, 3},
+
+		// The leading-zero rule applies only when the integer part is
+		// zero; once there is an integer digit the coefficient is
+		// already at least as long as the scale.
+		{"1.001", 4, 3},
+		{"100.001", 6, 3},
+
+		// Trailing zeros, on either side of the point.
+		{"0.0", 1, 0},
+		{"10.0", 2, 0},
+		{"1000", 4, 0},
+		{"100.0", 3, 0},
+		{"1.500", 2, 1},
+		{"0.10", 1, 1},
+		{"-0.001", 3, 3},
 	}
 	for _, c := range cases {
 		v, ok := new(big.Rat).SetString(c.lexical)
 		if !ok {
 			t.Fatalf("bad test input %q", c.lexical)
 		}
-		total, frac := countDigits(v)
+		total, frac, ok := countDigits(v)
+		if !ok {
+			t.Errorf("countDigits(%s) reported no terminating expansion", c.lexical)
+			continue
+		}
 		if total != c.wantTotal || frac != c.wantFrac {
 			t.Errorf("countDigits(%s) = (%d, %d), want (%d, %d)",
 				c.lexical, total, frac, c.wantTotal, c.wantFrac)
@@ -364,5 +384,164 @@ func TestSimpleTypeFinalIsEnforced(t *testing.T) {
 					forbidden, other, err)
 			}
 		}
+	}
+}
+
+// TestCountDigitsUnbounded pins that the fraction-digit count is exact at any
+// scale.
+//
+// countDigits used to expand the value one decimal digit at a time and stop at
+// a fixed bound of 4096, returning the truncated count. That is not a
+// defensive limit: a value with 4600 fraction digits reported 4096 of them and
+// so passed fractionDigits="4500", which it violates. The counts here run well
+// past the old bound so that reintroducing any bound fails this test rather
+// than merely moving the value that triggers it.
+func TestCountDigitsUnbounded(t *testing.T) {
+	for _, n := range []int{0, 1, 18, 64, 1024, 4095, 4096, 4097, 8192, 10000, 100000} {
+		// 10^-n written out: "0." then n-1 zeros then "1".
+		lex := "1"
+		if n > 0 {
+			lex = "0." + strings.Repeat("0", n-1) + "1"
+		}
+		v, ok := new(big.Rat).SetString(lex)
+		if !ok {
+			t.Fatalf("bad test input for n=%d", n)
+		}
+		total, frac, ok := countDigits(v)
+		if !ok {
+			t.Fatalf("n=%d: countDigits reported no terminating expansion", n)
+		}
+		wantTotal, wantFrac := uint64(n), uint64(n)
+		if n == 0 {
+			wantTotal = 1
+		}
+		if total != wantTotal || frac != wantFrac {
+			t.Errorf("n=%d: countDigits = (%d, %d), want (%d, %d)",
+				n, total, frac, wantTotal, wantFrac)
+		}
+	}
+}
+
+// TestCountDigitsLargeInteger pins the total-digit count for values whose size
+// is in the integer part rather than the fraction.
+func TestCountDigitsLargeInteger(t *testing.T) {
+	for _, n := range []int{100, 4097, 20000} {
+		lex := "1" + strings.Repeat("0", n)
+		v, _ := new(big.Rat).SetString(lex)
+		total, frac, ok := countDigits(v)
+		if !ok {
+			t.Fatalf("n=%d: no terminating expansion", n)
+		}
+		if total != uint64(n+1) || frac != 0 {
+			t.Errorf("n=%d: countDigits = (%d, %d), want (%d, 0)", n, total, frac, n+1)
+		}
+		// Same magnitude, but with the digits after the point.
+		lex = "1." + strings.Repeat("0", n-1) + "1"
+		v, _ = new(big.Rat).SetString(lex)
+		total, frac, ok = countDigits(v)
+		if !ok {
+			t.Fatalf("n=%d fraction: no terminating expansion", n)
+		}
+		if total != uint64(n+1) || frac != uint64(n) {
+			t.Errorf("n=%d fraction: countDigits = (%d, %d), want (%d, %d)",
+				n, total, frac, n+1, n)
+		}
+	}
+}
+
+// TestCountDigitsNonTerminating pins that a value with no finite decimal
+// expansion is reported as such rather than given a truncated count.
+//
+// No xs:decimal literal produces one — isDecimalLexical admits only sign,
+// digits and a single point, so the denominator is always a power of ten — but
+// countDigits must not answer with a number if one ever arrives.
+func TestCountDigitsNonTerminating(t *testing.T) {
+	for _, lex := range []string{"1/3", "2/7", "-1/6"} {
+		v, ok := new(big.Rat).SetString(lex)
+		if !ok {
+			t.Fatalf("bad test input %q", lex)
+		}
+		if _, _, ok := countDigits(v); ok {
+			t.Errorf("countDigits(%s) claimed a terminating expansion", lex)
+		}
+	}
+	// The upstream lexical check is what makes this unreachable in
+	// practice; assert it rather than assume it.
+	for _, lex := range []string{"1/3", "1e-5000", "0x10"} {
+		if isDecimalLexical(lex) {
+			t.Errorf("isDecimalLexical(%q) = true, want false", lex)
+		}
+	}
+}
+
+// TestDigitFacetsPastOldBound validates whole documents on either side of a
+// fractionDigits and a totalDigits limit set beyond the old 4096 expansion
+// bound.
+//
+// This is the end-to-end form of the false accept: a document with 4600
+// fraction digits was reported as having 4096 and so was accepted against
+// fractionDigits="4500". Accepting an invalid document is the worst failure a
+// validator has, so both facets are pinned here at values the old code could
+// not count.
+func TestDigitFacetsPastOldBound(t *testing.T) {
+	frac := func(n int) string { return "0." + strings.Repeat("0", n-1) + "1" }
+
+	cases := []struct {
+		name   string
+		facet  string
+		limit  int
+		value  string
+		accept bool
+	}{
+		{"fraction under limit", "fractionDigits", 4500, frac(4400), true},
+		{"fraction at limit", "fractionDigits", 4500, frac(4500), true},
+		{"fraction just over limit", "fractionDigits", 4500, frac(4501), false},
+		{"fraction far over limit", "fractionDigits", 4500, frac(4600), false},
+		{"fraction far past old bound", "fractionDigits", 4500, frac(5000), false},
+		{"fraction over a small limit", "fractionDigits", 2, "0.001", false},
+
+		// The exact boundary of the old expansion bound: 4096 fraction
+		// digits was counted correctly and rejected, 4097 counted as
+		// 4096 and was accepted.
+		{"fraction at old bound", "fractionDigits", 4095, frac(4096), false},
+		{"fraction one past old bound", "fractionDigits", 4096, frac(4097), false},
+		{"total one past old bound", "totalDigits", 4096, frac(4097), false},
+
+		{"total under limit", "totalDigits", 4500, frac(4400), true},
+		{"total at limit", "totalDigits", 4500, frac(4500), true},
+		{"total just over limit", "totalDigits", 4500, frac(4501), false},
+		{"total far over limit", "totalDigits", 4500, frac(6000), false},
+		{"total over limit as integer", "totalDigits", 4500,
+			"1" + strings.Repeat("0", 4500), false},
+		{"total at limit as integer", "totalDigits", 4500,
+			"1" + strings.Repeat("0", 4499), true},
+
+		// Purely integral values never entered the old scaling loop and
+		// so were always counted correctly. They are the regression
+		// guard: the fix must not disturb them at any length.
+		{"huge integer under limit", "totalDigits", 20001,
+			"1" + strings.Repeat("0", 20000), true},
+		{"huge integer over limit", "totalDigits", 20000,
+			"1" + strings.Repeat("0", 20000), false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			schema := fmt.Sprintf(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="v" type="d"/>
+  <xs:simpleType name="d">
+    <xs:restriction base="xs:decimal">
+      <xs:%s value="%d"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>`, c.facet, c.limit)
+			err := validateString(t, schema, "<v>"+c.value+"</v>")
+			if c.accept && err != nil {
+				t.Errorf("want accept, got error: %v", err)
+			}
+			if !c.accept && err == nil {
+				t.Error("want reject, got accept")
+			}
+		})
 	}
 }

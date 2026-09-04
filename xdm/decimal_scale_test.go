@@ -66,12 +66,24 @@ func TestDecimalNonTerminating(t *testing.T) {
 	}
 }
 
-// A denominator past the bound is rendered at the minimum too, so formatting
-// cannot be made to allocate without limit.
-func TestDecimalBeyondBound(t *testing.T) {
-	den := new(big.Int).Exp(big.NewInt(10), big.NewInt(maxDecimalScale+10), nil)
-	got := formatDecimal(new(big.Rat).SetFrac(big.NewInt(1), den))
-	if len(got) > 32 {
-		t.Errorf("a value past the bound rendered %d chars, want the minimum", len(got))
+// There is no scale past which a terminating value stops being rendered
+// exactly.
+//
+// This test previously asserted the opposite: that a value past a 1024-digit
+// bound was rendered at the 18-digit minimum. That was the bug written down as
+// an expectation — 1/10^1034 does not need "the minimum", it needs 1034
+// digits, and printing fewer states a different number. The bound is gone, so
+// the assertion is inverted.
+func TestDecimalBeyondFormerBound(t *testing.T) {
+	den := new(big.Int).Exp(big.NewInt(10), big.NewInt(1034), nil)
+	r := new(big.Rat).SetFrac(big.NewInt(1), den)
+	got := formatDecimal(r)
+	want := "0." + strings.Repeat("0", 1033) + "1"
+	if got != want {
+		t.Errorf("1/10^1034 rendered %d chars, want the full %d", len(got), len(want))
+	}
+	back, ok := new(big.Rat).SetString(got)
+	if !ok || back.Cmp(r) != 0 {
+		t.Error("rendered form does not equal the value it came from")
 	}
 }

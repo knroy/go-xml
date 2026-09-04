@@ -215,7 +215,7 @@ func (d *Duration) Lexical(t TypeCode) string {
 			secs.Sub(secs, new(big.Rat).Mul(new(big.Rat).SetInt(m), minR))
 		}
 		if secs.Sign() != 0 {
-			sb.WriteString(strings.TrimSuffix(strings.TrimRight(secs.FloatString(decimalScale(secs)), "0"), "."))
+			sb.WriteString(strings.TrimSuffix(strings.TrimRight(secs.FloatString(secondsScale(secs)), "0"), "."))
 			sb.WriteByte('S')
 		}
 	}

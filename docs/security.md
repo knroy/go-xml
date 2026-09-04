@@ -109,8 +109,9 @@ schema forbids was accepted with no error anywhere. Where such a bound must
 exist at all, exhausting it has to be an error, never a verdict.
 
 And raising the constant is never the fix. The cliffs found here landed at 32,
-64, 65, 257, 300 and 4096 — one walk counts links, another counts types, and no
-single number is correct for both. The fix is a visited set keyed on the
+64, 65, 257, 300 and 4096 — one walk counts links, another counts types, a
+third counts decimal digits, and no single number is correct for any two of
+them. The fix is a visited set keyed on the
 component, which stops a cycle exactly and does not limit a legal chain.
 [known-gaps.md](known-gaps.md) records which of the remaining bounds have been
 probed and found sound.
@@ -345,6 +346,20 @@ than answering, because deciding it needs alternatives RE2 cannot enumerate. An
 engine that answers correctly or says it cannot is safe to expose to untrusted
 patterns; one that guesses is not safe at any setting.
 
+**The group count is not bounded, and bounding it was a mistake.** A constant
+here refused any pattern declaring more than 64 capturing groups. Neither the
+XSD nor the XPath regex grammar sets such a ceiling, so that rejected valid
+patterns — `fn:matches` with 65 groups raised `FORX0002` — and it did not buy
+the safety it was aimed at. The width analysis it was protecting costs time in
+proportion to the pattern's *source length*, not its group count: 20,000 flat
+groups are analysed in about 120 µs, while a 12-deep alternation declaring only
+12 groups takes eight times as long, because it is 16 KB of pattern text. The
+cap therefore refused the cheap shape and admitted the expensive one. Reaching
+a nesting depth that costs even half a second requires roughly 4 MB of pattern
+the caller has already had to supply and parse, so the input bounds the work
+without a ceiling on groups. Pinned by `TestBackrefManyGroups`; the step budget
+above is unchanged and still converts exhaustion into `FORX0002`.
+
 **A backtracking matcher is available, and is off by default.**
 `xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command
 line, decides the general case. Leave it off for untrusted input. The reason is
@@ -544,6 +559,11 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 
 - **A second schema silently retyped a document the first had validated** — false accept, process-global type registries. `DerivedPrimitive` and `ListItem` are recorded on the node now. See CHANGELOG. *(One gap remains; see* Current status *above.)*
 - **A circular type longer than 4096 links loaded clean** — false accept, `checkTypeBaseCycles` counter, now a visited set. See CHANGELOG.
+- **A decimal with more than 4096 fraction digits passed a `fractionDigits` or
+  `totalDigits` facet it violates** — false accept, `countDigits`'s
+  decimal-expansion loop returning its truncated count as a verdict. The scale
+  is now computed exactly from the denominator's `2^a * 5^b` factorisation,
+  with no bound to exhaust. See CHANGELOG.
 - **RELAX NG refused a legal chain of 501 definitions** — false reject, `maxRefDepth`, removed. See CHANGELOG.
 - **A permitted file was read whole with no byte limit** — cost, `FileResolver.MaxBytes`. See CHANGELOG.
 - **`keyref` rediscovered its targets once per enclosing scope** — cost, fixed: the walk is pruned and seeded like `key` and `unique`, and per-level table copying was removed. 3.98x per doubling becomes 2.00x. See CHANGELOG.

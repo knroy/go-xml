@@ -360,7 +360,7 @@ func formatSeconds(sec *big.Rat) string {
 	if sec.IsInt() {
 		return fmt.Sprintf("%02d", sec.Num().Int64())
 	}
-	s := sec.FloatString(decimalScale(sec))
+	s := sec.FloatString(secondsScale(sec))
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimSuffix(s, ".")
 	if i := strings.IndexByte(s, '.'); i == 1 {

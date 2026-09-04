@@ -120,7 +120,13 @@ func castToNumeric(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 
 	case a.Type.IsNumeric():
 		if target == xdm.TypeInteger {
-			if a.IsNaN() || math.IsInf(a.Float64(), 0) {
+			// isInfinite tests the VALUE, not a float64 projection of it.
+			// math.IsInf(a.Float64(), 0) asked the projection, and Float64()
+			// on an arbitrary-precision xs:integer or xs:decimal overflows to
+			// +Inf above the float64 range -- so a finite 10^309 was reported
+			// as infinite and this cast refused an answer it had. Only
+			// xs:double and xs:float can actually be infinite.
+			if a.IsNaN() || isInfinite(a) {
 				// FOCA0002 rather than FORG0001: the lexical form is a
 				// perfectly good double, and it is the *numeric* operation
 				// that has no answer, which is what FOCA covers.
@@ -132,7 +138,7 @@ func castToNumeric(a *xdm.Atomic, target xdm.TypeCode) (*xdm.Atomic, error) {
 			return xdm.NewIntegerFromRat(new(big.Rat).SetInt(t)), nil
 		}
 		if target == xdm.TypeDecimal {
-			if a.IsNaN() || math.IsInf(a.Float64(), 0) {
+			if a.IsNaN() || isInfinite(a) {
 				return nil, xdm.Errorf("FOCA0002",
 					"cannot cast %s to xs:decimal", a.String())
 			}
@@ -435,7 +441,13 @@ func scaleDuration(d, n *xdm.Atomic, op string) (*xdm.Atomic, error) {
 	// operators have to recognise it before that conversion: without this a
 	// duration divided by INF looked like a division by zero, and a duration
 	// multiplied by INF was scaled by zero and returned P0M.
-	if math.IsInf(n.Float64(), 0) {
+	// isInfinite tests the VALUE. math.IsInf(n.Float64(), 0) asked a
+	// float64 projection of it, so an xs:integer or xs:decimal factor beyond
+	// the float64 range took this path: multiplying reported FODT0002
+	// without looking at the result, and dividing silently returned PT0S for
+	// an ordinary representable division. A genuine overflow is still caught
+	// by the range check on the scaled value below, which is its right place.
+	if isInfinite(n) {
 		if op == "div" {
 			// Dividing by an infinity shrinks the duration to nothing.
 			return durationFromSigned(0, new(big.Rat), d.Type), nil

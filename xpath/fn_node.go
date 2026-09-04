@@ -118,32 +118,45 @@ func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, err
 	if err != nil || a == nil {
 		return xdm.Empty(), err
 	}
-	places := 0
+	var requested int64
 	if len(args) > 1 {
 		p, err := argNumber(args, 1)
 		if err != nil {
 			return nil, err
 		}
 		if p != nil {
-			// The precision is clamped rather than used as given. It reaches
-			// exactRound as an exponent of ten, and a value like 4294967296
-			// would ask for a bignum with four billion digits — the process
-			// stops responding rather than returning a wrong answer, which is
-			// how this was found. Clamping is safe because no xs:decimal has
-			// anywhere near this many significant digits: rounding to more
-			// places than a value has is the identity, and rounding to fewer
-			// than -maxRoundPlaces gives zero either way.
-			places = clampPlaces(p.Int64())
+			// The precision is used as given, reduced by roundPlaces to an
+			// equivalent that is cheap to carry out. It reaches exactRound as
+			// an exponent of ten, so a value like 4294967296 would otherwise
+			// ask for a bignum with four billion digits; roundPlaces bounds it
+			// by the value being rounded instead of by a constant, which is
+			// what keeps rounding 10^-5000 to 5000 places returning the value
+			// rather than zero.
+			requested = p.Int64()
 		}
 	}
 
 	switch a.Type {
 	case xdm.TypeInteger:
-		if places >= 0 {
+		if requested >= 0 {
 			return xdm.One(a), nil
+		}
+		places, identity, zero := roundPlaces(a.Rat(), requested)
+		if identity {
+			return xdm.One(a), nil
+		}
+		if zero {
+			return xdm.One(xdm.NewInteger(0)), nil
 		}
 		return xdm.One(xdm.NewIntegerFromRat(exactRound(a.Rat(), places, halfToEven))), nil
 	case xdm.TypeDecimal:
+		places, identity, zero := roundPlaces(a.Rat(), requested)
+		if identity {
+			return xdm.One(a), nil
+		}
+		if zero {
+			return xdm.One(xdm.NewDecimal(new(big.Rat))), nil
+		}
 		return xdm.One(xdm.NewDecimal(exactRound(a.Rat(), places, halfToEven))), nil
 	}
 
@@ -168,7 +181,16 @@ func roundWithPrecision(args []xdm.Sequence, halfToEven bool) (xdm.Sequence, err
 	if exact == nil {
 		return xdm.One(a), nil
 	}
-	result, _ := exactRound(exact, places, halfToEven).Float64()
+	places, identity, zero := roundPlaces(exact, requested)
+	var result float64
+	switch {
+	case identity:
+		result = f
+	case zero:
+		result = 0
+	default:
+		result, _ = exactRound(exact, places, halfToEven).Float64()
+	}
 	// Rounding a negative value to zero yields *negative* zero, which the
 	// arithmetic above loses: floor(-0.2 + 0.5) is floor(0.3), a positive
 	// zero. IEEE 754 keeps the two apart and so does the spec, and the sign
@@ -521,22 +543,107 @@ func fnDoc(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 	return xdm.One(tree.Root), nil
 }
 
-// maxRoundPlaces bounds the precision argument of fn:round and
-// fn:round-half-to-even.
+// roundPlaces bounds the precision argument of fn:round and
+// fn:round-half-to-even by the value being rounded, rather than by a constant.
 //
-// The largest xs:double has about 309 digits before the point and 1074 after,
-// so a thousand places either side is already far past the point where any
-// finite value can be affected. Beyond it the operation is the identity in one
-// direction and zero in the other, and both are reached without building the
-// scale factor at all.
-const maxRoundPlaces = 4096
+// The precision reaches exactRound as an exponent of ten, so a value like
+// 4294967296 would ask for a bignum with four billion digits and the process
+// would stop responding. A fixed ceiling avoids that but answers a different
+// question: rounding 10^-5000 to 5000 places must return the value unchanged,
+// and a clamp to 4096 returned zero. The bound has to come from the value, not
+// from a number chosen in advance.
+//
+// Two facts make that exact. Rounding to more places than a value's own scale
+// is the identity, so any precision at or above the scale can be answered by
+// returning the value without building a scale factor at all. Rounding to
+// fewer places than -(digits before the point) discards every digit, so any
+// precision at or below that is answered by zero (or by the sole surviving
+// digit position) without a scale factor either. Between those two bounds the
+// precision is genuinely meaningful, and it is bounded by the value's own
+// size — a value with n significant digits can be given at most n meaningful
+// places, so the bignum exactRound builds is proportional to the input the
+// caller already supplied.
+//
+// The remaining case is a non-terminating rational, which has no finite scale.
+// It only arises from the xs:double branch, where the value came from a float
+// and carries at most 1074 fractional bits, so ratScale's terminating answer
+// covers every value that reaches here; a non-terminating one is bounded by
+// roundGuard, which is a resource limit in the strict sense: changing it
+// changes how long a hopeless request takes to refuse, never an answer.
+const roundGuard = 1 << 20
 
-func clampPlaces(n int64) int {
-	if n > maxRoundPlaces {
-		return maxRoundPlaces
+// ratScale returns the number of fractional digits r needs to be written
+// exactly, and whether it terminates at all. A big.Rat is kept in lowest
+// terms, so a terminating value has denominator 2^a*5^b and needs max(a,b)
+// digits. The 5s are stripped by repeated squaring so the cost is logarithmic
+// in b rather than one division per power.
+func ratScale(r *big.Rat) (int, bool) {
+	d := new(big.Int).Set(r.Denom())
+	a := int(d.TrailingZeroBits())
+	d.Rsh(d, uint(a))
+
+	pows := []*big.Int{big.NewInt(5)}
+	for {
+		next := new(big.Int).Mul(pows[len(pows)-1], pows[len(pows)-1])
+		if next.BitLen() > d.BitLen() {
+			break
+		}
+		pows = append(pows, next)
 	}
-	if n < -maxRoundPlaces {
-		return -maxRoundPlaces
+	b := 0
+	rem := new(big.Int)
+	for i := len(pows) - 1; i >= 0; i-- {
+		for {
+			q, m := new(big.Int).QuoRem(d, pows[i], rem)
+			if m.Sign() != 0 {
+				break
+			}
+			d = q
+			b += 1 << uint(i)
+		}
 	}
-	return int(n)
+	if d.CmpAbs(big.NewInt(1)) != 0 {
+		return 0, false
+	}
+	if b > a {
+		return b, true
+	}
+	return a, true
+}
+
+// roundPlaces reduces places to an equivalent value that exactRound can carry
+// out cheaply, or reports that the answer is already determined.
+//
+// identity is true when rounding cannot change r, and zero is true when every
+// significant digit is discarded. Otherwise the returned precision is
+// equivalent to the requested one and bounded by r's own size.
+func roundPlaces(r *big.Rat, places int64) (p int, identity, zero bool) {
+	if r.Sign() == 0 {
+		return 0, true, false
+	}
+	if places >= 0 {
+		if scale, ok := ratScale(r); ok && places >= int64(scale) {
+			// At or above the value's own scale there is nothing to discard.
+			return 0, true, false
+		}
+		if places > roundGuard {
+			return roundGuard, false, false
+		}
+		return int(places), false, false
+	}
+	// Negative precision zeroes digits before the point. Once it passes the
+	// number of integer digits, every digit is gone and the result is zero —
+	// except at exactly that boundary, where a carry can still round up, so
+	// only strictly beyond it is unconditionally zero.
+	intDigits := int64(len(new(big.Int).Abs(new(big.Int).Quo(r.Num(), r.Denom())).String()))
+	if new(big.Int).Abs(new(big.Int).Quo(r.Num(), r.Denom())).Sign() == 0 {
+		intDigits = 0
+	}
+	if -places > intDigits+1 {
+		return 0, false, true
+	}
+	if -places > roundGuard {
+		return 0, false, true
+	}
+	return int(places), false, false
 }

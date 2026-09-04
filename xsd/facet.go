@@ -567,7 +567,18 @@ func checkDigitFacets(steps []facetStep, v *big.Rat) error {
 			continue
 		}
 		if !counted {
-			total, frac = countDigits(v)
+			var ok bool
+			total, frac, ok = countDigits(v)
+			if !ok {
+				// A value with no finite decimal expansion has
+				// no digit count to compare. isDecimalLexical
+				// admits only sign, digits and one point, so
+				// nothing that reaches here can be such a
+				// value; refusing it is better than inventing
+				// a count that would let it pass.
+				return facetError(st.typ, FacetTotalDigits,
+					"value has no terminating decimal expansion")
+			}
 			counted = true
 		}
 		if f.TotalDigits != nil && total > *f.TotalDigits {
@@ -582,42 +593,111 @@ func checkDigitFacets(steps []facetStep, v *big.Rat) error {
 	return nil
 }
 
+// decimalMagnitude is a terminating decimal split into an integer coefficient
+// and a decimal scale: the value is coefficient / 10^scale.
+type decimalMagnitude struct {
+	coefficient *big.Int // absolute value; never negative
+	scale       uint64   // number of fraction digits, exactly
+}
+
+// decimalMagnitudeOf converts a rational to its exact decimal form, reporting
+// false if the value has no terminating decimal expansion.
+//
+// big.Rat holds lowest terms, so 1.5 is 3/2 rather than 15/10. A value is an
+// exact decimal precisely when its denominator is 2^a * 5^b with nothing left
+// over, and then the scale is max(a, b) — no more digits are needed and no
+// fewer will do. Factoring the denominator is O(scale) cheap integer
+// divisions; the earlier code instead multiplied the whole rational by ten
+// once per digit and stopped at a fixed bound, which turned a value with more
+// fraction digits than the bound into a *smaller* count and so let it pass a
+// fractionDigits facet it violates.
+func decimalMagnitudeOf(r *big.Rat) (decimalMagnitude, bool) {
+	d := r.Denom()
+	// The power of two is the number of trailing zero bits, which big.Int
+	// already knows; dividing them out one at a time would cost a full
+	// division per digit.
+	a := uint64(d.TrailingZeroBits())
+	rest := new(big.Int).Rsh(d, uint(a))
+
+	// Strip powers of five in halving chunks rather than singly. Dividing
+	// by 5^k removes k factors for one division, so the exponent is found
+	// in a logarithmic number of divisions on a shrinking number instead of
+	// one division per digit on the full-width one.
+	var b uint64
+	five := big.NewInt(5)
+	q, m := new(big.Int), new(big.Int)
+	for k := uint64(1); ; {
+		p := new(big.Int).Exp(five, new(big.Int).SetUint64(k), nil)
+		if p.BitLen() > rest.BitLen() {
+			if k == 1 {
+				break
+			}
+			k = 1
+			continue
+		}
+		q.QuoRem(rest, p, m)
+		if m.Sign() != 0 {
+			if k == 1 {
+				break
+			}
+			k /= 2
+			continue
+		}
+		rest.Set(q)
+		b += k
+		k *= 2
+	}
+
+	if rest.Cmp(big.NewInt(1)) != 0 {
+		// A prime other than 2 or 5 survives: 1/3 and its kind have no
+		// finite decimal expansion, so no digit count describes them.
+		return decimalMagnitude{}, false
+	}
+	scale := a
+	if b > scale {
+		scale = b
+	}
+	// numerator * 2^(scale-a) * 5^(scale-b) is the value written with
+	// exactly `scale` fraction digits, an exact integer by construction.
+	coef := new(big.Int).Abs(r.Num())
+	if k := scale - a; k > 0 {
+		coef.Lsh(coef, uint(k))
+	}
+	if k := scale - b; k > 0 {
+		coef.Mul(coef, new(big.Int).Exp(five, new(big.Int).SetUint64(k), nil))
+	}
+	return decimalMagnitude{coefficient: coef, scale: scale}, true
+}
+
 // countDigits returns the total and fraction digit counts of a decimal value.
 //
 // The counts are of the value, not of the literal: 1.50 and 1.5 are the same
 // value and both have two total digits and one fraction digit.
 //
-// big.Rat normalises to lowest terms, so the denominator is not a power of ten
-// even for a decimal — 1.5 is held as 3/2. The fraction digit count is
-// therefore derived from the decimal expansion: multiply by ten until the
-// value is integral, which terminates for any value whose denominator has only
-// 2 and 5 as prime factors. That is exactly the set of exact decimals, and a
-// non-decimal is rejected before it reaches here.
-func countDigits(v *big.Rat) (total, frac uint64) {
+// The second result is false for a value with no terminating decimal
+// expansion, for which neither count is defined. Every caller reaches here
+// only past isDecimalLexical, whose grammar is sign, digits and at most one
+// point — so the denominator is a power of ten and this cannot happen — but a
+// count must never be invented for a value that does not have one.
+func countDigits(v *big.Rat) (total, frac uint64, ok bool) {
 	if v.Sign() == 0 {
 		// Zero has one total digit and no fraction digits.
-		return 1, 0
+		return 1, 0, true
 	}
-
-	scaled := new(big.Rat).Abs(v)
-	ten := big.NewRat(10, 1)
-	// A decimal's denominator is 2^a * 5^b, so at most max(a,b) steps are
-	// needed. The bound guards against a value that is not an exact decimal
-	// reaching here despite the lexical check.
-	const maxScale = 4096
-	for i := 0; !scaled.IsInt() && i < maxScale; i++ {
-		scaled.Mul(scaled, ten)
-		frac++
+	m, ok := decimalMagnitudeOf(v)
+	if !ok {
+		return 0, 0, false
 	}
-
-	digits := uint64(len(scaled.Num().String()))
+	digits := uint64(len(m.coefficient.String()))
 	// A value such as 0.001 scales to 1, one digit, but the spec counts
 	// three: the leading zeros of the fraction are significant to
-	// totalDigits even though they are not to the value.
-	if digits < frac {
-		digits = frac
+	// totalDigits even though they are not to the value. The coefficient
+	// can only be shorter than the scale when the integer part is zero,
+	// and then the fraction digits are all the digits there are.
+	if digits < m.scale {
+		digits = m.scale
 	}
-	return digits, frac
+	return digits, m.scale, true
 }
 
 // facetError builds the diagnostic for a failed facet, naming the type that

@@ -245,6 +245,15 @@ no suite case, and `xslt/unionmember_test.go` is what pins it instead.
 Real gaps, together with the constraints and retractions that bound how they
 may be closed. Ordered by how much they cost.
 
+### `xsl:sort` compares arbitrary-precision values through `float64` first (XSLT) — not a defect
+
+`compareAtoms` in `xslt/instructions.go` uses `Float64()` for a value an
+`xs:double` cannot hold, but it is *sound*: the doubles are a pre-filter, and
+it falls through to an exact `Rat().Cmp` when they compare equal, so
+`xsl:sort` orders 10^400, 10^400+1 and 10^400+2 correctly. Recorded here
+because the arbitrary-precision audit flags the call site and the reason it is
+safe is not local to it.
+
 ### A hyphen after a variable reference is part of the name (XPath, XQuery) — not a defect, retracted
 
 `$e-1` evaluates as a reference to a variable named `e-1` rather than as
@@ -479,7 +488,11 @@ distinguish from a completed walk. The failure directions were all three kinds:
   chain under `xs:ID` ran 64 links, and `"1.5"` validated against a type
   descending from `xs:integer` at the same depth; `checkTypeBaseCycles` giving
   up after 4096 steps meant the function that exists to catch circular types
-  could not catch a large circular type.
+  could not catch a large circular type. `countDigits` in `xsd/facet.go` is the
+  same shape outside a graph walk: it expanded a decimal one digit at a time,
+  stopped at 4096, and returned the short count, so a value with 4600 fraction
+  digits satisfied `fractionDigits="4500"`. The scale now comes from factoring
+  the denominator as `2^a * 5^b`, which is exact and has nothing to exhaust.
 * **rejection** — `derivedFrom` refusing a legal `xsi:type`, and `relaxng`'s
   `maxRefDepth = 500` refusing a legal 501-definition grammar outright.
 * **silent erasure**, the worst of the three, because nothing reports an error.
@@ -492,7 +505,11 @@ distinguish from a completed walk. The failure directions were all three kinds:
   entirely. A legal-looking wrong number that nothing downstream can detect.
 
 **Why not raise the constant.** 32 to 1024 moves the cliff without removing it
-and leaves the same bug waiting at a depth nobody will test. The arbitrariness
+and leaves the same bug waiting at a depth nobody will test. `maxDecimalScale`
+is the case that proves it: capped at 18 it printed a 360-digit decimal as `0`,
+was raised to 1024, and printed `1/10^5000` as `0` for exactly the same reason.
+Raising it a third time would have been the same move again — it is now gone,
+the scale following the value. The arbitrariness
 is the argument: `derivationMethodsTo` surfaced only because a legal schema
 stopped *loading*, and its cliff sat at 65 where the validation-time walks sat
 at 257, because one counted links and the other types. `relaxng`'s bound is the
@@ -949,7 +966,9 @@ inline complex type (false accept). See CHANGELOG.
 (silent erasure). `fn:collection()` unimplemented, and then resolving a
 relative collection URI against the context item's base rather than the static
 base (capability gap). `xs:decimal` rendering capped at 18 fractional digits,
-so a value printed as `0` while comparing unequal to it (silent erasure).
+so a value printed as `0` while comparing unequal to it (silent erasure) —
+and then capped again at 1024, which moved that same contradiction to
+10^-1025 rather than removing it; the scale now follows the value.
 `in-scope-prefixes(/)` answering for the root element rather than raising
 `XPTY0004`, and `castable as xs:QName` answering true for a non-literal operand
 (false accepts). Four further singleton failures — `fn-doc-29`,

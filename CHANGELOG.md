@@ -8,6 +8,194 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+- **`xsl:number value=` rejected a finite `xs:integer` above the float64
+  range, and silently narrowed one under `version="1.0"`.** The same defect as
+  the `idiv` and cast ones below, at the last two sites the audit found.
+  `numberValueOf` (`xslt/grouping.go`) guarded its conversion with
+  `math.IsNaN(f) || math.IsInf(f, 0)` on the value cast to `xs:double`, so
+  `<xsl:number value="xs:integer('1' followed by 309 zeros)"/>` raised
+  `XTDE0980` for a number the data model holds exactly — with the boundary on
+  the float64 exponent limit, 10^308 fine and 10^309 not. The exact `Rat()`
+  path directly below the guard already computed the right answer; the guard
+  rejected the value before it could get there. The test is now skipped
+  exactly when the item has an exact value of its own, which is precisely when
+  that path is taken, so a genuine `xs:double` `INF` or `NaN` — and a
+  non-numeric value such as `'apples'` — still raises `XTDE0980` as before.
+
+  The backwards-compatible path a hundred lines above did the whole
+  conversion in `float64` and `int64` rather than only guarding with it, so
+  under `version="1.0"` an `xs:integer` above the float64 range formatted as
+  the string `"NaN"`, one above 2^53 lost its low digits with no error at all,
+  and one above the int64 range clamped to `9223372036854775807` — 10^24 came
+  out as 9223372036854775807. It now calls `numberValueOf` for the conversion
+  and keeps only XSLT 1.0's *outcomes*: an infinity, a `NaN`, a negative and a
+  non-number all format as the string `"NaN"`, since XSLT 1.0 had no
+  `XTDE0980` to raise. Values that reach that path through 1.0 arithmetic are
+  unaffected and still narrow, because XPath 1.0 compatibility casts the
+  operands of `+ - * div` to `xs:double` unconditionally (B.1) — there the
+  value really is a double by the time `xsl:number` sees it.
+
+- **`idiv` raised `FOAR0002` for a finite `xs:integer` above the float64
+  range, and answered zero for a finite huge divisor.** The NaN/infinite guard
+  in `integerDivide` (`xpath/operators.go`) asked
+  `math.IsInf(a.Float64(), 0)`. `Float64()` on an arbitrary-precision
+  `xs:integer` or `xs:decimal` overflows to `+Inf` above the float64 range, so
+  the guard was answering a question about a float64 *projection* of the value
+  rather than about the value. `xs:integer('1' followed by 309 zeros) idiv 1`
+  raised `FOAR0002` for a perfectly finite number, with the boundary sitting
+  exactly on the float64 exponent limit — 10^308 fine, 10^309 not — which is
+  not a boundary the XPath data model has. The divisor side of the same guard
+  sent a finite huge divisor down the "an infinite divisor truncates to zero"
+  path, so `3×10^400 idiv 10^400` answered `0` instead of `3`; that fault was
+  invisible until the dividend guard was fixed, because the dividend check
+  fired first. Both now go through a value-level `isInfinite`, which only
+  `xs:double` and `xs:float` can ever satisfy. `mod` was already correct: its
+  exact path never consults `Float64()`. The general rule, which the comment
+  now records: an arbitrary-precision value must never be routed through
+  float64 to answer a question about itself.
+
+- **Casting a finite `xs:decimal` or `xs:integer` above the float64 range
+  raised `FOCA0002`.** The same defect as the `idiv` one above, at two more
+  sites. `castToNumeric` (`xpath/cast.go`) guarded both the `xs:integer` and
+  the `xs:decimal` target with `math.IsInf(a.Float64(), 0)`, so a 401-digit
+  `xs:decimal` cast to `xs:integer`, and `xs:integer('1' followed by 400
+  zeros)` cast to `xs:decimal`, were refused as infinite. The boundary was the
+  float64 exponent limit again — 10^308 fine, 10^309 not. Both now use the
+  value-level `isInfinite` helper, which tests the type first: only `xs:double`
+  and `xs:float` can be infinite, and casting one of those to an exact type
+  still raises `FOCA0002`, which the new tests pin in both directions.
+
+- **`fn:format-integer` silently truncated any value a `float64` could not
+  hold.** `integerValueOf` (`xpath/fn_formatinteger.go`) returned
+  `int64(conv.Float64())`. This one raised no error at all: `format-integer(10^400,
+  '1')` answered `9223372036854775807`, and `format-integer(123456789012345678,
+  '1')` answered `123456789012345680`, because a double holds about 17
+  significant digits and the `int64` conversion then saturates. `$value` is
+  declared `xs:integer?`, which is unbounded, and F&O gives no error code for a
+  value that is merely large — so the value is now carried as a sign and an
+  exact decimal digit string and formatted, not refused. A decimal-digit-pattern
+  pads and groups those digits directly; the named sequences (Roman, letters,
+  spelled-out words) keep an `int64`, since a value too large for one is past
+  every one of their ranges anyway and takes the fallback to the digit string
+  that those sequences already produce there. Because the sign is now taken off
+  before formatting, `format-integer(-9223372036854775808, '1')` also stops
+  answering `--9223372036854775808`: the old `if n < 0 { n = -n }` left
+  `math.MinInt64` negative and the minus was prepended to a string that had one.
+
+- **Scaling a duration by a finite factor above the float64 range took the
+  infinity path.** A fourth instance of the same pattern, found while fixing
+  the casts. `scaleDuration` (`xpath/cast.go`) asked
+  `math.IsInf(n.Float64(), 0)` of the scaling factor, so an `xs:integer` or
+  `xs:decimal` factor past the float64 range was treated as an infinity:
+  multiplying reported `FODT0002` without ever looking at whether the result
+  overflowed, and — silently, which is worse — dividing took the "dividing by
+  an infinity shrinks the duration to nothing" branch, so
+  `xs:dayTimeDuration('PT1S') div xs:integer(10^309)` answered `PT0S` for an
+  ordinary representable division. A genuine overflow is still caught by the
+  range check on the scaled value below the branch, which is its right place.
+
+- **A `fractionDigits` or `totalDigits` facet accepted a value that violates
+  it, once the value had more than 4096 fraction digits.** `countDigits` in
+  `xsd/facet.go` derived both counts by multiplying the value by ten until it
+  became integral, bounded by `const maxScale = 4096`, and on hitting the bound
+  returned the truncated count as though the walk had finished. A value with
+  4600 fraction digits therefore reported 4096 of them and passed
+  `fractionDigits="4500"`, which it violates; the same truncation defeated
+  `totalDigits`. An invalid document accepted as valid is the worst failure a
+  validator has, and this one needed no malice to hit — only a long decimal.
+
+  The bound was not merely too small, and raising it would only have moved the
+  cliff to a value nobody would test. The counts are now computed exactly and
+  in closed form. `big.Rat` holds lowest terms, so a value is an exact decimal
+  precisely when its denominator factors as `2^a * 5^b` with nothing left over,
+  and then `fractionDigits` is `max(a, b)` — no expansion, and no bound to
+  exceed. `totalDigits` is the digit count of `numerator * 2^(scale-a) *
+  5^(scale-b)`, the value written at exactly that scale, raised to the scale
+  itself when the integer part is zero so that the leading zeros of `0.001`
+  still count three. A value with no terminating expansion now reports that
+  fact instead of a truncated count; `isDecimalLexical` admits only a sign,
+  digits and one point, so no `xs:decimal` literal can produce one, but a count
+  is no longer invented for a value that does not have one.
+
+  Purely integral values were never affected, since the old loop did not run
+  for them; they are pinned as the regression guard. The exact computation is
+  also far faster than the loop it replaces — counting a 100000-digit value
+  went from 6.2s to 3.5ms, since the old code did one big-`Rat` multiplication
+  per digit.
+
+- **`xs:decimal` rendering capped the scale at 1024 digits, so a value past it
+  printed as a different number.** A terminating decimal needing more than 1024
+  fractional digits fell back to an 18-digit rendering, and since those values
+  are mostly leading zeros the result was `"0"` — for `1/10^5000`, a lexical
+  form that compares unequal to the value it came from. `string()`, `cast as
+  xs:string` and the round trip `xs:decimal(string($x)) eq $x` all disagreed
+  with `$x eq 0`, and only one of the two answers can be right.
+
+  This is the second time the cliff moved rather than went: the cap was 18,
+  which printed a 360-digit literal as `0`, and raising it to 1024 left the
+  same contradiction waiting at 10^-1025. `xs:decimal` is arbitrary precision in
+  XML Schema, and the code already factored the denominator into `2^a·5^b` — it
+  knew the value terminated and approximated it anyway.
+
+  A terminating value now renders at whatever scale it needs, with no ceiling.
+  The bound was reacting to a real cost, but had it on the wrong side: printing
+  50000 digits takes 261µs, while the loop that *found* the scale by dividing
+  off one factor at a time took 907ms, being quadratic in the exponent. Stripping
+  the twos with a single shift and the fives by repeated squaring makes that
+  415µs, so the ceiling has nothing left to buy. A 10000-digit value formats
+  end-to-end in 92µs.
+
+  A rational with no finite decimal expansion — `1/3`, from division — is a
+  genuinely different case, keeps the 18-digit policy XPath 2.0 requires as a
+  minimum, and is unchanged: it has no exact lexical form, so rounding there
+  discards nothing the form could have carried.
+
+- **`fn:round-half-to-even` clamped its precision, which changed answers.** The
+  precision argument was clamped to ±4096 before use. The clamp was there for a
+  real reason — the precision reaches `exactRound` as an exponent of ten, so
+  `round($x, 4294967296)` asked for a bignum with four billion digits and the
+  process stopped responding — but it answered a different question than the one
+  asked. Rounding a value to at least as many places as its own scale cannot
+  change it, yet `round-half-to-even(10⁻⁵⁰⁰⁰, 5000)` returned **zero**: the
+  precision was reduced to 4096 first and every significant digit fell off.
+
+  The comment defending the clamp claimed that rounding below `-maxRoundPlaces`
+  "gives zero either way". That holds for `xs:double`, which tops out near
+  1.8 × 10³⁰⁸, but not for `xs:decimal` and `xs:integer`, which XPath leaves
+  unbounded: `round-half-to-even(10⁵⁰⁰⁰, -5000)` keeps its leading digit. The
+  claim was checked rather than trusted, and it was wrong in both directions —
+  the positive clamp zeroed a value it had to preserve, the negative one
+  preserved a value it had to zero.
+
+  The bound now comes from the value being rounded instead of from a constant.
+  A precision at or above the value's own scale is answered by returning the
+  value, and one past its last integer digit by returning zero, neither of which
+  builds a scale factor at all; in between, the meaningful precision is bounded
+  by the value's own size, so the bignum is proportional to input the caller
+  already supplied. `round-half-to-even(1.234, 4294967296)` still returns
+  promptly. Held by `TestRoundPrecisionAboveScaleIsIdentity`,
+  `TestRoundPrecisionBelowScaleStillRounds` and `TestRoundPrecisionNegative`.
+
+- **A backreference pattern was refused for having too many groups.** The
+  backreference path rejected any pattern declaring more than 64 capturing
+  groups with `FORX0002`, reachable from `fn:matches`, `fn:replace`,
+  `fn:tokenize` and `fn:analyze-string`. No such ceiling exists in either the
+  XSD or the XPath regular-expression grammar, so a 65-group pattern is valid
+  and was being refused.
+
+  The constant was aimed at the fixed-width analysis, on the stated theory that
+  it is "quadratic in the nesting". Measurement put the cost on a different
+  axis: it tracks the pattern's source length, not its group count. 20,000 flat
+  groups analyse in about 120 µs, while a 12-deep alternation declaring only 12
+  groups takes eight times as long, because it is 16 KB of text. The cap was
+  refusing the cheap shape while admitting the expensive one — it was not
+  bounding the quantity it named. Reaching a depth that costs even half a second
+  needs about 4 MB of pattern the caller must already supply and parse, so the
+  input bounds the work on its own and the cap is gone. The step budget that
+  bounds the optional backtracking matcher is untouched, and exhausting it still
+  raises `FORX0002` rather than a silent `false`. Held by
+  `TestBackrefManyGroups` and `TestBackrefManyGroupsStillBounded`.
+
 - **`keyref` rediscovered its targets once per enclosing scope.** A `keyref` on
   a self-embedding element walked the whole remaining subtree once per level:
   nodes visited grew 3.92x, 3.96x, 3.98x as depth doubled, so a hostile instance

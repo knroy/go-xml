@@ -959,18 +959,22 @@ func (i *numberInstr) Execute(rt *runtime, out *outputBuilder) error {
 				out.AppendText("NaN")
 				return nil
 			}
-			num, cerr := xpath.CastAtomic(at, xdm.TypeDouble)
-			if cerr != nil || math.IsNaN(num.Float64()) ||
-				math.IsInf(num.Float64(), 0) {
+			// The conversion itself is the same one the 2.0+ path uses:
+			// round(number($V)) taken on the value's own exact
+			// representation. Doing it in float64 and int64 instead reported
+			// every exact xs:integer above the float64 range as NaN, dropped
+			// digits above 2^53, and clamped at the int64 ceiling -- and an
+			// xs:integer reaches here from a 1.0 stylesheet readily, since
+			// count() yields one and integer arithmetic keeps it exact.
+			// Only the *outcomes* are 1.0's: a non-number, an infinity, a NaN
+			// and a negative all format as the string "NaN", because XSLT 1.0
+			// had no XTDE0980 to raise.
+			n, verr := numberValueOf(at)
+			if verr != nil || n.Sign() < 0 {
 				out.AppendText("NaN")
 				return nil
 			}
-			n := int64(math.Floor(num.Float64() + 0.5))
-			if n < 0 {
-				out.AppendText("NaN")
-				return nil
-			}
-			out.AppendText(formatNumberSeq([]*big.Int{big.NewInt(n)}, format, opts))
+			out.AppendText(formatNumberSeq([]*big.Int{n}, format, opts))
 			return nil
 		}
 
@@ -1066,7 +1070,19 @@ func numberValueOf(at *xdm.Atomic) (*big.Int, error) {
 			"XTDE0980: the value %q cannot be converted to an integer",
 			at.String())
 	}
-	if f := num.Float64(); math.IsNaN(f) || math.IsInf(f, 0) {
+	// The question is whether the *value* is NaN or infinite, not whether a
+	// float64 projection of it is. num is the cast to xs:double, and casting
+	// an xs:integer or xs:decimal above roughly 1.8e308 -- a value the data
+	// model holds exactly -- yields +Inf, so this rejected 10^309 as
+	// unconvertible even though the exact at.Rat() path immediately below
+	// handles it correctly. Skip the test exactly when at has an exact value
+	// of its own, which is precisely when that path is taken.
+	//
+	// (xpath.isInfinite at xpath/operators.go carries the same rule for idiv.
+	// It is unexported and in another package, so its shape is mirrored here
+	// rather than called; the gate differs because what matters here is
+	// whether the *source* item is exact, not whether the cast result is.)
+	if at.Rat() == nil && (num.IsNaN() || math.IsInf(num.Float64(), 0)) {
 		return nil, fmt.Errorf(
 			"XTDE0980: the value %q cannot be converted to an integer",
 			at.String())

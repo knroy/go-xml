@@ -70,11 +70,6 @@ type backrefUse struct {
 	star bool
 }
 
-// maxBackrefGroups bounds how many groups a pattern may declare before the
-// backreference path refuses it. A pattern this large is not something a
-// stylesheet wrote by hand, and the width analysis is quadratic in the nesting.
-const maxBackrefGroups = 64
-
 func hasBackref(p string) bool {
 	for i := 0; i+1 < len(p); i++ {
 		if p[i] != '\\' {
@@ -663,10 +658,16 @@ func buildBackrefRegexp(pattern, flags string, v Version) (*backrefRegexp, error
 		return nil, fmt.Errorf(
 			"FORX0002: invalid regular expression %q: %w", original, err)
 	}
-	if re.NumSubexp() > maxBackrefGroups {
-		return nil, fmt.Errorf(
-			"FORX0002: too many groups for a backreference pattern")
-	}
+	// There is deliberately no ceiling on the group count. A large one was
+	// here on the theory that the width analysis is quadratic in the nesting,
+	// but the cost is driven by the pattern's source length, not by how many
+	// groups it declares: 20000 flat groups are analysed in about 120us, while
+	// a 12-deep alternation declaring only 12 groups takes eight times as long
+	// because it is 16KB of source text. A cap on groups therefore refused
+	// cheap patterns — 65 groups is valid under both the XSD and the XPath
+	// regex grammars — while admitting the expensive ones, and reaching a
+	// depth costly enough to matter requires megabytes of pattern that the
+	// caller has already had to supply and parse.
 	for i := range refs {
 		// A backreference number is greedy: "\11" is group 11 when eleven
 		// groups exist, and group 1 followed by a literal "1" otherwise.

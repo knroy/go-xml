@@ -2,6 +2,7 @@ package xpath
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -34,7 +35,7 @@ func registerFormatInteger(l *Library) {
 		if !ok {
 			return nil, xdm.ErrType("fn:format-integer: expected an xs:integer")
 		}
-		n, err := integerValueOf(a)
+		neg, digits, err := integerValueOf(a)
 		if err != nil {
 			return nil, err
 		}
@@ -42,7 +43,7 @@ func registerFormatInteger(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		out, err := formatInteger(n, pic)
+		out, err := formatInteger(neg, digits, pic)
 		if err != nil {
 			return nil, err
 		}
@@ -50,17 +51,44 @@ func registerFormatInteger(l *Library) {
 	})
 }
 
-// integerValueOf reads the xs:integer the first argument is declared to be.
-func integerValueOf(a *xdm.Atomic) (int64, error) {
+// integerValueOf reads the xs:integer the first argument is declared to be,
+// and returns it as a sign and an exact decimal digit string.
+//
+// It used to return int64(conv.Float64()), which failed SILENTLY in two ways.
+// Float64() on an arbitrary-precision xs:integer overflows the float64 range
+// and the int64 conversion then saturates, so format-integer(10^400, '1')
+// answered "9223372036854775807"; and below that, a double holds only about 17
+// significant digits, so 123456789012345678 came back as 123456789012345680.
+// Neither raised an error.
+//
+// fn:format-integer declares $value as xs:integer?, which is unbounded, and
+// F&O gives no error code for a value that is merely large -- so a big value
+// is formatted, not refused. The digit string is what every path here actually
+// needs: a decimal-digit-pattern pads and groups the digits, and the named
+// sequences all fall back to the digit string once past their own range.
+func integerValueOf(a *xdm.Atomic) (neg bool, digits string, err error) {
 	conv, err := CastAtomic(a, xdm.TypeInteger)
 	if err != nil {
-		return 0, xdm.ErrType("fn:format-integer: %v", err)
+		return false, "", xdm.ErrType("fn:format-integer: %v", err)
 	}
-	return int64(conv.Float64()), nil
+	s := conv.String()
+	if strings.HasPrefix(s, "-") {
+		return true, s[1:], nil
+	}
+	return false, s, nil
 }
 
-// formatInteger renders n according to the picture.
-func formatInteger(n int64, pic string) (string, error) {
+// formatInteger renders the magnitude digits according to the picture, with a
+// minus sign prepended when neg.
+//
+// The value arrives as sign-and-digits rather than as an int64 so that an
+// xs:integer beyond the int64 range is formatted exactly. Taking the sign here
+// also matches the spec, which applies every rule to the absolute value -- and
+// it removes a second latent defect: the old "if n < 0 { n = -n }" left
+// math.MinInt64 negative, so format-integer(-9223372036854775808, '1')
+// prepended the sign to a string that already had one and answered
+// "--9223372036854775808".
+func formatInteger(neg bool, digits string, pic string) (string, error) {
 	token, modifier := splitIntegerPicture(pic)
 	if token == "" {
 		return "", fmt.Errorf(
@@ -71,14 +99,7 @@ func formatInteger(n int64, pic string) (string, error) {
 		return "", err
 	}
 
-	// A negative value is formatted from its absolute value with a minus sign
-	// prepended, whatever the numbering sequence.
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-
-	out, err := formatIntegerToken(n, token, ordinal)
+	out, err := formatIntegerToken(digits, token, ordinal)
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +169,14 @@ func splitIntegerPicture(pic string) (token, modifier string) {
 }
 
 // formatIntegerToken renders n for one primary format token.
-func formatIntegerToken(n int64, token string, ordinal bool) (string, error) {
+//
+// The named sequences take an int64 because none of them has a representation
+// beyond a few thousand anyway: each already falls back to the decimal digits
+// when the value is outside its range. A value too large for an int64 is
+// therefore past every one of those ranges, and takes the same fallback --
+// with its exact digits, which is the point.
+func formatIntegerToken(digits string, token string, ordinal bool) (string, error) {
+	n, fits := smallEnough(digits)
 	// The sequences that are named by a single letter. A token is a decimal
 	// digit pattern only if it contains a Unicode digit — "the primary format
 	// token contains at least one Unicode digit" is the spec's test, and it
@@ -157,40 +185,54 @@ func formatIntegerToken(n int64, token string, ordinal bool) (string, error) {
 	// the decimal representation rather than a malformed pattern; the suite
 	// asserts exactly that for format-integer(1500000, '#').
 	if !containsDigit(token) {
-		switch token {
-		case "I":
-			return romanNum(n), nil
-		case "i":
-			return strings.ToLower(romanNum(n)), nil
-		case "A":
-			return alphaNum(n, true), nil
-		case "a":
-			return alphaNum(n, false), nil
-		case "w":
-			return spellDateNumber(n, "w", ordinal), nil
-		case "W":
-			return spellDateNumber(n, "W", ordinal), nil
-		case "Ww":
-			return spellDateNumber(n, "Ww", ordinal), nil
+		if fits {
+			switch token {
+			case "I":
+				return romanNum(n), nil
+			case "i":
+				return strings.ToLower(romanNum(n)), nil
+			case "A":
+				return alphaNum(n, true), nil
+			case "a":
+				return alphaNum(n, false), nil
+			case "w":
+				return spellDateNumber(n, "w", ordinal), nil
+			case "W":
+				return spellDateNumber(n, "W", ordinal), nil
+			case "Ww":
+				return spellDateNumber(n, "Ww", ordinal), nil
+			}
 		}
 		// A token with no digits and no recognised name is not an error: the
 		// spec is explicit that an unrecognised-but-well-formed token falls
 		// back to a default representation rather than failing, so that a
 		// construct one processor knows and another does not is never an
 		// error. Only a malformed digit pattern is FODF1310.
-		return decimalString(n, ordinal), nil
+		return decimalString(digits, ordinal), nil
 	}
-	return formatDigitPattern(n, token, ordinal)
+	return formatDigitPattern(digits, token, ordinal)
+}
+
+// smallEnough parses the digit string as an int64, reporting whether it fits.
+//
+// A value that does not fit is far past the range of every named numbering
+// sequence there is -- Roman stops at 3999, spelled-out words at 10^15 -- so
+// the caller takes the spec's fallback to the decimal digits for it, which is
+// what those sequences would have returned anyway had they been able to hold
+// the value.
+func smallEnough(digits string) (int64, bool) {
+	n, err := strconv.ParseInt(digits, 10, 64)
+	return n, err == nil
 }
 
 // formatDigitPattern renders n for a decimal-digit-pattern token.
-func formatDigitPattern(n int64, token string, ordinal bool) (string, error) {
+func formatDigitPattern(digits string, token string, ordinal bool) (string, error) {
 	zero, mandatory, groups, err := parseDigitPattern(token)
 	if err != nil {
 		return "", err
 	}
 
-	s := decimalString(n, false)
+	s := digits
 	// At least as many digits as there are mandatory-digit-signs.
 	if len(s) < mandatory {
 		s = strings.Repeat("0", mandatory-len(s)) + s
@@ -200,7 +242,7 @@ func formatDigitPattern(n int64, token string, ordinal bool) (string, error) {
 		s = translateDigits(s, zero)
 	}
 	if ordinal {
-		s += ordinalSuffixFor(n)
+		s += ordinalSuffixForDigits(digits)
 	}
 	return s, nil
 }
@@ -382,11 +424,28 @@ func containsDigit(token string) bool {
 	return false
 }
 
-// decimalString renders n in ASCII digits, optionally with an ordinal suffix.
-func decimalString(n int64, ordinal bool) string {
-	s := fmt.Sprintf("%d", n)
+// decimalString renders the digits, optionally with an ordinal suffix.
+func decimalString(digits string, ordinal bool) string {
 	if ordinal {
-		s += ordinalSuffixFor(n)
+		return digits + ordinalSuffixForDigits(digits)
 	}
-	return s
+	return digits
+}
+
+// ordinalSuffixForDigits is ordinalSuffixFor for a value held as digits.
+//
+// The English suffix depends only on the last two digits, so it is exact for
+// a value no int64 can hold: 10^400+21 takes "st" just as 21 does. The digits
+// carry no sign -- formatInteger takes that off before any of this -- so the
+// negative handling ordinalSuffixFor has does not arise here.
+func ordinalSuffixForDigits(digits string) string {
+	last2 := digits
+	if len(last2) > 2 {
+		last2 = last2[len(last2)-2:]
+	}
+	n, err := strconv.ParseInt(last2, 10, 64)
+	if err != nil {
+		return "th"
+	}
+	return ordinalSuffixFor(n)
 }

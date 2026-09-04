@@ -917,16 +917,35 @@ func integerDivide(a, b *xdm.Atomic) (*xdm.Atomic, error) {
 	if b.Type.IsNumeric() && isZero(b) && !b.IsNaN() {
 		return nil, fmt.Errorf("FOAR0001: integer division by zero")
 	}
-	if a.IsNaN() || b.IsNaN() || math.IsInf(a.Float64(), 0) {
+	if a.IsNaN() || b.IsNaN() || isInfinite(a) {
 		return nil, fmt.Errorf("FOAR0002: idiv operand is NaN or infinite")
 	}
-	if math.IsInf(b.Float64(), 0) {
+	if isInfinite(b) {
 		return xdm.NewInteger(0), nil
 	}
 	q := new(big.Rat).Quo(ratOf(a), ratOf(b))
 	// idiv truncates toward zero.
 	t := new(big.Int).Quo(q.Num(), q.Denom())
 	return xdm.NewIntegerFromRat(new(big.Rat).SetInt(t)), nil
+}
+
+// isInfinite reports whether the VALUE is an infinity, which only xs:double
+// and xs:float can be.
+//
+// The type test is the whole point. math.IsInf(a.Float64(), 0) asks the same
+// question of a float64 *projection* of the value, and Float64() on an
+// arbitrary-precision xs:integer or xs:decimal overflows to +Inf above the
+// float64 range -- so a finite exact integer such as 10^309 was reported as
+// infinite and idiv raised FOAR0002 for it. The boundary sat on the float64
+// exponent limit rather than on anything in the XPath data model. Once the
+// type is known to be inexact, Float64() returns the stored double verbatim
+// and projects nothing.
+//
+// The general rule: an arbitrary-precision value must never be routed through
+// float64 to answer a question about itself.
+func isInfinite(a *xdm.Atomic) bool {
+	return (a.Type == xdm.TypeDouble || a.Type == xdm.TypeFloat) &&
+		math.IsInf(a.Float64(), 0)
 }
 
 func modulo(a, b *xdm.Atomic, common xdm.TypeCode, exact bool) (*xdm.Atomic, error) {
