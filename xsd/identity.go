@@ -40,6 +40,40 @@ type nodeTable struct {
 	// entries is what a keyref resolves against and must drop ambiguity;
 	// targets is what a duplicate check counts and must not.
 	targets map[*xdm.Node]string
+
+	// ambiguous records the sequences that two or more sibling subtrees
+	// each defined, and which were therefore removed from entries.
+	//
+	// Deleting from entries is not enough on its own: a key is absent both
+	// before it is first seen and after it has been dropped as ambiguous,
+	// and the merge cannot tell those apart from entries alone. Three
+	// siblings defining the same sequence used to leave it RESOLVABLE —
+	// the second deleted it and the third found nothing there and put it
+	// back — so an ancestor's keyref resolved against a key no reading of
+	// the document makes unique. It oscillated with the count: wrong at
+	// three siblings and five, right at two and four.
+	ambiguous map[string]bool
+}
+
+// mergeEntry folds one sibling's entry into this table.
+//
+// Every merge goes through here so the three states stay distinct: absent, a
+// unique node, and ambiguous. Ambiguity is terminal — once two subtrees have
+// defined a sequence, nothing a later sibling contributes can make it
+// resolvable again.
+func (t *nodeTable) mergeEntry(k string, n *xdm.Node) {
+	if t.ambiguous[k] {
+		return
+	}
+	if prev, exists := t.entries[k]; exists && prev != n {
+		delete(t.entries, k)
+		if t.ambiguous == nil {
+			t.ambiguous = map[string]bool{}
+		}
+		t.ambiguous[k] = true
+		return
+	}
+	t.entries[k] = n
 }
 
 // keySep separates the fields of a key sequence.
@@ -131,17 +165,24 @@ func mergeTables(children []icTables) icTables {
 			existing, ok := out[ic]
 			if !ok {
 				out[ic] = &nodeTable{
-					entries: copyEntries(tbl.entries),
-					targets: copyTargets(tbl.targets),
+					entries:   copyEntries(tbl.entries),
+					targets:   copyTargets(tbl.targets),
+					ambiguous: copyAmbiguous(tbl.ambiguous),
 				}
 				continue
 			}
-			for k, n := range tbl.entries {
-				if _, clash := existing.entries[k]; clash {
-					delete(existing.entries, k)
-					continue
+			// A sequence already ambiguous in the child stays ambiguous
+			// here: the ancestor's scope contains that child's whole
+			// subtree, so both occurrences are inside it.
+			for k := range tbl.ambiguous {
+				if existing.ambiguous == nil {
+					existing.ambiguous = map[string]bool{}
 				}
-				existing.entries[k] = n
+				existing.ambiguous[k] = true
+				delete(existing.entries, k)
+			}
+			for k, n := range tbl.entries {
+				existing.mergeEntry(k, n)
 			}
 			// targets is a union: a node selected in one subtree is
 			// still selected in the ancestor's, and a sequence two
@@ -152,6 +193,17 @@ func mergeTables(children []icTables) icTables {
 				existing.targets[n] = k
 			}
 		}
+	}
+	return out
+}
+
+func copyAmbiguous(in map[string]bool) map[string]bool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }
@@ -302,13 +354,12 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 		if v.inSkippedContent(node) {
 			continue
 		}
-		seq, complete, ok := v.keySequence(node, ic)
+		joined, complete, ok := v.cachedKeySequence(node, ic)
 		if !ok || !complete {
 			// A keyref whose fields are absent simply does not
 			// participate; only a key requires every field.
 			continue
 		}
-		joined := strings.Join(seq, keySep)
 		if target == nil {
 			v.fail(node, "cvc-identity-constraint.4.3",
 				"keyref %q: no %s is in scope", ic.Name.Local, ic.Refer.Name.Local)
@@ -321,6 +372,46 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 				strings.ReplaceAll(joined, keySep, ", "))
 		}
 	}
+}
+
+// cachedKeySequence is keySequence with the result kept per (node, constraint).
+//
+// Unlike a key or unique, a keyref cannot prune: it produces no table for an
+// ancestor to seed from, and a node under a nested keyref scope is a target of
+// that scope AND of every enclosing one, each resolving against its own key
+// table. Both checks are required, so the number of checks really is nodes
+// times enclosing scopes and no traversal change can remove it.
+//
+// What is repeated needlessly is the field extraction. A node's key sequence
+// does not depend on which scope is asking, and computing it means running the
+// field paths — the expensive half of the loop. Caching it leaves the
+// quadratic count of cheap map lookups and removes the quadratic count of
+// selectNodes calls.
+func (v *validator) cachedKeySequence(node *xdm.Node, ic *IdentityConstraint) (joined string, complete, ok bool) {
+	type key struct {
+		n  *xdm.Node
+		ic *IdentityConstraint
+	}
+	k := key{node, ic}
+	if v.keySeqCache == nil {
+		v.keySeqCache = map[any]cachedSeq{}
+	}
+	if c, hit := v.keySeqCache[k]; hit {
+		return c.joined, c.complete, c.ok
+	}
+	seq, complete, ok := v.keySequence(node, ic)
+	if ok && complete {
+		joined = strings.Join(seq, keySep)
+	}
+	v.keySeqCache[k] = cachedSeq{joined: joined, complete: complete, ok: ok}
+	return joined, complete, ok
+}
+
+// cachedSeq is one memoised key sequence.
+type cachedSeq struct {
+	joined   string
+	complete bool
+	ok       bool
 }
 
 // keySequence evaluates a constraint's fields against one target node.

@@ -147,6 +147,59 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Fixed in the sixth audit
 
+### A key ambiguous across three siblings became resolvable again
+
+`mergeTables` folds each child's key table into the ancestor's, and dropped a
+sequence two children both defined — an ancestor's keyref cannot say which of
+them it resolves to. Deleting the entry was the whole record of that, and it is
+not enough: a key is absent both before it is first seen and after it has been
+dropped, and the merge could not tell those apart. A third sibling found
+nothing there and put it back.
+
+The result oscillated with the sibling count — resolvable at one, ambiguous at
+two, **resolvable again at three**, ambiguous at four — and the wrong direction
+was acceptance. An outer keyref resolved against a key that three separate
+subtrees defined.
+
+`nodeTable.ambiguous` makes the third state explicit and `mergeEntry` is the
+single path every fold goes through, so ambiguity is terminal. The regression
+test walks one through seven siblings, and asserts the invariant directly as
+well as through a verdict: if two distinct nodes produced the same sequence,
+that sequence cannot still be resolvable. Checking the table rather than the
+answer is what makes the next violation cheap to find.
+
+Found by an external audit reading the merge, not by the oracle — the
+generated corpora put targets under one scope at a time, so a three-sibling
+ancestor never arose. The corpus has that shape now.
+
+### keyref could not be pruned, so its key sequences are cached instead
+
+The pruning that made `key` and `unique` linear does not transfer. A `key`
+builds a table its ancestor seeds from, so a pruned subtree is still accounted
+for; a `keyref` produces nothing, and a node under a nested keyref scope is a
+target of that scope *and* of every enclosing one, each resolving against its
+own key table. Both checks are required, so the count of checks really is
+nodes times enclosing scopes and no traversal change removes it.
+
+What was repeated needlessly is the field extraction, which is the expensive
+half — a node's key sequence does not depend on which scope is asking.
+Memoising it per (node, constraint) leaves the quadratic count of map lookups
+and removes the quadratic count of `selectNodes` calls: at depth 960, 221 ms
+and 5,164,375 allocations become 158 ms and 2,863,754; at width 40, 324 ms and
+5,269,468 become 217 ms and 1,297,551. The curve is unchanged and that is
+inherent rather than unfinished.
+
+### The language-inclusion procedure declined any bound above 64
+
+XSD 1.1's semantic subsumption check unrolls a repetition into one state per
+copy and refused outright above `maxOccurs="64"`, falling back to the
+structural 1.0 rules — which can refuse a restriction whose language really is
+a subset. The bound was a second cliff in front of the real one:
+`subsumeMaxStates` is checked on every iteration of the unroll, so the state
+budget already stops a bound too large to unroll, and stops it where the cost
+is incurred rather than at a number chosen in advance. Removed. Bounds of
+1,000,000 and `unbounded` still load in milliseconds, through the budget.
+
 ### Six base-chain counters accepted a duplicate xs:ID and rejected legal schemas
 
 The counterpart to the `depth > 32` and `depth > 64` findings below, and the

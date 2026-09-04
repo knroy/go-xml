@@ -101,11 +101,15 @@ func nfaParticle(n *nfa, p *Particle, from int, active map[*ModelGroup]bool) ([]
 	}
 
 	min, max := p.MinOccurs, p.MaxOccurs
-	if max != Unbounded && max > 64 {
-		// Beyond this the unrolling is not worth its cost, and no real
-		// schema in either corpus spells it.
-		return nil, false
-	}
+	// A bound above 64 used to decline here outright. That was a second,
+	// smaller cliff in front of the real one: the unroll lays down a state
+	// per copy and the loop below checks subsumeMaxStates on every
+	// iteration, so the state budget already stops a bound too large to
+	// unroll — and stops it at the point where the cost is actually
+	// incurred rather than at a number chosen in advance. Declining early
+	// meant a legal XSD 1.1 restriction with maxOccurs="100" fell back to
+	// the structural 1.0 rules, which can refuse a schema whose language
+	// really is a subset.
 
 	// ends collects every state at which the whole repetition may stop:
 	// after min copies, after min+1, and so on.

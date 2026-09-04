@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,170 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,173 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,20 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**An oracle only covers the shapes its generator makes.** The identity oracles
+run 10,000 documents and agreed throughout while `mergeTables` had a bug that
+made a key resolvable again at three siblings, five siblings, seven. The
+generators put targets under one scope at a time, so an ancestor merging three
+sibling tables never arose — the corpus could not express the bug, exactly as
+the `.//box/leaf` case could not express a dropped leading step until loose
+leaves were added.
+
+An external reader found it by reading the merge. The durable fix is not more
+documents but an invariant asserted on the data structure itself: if two
+distinct nodes produced the same key sequence, that sequence must not still be
+resolvable. That check is three lines, runs on every merged table, and fails at
+the point of corruption rather than several layers away in a verdict.
 
 **A probe that clears a guard has to reach the guard.** This file recorded a
 300-link derivation chain as evidence that eleven remaining `seen > 64` and

@@ -239,6 +239,11 @@ type validator struct {
 	// it; see icStats for why elapsed time is not enough on its own.
 	icStats *icStats
 
+	// keySeqCache memoises a target's key sequence per constraint. A keyref
+	// on a recursive element checks each target once per enclosing scope,
+	// and the sequence is the same every time.
+	keySeqCache map[any]cachedSeq
+
 	// declFor records the declaration each element was validated against,
 	// so that an identity-constraint walk can tell whether a descendant is
 	// itself a scope of the same constraint and stop there. It is filled
