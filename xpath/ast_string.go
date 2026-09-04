@@ -285,11 +285,17 @@ func nodeTypeMatches(n *xdm.Node, want string) bool {
 	// as a whole key first — that is how a QUALIFIED want is satisfied by a
 	// value annotated with a type derived from it — and only an unqualified
 	// step is offered to the built-in table.
-	for i := 0; i < 32 && a != ""; i++ {
+	// Termination is by visited set, not by a step count: a repeated name is
+	// exactly the cycle the count was guarding against, and the count decided
+	// a definite "does not match" for any legal chain longer than 32 — a
+	// restriction 33 links deep stopped satisfying element(*, xs:string).
+	seen := map[string]bool{a: true}
+	for a != "" {
 		a = xdm.DerivedBase(a)
-		if a == "" {
+		if a == "" || seen[a] {
 			break
 		}
+		seen[a] = true
 		if a == want {
 			return true
 		}
@@ -329,12 +335,18 @@ func declaredTypeMatches(n *xdm.Node, want string) bool {
 		return true
 	}
 	// The derivation chain is walked for the same reason nodeTypeMatches
-	// walks it, and bounded for the same reason: a schema whose derivations
-	// formed a cycle must not spin here.
+	// walks it, and terminates the same way: a visited set, because a schema
+	// whose derivations formed a cycle must not spin here and a repeated name
+	// is what a cycle is.
 	a := n.TypeAnnotation
-	for i := 0; i < 32 && a != ""; i++ {
+	seen := map[string]bool{a: true}
+	for a != "" {
 		a = xdm.DerivedBase(a)
-		if a != "" && xdm.AnnotationLocal(a) == want {
+		if a == "" || seen[a] {
+			break
+		}
+		seen[a] = true
+		if xdm.AnnotationLocal(a) == want {
 			return true
 		}
 	}

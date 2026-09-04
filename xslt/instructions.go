@@ -334,18 +334,20 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 //
 // "or a type derived therefrom" is answered by walking the derivation chain
 // the schema recorded, which the qualified keys make exact end to end. The
-// walk is bounded like every other in the engine, so a schema whose
-// derivations formed a cycle cannot spin here.
+// walk terminates on a visited set rather than a step count, so a schema
+// whose derivations formed a cycle cannot spin here while a legal chain of
+// any length is still followed to its end. The count this replaced returned
+// false past 32 links, which is the permissive verdict: a deep restriction of
+// xs:QName was copied without its namespace bindings and XTTE0950 went
+// unreported.
 func isNamespaceSensitiveType(ann string) bool {
-	for i := 0; i < 32 && ann != ""; i++ {
+	seen := map[string]bool{}
+	for ann != "" && !seen[ann] {
 		if ann == "QName" || ann == "NOTATION" {
 			return true
 		}
-		next := xdm.DerivedBase(ann)
-		if next == ann {
-			return false
-		}
-		ann = next
+		seen[ann] = true
+		ann = xdm.DerivedBase(ann)
 	}
 	return false
 }

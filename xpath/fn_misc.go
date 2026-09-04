@@ -2175,14 +2175,19 @@ func isIDREFAnnotation(annotation string) bool {
 
 // annotationDerivesFrom walks the derivation chain a schema recorded.
 //
-// The walk is bounded for the same reason the one in typeexpr.go is: this runs
-// once per attribute of every node, and a schema whose derivations formed a
-// cycle would otherwise not terminate.
+// Termination is by visited set for the same reason the walks in typeexpr.go
+// use one: this runs once per attribute of every node, a schema whose
+// derivations formed a cycle would otherwise not terminate, and a repeated
+// name identifies that cycle exactly. The step count this replaced returned
+// false past 32 links, which made fn:id and fn:idref stop seeing a deep
+// restriction of xs:ID as an ID at all.
 func annotationDerivesFrom(annotation, base string) bool {
-	for i := 0; i < 32 && annotation != ""; i++ {
+	seen := map[string]bool{}
+	for annotation != "" && !seen[annotation] {
 		if annotation == base {
 			return true
 		}
+		seen[annotation] = true
 		annotation = xdm.DerivedBase(annotation)
 	}
 	return false

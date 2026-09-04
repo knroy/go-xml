@@ -352,10 +352,17 @@ func deepCopyNode(n *xdm.Node) *xdm.Node {
 		// without the member the typed value collapsed from a sequence of
 		// tokens to one string holding all of them.
 		UnionMember: n.UnionMember,
+		// The resolved meaning of the annotation travels with it too, for
+		// exactly the reason above: the clone is what the assertion evaluates
+		// over, and a clone that kept only the name would fall back to the
+		// process-global registries to find out what the name means.
+		DerivedPrimitive: n.DerivedPrimitive,
+		ListItem:         n.ListItem,
 	}
 	for _, a := range n.Attrs {
 		out.AddAttr(&xdm.Node{Kind: a.Kind, Name: a.Name, Value: a.Value,
-			TypeAnnotation: a.TypeAnnotation, UnionMember: a.UnionMember})
+			TypeAnnotation: a.TypeAnnotation, UnionMember: a.UnionMember,
+			DerivedPrimitive: a.DerivedPrimitive, ListItem: a.ListItem})
 	}
 	for _, ns := range n.Namespaces {
 		out.AddNamespace(ns.Name.Local, ns.Value)

@@ -197,13 +197,18 @@ func derivedSubtypeOfThroughSchema(derived, facet string) bool {
 	if derivedSubtypeOf(derived, facet) {
 		return true
 	}
-	// The walk is bounded so that a schema whose derivations somehow formed a
-	// cycle cannot loop here, exactly as in nodeTypeMatches.
-	for i := 0; i < 32 && derived != ""; i++ {
+	// A visited set rather than a step count: a schema whose derivations
+	// somehow formed a cycle must not loop here, and a cycle is exactly what
+	// a repeated name identifies. The count this replaced answered a definite
+	// "not a subtype" on running out of steps, so a legal acyclic chain of 33
+	// user-defined types decided the subtype relation wrongly.
+	seen := map[string]bool{derived: true}
+	for derived != "" {
 		derived = xdm.DerivedBase(derived)
-		if derived == "" {
+		if derived == "" || seen[derived] {
 			return false
 		}
+		seen[derived] = true
 		if !xdm.IsQualifiedAnnotation(derived) && derivedSubtypeOf(derived, facet) {
 			return true
 		}
@@ -623,11 +628,19 @@ func schemaTypeNameMatches(annotation, want string) bool {
 	// annotated as a restriction of xs:NOTATION answered true for its own
 	// type and false for xs:NOTATION, which is half the relation.
 	//
-	// The walk is bounded: a schema whose derivations somehow formed a cycle
-	// would otherwise not terminate, and this runs on every comparison.
-	for i := 0; i < 32 && a != ""; i++ {
+	// A visited set rather than a step count: a schema whose derivations
+	// somehow formed a cycle would otherwise not terminate, and a repeated
+	// name identifies that cycle exactly. The count this replaced stopped
+	// after 32 links and returned false, which is a definite negative on a
+	// legal chain rather than a refusal.
+	seen := map[string]bool{a: true}
+	for a != "" {
 		a = xdm.DerivedBase(a)
-		if a != "" && a == w {
+		if a == "" || seen[a] {
+			return false
+		}
+		seen[a] = true
+		if a == w {
 			return true
 		}
 	}

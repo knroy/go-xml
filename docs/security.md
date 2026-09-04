@@ -183,6 +183,43 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Fixed in the sixth audit
 
+### A second schema silently retyped a document the first had validated
+
+`xdm` keeps three process-global registries — `derivedPrimitives`, `listItems`,
+`unionMembers` — mapping a type's expanded name to what it erases to. They are
+mutex-protected, which makes them race-free and not isolated: the key is the
+QName alone, so the last schema to register a name wins for the whole process.
+
+That is not a degraded fallback. A value annotated `{urn:x}T` and atomised as
+`xs:decimal` becomes `xs:string` once another schema registers the same name
+over a string restriction, and `. lt '9'` then answers **true** under string
+ordering where the numeric answer is false — a wrong comparison with no error.
+Where the lexical form does not parse under the new primitive the node degrades
+to `untypedAtomic` instead, which flips `instance of xs:string` from true to
+false; the "safe" fallback is not answer-preserving either.
+
+It reaches further than a caller could reasonably expect. Compile-time
+registration is not replayed per transform, so the **same compiled
+`*Stylesheet`** returned `DECIMAL` and then `STRING` for the same input,
+because an unrelated part of the process called `xsd.Load` in between. A
+long-lived server that compiles once and transforms many times is exactly the
+shape that breaks.
+
+The fix follows what this package already does elsewhere. `Node.UnionMember`,
+`IsID` and `IsIDREFS` record the assessment's answer *on the node*, and the
+comment beside `IsID` gives the reason: the property is fixed by the assessment
+that produced the node. Unions were measurably immune to this bug for that
+reason. `DerivedPrimitive` and `ListItem` join them, resolved against the
+schema being validated, with the registry kept as the fallback for nodes
+annotated some other way. `TypeAnnotation` stays a public string field and no
+exported signature changed.
+
+**Not complete.** Four literal node-copy sites in `xslt/transform.go` and
+`xslt/copyfuncs.go` drop the new fields and fall back to the registry, the same
+way they already drop `UnionMember`. Harmless while the annotation survives the
+copy — the registry still answers — but it is the remaining gap in the
+guarantee, and it is recorded here rather than left for the next audit to find.
+
 ### A circular type longer than 4096 links loaded clean
 
 `checkTypeBaseCycles` walks a global type's base chain looking for a return to

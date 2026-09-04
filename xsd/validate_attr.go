@@ -194,7 +194,7 @@ func (v *validator) applyAttributeDefault(el *xdm.Node, use *AttributeUse) {
 	}
 	if use.Decl.Type != nil {
 		if a := annotationName(use.Decl.Type); a != "" {
-			attr.SetTypeAnnotation(a)
+			setResolvedAnnotation(attr, a, use.Decl.Type)
 		}
 	}
 	el.AddAttr(attr)
@@ -369,7 +369,9 @@ func (v *validator) validateAttribute(a *xdm.Node, decl *AttributeDecl, use *Val
 		// input-type-annotations="strip" clears the annotation while
 		// requiring them to survive, and fn:id/fn:idref are defined over
 		// them rather than over the annotation.
-		a.SetTypeAnnotation(xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local))
+		setResolvedAnnotation(a,
+			xdm.AnnotationName(decl.Type.Name.URI, decl.Type.Name.Local),
+			decl.Type)
 	}
 }
 

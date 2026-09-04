@@ -614,17 +614,19 @@ func describeNode(n *xdm.Node) string {
 // is why section 19.2 forbids validating one against these types instead of
 // letting the prefix resolve against nothing.
 func namespaceSensitiveType(schema *xsd.Schema, name xdm.QName) (bool, string) {
+	// A visited set rather than a step count: a repeated name is the cycle the
+	// count was guarding against, and running out of steps returned false —
+	// the permissive verdict, which let a constructed attribute validate
+	// against a type 33 links above xs:QName that section 19.2 forbids.
 	local := name.Local
-	for i := 0; i < 32 && local != ""; i++ {
+	seen := map[string]bool{}
+	for local != "" && !seen[local] {
 		switch local {
 		case "QName", "NOTATION":
 			return true, "derived from xs:" + local
 		}
-		next := xdm.DerivedBase(local)
-		if next == local {
-			break
-		}
-		local = next
+		seen[local] = true
+		local = xdm.DerivedBase(local)
 	}
 	return false, ""
 }

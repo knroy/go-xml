@@ -648,6 +648,134 @@ still terminates — legal recursion across an `<element>` validating at nesting
 1000, and self-reference without an intervening `<element>` still refused under
 §4.19.
 
+### Five more 32-step walks, this time in the data model (fixed)
+
+The section above called two counters the last, and they were the last *in the
+schema layer*. Five more sat in `xdm/node.go`, walking a different graph: not
+the schema component tree but `derivedPrimitives`, the process-global
+annotation-name to annotation-name map that `xsd` populates as it loads and
+that atomisation reads on every typed value. Each stopped at `i < 32`.
+
+| walk | truncated answer | what it decided |
+|---|---|---|
+| `atomicForLexical` | `nil` | every token of a list fell back to `xs:untypedAtomic` |
+| `listItemType` | `""` | the annotation stopped being a list; `AtomizeList` refused it |
+| `atomicForDerivedAnnotation` | `nil` | the node atomised to `xs:untypedAtomic`, losing the annotation |
+| `annotationIDKind` | `(false, false)` | is-id and is-idrefs were never set; `fn:id` could not find the node |
+| `HasSimpleTypeAnnotation` | `false` | §4.4 whitespace-only text was stripped out of a validated typed value |
+
+The verdict is the same one this document reached six times before, and for the
+same reason: a step count cannot tell a cyclic chain from a merely deep one.
+The demonstration is a chain of 33 user-defined restrictions over `xs:int` —
+legal, acyclic, and nothing a schema author would think twice about. At 32 the
+value atomises to `xs:integer`; at 33 it does not atomise at all, and every
+`instance of` on it answers false.
+
+The failure direction here is not acceptance but **silent erasure**. Nothing
+reports an error; the value simply arrives untyped, so a comparison that should
+have been numeric becomes a string comparison and a transform produces a wrong
+answer rather than a diagnostic. `annotationIDKind` is the sharpest of the
+five, because the property it fails to set is one XSLT 2.0 §3.5 requires to
+survive `input-type-annotations="strip"` — a node that never got marked cannot
+have its marking preserved.
+
+**Why not raise the constant.** For the reason given at 32-to-1024 above, and
+one more specific to here: the registry is a name-to-name map, so a cycle is
+possible only if a schema registers one, and a visited set keyed on the name
+string identifies that condition exactly. All five now carry a `map[string]bool`
+and impose no limit on a legal chain. Two of them (`listItemType`,
+`HasSimpleTypeAnnotation`) already tested `next == annotation`, which caught a
+self-loop and nothing longer; the set subsumes it and the test stays as the
+cheap first check.
+
+Reachable from a schema, not from an instance alone. Measured: gate OK with all
+six marks identical. `xdm/derivation_depth_test.go` pins all five at depths 1,
+2, 31, 32, 33, 64, 65, 128, 256, 512 and 1024, asserting a semantic property at
+each — the value atomises to the right primitive and keeps its derived name,
+the list item type is recovered and its tokens are integers, the ID kind is
+still ID and is not confused with IDREFS, and an unregistered complex type is
+still not simple — rather than that a call returned non-nil. All five fail
+against the previous code, 88 assertions in total, at exactly 32. A separate
+case registers `A -> B` and `B -> A` and drives all five walks through the
+cycle behind a watchdog, because the regression a visited set could introduce
+is a hang, which no assertion catches.
+
+Each test case builds its type names in a namespace carrying its own depth and
+its own walk. The registries are process-global and `go test` runs one process,
+so two cases sharing an annotation name would answer each other's questions.
+
+### Seven more of the same walk, in the query and transform layers (fixed)
+
+The data-model entry above found five; the same shape sat seven more times
+above it, in `xpath/` and `xslt/`. All seven walked the derivation chain
+`xdm.DerivedBase` records, six with `for i := 0; i < 32 && a != ""; i++` and
+one, the odd member of the family, with `for i := 0; i < 64` over a chain of
+copies rather than of types.
+
+Every one of them answers a yes/no question, and every one returned a definite
+answer on running out of steps rather than refusing. That is the dangerous
+shape: the caller cannot tell a truncated walk from a completed one.
+
+| walk | truncated answer | what it decided |
+|---|---|---|
+| `derivedSubtypeOfThroughSchema` (`xpath/typeexpr.go`) | `false` | `data(e) instance of xs:decimal` false for a deep restriction of xs:integer |
+| `schemaTypeNameMatches` (`xpath/typeexpr.go`) | `false` | a value is not an instance of its own ancestor type |
+| `annotationDerivesFrom` (`xpath/fn_misc.go`) | `false` | `fn:id`/`fn:idref` blind to a deep restriction of xs:ID — the document has no IDs |
+| `nodeTypeMatches` (`xpath/ast_string.go`) | `false` | `element(*, T)` refuses a node the schema annotated with a restriction of T |
+| `declaredTypeMatches` (`xpath/ast_string.go`) | `false` | the same for `schema-element()` |
+| `isNamespaceSensitiveType` (`xslt/instructions.go`) | `false` | XTTE0950 unreported: a QName-derived attribute copied away from its binding |
+| `namespaceSensitiveType` (`xslt/validate.go`) | `false` | XTTE1545 unreported: a constructed attribute validated against xs:QName, which 19.2 forbids |
+
+The five subtype walks fail in the *restrictive* direction and the two XSLT
+ones in the *permissive* direction, which is worth stating plainly: the first
+five make a legal query answer wrongly, the last two let a stylesheet do what
+the specification says is an error.
+
+The cliff is at 33 links for six of them and at 32 for `annotationDerivesFrom`,
+which tests before it steps and so gets one fewer.
+
+`accumulatorOrigin` (`xslt/accumulator.go`) is the seventh and is not a subtype
+walk at all. It follows a node produced by a `copy-accumulators="yes"` copy
+back to the node it was copied from, and section 18.3 makes the *original* the
+only correct source for the accumulator's value. Past 64 links it stopped and
+returned the intermediate copy it had reached — a node in a tree of its own
+where the accumulator computes something else entirely. Not a refusal and not a
+crash: a legal-looking wrong number, from a stylesheet that copies a copy 65
+times. Its truncated answer is the most insidious of the eight because nothing
+downstream can detect it.
+
+**Verdict: all seven are cycle guards, none is a resource bound.** Each is
+protecting against a chain that reaches itself — a registry cycle for the seven
+type walks, a copy-origin cycle for the accumulator — and a repeated key
+identifies that exactly. None of them bounds work that grows with anything but
+the chain's own length, which is the schema author's to choose and not a
+resource this engine is rationing. They are now visited sets keyed on the
+annotation name, and on the `*xdm.Node` pointer for the accumulator.
+
+Measured: XSLT 2.0 6147 → **6149** and XSLT 3.0 8610 → **8612**, with the
+failing-case list diffed by name — `as/as-1811` and `as/as-3002` moved from
+failing to passing and nothing moved the other way. Both are schema-aware cases
+over sequences of user-defined atomic types, which is the family exactly. QT3
+unchanged and byte-identical by name: XPath 2.0 15183, 3.0 19244, 3.1 21786,
+XQuery 29800.
+
+`xpath/deep_annotation_chain_test.go` and `xslt/deep_chain_walk_test.go` pin
+depths 1, 2, 31, 32, 33, 64, 65, 128, 256 and 512. The assertions are
+semantic — `instance of` holds, `element(*, T)` matches, a deep QName-derived
+type is still namespace-sensitive, the accumulator reaches the original through
+512 copies — never that a call returned. Each also asserts the *negative*: an
+unrelated chain of the same depth must still not match, so a visited set that
+widened the relation would be caught. Every one fails against the previous code
+at its own cliff.
+
+Cyclic-input tests sit beside them, because the counts were nominally there for
+that and it must not regress into a hang: a genuine ring at 1, 2, 33, 64 and
+128 links, including a type that is its own base, and a cyclic copy-origin
+chain. Each must return the safe answer rather than spin.
+
+Test cases build their names in a namespace carrying their own depth and walk,
+for the reason the section above gives: the registry is process-global.
+
 ### A choice is unordered under 1.1 (fixed)
 
 `particlesT002`, `particlesT009`: the derived choice offers the base's

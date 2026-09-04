@@ -190,7 +190,8 @@ func (s *Schema) validateNodeAgainstType(n *xdm.Node, typ Type,
 			// on a value rather than on a declared node. Without it an
 			// attribute validated against a named type came out untyped and
 			// "instance of attribute(a, my:t)" answered false for it.
-			n.SetTypeAnnotation(xdm.AnnotationName(typeName.URI, typeName.Local))
+			setResolvedAnnotation(n,
+				xdm.AnnotationName(typeName.URI, typeName.Local), typ)
 		}
 	default:
 		return fmt.Errorf("xsd: ValidateAgainstType needs an element or attribute")
@@ -344,4 +345,82 @@ func (s *Schema) IsListSimpleType(typeName xdm.QName) (itemType xdm.QName, ok bo
 		cur = base
 	}
 	return xdm.QName{}, false
+}
+
+// resolveAnnotationMeaning computes what a type annotation MEANS for the
+// schema currently being validated against: the built-in the type erases to,
+// and its item type when the type is a list. Either result is "" when the
+// type has no such answer.
+//
+// It is the per-node counterpart of registerDerivedTypes, and deliberately
+// computes the same two facts the same way — annotationName for the erasure,
+// listItemTypeOf for the item type — so that a node's own record and the
+// process-global registry agree whenever they both hold an answer. What
+// differs is WHEN each is consulted: the registry is keyed by QName alone and
+// answers for whichever schema loaded most recently, while this runs against
+// the schema that is actually validating the node. Two schemas defining
+// {urn:x}T differently is enough to make those answers disagree, and the
+// node's own is the correct one. See xdm.Node.DerivedPrimitive.
+//
+// A nil type, or one that is neither a simple type nor a complex type with
+// simple content, yields two empty strings: there is nothing to record, and
+// atomisation falls back to the registry exactly as before.
+func resolveAnnotationMeaning(key string, t Type) (derivedPrimitive, listItem string) {
+	var base *SimpleType
+	switch ct := t.(type) {
+	case *SimpleType:
+		if ct == nil {
+			return "", ""
+		}
+		// A list's item type is recorded rather than its base, for the reason
+		// registerDerivedTypes records it: a list derives from
+		// xs:anySimpleType, which no value can be built from, so the item
+		// type is the only thing that says what the tokens are.
+		if item := listItemTypeOf(ct); item != nil {
+			if in := annotationName(item); in != "" && in != key {
+				listItem = in
+			}
+		}
+		base, _ = ct.Base.(*SimpleType)
+	case *ComplexType:
+		// Only simple content erases to a built-in. A complex type with
+		// element-only or mixed content has no typed value to speak of, and
+		// registerDerivedTypes records only a base-type link for it, which is
+		// a relation between two schema names rather than an erasure.
+		if ct == nil || ct.Content != ContentSimple {
+			return "", ""
+		}
+		if sc := ct.SimpleContent; sc != nil {
+			if item := listItemTypeOf(sc); item != nil {
+				if in := annotationName(item); in != "" && in != key {
+					listItem = in
+				}
+			}
+		}
+		base = ct.SimpleContent
+	default:
+		return "", ""
+	}
+	if base != nil {
+		if prim := annotationName(base); prim != "" && prim != key {
+			derivedPrimitive = prim
+		}
+	}
+	return derivedPrimitive, listItem
+}
+
+// setResolvedAnnotation stamps an annotation on a node together with what that
+// annotation means for the given type, so the node does not have to ask the
+// process-global registries later.
+//
+// Every schema-assessment site that annotates goes through here rather than
+// calling xdm.SetTypeAnnotation directly. A site that annotates with a name
+// but has no Type in hand keeps using SetTypeAnnotation, which leaves the
+// resolved fields empty and falls back to the registry.
+func setResolvedAnnotation(n *xdm.Node, annotation string, t Type) {
+	if annotation == "" {
+		return
+	}
+	prim, item := resolveAnnotationMeaning(annotation, t)
+	n.SetTypeAnnotationResolved(annotation, prim, item)
 }

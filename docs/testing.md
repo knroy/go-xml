@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,195 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,225 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -68,6 +68,26 @@ Consistent is an XSD 1.1 rule and `Options{}` defaults to 1.0, which silently
 no-ops it. A baseline that reads "correct" for the wrong reason is the most
 expensive kind of wrong answer, which is why the test asserts the shallow case
 fails before it asserts anything about the deep one.
+
+**A hypothesis handed to an implementer is a lead, not a diagnosis.** When the
+per-node type descriptor broke two XSLT cases, the reproduction came with a
+guess: `as-3002` is named "list-builtin", and `xsd/assemble.go` skips
+registering built-ins, so a node preferring an empty field over the registry
+would lose typing for a list of built-ins. Plausible, and wrong.
+
+The real cause was that the resolved fields **outlived their annotation**.
+`Atomize` gates on `TypeAnnotation != ""` and `AtomizeList` did not, so a result
+tree element arrived with an empty annotation and a live `ListItem`, split into
+three tokens anyway, and compared three tokens against a whole string. The
+registry path was immune for a reason worth keeping in mind: it derived the item
+type *from* the annotation, so an empty annotation meant no list, structurally.
+
+Two habits from this. State a hypothesis as a hypothesis and ask for it to be
+verified rather than applied — it was, and the instrumented judge found the
+truth in one pass. And when replacing a lookup that derived one fact from
+another with two independent fields, the invariant that used to be structural
+becomes something you have to maintain by hand: every reader of the new field
+needs the same guard the old derivation gave for free.
 
 **A boolean oracle can be too weak to see anything.** The keyref oracle first
 compared valid against invalid, and roughly 85% of generated documents fail

@@ -1673,9 +1673,15 @@ func (v *validator) validateChild(kid *xdm.Node, p *position) icTables {
 				v.validateAgainstType(kid, t, nil)
 				return nil
 			}
+			// The annotation is saved and restored around this
+			// assessment, and the resolved fields travel WITH it:
+			// they are halves of one fact, so restoring the name
+			// while leaving the meaning from the anyType pass would
+			// describe the old type with the new type's erasure.
 			prev := kid.TypeAnnotation
+			prevPrim, prevItem := kid.DerivedPrimitive, kid.ListItem
 			v.validateAgainstType(kid, v.schema.anyType(), nil)
-			kid.SetTypeAnnotation(prev)
+			kid.SetTypeAnnotationResolved(prev, prevPrim, prevItem)
 			return nil
 		case ProcessStrict:
 			d, ok := v.schema.Elements[name]
@@ -1993,15 +1999,19 @@ func (v *validator) annotate(el *xdm.Node, typ Type) {
 		return
 	}
 	if n := typ.TypeName(); n.Local != "" {
-		el.SetTypeAnnotation(xdm.AnnotationName(n.URI, n.Local))
+		setResolvedAnnotation(el, xdm.AnnotationName(n.URI, n.Local), typ)
 		return
 	}
 	if a := annotationName(typ); a != "" {
-		el.SetTypeAnnotation(a)
+		setResolvedAnnotation(el, a, typ)
 		return
 	}
 	if a := anonComplexAnnotation(typ); a != "" {
-		el.SetTypeAnnotation(a)
+		// An anonymous COMPLEX type annotates with a named ancestor's name,
+		// so the meaning recorded is that of typ itself -- which, having
+		// element-only or mixed content, resolves to nothing and correctly
+		// leaves the resolved fields empty.
+		setResolvedAnnotation(el, a, typ)
 	}
 }
 

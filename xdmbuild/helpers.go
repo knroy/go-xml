@@ -29,8 +29,16 @@ func DeepCopy(n *xdm.Node) *xdm.Node {
 		// and stops -- so a copy that kept only the annotation atomised to
 		// xs:untypedAtomic and lost every type the value really had.
 		UnionMember: n.UnionMember,
-		IsID:        n.IsID,
-		IsIDREFS:    n.IsIDREFS,
+		// The resolved meaning of the annotation travels for the same reason
+		// the union member does, and losing it would be the same bug in a new
+		// place: a copy that kept only the name would have to ask the
+		// process-global registries what that name means, and they answer for
+		// whichever schema loaded last. A result tree built by XSLT out of
+		// validated input would then silently change type.
+		DerivedPrimitive: n.DerivedPrimitive,
+		ListItem:         n.ListItem,
+		IsID:             n.IsID,
+		IsIDREFS:         n.IsIDREFS,
 		// dm:nilled travels with the annotation on a COPY. A copy of an
 		// assessed element is an element that was assessed: validation-1202
 		// copies a nilled element with validation="preserve" and requires
@@ -46,8 +54,10 @@ func DeepCopy(n *xdm.Node) *xdm.Node {
 	for _, a := range n.Attrs {
 		c.AddAttr(&xdm.Node{Kind: xdm.KindAttribute, Name: a.Name,
 			Value: a.Value, TypeAnnotation: a.TypeAnnotation,
-			UnionMember: a.UnionMember,
-			IsID:        a.IsID, IsIDREFS: a.IsIDREFS})
+			UnionMember:      a.UnionMember,
+			DerivedPrimitive: a.DerivedPrimitive,
+			ListItem:         a.ListItem,
+			IsID:             a.IsID, IsIDREFS: a.IsIDREFS})
 	}
 	for _, ch := range n.Children {
 		c.AppendChild(DeepCopy(ch))

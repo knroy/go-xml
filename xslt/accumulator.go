@@ -649,8 +649,22 @@ func (rt *runtime) noteCopiedAccumulators(orig, copy *xdm.Node) {
 // accumulatorOrigin follows a node back to the node it was copied from, or
 // returns it unchanged. The chain is followed to its end so that a copy of a
 // copy still answers with the original's value.
+//
+// Termination is by visited set rather than by a step count. The count this
+// replaced stopped after 64 links and returned whatever node it had reached,
+// which is a definite answer and the WRONG one: the accumulator then reported
+// the value of an intermediate copy rather than of the original, and section
+// 18.3 makes the original the only correct source. A stylesheet that copies a
+// copy 65 times is legal and gets a legal-looking wrong number.
+//
+// A revisit means the recorded correspondence formed a cycle, which
+// noteCopiedAccumulators cannot produce for a fresh copy but which nothing
+// here proves; returning the node reached is the same safe stop the count
+// made, now on the only condition that actually calls for it.
 func (rt *runtime) accumulatorOrigin(n *xdm.Node) *xdm.Node {
-	for i := 0; i < 64; i++ {
+	seen := map[*xdm.Node]bool{}
+	for !seen[n] {
+		seen[n] = true
 		orig, ok := rt.accumOrigin[n]
 		if !ok {
 			return n

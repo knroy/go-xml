@@ -166,6 +166,36 @@ type Node struct {
 	// them, so the common path pays only the field.
 	UnionMember string
 
+	// DerivedPrimitive and ListItem record what TypeAnnotation MEANS, as the
+	// schema that validated this node defined it: the built-in the annotated
+	// type erases to, and — when the annotated type is a list — the type of
+	// its items. Both are annotation names, like TypeAnnotation itself.
+	//
+	// They exist for the reason UnionMember and IsID do, and the three are
+	// one pattern: the property is fixed by the assessment that produced the
+	// node, so it is recorded when that assessment happens rather than
+	// recomputed afterwards from a name. Recomputing means asking the
+	// process-global derivation registries (derivedPrimitives, listItems),
+	// which are keyed by QName alone and hold whatever schema loaded LAST.
+	// Two schemas may legitimately define {urn:x}T differently — one deriving
+	// from xs:decimal, one from xs:string — and a node validated against the
+	// first then atomised as the second's type: same lexical form, a
+	// confidently wrong answer rather than a fallback, so "'10' lt '9'" came
+	// back true under string ordering where the numeric comparison is false.
+	// A cached stylesheet was corrupted permanently by any later load of a
+	// colliding name, because compile-time registration is not replayed per
+	// transform. Unions were immune precisely because UnionMember already
+	// recorded the answer on the node; this extends that to the other two.
+	//
+	// Empty means "not recorded", not "no derivation": a node annotated by
+	// something other than schema assessment — DTD attribute types, the XSLT
+	// validation instructions, a plain struct literal — leaves them empty and
+	// atomisation falls back to the registries, exactly as it did before.
+	// So these fields are a per-node OVERRIDE of a global answer, never a
+	// precondition for having one.
+	DerivedPrimitive string
+	ListItem         string
+
 	// IsID and IsIDREFS are the data model's is-id and is-idrefs properties
 	// (XDM §5.2, §6.2). They are deliberately *separate* state from
 	// TypeAnnotation rather than being derived from it, because XSLT 2.0
@@ -736,7 +766,27 @@ func (n *Node) Atomize() *Atomic {
 // zero-length token, which is what "a list of no items" means and what
 // strings.Fields already produces.
 func (n *Node) AtomizeList() (Sequence, bool) {
-	item := listItemType(n.TypeAnnotation)
+	// The node's own record wins over the registry, which is keyed by QName
+	// alone and holds whatever schema loaded last -- see Node.ListItem. A
+	// node that carries no record falls back to the walk, so a node annotated
+	// by something other than schema assessment behaves as it always did.
+	//
+	// It is read ONLY when the node still carries an annotation. The field
+	// describes what the annotation MEANS, so without one there is nothing
+	// for it to be the meaning of, and a node whose annotation was cleared
+	// must atomise as untyped -- one item holding the whole string, not a
+	// sequence of tokens. Reading it unconditionally made a stripped result
+	// tree still atomise as a list: <my:list-builtin> came out of
+	// copy-of/validation with its annotation gone but its item type intact,
+	// so "elem = 'one two three'" compared three NMTOKENs against the whole
+	// string and answered false (as-3002, as-1811).
+	var item string
+	if n.TypeAnnotation != "" {
+		item = n.ListItem
+	}
+	if item == "" {
+		item = listItemType(n.TypeAnnotation)
+	}
 	if item == "" {
 		// A union whose selected member is a LIST has a sequence for its
 		// typed value, and the union's own name says nothing about it: a
@@ -777,7 +827,7 @@ func (n *Node) AtomizeList() (Sequence, bool) {
 //
 // AtomizeList needs this and atomicForDerivedAnnotation cannot serve: that
 // function reads the whole node's string value, while a list item is one
-// token out of many. The walk is the same, bounded the same way, and the
+// token out of many. The walk is the same, guarded the same way, and the
 // value keeps the ITEM type's own name so that
 // "data(@list) instance of my:itemType*" answers true.
 func atomicForLexical(typeName, value string) *Atomic {
@@ -785,7 +835,12 @@ func atomicForLexical(typeName, value string) *Atomic {
 		return a
 	}
 	name := typeName
-	for i := 0; i < 32; i++ {
+	// The registry is a name->name map, so the only way this walk fails to
+	// terminate is a cycle a schema registered. A visited set keyed on the
+	// name identifies that exactly, where a step count also cut off the legal
+	// deep chains it could not tell apart from a cycle.
+	seen := map[string]bool{name: true}
+	for {
 		derivedMu.RLock()
 		prim, ok := derivedPrimitives[name]
 		derivedMu.RUnlock()
@@ -795,15 +850,23 @@ func atomicForLexical(typeName, value string) *Atomic {
 		if a := atomicForAnnotation(prim, value); a != nil {
 			return a
 		}
+		if seen[prim] {
+			return nil
+		}
+		seen[prim] = true
 		name = prim
 	}
-	return nil
 }
 
 // listItemType maps a list type annotation to the type of its items, or ""
 // when the annotation does not name a list type.
 func listItemType(annotation string) string {
-	for i := 0; i < 32 && annotation != ""; i++ {
+	// Guarded by a visited set rather than a step count: only a cycle a schema
+	// registered can keep this walk going, and the set names that condition
+	// instead of guessing at a depth no legal chain exceeds.
+	seen := map[string]bool{}
+	for annotation != "" && !seen[annotation] {
+		seen[annotation] = true
 		switch annotation {
 		case "NMTOKENS":
 			return "NMTOKEN"
@@ -1423,13 +1486,36 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 	// which lost the annotation and made every "instance of" on the value
 	// answer false.
 	//
-	// The walk is bounded so that a schema whose derivations somehow formed a
-	// cycle cannot spin here.
+	// The walk is guarded by a visited set so that a schema whose derivations
+	// somehow formed a cycle cannot spin here. That is the only thing that can
+	// stop it terminating — the registry is a name->name map — and a count
+	// cannot tell such a cycle from a legally deep chain of restrictions.
 	name := n.TypeAnnotation
-	for i := 0; i < 32; i++ {
-		derivedMu.RLock()
-		prim, ok := derivedPrimitives[name]
-		derivedMu.RUnlock()
+	seen := map[string]bool{name: true}
+	// The node's own record of what its type erases to is preferred over the
+	// registry for the FIRST step, which is the step that names the type this
+	// node was actually validated against. Later steps walk names that came
+	// out of the registry already, so there is nothing node-local to prefer.
+	// See the commentary on Node.DerivedPrimitive: the registry is keyed by
+	// QName alone and answers for whatever schema loaded last.
+	// Guarded on the annotation for the reason AtomizeList is: the field
+	// describes what the annotation means, and an annotation-less node has
+	// no meaning to prefer. (Atomize only reaches here with one set, but the
+	// walk is exported through other paths and must not depend on that.)
+	first := ""
+	if n.TypeAnnotation != "" {
+		first = n.DerivedPrimitive
+	}
+	for {
+		var prim string
+		var ok bool
+		if first != "" {
+			prim, ok, first = first, true, ""
+		} else {
+			derivedMu.RLock()
+			prim, ok = derivedPrimitives[name]
+			derivedMu.RUnlock()
+		}
 		if !ok {
 			return nil
 		}
@@ -1450,18 +1536,25 @@ func atomicForDerivedAnnotation(n *Node) *Atomic {
 			// "instance of my:partNumberType".
 			return a.WithDerived(n.TypeAnnotation)
 		}
+		if seen[prim] {
+			return nil
+		}
+		seen[prim] = true
 		name = prim
 	}
-	return nil
 }
 
 // annotationIDKind reports whether an annotation name is derived from xs:ID or
 // from xs:IDREF/xs:IDREFS, walking the derivation chain a schema registered.
 //
-// The walk is bounded for the same reason the other derivation walks are: a
-// schema whose derivations somehow formed a cycle must not spin here.
+// The walk is guarded for the same reason the other derivation walks are: a
+// schema whose derivations somehow formed a cycle must not spin here. A
+// visited set says that and only that, so a long but acyclic chain of
+// restrictions over xs:ID still reports the ID kind it inherits.
 func annotationIDKind(annotation string) (isID, isIDREFS bool) {
-	for i := 0; i < 32 && annotation != ""; i++ {
+	seen := map[string]bool{}
+	for annotation != "" && !seen[annotation] {
+		seen[annotation] = true
 		switch annotation {
 		case "ID":
 			return true, false
@@ -1490,10 +1583,44 @@ func annotationIDKind(annotation string) (isID, isIDREFS bool) {
 // those rules say the properties do not change at all.
 func (n *Node) SetTypeAnnotation(annotation string) {
 	n.TypeAnnotation = annotation
+	if annotation == "" {
+		// Clearing the annotation clears what it meant. DerivedPrimitive and
+		// ListItem describe a type this node no longer claims, and leaving
+		// them would let it keep atomising as that type -- an annotation-less
+		// node that still splits into list items is exactly the bug
+		// input-type-annotations="strip" and xsl:copy-of would have hit.
+		n.DerivedPrimitive, n.ListItem = "", ""
+	}
 	if isID, isRefs := annotationIDKind(annotation); isID || isRefs {
 		n.IsID = n.IsID || isID
 		n.IsIDREFS = n.IsIDREFS || isRefs
 	}
+}
+
+// SetTypeAnnotationResolved records an annotation together with what it means
+// according to the schema doing the validating: the built-in the type erases
+// to, and the item type when it is a list. Either may be empty when the
+// caller has no answer, which leaves the corresponding field unset and lets
+// atomisation fall back to the process-global registries.
+//
+// It exists because SetTypeAnnotation cannot answer those questions. Resolving
+// a name to its base means consulting the registries, and those are keyed by
+// QName alone across the whole process, so the answer they give depends on
+// which schema loaded most recently rather than on which schema validated
+// this node. The validator holds the right schema at the right moment; this
+// is how it hands the answer to the node instead of leaving it to be looked
+// up again later against possibly different definitions. See the commentary
+// on Node.DerivedPrimitive.
+//
+// The fields are ASSIGNED rather than or-ed, unlike is-id and is-idrefs: they
+// describe the assessment happening now, so re-annotating a node replaces
+// them. Clearing them when the caller has no answer is deliberate — a stale
+// value from a previous assessment would be a wrong answer rather than a
+// missing one, and a missing one falls back correctly.
+func (n *Node) SetTypeAnnotationResolved(annotation, derivedPrimitive, listItem string) {
+	n.SetTypeAnnotation(annotation)
+	n.DerivedPrimitive = derivedPrimitive
+	n.ListItem = listItem
 }
 
 // HasSimpleTypeAnnotation reports whether an annotation names a simple type,
@@ -1521,9 +1648,13 @@ func HasSimpleTypeAnnotation(annotation string) bool {
 	if ListItemOf(annotation) != "" {
 		return true
 	}
-	// Bounded like every other derivation walk here, so that a schema whose
-	// derivations somehow formed a cycle cannot spin.
-	for i := 0; i < 32 && annotation != ""; i++ {
+	// Guarded like every other derivation walk here, so that a schema whose
+	// derivations somehow formed a cycle cannot spin. The next == annotation
+	// test below catches a self-loop; the visited set catches the longer
+	// cycles it cannot see.
+	seen := map[string]bool{}
+	for annotation != "" && !seen[annotation] {
+		seen[annotation] = true
 		if isBuiltinSimpleTypeName(annotation) {
 			return true
 		}
