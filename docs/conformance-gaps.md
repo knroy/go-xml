@@ -227,19 +227,21 @@ converts to LF on re-parse.
 
 ---
 
-# xslt — 22 failures across the two targets
+# xslt — 21 failures across the two targets
 
-Eight at the 2.0 target and fourteen at the 3.0 target. Three cases fail at
+Eight at the 2.0 target and thirteen at the 3.0 target. Three cases fail at
 both — `import-schema-137`, `validation-0201` and `docbook-001` — so the
-distinct case count is nineteen. (This heading has read 29, 28, 27 and 23 in
+distinct case count is eighteen. (This heading has read 29, 28, 27, 23 and 22 in
 turn as `xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009`
 missing from the 3.0 list, `unparsed-text-2003` left the denominator, and
 `use-package-003` was fixed by scoping an ordinary function call to the package
 it is written in.)
 
-## XSLT 2.0 — 9 failures
+## XSLT 2.0 — 8 failures
 
-This section used to open "None of the nine can be fixed." Two can, and
+The table below carries nine rows; `unparsed-text-2003` is the ninth and is
+out of scope rather than failing, so it is not in the eight. This section used
+to open "None of the nine can be fixed." Two can, and
 neither moves the numerator: `validation-0201` is a harness comparison the
 suite's own schema licenses, and `unparsed-text-2003` is a case the suite
 declares out of scope through a dependency it forgot to write down. A third,
@@ -320,7 +322,7 @@ data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
 the data, rather than on Appendix F's own words. That caveat cuts against
 changing anything, not for it.
 
-## XSLT 3.0 — 14 failures
+## XSLT 3.0 — 13 failures
 
 ### Deliberate divergence — 1
 
@@ -412,22 +414,25 @@ about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
 are settled above — the first as not implementable, the second as
 implementation-defined once the engine defect behind it was fixed — so no
-headroom is left against this suite. The fourteen that cannot be fixed: `accept-913`, `package-200`,
-`package-021err`, `package-022err`, `streamable-141`,
+headroom is left against this suite. The thirteen that cannot be fixed: `accept-913`, `package-200`,
+`package-021err`, `package-022err`,
 `docbook-001`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
 `import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
 and `evaluate-045` (the last given up deliberately; see *Deliberate
-divergence* above).
+divergence* above). `streamable-141` was the fourteenth and is fixed — see its
+row above.
 
-Seven entries left this list as the work behind them landed. `base-uri-052`
+Entries left this list as the work behind them landed. `base-uri-052`
 went with XInclude. `catalog-006b` went with `xsl:assert`: it reports every
 XSLT element the processor recognises, so an absent one was visible in it. The
 three `regex-syntax` ambiguous-dash cases went when `XSD_1.1` was scoped to the
 version being measured rather than to the engine, and `catalog-005b` and
 `type-available-0151` with them. `package-version-011` went when the static
 phase was given the module resolver, `docbook-004` when the fragment on an
-`xsl:source-document` href stopped being dropped, and `unparsed-text-2003` by
-leaving the denominator. `strip-space-009` is the one addition, having been
+`xsl:source-document` href stopped being dropped, `unparsed-text-2003` by
+leaving the denominator, and `streamable-141` when §3.9.1's "notwithstanding"
+clause turned out to make it checkable without the streamability analysis.
+`strip-space-009` is the one addition, having been
 counted in the prose here but omitted from the list
 until the audit found it.
 
@@ -656,7 +661,7 @@ streaming dependency:
 # Summary
 
 The per-suite counts are in the table at the top. What that table cannot show
-is *why* the 99 unfixable cases are unfixable:
+is *why* the 103 unfixable cases are unfixable:
 
 | Reason | Cases | Where |
 |---|---:|---|
@@ -675,7 +680,7 @@ is *why* the 99 unfixable cases are unfixable:
 The XSLT rows above are exact and case-by-case. The XSD rows are not: they are
 derived from the `status` field and the kind of each disagreement, and the two
 XSD reason rows overlap slightly with the suite-defect row, so this table sums
-to a little more than 102. That imprecision is inherent to deriving the XSD
+to a little more than 103. That imprecision is inherent to deriving the XSD
 split from status rather than from a per-case reading, and it is stated here
 rather than papered over — the previous revision's version of this table summed
 to 124 against a claimed 131, with no note.

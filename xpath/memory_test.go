@@ -77,3 +77,60 @@ func mustEval(t *testing.T, ctx *Context, expr string) string {
 	}
 	return seq[0].(interface{ String() string }).String()
 }
+
+// charAtomCache has the same shape and the same failure mode as the regex
+// cache: it is process-wide, and its keys are not a fixed set drawn from the
+// stylesheet, because a pattern taken from document data mints an atom per
+// distinct single-character construct it contains.
+//
+// This counts entries rather than measuring the heap. A char atom is small,
+// so heap growth over a few thousand of them is within GC noise; the map size
+// is the thing the bound actually controls, and it is exact.
+func TestCharAtomCacheIsBounded(t *testing.T) {
+	withBacktracking(t, func() {
+		// Each atom is a distinct one-character class, so the pattern below
+		// contributes one new cache key per iteration. The backreference is
+		// what routes the pattern to the backtracking engine at all.
+		const atoms = charAtomCacheMax * 3
+		for i := 0; i < atoms; i++ {
+			pat := fmt.Sprintf("([a-%c])\\1", rune(0x0100+i))
+			if _, err := CompileRegexp(pat, ""); err != nil {
+				t.Fatalf("%s: %v", pat, err)
+			}
+		}
+		n := 0
+		charAtomCache.Range(func(_, _ any) bool { n++; return true })
+		if n > charAtomCacheMax {
+			t.Errorf("char atom cache holds %d entries after %d distinct atoms, "+
+				"bound is %d — the cache is not being bounded",
+				n, atoms, charAtomCacheMax)
+		}
+	})
+}
+
+// A cleared char atom cache must still compile and match correctly: every
+// entry is reproducible from its key, so no answer may depend on a hit.
+func TestCharAtomCacheStaysCorrectWhenCleared(t *testing.T) {
+	withBacktracking(t, func() {
+		check := func(after int) {
+			t.Helper()
+			re, err := CompileRegexp(`([a-c])x\1`, "")
+			if err != nil {
+				t.Fatalf("stable pattern failed to compile after %d insertions: %v", after, err)
+			}
+			if !re.MatchString("bxb") || re.MatchString("bxc") {
+				t.Fatalf("stable pattern gave the wrong answer after %d insertions", after)
+			}
+		}
+		for i := 0; i < charAtomCacheMax*3; i++ {
+			pat := fmt.Sprintf("([a-%c])\\1", rune(0x2000+i))
+			if _, err := CompileRegexp(pat, ""); err != nil {
+				t.Fatalf("%s: %v", pat, err)
+			}
+			if i%500 == 0 {
+				check(i)
+			}
+		}
+		check(charAtomCacheMax * 3)
+	})
+}

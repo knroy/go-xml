@@ -204,6 +204,95 @@ $GO build ./... || fail "build"
 section "vet"
 $GO vet ./... || fail "vet"
 
+# docfigure asserts that a number written in the documentation still equals the
+# number the command beside it produces.
+#
+# This is NOT a ratchet. A ratchet records a high-water mark and only a DROP is
+# a regression, which is right for a conformance score that moves with upstream
+# and with the engine. A documented count is different: a test count that fell
+# is exactly as stale as one that rose, because the claim is "this is how many
+# there are", not "at least this many". So the comparison is equality and the
+# marks live here rather than in tests/ratchet.txt, whose whole contract is
+# "may not decrease".
+#
+# It exists because the two mechanisms were once measured against each other on
+# this tree. Every conformance figure guarded by the ratchet was correct to the
+# case, eight for eight; the unit test count -- guarded by nothing but prose --
+# was stale by 59 in all four files that stated it. That gap is not diligence.
+# One of the numbers is re-derived by a script that fails the build when it
+# moves and the other is not, and reading does not close the difference: three
+# of those four stale copies were written and reviewed by people who were at
+# that moment actively hunting stale claims.
+#
+# THE COUNTING METHOD IS PART OF THE CLAIM. "How many tests" has several honest
+# answers -- `func Test` declarations, subtests, table rows -- and a reader who
+# re-derives it differently will report drift that is not there. Every figure
+# below therefore carries its exact command, the same command is quoted in the
+# documentation beside each number, and the failure message prints it. A figure
+# whose method is not written down is not guarded; it is merely asserted twice.
+#
+# It runs in fast mode as well: it costs a few greps, it needs no suite on
+# disk, and stale doc figures are the drift most likely to be introduced by a
+# change that is otherwise entirely green.
+#
+# The counting commands. Each excludes .claude/worktrees, which holds agent
+# checkouts of this same repository and would otherwise multiply every count.
+docfigure_tests() {
+	grep -rn "func Test" --include='*_test.go' . |
+		grep -vc '/\.claude/worktrees/'
+}
+docfigure_fuzz() {
+	grep -rn "func Fuzz" --include='*_test.go' . |
+		grep -vc '/\.claude/worktrees/'
+}
+docfigure_limits() {
+	grep -hc "func Test" ./*/limits_boundary_test.go |
+		awk '{n += $1} END {print n + 0}'
+}
+
+# docfigure name, expected, actual, files...
+docfigure() {
+	_what=$1 _want=$2 _got=$3
+	shift 3
+	[ "$_want" = "$_got" ] && return 0
+	fail "$_what: the documentation says $_want, the tree has $_got.
+    counted by: $(docfigure_cmd "$_what")
+    Update every one of these to $_got, and the same number in
+    tests/check.sh's docfigure section, in the same commit:
+$(for _f in "$@"; do printf '        %s\n' "$_f"; done)
+    There is deliberately no GOXSLT=update affordance here: the ratchet can
+    rewrite tests/ratchet.txt because nothing reads that file but the ratchet,
+    whereas these numbers sit inside English sentences that a script cannot
+    reword. Editing them by hand is the point -- it is the moment someone
+    checks the sentence around the number still says something true."
+}
+
+# The command text for a figure, printed by the failure above so that whoever
+# reads it in CI can re-derive the number without opening this script.
+docfigure_cmd() {
+	case $1 in
+	"unit test count")
+		printf '%s' "grep -rn 'func Test' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+	"fuzz target count")
+		printf '%s' "grep -rn 'func Fuzz' --include='*_test.go' . | grep -vc '/\\.claude/worktrees/'" ;;
+	"limit boundary test count")
+		printf '%s' "grep -hc 'func Test' ./*/limits_boundary_test.go | awk '{n += \$1} END {print n + 0}'" ;;
+	esac
+}
+
+section "documented figures"
+_docfig_before=$failed
+docfigure "unit test count" 1416 "$(docfigure_tests)" \
+	README.md:109 README.md:1218 docs/testing.md:23 docs/todo.md:20
+docfigure "fuzz target count" 5 "$(docfigure_fuzz)" \
+	README.md:1223 docs/testing.md:29
+docfigure "limit boundary test count" 13 "$(docfigure_limits)" \
+	docs/testing.md:24
+if [ "$failed" -eq "$_docfig_before" ]; then
+	printf 'tests %s, fuzz targets %s, limit boundary tests %s — as documented\n' \
+		"$(docfigure_tests)" "$(docfigure_fuzz)" "$(docfigure_limits)"
+fi
+
 # GOXSLT_NO_SUITES keeps the conformance suites out of these two steps. They
 # are the fast gate, and the suites get their own sections below; without it a
 # run that has testdata/ on disk does the whole conformance job twice, because

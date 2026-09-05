@@ -20,29 +20,30 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   exercising a release roughly three hundred commits behind, so an API break in
   the two packages changed most this cycle could not have failed them.
 
-  A committed `go.work` at the repository root now redirects the dependency to
-  `.`. The redirection is kept out of `w3cschemas/go.mod` deliberately: that
-  module is published (tag `w3cschemas/v0.1.0`), and a `replace` in a published
-  `go.mod` has to be stripped at every tag or it misleads whoever reads it.
-  `go.work` names only `.` and `./w3cschemas`, so it reproduces identically for
-  every developer and for CI, which is the case where committing a workspace is
-  correct.
-
-  A workspace alone was not enough, and the reason is worth recording: a 1.25
-  toolchain rejected the module *before* consulting the workspace, because MVS
-  reads the required version's own `go.mod` regardless of any replacement, and
-  both v1.1.0 and v1.2.0 declare `go 1.26`. Since CI pins `go-version: '1.25'`,
-  the module would have failed there even wired correctly. The `require` now
-  names v1.2.1, which declares `go 1.25.0`. That in turn let `w3cschemas/go.mod`
-  drop from `go 1.26` to `go 1.25.0` and `golang.org/x/text` from v0.37.0 to
-  v0.36.0, both now identical to the root module — the dependency skew is gone
-  and the module builds standalone on 1.25 as well as inside the workspace. The
-  `go 1.26` was never a language requirement; it was the stale pin showing
+  The fix is a step of its own in `tests/check.sh` and in `ci.yml`'s fast job,
+  plus a `require` that a supported toolchain can actually read. The module now
+  pins `github.com/knroy/go-xml v1.2.1`, which declares `go 1.25.0`; v1.1.0 and
+  v1.2.0 both declare `go 1.26`, and a 1.25 toolchain refuses such a module
+  outright, because MVS reads the required version's own `go.mod` before
+  anything else can redirect it. Since CI pins `go-version: '1.25'`, the module
+  could not have built there on the old pin however it was wired. The newer pin
+  in turn let `w3cschemas/go.mod` drop from `go 1.26` to `go 1.25.0` and
+  `golang.org/x/text` from v0.37.0 to v0.36.0, both now identical to the root
+  module — the dependency skew is gone and the module builds standalone on 1.25.
+  The `go 1.26` was never a language requirement; it was the stale pin showing
   through, which is why `go mod tidy` kept restoring it.
 
-  Finally, a step of its own in `tests/check.sh` and in `ci.yml`'s fast job. A
-  workspace makes the module compile against the right code; it does not cause
-  anything to run it.
+  What the step measures is deliberately **the module against the go-xml
+  release its `go.mod` names, not against this tree**. A `go.work` redirecting
+  the dependency to `.` was tried and removed: it would have meant two
+  mechanisms — the workspace and the pin — needing to agree, and the one that
+  silently disagrees is the one nobody notices. w3cschemas is published
+  separately, so the version it pins is the version its users get, and testing
+  it against an unreleased tree measures something nobody can install. The
+  consequence is stated plainly rather than papered over: this catches a broken
+  w3cschemas, and it does *not* catch an API break in this tree that would
+  affect it. Bumping the pin after a release is what closes that gap, and that
+  is a release step.
 
 - **Investigated, not changed: the `XSpec 225` ratchet mark is correct.** It
   was reported as stale on the grounds that the corpus measured 224. It does
@@ -83,6 +84,32 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Security
 
+- **Two caches with no bound.** A bound on a cache is a property of the cache,
+  so every path that writes to one has to obey it; these two did not.
+
+  `xpath`'s backtracking regex engine memoises the single-character atoms a
+  pattern compiles to, and that map had no eviction and no limit. The atoms are
+  not a fixed set drawn from the stylesheet: one pattern holds as many distinct
+  atoms as its author writes, and `matches($s, $node/@pattern)` takes the
+  pattern from document data, so a long-running process retained one compiled
+  regexp per distinct atom it had ever seen — 3,000 patterns measured 3,000
+  entries, none released. It is now bounded at 1024 and cleared wholesale, the
+  same way the ordinary regex cache beside it already was. This is reachable
+  only under `SetBacktrackingRegex(true)`, which is off by default and set only
+  by `cmd/go-xml`'s `-backtracking-regex` flag, so it is an opt-in availability
+  concern rather than a default-configuration one.
+
+  `xslt.FileResolver.Preload` wrote straight into the document cache instead of
+  going through `publish`, which is what enforces the 256-document bound, so a
+  host preloading a document per request grew the map for the life of the
+  process. `Preload` is a host-application API that no document or stylesheet
+  reaches, so this was an invariant violation and not an attack surface.
+
+  Pinned by `xpath.TestCharAtomCacheIsBounded`,
+  `xpath.TestCharAtomCacheStaysCorrectWhenCleared` and
+  `xslt.TestPreloadHonorsCacheLimit`; each was checked against the unfixed code
+  first, and each fails there.
+
 - **`xsd` no longer installs an unconfined file resolver by default.**
   `Load`, `LoadFile`, `LoadFiles` and `WithInstanceLocations` each defaulted a
   nil `Options.Resolver` to a `FileResolver` with no `Root` — "any readable
@@ -121,6 +148,61 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Documentation
 
+- **Four claims that the code had already outgrown.** Each described behaviour
+  that changed under it, and three of the four understated the risk or
+  overstated what is refused.
+
+  `docs/xsd.md`, `docs/options.md` and `docs/validation.md` all still said a
+  nil `xsd.Options.Resolver` defaults to an unrooted `&xsd.FileResolver{}`.
+  That was the vulnerability fixed under *Security* above; the three now state
+  what `SECURITY.md` and `docs/security.md` already did — `Load` refuses a
+  named location, `LoadFile`, `LoadFiles` and `WithInstanceLocations` root the
+  default at the directories the caller named.
+
+  `docs/options.md` published the negative-`MaxErrors` silent pass as live: it
+  claimed the stop check has no `> 0` guard and that the case is "recorded as a
+  skipped test", and told callers not to pass a negative value. The guard is in
+  `xsd/validate.go`, the test in `xsd/limits_boundary_test.go` is active, and a
+  negative value means no limit exactly as it does for `MaxDepth` beside it and
+  for `dtd.Options.MaxErrors`. The warning now documents the convention and
+  keeps the history as the reason the convention is written down.
+
+  `README.md` said `fn:unparsed-text` is "disabled by design, unconditionally".
+  `xslt.FileResolver.UnparsedText` enables it, confined to `Roots`.
+  `docs/security.md` had already corrected the same sentence; the README bullet
+  now matches it and reads in the fail-closed-unless-configured shape of the
+  `fn:collection` and `fn:doc` bullets beside it.
+
+  `docs/validation.md` told readers to reach for libxml2 bindings, `xmllint` or
+  a JVM sidecar for stage 2, with the code comment "not this library" — in a
+  file that documents this library's XSD 1.0/1.1 validator a hundred lines
+  earlier, and that `README.md` sends schema users to. The three-stage example
+  now uses `xsd`. Its actual point is kept unchanged: the schema check runs
+  before the Schematron rules, which is the order the e-invoicing
+  specifications prescribe.
+
+- **A retention claim overstated what was measured.** `docs/security.md` read
+  "2,000 distinct schema loads ... show **0.00 MB** heap growth after GC". That
+  holds only when the schemas reuse type names. The derivation registries in
+  `xdm` (`derivedPrimitives`, `unionMembers`, `listItems`) are process-global,
+  keyed by expanded QName, and have no eviction, so a type registration
+  outlives the `*Schema` that made it — 2,000 schemas with a unique
+  targetNamespace *and* a unique type name each leave 2,000 entries and about
+  0.20 MB retained after two GCs with every `*Schema` unreachable. The document
+  now states that plainly: the cost is per distinct type rather than per load,
+  roughly 100 bytes each, unbounded only for a caller who can be made to load
+  unbounded distinct schemas. It also now points at the mitigation for the
+  *semantic* hazard of the shared registry, which is unchanged and already in
+  place: `xdm.Node.DerivedPrimitive`, `UnionMember` and `ListItem` record the
+  resolved typing on the node at validation time, overriding the global answer.
+
+  The behaviour itself is not changed here. `xsd.TestSchemaTypeRegistryRetainsPerType`
+  pins it: 2,000 unique types, a ceiling of 2 KB retained per distinct type
+  against the ~112 bytes measured, and a second pass proving re-registration of
+  the same QNames is idempotent. The ceiling is deliberately loose — it is there
+  to fail loudly if a registration ever starts retaining a component or a
+  subtree instead of two strings, not to track allocator noise.
+
 - **The two rooted file resolvers enforce their roots by different mechanisms,
   and that is now written down.** `xslt.FileResolver` opens through
   `os.OpenRoot`, which enforces at open time; `xsd.FileResolver` resolves
@@ -136,6 +218,55 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   this library treats as hostile is the *document*, which names a location and
   cannot move files. `docs/security.md` and the code comment now state the
   asymmetry and the reasoning rather than leaving it to be rediscovered.
+
+- **Numbers and counts that had drifted apart between documents.** An audit
+  compared every stated conformance figure against `tests/ratchet.txt`, which
+  `tests/check.sh` enforces, and every stated count against the list it
+  introduces.
+
+  The XSD 1.1 instance denominator read 26,204 in four places in `README.md`
+  and one in `docs/todo.md`; the measured figure is 26,216, the 12 difference
+  being the instance tests `iri-001` had been masking until that harness defect
+  was fixed. With it, `README.md`'s XSD residue reads 38 disagreements on 1.1
+  rather than 39, and 71 of 79 rather than 71 of 80 — the same numbers
+  `docs/conformance-gaps.md` already carried.
+
+  `README.md` gave XSLT 3.0 as 99.84% in prose and 99.85% in the table; 8,612
+  of 8,625 is 99.85%. The package-composition share in the same paragraph read
+  "5 of 15" against a documented 4 of 13. A pasted suite transcript showed an
+  older run — 6,158 in scope, 9 failed — beside prose quoting the current one;
+  it now shows tonight's 6,157 in scope, 8 failed.
+
+  In `docs/conformance-gaps.md` the section headers had drifted from the master
+  table they summarise. The XSLT 2.0 header said 9 where its own table's ninth
+  row, `unparsed-text-2003`, is marked out of scope rather than failing; the
+  XSLT 3.0 header said 14 where `streamable-141`'s row records it as fixed. The
+  list of "the fourteen that cannot be fixed" carried `streamable-141` for the
+  same reason and is now thirteen. The cross-target heading follows at 21, with
+  18 distinct cases after the three that fail at both targets. The Summary's
+  "99 unfixable" and "a little more than 102" both now read 103, the master
+  table's total.
+
+  `SECURITY.md` pointed at "the two things a caller must still do"; the list in
+  `docs/security.md` has six. The count is corrected and the pointer kept —
+  the list itself is not duplicated.
+
+  `docs/todo.md` carried unresolved QName prefix resolution as open work. It is
+  implemented, by exactly the threading the entry predicted would be needed:
+  `validateSimpleValueIn` in `xsd/validate_simple.go` takes the instance node,
+  and an unbound prefix is `cvc-datatype-valid.1.2.1`. The entry is rewritten
+  in the *— fixed* form the file uses elsewhere.
+
+  Two documents described symlink containment in ways that read as a
+  contradiction because neither said which resolver it meant. `README.md`
+  described `os.Root`-at-open and `docs/server.md` described resolve-then-check;
+  both are true, of `xslt.FileResolver` and `xsd.FileResolver` respectively.
+  Each now names its package and `docs/server.md` points at the explanation in
+  `docs/security.md`.
+
+  `docs/testing.md` gave the xslTNG clone URL as `docbook/xslt3ng`, which does
+  not exist; the repository is `docbook/xslTNG`, as `tests/check.sh` already
+  used.
 
 ### Fixed
 

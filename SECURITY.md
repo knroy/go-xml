@@ -67,4 +67,4 @@ Four that most often surprise:
   match and exhausting it is an error, never a silent "no match".
 
 [docs/security.md](docs/security.md) has the threat model, the audit results,
-and the two things a caller must still do themselves.
+and the six things a caller must still do themselves.

@@ -227,7 +227,7 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 |---|---|---|---|
 | `Version` | `Version` | `Version10` | Selects XSD 1.0 or 1.1. The zero value is 1.0 so that a schema written for 1.0 does not silently acquire 1.1's relaxations — 1.1 changes which *schemas* are legal, not only which documents. |
 | `MaxDocuments` | `int` | `DefaultMaxDocuments` = 512 | How many documents one assembly may read, following `import`, `include` and `redefine`. |
-| `Resolver` | `Resolver` | `FileResolver{}` | How a `schemaLocation` becomes bytes. See below. |
+| `Resolver` | `Resolver` | none configured | How a `schemaLocation` becomes bytes. Nothing is fetched unless you supply one; the nil default follows the grant the entry point already made — `Load` refuses a named location, `LoadFile` and `LoadFiles` root a `FileResolver` at the directories they were handed. See below. |
 | `ParseOptions` | `xdm.ParseOptions` | zero | Applied to every document the assembly reads. |
 | `LaxUPA` | `bool` | enforce | Relaxes Unique Particle Attribution. Some published schemas violate it; this loads them anyway. |
 | `XPathVersion` | `xpath.Version` | `XPath20` | The version of XPath the 1.1 assertions and conditional type alternatives are written in. See [Choosing a language version](#choosing-a-language-version). |
@@ -276,16 +276,18 @@ err := schema.Validate(doc.Root, xsd.ValidateOptions{
 
 | Field | Type | Zero value | What it does |
 |---|---|---|---|
-| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. **Do not pass a negative value** — see below. |
+| `MaxErrors` | `int` | `DefaultMaxErrors` = 100 | Stops after this many failures. A document wrong in every element would otherwise produce an error per element, which helps nobody and costs memory proportional to the document. A negative value means no limit. |
 | `MaxDepth` | `int` | `DefaultMaxDepth` = 1000 | Recursion limit for validation. A negative value means no limit. |
 
-> **A negative `xsd.ValidateOptions.MaxErrors` reports an invalid document as
-> valid.** `Validate` returns `nil`. Unlike `dtd.Options.MaxErrors`, where a
-> negative value correctly means "no limit", the stop check here is
-> `len(v.errs) >= v.opts.MaxErrors` with no `> 0` guard, so `0 >= -1` holds on
-> the first failure and validation stops before recording anything. Recorded as
-> a skipped test in `xsd/limits_boundary_test.go`. Use `0` for the default or a
-> large positive number; there is no unlimited setting.
+> **A negative value means no limit throughout.** `xsd.ValidateOptions`
+> `MaxErrors` and `MaxDepth`, `dtd.Options.MaxErrors` and `xdm.ParseOptions`
+> all read it the same way, and `0` selects the default rather than zero of
+> anything. `MaxErrors` did not always: the stop check was
+> `len(v.errs) >= v.opts.MaxErrors` with no `> 0` guard, so `0 >= -1` held on
+> the first failure, validation stopped before recording anything, and
+> `Validate` returned `nil` for a flagrantly invalid document — a silent pass.
+> The guard is now `v.opts.MaxErrors > 0 &&`, matching `dtd`, and
+> `xsd/limits_boundary_test.go` fails against any revision that drops it.
 | `Annotate` | `bool` | off | Writes each node's type into `TypeAnnotation`, together with the resolved `DerivedPrimitive`, `ListItem` and `UnionMember` beside it, producing the part of the PSVI that XPath and XSLT consume. The resolved fields are recorded per node rather than looked up later, so a schema loaded afterwards cannot retype a document this one already validated. Off by default because it **mutates the tree you passed in**. |
 
 ### Bounding a run with a context

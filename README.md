@@ -103,10 +103,10 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (8,612 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
-| **XSD 1.1** | 99.90% instance (26,189 of 26,204); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
+| **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 1,357, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,416 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -114,10 +114,10 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 true here:
 
 1. **Both halves of the XSD numbers carry a residue of disagreements** — 41 on
-   1.0 and 39 on 1.1 — and where they are schema-validity failures, a schema
+   1.0 and 38 on 1.1 — and where they are schema-validity failures, a schema
    invalid in one of those ways is accepted rather than reported. They are
    listed in *Where it fails*, along with what the suite skips and why; **most
-   of them — 71 of 80 — are cases the W3C itself has queried or filed a bug
+   of them — 71 of 79 — are cases the W3C itself has queried or filed a bug
    against**, including every one of the 44 `MS-Regex` disagreements, which
    are a single open bug. A further 16 cases on 1.0 and 14 on 1.1 are excluded
    from both sides of the ratio because the suite marks them
@@ -131,10 +131,10 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.84%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.85%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
-   now 5 of 15, all five documented as unreachable rather than outstanding.
+   now 4 of 13, all four documented as unreachable rather than outstanding.
    What is left is a long tail of one or two cases across thirty test sets,
    which is harder to summarise but easier to live with — no single feature is
    systematically weak. The corpus differential against Saxon remains stronger
@@ -547,6 +547,14 @@ set is the handful of patterns a stylesheet actually contains. Correctness does
 not depend on a hit — every entry is reproducible from its key — and
 [`TestRegexCacheStaysCorrectWhenCleared`](xpath/memory_test.go) pins that.
 
+The backtracking engine's single-character-atom cache had the same defect and
+now has the same bound. It is reached only when `SetBacktrackingRegex(true)` is
+set — off by default, and set only by `cmd/go-xml`'s `-backtracking-regex` flag —
+so it was an opt-in availability issue rather than a default-configuration one.
+[`TestCharAtomCacheIsBounded`](xpath/memory_test.go) counts the entries rather
+than the heap, because one atom is small enough that the map size is the only
+exact signal.
+
 `FileResolver`'s document cache exists because `fn:doc` is defined to return
 the *same* node for the same URI within one execution, so `doc('x') is doc('x')`
 requires it. It is mutex-guarded, and now capped at 256 documents. It had been
@@ -678,9 +686,9 @@ Every remote-reference mechanism is off unless you turn it on.
   read any file beside it, not only include one — keep stylesheets in a
   directory of their own if that matters. Everything outside stays refused.
   `xslt.FileResolver` confines reads to directories you name and refuses every
-  non-`file` scheme; there is no network option. Confinement is enforced by
-  `os.Root` at the moment of opening rather than by resolving a path and
-  checking it first, so a symlink swapped between the check and the open cannot
+  non-`file` scheme; there is no network option. In `xslt`, confinement is
+  enforced by `os.Root` at the moment of opening rather than by resolving a
+  path and checking it first, so a symlink swapped between the check and the open cannot
   escape — the older resolve-then-check design had that gap. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
@@ -957,7 +965,7 @@ Two figures, and the second is the one that matters.
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,204 (99.90%) |
+| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
 
 **Earlier revisions of this file reported a single "99.56%" for XSD 1.0 and
 "XSD 1.1: 100%". Both were measured wrongly, and the correction is large enough
@@ -1169,13 +1177,18 @@ here rather than half-done in the code.
 
 ## What is not
 
-Two things are unsupported, neither of them an XSLT element. **Each one errors
-rather than doing something plausible** — an XSLT processor that accepts an
+Three things are refused until configured or refused outright, none of them an
+XSLT element. **Each one errors rather than doing something plausible** — an XSLT processor that accepts an
 instruction and quietly ignores it is the worst possible failure mode, because
 the output looks fine and is wrong.
 
-* **`fn:unparsed-text`** — reading arbitrary files named by a stylesheet is
-  disabled by design, unconditionally.
+* **`fn:unparsed-text` without `FileResolver.UnparsedText`** — reading files
+  named by a stylesheet is off by default and enabled by a switch of its own,
+  implied by nothing else. It is separate because it is the widest of these:
+  `fn:doc` hands back a parsed XML document, so a file that is not well-formed
+  XML discloses nothing, while `unparsed-text` hands back the raw bytes of any
+  file inside `Roots` — a root holding one XML data file and one private key
+  leaks the key.
 * **`fn:collection` and `fn:doc` without a resolver** — both fail closed rather
   than returning nothing, so a misconfiguration is reported instead of looking
   like a document set that happened to be empty. Supply a
@@ -1207,11 +1220,11 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,357) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,416 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
-| **W3C xsdtests suite** | systematic XSD conformance across 25,003 instance and 14,405 schema-validity tests | schemas nobody writes by hand |
+| **W3C xsdtests suite** | systematic XSD conformance across 24,995 instance and 14,393 schema-validity tests (XSD 1.0; 1.1 adds 26,216 and 15,354) | schemas nobody writes by hand |
 | **Production schema sets** | what large modular schemas do that suites do not | anything those industries happen not to use |
 | **Fuzzing** (5 targets) | a crash, hang or wrong refusal on input no author would write | anything a coverage-guided search does not reach in the time it is given |
 
@@ -1413,8 +1426,8 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 ```
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
-XSLT suite: 14601 cases, 6158 in scope, 8443 skipped
-in-scope: 6149 passed, 9 failed (99.85%)
+XSLT suite: 14601 cases, 6157 in scope, 8444 skipped
+in-scope: 6149 passed, 8 failed (99.87%)
 ```
 
 `TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every
@@ -1582,7 +1595,7 @@ Measured against [w3c/xsdtests](https://github.com/w3c/xsdtests) at commit
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,204 (99.90%) |
+| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
 
 Every failure is catalogued in
 [docs/conformance-gaps.md](docs/conformance-gaps.md), with a verdict on whether

@@ -377,10 +377,13 @@ func (r *FileResolver) Preload(uri string, tree *xdm.Tree) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cache == nil {
-		r.cache = map[string]*xdm.Tree{}
-	}
-	r.cache[path] = tree
+	// Through publish, not straight into the map: the bound on the cache is a
+	// property of the cache, so every path that writes to it has to obey it.
+	// This one is a host-application call rather than anything a document or a
+	// stylesheet can reach, so an unbounded Preload was an invariant violation
+	// and not an attack surface -- but a host that preloads a document per
+	// request would still have grown the map for the life of the process.
+	r.publish(path, tree)
 }
 
 // load parses a file, caching the result.

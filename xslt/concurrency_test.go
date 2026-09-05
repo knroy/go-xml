@@ -247,6 +247,60 @@ func TestResolverCacheIsBounded(t *testing.T) {
 	}
 }
 
+// Preload writes into the same cache, so it obeys the same bound.
+//
+// Preload is a host-application API -- a harness hands the resolver the tree it
+// parsed itself, so that doc() of that document's own URI returns the same
+// nodes. Nothing in a document or a stylesheet reaches it. But a host that
+// preloads one document per request writes to the cache as often as any
+// stylesheet does, and the bound is a property of the cache rather than of the
+// caller.
+func TestPreloadHonorsCacheLimit(t *testing.T) {
+	dir := t.TempDir()
+	r, err := NewFileResolver(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < resolverCacheMax+20; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("p%d.xml", i))
+		if err := os.WriteFile(name, []byte(`<a/>`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		tree, err := xdm.ParseString(`<a/>`, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Preload(name, tree)
+	}
+	r.mu.Lock()
+	n := len(r.cache)
+	r.mu.Unlock()
+	if n > resolverCacheMax {
+		t.Errorf("cache holds %d documents, over the %d bound", n, resolverCacheMax)
+	}
+	if n == 0 {
+		t.Fatal("nothing was preloaded, so the bound was not exercised")
+	}
+	// And it still preloads: the most recent tree is the one doc() answers with,
+	// rather than a second parse of the file.
+	name := filepath.Join(dir, "last.xml")
+	if err := os.WriteFile(name, []byte(`<a/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := xdm.ParseString(`<a/>`, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Preload(name, tree)
+	got, err := r.ResolveDocument(name, "")
+	if err != nil {
+		t.Fatalf("resolving a preloaded document: %v", err)
+	}
+	if got != tree {
+		t.Error("preloaded tree was not the one returned")
+	}
+}
+
 // TestConcurrentCompile compiles stylesheets from several goroutines at once.
 //
 // Compile keeps the imported schema in package state while it runs, so that

@@ -608,11 +608,28 @@ func (p *btParser) compileCharAtom(src string) (btNode, error) {
 	}
 	re, err := buildCharAtom(src, p.dotAll, p.fold)
 	if err != nil {
-		charAtomCache.Store(key, err)
+		storeCharAtom(key, err)
 		return nil, err
 	}
-	charAtomCache.Store(key, re)
+	storeCharAtom(key, re)
 	return &btChar{re: re, src: src}, nil
+}
+
+// storeCharAtom adds an entry, clearing the cache first if it is full.
+func storeCharAtom(key charAtomKey, v any) {
+	if charAtomCacheSize.Load() >= charAtomCacheMax {
+		// Two goroutines can both decide to clear; that is harmless, since a
+		// cleared cache is only a performance loss and every entry is
+		// reproducible from its key.
+		charAtomCache.Range(func(k, _ any) bool {
+			charAtomCache.Delete(k)
+			return true
+		})
+		charAtomCacheSize.Store(0)
+	}
+	if _, loaded := charAtomCache.LoadOrStore(key, v); !loaded {
+		charAtomCacheSize.Add(1)
+	}
 }
 
 func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
@@ -645,7 +662,24 @@ type charAtomKey struct {
 // "[\p{IsBasicLatin}-[aeiou]]" expands to hundreds of ranges, and a pattern
 // that uses it inside a loop would otherwise pay for that expansion on every
 // compilation.
-var charAtomCache sync.Map
+//
+// The cache is bounded, for the same reason the regex cache is: the atoms are
+// not a fixed set drawn from the stylesheet. A single pattern contains as many
+// distinct atoms as the author cares to write, and "matches($s, $node/@pattern)"
+// takes the pattern from document data, so a long-running process would retain
+// one compiled regexp per distinct atom it had ever seen. That is only reachable
+// with SetBacktrackingRegex(true) — off by default, and set only by
+// cmd/go-xml's -backtracking-regex flag — so it is an opt-in availability concern,
+// not a default-configuration one.
+//
+// Cleared wholesale rather than evicted one at a time, matching the regex
+// cache: a true LRU would need a lock on every read, which costs more than it
+// saves when the working set is a handful of atoms re-cached immediately after
+// a clear.
+const charAtomCacheMax = 1024
+
+var charAtomCache sync.Map // key: charAtomKey -> *regexp.Regexp or error
+var charAtomCacheSize atomic.Int64
 
 // ---------------------------------------------------------------------------
 // Matcher

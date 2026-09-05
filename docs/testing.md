@@ -20,15 +20,34 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,357 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
-| **Limit boundary tests** | 7 tables | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
+| **Unit tests** | 1,416 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
-| **W3C conformance suites** | ~128,000 cases | systematic divergence from the specification | what the suites do not ask about — see below |
+| **W3C conformance suites** | 141,679 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Fuzzing** | 5 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
 | **The ratchet** | 9 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+
+**How the first four counts are counted**, because "how many tests" has several
+honest answers and the one meant here is the narrow one. The three that a
+command can settle are asserted for equality by `tests/check.sh`'s *documented
+figures* section, which fails the gate when this table drifts from the tree:
+
+* **Unit tests** — `func Test` declarations, not subtests and not table rows:
+  `grep -rn "func Test" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+* **Limit boundary tests** — `func Test` declarations in the six
+  `*/limits_boundary_test.go` files (dtd, relaxng, xdm, xpath, xsd, xslt); most
+  are table-driven, so they run rather more than 13 cases:
+  `grep -hc "func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
+* **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
+* **W3C conformance suites** — the sum of the in-scope totals in the status
+  table: XPath 2.0 15,183 + XQuery 3.1 29,803 + XSLT 2.0 6,157 + XSLT 3.0 8,625
+  + XSD 1.0 39,388 + XSD 1.1 41,558 + RELAX NG 965. XPath 3.0 and 3.1 are not
+  added again — the QT3 catalog is one corpus measured at three versions, and
+  the 2.0 figure is the whole of it that this engine claims. An earlier
+  revision said "~128,000", which no grouping of these numbers reaches.
 
 **The suites are the weakest of these where it counts most.** Every one of
 them feeds the parser *well-formed* input and measures what happens after; none
@@ -299,7 +318,7 @@ DocBook needs its localisation files generated before it will transform
 anything, and this engine can do it:
 
 ```sh
-git clone --depth 1 https://github.com/docbook/xslt3ng testdata/xsltng
+git clone --depth 1 https://github.com/docbook/xslTNG testdata/xsltng
 for f in testdata/xsltng/src/main/locale/*.xml; do
   go run ./cmd/go-xml -xsl testdata/xsltng/src/main/xslt/modules/xform-locale.xsl \
     -allow-dir testdata/xsltng \
@@ -375,25 +394,38 @@ happens.
 `-count=1` is **mandatory** on every suite run. Go caches test results, and a
 cached pass cannot show a regression.
 
+**Every one of these sets the suite variable, and sets it to an absolute
+path.** A suite test skips when its variable is unset, and a *relative* path
+resolves against the package directory rather than the repository root — either
+way `go test` prints `ok` having run nothing. That is the trap described under
+[The suites](#the-suites); `tests/check.sh` avoids it with its `abspath` helper,
+and these commands avoid it with `$PWD`, so they must be run from the
+repository root.
+
 ```sh
 # One suite, with its summary
-GOXSLT_XSLTS=testdata/xslt30-test go test ./tests/xslts/ \
+GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ \
   -run TestXSLT30Suite -count=1 -v
 
 # Every failing case, by name and reason
-GOXSLT_XSLTS_VERBOSE=1 go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
+GOXSLT_XSLTS=$PWD/testdata/xslt30-test GOXSLT_XSLTS_VERBOSE=1 \
+  go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
 
 # Which test sets are worst — a set failing nearly everything is an
 # unimplemented feature; one failing a handful is edge cases
-GOXSLT_XSLTS_BYSET=1 go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
-
-# One set only
-GOXSLT_XSLTS_ONLYSET=merge GOXSLT_XSLTS_VERBOSE=1 \
+GOXSLT_XSLTS=$PWD/testdata/xslt30-test GOXSLT_XSLTS_BYSET=1 \
   go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
 
-# QT3 equivalents
-GOXSLT_QT3_VERBOSE=1 go test ./tests/qt3/ -count=1 -v
-GOXSLT_QT3_SET=fn-matches go test ./tests/qt3/ -count=1 -v
+# One set only
+GOXSLT_XSLTS=$PWD/testdata/xslt30-test \
+  GOXSLT_XSLTS_ONLYSET=merge GOXSLT_XSLTS_VERBOSE=1 \
+  go test ./tests/xslts/ -run TestXSLT30Suite -count=1 -v
+
+# QT3 equivalents. Without GOXSLT_QT3 these skip and print ok in 0.4s.
+GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_VERBOSE=1 \
+  go test ./tests/qt3/ -count=1 -v
+GOXSLT_QT3=$PWD/testdata/qt3tests GOXSLT_QT3_SET=fn-matches \
+  go test ./tests/qt3/ -count=1 -v
 
 # XSD, which has its own driver rather than a Go test
 go run ./tests/xsdsuite testdata/xsdtests        # 1.0
@@ -617,29 +649,34 @@ $ cd w3cschemas && go list -f '{{.Dir}}' github.com/knroy/go-xml/xsd
 Its tests passed, and what they were testing was a release a few hundred
 commits old. An API break in `xsd` or `xdm` could not have failed them.
 
-Three things fix it, and all three are needed:
+Two things fix it:
 
-* **`go.work` at the repository root** redirects the dependency to `.`, so the
-  module builds against this tree. The redirection lives there rather than in
-  `w3cschemas/go.mod` because that module is published (tag
-  `w3cschemas/v0.1.0`); a `replace` in a published `go.mod` has to be stripped
-  at every tag or it misleads whoever reads it. `go.work` is not published, so
-  it carries the local wiring for free. It is committed, because it names only
-  `.` and `./w3cschemas` — Go's caution against committing a workspace is
-  about workspaces that reach outside the repository and therefore differ per
-  developer.
 * **The `require` names v1.2.1, not v1.1.0.** v1.1.0 and v1.2.0 both declare
-  `go 1.26`, and that is inherited: a 1.25 toolchain refuses the module before
-  it ever looks at the workspace, because MVS reads the dependency's `go.mod`
-  regardless. Since CI pins 1.25, the old pin made the module unbuildable in
-  CI even with a workspace in place. v1.2.1 declares `go 1.25.0`, which also
-  let `w3cschemas/go.mod` drop from `go 1.26` to `go 1.25.0` and `x/text` from
-  v0.37.0 to v0.36.0 — both now identical to the root module. The `go 1.26`
-  was never a language requirement; it was the stale dependency showing
-  through.
-* **A step of its own**, in `check.sh` and in `ci.yml`'s fast job. A workspace
-  makes the module build against the right code; it does not cause anything to
-  run it. `go list ./...` at the root still excludes it, by design.
+  `go 1.26`, and that is inherited: a 1.25 toolchain refuses the module
+  outright, because MVS reads the required version's own `go.mod` before
+  anything else gets a say. Since CI pins 1.25, the old pin made the module
+  unbuildable there however it was wired. v1.2.1 declares `go 1.25.0`, which
+  also let `w3cschemas/go.mod` drop from `go 1.26` to `go 1.25.0` and `x/text`
+  from v0.37.0 to v0.36.0 — both now identical to the root module. The
+  `go 1.26` was never a language requirement; it was the stale dependency
+  showing through.
+* **A step of its own**, in `check.sh` and in `ci.yml`'s fast job. `go list
+  ./...` at the root still excludes it, by design, so without an explicit step
+  nothing runs it at all.
+
+What the step measures is **the module against the go-xml release its `go.mod`
+names, not against this tree** — and that is a deliberate choice rather than an
+oversight. A `go.work` at the repository root redirecting the dependency to `.`
+was tried and removed. It worked, but it meant two mechanisms — the workspace
+and the pin — had to agree, and the one that silently disagrees is the one
+nobody notices. w3cschemas is published separately, so the version it pins is
+the version its users get; testing it against an unreleased tree measures
+something nobody can install.
+
+The consequence is worth stating rather than papering over: this step catches a
+broken w3cschemas, and it does **not** catch an API break in this tree that
+would affect it. Bumping the pin after a release is what closes that gap, and
+that is a release step.
 
 The general shape of this: *a module that is in no gate cannot regress, and a
 module pinned to a release is not testing your working tree even when it is.*

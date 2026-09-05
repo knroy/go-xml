@@ -131,12 +131,22 @@ violation, and the zero value is 1.0, which keeps the stricter one.
 ## Resolving schemaLocation
 
 `include`, `import` and `redefine` name other documents, so following them
-means fetching whatever the schema asks for. The default resolver reads from
-disk only:
+means fetching whatever the schema asks for. Nothing is fetched unless a
+resolver is configured, and the default when `Resolver` is nil follows the
+grant the caller already made by choosing an entry point:
 
 ```go
-xsd.Options{Resolver: &xsd.FileResolver{}}   // the default when Resolver is nil
+xsd.Load(root, baseURI, xsd.Options{})   // refuses: no path was granted
+xsd.LoadFile("main.xsd", xsd.Options{})  // &xsd.FileResolver{Root: "."} — the file's directory
 ```
+
+`Load` takes a tree rather than a path, so the caller has granted nothing on
+disk and a named location is refused. Only a document that actually asks is
+affected: a self-contained schema, which is nearly every use of `Load`, never
+resolves anything. `LoadFile` and `LoadFiles` were handed paths, so a sibling
+`xs:include` still resolves — rooted at the directories named, which refuses an
+absolute path elsewhere or a climb through `..`. `Schema.WithInstanceLocations`
+is rooted the same way, at the directories the schema was loaded from.
 
 To follow remote locations you have to say so, and say which hosts:
 

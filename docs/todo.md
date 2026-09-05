@@ -8,7 +8,7 @@ Current position:
 | | schema-validity | instance |
 |---|---|---|
 | XSD 1.0 | 14,380 / 14,393 (99.91%) | 24,967 / 24,995 (99.89%) |
-| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,204 (99.90%) |
+| XSD 1.1 | 15,343 / 15,354 (99.93%) | 26,189 / 26,216 (99.90%) |
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,244 of 19,244 in scope |
 | XPath 3.1 | 100.00% — 21,786 of 21,786 in scope (0 failing) |
@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas that fail to load | 19, most of them correctly |
-| Tests | 1,357, clean under `-race` |
+| Tests | 1,416 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -207,17 +207,19 @@ expected file apart from whitespace; the case still fails on the indent width,
 which is implementation-defined, so it gains no suite case. Covered by
 `xslt/unionmember_test.go`.
 
-### 2.3 QName values do not resolve their prefix
+### 2.3 QName values do not resolve their prefix — fixed
 
-An `xs:QName` value is checked lexically: prefix and local name must be
-NCNames, and `xmlns` is rejected as a prefix because nothing can bind it. But a
-prefix that is simply *undeclared* is accepted, because the lexical check has
-no access to the element's in-scope namespaces.
+An `xs:QName` value used to be checked only lexically: prefix and local name
+had to be NCNames, and `xmlns` was rejected as a prefix because nothing can
+bind it. But a prefix that was simply *undeclared* was accepted, because the
+lexical check had no access to the element's in-scope namespaces.
 
-Fixing it means threading the instance element's namespace context through
-`validateSimpleValueVersion` and its ten call sites. Worth doing for
-correctness — a QName whose prefix does not resolve has no value — but it buys
-one test on the suite, so it has not been done for the number.
+Fixed as the entry said it would have to be: the instance node is threaded
+through as `validateSimpleValueIn`, and the binding is checked in
+`xsd/validate_simple.go` where the node is still in hand rather than among the
+facets. Part 2 §3.2.18 makes the namespace name part of the value, so an
+unbound prefix denotes no value at all and is now `cvc-datatype-valid.1.2.1`.
+It buys one test on the suite; it was done for the correctness, not the number.
 
 ### 2.4 XPath: `$e-1` names a variable — retracted, not a defect
 

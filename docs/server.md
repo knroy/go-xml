@@ -388,9 +388,12 @@ read any file, and it can spend your whole timeout doing it. Never compile a
 stylesheet uploaded by a user; ship rule sets with the service. If you must
 accept one, run it in a separate process with its own filesystem view.
 
-`FileResolver` resolves symlinks *before* the containment check, so a link
-inside a permitted directory cannot reach outside it. Ten traversal vectors
-are covered by tests.
+`xsd.FileResolver` resolves symlinks *before* the containment check, so a link
+inside a permitted directory cannot reach outside it; `xslt.FileResolver`
+enforces the same containment by a different mechanism, opening through
+`os.OpenRoot` so no path is resolved and then re-opened. The difference is
+deliberate and is explained in
+[docs/security.md](security.md). Ten traversal vectors are covered by tests.
 
 ## Observability
 

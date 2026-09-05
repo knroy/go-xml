@@ -620,10 +620,29 @@ and facets still apply to the substituted type.
 ### Concurrency and retention
 
 - No `go func` anywhere in non-test code; goroutine count is stable.
-- 20,000 parse-and-validate cycles and 2,000 distinct schema loads each show
-  **0.00 MB** heap growth after GC.
-- The `xpath` regex cache is bounded at 1024; the `xsd` model cache is keyed by
-  complex type, which is schema-controlled rather than attacker-controlled.
+- 20,000 parse-and-validate cycles show **0.00 MB** heap growth after GC.
+- 2,000 distinct schema loads show 0.00 MB only when the schemas reuse type
+  names. **A schema type registration is retained for the life of the
+  process.** The derivation registries in `xdm` (`derivedPrimitives`,
+  `unionMembers`, `listItems`) are process-global, keyed by expanded QName, and
+  have no eviction: an entry outlives the `*Schema` that created it, which is
+  itself collected normally. The cost is per *distinct type*, not per load —
+  reloading the same schema rewrites the same keys — and is roughly 100 bytes
+  per distinct type: 2,000 schemas with unique namespaces and unique type names
+  retain 2,000 entries and about 0.20 MB after GC.
+  `xsd.TestSchemaTypeRegistryRetainsPerType` pins both facts. A caller who can
+  be made to load unbounded *distinct* schemas grows this without bound; one
+  that replays the same schemas does not.
+- The semantic risk of a shared registry — two schemas defining `{uri}T`
+  differently, so a node atomises as whichever loaded last — is mitigated
+  separately, by recording the resolved typing on the node at validation time:
+  `xdm.Node.DerivedPrimitive`, `UnionMember` and `ListItem` are a per-node
+  override of the global answer. See the commentary on those fields in
+  `xdm/node.go`.
+- The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
+  single-character-atom cache; the `xsd` model cache is keyed by complex type,
+  which is schema-controlled rather than attacker-controlled. The atom cache is
+  reached only with `SetBacktrackingRegex(true)`, which is off by default.
 - A compiled `Schema` and `Stylesheet` are safe for concurrent use, verified
   under `-race`.
 

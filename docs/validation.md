@@ -157,8 +157,8 @@ if err := schema.Validate(doc.Root, xsd.ValidateOptions{}); err != nil {
 }
 ```
 
-Measured against the W3C XSD test suite: **99.88%** agreement on 24,999
-instance tests, and **99.86%** on its 14,405 schema-validity tests — the
+Measured against the W3C XSD test suite: **99.89%** agreement on 24,995
+instance tests, and **99.91%** on its 14,393 schema-validity tests — the
 second figure is the honest one to quote, and [xsd.md](xsd.md) explains why
 earlier revisions reported neither.
 
@@ -213,8 +213,13 @@ opt-in as they do in Xerces.
 ### Resolving schemaLocation
 
 `include`, `import` and `redefine` name other documents, and following those
-names means fetching whatever the schema says. The default `FileResolver` reads
-only from disk. To follow remote locations, opt in:
+names means fetching whatever the schema says. Nothing is fetched unless a
+resolver is configured. With `Resolver` nil, `xsd.Load` refuses a named
+location outright — it was handed a tree, not a path, so nothing on disk was
+granted — while `LoadFile` and `LoadFiles` were handed paths and default to a
+`FileResolver` rooted at the directories those paths name: a sibling
+`xs:include` resolves, an absolute path elsewhere or a climb through `..` does
+not. To follow remote locations, opt in:
 
 ```go
 xsd.Options{Resolver: &xsd.HTTPResolver{
@@ -239,7 +244,10 @@ lets a caller validate the source against the same components:
 
 ```go
 sheet, err := xslt.Compile(styleTree.Root, xslt.CompileOptions{
-    SchemaResolver: &xsd.FileResolver{},
+    // Rooted: the stylesheet names the schema location, so confine
+    // resolution to the directory the schemas live in. A FileResolver
+    // with no Root reads any path the stylesheet asks for.
+    SchemaResolver: &xsd.FileResolver{Root: "/srv/schemas"},
 })
 if err != nil {
     return err
@@ -266,9 +274,8 @@ expressible in XSD at all. They are Schematron, and Schematron is XSLT.
 
 ### If you do need XSD
 
-Use a schema validator alongside this one. In Go the practical options are
-cgo bindings to libxml2 (`lestrrat-go/libxml2`), shelling out to `xmllint`, or
-a JVM sidecar. Run the schema check first, then the Schematron rules — that is
+The `xsd` package covers it — see [xsd.md](xsd.md) — so the three stages are
+one library. Run the schema check first and the Schematron rules after: that is
 the order the e-invoicing specifications themselves prescribe, because a
 document that is structurally wrong produces useless business-rule output.
 
@@ -279,14 +286,19 @@ if err != nil {
     return fmt.Errorf("not well-formed: %w", err)
 }
 
-// Stage 2: XSD, if you need it — not this library.
-if err := externalSchemaValidator.Validate(src); err != nil {
+// Stage 2: XSD. Load the schema once, outside the request path.
+if err := schema.Validate(tree.Root, xsd.ValidateOptions{MaxErrors: 25}); err != nil {
     return err
 }
 
-// Stage 3: business rules. This library.
+// Stage 3: business rules. Schematron compiled to XSLT.
 res, err := sheet.Transform(ctx, tree.Root, xslt.TransformOptions{})
 ```
+
+`schema` here is an `*xsd.Schema` from `xsd.LoadFile("invoice.xsd",
+xsd.Options{})` — immutable once loaded and safe to share across goroutines,
+which is why it belongs in start-up rather than per document. Stage 2 takes the
+parsed tree, not the source text, so the document is read once.
 
 ## Schematron in practice
 
