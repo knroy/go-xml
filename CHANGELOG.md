@@ -6,6 +6,56 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+## v1.2.2 — 2026-09-05
+
+Security and the honesty of the numbers. Measured with `tests/check.sh`:
+XPath 2.0, 3.0 and 3.1 all at 100%, XQuery 3.1 at 99.99% (29,800 of 29,803),
+XSLT 2.0 at 99.87% (6,149 of 6,157), XSLT 3.0 at 99.85% (8,612 of 8,625),
+XSD 1.0 at 99.90% (39,347 agreeing) and 1.1 at 99.91% (41,532), RELAX NG at
+100% (965 of 965). DocBook xslTNG 577 of 593 and XSpec 225, with 1,435 unit
+tests and 6 fuzz targets clean under `-race`. No conformance figure moved in
+either direction: every change here was made without spending a case.
+
+**Four silent wrong answers are closed.** A schema loaded with a zero-value
+`xsd.Options` read whatever an `xs:include` named, `/etc/hosts` included. INF
+and NaN passed every facet a schema could write. The `i` regular-expression
+flag reached inside a character class, so `matches('a','[\p{Lu}]','i')`
+answered true. A calendar name with an unbound namespace prefix formatted a
+date instead of raising. Each was reproduced before it was called a bug, and
+each fix was checked by breaking it again to confirm the new test fails.
+
+**Two bounds did not bound.** The regular-expression caches were bounded
+against a single goroutine and not against several: check the size, clear the
+map, insert, with no lock across the three, peaks at 2,984 entries against a
+limit of 1,024. `FileResolver.Preload` wrote past the document-cache bound by
+not going through the function that enforces it. Both now hold under
+contention, and the tests that pin them sample from parallel writers, because
+the sequential tests that shipped with the original bound could not observe
+the defect at all.
+
+**The documentation is now checked by the gate.** Nine conformance marks were
+already machine-enforced and all nine were correct; the unit test count, which
+nothing checked, was wrong in four files at once. `tests/check.sh` now compares
+documented counts against the commands that produce them and fails on a
+mismatch -- it caught a stale figure in this release's own preparation.
+Alongside that, a dozen claims that the code had outgrown were corrected,
+including three describing security behaviour that had already changed.
+
+**One limitation is now written down rather than absent.** `checkUPA` is the
+only load-time algorithm with no budget: its cost is cubic in the size of a
+content model, and 116 KB of legal schema takes 12 seconds. Measured over
+every schema in this tree, the widest state real schemas produce is 19
+positions against 2,048 for the adversarial shape, so this is reachable only
+by a schema written to reach it -- but until it is bounded, do not load
+untrusted schemas without a wall-clock limit. `docs/security.md` says so, and
+`xsd/complexity_fuzz_test.go` asserts the growth exponent so it cannot worsen
+unnoticed.
+
+The exported API is unchanged. Callers who passed a nil `xsd.Options.Resolver`
+and relied on schema documents being fetched from anywhere on disk must now
+supply a resolver; that is the one behavioural change a working caller can
+notice, and it is the one that closes the arbitrary-read.
+
 ### Fixed — CI
 
 - **The `w3cschemas` module was testing a published release, not this tree.**
