@@ -282,9 +282,9 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 1416 "$(docfigure_tests)" \
+docfigure "unit test count" 1435 "$(docfigure_tests)" \
 	README.md:109 README.md:1218 docs/testing.md:23 docs/todo.md:20
-docfigure "fuzz target count" 5 "$(docfigure_fuzz)" \
+docfigure "fuzz target count" 6 "$(docfigure_fuzz)" \
 	README.md:1223 docs/testing.md:29
 docfigure "limit boundary test count" 13 "$(docfigure_limits)" \
 	docs/testing.md:24

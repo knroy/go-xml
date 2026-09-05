@@ -107,6 +107,24 @@ type Context struct {
 	// never interprets it, only carries it.
 	StaticHost any
 
+	// StaticNamespaces is the statically known namespaces of the expression,
+	// carried from compile time so that a function can expand a prefix that
+	// reaches it as a *string* rather than as syntax.
+	//
+	// Almost every prefix in an expression is resolved by the parser, which is
+	// why NamespaceResolver is a compile-time interface. The exception is a
+	// prefixed name that arrives as an argument value: F&O 9.8.4.3 says the
+	// $calendar argument of the date formatting functions "must be a valid
+	// EQName ... if it is a lexical QName then it is expanded into an expanded
+	// QName using the statically known namespaces", and the functions' own
+	// Properties section lists them as depending on "namespaces" for exactly
+	// this reason. The argument need not be a literal, so the expansion cannot
+	// be done at parse time; the resolver has to survive into evaluation.
+	//
+	// Nil means the caller compiled without one, and a prefixed calendar is
+	// then unresolvable — which is the same answer an empty resolver gives.
+	StaticNamespaces NamespaceResolver
+
 	// collation is the collation in force for string comparison, when a
 	// function has been given one. Nil means the codepoint collation, which
 	// is the default everywhere.

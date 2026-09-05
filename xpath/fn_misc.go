@@ -249,6 +249,27 @@ func unparsedText(ctx *Context, args []xdm.Sequence) (string, error) {
 // characters it may hold. fn:unparsed-text layers its own on top; fn:json-doc
 // takes the text as it stands and lets the JSON parser judge it.
 func readText(ctx *Context, s, enc string) (string, error) {
+	// A fragment identifier names a part of a resource, and these functions
+	// retrieve whole resources: F&O 3.0 14.8.5 makes it a dynamic error
+	// rather than something to ignore -- "[err:FOUT1170] if $href contains a
+	// fragment identifier, or if it cannot be used to retrieve the string
+	// representation of a resource". The check lives here, before the
+	// resolver is consulted, so it is decidable from the URI alone and holds
+	// for a URI this engine would never fetch: unparsed-text-013 and
+	// json-doc-error-028 both name an http:// host.
+	//
+	// Stripping the fragment and reading the whole file, which is what used
+	// to happen, is a silent wrong answer -- the caller asked for a part and
+	// got the whole, with nothing to say so.
+	//
+	// A raw '#' is the test, matching FragmentIsValidXMLName. RFC 3986 3.5
+	// makes '#' the fragment delimiter by definition; a number sign that is
+	// meant as data is written "%23" and is not a delimiter, so it does not
+	// make the URI contain a fragment.
+	if strings.IndexByte(s, '#') >= 0 {
+		return "", fmt.Errorf(
+			"FOUT1170: %q contains a fragment identifier", s)
+	}
 	// No resolver means the function is off, which is the default. The
 	// message names the reason rather than the URI: a stylesheet that gets
 	// this back has not been granted file reads at all, and saying "cannot
@@ -678,7 +699,7 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 		// three- or four-argument signature, so format-date(d, p, "") is
 		// XPST0017 rather than a call with a defaulted calendar.
 		l.registerFnSince(since, name, []int{2, 5}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
-			if err := checkFormatDateArgs(args); err != nil {
+			if err := checkFormatDateArgs(ctx, args); err != nil {
 				return nil, err
 			}
 			// $value is declared xs:dateTime?/xs:date?/xs:time? — a
@@ -731,7 +752,10 @@ func registerFormatDateTimeSince(l *Library, since Version) {
 // The calendar is a lexical QName — "AD", "ISO", or an implementation's own
 // name — so a value that is not one is FOFD1340. The place is a string, and a
 // non-string there is a type error rather than a picture error.
-func checkFormatDateArgs(args []xdm.Sequence) error {
+//
+// ctx supplies the statically known namespaces, which a prefixed calendar is
+// expanded against; see Context.StaticNamespaces.
+func checkFormatDateArgs(ctx *Context, args []xdm.Sequence) error {
 	if len(args) < 5 {
 		return nil
 	}
@@ -770,8 +794,11 @@ func checkFormatDateArgs(args []xdm.Sequence) error {
 			// this implementation is expected to know. "Q{}ISO" is the braced
 			// spelling of exactly that, so it is normalised before the check
 			// rather than mistaken for an extension.
-			if name, inNoNamespace := calendarInNoNamespace(cal); inNoNamespace &&
-				!supportedCalendar(name) {
+			name, inNoNamespace, err := calendarInNoNamespace(ctx, cal)
+			if err != nil {
+				return err
+			}
+			if inNoNamespace && !supportedCalendar(name) {
 				return fmt.Errorf(
 					"FOFD1340: the calendar %q is not supported", cal)
 			}
@@ -783,15 +810,38 @@ func checkFormatDateArgs(args []xdm.Sequence) error {
 // calendarInNoNamespace returns a calendar name's local part and whether it
 // names no namespace, which is the case this implementation is expected to
 // recognise. "ISO" and "Q{}ISO" are the same calendar written two ways.
-func calendarInNoNamespace(s string) (string, bool) {
+//
+// A prefixed name is not lexically in no namespace: F&O 9.8.4.3 requires it to
+// be "expanded into an expanded QName using the statically known namespaces",
+// so the prefix is looked up rather than assumed to name an extension. A
+// prefix that is not bound there has no expansion at all, which makes the
+// argument an invalid calendar name rather than an unsupported one — FOFD1340
+// either way, but for the reason the spec gives.
+func calendarInNoNamespace(ctx *Context, s string) (string, bool, error) {
 	if rest, ok := strings.CutPrefix(s, "Q{"); ok {
 		end := strings.IndexByte(rest, '}')
 		if end < 0 {
-			return "", false
+			return "", false, nil
 		}
-		return rest[end+1:], rest[:end] == ""
+		return rest[end+1:], rest[:end] == "", nil
 	}
-	return s, !strings.Contains(s, ":")
+	prefix, local := xdm.SplitQName(s)
+	if prefix == "" {
+		return local, true, nil
+	}
+	var uri string
+	if ctx != nil && ctx.StaticNamespaces != nil {
+		uri, _ = ctx.StaticNamespaces.ResolvePrefix(prefix)
+	}
+	if uri == "" {
+		return "", false, fmt.Errorf(
+			"FOFD1340: the calendar %q uses the unbound namespace prefix %q",
+			s, prefix)
+	}
+	// The expanded name is in a namespace, so which calendar it names is
+	// implementation-defined and this implementation defines none: the
+	// requested calendar is simply not one it has, and the fallback applies.
+	return local, false, nil
 }
 
 // supportedCalendar reports whether this implementation can format dates in

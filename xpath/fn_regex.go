@@ -5,8 +5,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -246,8 +244,8 @@ func compileArgRegexp(args []xdm.Sequence, pat, flags int, v Version) (*regexp.R
 // handful of stylesheet patterns that are re-cached immediately after a clear.
 const regexCacheMax = 1024
 
-var regexCache sync.Map // key: flags + "\x00" + pattern -> *regexp.Regexp or error
-var regexCacheSize atomic.Int64
+// key: version + "\x00" + flags + "\x00" + pattern -> *regexp.Regexp or error
+var regexCache = boundedCache[string, any]{max: regexCacheMax, items: map[string]any{}}
 
 // compileXPathRegexp translates an XML Schema / XPath 2.0 regular expression
 // into Go's syntax and compiles it.
@@ -261,7 +259,7 @@ var regexCacheSize atomic.Int64
 // mis-compiled.
 func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error) {
 	key := v.String() + "\x00" + flags + "\x00" + pattern
-	if hit, ok := regexCache.Load(key); ok {
+	if hit, ok := regexCache.Get(key); ok {
 		switch t := hit.(type) {
 		case *regexp.Regexp:
 			return t, nil
@@ -279,21 +277,11 @@ func compileXPathRegexp(pattern, flags string, v Version) (*regexp.Regexp, error
 	return re, nil
 }
 
-// storeRegex adds an entry, clearing the cache first if it is full.
+// storeRegex adds an entry. The bound is enforced by boundedCache, which holds
+// the check and the insert under one lock: doing them separately let concurrent
+// callers interleave between the two and carry the table past its limit.
 func storeRegex(key string, v any) {
-	if regexCacheSize.Load() >= regexCacheMax {
-		// Two goroutines can both decide to clear; that is harmless, since a
-		// cleared cache is only a performance loss and every entry is
-		// reproducible from its key.
-		regexCache.Range(func(k, _ any) bool {
-			regexCache.Delete(k)
-			return true
-		})
-		regexCacheSize.Store(0)
-	}
-	if _, loaded := regexCache.LoadOrStore(key, v); !loaded {
-		regexCacheSize.Add(1)
-	}
+	regexCache.Put(key, v)
 }
 
 // argFlags reads the flags argument of a regex function.
@@ -460,6 +448,13 @@ func translatePattern(p string, dotAll bool, v Version) (string, error) {
 	// Where the class currently being read starts in p, so a subtraction
 	// can recover its left operand before translation rewrote it.
 	classSrc := -1
+	// Where the current class's "[" was written to sb, and the codepoint
+	// ranges of any \p or \P category escapes it contains. A category is
+	// immune to the "i" flag, but the rest of the class is not, so the two
+	// halves have to be emitted under different flag scopes. See the "]"
+	// case for how they are recombined.
+	classOut := -1
+	var classCats []cpRange
 
 	for i := 0; i < len(p); i++ {
 		c := p[i]
@@ -500,20 +495,81 @@ func translatePattern(p string, dotAll bool, v Version) (string, error) {
 						// sensitivity has to be pinned. A global "i" flag
 						// otherwise reaches inside \p{Lu} and makes it match
 						// lowercase, which is not what asking for an uppercase
-						// letter means.
+						// letter means. The spec is explicit that the flag
+						// stops here: "All other constructs are unaffected by
+						// the 'i' flag. For example, '\p{Lu}' continues to
+						// match upper-case letters only."
 						//
-						// Inside a character class there is nowhere to put the
-						// group: RE2 reads "(?-i:...)" between brackets as the
-						// literal characters that spell it, so "[\P{L}*]"
-						// silently became "any of ( ? - i : \ P { L } * )" —
-						// which matches "A". The escape is contributed bare
-						// there, and the case pinning is lost along with it,
-						// which is the lesser of the two wrongs.
-						if inClass {
-							sb.WriteString("\\" + string(esc) + "{" + body + "}")
-						} else {
+						// Outside a class a "(?-i:...)" group does that.
+						// Inside one it cannot go where the escape sits: RE2
+						// reads "(?-i:...)" between brackets as the literal
+						// characters that spell it, so "[\P{L}*]" would become
+						// "any of ( ? - i : \ P { L } * )" — which matches "A"
+						// and "?" alike. Contributing the escape bare was the
+						// previous answer to that. It avoided the misparse but
+						// lost the pinning with it, so
+						// matches('a','[\p{Lu}]','i') returned true: a wrong
+						// boolean rather than a wrong error, and silent.
+						//
+						// Expanding the category to explicit ranges is not on
+						// its own enough either, because RE2's "i" folds the
+						// members of a literal range too — "(?i)[A-Z]" matches
+						// "a". What works is to keep the category out of the
+						// bracket entirely: its ranges are collected here and
+						// the "]" case emits them as a separate alternative
+						// inside its own "(?-i:...)", where the group is
+						// parsed as a group. Only that branch is pinned, so
+						// the literal members of a mixed class such as
+						// "[q\p{Ll}]" still fold as the flag says they should.
+						if !inClass {
 							sb.WriteString("(?-i:\\" + string(esc) + "{" + body + "})")
+							i += len(p[i+1:]) - len(rest)
+							continue
 						}
+						sub, good := propertyRanges(body)
+						if !good {
+							// A name the Unicode tables here do not know: a
+							// script such as \p{Greek}, which RE2 accepts and
+							// Appendix F does not define. There is nothing to
+							// expand, so it is contributed bare as before,
+							// still unpinned. Whether such a name ought to be
+							// refused outright is a separate question from
+							// this one, and deciding it here would change
+							// which patterns compile.
+							sb.WriteString("\\" + string(esc) + "{" + body + "}")
+							i += len(p[i+1:]) - len(rest)
+							continue
+						}
+						if esc == 'P' {
+							// A negated category inside a class. RE2 has no
+							// class-level complement, so it is computed here,
+							// exactly as the \I, \C and negated-block cases
+							// nearby already do. Whether the class itself is
+							// negated does not enter into it: "[^...]" applies
+							// to the finished set, so complementing the
+							// category first and letting the class negate the
+							// union afterwards is the right order.
+							sub = complementRanges(sub)
+						}
+						// A category is a set, so it cannot be the upper
+						// end of a range: "[f-\p{Lu}]" is not in the XML
+						// Schema grammar. RE2 used to refuse it for us,
+						// because "\p{Lu}" was still a property reference
+						// when it saw it. Expanding the category here
+						// removes that accident — the leftover "f-" would
+						// become a literal hyphen and the pattern would
+						// quietly compile — so the case is detected and
+						// refused explicitly, which is what re00589 and
+						// re00590 in the QT3 suite check.
+						if strings.HasSuffix(sb.String(), "-") &&
+							!strings.HasSuffix(sb.String(), "[-") &&
+							!strings.HasSuffix(sb.String(), "\\-") {
+							return "", fmt.Errorf(
+								"FORX0002: %q is not in the XML Schema "+
+									"grammar (a category may not be the "+
+									"end of a range)", p)
+						}
+						classCats = append(classCats, sub...)
 						i += len(p[i+1:]) - len(rest)
 						continue
 					}
@@ -634,9 +690,25 @@ func translatePattern(p string, dotAll bool, v Version) (string, error) {
 			}
 			inClass = true
 			classSrc = i
+			classOut = sb.Len()
+			classCats = nil
 			sb.WriteByte(c)
 		case ']':
 			inClass = false
+			if len(classCats) > 0 && classOut >= 0 {
+				sb.WriteByte(c)
+				out, err := closeClassWithCategories(
+					sb.String(), classOut, classCats, p)
+				if err != nil {
+					return "", err
+				}
+				sb.Reset()
+				sb.WriteString(out)
+				classCats = nil
+				classOut = -1
+				continue
+			}
+			classOut = -1
 			sb.WriteByte(c)
 		case '-':
 			// Character-class subtraction, "[a-z-[aeiou]]", has no RE2 syntax,
@@ -656,14 +728,38 @@ func translatePattern(p string, dotAll bool, v Version) (string, error) {
 				if open := strings.LastIndexByte(built, '['); open >= 0 && classSrc >= 0 {
 					built = built[:open] + p[classSrc:i]
 				}
-				out, consumed, err := applySubtraction(built, p[i:])
+				out, clsAt, consumed, err := applySubtraction(built, p[i:])
 				if err != nil {
 					return "", err
+				}
+				// A subtraction whose operands mention a category is
+				// immune to "i" for the same reason a bare \p{Lu} is,
+				// and the difference has already been reduced to
+				// explicit ranges — so, as in the negated case, the
+				// finished class is pinned as a whole. The group goes
+				// outside the bracket, where RE2 reads it as a group.
+				//
+				// Only when a category was involved: "[a-z-[aeiou]]"
+				// has literal operands that the flag is entitled to
+				// fold, so pinning it unconditionally would stop "B"
+				// matching where it should.
+				if subtractionHasCategory(p[classSrc:], p[i:]) {
+					// clsAt is where the emitted class begins, reported
+					// by applySubtraction rather than searched for: the
+					// expanded body contains escaped "\[" literals, so
+					// scanning back for a bracket finds one of those and
+					// splices the group into the middle of the class.
+					out = out[:clsAt] + "(?-i:" + out[clsAt:] + ")"
 				}
 				sb.Reset()
 				sb.WriteString(out)
 				i += consumed - 1
 				inClass = false
+				// applySubtraction recomputed the whole class from the
+				// original source, categories included, so anything
+				// collected for it is already accounted for.
+				classCats = nil
+				classOut = -1
 				continue
 			}
 			sb.WriteByte(c)
@@ -902,7 +998,7 @@ func compileBacktrackFallback(pattern, flags string, orig error, v Version) (*bt
 // an attacker chooses — applies here at least as strongly.
 func compileBacktrackCached(pattern, flags string, ver Version) (*btRegexp, error) {
 	key := "bt\x00" + ver.String() + "\x00" + flags + "\x00" + pattern
-	if v, ok := regexCache.Load(key); ok {
+	if v, ok := regexCache.Get(key); ok {
 		switch t := v.(type) {
 		case *btRegexp:
 			return t.clone(), nil
@@ -956,10 +1052,10 @@ func matchInput(s, flags string) string {
 // bracket and body of the left-hand class; rest begins at the "-" that starts
 // the subtraction. It returns the replacement for built and how many bytes of
 // rest were consumed, including the closing bracket of the outer class.
-func applySubtraction(built, rest string) (string, int, error) {
+func applySubtraction(built, rest string) (string, int, int, error) {
 	open := strings.LastIndexByte(built, '[')
 	if open < 0 {
-		return "", 0, fmt.Errorf("FORX0002: malformed character class subtraction")
+		return "", 0, 0, fmt.Errorf("FORX0002: malformed character class subtraction")
 	}
 	prefix, left := built[:open], built[open+1:]
 
@@ -983,14 +1079,14 @@ func applySubtraction(built, rest string) (string, int, error) {
 		}
 	}
 	if end < 0 {
-		return "", 0, fmt.Errorf("FORX0002: unterminated character class subtraction")
+		return "", 0, 0, fmt.Errorf("FORX0002: unterminated character class subtraction")
 	}
 	right := rest[2:end]
 
 	// The outer class must still be closed after the inner one.
 	consumed := end + 1
 	if consumed >= len(rest) || rest[consumed] != ']' {
-		return "", 0, fmt.Errorf("FORX0002: malformed character class subtraction")
+		return "", 0, 0, fmt.Errorf("FORX0002: malformed character class subtraction")
 	}
 	consumed++
 
@@ -999,11 +1095,11 @@ func applySubtraction(built, rest string) (string, int, error) {
 		// Shorthand classes such as \d or \p{L} would need the Unicode
 		// tables that define them to expand exactly, so those are still
 		// refused rather than approximated.
-		return "", 0, fmt.Errorf(
+		return "", 0, 0, fmt.Errorf(
 			"FORX0002: character class subtraction is only supported for " +
 				"literal characters and ranges")
 	}
-	return prefix + "[" + body + "]", consumed, nil
+	return prefix + "[" + body + "]", len(prefix), consumed, nil
 }
 
 // takeBlockName reads a "{IsName}" block reference following \p or \P.
@@ -1400,4 +1496,110 @@ func tokenizeBacktrack(bt *btRegexp, s string) (xdm.Sequence, error) {
 		out = append(out, xdm.NewString(p))
 	}
 	return out, nil
+}
+
+// closeClassWithCategories rewrites a just-closed character class that
+// contained one or more \p or \P category escapes.
+//
+// built is everything emitted so far, ending in that class; open is the offset
+// in built of the class's "[". cats are the codepoint ranges the categories
+// contributed, already complemented where the escape was \P.
+//
+// A category is immune to the "i" flag and the rest of the class is not, so
+// the class is split into two alternatives under different flag scopes:
+//
+//	[a\p{Lu}]  ->  (?:[a]|(?-i:[A-Z...]))
+//
+// Only the category branch is pinned, so a literal member still folds when the
+// flag asks for it. Putting the whole class inside one "(?-i:...)" would be
+// simpler and wrong: it would pin the literals too, and "[q\p{Ll}]" would then
+// stop matching "Q" under "i".
+//
+// A negated class cannot be split that way — "not (a or Lu)" is not "not a or
+// not Lu" — so its two halves are intersected instead, by subtracting the
+// categories from the complement of the rest. That yields a single class of
+// explicit ranges, which is then pinned whole; see the negated branch below
+// for why pinning everything is right there and wrong here.
+func closeClassWithCategories(built string, open int, cats []cpRange, p string) (string, error) {
+	prefix, class := built[:open], built[open:]
+	// class is "[...]" — its body is what the literal members amount to.
+	body := class[1 : len(class)-1]
+	negated := strings.HasPrefix(body, "^")
+	if negated {
+		body = body[1:]
+	}
+	cats = normalizeRanges(cats)
+
+	if negated {
+		// A negated class is an intersection of exclusions, so it cannot be
+		// split into alternatives the way the positive case is. It does not
+		// need to be: once the categories are expanded the class is a set of
+		// explicit ranges with no property reference left in it, and the
+		// whole thing can go inside one "(?-i:...)" — the group sits outside
+		// the bracket, where RE2 parses it as a group rather than as the
+		// literal characters that spell it.
+		//
+		// Pinning the whole class is right here in a way it would not be for
+		// the positive case. Every member of "[^...]" is named by what it
+		// excludes, and the exclusions are now exact codepoints; letting "i"
+		// fold them would make "[^\p{Lu}]" reject "a", since "a" folds to an
+		// "A" the class excludes. That is the leak, not the fix for it.
+		if body == "" {
+			return prefix + "(?-i:[^" + formatClass(cats) + "])", nil
+		}
+		// Both halves exclude, so the survivors are the codepoints excluded
+		// by neither. The literal half has to be read back as ranges to
+		// intersect it, which parseClassBody does exactly or not at all.
+		lit, litNeg, ok := parseClassBody(body)
+		if !ok || litNeg {
+			return "", fmt.Errorf(
+				"FORX0002: %q mixes a Unicode category with a class this "+
+					"translator cannot expand exactly", p)
+		}
+		keep := subtractRanges(complementRanges(lit), cats)
+		if len(keep) == 0 {
+			// RE2 rejects "[]", so a class that cannot match is written
+			// as one excluding every codepoint.
+			return prefix + "[^\\x{0}-\\x{10FFFF}]", nil
+		}
+		return prefix + "(?-i:[" + formatClass(keep) + "])", nil
+	}
+
+	pinned := "(?-i:[" + formatClass(cats) + "])"
+	if body == "" {
+		// No literal members, so there is nothing for the flag to fold and
+		// no alternation to build.
+		return prefix + pinned, nil
+	}
+	return prefix + "(?:[" + body + "]|" + pinned + ")", nil
+}
+
+// subtractionHasCategory reports whether either operand of a class
+// subtraction contains a \p or \P category escape, which is what decides
+// whether the resulting class has to be pinned against the "i" flag.
+//
+// left starts at the "[" of the outer class and right at the "-" that opens
+// the subtraction; between them they cover the whole construct. A block name
+// ("Is..." ) is not a category and does not pin anything: its range is a set of
+// codepoints like any literal, so the flag may fold it.
+func subtractionHasCategory(left, right string) bool {
+	for _, s := range []string{left, right} {
+		for i := 0; i+1 < len(s); i++ {
+			if s[i] != '\\' {
+				continue
+			}
+			if s[i+1] != 'p' && s[i+1] != 'P' {
+				// Skip whatever this escape is, so a "\\\\" before a
+				// "p" is not read as an escape of it.
+				i++
+				continue
+			}
+			if body, _, ok := takeBlockName(s[i+2:]); ok &&
+				!strings.HasPrefix(body, "Is") {
+				return true
+			}
+			i++
+		}
+	}
+	return false
 }

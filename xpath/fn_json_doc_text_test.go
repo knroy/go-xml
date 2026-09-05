@@ -3,6 +3,8 @@ package xpath
 import (
 	"strings"
 	"testing"
+
+	"github.com/knroy/go-xml/xdm"
 )
 
 // fixedTextResolver hands back one text for any URI, so a test can put exact
@@ -72,5 +74,111 @@ func TestJSONDocIsNotBoundByUnparsedTextsCharacterRule(t *testing.T) {
 			check(`unparsed-text('x')`, tc.unparsedWant)
 			check(`json-doc('x')`, tc.jsonWant)
 		})
+	}
+}
+
+// A fragment identifier names a part of a resource, and the unparsed-text
+// family retrieves whole resources. F&O 3.0 14.8.5 makes that a dynamic
+// error, not something to ignore: "A dynamic error is raised [err:FOUT1170]
+// if $href contains a fragment identifier, or if it cannot be used to
+// retrieve the string representation of a resource."
+//
+// The fragment used to be stripped and the whole file returned, which is a
+// silent wrong answer: the caller asked for a part of a resource and got all
+// of it, with nothing to indicate the difference.
+//
+// The resolver here answers every URI, so a case that still succeeds proves
+// the check reads the URI rather than the resolver's refusal -- which is what
+// the suite requires, since unparsed-text-013 and json-doc-error-028 both
+// name an http:// host no offline engine will ever fetch.
+func TestUnparsedTextRejectsAFragmentIdentifier(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr string
+		// want is a substring of the required error; empty means the call
+		// must succeed and return the resource.
+		want string
+	}{
+		// fn:unparsed-text states the rule itself (F&O 3.0 14.8.5).
+		{"unparsed-text", `unparsed-text('r.txt#frag')`, "FOUT1170"},
+		// fn:unparsed-text-lines is defined as tokenize(unparsed-text(...)),
+		// and 14.8.6 says "Error conditions are the same as for the
+		// fn:unparsed-text function."
+		{"unparsed-text-lines", `unparsed-text-lines('r.txt#frag')`, "FOUT1170"},
+		// fn:json-doc is that same read followed by fn:parse-json, and the
+		// catalog asserts FOUT1170 for a fragment in json-doc-error-028.
+		{"json-doc", `json-doc('r.txt#frag')`, "FOUT1170"},
+
+		// A bare fragment marker still counts: "#" with nothing after it is
+		// an empty fragment, not the absence of one.
+		{"empty fragment", `unparsed-text('r.txt#')`, "FOUT1170"},
+
+		// "%23" is a percent-encoded number sign, not a delimiter: RFC 3986
+		// 3.5 gives that role to a raw "#" alone. Such a URI contains no
+		// fragment and must be retrieved normally.
+		{"percent-encoded #23 is not a fragment", `unparsed-text('r%23.txt')`, ""},
+
+		// The ordinary path must be untouched.
+		{"no fragment at all", `unparsed-text('r.txt')`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewContext(nil, Builtins())
+			ctx.Texts = fixedTextResolver{text: "the whole resource"}
+			ctx.Version = XPath31
+
+			got, err := Eval(tc.expr, ctx, testNS{})
+			switch {
+			case tc.want == "":
+				if err != nil {
+					t.Fatalf("%s: %v, want the resource", tc.expr, err)
+				}
+			case err == nil:
+				t.Fatalf("%s: returned %v, want %s -- the fragment was "+
+					"ignored and the whole resource returned",
+					tc.expr, got, tc.want)
+			case xdm.ErrorCode(err) != tc.want:
+				t.Fatalf("%s: %v (code %q), want code %s",
+					tc.expr, err, xdm.ErrorCode(err), tc.want)
+			}
+		})
+	}
+}
+
+// fn:unparsed-text-available does NOT raise for a fragment. F&O 3.0 14.8.7
+// defines it as reporting whether fn:unparsed-text would succeed: it "returns
+// true if a call on fn:unparsed-text with the same arguments would succeed,
+// and false if a call on fn:unparsed-text with the same arguments would fail
+// with a non-recoverable dynamic error". FOUT1170 is such an error, so the
+// answer is false -- fn-unparsed-text-available-013 asserts exactly that.
+//
+// Before the fix this returned true, and it was true for the wrong reason:
+// the fragment was dropped and a real file was found behind it.
+func TestUnparsedTextAvailableIsFalseForAFragmentRatherThanAnError(t *testing.T) {
+	ctx := NewContext(nil, Builtins())
+	ctx.Texts = fixedTextResolver{text: "the whole resource"}
+	ctx.Version = XPath31
+
+	for _, expr := range []string{
+		`unparsed-text-available('r.txt#frag')`,
+		`unparsed-text-available('r.txt#frag', 'utf-8')`,
+	} {
+		got, err := Eval(expr, ctx, testNS{})
+		if err != nil {
+			t.Fatalf("%s: %v, want false (this function reports, it does "+
+				"not raise)", expr, err)
+		}
+		if s := renderSeq(got); s != "false" {
+			t.Errorf("%s = %s, want false", expr, s)
+		}
+	}
+
+	// The same call without the fragment must still be true, or the case
+	// above would pass for no reason.
+	got, err := Eval(`unparsed-text-available('r.txt')`, ctx, testNS{})
+	if err != nil {
+		t.Fatalf("unparsed-text-available('r.txt'): %v", err)
+	}
+	if s := renderSeq(got); s != "true" {
+		t.Errorf("unparsed-text-available('r.txt') = %s, want true", s)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
@@ -809,27 +808,16 @@ var ucaMatcher = language.NewMatcher(collate.Supported())
 // out at regexCacheMax: a collation URI can be built from document data —
 // concat($base, $node/@lang) — so the set of URIs is not fixed by the
 // stylesheet, and a true LRU would cost a lock on every read to protect a
-// working set that is normally one or two entries.
+// working set that is normally one or two entries. The bound holds under
+// concurrency as well as sequentially; see xpath/cache.go.
 const ucaCacheMax = 256
 
 func ucaCollationFor(uri string) (Collation, error) {
-	if v, ok := ucaCache.Load(uri); ok {
-		e := v.(ucaCacheEntry)
+	if e, ok := ucaCache.Get(uri); ok {
 		return e.c, e.err
 	}
 	c, err := parseUCACollation(uri)
-	if ucaCacheSize.Load() >= ucaCacheMax {
-		// Two goroutines can both decide to clear; that is harmless, since
-		// every entry is reproducible from its key.
-		ucaCache.Range(func(k, _ any) bool {
-			ucaCache.Delete(k)
-			return true
-		})
-		ucaCacheSize.Store(0)
-	}
-	if _, loaded := ucaCache.LoadOrStore(uri, ucaCacheEntry{c, err}); !loaded {
-		ucaCacheSize.Add(1)
-	}
+	ucaCache.Put(uri, ucaCacheEntry{c, err})
 	return c, err
 }
 
@@ -838,7 +826,4 @@ type ucaCacheEntry struct {
 	err error
 }
 
-var (
-	ucaCache     sync.Map // URI -> ucaCacheEntry
-	ucaCacheSize atomic.Int64
-)
+var ucaCache = boundedCache[string, ucaCacheEntry]{max: ucaCacheMax, items: map[string]ucaCacheEntry{}}

@@ -161,13 +161,19 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
 		c.version != ctx.Version ||
-		(c.staticHost != nil && c.staticHost != ctx.StaticHost) {
+		(c.staticHost != nil && c.staticHost != ctx.StaticHost) ||
+		(c.ns != nil && ctx.StaticNamespaces == nil) {
 		sub := *ctx
 		if c.staticBase != "" {
 			sub.StaticBaseURI = c.staticBase
 		}
 		if c.staticHost != nil {
 			sub.StaticHost = c.staticHost
+		}
+		// The namespaces the expression was compiled against are the ones a
+		// prefixed $calendar expands with; see Context.StaticNamespaces.
+		if c.ns != nil {
+			sub.StaticNamespaces = c.ns
 		}
 		// The version the expression was compiled in is what its function
 		// calls resolve against, whatever the caller's context says: an

@@ -640,9 +640,18 @@ and facets still apply to the substituted type.
   override of the global answer. See the commentary on those fields in
   `xdm/node.go`.
 - The `xpath` regex cache is bounded at 1024, as is the backtracking engine's
-  single-character-atom cache; the `xsd` model cache is keyed by complex type,
-  which is schema-controlled rather than attacker-controlled. The atom cache is
-  reached only with `SetBacktrackingRegex(true)`, which is off by default.
+  single-character-atom cache; the UCA collation cache is bounded at 256. All
+  three hold their bound under concurrent use, not merely on a single goroutine:
+  each is a `boundedCache` (`xpath/cache.go`) that performs the full-check and
+  the insert under one lock hold. An earlier form checked an atomic size counter
+  and inserted into a `sync.Map` as separate steps, which let concurrent callers
+  interleave and carry the table past its bound — a peak of 1726 live entries
+  against a bound of 1024 was measured with 200 concurrent callers. The overshoot
+  scaled with the number of goroutines in flight rather than with the volume of
+  input, so it was a violated bound rather than unbounded growth; more requests
+  did not enlarge it. The `xsd` model cache is keyed by complex type, which is
+  schema-controlled rather than attacker-controlled. The atom cache is reached
+  only with `SetBacktrackingRegex(true)`, which is off by default.
 - A compiled `Schema` and `Stylesheet` are safe for concurrent use, verified
   under `-race`.
 

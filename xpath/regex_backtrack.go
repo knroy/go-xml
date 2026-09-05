@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -598,7 +597,7 @@ func splitGreedyRefClosed(n int, closed map[int]bool) (int, string) {
 // without being written twice.
 func (p *btParser) compileCharAtom(src string) (btNode, error) {
 	key := charAtomKey{src: src, dotAll: p.dotAll, fold: p.fold}
-	if v, ok := charAtomCache.Load(key); ok {
+	if v, ok := charAtomCache.Get(key); ok {
 		switch t := v.(type) {
 		case *regexp.Regexp:
 			return &btChar{re: t, src: src}, nil
@@ -617,19 +616,7 @@ func (p *btParser) compileCharAtom(src string) (btNode, error) {
 
 // storeCharAtom adds an entry, clearing the cache first if it is full.
 func storeCharAtom(key charAtomKey, v any) {
-	if charAtomCacheSize.Load() >= charAtomCacheMax {
-		// Two goroutines can both decide to clear; that is harmless, since a
-		// cleared cache is only a performance loss and every entry is
-		// reproducible from its key.
-		charAtomCache.Range(func(k, _ any) bool {
-			charAtomCache.Delete(k)
-			return true
-		})
-		charAtomCacheSize.Store(0)
-	}
-	if _, loaded := charAtomCache.LoadOrStore(key, v); !loaded {
-		charAtomCacheSize.Add(1)
-	}
+	charAtomCache.Put(key, v)
 }
 
 func buildCharAtom(src string, dotAll, fold bool) (*regexp.Regexp, error) {
@@ -675,11 +662,13 @@ type charAtomKey struct {
 // Cleared wholesale rather than evicted one at a time, matching the regex
 // cache: a true LRU would need a lock on every read, which costs more than it
 // saves when the working set is a handful of atoms re-cached immediately after
-// a clear.
+// a clear. The bound holds under concurrency as well as sequentially; see
+// xpath/cache.go.
 const charAtomCacheMax = 1024
 
-var charAtomCache sync.Map // key: charAtomKey -> *regexp.Regexp or error
-var charAtomCacheSize atomic.Int64
+// The value is a *regexp.Regexp or an error — failures are memoised too, so a
+// pattern that names a bad atom on every iteration re-derives it only once.
+var charAtomCache = boundedCache[charAtomKey, any]{max: charAtomCacheMax, items: map[charAtomKey]any{}}
 
 // ---------------------------------------------------------------------------
 // Matcher

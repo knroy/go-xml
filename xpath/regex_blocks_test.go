@@ -235,3 +235,132 @@ func TestNameCharsAboveTheBMP(t *testing.T) {
 		}
 	}
 }
+
+// The "i" flag must not reach inside a category escape, and a character class
+// is not an exception. The spec is explicit: "All other constructs are
+// unaffected by the 'i' flag. For example, '\p{Lu}' continues to match
+// upper-case letters only."
+//
+// Outside a class that is a "(?-i:...)" group. Inside one it could not be:
+// RE2 reads "(?-i:...)" between brackets as the literal characters that spell
+// it, so "[(?-i:\p{Lu})]" matches "?" and ":", and "[(?-i:\P{L})*]" matches
+// every character. The escape was contributed bare instead, which avoided that
+// misparse but dropped the case pinning with it — a documented trade-off, but
+// one that made matches('a','[\p{Lu}]','i') return true. A wrong boolean, not
+// a wrong error, and silent.
+//
+// The category is now expanded into codepoint ranges, so there is no property
+// reference left for the flag to reach into.
+func TestCategoryEscapeIgnoresCaseFlagInsideClass(t *testing.T) {
+	for _, c := range []struct{ expr, want string }{
+		// The class form and the bare form must now agree.
+		{`matches('a', '^[\p{Lu}]$', 'i')`, "false"},
+		{`matches('A', '^[\p{Lu}]$', 'i')`, "true"},
+		{`matches('A', '^[\p{Ll}]$', 'i')`, "false"},
+		{`matches('a', '^[\p{Ll}]$', 'i')`, "true"},
+		{`matches('a', '^\p{Lu}$', 'i')`, "false"},
+		{`matches('A', '^\p{Lu}$', 'i')`, "true"},
+
+		// Without the flag nothing changed: the common path still works.
+		{`matches('A', '^[\p{Lu}]$')`, "true"},
+		{`matches('a', '^[\p{Lu}]$')`, "false"},
+		{`matches('a', '^[\p{Ll}]$')`, "true"},
+		{`matches('5', '^[\p{Nd}]$')`, "true"},
+		{`matches('a', '^[\p{Nd}]$')`, "false"},
+
+		// A category alongside other members of the class, which is what
+		// makes the bare contribution necessary in the first place.
+		{`matches('*', '^[\p{Lu}*]$', 'i')`, "true"},
+		{`matches('A', '^[\p{Lu}*]$', 'i')`, "true"},
+		{`matches('a', '^[\p{Lu}*]$', 'i')`, "false"},
+
+		// A negated category inside a class. "[\P{L}]" is the complement of
+		// the letters, computed here rather than left as a flag-sensitive \P.
+		{`matches('5', '^[\P{L}]$', 'i')`, "true"},
+		{`matches('a', '^[\P{L}]$', 'i')`, "false"},
+		{`matches('A', '^[\P{L}]$', 'i')`, "false"},
+		{`matches('5', '^[\P{L}]$')`, "true"},
+		{`matches('a', '^[\P{L}]$')`, "false"},
+		{`matches('a', '^[\P{Lu}]$', 'i')`, "true"},
+		{`matches('A', '^[\P{Lu}]$', 'i')`, "false"},
+
+		// The misparse the old comment warned about. Under a naive
+		// "(?-i:...)" inside the brackets this class became "any of
+		// ( ? - i : \ P { L } * )", which matched "A" and every other
+		// character. It must match the non-letters and "*", nothing else.
+		{`matches('A', '^[\P{L}*]$', 'i')`, "false"},
+		{`matches('a', '^[\P{L}*]$', 'i')`, "false"},
+		{`matches('*', '^[\P{L}*]$', 'i')`, "true"},
+		{`matches('5', '^[\P{L}*]$', 'i')`, "true"},
+		// "?" and ":" do belong to this class — they are not letters, so
+		// \P{L} covers them — but "i" and "P" are letters and must not,
+		// which is exactly what the misparse got wrong: it admitted every
+		// character that spells "(?-i:\P{L})".
+		{`matches('i', '^[\P{L}*]$', 'i')`, "false"},
+		{`matches('P', '^[\P{L}*]$', 'i')`, "false"},
+		{`matches('L', '^[\P{L}*]$', 'i')`, "false"},
+
+		// A negated class holding a category. RE2 applies "[^...]" to the
+		// whole body, so the bare ranges compose correctly.
+		{`matches('a', '^[^\p{Lu}]$', 'i')`, "true"},
+		{`matches('A', '^[^\p{Lu}]$', 'i')`, "false"},
+		{`matches('5', '^[^\p{Lu}]$', 'i')`, "true"},
+
+		// Subtraction reads the original source text rather than what the
+		// translator emitted, so it is unaffected — with the flag and
+		// without it.
+		{`matches('b', '^[\p{Ll}-[aeiou]]$')`, "true"},
+		{`matches('a', '^[\p{Ll}-[aeiou]]$')`, "false"},
+		{`matches('b', '^[\p{Ll}-[aeiou]]$', 'i')`, "true"},
+		{`matches('a', '^[\p{Ll}-[aeiou]]$', 'i')`, "false"},
+		// The subtracted class stays case-pinned too: "B" is not Ll.
+		{`matches('B', '^[\p{Ll}-[aeiou]]$', 'i')`, "false"},
+		{`matches('c', '^[a-z-[\p{Lu}]]$', 'i')`, "true"},
+	} {
+		if got := evalStrXSLT(t, testDoc, c.expr); got != c.want {
+			t.Errorf("%s = %q, want %q", c.expr, got, c.want)
+		}
+	}
+}
+
+// Two things the case-pinning of a category inside a class had to not break,
+// both caught by the QT3 suite rather than by reasoning.
+//
+// A category is a set, so it cannot be the upper end of a range. RE2 used to
+// refuse "[f-\p{Lu}]" on our behalf, because the escape was still a property
+// reference when it saw it; expanding the category to ranges removed that
+// accident and left a stray "f-" that would have compiled as a literal hyphen.
+// These are QT3's re00589 and re00590.
+//
+// And the subtraction path splices "(?-i:" in front of the class it emits. The
+// offset for that has to come from the code that built the class: the expanded
+// body contains escaped "\[" literals, so searching backwards for a bracket
+// finds one of those and cuts the class in half. That produced patterns RE2
+// rejected outright, which is how the suite caught it.
+func TestCategoryPinningKeepsGrammarAndBrackets(t *testing.T) {
+	for _, pat := range []string{
+		`([f-\p{Lu}]\w*)\s([\p{Lu}]\w*)`,
+		`([1-\P{Ll}][\p{Ll}]*)\s([\P{Ll}][\p{Ll}]*)`,
+	} {
+		if _, err := translatePattern(pat, false, XPath31); err == nil {
+			t.Errorf("%s: want FORX0002, got no error", pat)
+		}
+	}
+	// A subtraction whose left side is a negated category: the emitted class
+	// must still be a class RE2 can parse.
+	for _, pat := range []string{
+		`^[\P{Lu}-[ae-z]]+$`,
+		`^[\P{Lu}-[A-Z]]+$`,
+		`^[\P{Lu}-[\p{Lu}]]+$`,
+		`^[\P{Lu}-[ae-zA-Z]]+$`,
+	} {
+		tr, err := translatePattern(pat, false, XPath31)
+		if err != nil {
+			t.Errorf("%s: translate: %v", pat, err)
+			continue
+		}
+		if _, err := regexp.Compile("(?i)" + tr); err != nil {
+			t.Errorf("%s: compile: %v", pat, err)
+		}
+	}
+}

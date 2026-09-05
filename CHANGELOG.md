@@ -82,6 +82,47 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   driver reports `N assertions, M passed`, so its count is extracted and handed
   to `ratchetCount`. `tests/ratchet.txt` goes from seven marks to nine.
 
+### Fixed
+
+- **`fn:unparsed-text` accepted a URI with a fragment identifier and returned
+  the whole resource.** F&O 3.0 14.8.5 is explicit: "A dynamic error is raised
+  [err:FOUT1170] if `$href` contains a fragment identifier, or if it cannot be
+  used to retrieve the string representation of a resource." The fragment was
+  instead stripped from the URI before the read, so `unparsed-text('a.txt#f')`
+  returned all of `a.txt`.
+
+  That is a silent wrong answer, which is the reason it matters more than the
+  missing error code suggests. The caller asked for a fragment of a resource
+  and got the entire resource back, with nothing in the result to say the
+  selection had been discarded — no error, no truncation, no diagnostic. Code
+  that reads a named part of a file would have gone on to process the whole of
+  it as though the request had been honoured.
+
+  The check now sits in `readText`, ahead of the resolver, so it is decided
+  from the URI alone. That placement is what makes it correct for the cases
+  the suites actually ask about: `unparsed-text-013` and `json-doc-error-028`
+  both name an `http://` host this engine will never fetch, so a check made
+  after the retrieval attempt could only ever report the refusal to fetch.
+  Three functions share that read and so share the rule — `fn:unparsed-text`,
+  `fn:unparsed-text-lines` (14.8.6: "Error conditions are the same as for the
+  `fn:unparsed-text` function") and `fn:json-doc`, whose catalog asserts
+  FOUT1170 for a fragment.
+
+  `fn:unparsed-text-available` is deliberately not among them. 14.8.7 defines
+  it as reporting whether `fn:unparsed-text` would succeed — it "returns true
+  if a call on `fn:unparsed-text` with the same arguments would succeed, and
+  false if a call on `fn:unparsed-text` with the same arguments would fail
+  with a non-recoverable dynamic error" — so a fragment makes it return
+  `false`, not raise. It returned `true` before, and for the wrong reason: the
+  fragment was dropped and a real file was found behind it.
+
+  A raw `#` is the test. RFC 3986 §3.5 gives that character its role as the
+  fragment delimiter, so a number sign meant as data is written `%23` and
+  delimits nothing: `unparsed-text('r%23.txt')` names a file whose name
+  contains `#` and is retrieved normally. This matches `FragmentIsValidXMLName`,
+  which `fn:document` already used for the analogous XTRE1160 rule.
+  `fn:doc` and `fn:collection` are untouched — their URI rules are their own.
+
 ### Security
 
 - **Two caches with no bound.** A bound on a cache is a property of the cache,
@@ -109,6 +150,42 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   `xpath.TestCharAtomCacheStaysCorrectWhenCleared` and
   `xslt.TestPreloadHonorsCacheLimit`; each was checked against the unfixed code
   first, and each fails there.
+
+- **Those cache bounds held only on one goroutine.** The fix above, and the two
+  bounded caches it left in place, shared an idiom that is not atomic as a
+  group: read an atomic size counter, clear the `sync.Map` wholesale if it is
+  full, then `LoadOrStore` the new entry. Nothing holds across those three
+  steps, and `sync.Map`'s `Range` and `LoadOrStore` are lock-free by design, so
+  concurrent callers inserted straight through a clear that was still running.
+  The table carried past its limit.
+
+  Measured on the unfixed code with 200 goroutines inserting distinct keys: a
+  peak of 1,726 live entries in `charAtomCache` against a bound of 1024. At 800
+  goroutines the peak reached 3,454. The overshoot scales with the number of
+  callers in flight, not with how many keys they insert between them — so this
+  is a violated bound, not unbounded growth, and an attacker cannot enlarge it
+  by sending more data. A bound that holds only on one goroutine is still not a
+  bound, which is the reason to fix it rather than to re-scope it.
+
+  All three caches — `regexCache`, `charAtomCache` and the UCA collation cache
+  — are now one type, `boundedCache` in `xpath/cache.go`, which does the
+  full-check and the insert under a single lock hold. Eviction is unchanged:
+  wholesale clear, not LRU, because an LRU has to record a use on every *read*
+  and the working set here is a handful of patterns re-cached immediately after
+  a clear. The lock is a plain `Mutex` rather than an `RWMutex` deliberately;
+  the critical section is one map lookup, and at that length `RLock`'s own two
+  atomics cost more than the reader parallelism they buy. `compileBacktrackCached`
+  still shares `regexCache`'s storage, and so still shares its bound.
+
+  The sequential bound tests written alongside the original fix passed against
+  all of this. They drove each cache from a single goroutine, which cannot
+  observe the defect at all. `xpath.TestRegexCacheIsBoundedConcurrently`,
+  `TestCharAtomCacheIsBoundedConcurrently` and `TestUCACacheIsBoundedConcurrently`
+  cover the gap; each samples the size *while* the writers run, because the
+  overshoot is a transient peak and a count taken after they finish lands
+  wherever the last clear left the map. All three were checked against the old
+  idiom and fail there — 2,904, 1,835 and 989 entries against bounds of 1024,
+  1024 and 256 — on fifteen runs out of fifteen.
 
 - **`xsd` no longer installs an unconfined file resolver by default.**
   `Load`, `LoadFile`, `LoadFiles` and `WithInstanceLocations` each defaulted a
@@ -269,6 +346,101 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   used.
 
 ### Fixed
+
+- **A prefixed `$calendar` is now expanded against the statically known
+  namespaces.** `format-date($d, '[Y]', (), 'zz:thing', ())` formatted the date
+  and returned it, whatever `zz` was or was not bound to. The name was checked
+  for being a lexically well-formed EQName and then, because it contained a
+  colon, taken to name a calendar "in some namespace" — an implementation's own
+  extension, left alone and fallen back on. Nothing ever looked the prefix up,
+  so an expression naming a namespace that did not exist behaved exactly like
+  one naming a namespace that did.
+
+  F&O 9.8.4.3 does not leave the prefix lexical: "The calendar value if present
+  **must** be a valid `EQName` ... If it is a lexical `QName` then it is
+  expanded into an expanded QName using the *statically known namespaces*; if
+  it has no prefix then it represents an expanded-QName in no namespace. If the
+  expanded QName is in no namespace, then it **must** identify a calendar with
+  a designator specified below ... If the expanded QName is in a namespace then
+  it identifies the calendar in an implementation-defined way." The functions'
+  own Properties section says the same from the other side: the five-argument
+  form "depends on implicit timezone, and **namespaces**", and E.4 records the
+  change that made it so ("the 5-argument versions ... are dependent on the
+  namespaces in the static context, since the calendar argument is a lexical
+  QName", Bug 22395).
+
+  The expansion decides which of two different rules applies, which is why
+  skipping it is not cosmetic. A name in **no** namespace must be one of the
+  designators or it is `FOFD1340`; a name **in** a namespace is
+  implementation-defined and falls back. Treating "has a colon" as "is in a
+  namespace" put every prefixed name, bound or not, on the permissive side of
+  that split.
+
+  The resolution cannot happen in the parser, which is where every other prefix
+  in an expression is resolved: `$calendar` arrives as a *string value* and need
+  not be a literal, so the resolver has to survive into evaluation. It now does,
+  as `Context.StaticNamespaces`, carried from the `NamespaceResolver` the
+  expression was compiled with by the same overlay in `Compiled.Eval` that
+  already carries the static base URI, the default collation and the compiled
+  version. An unbound prefix has no expansion at all, so it is `FOFD1340` —
+  reported as an unbound prefix rather than as an unsupported calendar, since
+  the two are different faults.
+
+  What did not change is the behaviour the suite already pins: a *bound* prefix
+  and a braced URI literal still succeed and fall back (QT3
+  `format-date-en153`, `-en154`), an unknown name in no namespace is still an
+  error (`-en156`), and a malformed name still is (`-en157`, `-en158`).
+
+- **The `i` flag no longer reaches inside a `\p{...}` category in a character
+  class.** `matches('a', '[\p{Lu}]', 'i')` returned `true`, and
+  `matches('A', '[\p{Ll}]', 'i')` did too: a wrong boolean, silently, from a
+  pattern asking for exactly one case. F&O is explicit that the flag stops at
+  the category — "All other constructs are unaffected by the \"i\" flag. For
+  example, \"\p{Lu}\" continues to match upper-case letters only." Outside a
+  class that was already honoured with a `(?-i:...)` group; inside one it was
+  not, so the two spellings of the same set disagreed with each other.
+
+  This was a documented trade-off rather than an oversight, and the comment
+  explaining it was accurate about the mechanism. RE2 reads `(?-i:...)`
+  *between brackets* as the literal characters that spell it, so emitting the
+  group where the escape sat turned `[\P{L}*]` into "any of `( ? - i : \ P {
+  L } * )`" — a class matching `A` and every other letter. Faced with a
+  misparse that broke the class outright and a lost case-pinning that broke one
+  flag, the author took the second. What the comment did not say is what the
+  user sees: not a compile error, but `matches()` answering the wrong boolean.
+
+  Neither horn was necessary. The category is now expanded into its codepoint
+  ranges — through the same `propertyRanges`, `complementRanges` and
+  `formatClass` helpers the Appendix G block names and `\I`/`\C` already use —
+  and emitted *outside* the bracket as its own pinned alternative:
+  `[a\p{Lu}]` becomes `(?:[a]|(?-i:[A-Z…]))`. Expanding to ranges is not on its
+  own enough, because RE2 folds the members of a literal range too, so `(?i)`
+  over `[A-Z]` still matches `a`; and pinning the whole class instead would
+  over-correct, stopping `[q\p{Ll}]` from matching `Q` under `i`. Splitting the
+  two halves under different flag scopes is what gets both right.
+
+  A negated class is an intersection rather than a union, so it cannot be split
+  that way: `[^\p{Lu}]` subtracts the category from the complement of the rest
+  and pins the single resulting class, which is correct precisely because every
+  member of a negated class is named by what it excludes. Class subtraction is
+  pinned on the same condition — `[\p{Ll}-[aeiou]]` no longer matches `B` under
+  `i`, while `[a-z-[aeiou]]`, whose operands are literals the flag is entitled
+  to fold, still does. A category name the Unicode tables do not know, such as
+  the script `\p{Greek}`, is passed through bare as before; whether Appendix F
+  should refuse it is a separate question from this one.
+
+  Expanding the category also removed an accident the old form relied on. A
+  category is a set, so it cannot be the upper end of a range, and `[f-\p{Lu}]`
+  is not in the XML Schema grammar; RE2 refused it only because the escape was
+  still a property reference by the time it saw it. With the category expanded
+  the leftover `f-` would have compiled as a literal hyphen, so the case is now
+  detected and refused in the translator, where it belongs — QT3's `re00589`
+  and `re00590`.
+
+  The expansion is bounded: the largest category, `\p{C}`, is about 4.6 kB of
+  class body and compiles in tens of microseconds, the same order as the
+  `\i`/`\c` complements already emitted by every XML name pattern, and the
+  result is cached.
 
 - **`INF`, `-INF` and `NaN` no longer satisfy every bound facet.** `checkBounds`
   compared with `big.Rat` and read a lexical with no rational form as "no

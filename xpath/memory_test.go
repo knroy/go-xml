@@ -3,6 +3,8 @@ package xpath
 import (
 	"fmt"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -98,8 +100,7 @@ func TestCharAtomCacheIsBounded(t *testing.T) {
 				t.Fatalf("%s: %v", pat, err)
 			}
 		}
-		n := 0
-		charAtomCache.Range(func(_, _ any) bool { n++; return true })
+		n := charAtomCache.Len()
 		if n > charAtomCacheMax {
 			t.Errorf("char atom cache holds %d entries after %d distinct atoms, "+
 				"bound is %d — the cache is not being bounded",
@@ -133,4 +134,133 @@ func TestCharAtomCacheStaysCorrectWhenCleared(t *testing.T) {
 		}
 		check(charAtomCacheMax * 3)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent bound tests
+// ---------------------------------------------------------------------------
+
+// The three sequential bound tests above — TestRegexCacheIsBounded,
+// TestCharAtomCacheIsBounded and their collation equivalent — drive each cache
+// from a single goroutine, and they passed against code whose bound did not
+// hold at all under concurrency. That is the reason both kinds of test exist,
+// and the reason these were added.
+//
+// The original idiom checked an atomic size counter, cleared the map, and
+// inserted, as three separate steps against a sync.Map. Concurrent callers
+// interleaved between the check and the insert, so entries accumulated past the
+// bound: measured at a peak of 1655 live entries against charAtomCacheMax=1024
+// with 200 concurrent callers, and 3454 with 800. The overshoot scaled with the
+// number of goroutines in flight rather than with the volume of input, so it was
+// a violated bound and not unbounded growth — an attacker could not enlarge it
+// by sending more data. A bound that holds only on one goroutine is still not a
+// bound, which is what these tests pin.
+//
+// Each test samples the cache size *while* the writers are running, not only
+// after they finish. The overshoot is a transient peak: a post-hoc count lands
+// wherever the last clear left the map and routinely reads below the bound even
+// when the bound was breached moments earlier. A test that only counted at the
+// end could not observe the defect it exists to catch.
+
+// concurrentCachePeak runs write concurrently across many goroutines while
+// sampling the cache size, and returns the largest size observed at any
+// instant.
+//
+// The writers all wait on one channel so they are released together, which is
+// what produces genuine contention rather than a staggered sequence. Several
+// sampler goroutines run in parallel: a single sampler observed the size only
+// about half as often, and the peak being caught here is transient.
+func concurrentCachePeak(goroutines, each int, size func() int, write func(g, i int)) int {
+	var stop atomic.Bool
+	var peak atomic.Int64
+	var samplers sync.WaitGroup
+	for s := 0; s < 4; s++ {
+		samplers.Add(1)
+		go func() {
+			defer samplers.Done()
+			for !stop.Load() {
+				n := int64(size())
+				for {
+					old := peak.Load()
+					if n <= old || peak.CompareAndSwap(old, n) {
+						break
+					}
+				}
+			}
+		}()
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < each; i++ {
+				write(g, i)
+			}
+		}(g)
+	}
+	close(start)
+	wg.Wait()
+	stop.Store(true)
+	samplers.Wait()
+	return int(peak.Load())
+}
+
+// The regex cache must hold its bound when many goroutines compile distinct
+// patterns at once. Each goroutine uses a disjoint key range, so the writers
+// contend on the cache without deduplicating each other's work.
+func TestRegexCacheIsBoundedConcurrently(t *testing.T) {
+	const goroutines = 200
+	const each = 60
+	peak := concurrentCachePeak(goroutines, each, regexCache.Len, func(g, i int) {
+		// Compiling through the public entry point exercises the same store
+		// path the evaluator uses.
+		CompileRegexp(fmt.Sprintf("conc%d_%dz", g, i), "")
+	})
+	if peak > regexCacheMax {
+		t.Errorf("regex cache peaked at %d entries under %d concurrent writers, "+
+			"bound is %d — the bound does not hold under concurrency",
+			peak, goroutines, regexCacheMax)
+	}
+}
+
+// The char atom cache has the same shape and had the same defect. It is only
+// reachable with the backtracking engine on, which is what withBacktracking
+// arranges.
+func TestCharAtomCacheIsBoundedConcurrently(t *testing.T) {
+	withBacktracking(t, func() {
+		const goroutines = 200
+		const each = 60
+		peak := concurrentCachePeak(goroutines, each, charAtomCache.Len, func(g, i int) {
+			// One distinct single-character class per iteration; the
+			// backreference is what routes the pattern to the backtracking
+			// engine, and so to the char atom cache, at all.
+			CompileRegexp(fmt.Sprintf("([a-%c])\\1", rune(0x3000+g*each+i)), "")
+		})
+		if peak > charAtomCacheMax {
+			t.Errorf("char atom cache peaked at %d entries under %d concurrent writers, "+
+				"bound is %d — the bound does not hold under concurrency",
+				peak, goroutines, charAtomCacheMax)
+		}
+	})
+}
+
+// The UCA collation cache is smaller (256) and so crosses its bound sooner.
+// Every URI here is unsupported and therefore fails to parse; that is
+// deliberate, because failures are memoised too and the failure path is the one
+// a stylesheet naming a bad collation from document data would drive.
+func TestUCACacheIsBoundedConcurrently(t *testing.T) {
+	const goroutines = 200
+	const each = 30
+	peak := concurrentCachePeak(goroutines, each, ucaCache.Len, func(g, i int) {
+		ResolveCollation(fmt.Sprintf("%s?lang=zz-conc-%d-%d", UCACollation, g, i))
+	})
+	if peak > ucaCacheMax {
+		t.Errorf("UCA collation cache peaked at %d entries under %d concurrent writers, "+
+			"bound is %d — the bound does not hold under concurrency",
+			peak, goroutines, ucaCacheMax)
+	}
 }
