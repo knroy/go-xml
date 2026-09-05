@@ -23,7 +23,7 @@ let something through, and the column that matters is the last one.
 | **Unit tests** | 1,435 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
-| **W3C conformance suites** | 141,679 cases | systematic divergence from the specification | what the suites do not ask about — see below |
+| **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Fuzzing** | 6 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
@@ -44,7 +44,7 @@ figures* section, which fails the gate when this table drifts from the tree:
 * **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
   table: XPath 2.0 15,183 + XQuery 3.1 29,803 + XSLT 2.0 6,157 + XSLT 3.0 8,625
-  + XSD 1.0 39,388 + XSD 1.1 41,558 + RELAX NG 965. XPath 3.0 and 3.1 are not
+  + XSD 1.0 39,388 + XSD 1.1 41,570 + RELAX NG 965. XPath 3.0 and 3.1 are not
   added again — the QT3 catalog is one corpus measured at three versions, and
   the 2.0 figure is the whole of it that this engine claims. An earlier
   revision said "~128,000", which no grouping of these numbers reaches.

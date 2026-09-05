@@ -106,6 +106,26 @@ failure mode. The harness was validated by sabotage: making the swallowed
 each report "no violation" was caught, with a concrete schema and document in
 the failure message.
 
+**One load-time algorithm is not budgeted, and the omission is deliberate
+rather than overlooked.** `checkUPA` (`xsd/upa.go`) is the Unique Particle
+Attribution check, and its cost is O(states x pairs): `maxPositions` bounds the
+number of positions but not the pairwise scan over them, so the work is cubic
+in the size of a content model. Measured through the public `Load` API on a
+schema of nothing but optional elements: 116 KB takes 12.6s and 115 MB, 163 KB
+takes 1m45s and 369 MB, roughly 8x per doubling. `xsd/complexity_fuzz_test.go`
+records this in its inventory and asserts the growth exponent so it cannot
+worsen unnoticed.
+
+The reason it is still here is measurement rather than optimism. Instrumented
+over every schema in this tree -- 11,610 of them, the whole W3C suite included
+-- the widest state any real schema produces is 19 positions; the adversarial
+shape above reaches 2,048. So a caller loading schemas it wrote is nowhere near
+this, and a caller loading schemas an attacker wrote should not be doing so
+without a timeout in any case. The fix is a decision between bounding the scan
+and rewriting the element-vs-element test as a name-bucket intersection, and it
+is tracked rather than pretended away. Until then: **do not load untrusted
+schemas without a wall-clock limit around the call.**
+
 **The distinction that matters**, and the single most useful idea this file has
 produced — it decides whether a numeric constant in this code is a feature or a
 bug, and it is the first thing to apply to any new one:

@@ -827,11 +827,13 @@ re-loads the production corpora for exactly this reason, and the W3C's own
 `schema-for-xslt30.xsd` — reached through the XSLT suite in nine seconds —
 proved the sharper guard of the two.
 
-### XSD schema-validity: 6 (1.0) and 11 (1.1) addressable false rejects
+### XSD schema-validity: 6 (1.0) and 1 (1.1) addressable false rejects
 
 The ones that matter, because a false reject breaks a working caller. Most are
-Particle Valid (Restriction); `iri-001` needs a DOCTYPE and is refused by
-design.
+Particle Valid (Restriction). The 1.1 figure was 11 until the suite harness
+began loading schemas with `AllowDOCTYPE` set: `iri-001` and its ten masked
+instance cases were refused for wanting a DOCTYPE, not for anything the
+validator decided.
 
 One attempt is recorded above as reverted: carrying the element's occurrence
 range onto `recurseAsIfGroup`'s wrapper fixes `particlesZ001`, `Z023` and

@@ -219,11 +219,11 @@ functions were already there and already at 100%.
 ```
   cmd/go-xml          command-line transformer
         │
-  ┌─────▼─────────────────────────┐  ┌─────────────────────────────┐
+  ┌─────▼─────────────────────────┐  ┌──────────────────────────────┐
   │ xslt   stylesheet compiler    │  │ xquery  constructors · FLWOR │
   │        patterns · templates   │  │         the prolog           │
   │        instructions · output  │  │                              │
-  └─────┬─────────────────────────┘  └─────┬───────────────────────┘
+  └─────┬─────────────────────────┘  └─────┬────────────────────────┘
         │                                  │
         │        ┌─────────────────────────┘
         │        │  both build result trees with xdmbuild, and hand
@@ -1004,9 +1004,7 @@ instance is refused, number in the low tens and are tracked separately because
 they are the more serious kind: refusing valid input breaks a caller, while
 accepting invalid input only fails to catch their mistake.
 
-Two notes on the denominator. A handful of schemas still fail to load for
-reasons that are not bugs: two need a DOCTYPE, refused by default because it
-enables XXE. The `XmlVersions` schemas are a different matter — they carry
+One note on the denominator, and one on the numerator. The `XmlVersions` schemas carry
 `version="1.1"` and this parser accepts and loads all of them, but reads them
 under XML 1.0 rules, so what they test is not what is measured. See
 [todo.md](docs/todo.md#11-xml-11-documents--the-largest-single-win).

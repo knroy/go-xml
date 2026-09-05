@@ -16,7 +16,7 @@ Current position:
 | XSLT 2.0 | 99.87% — 6,149 of 6,157 in scope (8 failing) |
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
-| Schemas that fail to load | 19, most of them correctly |
+| Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
 | Tests | 1,435 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
@@ -145,6 +145,85 @@ of scope rather than passing — see
 that `import` needs. It is the same shape of problem as `xsd`'s schema
 assembly, and the resolver must default to nil like every other one here, or
 a query gains the ability to fetch.
+
+### 1.6 A host API for JSON, and a context item that is not a node
+
+Two separate gaps that a caller hits together, because both stand between a
+JSON string and an evaluation that can see it.
+
+**There is no `xdm.ParseJSON`.** All four XPath 3.1 JSON functions are
+implemented — `fn:parse-json`, `fn:json-doc`, `fn:json-to-xml`,
+`fn:xml-to-json` — but `parseJSONText` in `xpath/fn_json.go` is unexported, so
+a host holding a JSON string has to reach the map by compiling and evaluating
+an expression:
+
+```go
+e, _ := xpath.ParseVersion(`parse-json('{"n":42}')`, nil, xpath.XPath31)
+ctx := xpath.NewContext(nil, xpath.Builtins())
+ctx.Version = xpath.XPath31   // and this line, or XPST0017
+seq, _ := e.Eval(ctx)         // seq[0] is an *xdm.MapItem
+```
+
+Two things make that worse than it looks. The version is set in **two** places
+and both are required: `xpath.Parse` compiles 2.0, so the expression needs
+`ParseVersion(…, XPath31)`, and `parse-json` is registered with
+`registerFnSince(XPath31, …)`, which reads `ctx.Version` rather than the
+parser's. Setting one and not the other gives `XPST0017: unknown function`,
+which reads like the function is missing rather than like a version is unset.
+The second is that the JSON text has to be *spliced into an expression*, so a
+caller with a string in hand must escape it into a string literal.
+
+**What it buys.** `xdm.ParseString` is the XML answer to the same question,
+and the asymmetry is the whole complaint: a host can parse XML in one call and
+must write an XPath expression to parse JSON. It also removes the two-version
+trap from the common path.
+
+**What it costs.** Very little — the parser exists and is exercised by the
+suites. The shape is settled by prior art: Saxon added
+`Processor.newJsonBuilder().parseJson(String)` in Saxon 11 for exactly this
+reason, and SaxonC puts `parse_json` directly on the processor, which is the
+closer match to a package-level `xdm.ParseJSON(text string) (xdm.Item, error)`.
+Saxon exposes exactly one option, `liberal`, and takes `fn:parse-json`'s
+defaults for everything else including `duplicates="use-first"`; there is no
+reason to offer more until someone asks.
+
+One note for whoever writes it: JSON numbers become `xs:double`. That looks
+like a violation of the rule recorded in `cc17983` — an exact value must never
+be routed through float64 — and is not. F&O fixes the mapping, so the double
+is the specified answer rather than a shortcut, and the code should say so or
+it will be "fixed" later.
+
+**Prior art is thinner than it first appears.** Saxon is the *only* processor
+with this API. Five others implement real XDM 3.1 maps and arrays — Altova
+RaptorXML, XmlPrime, FontoXPath, elementpath, BaseX — and every one of them
+exposes a map only as something read *out of* an evaluation, with no
+constructor that ingests JSON. BaseX's `JsonW3Converter` is Java-public but
+undocumented; eXist-db's parser lives inside the function implementation. The
+structural reason is that the only standard host API, XQJ (JSR 225), froze at
+XQuery 1.0 in 2009, before maps, arrays and JSON existed in the data model,
+and no successor was written. So this is not a convention to conform to. It is
+one implementation's good idea, and the ergonomics are ours to choose.
+
+**The XSLT context item is narrower than the specification's.**
+`Stylesheet.Transform` takes a `*xdm.Node`, so a map cannot be the principal
+source of a transformation even though the language allows it. XSLT 3.0 gives
+`xsl:global-context-item` the default `as="item()"`, and the error that
+polices non-node items is narrow rather than general: XTTE0510 fires only for
+`xsl:apply-templates` with no `select`, which would be pointless if a non-node
+context item were forbidden outright. The specification goes further and names
+this signature as the older one — a single node "is likely to be found for
+compatibility reasons in a transformation API designed to work with earlier
+versions of this specification". Saxon's `Xslt30Transformer` takes
+`setGlobalContextItem(XdmItem)`.
+
+Nothing internal blocks it: `checkGlobalContextItem` already takes an
+`xdm.Item`, and the narrowing happens only at the public signature. The cost
+is an API decision rather than an implementation one — `Transform`'s signature
+is covered by the 1.x stability promise, so widening it means a sibling entry
+point rather than a change in place. Until then the workarounds are real but
+indirect: pass the map through `TransformOptions.Params` to a top-level
+`xsl:param`, or call `parse-json()` inside the stylesheet and bind it to an
+`xsl:variable`, passing only the JSON string in.
 
 ## 2. Bugs
 
