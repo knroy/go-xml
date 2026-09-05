@@ -223,6 +223,23 @@ GOXSLT_NO_SUITES=1 $GO test ./... -count=1 || fail "unit tests"
 section "race"
 GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
 
+# w3cschemas is a module of its own -- the schemas it bundles are W3C-licensed
+# and the core module is MIT -- so `go list ./...` at the root does not reach
+# it and none of the steps above cover it. It needs a step of its own or it is
+# in no gate at all, which is what it was in: nothing here and nothing in
+# ci.yml ran it.
+#
+# What this step measures is the module against the go-xml RELEASE its go.mod
+# names, not against this tree. That is deliberate: w3cschemas is published
+# separately, so the version it pins is the version its users get, and testing
+# it against an unreleased tree would measure something nobody can install. It
+# catches a broken w3cschemas; it does NOT catch an API break in this tree that
+# would affect it. Bumping the pin after a release is what closes that gap, and
+# is a release step rather than something to paper over with a workspace file.
+section "w3cschemas (separate module)"
+(cd w3cschemas && $GO build ./... && $GO vet ./... &&
+	$GO test ./... -count=1) || fail "w3cschemas"
+
 if [ "$MODE" = fast ]; then
 	printf '\n=== fast mode: external suites not run\n'
 	if [ "$failed" -eq 0 ]; then printf 'OK\n'; else printf 'FAILED\n'; fi
@@ -237,6 +254,15 @@ if [ -f "$QT3/catalog.xml" ]; then
 	out=$(GOXSLT_QT3="$QT3" $GO test ./tests/qt3/ -count=1 -run TestQT3 -v 2>&1) || true
 	if printf '%s' "$out" | grep -q 'in-scope:'; then
 		printf '%s\n' "$out" | grep -E 'QT3:|in-scope:'
+		# Ratcheted like every other suite. This was the one Go suite whose
+		# passing count could fall without the script noticing -- the comment
+		# above explains why the PERCENTAGE is not asserted, which is a
+		# different thing from letting the count drop silently.
+		#
+		# TestQT3 logs one "in-scope:" line per language version, so the
+		# figure to ratchet is the LAST of them (the full 2.0 run), not the
+		# first. ratchet() takes head -1, so the line is selected here.
+		ratchet TestQT3 "$(printf '%s\n' "$out" | grep 'in-scope:' | tail -1)"
 	else
 		fail "QT3 ran but reported no summary — did it skip?"
 		printf '%s\n' "$out" | tail -5
@@ -290,6 +316,11 @@ if [ -f "$RNG" ]; then
 	out=$(GOXSLT_RNG="$RNG" $GO test ./relaxng/ -count=1 -run TestSpectest -v 2>&1) || true
 	if printf '%s' "$out" | grep -q 'spectest:'; then
 		printf '%s\n' "$out" | grep -E 'spectest:|failing'
+		# The spectest driver logs "N assertions, M passed" rather than the
+		# "in-scope: M passed" the Go suites use, so the passing count is
+		# extracted here and handed to ratchetCount.
+		_rng=$(printf '%s' "$out" | sed -n 's/.*spectest: [0-9]* assertions, \([0-9]*\) passed.*/\1/p' | head -1)
+		ratchetCount RelaxNGSpectest "$_rng"
 	else
 		fail "spectest ran but reported no summary"
 		printf '%s\n' "$out" | tail -5

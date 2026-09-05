@@ -81,7 +81,22 @@ func (s *Schema) WithInstanceLocations(root *xdm.Node, policy InstanceLocationPo
 		opts.Resolver = policy.Resolver
 	}
 	if opts.Resolver == nil {
-		opts.Resolver = &FileResolver{}
+		// The locations here come from the instance, which is the least
+		// trusted input this package takes, so the unrooted default was
+		// worst of all at this site: a document could name any readable
+		// path and have it opened. The fallback is confined to the
+		// directories the schema was loaded from, which is the same base
+		// the locations resolve against below.
+		//
+		// A schema with no source paths grants nothing, and the check
+		// below turns that into an error; refusing here as well keeps a
+		// future caller from reaching an empty root set that admitted
+		// everything by having nothing to test against.
+		if len(s.sourcePaths) == 0 {
+			opts.Resolver = noResolverConfigured{}
+		} else {
+			opts.Resolver = rootedFileResolver(s.sourcePaths)
+		}
 	}
 	if opts.MaxDocuments == 0 {
 		opts.MaxDocuments = policy.MaxDocuments

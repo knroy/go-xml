@@ -841,6 +841,14 @@ func (c *compiler) collectInclude(inc *xdm.Node, collect func(*xdm.Node) error) 
 	if err := checkSyntax(root); err != nil {
 		return err
 	}
+	// An included grammar is a schema document like any other, and section 7
+	// applies to it. Checking only its syntax would let a construct the
+	// restrictions forbid — an <attribute> inside an <attribute>, a <text>
+	// inside a <list> — reach the deriver, which assumes it has already been
+	// refused. The top-level and <externalRef> paths both check it here.
+	if err := checkRestrictions(root); err != nil {
+		return err
+	}
 
 	// What the include overrides: the names it defines itself, and whether it
 	// replaces <start>.

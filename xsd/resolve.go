@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -28,6 +29,96 @@ type Resolver interface {
 	// which for an include is not an error (§4.2.1), and the caller
 	// distinguishes the cases.
 	Resolve(namespace, location, base string) (io.ReadCloser, string, error)
+}
+
+// noResolverConfigured is the default where no location has been granted.
+//
+// It answers every request with an error rather than with (nil, nil). The
+// contract reads a nil reader and a nil error as "no schema document", which
+// for an xs:include is not a failure — the include is dropped and assembly
+// succeeds. That is right for a caller who deliberately hardened, and wrong as
+// a default: a schema that silently lost half its components validates
+// documents against the half that is left. So the refusal is loud.
+type noResolverConfigured struct{}
+
+// errNoResolver marks the refusal as a configuration fault rather than a
+// location that merely could not be found.
+//
+// The distinction decides whether assembly carries on. §4.2.1 makes an
+// unresolvable include a hint that missed — "no corresponding inclusion is
+// performed" — and dropping it is right when a resolver looked and came back
+// empty. It is wrong when no resolver was ever configured: the schema then
+// loses components for a reason that has nothing to do with the schema, and
+// reports success. queueRef tests for this and reports it.
+var errNoResolver = errors.New("no Resolver is configured")
+
+// errRefusedByPolicy marks a refusal the configuration made deliberately, as
+// against a location that was looked for and not found.
+//
+// It travels with errNoResolver for the same reason: §4.2.1 lets an
+// unresolvable include be dropped, and doing so is right for a location that
+// simply is not there — a remote URL with no network resolver is the usual
+// case, and the W3C suite's own metadata schema depends on it being tolerated.
+// It is wrong for a location the configuration refused on purpose. Dropping
+// that one means a caller who set a Root gets a schema quietly missing whatever
+// sat outside it, and is told the load succeeded.
+var errRefusedByPolicy = errors.New("refused by the resolver's configuration")
+
+// Resolve implements Resolver.
+func (noResolverConfigured) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	if location == "" {
+		return nil, "", nil
+	}
+	return nil, "", fmt.Errorf(
+		"schemaLocation %q cannot be resolved: %w (Options.Resolver); pass "+
+			"a FileResolver, a MapResolver or an HTTPResolver to say what "+
+			"this schema may read", location, errNoResolver)
+}
+
+// multiRootFileResolver reads from any of several directories.
+//
+// LoadFiles is given a list of paths that need not share a parent, so the
+// grant its default makes is the set of the directories the caller named. A
+// location is offered to each in turn and the first that admits it wins.
+type multiRootFileResolver struct {
+	roots []*FileResolver
+}
+
+// Resolve implements Resolver.
+func (r multiRootFileResolver) Resolve(namespace, location, base string) (io.ReadCloser, string, error) {
+	if location == "" {
+		return nil, "", nil
+	}
+	var firstErr error
+	for _, fr := range r.roots {
+		rc, resolved, err := fr.Resolve(namespace, location, base)
+		if err == nil {
+			return rc, resolved, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, "", firstErr
+}
+
+// rootedFileResolver confines a default FileResolver to the directories the
+// caller's own arguments named.
+func rootedFileResolver(paths []string) Resolver {
+	seen := map[string]bool{}
+	var rs []*FileResolver
+	for _, p := range paths {
+		d := filepath.Dir(p)
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		rs = append(rs, &FileResolver{Root: d})
+	}
+	if len(rs) == 1 {
+		return rs[0]
+	}
+	return multiRootFileResolver{roots: rs}
 }
 
 // FileResolver resolves a schemaLocation against the filesystem.
@@ -86,6 +177,19 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		// error from EvalSymlinks. The root is resolved the same way, since
 		// a root reached through a symlink would otherwise never match the
 		// resolved target.
+		//
+		// This resolves and then opens, which is the shape a TOCTOU race
+		// attacks — xslt's resolver uses os.OpenRoot instead and enforces at
+		// open time. The window does not close here because what gets opened
+		// is the RESOLVED path (p = abs below): every link has already been
+		// followed, so a link that passed the check is not traversed again
+		// and cannot be swung underneath. Exploiting what remains means
+		// replacing a directory component of the resolved path between the
+		// two steps, which needs write access inside the root — and an
+		// attacker holding that can just write the file. The hostile party
+		// here is a *document*, which names a location and cannot touch the
+		// filesystem at all. See docs/security.md, "All resolution defaults
+		// are closed".
 		if x, err := filepath.EvalSymlinks(root); err == nil {
 			root = x
 		}
@@ -96,7 +200,8 @@ func (r *FileResolver) Resolve(namespace, location, base string) (io.ReadCloser,
 		// also admit "/srv/anything".
 		if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
 			return nil, "", fmt.Errorf(
-				"schemaLocation %q resolves outside the permitted root", location)
+				"schemaLocation %q resolves outside the permitted root: %w",
+				location, errRefusedByPolicy)
 		}
 		p = abs
 	}

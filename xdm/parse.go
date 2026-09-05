@@ -131,6 +131,39 @@ const (
 // namespace nodes are addressable on the namespace axis, and a literal result
 // element must be serialised with the prefix the author wrote.
 func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
+	// The byte limit wraps the reader FIRST, ahead of every other wrapper,
+	// so that it bounds the raw source as ParseOptions.MaxBytes says it
+	// does: what is read, not what a caller remembered to check. One byte
+	// over the limit is read deliberately: hitting it is then
+	// distinguishable from a document that happens to be exactly the
+	// maximum size.
+	//
+	// Ordering is load-bearing. The UTF-16 decoder beneath decodeReader
+	// reads its whole input in one io.ReadAll — it has to, because the
+	// encoding declaration it rewrites sits at the front of text a
+	// streaming decoder would already have handed on — so wrapping the
+	// limit outside it merely counted bytes that had already been pulled in
+	// and decoded. Measured: an 8 MB UTF-16 document allocated 138 MB
+	// against a MaxBytes of 1024 before being refused, which is a refusal
+	// that costs more than accepting. Wrapped here the ReadAll hits the
+	// limited reader and stops at the bound.
+	maxBytes := opts.MaxBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxBytes
+	}
+	if maxBytes > 0 {
+		// maxBytes+1 overflows to a negative limit at math.MaxInt64, and
+		// io.LimitReader treats that as "nothing left", so the largest limit a
+		// caller can name refused every document with "no root element". The
+		// saturating form keeps the over-read where it fits and drops it where
+		// no document can reach the limit anyway.
+		lim := maxBytes
+		if lim < math.MaxInt64 {
+			lim++
+		}
+		r = &countingReader{r: io.LimitReader(r, lim), max: maxBytes}
+	}
+
 	// Position tracking needs the source text to count lines in, and the
 	// reader is consumed by the decoder. Tee it into a buffer rather than
 	// reading it all up front, so that a parse failing early on a huge
@@ -156,29 +189,6 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 	// It replaces one byte with one byte, so every offset downstream, both
 	// TrackPositions and the entity base spans, still means what it did.
 	r = newAttNormReader(r)
-
-	// The byte limit wraps the reader, so it bounds what is read rather
-	// than what a caller remembered to check. One byte over the limit is
-	// read deliberately: hitting it is then distinguishable from a document
-	// that happens to be exactly the maximum size.
-	maxBytes := opts.MaxBytes
-	if maxBytes == 0 {
-		maxBytes = DefaultMaxBytes
-	}
-	var counted *countingReader
-	if maxBytes > 0 {
-		// maxBytes+1 overflows to a negative limit at math.MaxInt64, and
-		// io.LimitReader treats that as "nothing left", so the largest limit a
-		// caller can name refused every document with "no root element". The
-		// saturating form keeps the over-read where it fits and drops it where
-		// no document can reach the limit anyway.
-		lim := maxBytes
-		if lim < math.MaxInt64 {
-			lim++
-		}
-		counted = &countingReader{r: io.LimitReader(r, lim), max: maxBytes}
-		r = counted
-	}
 
 	trackPos := opts.TrackPositions
 	var srcBuf strings.Builder
@@ -292,7 +302,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 		case xml.StartElement:
 			depth++
 			if depth > maxDepth {
-				return nil, fmt.Errorf("parse XML: nesting exceeds %d levels", maxDepth)
+				return nil, fmt.Errorf("parse XML: nesting exceeds %d levels: %w",
+					maxDepth, ErrResourceLimit)
 			}
 			if cur == tree.Root {
 				if sawRoot {
@@ -329,7 +340,8 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 			nodes += 1 + len(el.Attrs) + len(el.Namespaces)
 			if maxNodes > 0 && nodes > maxNodes {
 				return nil, fmt.Errorf(
-					"parse XML: document exceeds %d nodes", maxNodes)
+					"parse XML: document exceeds %d nodes: %w",
+					maxNodes, ErrResourceLimit)
 			}
 			cur.AppendChild(el)
 			cur = el
@@ -511,13 +523,18 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 						return parseExpanded(srcBuf.String(), ents, opts)
 					}
 					// Arm the charge reader now that the declarations are
-					// known. Everything the decoder has already buffered was
-					// read before any entity could be referenced in content,
-					// and the remainder streams through the reader, so every
+					// known. The decoder has already buffered ahead — possibly
+					// the entire document, if the declaration was large enough
+					// to fill its read-ahead window along with the body — so
+					// arming charges that backlog here rather than waiting for
+					// a further Read that may never come. The remainder, if
+					// any, streams through the reader. Either way every
 					// reference in the document body is charged before the
 					// decoder expands it.
 					if charger != nil {
-						charger.t = ents
+						if err := charger.arm(ents); err != nil {
+							return nil, fmt.Errorf("parse XML: %w", err)
+						}
 					}
 					if dec.Entity == nil {
 						dec.Entity = map[string]string{}
@@ -741,7 +758,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
 	if c.n > c.max {
-		return n, fmt.Errorf("document exceeds %d bytes", c.max)
+		return n, fmt.Errorf("document exceeds %d bytes: %w", c.max, ErrResourceLimit)
 	}
 	return n, err
 }

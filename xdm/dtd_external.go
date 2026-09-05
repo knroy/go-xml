@@ -112,7 +112,8 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	}
 	if t.fetches >= maxExternalFetches {
 		return "", "", fmt.Errorf(
-			"document fetches more than %d external entities", maxExternalFetches)
+			"document fetches more than %d external entities: %w",
+			maxExternalFetches, ErrResourceLimit)
 	}
 	t.fetches++
 	rc, resolved, err := t.resolver.ResolveEntity(systemID, publicID, base)
@@ -139,8 +140,8 @@ func (t *entityTable) fetchExternal(systemID, publicID, base string) (string, st
 	}
 	if len(data) > room {
 		return "", "", fmt.Errorf(
-			"external entity %q exceeds the remaining %d byte expansion budget",
-			systemID, room)
+			"external entity %q exceeds the remaining %d byte expansion budget: %w",
+			systemID, room, ErrResourceLimit)
 	}
 	// Charged before expansion, per the note above.
 	t.total += len(data)
@@ -166,7 +167,8 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	}
 	if t.externalDepth >= maxExternalDepth {
 		return "", fmt.Errorf(
-			"external entities nested more than %d deep", maxExternalDepth)
+			"external entities nested more than %d deep: %w",
+			maxExternalDepth, ErrResourceLimit)
 	}
 	// A placeholder guards a cycle the same way resolve does for internal
 	// entities: an external entity whose text references itself would
@@ -414,7 +416,8 @@ func (t *entityTable) mergeUnder(sub *entityTable) {
 func (t *entityTable) expandParameterEntities(subset, base string, depth int) (string, error) {
 	if depth > maxExternalDepth {
 		return "", fmt.Errorf(
-			"parameter entities nested more than %d deep", maxExternalDepth)
+			"parameter entities nested more than %d deep: %w",
+			maxExternalDepth, ErrResourceLimit)
 	}
 	params, err := t.parseParameterDecls(subset, base)
 	if err != nil {
@@ -472,7 +475,8 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			t.total += len(text)
 			if t.total > maxTotalEntityBytes {
 				return "", fmt.Errorf(
-					"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+					"entity expansion exceeds %d bytes in total: %w",
+					maxTotalEntityBytes, ErrResourceLimit)
 			}
 		}
 		// The substituted text may itself declare and reference further
@@ -484,7 +488,8 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 		sb.WriteString(text)
 		if sb.Len() > maxTotalEntityBytes {
 			return "", fmt.Errorf(
-				"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+				"entity expansion exceeds %d bytes in total: %w",
+				maxTotalEntityBytes, ErrResourceLimit)
 		}
 		i += j + 1
 	}

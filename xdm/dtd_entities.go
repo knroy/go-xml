@@ -307,7 +307,8 @@ func (t *entityTable) resolve(name string) (string, error) {
 	if t.total > maxTotalEntityBytes {
 		delete(t.expanded, name)
 		return "", fmt.Errorf(
-			"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+			"entity expansion exceeds %d bytes in total: %w",
+			maxTotalEntityBytes, ErrResourceLimit)
 	}
 	t.expanded[name] = out
 	return out, nil
@@ -315,7 +316,8 @@ func (t *entityTable) resolve(name string) (string, error) {
 
 func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string, error) {
 	if depth > maxEntityDepth {
-		return "", fmt.Errorf("entity expansion exceeds %d levels", maxEntityDepth)
+		return "", fmt.Errorf("entity expansion exceeds %d levels: %w",
+			maxEntityDepth, ErrResourceLimit)
 	}
 	var sb strings.Builder
 	for i := 0; i < len(s); {
@@ -401,7 +403,8 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 			sb.WriteString(sub)
 			if sb.Len() > maxEntityBytes {
 				return "", fmt.Errorf(
-					"entity expansion exceeds %d bytes", maxEntityBytes)
+					"entity expansion exceeds %d bytes: %w",
+					maxEntityBytes, ErrResourceLimit)
 			}
 			i += j + 1
 			continue
@@ -419,7 +422,8 @@ func (t *entityTable) expand(s string, depth int, seen map[string]bool) (string,
 		sb.WriteString(sub)
 		if sb.Len() > maxEntityBytes {
 			return "", fmt.Errorf(
-				"entity expansion exceeds %d bytes", maxEntityBytes)
+				"entity expansion exceeds %d bytes: %w",
+				maxEntityBytes, ErrResourceLimit)
 		}
 		i += j + 1
 	}
@@ -704,12 +708,14 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 		count++
 		if count > maxEntityCount {
 			return "", fmt.Errorf(
-				"document references more than %d entities", maxEntityCount)
+				"document references more than %d entities: %w",
+				maxEntityCount, ErrResourceLimit)
 		}
 		written += len(rep)
 		if written > maxTotalEntityBytes {
 			return "", fmt.Errorf(
-				"entity expansion exceeds %d bytes", maxTotalEntityBytes)
+				"entity expansion exceeds %d bytes: %w",
+				maxTotalEntityBytes, ErrResourceLimit)
 		}
 		// Where this replacement lands is recorded so the second parse can
 		// give the nodes it produces the base URI of the entity they were
@@ -738,6 +744,22 @@ func (t *entityTable) substituteMarkupEntities(src string) (string, error) {
 //
 // The scan tracks quotes and nesting because an internal subset may contain
 // both: a default value may hold "]" and a declaration may hold ">".
+//
+// Comments and processing instructions are skipped whole. XML 1.0 §2.8 admits
+// both to the internal subset — markupdecl is "elementdecl | AttlistDecl |
+// EntityDecl | NotationDecl | PI | Comment" — and neither one's content is
+// markup, so an apostrophe, a quote or a bracket written inside one is text and
+// not structure. Reading them as structure was wrong in both directions:
+// "<!-- it's here -->" opened a quote that never closed and the scan ran off
+// the end, returning 0 and making the caller treat the subset itself as
+// content; "<!-- ] -->" closed the bracket early and ended the subset in the
+// middle of the declarations. A PI misparses identically — "<?p it's here ?>"
+// swallowed the rest of the document — which made a well-formed file fail to
+// parse with "unexpected EOF".
+//
+// A CDATA section needs no handling: CDSect appears only in `content`
+// (XML 1.0 §2.4, §3.1), never in intSubset, so one written here is a malformed
+// document that the decoder rejects on its own.
 func endOfInternalSubset(src string) int {
 	i := strings.Index(src, "<!DOCTYPE")
 	if i < 0 {
@@ -752,6 +774,31 @@ func endOfInternalSubset(src string) int {
 				quote = 0
 			}
 			continue
+		}
+		// A comment or PI can only begin where markup can, which is
+		// outside a quoted literal — the test above has already excluded
+		// that. "<!--" is tried before "<?" only because they cannot both
+		// match; the order carries no meaning.
+		if c == '<' {
+			var open, close string
+			switch {
+			case strings.HasPrefix(src[j:], "<!--"):
+				open, close = "<!--", "-->"
+			case strings.HasPrefix(src[j:], "<?"):
+				open, close = "<?", "?>"
+			}
+			if open != "" {
+				end := strings.Index(src[j+len(open):], close)
+				if end < 0 {
+					// Unterminated: the document is malformed and the
+					// decoder will say so. Consuming the rest is the safe
+					// reading, as resuming inside the construct would scan
+					// its text as structure.
+					return 0
+				}
+				j += len(open) + end + len(close) - 1
+				continue
+			}
 		}
 		switch c {
 		case '"', '\'':
@@ -980,7 +1027,8 @@ func (t *entityTable) chargeReferences(src string) error {
 		total += len(rep)
 		if total > maxTotalEntityBytes {
 			return fmt.Errorf(
-				"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+				"entity expansion exceeds %d bytes in total: %w",
+				maxTotalEntityBytes, ErrResourceLimit)
 		}
 	}
 	return nil
@@ -1030,19 +1078,10 @@ func (c *entityChargeReader) Read(p []byte) (int, error) {
 		// decoder reads ahead: by the time the DOCTYPE has been parsed and
 		// the table installed, a good deal of the content has already
 		// streamed past, and those references have to be charged too.
-		// Buffering stops as soon as the table arrives and the backlog is
-		// drained.
+		// Buffering stops as soon as the table arrives, which arm drains.
 		if c.t == nil {
 			c.backlog = append(c.backlog, p[:n]...)
 			return n, err
-		}
-		if len(c.backlog) > 0 {
-			b := c.backlog
-			c.backlog = nil
-			if cerr := c.charge(b); cerr != nil {
-				c.err = cerr
-				return n, cerr
-			}
 		}
 		if cerr := c.charge(p[:n]); cerr != nil {
 			c.err = cerr
@@ -1050,6 +1089,33 @@ func (c *entityChargeReader) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// arm installs the entity table and charges everything read before it was
+// known.
+//
+// Draining here rather than on the next Read is what makes the control
+// enforceable. A single read can deliver the DOCTYPE and the whole body
+// together — a large entity declaration guarantees it, because the decoder's
+// read-ahead window is sized in bytes and one big declaration fills it along
+// with everything after — and then no further Read ever comes: the backlog
+// would be dropped and the budget never charged, while the decoder went on to
+// expand every reference in it. The table becomes known at exactly one point
+// in the parse, and the backlog is sitting here at that moment, so that is
+// where it is charged: before expansion, which is the whole point of charging
+// at all rather than measuring afterwards.
+func (c *entityChargeReader) arm(t *entityTable) error {
+	c.t = t
+	if len(c.backlog) == 0 {
+		return nil
+	}
+	b := c.backlog
+	c.backlog = nil
+	if err := c.charge(b); err != nil {
+		c.err = err
+		return err
+	}
+	return nil
 }
 
 // charge scans one chunk, accumulating the expanded length of every reference
@@ -1107,7 +1173,8 @@ func (c *entityChargeReader) charge(b []byte) error {
 		c.total += len(rep)
 		if c.total > maxTotalEntityBytes {
 			return fmt.Errorf(
-				"entity expansion exceeds %d bytes in total", maxTotalEntityBytes)
+				"entity expansion exceeds %d bytes in total: %w",
+				maxTotalEntityBytes, ErrResourceLimit)
 		}
 	}
 	return nil

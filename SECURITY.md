@@ -51,8 +51,12 @@ Four that most often surprise:
   make per input source rather than globally.
 * **`xsi:schemaLocation` is ignored.** Honouring it lets a document choose the
   schema it is validated against, which is the document grading its own work.
-* **No schema, document or entity is fetched** unless a resolver is supplied.
-  There is no default resolver anywhere in this library, in any package.
+* **No schema, document or entity is fetched** unless a resolver is supplied,
+  with one narrow and deliberate exception: `xsd.LoadFile` and `xsd.LoadFiles`
+  were handed paths on disk, so they default to a `FileResolver` *rooted at the
+  directories those paths name* — a sibling `xs:include` resolves, anything
+  outside does not. Every other entry point, `xsd.Load` included, refuses until
+  a resolver is configured.
 * **Regular expressions are matched by RE2**, which is linear in the length of
   the input and cannot be made to backtrack. A backreference RE2 cannot express
   is refused with `FORX0002` rather than guessed at, and the general case is

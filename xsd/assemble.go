@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,7 +84,20 @@ const DefaultMaxDocuments = 512
 // resolve. It may be empty when the document names only absolute locations.
 func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if opts.Resolver == nil {
-		opts.Resolver = &FileResolver{}
+		// Closed by default, like every other resolution point in the
+		// library. This entry takes a tree, not a path: the caller has
+		// granted nothing on disk, so defaulting to a FileResolver with
+		// no Root handed an in-memory document the run of the
+		// filesystem through its own xs:include. xslt reached this
+		// exact way — it refuses a named schema-location when no
+		// SchemaResolver is configured, then passed that nil straight
+		// through for an inline <xs:schema>, and the include inside it
+		// was followed anyway.
+		//
+		// Only a document that actually names a location is refused. A
+		// schema with nothing to resolve never asks, so the common case
+		// of Load over a self-contained document is unaffected.
+		opts.Resolver = noResolverConfigured{}
 	}
 	if opts.MaxDocuments == 0 {
 		opts.MaxDocuments = DefaultMaxDocuments
@@ -247,7 +261,13 @@ func registerDerivedTypes(s *Schema) {
 // LoadFile assembles a schema from a file on disk.
 func LoadFile(path string, opts Options) (*Schema, error) {
 	if opts.Resolver == nil {
-		opts.Resolver = &FileResolver{}
+		// The caller named a file, so reading from disk is what was
+		// asked for and refusing here would break every relative
+		// xs:include beside it. The grant is confined to the directory
+		// the caller pointed at: a schema that then asks for
+		// "/etc/shadow", or climbs out with "..", is refused, which the
+		// unrooted default permitted.
+		opts.Resolver = &FileResolver{Root: filepath.Dir(path)}
 	}
 	rc, resolved, err := opts.Resolver.Resolve("", path, "")
 	if err != nil {
@@ -285,7 +305,10 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	}
 
 	if opts.Resolver == nil {
-		opts.Resolver = &FileResolver{}
+		// As in LoadFile, confined to what the caller named. Several
+		// paths may sit in several directories, so the grant is the set
+		// of their directories rather than one.
+		opts.Resolver = rootedFileResolver(paths)
 	}
 	if opts.MaxDocuments == 0 {
 		opts.MaxDocuments = DefaultMaxDocuments
@@ -871,6 +894,32 @@ func (a *assembler) queueRef(el *xdm.Node, doc *schemaDoc, namespace, location s
 		defer rc.Close()
 	}
 	if err != nil || rc == nil {
+		if isInclude &&
+			(errors.Is(err, errNoResolver) || errors.Is(err, errRefusedByPolicy)) {
+			// Not a hint that missed: nothing was ever configured
+			// to look. §4.2.1 lets an unresolvable include be
+			// dropped, which is right when a resolver looked and
+			// came back empty and wrong when none was configured —
+			// the schema then quietly loses components of its own
+			// namespace and still reports success, so a caller who
+			// hardened has no way to tell a schema that needed
+			// nothing from one that needed something.
+			//
+			// Only include. An import is different: §5.3 Missing
+			// Sub-components gives an unfetched namespace a defined
+			// outcome — the references into it are · absent · and
+			// the consequence falls at validation — and every
+			// conforming processor loads such a schema.
+			// TestUnresolvedImportLeavesReferencesAbsent holds that
+			// case, which the suite's own common/xsts.xsd relies on.
+			//
+			// The same applies to a location a configured Root
+			// refused: that is a decision, not a miss, and a
+			// schema silently missing what sat outside the root
+			// would be reported as having loaded.
+			a.p.errs = append(a.p.errs, errorAt(el, "src-resolve", "%v", err))
+			return
+		}
 		// A redefine that redefines nothing costs nothing when its
 		// location cannot be resolved — anyURI_a001 says of exactly
 		// this case that the document "should give only 3 warning for

@@ -28,7 +28,7 @@ let something through, and the column that matters is the last one.
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
 | **Fuzzing** | 5 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
-| **The ratchet** | 7 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+| **The ratchet** | 9 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 
 **The suites are the weakest of these where it counts most.** Every one of
 them feeds the parser *well-formed* input and measures what happens after; none
@@ -113,6 +113,16 @@ generators put targets under one scope at a time, so an ancestor merging three
 sibling tables never arose — the corpus could not express the bug, exactly as
 the `.//box/leaf` case could not express a dropped leading step until loose
 leaves were added.
+
+**A generator that emits one datatype cannot see a datatype bug.** The identity
+oracles build every field from `xs:string` ids, so no number of documents from
+them says anything about whether `3.0` and `3` collide as one `xs:decimal` —
+equality on strings and equality on values are the same relation there. That
+gap was found by asking the question directly instead:
+`xsd/identity_typed_equality_test.go` asserts the spellings per primitive as
+verdicts, and it is what showed that a field typed as a *union* recorded no
+value at all and fell back to comparing raw strings. The oracles were green
+before and after that fix, correctly — the case is outside what they generate.
 
 An external reader found it by reading the merge. The durable fix is not more
 documents but an invariant asserted on the data structure itself: if two
@@ -208,6 +218,20 @@ three functions to follow (see
 answers in a paragraph, and it keeps answering after the argument is
 forgotten.
 
+**A verdict is the assertion; "no error" is not.**
+`relaxng/datatype_bounds_test.go` asserts `valid` / `invalid` / `schema-error`
+by name rather than checking that validation returned no error, because the
+defects it pins are false accepts — a `maxInclusive` of `9007199254740992` that
+admitted `9007199254740993`, and a `minLength` of `9223372036854775808` that
+wrapped negative and admitted every string. Both produce no error at all, so a
+test that only asked whether validation blew up would have passed against
+either. The bound cases walk both sides of 2^53 in both directions, values past
+the range of any float, negatives, and `xs:decimal` pairs differing only in the
+twentieth significant digit; the `xs:double` cases are there to keep the fix
+from over-reaching, since `float64` really is that type's value space. The file
+also pins that an `<include>`d grammar is checked against section 7, which
+`derive.go` assumes and the include path did not do.
+
 **The production schema sets found the most per hour.** Pointing the validator
 at UBL 2.1 turned up two defects the entire W3C suite had not, and between them
 they meant all 65 main-document schemas failed to load with 1,758 errors
@@ -297,6 +321,8 @@ seen. `check.sh` fails when a count goes **down**.
 
 ```
 DocBook 577
+RelaxNGSpectest 965
+TestQT3 29800
 TestQT3XQuery 29800
 TestXSLT30Suite 8612
 TestXSLTSuite 6149
@@ -304,6 +330,14 @@ XSD10 39347
 XSD11 41532
 XSpec 225
 ```
+
+`TestQT3` and `RelaxNGSpectest` were added late: both suites were being run and
+printed, and neither was ratcheted, so an XPath 2.0 or RELAX NG count could
+fall without `check.sh` saying anything. `TestQT3` logs one `in-scope:` line
+per language version, so the mark is taken from the **last** of them — the
+full 2.0 run — rather than the first. The spectest driver reports
+`N assertions, M passed` instead of `in-scope: M passed`, so its count is
+extracted in `check.sh` and handed to `ratchetCount`.
 
 It exists because build-and-test cannot see a silent revert: a stale copy of a
 shared file committed over an additive change leaves a tree that compiles and
@@ -395,6 +429,34 @@ commit** in two runs minutes apart, and the ratchet correctly called the second
 a regression. Two different numbers for one commit cannot be a code change —
 only cases sitting near the deadline on a loaded runner. Both drivers now use
 60 seconds.
+
+### A unit test may not cost minutes
+
+The deadline that actually broke CI was not a per-case one. `84735c8` added
+`TestMaxPositionsRealBoundary`, which compiled three content models of about
+8,192 particles each to drive `maxPositions` at its edges.
+`compileContentModel` is a Glushkov construction whose follow-set cost grows as
+the **cube** of the particle count — measured on an idle 12-core laptop, 1,024
+particles compile in 0.16s, 2,048 in 1.4s, 4,096 in 12s and 8,192 in 90s, each
+doubling costing about nine times the last. The test alone ran 202 seconds
+there, and under `-race` on a two-core runner it did not finish inside the
+25-minute `go test` deadline at all.
+
+That failed **both** CI jobs, which is what made it look like two bugs. The
+`test` job runs `go test ./... -race`; `tests/check.sh` runs the same step in
+its `race` section before it reaches a single suite, so the conformance job
+died in the same place and never printed a conformance number.
+
+The boundary is now driven at a forced budget of 64 via `withBudgets`, which is
+what the neighbouring `TestMaxPositionsBoundary` already did. The off-by-one
+being asserted is a property of the comparison, not of the constant's
+magnitude: at 64 the same three cases run in microseconds and still fail if
+`>=` is ever written as `>`. `TestMaxPositionsProductionValue` pins the shipped
+8,192 separately, so lowering the real budget stays a deliberate edit.
+
+The rule this leaves: a test in a `go test ./...` package is a unit test, and a
+unit test that costs minutes is a bug in the test. Drive a budget's edges at a
+forced budget and assert the production value separately.
 
 One case does not pass at any deadline. `op:same-key-023` builds 75³ = 421,875
 keys and calls `map:put` and `map:remove` once for each; both are O(n) in this
@@ -533,6 +595,54 @@ remembering to run the script, and a number nobody re-measures is a number that
 quietly stops being true.
 
 ---
+
+## The second module has to be gated separately
+
+`w3cschemas/` is its own module — the W3C documents it bundles are under W3C
+terms, and keeping them out of the MIT core is the point of the split. That
+split also means `go list ./...` at the repository root does not reach it, so
+every root-level step misses it: build, vet, unit tests and race all stop at
+the module boundary.
+
+For a long time nothing else picked it up either. It appeared in neither
+`ci.yml` nor `check.sh`, and its `go.mod` named a *published release* of
+`github.com/knroy/go-xml` rather than this tree, so its imports of `xsd` and
+`xdm` resolved to the module cache:
+
+```sh
+$ cd w3cschemas && go list -f '{{.Dir}}' github.com/knroy/go-xml/xsd
+/Users/…/go/pkg/mod/github.com/knroy/go-xml@v1.1.0/xsd
+```
+
+Its tests passed, and what they were testing was a release a few hundred
+commits old. An API break in `xsd` or `xdm` could not have failed them.
+
+Three things fix it, and all three are needed:
+
+* **`go.work` at the repository root** redirects the dependency to `.`, so the
+  module builds against this tree. The redirection lives there rather than in
+  `w3cschemas/go.mod` because that module is published (tag
+  `w3cschemas/v0.1.0`); a `replace` in a published `go.mod` has to be stripped
+  at every tag or it misleads whoever reads it. `go.work` is not published, so
+  it carries the local wiring for free. It is committed, because it names only
+  `.` and `./w3cschemas` — Go's caution against committing a workspace is
+  about workspaces that reach outside the repository and therefore differ per
+  developer.
+* **The `require` names v1.2.1, not v1.1.0.** v1.1.0 and v1.2.0 both declare
+  `go 1.26`, and that is inherited: a 1.25 toolchain refuses the module before
+  it ever looks at the workspace, because MVS reads the dependency's `go.mod`
+  regardless. Since CI pins 1.25, the old pin made the module unbuildable in
+  CI even with a workspace in place. v1.2.1 declares `go 1.25.0`, which also
+  let `w3cschemas/go.mod` drop from `go 1.26` to `go 1.25.0` and `x/text` from
+  v0.37.0 to v0.36.0 — both now identical to the root module. The `go 1.26`
+  was never a language requirement; it was the stale dependency showing
+  through.
+* **A step of its own**, in `check.sh` and in `ci.yml`'s fast job. A workspace
+  makes the module build against the right code; it does not cause anything to
+  run it. `go list ./...` at the root still excludes it, by design.
+
+The general shape of this: *a module that is in no gate cannot regress, and a
+module pinned to a release is not testing your working tree even when it is.*
 
 ## The Go version is a conformance dependency
 

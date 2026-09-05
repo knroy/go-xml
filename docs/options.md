@@ -81,8 +81,22 @@ and every one of them now also carries the sentinel. The rightmost column is
 why the code alone is misleading; the codes are kept because callers and the
 conformance suites read them, and changing one is spec-visible.
 
+`xdm`'s own parse limits come first, and they were the last to be covered:
+the package that *defines* the sentinel did not apply it to any of its four
+limits, so a caller that had adopted `errors.Is` everywhere else still saw a
+`xdm.Parse` refusal as an ordinary parse failure. Their messages carry no spec
+code at all, which makes them harder to tell apart, not easier — "document
+exceeds 100 bytes" and "element \"b\" closed by end element \"a\"" arrive as the
+same kind of thing. `xdm/resourcelimit_test.go` pins each one, and pins that a
+syntax error does *not* carry the sentinel.
+
 | Limit | Site | Code | What the code actually means |
 |---|---|---|---|
+| `MaxDepth` | `xdm/parse.go` | *(none)* | reads as a malformed document |
+| `MaxNodes` | `xdm/parse.go` | *(none)* | as above |
+| `MaxBytes` | `xdm/parse.go` | *(none)* | as above |
+| entity expansion budget | `xdm/dtd_entities.go`, `xdm/dtd_external.go` | *(none)* | as above |
+| `maxIncludeDepth` / `maxIncludeFetches` | `xdm/xinclude.go` | *(none)* | the text already said "resource limit exceeded"; now `errors.Is` agrees |
 | `maxParseDepth` (expression) | `xpath/parser.go` | `XPST0003` | the expression is syntactically invalid |
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |

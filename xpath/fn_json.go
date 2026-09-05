@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -880,10 +881,21 @@ func (b *jsonBuilder) str(s string) error { return b.emit(xdm.One(xdm.NewString(
 // The data model has no "JSON number": every one becomes a double, so 1 and
 // 1.0 and 1e0 are the same value. The lexeme was carried this far only for
 // fn:json-to-xml's benefit.
+// A magnitude no double can hold is not a grammar error. The scanner has
+// already checked the lexeme against JSON's number production, so the only
+// failure ParseFloat has left to report is strconv.ErrRange -- and on that it
+// still returns the right value: ±Inf for an overflow, ±0 for an underflow.
+// Rejecting "1e400" as "not a valid JSON number" said something false about
+// text JSON permits, and disagreed with fn:json-to-xml, which carries the
+// same lexeme through without complaint. F&O 3.0 §4.2 allows a double
+// overflow to yield INF, which is what this processor does everywhere else.
 func (b *jsonBuilder) number(lexeme string) error {
 	f, err := strconv.ParseFloat(lexeme, 64)
 	if err != nil {
-		return errFOJS0001("%q is not a valid JSON number", lexeme)
+		var numErr *strconv.NumError
+		if !errors.As(err, &numErr) || numErr.Err != strconv.ErrRange {
+			return errFOJS0001("%q is not a valid JSON number", lexeme)
+		}
 	}
 	return b.emit(xdm.One(xdm.NewDouble(f)))
 }

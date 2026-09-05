@@ -6,7 +6,255 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Fixed — CI
+
+- **The `w3cschemas` module was testing a published release, not this tree.**
+  It is a separate module — the W3C documents it bundles are under W3C terms
+  rather than MIT — and it was in no gate at all: absent from `ci.yml`, absent
+  from `tests/check.sh`, and out of reach of `go list ./...` at the root, which
+  does not cross a module boundary. Its `go.mod` required
+  `github.com/knroy/go-xml v1.1.0`, so its imports of `xsd` and `xdm` resolved
+  to the module cache rather than to the working tree:
+  `go list -f '{{.Dir}}' github.com/knroy/go-xml/xsd` inside it answered
+  `…/pkg/mod/github.com/knroy/go-xml@v1.1.0/xsd`. Its tests passed while
+  exercising a release roughly three hundred commits behind, so an API break in
+  the two packages changed most this cycle could not have failed them.
+
+  A committed `go.work` at the repository root now redirects the dependency to
+  `.`. The redirection is kept out of `w3cschemas/go.mod` deliberately: that
+  module is published (tag `w3cschemas/v0.1.0`), and a `replace` in a published
+  `go.mod` has to be stripped at every tag or it misleads whoever reads it.
+  `go.work` names only `.` and `./w3cschemas`, so it reproduces identically for
+  every developer and for CI, which is the case where committing a workspace is
+  correct.
+
+  A workspace alone was not enough, and the reason is worth recording: a 1.25
+  toolchain rejected the module *before* consulting the workspace, because MVS
+  reads the required version's own `go.mod` regardless of any replacement, and
+  both v1.1.0 and v1.2.0 declare `go 1.26`. Since CI pins `go-version: '1.25'`,
+  the module would have failed there even wired correctly. The `require` now
+  names v1.2.1, which declares `go 1.25.0`. That in turn let `w3cschemas/go.mod`
+  drop from `go 1.26` to `go 1.25.0` and `golang.org/x/text` from v0.37.0 to
+  v0.36.0, both now identical to the root module — the dependency skew is gone
+  and the module builds standalone on 1.25 as well as inside the workspace. The
+  `go 1.26` was never a language requirement; it was the stale pin showing
+  through, which is why `go mod tidy` kept restoring it.
+
+  Finally, a step of its own in `tests/check.sh` and in `ci.yml`'s fast job. A
+  workspace makes the module compile against the right code; it does not cause
+  anything to run it.
+
+- **Investigated, not changed: the `XSpec 225` ratchet mark is correct.** It
+  was reported as stale on the grounds that the corpus measured 224. It does
+  not: three runs — twice at `HEAD` and once at `e51ed3f`, the last green
+  commit before this cycle — each transformed **225 of 284** inputs with a
+  byte-identical set of 59 failures, against a clean `testdata/xspec` at
+  `799d52a`. So there is no engine regression and no upstream drift, and the
+  mark is left alone. Timeouts are not the explanation either, which was the
+  other candidate given how load-sensitive this script has been before: the
+  slowest *passing* case, `report-sequence.xspec`, takes 871ms against the
+  120s deadline `check.sh` passes, a margin of 138×. The 224 could not be
+  reproduced. Recorded here so the mark is not lowered on the strength of a
+  single measurement — lowering it is exactly how a real regression would get
+  normalised away.
+
+- **A unit test that cost minutes broke both CI jobs.**
+  `TestMaxPositionsRealBoundary`, added in `84735c8`, compiled three content
+  models of ~8,192 particles to drive `maxPositions` at its edges.
+  `compileContentModel` is cubic in the particle count (1,024 particles in
+  0.16s, 2,048 in 1.4s, 4,096 in 12s, 8,192 in 90s on an idle 12-core laptop),
+  so the test ran 202s there and, under `-race` on a two-core runner, did not
+  finish inside the 25-minute `go test` deadline. That failed the `test` job
+  and — because `tests/check.sh` runs the same `-race` step before any suite —
+  the `conformance` job too, which is why one bug looked like two. The
+  boundary is now driven at a forced budget of 64 through `withBudgets`, as the
+  neighbouring `TestMaxPositionsBoundary` already did; the off-by-one asserted
+  is a property of the comparison, not of the constant. A new
+  `TestMaxPositionsProductionValue` pins the shipped 8,192 so lowering it stays
+  deliberate. Full `-race` run at `GOMAXPROCS=2`: never finished (>25m) before,
+  1m17s after.
+
+- **`TestQT3` and the RELAX NG spectest are now ratcheted.** Both were run and
+  printed but not recorded, so an XPath 2.0 or RELAX NG count could fall
+  without `check.sh` saying anything. `TestQT3` logs one `in-scope:` line per
+  language version and the mark is taken from the last of them; the spectest
+  driver reports `N assertions, M passed`, so its count is extracted and handed
+  to `ratchetCount`. `tests/ratchet.txt` goes from seven marks to nine.
+
+### Security
+
+- **`xsd` no longer installs an unconfined file resolver by default.**
+  `Load`, `LoadFile`, `LoadFiles` and `WithInstanceLocations` each defaulted a
+  nil `Options.Resolver` to a `FileResolver` with no `Root` — "any readable
+  path", by that field's own comment. A zero-value `Options` therefore opened
+  and read whatever an `xs:include` named: an absolute `/etc/hosts` came back
+  as a parse error *about the contents of /etc/hosts*, which is the proof the
+  read happened. `SECURITY.md` claimed there was "no default resolver anywhere
+  in this library, in any package", and for `xsd` that was false.
+
+  It was reachable from outside the package. `xslt` refuses an
+  `xsl:import-schema` naming a schema-location when no `SchemaResolver` is
+  configured, then passed that same nil to `xsd.Load` for an *inline*
+  `<xs:schema>` — whose own `xs:include` was followed anyway. A caller who
+  hardened `xslt` still had the filesystem readable through a stylesheet.
+
+  The default now follows the grant the caller already made. `Load` takes a
+  tree and no path, so it refuses; a self-contained schema, which is nearly
+  every use of `Load`, is unaffected because it asks for nothing. `LoadFile`
+  and `LoadFiles` were handed paths, so a sibling include still resolves — but
+  the default is rooted at the directories the caller named, so an absolute
+  path elsewhere or a climb through `..` is refused, which the unrooted
+  default permitted. `WithInstanceLocations` is rooted the same way, and it
+  mattered most there: its locations come from the instance.
+
+- **A resolution the configuration refused is now reported instead of
+  dropped.** §4.2.1 permits an `xs:include` whose location cannot be resolved
+  to contribute nothing, and that is right for a location looked for and not
+  found — a remote URL with no network resolver, most commonly. It is wrong
+  for "no resolver is configured" and "outside the permitted root", which are
+  decisions rather than misses: a caller who hardened got a schema quietly
+  missing components and a `nil` error, and then validated documents against
+  what was left. Both now surface as `src-resolve`. `xs:import` keeps the
+  silent path in both cases, because §5.3 *Missing Sub-components* gives an
+  unfetched namespace a defined outcome and every conforming processor loads
+  such a schema — the W3C suite's own `common/xsts.xsd` is exactly that.
+
+### Documentation
+
+- **The two rooted file resolvers enforce their roots by different mechanisms,
+  and that is now written down.** `xslt.FileResolver` opens through
+  `os.OpenRoot`, which enforces at open time; `xsd.FileResolver` resolves
+  symlinks, compares against the root, then opens — the check-then-use shape a
+  TOCTOU race attacks in general. It was reviewed and deliberately kept. What
+  is opened is the *resolved* path, so a link that passed the check is never
+  traversed again and cannot be swung between the two steps; a racer swapping a
+  symlink inside the root as fast as the filesystem allows, against a resolver
+  reading in a tight loop, produced over a hundred thousand successful reads
+  and zero escapes. The residual window needs an attacker who can replace a
+  directory component of the already-resolved path, which requires write access
+  inside the root — and anyone with that can write the file directly. The party
+  this library treats as hostile is the *document*, which names a location and
+  cannot move files. `docs/security.md` and the code comment now state the
+  asymmetry and the reasoning rather than leaving it to be rediscovered.
+
+### Fixed
+
+- **`INF`, `-INF` and `NaN` no longer satisfy every bound facet.** `checkBounds`
+  compared with `big.Rat` and read a lexical with no rational form as "no
+  opinion", returning success: with `xs:double` constrained to `0..100`, `101`
+  was correctly refused while `INF`, `-INF` and `NaN` were all accepted. The
+  comment explaining this had the right premise and the inverted conclusion —
+  being outside any bound the schema can write is exactly what makes these
+  values invalid.
+
+  §3.3.5 and §3.3.6 put `positiveInfinity` above every finite value and
+  `negativeInfinity` below every one, and leave `NaN` incomparable to
+  everything including itself. So `INF` fails `maxInclusive="100"`, `-INF`
+  fails `minInclusive="0"`, and `NaN` fails *any* ordering facet the type
+  carries — min or max, inclusive or exclusive — because satisfying one would
+  need a comparison that does not hold. A bound may itself be `INF`, and then
+  it bounds nothing on that side, which is the pair `jsonschema.go` writes for
+  a JSON number.
+
+  The gap was in the facet path only. The same value in an XSD 1.1
+  `xs:assert` was already refused correctly, and `enumeration` was already
+  right because it is equality rather than order — a test now holds that,
+  so a later change to the bound comparison cannot take it along.
+
+- **A derived type could widen a bound to `INF` and the schema still loaded.**
+  `compareBoundValues` returned "unordered" for a bound with no rational form
+  and `checkBoundOrder` reads unordered as satisfied, so a restriction of a
+  base with `maxInclusive="10"` could set `maxInclusive="INF"` without
+  complaint, which §4.3.7.4 forbids. This had no instance consequence — the
+  facet chain still enforced the base's bound at validation — so it was a
+  missing diagnostic rather than a false accept. `NaN` stays unordered, because
+  it genuinely orders against nothing and refusing would assert an order it
+  does not have.
+
+- **A validated `xs:double` that overflowed stopped being a double.** Building
+  a typed value from a schema annotation parsed the lexical form with
+  `strconv.ParseFloat` and treated any error as "not a lexical form of this
+  type". `ParseFloat("1e400", 64)` returns `+Inf` *with* `strconv.ErrRange` —
+  the right value carried by an error — and the fallback switch that follows
+  only recognises the literals `INF`, `-INF` and `NaN`, so `1e400` matched
+  nothing and the function returned no atomic at all. The caller then fell back
+  to `xs:untypedAtomic`: a node the schema had validated as `xs:double`, and
+  annotated as one, atomised as untyped, so it compared as a string and lost
+  every numeric operation. This is the third instance of the same
+  `ParseFloat`-error confusion, after `xpath/cast.go` and `xpath/fn_json.go`,
+  and it is fixed the same way — discard `strconv.ErrRange` and keep the value,
+  which F&O 3.0 §4.2 permits and which the other two sites already do. It
+  reached only *typed* data, which is why the earlier fixes' tests did not see
+  it. Underflow was never affected: Go returns `0` with a nil error for it.
+  `xs:float` is fixed with the same change, `NewFloat` narrowing `+Inf` through
+  `float32` as before.
+
+- **A processing instruction in an internal DTD subset broke the subset scan.**
+  XML 1.0 §2.8 admits a PI to `intSubset` — `markupdecl` is "elementdecl |
+  AttlistDecl | EntityDecl | NotationDecl | PI | Comment" — and §2.6 makes its
+  content text rather than markup. `endOfInternalSubset` skipped comments for
+  exactly this reason but not PIs, so a `]`, a `>` or a quote written inside
+  one was read as structure: `<?p a ] b ?>` ended the subset in the middle of
+  the declarations, and the entity references in the body were then rewritten
+  against a boundary in the wrong place. The skip now covers both constructs.
+  CDATA needs none: `CDSect` belongs to `content`, not to `intSubset`, so one
+  written there is malformed and the decoder rejects it. A PI holding an
+  unbalanced apostrophe, or a bare `>`, is still refused — `encoding/xml` ends
+  its `Directive` token at that character and never delivers the DOCTYPE whole,
+  which is a defect in the standard library's directive scanner and not in this
+  one.
+
+
 ### Changed
+
+- **A number too large for a double now casts to `INF` instead of being
+  rejected as a malformed lexical form.** `xs:double("1e400")` raised
+  `FORG0001: invalid xs:double value`, but `1e400` *is* a well-formed
+  `xs:double` lexical form — the grammar puts no upper bound on the exponent,
+  and the shape check accepted it. What failed was the parse, with
+  `strconv.ErrRange`, and a range error was being reported as a lexical one.
+  F&O 3.0 §18.3 sends a value "too large or too small to be accurately
+  represented" to §4.2, which permits exactly three behaviours for an
+  `xs:double` or `xs:float` overflow: raise `FOAR0002`, return `±INF`, or
+  return the largest finite value. `FORG0001` is none of the three. The engine
+  also contradicted itself four ways: the literal `1e400` was already `INF`,
+  `1e308 * 10` was already `INF`, `xs:float("1e39")` was `INF` while
+  `xs:float("1e400")` was an error, and underflow was handled correctly, so
+  only the overflow direction was broken. `±INF` is now returned throughout, in
+  line with what the lexer and the arithmetic operators had already chosen.
+  The silent case was the worse one: `fn:number` turns a failed cast into
+  `NaN` by design, so `number("1e400")` answered `NaN` for a value it could
+  convert, and `<v>1e400</v>` made `/r/v > 0` false with nothing to signal it;
+  `sum`, `avg` and `max` over the same document raised `FORG0001`. A
+  malformed form is still `FORG0001`, and the spellings XML Schema does not
+  admit — `Inf`, `Infinity`, `+Inf`, `0x10` — are still rejected. The same
+  mistake had a second, independent copy in the JSON scanner, where
+  `parse-json('1e400')` raised `FOJS0001` for text JSON permits while
+  `json-to-xml('1e400')` carried the identical lexeme through untouched.
+
+- **The `html` and `xhtml` output methods no longer indent inside `pre` and
+  `textarea`.** With `indent="yes"`, an element-only `<pre><span>func</span>
+  <span> main</span></pre>` came out across three indented lines, changing the
+  rendered text from `func main` to a three-line block; inside a `<textarea>`
+  the inserted whitespace becomes part of the value the control submits.
+  Serialization 3.1 §5 grants the licence this serialiser cites for indenting
+  at all — whitespace may be added "only where the effect is not significant"
+  — and inside these elements every user agent renders it literally. Only
+  element-only content was exposed: an element with a non-whitespace text
+  child was already spared by the mixed-content rule, so `<pre>a\nb</pre>` was
+  never at risk, but element-only content is exactly what a syntax highlighter
+  or a DocBook-style stylesheet emits. The mechanism already existed —
+  `suppress-indentation="pre textarea"` produced correct output — so what was
+  missing was the default. The set is `pre`, `listing`, `plaintext`,
+  `textarea` and `xmp`: HTML 4.01 §9.3.4 names the first, third, fifth and
+  `listing` as the elements where white space is significant and §17.7 makes
+  `textarea`'s content the control's literal initial value, while HTML5's
+  default style sheet applies `white-space: pre` to the same five. Both
+  versions agree, so unlike the void-element tables there is no version split.
+  `script` and `style` are absent because they are never indented anyway. The
+  `xml` method is deliberately unchanged and pinned by a test: it serialises a
+  tree with no HTML semantics, where `<pre>` is an ordinary element name and
+  indenting it is correct.
 
 - **Dividing one duration by another now returns the same `xs:decimal` as
   dividing the equivalent numbers.** `xs:dayTimeDuration("PT1S") div
@@ -79,6 +327,47 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   make `0.001` unrepresentable by any conforming schema.
 
 ### Fixed
+
+- **RELAX NG compared `xs:integer` and `xs:decimal` bounds through
+  `float64`.** `parseNumber` (`relaxng/datatype_xsd.go`) read both the instance
+  value and the `minInclusive`/`maxInclusive`/`minExclusive`/`maxExclusive`
+  parameter with `strconv.ParseFloat`, and `checkBound` compared the two as
+  `float64`. Above 2^53 consecutive integers share a `float64`, so a
+  `maxInclusive` of `9007199254740992` accepted `9007199254740993`, and a
+  `maxInclusive` of `1.00000000000000000001` on `xs:decimal` accepted
+  `1.00000000000000000002`. Both directions were affected, and the exclusive
+  bounds inverted at the boundary as well -- a `maxExclusive` of
+  `9007199254740993` rejected the `9007199254740992` it should admit. These are
+  false accepts and false rejects on arbitrary-precision types, which
+  `xs:integer` and `xs:decimal` both are. Comparison now goes through
+  `math/big.Rat`, matching what `checkBounds` in `xsd/validate_simple.go`
+  already did; `xs:float` and `xs:double` keep `float64`, since that is
+  genuinely their value space, and `INF`/`NaN` -- which have no rational form
+  and can only arise there -- are carried as floats, with `NaN` reported as
+  unordered rather than silently satisfying a bound. This is the same defect
+  class as the sweep in "an exact value must never be routed through float64",
+  which did not reach `relaxng/`.
+
+- **An out-of-range `length` parameter in RELAX NG became a bound that
+  accepted everything.** `atoiParam` (`relaxng/datatype_xsd.go`) accumulated
+  `n = n*10 + int(c-'0')` with no overflow guard, so a `minLength` of
+  `9223372036854775808` wrapped to a negative `int`. The comparison `l < n` was
+  then never true, and a parameter written to reject every string accepted
+  every string instead. A length too large to represent names no bound at all,
+  so it is now refused as a schema error at compile time rather than at first
+  use -- whether a parameter is well formed does not depend on a value, unlike
+  a facet violation, which does. This matches `uintFacet` in
+  `xsd/parse_type.go`, which already rejected an unrepresentable length facet.
+
+- **A grammar reached through `<include>` was not checked against section 7.**
+  `collectInclude` (`relaxng/compile.go`) ran `checkSyntax` on the included
+  document but not `checkRestrictions`, unlike the top-level and
+  `<externalRef>` paths, which run both. `derive.go` assumes every pattern it
+  sees has already passed `restrict.go`, so a construct the restrictions forbid
+  -- an `<attribute>` inside an `<attribute>`, a `<text>` inside a `<list>` --
+  could reach the deriver from an included file, and the schema compiled
+  without error instead of being rejected. The included document is now checked
+  the same way the others are.
 
 - **A resource guard on `fn:round` was changing answers, not just refusing
   them.** `roundGuard` (`xpath/fn_node.go`) clamped the requested precision on
@@ -1020,6 +1309,87 @@ breaking change means 2.0 with a new module path. See *Stability* below.
   7,260, 28,920, 115,440 and 461,280 — four times the work for twice the depth.
   The counters are nil in every ordinary build and attach through a
   package-internal hook.
+
+- **The entity expansion budget was bypassed whenever the DOCTYPE and the
+  document body arrived in one read.** `entityChargeReader` exists to charge
+  references *before* `encoding/xml` substitutes them, because a post-parse
+  check reports the same verdict only after the expansion it is refusing has
+  already been allocated. While the entity table is nil the reader buffers into
+  a backlog, and it drained that backlog on the *next* `Read` — which for a
+  large entity declaration never comes: the decoder's read-ahead window is
+  sized in bytes, so one big declaration fills it along with the entire body,
+  the backlog was dropped, and `charge` was never called. Five enforcement
+  sites existed and the one guarding the streaming path never fired.
+
+  There was no threshold. Measured with `AllowDOCTYPE: true` and one entity
+  referenced 400 times: a 10 KB entity (11 KB of source) expanded to 3 MB past
+  the 1 MB budget and allocated 11 MB; a 60 KB entity reached 22 MB expanded
+  and 87 MB allocated; a 1 MB entity — a 1 MB request body — reached 381 MB
+  expanded and **1,423 MB allocated**, a single-request OOM reachable with
+  `AllowDOCTYPE` alone, no external entities and no network.
+
+  The backlog is now charged at `arm`, the one point in `xdm/parse.go` where
+  the table becomes known and where the backlog is sitting. All three are
+  refused, and the largest now allocates 21 MB rather than 1,423 MB — the
+  bound is on peak memory again, which is the only reason to charge before
+  expansion rather than measure after it.
+  `TestEntityBudgetHoldsWhenDoctypeAndBodyShareOneRead` asserts the allocation
+  and not merely the refusal, so a fix that refuses expensively still fails.
+
+- **`endOfInternalSubset` read comment text as structure.** It tracked quotes
+  and brackets but had no comment state, and XML 1.0 §2.8 permits comments in
+  the internal subset while §2.5 says their content is not markup. So
+  `<!DOCTYPE d [ <!-- it's here --> … ]>` opened a quote that never closed and
+  the scan ran off the end, returning `0` — making `charge` treat the subset
+  itself as content — while `<!DOCTYPE d [ <!-- ] --> … ]>` closed the bracket
+  early, returning 24 instead of 43 and scanning the declarations as content.
+  Comments are now skipped whole.
+
+  This was unreachable end-to-end on its own: the backlog bypass above
+  dominated every case, so nothing downstream of the boundary was ever
+  consulted. Fixing the first exposes the second, which is why they are fixed
+  and tested together —
+  `TestEntityBudgetWithCommentInSubset` exercises the interaction in both
+  directions, refusing 4 MB of expansion past the budget and still accepting
+  100 KB under it with the same comment present.
+
+- **`xdm`'s own limits did not carry `xdm.ErrResourceLimit`.** The package
+  that *defines* the sentinel, and documents it as the way a caller
+  distinguishes "the processor declined" from "your input is wrong", applied
+  it to none of its four parse limits: depth, `MaxNodes`, `MaxBytes` and the
+  entity budget all returned `errors.Is(err, ErrResourceLimit) == false`, the
+  same answer as a genuine syntax error. `xdm/xinclude.go` already wrote
+  "resource limit exceeded" into its message text without wrapping, which is
+  the version of the bug that looks fixed.
+
+  Fourteen sites across `parse.go`, `dtd_entities.go`, `dtd_external.go` and
+  `xinclude.go` now wrap it, following the established rule: the sentinel is
+  **appended**, so every existing message stays byte-identical for the tests
+  and suites that match on it. New `xdm/resourcelimit_test.go` asserts the full
+  message string rather than a substring — a wrap that renders the sentinel
+  first and the reason after would pass a `Contains` check — and asserts that a
+  malformed document is still *not* a resource limit.
+
+- **`MaxBytes` did not bound a UTF-16 document at all.** `ParseOptions.MaxBytes`
+  is documented as bounding the source document, and the code says the limit
+  "wraps the reader, so it bounds what is read rather than what a caller
+  remembered to check". But `decodeReader` ran *before* that wrap, and
+  `utf16Reader.fill` reads its whole input in a single `io.ReadAll` — it has
+  to, since the encoding declaration it rewrites sits at the front of text a
+  streaming decoder would already have handed on. So the entire document was
+  pulled in and decoded to UTF-8 before one byte was counted: 8 MB of UTF-16
+  allocated 136 MB against a `MaxBytes` of 1024, a refusal costing far more
+  than an acceptance. `fill`'s own comment concedes the whole-input read and
+  justifies it with "schema and instance documents are small enough", which is
+  not a property attacker-supplied input has.
+
+  The limit now wraps first, ahead of every other reader including the
+  decoder, so the `ReadAll` hits the bounded reader and stops. The same probe
+  allocates nothing measurable. UTF-8 is unaffected — `decodeReader` only
+  strips a BOM or rewrites a version declaration — and a small UTF-16 document
+  still parses, which `TestMaxBytesBoundsUTF16Input` checks alongside the
+  allocation, so the bound cannot be met by dropping the UTF-16 support XML
+  1.0 §4.3.3 makes mandatory.
 
 ## v1.2.1 — 2026-09-03
 
@@ -2405,3 +2775,54 @@ test recording the rule, so that the next reader of the `if y < 0 { y = -y }`
 line finds it rather than the surprise. Sensitivity was confirmed by making
 `[Y]` emit the sign: the test failed with `-1000000 bc` and `bc -1000000`,
 which is the double-signed output the rule exists to prevent.
+
+## xsd: an identity field typed as a union compared spellings, not values
+
+Identity-constraint equality is defined on values. `keyString` already builds a
+type-tagged canonical form for every field before the sequence is joined, so
+`3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer`,
+`1` and `true` as one `xs:boolean`, and a keyref written `5.0` resolves a key
+written `5`. All of that was already right; the audit's reading of the joined
+string as a lexical comparison was wrong, and `TestIdentityTypedEquality` now
+pins the sixteen cases as verdicts rather than leaving it to be re-derived.
+
+One family was not right. `recordKeyValue` asks `primitiveOf` for the field's
+primitive and gives up when there is none, and a union has none of its own —
+so a union-typed field recorded no value at all and fell back to comparing the
+raw string. Two elements carrying the decimals `1.5` and `1.50` are one value
+and did not collide under `xs:unique`: a false negative, an invalid document
+accepted.
+
+The member that validated supplies the primitive. `unionMemberFor` already
+existed for `fixedValueEqual`, which needs the same answer for the same reason:
+the member is the one the value is valid against, not any member that happens
+to accept it. stE054 is why that distinction is load-bearing — scanning every
+member makes a boolean and a double compare equal.
+
+Sixteen lines in `recordKeyValue`. Both suites are unchanged at 39347 and
+41532 agreements, with the failing sets identical by name, so no suite case
+contradicts the rule.
+
+The other half of the audit item — that `keySep = "\x1f"` could forge a field
+boundary — stays latent and is now pinned rather than argued.
+`TestIdentityKeySeparatorUnreachableInXML10` asserts that the parser refuses
+U+001F in character data, which is what makes the joined string safe under XML
+1.0. When XML 1.1 lands that test fails and names the work, which is the
+dependency `docs/todo.md` already records. Replacing the join with a tuple
+today would buy nothing and would disturb the three invariants below.
+
+Those invariants now have tests of their own, because the rewrite this item
+asked for would have had to preserve them: ambiguity is terminal
+(`TestIdentityAmbiguityIsTerminal`, over one to six sibling definers, since the
+reverted bug was right at two and four and wrong at three and five), tables are
+seeded from `below.targets` before the walk
+(`TestIdentitySeededFromBelowBeforeWalk`), and the pruned walk stays linear
+(`TestIdentityWalkStaysLinear`, asserted on the work counter rather than on
+elapsed time).
+
+Each was proved sensitive by sabotage. Making ambiguity non-terminal failed the
+first at three and five siblings exactly as the historical bug did; skipping
+the seed produced 416 and 234 oracle disagreements plus the cross-level cases;
+dropping the keyref check failed the keyref oracle; disabling `canonicalValue`
+failed the typed-equality cases across every primitive; and disabling the union
+fix failed the new union case. `visited/node` is unchanged at 1.0/1.9/2.0.

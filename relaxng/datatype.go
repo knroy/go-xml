@@ -125,6 +125,19 @@ func checkParams(dt datatype, library, name string, params []param) error {
 	// A library type's parameters are checked against a value, and there is
 	// no value here. Leaving them is the honest choice: reporting a facet
 	// violation for a value the schema never mentions would be wrong.
+	//
+	// Whether a parameter is *well formed* is a different question, and one
+	// that does not need a value. A length written as a number too large to
+	// represent names no bound at all, so the schema says something its author
+	// cannot have meant; that is an error in the schema, not in a document.
+	for _, p := range params {
+		switch p.Name {
+		case "length", "minLength", "maxLength":
+			if _, err := atoiParam(p); err != nil {
+				return err
+			}
+		}
+	}
 	_ = dt
 	return nil
 }

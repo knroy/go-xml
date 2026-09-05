@@ -2,6 +2,8 @@ package relaxng
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -96,8 +98,13 @@ func (t xsdType) equal(a, b string) bool {
 	return ca == cb
 }
 
+// atoiParam reads a length parameter as a non-negative integer.
+//
+// A value too large to represent is an error rather than a bound that wraps.
+// The wrapped bound is worse than no bound at all: a minLength that overflows
+// to a negative int is a constraint no string can fail, so a parameter written
+// to reject everything would accept everything instead.
 func atoiParam(p param) (int, error) {
-	n := 0
 	s := strings.TrimSpace(p.Value)
 	if s == "" {
 		return 0, fmt.Errorf("parameter %s has no value", p.Name)
@@ -106,7 +113,11 @@ func atoiParam(p param) (int, error) {
 		if c < '0' || c > '9' {
 			return 0, fmt.Errorf("parameter %s = %q is not a number", p.Name, p.Value)
 		}
-		n = n*10 + int(c-'0')
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("parameter %s = %q is too large to represent",
+			p.Name, p.Value)
 	}
 	return n, nil
 }
@@ -164,32 +175,92 @@ func (t xsdType) checkBound(value string, p param) error {
 	if !ok {
 		return fmt.Errorf("%s = %q is not a number", p.Name, p.Value)
 	}
+	c, ok := compareNumbers(v, b)
+	if !ok {
+		// One side is NaN, which is unordered against everything. A bound
+		// cannot be met by a value that compares to nothing.
+		return fmt.Errorf("%s: %q is not comparable to %q",
+			p.Name, value, p.Value)
+	}
 	switch p.Name {
 	case "minInclusive":
-		if v < b {
-			return fmt.Errorf("%v is below minInclusive %v", v, b)
+		if c < 0 {
+			return fmt.Errorf("%s is below minInclusive %s", value, p.Value)
 		}
 	case "maxInclusive":
-		if v > b {
-			return fmt.Errorf("%v exceeds maxInclusive %v", v, b)
+		if c > 0 {
+			return fmt.Errorf("%s exceeds maxInclusive %s", value, p.Value)
 		}
 	case "minExclusive":
-		if v <= b {
-			return fmt.Errorf("%v is not above minExclusive %v", v, b)
+		if c <= 0 {
+			return fmt.Errorf("%s is not above minExclusive %s", value, p.Value)
 		}
 	case "maxExclusive":
-		if v >= b {
-			return fmt.Errorf("%v is not below maxExclusive %v", v, b)
+		if c >= 0 {
+			return fmt.Errorf("%s is not below maxExclusive %s", value, p.Value)
 		}
 	}
 	return nil
 }
 
-// parseNumber reads a value as a float for comparison.
-func parseNumber(s string) (float64, bool) {
-	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+// number is a parsed numeric value held exactly wherever it can be.
+//
+// xs:integer and xs:decimal have arbitrary precision, so routing them through
+// float64 makes consecutive values above 2^53 compare equal and admits values
+// the bound was written to exclude. rat holds those exactly. INF and NaN have
+// no rational form and reach comparison only from xs:float and xs:double,
+// where they are genuinely float64 values, so they are carried as such.
+type number struct {
+	rat     *big.Rat
+	special float64 // valid only when rat == nil
+}
+
+// parseNumber reads a value for comparison, exactly where the lexical form
+// permits it.
+func parseNumber(s string) (number, bool) {
+	s = strings.TrimSpace(s)
+	if r, ok := new(big.Rat).SetString(s); ok {
+		// SetString also accepts forms big.Rat means but XSD does not, such
+		// as "1/2"; those never reach here, because the lexical check has
+		// already passed the value against its datatype.
+		if !strings.ContainsAny(s, "/") {
+			return number{rat: r}, true
+		}
+	}
+	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
+		return number{}, false
+	}
+	return number{special: f}, true
+}
+
+// compareNumbers orders two values, reporting false when they are unordered
+// — which happens only when one of them is NaN.
+func compareNumbers(a, b number) (int, bool) {
+	if a.rat != nil && b.rat != nil {
+		return a.rat.Cmp(b.rat), true
+	}
+	af, aok := a.float()
+	bf, bok := b.float()
+	if !aok || !bok || math.IsNaN(af) || math.IsNaN(bf) {
 		return 0, false
 	}
+	switch {
+	case af < bf:
+		return -1, true
+	case af > bf:
+		return 1, true
+	}
+	return 0, true
+}
+
+// float returns the value as a float64. An exact value converts; the
+// conversion is only ever used against an infinity, where the rounding cannot
+// change the answer.
+func (n number) float() (float64, bool) {
+	if n.rat == nil {
+		return n.special, true
+	}
+	f, _ := n.rat.Float64()
 	return f, true
 }

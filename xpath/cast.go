@@ -3,9 +3,11 @@ package xpath
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -179,9 +181,34 @@ func parseNumericLexical(s string, target xdm.TypeCode) (*xdm.Atomic, error) {
 		if !isSchemaFloatLexical(s) {
 			return nil, xdm.ErrCast("invalid %s value %q", target, s)
 		}
-		var f float64
-		if _, err := fmt.Sscanf(s, "%g", &f); err != nil || !isFullNumber(s) {
-			return nil, xdm.ErrCast("invalid %s value %q", target, s)
+		// ParseFloat rather than Sscanf, because the two report an
+		// out-of-range magnitude differently and only one of them can be
+		// told apart from a malformed string. Sscanf returns a bare error
+		// for "1e400", which the code read as "not a valid lexical form" --
+		// but "1e400" *is* a valid xs:double lexical form, as
+		// isSchemaFloatLexical above has just established. F&O 3.0 §18.3
+		// says a value too large to represent "is handled as an overflow or
+		// underflow as defined in §4.2", and §4.2 permits exactly three
+		// behaviours: raise FOAR0002, return ±INF, or return the largest
+		// finite value. FORG0001 is none of them.
+		//
+		// ±INF is the one this processor has already chosen everywhere
+		// else: the lexer returns INF for the literal 1e400, and
+		// xs:double("1e308") * 10 returns INF rather than raising
+		// FOAR0002. Casting identical text had to agree.
+		//
+		// ParseFloat states the distinction: on ErrRange it still returns
+		// ±Inf for an overflow and ±0 for an underflow, which are exactly
+		// the values wanted, so the range error is discarded and the value
+		// kept. Any other error is a genuinely malformed string.
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			var numErr *strconv.NumError
+			if !errors.As(err, &numErr) ||
+				numErr.Err != strconv.ErrRange {
+				return nil, xdm.ErrCast(
+					"invalid %s value %q", target, s)
+			}
 		}
 		return makeFloat(f, target), nil
 	}
@@ -253,16 +280,6 @@ func isSchemaFloatLexical(s string) bool {
 		}
 	}
 	return i == len(s)
-}
-
-// isFullNumber rejects strings like "12abc" that Sscanf would accept a prefix
-// of. Sscanf stops at the first bad character and reports success, so the
-// length check is what makes the cast strict.
-func isFullNumber(s string) bool {
-	var f float64
-	var tail string
-	n, _ := fmt.Sscanf(s, "%g%s", &f, &tail)
-	return n == 1
 }
 
 func numericOf(r *big.Rat, f float64, target xdm.TypeCode) *xdm.Atomic {

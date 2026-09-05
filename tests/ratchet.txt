@@ -1,4 +1,6 @@
 DocBook 577
+RelaxNGSpectest 965
+TestQT3 29800
 TestQT3XQuery 29800
 TestXSLT30Suite 8612
 TestXSLTSuite 6149

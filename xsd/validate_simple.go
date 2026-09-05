@@ -71,6 +71,22 @@ func (v *validator) recordKeyValue(n *xdm.Node, normalized string, t *SimpleType
 	if item != nil && item.Variety == VarietyList && item.ItemType != nil {
 		item = item.ItemType
 	}
+	// A union has no primitive of its own, so primitiveOf reports nothing
+	// for one and the field would fall back to comparing spellings: two
+	// elements carrying the decimals 1.5 and 1.50 are one value, and
+	// without this they did not collide under xs:unique.
+	//
+	// The member is the one that VALIDATED, not any member that happens to
+	// accept the value. unionMemberFor picks the first member the value is
+	// valid against, which is the same rule the value itself was validated
+	// under, and fixedValueEqual already relies on it for the same reason:
+	// stE054 shows that scanning every member instead makes values of
+	// different primitives compare equal.
+	if item != nil && item.Variety == VarietyUnion {
+		if m := unionMemberFor(normalized, item); m != nil {
+			item = m
+		}
+	}
 	prim := ""
 	if p := primitiveOf(item); p != nil {
 		prim = p.Name.Local
@@ -744,25 +760,96 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 		return nil
 	}
 
-	val, ok := new(big.Rat).SetString(normalized)
-	if !ok {
-		// Special float values have no rational form. INF and NaN are
-		// outside any bound the schema can write, and comparing them
-		// numerically is not meaningful.
+	// Only the two floating types have INF and NaN in their value space;
+	// xs:decimal reaching here with an unparsable lexical is a value the
+	// lexical check already refused.
+	floating := prim == "float" || prim == "double"
+
+	val, finite := new(big.Rat).SetString(normalized)
+	special, isSpecial := 0, false
+	if floating {
+		special, isSpecial = specialFloatOrder(normalized)
+	}
+	if !finite && !isSpecial {
 		return nil
 	}
 
 	for _, st := range steps {
 		f := st.facets
+		// cmp orders the instance value against a bound literal.
+		//
+		// The floating types have three values with no rational form.
+		// §3.3.5/§3.3.6 order them -INF < every finite value < INF and
+		// leave NaN incomparable to everything, itself included, so the
+		// comparison is on that order and not on big.Rat alone. Treating
+		// an unparsable value as "no opinion" is what let INF satisfy
+		// maxInclusive="100": being outside every bound the schema can
+		// write is exactly what makes it invalid.
 		cmp := func(lex *string) (int, bool) {
 			if lex == nil {
 				return 0, false
 			}
-			b, ok := new(big.Rat).SetString(strings.TrimSpace(*lex))
+			lexs := strings.TrimSpace(*lex)
+			bound, boundSpecial := 0, false
+			if floating {
+				bound, boundSpecial = specialFloatOrder(lexs)
+			}
+			switch {
+			case isSpecial && special == 0:
+				// NaN. Incomparable, so it satisfies no
+				// ordering facet at all; the callers below read
+				// a false "ok" as "the facet does not apply",
+				// which is why NaN is refused explicitly here.
+				return 0, false
+			case boundSpecial && bound == 0:
+				// A NaN bound orders against nothing either, so
+				// no value can be judged by it.
+				return 0, false
+			case isSpecial || boundSpecial:
+				v := 0
+				if isSpecial {
+					v = special
+				}
+				b := 0
+				if boundSpecial {
+					b = bound
+				}
+				if v == b {
+					return 0, true
+				}
+				if v < b {
+					return -1, true
+				}
+				return 1, true
+			}
+			if !finite {
+				return 0, false
+			}
+			b, ok := new(big.Rat).SetString(lexs)
 			if !ok {
 				return 0, false
 			}
 			return val.Cmp(b), true
+		}
+		if isSpecial && special == 0 {
+			// NaN fails every ordering facet the type carries,
+			// inclusive and exclusive alike, because satisfying one
+			// would require a comparison that does not hold.
+			switch {
+			case f.MinInclusive != nil:
+				return facetError(st.typ, FacetMinInclusive,
+					"%s is not comparable to %s", normalized, *f.MinInclusive)
+			case f.MaxInclusive != nil:
+				return facetError(st.typ, FacetMaxInclusive,
+					"%s is not comparable to %s", normalized, *f.MaxInclusive)
+			case f.MinExclusive != nil:
+				return facetError(st.typ, FacetMinExclusive,
+					"%s is not comparable to %s", normalized, *f.MinExclusive)
+			case f.MaxExclusive != nil:
+				return facetError(st.typ, FacetMaxExclusive,
+					"%s is not comparable to %s", normalized, *f.MaxExclusive)
+			}
+			continue
 		}
 		if c, ok := cmp(f.MinInclusive); ok && c < 0 {
 			return facetError(st.typ, FacetMinInclusive,
@@ -782,6 +869,29 @@ func checkBounds(steps []facetStep, normalized, prim string) error {
 		}
 	}
 	return nil
+}
+
+// specialFloatOrder places the three floating values that have no rational
+// form on the order of §3.3.5/§3.3.6.
+//
+// The result is -1 for negativeInfinity, +1 for positiveInfinity and 0 for
+// NaN; the caller must read a 0 as "incomparable", never as "equal", because
+// NaN is not equal to itself. Anything else reports false, meaning the lexical
+// is an ordinary rational.
+//
+// "+INF" is admitted because XSD 1.1 added it as a second spelling of
+// positiveInfinity; a 1.0 document that writes it has already been refused by
+// the lexical check, so accepting the spelling here cannot widen 1.0.
+func specialFloatOrder(lexical string) (int, bool) {
+	switch lexical {
+	case "INF", "+INF":
+		return 1, true
+	case "-INF":
+		return -1, true
+	case "NaN":
+		return 0, true
+	}
+	return 0, false
 }
 
 // recordIDs notes xs:ID and xs:IDREF values for the document-level check.

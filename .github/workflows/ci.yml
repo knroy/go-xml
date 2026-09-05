@@ -48,6 +48,29 @@ jobs:
         env:
           GOXSLT_NO_SUITES: '1'
 
+      # w3cschemas is a second module -- the schemas it bundles are under W3C
+      # terms rather than MIT -- so every step above misses it: `go list ./...`
+      # at the root does not cross a module boundary. Until this step existed
+      # it was in no gate anywhere, and its go.mod named a published release,
+      # so what its tests exercised was the module cache rather than this
+      # tree. It imports xsd and xdm; an API break in either was invisible.
+      #
+      # It is measured against the go-xml RELEASE its go.mod names, not against
+      # this tree: it is published separately, so the version it pins is the
+      # version its users get. That means this step catches a broken
+      # w3cschemas, not an API break here that would affect it -- bumping the
+      # pin after a release is what closes that, and it is a release step.
+      # GOFLAGS=-mod=readonly keeps a CI run from papering over a go.mod that
+      # needs tidying.
+      - name: w3cschemas (separate module)
+        working-directory: w3cschemas
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./... -count=1
+
   # The conformance gate. These suites are third-party and are not vendored,
   # so CI fetches them — which is also the only place they are fetched
   # reproducibly. Without this job the published percentages depend on someone

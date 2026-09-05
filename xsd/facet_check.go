@@ -279,14 +279,34 @@ func compareBoundValues(a, b, primitive string) (int, bool) {
 		return compareTemporal(ta, tb)
 
 	case "decimal", "float", "double":
+		// INF, -INF and NaN have no rational form but are ordered
+		// values of the two floating types (§3.3.5/§3.3.6): -INF below
+		// every finite value, INF above every one. Leaving them
+		// unordered here let a restriction widen the base's
+		// maxInclusive="10" to "INF" and still load, which §4.3.7.4
+		// forbids. NaN stays unordered, because it genuinely orders
+		// against nothing — a NaN bound admits no value either way, and
+		// the constraint has nothing to say about it.
+		if primitive == "float" || primitive == "double" {
+			sa, okA := specialFloatOrder(a)
+			sb, okB := specialFloatOrder(b)
+			switch {
+			case (okA && sa == 0) || (okB && sb == 0):
+				return 0, false
+			case okA || okB:
+				switch {
+				case sa == sb:
+					return 0, true
+				case sa < sb:
+					return -1, true
+				default:
+					return 1, true
+				}
+			}
+		}
 		ra, okA := new(big.Rat).SetString(a)
 		rb, okB := new(big.Rat).SetString(b)
 		if !okA || !okB {
-			// INF, -INF and NaN have no rational form. They are
-			// legal float bounds, but ordering them against a
-			// finite bound here would need a float model the
-			// constraint does not require, so leave the pair
-			// unordered rather than guess.
 			return 0, false
 		}
 		return ra.Cmp(rb), true

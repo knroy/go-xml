@@ -222,8 +222,8 @@ func (p *includeProc) expandChildren(n *Node, base string, depth int) error {
 func (p *includeProc) expandInclude(inc *Node, depth int) ([]*Node, error) {
 	if depth >= maxIncludeDepth {
 		return nil, fatalInclude{fmt.Errorf(
-			"resource limit exceeded: xi:include nesting exceeds %d levels",
-			maxIncludeDepth)}
+			"resource limit exceeded: xi:include nesting exceeds %d levels: %w",
+			maxIncludeDepth, ErrResourceLimit)}
 	}
 
 	// Section 3.2: an include element may have "zero or one fallback"
@@ -399,7 +399,9 @@ func (p *includeProc) selectLocal(inc *Node, xptr, base string) ([]*Node, error)
 // is reached both from the ordinary path and from the href-less one.
 func (p *includeProc) fetchText(target, base, encoding string) ([]*Node, error) {
 	if p.fetches >= maxIncludeFetches {
-		return nil, fatalInclude{fmt.Errorf("resource limit exceeded: document performs more than %d inclusions", maxIncludeFetches)}
+		return nil, fatalInclude{fmt.Errorf(
+			"resource limit exceeded: document performs more than %d inclusions: %w",
+			maxIncludeFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")
@@ -487,7 +489,9 @@ func (p *includeProc) fetch(target, base, parse, xptr, encoding string, depth in
 		return p.fetchText(target, base, encoding)
 	}
 	if p.fetches >= maxIncludeFetches {
-		return nil, fatalInclude{fmt.Errorf("resource limit exceeded: document performs more than %d inclusions", maxIncludeFetches)}
+		return nil, fatalInclude{fmt.Errorf(
+			"resource limit exceeded: document performs more than %d inclusions: %w",
+			maxIncludeFetches, ErrResourceLimit)}
 	}
 	if p.opts.Resolver == nil {
 		return nil, fmt.Errorf("no include resolver: inclusions are not permitted")

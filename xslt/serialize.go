@@ -1044,6 +1044,62 @@ func (s *serializer) suppressed(n *xdm.Node) bool {
 	if a := n.Attr(xdm.NSXML, "space"); a != nil && a.Value == "preserve" {
 		return true
 	}
+	// The html and xhtml methods suppress indentation inside the elements
+	// whose whitespace HTML renders verbatim, whether or not the caller named
+	// them. Serialization 3.1 §5 grants the licence this serialiser cites for
+	// indenting at all -- whitespace may be added "only where the effect is
+	// not significant" -- and inside these elements it is significant by
+	// definition: every user agent renders their content literally. Indenting
+	// <pre><span>func</span><span> main</span></pre> changed the rendered
+	// text from "func main" to a three-line block, and inside a <textarea>
+	// the inserted whitespace becomes part of the value the control submits.
+	//
+	// suppress-indentation already produced the right output when a caller
+	// wrote "pre textarea" by hand, which is what makes this a missing
+	// default rather than a missing mechanism. Only element-only content was
+	// exposed: an element with a non-whitespace text child is already spared
+	// by the mixed-content rule above, so <pre>line1\nline2</pre> was never
+	// at risk. Element-only content is exactly what a syntax highlighter or a
+	// DocBook-style stylesheet generates.
+	//
+	// The xml method is deliberately excluded. It serialises a tree with no
+	// HTML semantics attached, where <pre> is an ordinary element name and
+	// indenting it is correct; a caller who means HTML's <pre> there says so
+	// with suppress-indentation or xml:space.
+	// The html method folds case, as it does for every other name it
+	// recognises; the xhtml method does not, because it is XML and <PRE> is
+	// a different element there.
+	if s.html && !s.xhtml && n.Name.URI == "" &&
+		htmlPreserveWhitespaceElement(strings.ToLower(n.Name.Local)) {
+		return true
+	}
+	if s.xhtml && (n.Name.URI == nsXHTML || n.Name.URI == "") &&
+		htmlPreserveWhitespaceElement(n.Name.Local) {
+		return true
+	}
+	return false
+}
+
+// htmlPreserveWhitespaceElement reports whether an HTML element renders its
+// content with whitespace intact, so that a serialiser may not indent inside
+// it.
+//
+// The set is the one both HTML versions this serialiser writes agree on.
+// HTML 4.01 §9.3.4 gives <pre> and the deprecated <listing>, <plaintext> and
+// <xmp> as the elements where "white space is significant", and §17.7 makes
+// <textarea>'s content the literal initial value of the control. HTML5's
+// rendering section applies "white-space: pre" to the same five in its
+// default style sheet. Nothing distinguishes 4 from 5 here, so unlike the
+// void-element tables there is no version split to make.
+//
+// <script> and <style> are absent because they are not indented anyway: the
+// html method writes them as raw text through isRawTextElement, and under the
+// xhtml method they are ordinary XML content that no HTML rule protects.
+func htmlPreserveWhitespaceElement(local string) bool {
+	switch local {
+	case "pre", "listing", "plaintext", "textarea", "xmp":
+		return true
+	}
 	return false
 }
 

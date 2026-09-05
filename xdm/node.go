@@ -1,6 +1,7 @@
 package xdm
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"sort"
@@ -972,14 +973,34 @@ func atomicForAnnotation(typeName, value string) *Atomic {
 		return NewIntegerFromRat(r)
 
 	case "float", "double":
-		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		// ParseFloat reports a magnitude no double can hold as
+		// strconv.ErrRange, and returns ±Inf along with it. That is a
+		// correct value carried by an error, and treating the error as
+		// "not a lexical form of this type" was wrong: "1e400" IS a
+		// valid xs:double literal, the schema validated it as one, and
+		// this branch only runs on text a schema already accepted.
+		//
+		// The value returned is the one the rest of the processor has
+		// settled on: F&O 3.0 §4.2 permits an overflow to yield ±INF,
+		// which is what casting and JSON parsing do (xpath/cast.go,
+		// xpath/fn_json.go). Rejecting it here returned nil, the caller
+		// fell back to xs:untypedAtomic, and a validated xs:double
+		// silently stopped being a double.
+		//
+		// Underflow needs no handling: Go returns 0 with a nil error
+		// for it, so only the overflow case ever reached the switch.
+		trimmed := strings.TrimSpace(value)
+		f, err := strconv.ParseFloat(trimmed, 64)
 		if err != nil {
-			switch strings.TrimSpace(value) {
-			case "INF":
+			var numErr *strconv.NumError
+			switch {
+			case errors.As(err, &numErr) && numErr.Err == strconv.ErrRange:
+				// Keep f: it is already ±Inf (or ±0).
+			case trimmed == "INF":
 				f = math.Inf(1)
-			case "-INF":
+			case trimmed == "-INF":
 				f = math.Inf(-1)
-			case "NaN":
+			case trimmed == "NaN":
 				f = math.NaN()
 			default:
 				return nil

@@ -424,6 +424,44 @@ works:
 
 A cycle — direct or mutual — is detected and refused rather than recursed.
 
+The 1 MB total is charged *before* expansion, by `entityChargeReader` in
+`xdm/dtd_entities.go`, and that ordering is the control. Checking afterwards
+reports the same verdict at a cost that makes reporting it pointless:
+`encoding/xml` coalesces a run of substitutions into one token, so a document
+whose references expand to gigabytes has allocated them all before any
+post-parse check can look. The bound therefore caps *peak memory* near the
+budget, not merely the accepted result.
+
+That held only for what the reader saw streaming past. The charger buffers
+bytes read before the DOCTYPE is parsed and the entity table installed, and it
+used to drain that backlog on the *next* `Read` — which for a large entity
+declaration never comes: the decoder's read-ahead window is sized in bytes, so
+one big declaration fills it along with the whole body, the backlog was
+dropped, and the budget was never charged. There was no threshold; a 10 KB
+entity referenced 400 times already exceeded the 1 MB bound threefold, and a
+1 MB source reached 1.4 GB of allocation — a single-request OOM reachable with
+`AllowDOCTYPE` alone, no external entities and no network. The backlog is now
+charged at the one point where the table becomes known, so the bound holds
+whether the document streams or arrives in a single read. Pinned by
+`TestEntityBudgetHoldsWhenDoctypeAndBodyShareOneRead`, which asserts the
+allocation and not only the refusal.
+
+Where the charge begins is decided by `endOfInternalSubset`, which must count
+*uses* of an entity and not its *declaration*. It tracked quotes and brackets
+but had no comment state, and XML 1.0 §2.8 permits comments in the internal
+subset while §2.5 says their content is not markup — so an apostrophe or a `]`
+written as prose inside one was read as structure, and the boundary moved in
+either direction. Comments are now skipped whole.
+
+`MaxBytes` bounds the raw source, so it is applied ahead of every other
+reader wrapper — decoding included. It used to wrap *outside* the UTF-16
+decoder, whose `fill` reads its whole input in one `io.ReadAll` (it has to: the
+encoding declaration it rewrites sits at the front of text a streaming decoder
+would already have handed on), so a UTF-16 document was pulled in and decoded
+in full before a byte was counted. The limit described the refusal but not its
+cost: 8 MB of UTF-16 allocated 136 MB against a `MaxBytes` of 1024. Pinned by
+`TestMaxBytesBoundsUTF16Input`.
+
 The parse limits apply to the result, not just the input. `MaxBytes`,
 `MaxNodes` and `MaxDepth` are re-applied to the *expanded* text, which was the
 suspected bypass and is not one — an entity cannot be used to smuggle a
@@ -478,6 +516,76 @@ anyone deciding what a root may contain. `xsl:result-document` never writes to
 disk; the engine returns secondary results to the caller as data. XInclude is
 off unless a caller runs `xdm.ProcessXInclude` and names the roots it may read
 — see *XInclude: a new reader on the old gate* above.
+
+`xsd` is the tenth path, and until recently it was the exception this heading
+claimed did not exist. Four sites — `Load`, `LoadFile`, `LoadFiles` and
+`WithInstanceLocations` — defaulted a nil `Options.Resolver` to a
+`FileResolver` with no `Root`, which that type's own field comment describes as
+permitting "any readable path". A zero-value `Options` therefore read whatever
+an `xs:include` named, `/etc/hosts` included.
+
+It was reachable from outside the package. `xslt` refuses an
+`xsl:import-schema` that names a schema-location when no `SchemaResolver` is
+configured — but for an *inline* `<xs:schema>` it passed that same nil straight
+to `xsd.Load`, and the `xs:include` inside the inline schema was followed
+against the open default. A caller who had deliberately configured no schema
+resolver still had the filesystem readable through any stylesheet it compiled.
+
+The default now follows the grant the caller has already made:
+
+- **`Load` refuses.** It is handed a tree and no path, so nothing on disk was
+  granted and nothing on disk is read. Only a document that actually names a
+  location is affected; a self-contained schema still loads with a zero-value
+  `Options`, which is how `Load` is almost always used.
+- **`LoadFile` and `LoadFiles` keep a default**, because the caller named files
+  and reading beside them is the thing that was asked for — refusing would
+  break every relative `xs:include` for no gain. The default is now *rooted* at
+  the directories the caller named, so a schema that then asks for an absolute
+  path elsewhere, or climbs out with `..`, is refused. `LoadFiles` grants the
+  set of its arguments' directories and nothing else.
+- **`WithInstanceLocations` is rooted at the schema's own directories.** Its
+  locations come from the instance, the least trusted input the package takes,
+  so the unrooted default was worst of all here.
+
+Two refusals are also made *loud*, which is a change in kind rather than
+degree. §4.2.1 permits dropping an `xs:include` whose location cannot be
+resolved, and that is right for a location that was looked for and not found —
+a remote URL with no network resolver is the ordinary case, and the W3C suite's
+own `common/xsts.xsd` depends on it being tolerated. It is wrong for a location
+the *configuration* refused: "no resolver is configured" and "outside the
+permitted root" are decisions, not misses, and dropping them left a caller who
+had hardened with a schema quietly missing components and a successful return.
+Both now surface as `src-resolve`. An `xs:import` keeps the silent path in
+both cases, because §5.3 *Missing Sub-components* gives an unfetched namespace
+a defined outcome — the references into it are ·absent· and the consequence
+falls at validation — and every conforming processor loads such a schema.
+
+The two rooted resolvers enforce their roots by different **mechanisms**, and
+the difference is deliberate rather than an oversight. `xslt.FileResolver`
+opens through `os.OpenRoot`, which resolves each path component against the
+root at open time; `xsd.FileResolver` resolves symlinks with
+`filepath.EvalSymlinks`, compares the result against the root, and then opens.
+The second is the check-then-use shape that a time-of-check/time-of-use race
+attacks in general — but not in this one, because the path that is opened is
+the *resolved* one. `EvalSymlinks` returns a path with every link already
+followed and the code opens that, so a link that passed the check is never
+traversed a second time and cannot be swung between the two steps. A racer
+that swaps a symlink inside the root as fast as the filesystem allows, against
+a resolver reading in a tight loop, produced over a hundred thousand
+successful reads and **zero** that escaped.
+
+What is left is narrower than the general shape suggests: an attacker who can
+replace a *directory component of the already-resolved path* between the check
+and the open. That requires write access inside the root, and anyone with it
+can put the bytes they want in the file directly — the read is no longer the
+weak link. This is the sense in which the threat model holds: the party this
+document treats as hostile is the *document*, and a document names a location,
+it does not get to move files. `os.OpenRoot` would close even the narrow
+window, and would be the right change if `xsd` were ever hardened against a
+hostile local process sharing the root; it is not adopted today because it
+would buy nothing against the attacker this library actually defends against.
+The asymmetry is recorded here so that it is a known position rather than a
+discrepancy someone rediscovers.
 
 `AllowHost` resists spoofing: it uses `u.Hostname()`, so userinfo tricks
 (`http://good.example@127.0.0.1/`) and ports do not fool it, and it is

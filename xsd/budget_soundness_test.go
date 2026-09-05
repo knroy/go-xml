@@ -479,45 +479,70 @@ func TestMaxPositionsBoundary(t *testing.T) {
 	}
 }
 
-// TestMaxPositionsRealBoundary drives the production value at its edges. The
-// guard reads len(m.positions) >= maxPositions *before* the position is
-// appended, so 8191 and 8192 compile and 8193 declines. What matters is that
-// the decline is an error and a nil model: a truncated model would silently
-// admit sequences the schema forbids.
+// TestMaxPositionsRealBoundary drives the guard at its edges. The guard reads
+// len(m.positions) >= maxPositions *before* the position is appended, so
+// exactly maxPositions compile and maxPositions+1 declines. What matters is
+// that the decline is an error and a nil model: a truncated model would
+// silently admit sequences the schema forbids.
+//
+// The edges are driven at a forced budget rather than the production 8192.
+// compileContentModel is a Glushkov construction whose follow-set cost grows
+// as the cube of the particle count -- measured on an idle 12-core laptop,
+// 1024 particles compile in 0.16s, 2048 in 1.4s, 4096 in 12s and 8192 in 90s,
+// each doubling costing about nine times the last. Three models at ~8k
+// therefore cost about four and a half minutes on a fast machine and, under
+// -race on a two-core CI runner, long enough that the whole `go test` run
+// blew its 25m deadline and the build reported a panic rather than a result.
+// That is what broke CI from 84735c8 onward.
+//
+// The off-by-one being asserted is a property of the comparison, not of the
+// constant's magnitude: at a forced budget of 64 the same three cases run in
+// microseconds and fail in exactly the same way if the >= is ever written as
+// >. TestMaxPositionsProductionValue below pins the production number, so a
+// change to it still has to be deliberate.
 func TestMaxPositionsRealBoundary(t *testing.T) {
-	if testing.Short() {
-		t.Skip("compiles three models of ~8k particles")
-	}
-	// The guard is len(m.positions) >= maxPositions *before* the position is
-	// appended, so exactly maxPositions compile and maxPositions+1 declines.
-	for _, n := range []int{8191, 8192, 8193} {
-		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
-			ps := make([]*Particle, n)
-			for i := range ps {
-				ps[i] = &Particle{MinOccurs: 0, MaxOccurs: 1,
-					Term: &ElementDecl{Name: xdm.QName{Local: fmt.Sprintf("e%d", i)}}}
-			}
-			p := &Particle{MinOccurs: 1, MaxOccurs: 1,
-				Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}
-			m, err := compileContentModel(p)
-			if n <= 8192 {
-				if err != nil {
-					t.Fatalf("n=%d is within the budget but failed: %v", n, err)
+	const limit = 64
+	withBudgets(limit, -1, -1, -1, func() {
+		for _, n := range []int{limit - 1, limit, limit + 1} {
+			t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+				ps := make([]*Particle, n)
+				for i := range ps {
+					ps[i] = &Particle{MinOccurs: 0, MaxOccurs: 1,
+						Term: &ElementDecl{Name: xdm.QName{Local: fmt.Sprintf("e%d", i)}}}
 				}
-				if len(m.positions) != n {
-					t.Fatalf("built %d positions, want %d", len(m.positions), n)
+				p := &Particle{MinOccurs: 1, MaxOccurs: 1,
+					Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}
+				m, err := compileContentModel(p)
+				if n <= limit {
+					if err != nil {
+						t.Fatalf("n=%d is within the budget but failed: %v", n, err)
+					}
+					if len(m.positions) != n {
+						t.Fatalf("built %d positions, want %d", len(m.positions), n)
+					}
+					return
 				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("n=%d exceeds maxPositions=%d but compiled with %d positions; "+
-					"a truncated model would admit sequences the schema forbids",
-					n, maxPositions, len(m.positions))
-			}
-			if m != nil {
-				t.Errorf("a declined build must return a nil model, got %p", m)
-			}
-		})
+				if err == nil {
+					t.Fatalf("n=%d exceeds maxPositions=%d but compiled with %d positions; "+
+						"a truncated model would admit sequences the schema forbids",
+						n, maxPositions, len(m.positions))
+				}
+				if m != nil {
+					t.Errorf("a declined build must return a nil model, got %p", m)
+				}
+			})
+		}
+	})
+}
+
+// TestMaxPositionsProductionValue pins the shipped budget. The boundary above
+// is driven at a forced value because the production one is too expensive to
+// compile three times; this is what keeps that substitution honest, so that
+// lowering the real budget is a deliberate edit rather than a silent one.
+func TestMaxPositionsProductionValue(t *testing.T) {
+	if maxPositions != 8192 {
+		t.Errorf("maxPositions is %d, want 8192; if this change is deliberate, "+
+			"update this test and docs/options.md", maxPositions)
 	}
 }
 

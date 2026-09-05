@@ -58,6 +58,11 @@ data. Under 1.1 it can, and two different field tuples would then produce the
 same joined string — a false key match. The tuple representation has to stop
 being a joined string before 1.1 lands, not after.
 
+`TestIdentityKeySeparatorUnreachableInXML10` pins the premise rather than
+leaving it as a note here: it asserts that the parser refuses U+001F in
+character data. Whoever makes 1.1 documents parse will see it fail, which is
+the intended way to find this paragraph.
+
 Cost: substantial. Buys: correctness for documents that really are 1.1, and
 an end to the silent misreading above. Scoping it properly needs the W3C
 `xmlconf` suite, which this repository does not currently vendor — the other
