@@ -6,6 +6,44 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Fixed
+
+**The last unbudgeted load-time algorithm is bounded.** v1.2.2 wrote down that
+`checkUPA` had no budget of its own: `maxPositions` bounds the number of
+positions in a content model but not the pairwise scan over them, so Unique
+Particle Attribution cost O(states x pairs) and was cubic in the size of the
+model. Measured through the public `Load` API on a sequence of n optional
+elements, the densest follow relation the shortest schema text can produce:
+n=256 26ms, n=512 216ms, n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair
+tests, about 8x per doubling -- roughly fourteen minutes and over a gigabyte
+extrapolated to `maxPositions` = 8192. The same n=2048 schema now loads in
+0.51s, and the curve is the quadratic cost of building the follow relation
+rather than a cubic scan on top of it.
+
+`maxUPAStateWidth` (256) gates `len(state)` before the triangular loop begins,
+so none of the quadratic cost is paid before the gate notices and a state is
+either scanned whole or declined whole; `maxUPAPairTests` (2^22) is cumulative
+across a model's states, because the width gate alone still admits 8192 states
+of width 255 and ~260 million pair tests. The threshold is measured, not
+chosen: over every schema in this tree the widest state a real schema produces
+is 19 positions in `testdata/xsdtests` (15,464 schemas) and 72 in
+`testdata/xslt30-test`, against 2,048 for the adversarial shape, so 256 is 3.5x
+the widest real state and 8x the XSD suite's.
+
+Exceeding either budget SKIPS the check and never rejects the schema, following
+the policy already in place where a content model is too big to compile at all.
+UPA is a constraint on the schema, so declining to examine one must not decide
+whether it loads -- a resource bound that rejected would make the set of
+loadable schemas depend on a constant. Both XSD conformance marks are
+unchanged, 39,347 and 41,532, which is the check that the budget never fires on
+real input. A skip sets `contentModel.upaSkipped` rather than passing silently,
+because a declined check and a clean one both return nil and are otherwise
+indistinguishable; `xsd/budget_soundness_test.go` uses that to assert the
+budget fires on the adversarial shape, stays clear at width 72, and is
+one-directional. The new tests were validated by sabotage: made never to fire,
+and made to reject instead of skip, each caught with the schema in the failure
+message.
+
 ## v1.2.2 — 2026-09-05
 
 Security and the honesty of the numbers. Measured with `tests/check.sh`:

@@ -45,6 +45,17 @@ type contentModel struct {
 	// nullable records whether the model matches the empty sequence.
 	nullable bool
 
+	// upaSkipped records that checkUPA declined at least one state of this
+	// model because it exceeded maxUPAStateWidth or maxUPAPairTests.
+	//
+	// A skipped check is not a passed one: the model's ambiguity is
+	// unknown, and the schema loaded anyway. That distinction is invisible
+	// from the outside — a declined check and a clean one both return nil
+	// — so it is recorded here rather than left to be inferred, which is
+	// what lets budget_soundness_test.go assert that the budget fires on
+	// the shape it is meant to fire on and stays silent on real schemas.
+	upaSkipped bool
+
 	// counters are the repetition scopes, innermost last. A position
 	// inside a bounded repetition belongs to one, and the runtime tracks a
 	// count for each rather than duplicating states.

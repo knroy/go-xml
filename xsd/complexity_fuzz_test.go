@@ -57,15 +57,26 @@ import (
 //	                                                          O(V+E); width expansion is
 //	                                                          caught by maxPositions
 //
-// ALGORITHMS WITH NO EXPLICIT BUDGET (the finding this file exists to pin):
+// ALGORITHMS WITH NO EXPLICIT BUDGET (the finding this file exists to pin).
+// The first entry is no longer one of them and is kept, marked, because the
+// inventory is a record of what was found as much as of what is outstanding:
 //
-//	UPA pairwise competition      checkUPA, upa.go:241        NO BUDGET. Triangular loop
-//	                                                          (upa.go:256-257) over each of
-//	                                                          len(m.follow)+1 states.
-//	                                                          Bounded only transitively by
-//	                                                          maxPositions, and only to
-//	                                                          O(positions^3) -- see
-//	                                                          TestUPACostIsCubicInPositions.
+//	UPA pairwise competition      checkUPA, upa.go                BUDGETED as of the entry
+//	                                                              below. maxUPAStateWidth
+//	                                                              (256) gates len(state)
+//	                                                              BEFORE the triangular loop;
+//	                                                              maxUPAPairTests (2^22) is
+//	                                                              cumulative across a model's
+//	                                                              states. Exceeding either
+//	                                                              SKIPS the check and records
+//	                                                              contentModel.upaSkipped --
+//	                                                              it never rejects. Was the
+//	                                                              last entry here with no
+//	                                                              budget at all; the cubic
+//	                                                              cost it had is still pinned
+//	                                                              by TestUPACostIsCubicInPositions,
+//	                                                              which measures at n=128/256,
+//	                                                              below the width gate.
 //	substitution-closure overlap  elementNamesOverlap,        NO BUDGET. Nested loop over
 //	                              upa.go:338                  two substitutable slices.
 //	substitution EDC              checkSubstitutionEDC, :487  NO BUDGET. positions x closure.

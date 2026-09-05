@@ -232,12 +232,65 @@ func sortedErrors(msgs []string) []error {
 	return out
 }
 
+// maxUPAStateWidth bounds the width of a state checkUPA will scan pairwise.
+//
+// The scan inside one state is triangular — len(state)^2/2 pair tests — and a
+// model of n positions can have O(n) states, so the total is cubic in the
+// position count while maxPositions bounds only n. Measured through the public
+// Load API on a sequence of n optional elements, which is the densest follow
+// relation the shortest schema text can produce: n=256 26ms, n=512 216ms,
+// n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests — about 8x per
+// doubling. Extrapolated to maxPositions=8192 that is ~14 minutes and over a
+// gigabyte for one ~320KB schema document.
+//
+// 256 is chosen from measurement, not from taste. Instrumented over every
+// schema in this tree, the widest state a real schema produces is 19 positions
+// in testdata/xsdtests (15,470 schemas) and 72 in testdata/xslt30-test, whose
+// widest single file is tests/expr/type-expr/variousTypesSchemaExpr.xsd. The
+// adversarial shape above reaches 2,048. So 256 is 3.5x the widest state any
+// real schema in this tree produces and 8x the XSD suite's — it cannot fire on
+// legitimate input — while capping one state's scan at ~32,000 pair tests.
+//
+// The gate is on state WIDTH and is checked BEFORE the triangular loop begins,
+// not inside it. A bound tested during the scan would still have paid part of
+// the quadratic cost before noticing, and — worse — would leave a state half
+// examined, which is a check that reports "no violation" having looked at some
+// pairs and not others. Declining the whole state is the honest unit.
+//
+// maxUPAPairTests is a cumulative budget across all the states of one model,
+// because the width gate alone does not bound the total: a model of 8192
+// positions in 8192 states of width 255 each passes the width gate everywhere
+// and still performs ~260 million pair tests. The cumulative cap makes the
+// work linear-bounded in the worst case whatever the shape.
+//
+// The policy on exceeding either is the one already established at
+// checkContentModelConstraints' compile failure (upa.go:179): the check is
+// SKIPPED and the schema still loads. It is NOT a rejection. UPA is a
+// constraint on the schema, and a schema the checker declined to examine is
+// one whose ambiguity is unknown — refusing it would turn a budget into a
+// conformance failure and change the set of schemas that load. Skipping can
+// only ever be MORE permissive, which is the direction budget_soundness_test.go
+// requires of every budget in this package.
+//
+// They are vars only so tests may lower them; they are never assigned in
+// production.
+var (
+	maxUPAStateWidth = 256
+	maxUPAPairTests  = 1 << 22 // 4,194,304
+)
+
 // checkUPA reports a content model in which two competing particles could match
 // the same element.
 //
 // The states to examine are the initial set and each position's follow set: at
 // every point where the automaton must choose, no two choices may accept the
 // same element.
+//
+// A state wider than maxUPAStateWidth, or a model whose cumulative pair tests
+// would exceed maxUPAPairTests, is SKIPPED rather than rejected; skipped is
+// recorded on the model so a caller or a test can observe that the check was
+// declined. See maxUPAStateWidth for why, and for the measurements behind the
+// numbers.
 func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 	type upaState struct {
 		positions []int
@@ -251,8 +304,18 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 		states = append(states, upaState{f, false})
 	}
 
+	budget := maxUPAPairTests
 	for _, st := range states {
 		state := st.positions
+		// Bound the WORK before any of it is done. A state too wide to
+		// scan, or one that would exhaust what is left of the model's
+		// cumulative budget, is declined whole — see maxUPAStateWidth.
+		pairs := len(state) * (len(state) - 1) / 2
+		if len(state) > maxUPAStateWidth || pairs > budget {
+			m.upaSkipped = true
+			continue
+		}
+		budget -= pairs
 		for i := 0; i < len(state); i++ {
 			for j := i + 1; j < len(state); j++ {
 				a, b := m.positions[state[i]], m.positions[state[j]]

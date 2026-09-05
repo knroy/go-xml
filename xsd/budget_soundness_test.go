@@ -626,3 +626,308 @@ func TestUPASkipStillRejectsDocuments(t *testing.T) {
 		t.Logf("rejected, though not by the compile failure: %v", verr)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// UPA scan budget
+// ---------------------------------------------------------------------------
+
+// withUPABudgets runs fn with the two UPA budgets set to the given values,
+// restoring them afterwards. A value of -1 leaves that budget alone. It is
+// separate from withBudgets because the UPA budgets bound a *check*, not a
+// construction: the four budgets above all decline to build something, whereas
+// these decline to examine something already built.
+func withUPABudgets(width, pairs int, fn func()) {
+	ow, op := maxUPAStateWidth, maxUPAPairTests
+	defer func() { maxUPAStateWidth, maxUPAPairTests = ow, op }()
+	if width >= 0 {
+		maxUPAStateWidth = width
+	}
+	if pairs >= 0 {
+		maxUPAPairTests = pairs
+	}
+	fn()
+}
+
+// upaCases are schemas whose acceptance turns on the UPA check: each ambiguous
+// shape paired with the unambiguous shape it is one edit away from. Both
+// polarities are required, because a suite of valid schemas alone cannot tell a
+// sound skip from one that has stopped checking anything.
+func upaCases() []derivationCase {
+	body := func(inner string) string {
+		return wrap(`<xs:element name="r"><xs:complexType>` + inner +
+			`</xs:complexType></xs:element>`)
+	}
+	return []derivationCase{
+		// Two branches of a choice on the same element name: the
+		// textbook ambiguity, and the shape checkUPA exists to reject.
+		{"upa/choice-same-name", body(`<xs:choice>
+		  <xs:element name="a" type="xs:string"/>
+		  <xs:element name="a" type="xs:string"/>
+		</xs:choice>`), false, Version10},
+		{"upa/choice-distinct", body(`<xs:choice>
+		  <xs:element name="a" type="xs:string"/>
+		  <xs:element name="b" type="xs:string"/>
+		</xs:choice>`), true, Version10},
+
+		// An optional element followed by the same name: the automaton
+		// cannot say which particle the first "a" belongs to.
+		{"upa/optional-then-same", body(`<xs:sequence>
+		  <xs:element name="a" type="xs:string" minOccurs="0"/>
+		  <xs:element name="a" type="xs:string"/>
+		</xs:sequence>`), false, Version10},
+		{"upa/optional-then-other", body(`<xs:sequence>
+		  <xs:element name="a" type="xs:string" minOccurs="0"/>
+		  <xs:element name="b" type="xs:string"/>
+		</xs:sequence>`), true, Version10},
+
+		// Two overlapping wildcards, which compete under both versions.
+		{"upa/two-wildcards", body(`<xs:choice>
+		  <xs:any namespace="##any" processContents="skip"/>
+		  <xs:any namespace="##any" processContents="skip"/>
+		</xs:choice>`), false, Version10},
+
+		// Element against wildcard: ambiguous under 1.0, resolved in
+		// favour of the element under 1.1. Both polarities of the same
+		// text, so a skip that ignored Version would show up here.
+		{"upa/element-vs-wildcard-10", body(`<xs:choice>
+		  <xs:element name="a" type="xs:string"/>
+		  <xs:any namespace="##any" processContents="skip"/>
+		</xs:choice>`), false, Version10},
+		{"upa/element-vs-wildcard-11", body(`<xs:choice>
+		  <xs:element name="a" type="xs:string"/>
+		  <xs:any namespace="##any" processContents="skip"/>
+		</xs:choice>`), true, Version11},
+	}
+}
+
+// TestUPABudgetSoundness forces the UPA budgets so low that every state is
+// declined, and asserts the skip is only ever MORE permissive.
+//
+// This is the one direction that matters. A skipped UPA check makes an
+// ambiguous schema load, which is a false ACCEPT of a *schema* — but the
+// invariant this file enforces is stated over the budgeted path against the
+// exact path, and the guarantee is that the budget never turns an accepted
+// schema into a rejected one. A budget that could reject is a budget that
+// changes the set of schemas that load, which is a conformance failure; the
+// permissive direction is a declined check, which is what the skip is.
+//
+// TestUPASkipStillRejectsDocuments above is the companion for the other half:
+// where a skip arises from a model that would not compile, documents are still
+// refused at validate time.
+func TestUPABudgetSoundness(t *testing.T) {
+	for _, c := range upaCases() {
+		t.Run(c.name, func(t *testing.T) {
+			exact, exactWhy := loadSchema(c.schema, c.ver)
+			if exact != c.valid {
+				t.Fatalf("case is mislabelled: at the normal budget got accepted=%v (%s), want %v",
+					exact, exactWhy, c.valid)
+			}
+			forcings := []struct {
+				name         string
+				width, pairs int
+			}{
+				{"maxUPAStateWidth=0", 0, -1},
+				{"maxUPAStateWidth=1", 1, -1},
+				{"maxUPAPairTests=0", -1, 0},
+				{"both=0", 0, 0},
+			}
+			for _, f := range forcings {
+				var forced bool
+				var why string
+				withUPABudgets(f.width, f.pairs, func() {
+					forced, why = loadSchema(c.schema, c.ver)
+				})
+				// The load direction: a budget must never turn a
+				// schema that loads into one that does not.
+				if exact && !forced {
+					t.Errorf("UNSOUND IN THE REJECT DIRECTION: with %s the schema was REJECTED (%s), "+
+						"but the exact path accepts it. A budget must decline a check, "+
+						"never fail one.\n  schema: %s", f.name, why, c.schema)
+				}
+			}
+		})
+	}
+}
+
+// TestUPABudgetDeclineIsRecorded pins that a skip is observable. A declined
+// check and a clean one both return nil from checkUPA, so without the record on
+// the model there is no way for a caller or a test to tell "this model is
+// unambiguous" from "nobody looked". The two tests below depend on this being
+// true, and so does the claim in docs/security.md.
+func TestUPABudgetDeclineIsRecorded(t *testing.T) {
+	m := compileWideOptional(t, 8)
+	if err := checkUPA(m, "t", CheckOptions{}); err != nil {
+		t.Fatalf("a sequence of distinct optional elements is unambiguous: %v", err)
+	}
+	if m.upaSkipped {
+		t.Fatalf("at the production budget a width-8 model must not be skipped")
+	}
+	withUPABudgets(2, -1, func() {
+		m := compileWideOptional(t, 8)
+		if err := checkUPA(m, "t", CheckOptions{}); err != nil {
+			t.Fatalf("a declined check must not report a violation: %v", err)
+		}
+		if !m.upaSkipped {
+			t.Errorf("with maxUPAStateWidth=2 a width-8 model was scanned in full; " +
+				"the budget did not fire, so nothing bounds the triangular scan")
+		}
+	})
+}
+
+// compileWideOptional builds a sequence of n optional element particles. Its
+// follow relation is dense — every position may follow every earlier one — so
+// its states are as wide as the position count, which is what makes it the
+// worst case for checkUPA's triangular scan.
+func compileWideOptional(t *testing.T, n int) *contentModel {
+	t.Helper()
+	ps := make([]*Particle, n)
+	for i := range ps {
+		ps[i] = &Particle{MinOccurs: 0, MaxOccurs: 1,
+			Term: &ElementDecl{Name: xdm.QName{Local: fmt.Sprintf("e%d", i)}}}
+	}
+	m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: 1,
+		Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}})
+	if err != nil {
+		t.Fatalf("compiling %d optional particles: %v", n, err)
+	}
+	return m
+}
+
+// TestUPABudgetFiresAndSchemaStillLoads drives the adversarial shape and pins
+// both halves of the policy: the budget FIRES, and the schema still LOADS.
+//
+// The second half is the load-bearing one. checkContentModelConstraints'
+// existing compile-failure path (upa.go:179) skips the check and keeps the
+// schema, and this budget follows it exactly: a model too expensive to examine
+// is declined, never rejected. Were it a rejection instead, the set of schemas
+// that load would depend on a resource bound, and the conformance marks in
+// tests/ratchet.txt would move.
+//
+// The gate is PER STATE, so a model may have some states declined and others
+// scanned exactly, and a violation found in a state that WAS scanned is a real
+// violation which must still be reported. The shape here is chosen so that
+// every state is wide: a repeating choice of n same-named elements has n
+// positions, and the follow set of each is all n, so forcing the width below n
+// declines every state and nothing is examined at all.
+//
+// It runs at a forced budget rather than driving 2,048 particles, for the
+// reason TestMaxPositionsRealBoundary records: at the production numbers this
+// shape costs 12 seconds and 115MB per load, and three of them once blew CI's
+// deadline under -race. The comparison being asserted is len(state) against the
+// limit, which does not care which absolute number plays the limit's part.
+func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
+	// An AMBIGUOUS model in which EVERY state is n wide: a repeating
+	// choice of n elements all named "a". At the normal budget the schema
+	// is rejected; under a forced budget every state is declined and it
+	// must load.
+	const n = 32
+	var b strings.Builder
+	b.WriteString(`<xs:element name="r"><xs:complexType><xs:choice maxOccurs="unbounded">`)
+	for i := 0; i < n; i++ {
+		b.WriteString(`<xs:element name="a" type="xs:string"/>`)
+	}
+	b.WriteString(`</xs:choice></xs:complexType></xs:element>`)
+	src := wrap(b.String())
+
+	if ok, why := loadSchema(src, Version10); ok {
+		t.Fatalf("a repeating choice of %d particles all named \"a\" is ambiguous "+
+			"and must be rejected at the production budget, but it loaded", n)
+	} else if !strings.Contains(why, "cos-nonambig") {
+		t.Fatalf("rejected, but not by UPA: %s", why)
+	}
+
+	for _, f := range []struct {
+		name         string
+		width, pairs int
+	}{
+		{"maxUPAStateWidth=8", 8, -1},
+		{"maxUPAPairTests=0", -1, 0},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			withUPABudgets(f.width, f.pairs, func() {
+				ok, why := loadSchema(src, Version10)
+				if !ok {
+					t.Fatalf("with %s the schema was REJECTED (%s); a model too "+
+						"expensive to check must be SKIPPED, not refused — "+
+						"otherwise a resource bound decides which schemas load",
+						f.name, why)
+				}
+			})
+			// And the budget really is what let it through: the same
+			// model, checked directly, must record the skip.
+			withUPABudgets(f.width, f.pairs, func() {
+				ps := make([]*Particle, n)
+				for i := range ps {
+					ps[i] = &Particle{MinOccurs: 1, MaxOccurs: 1,
+						Term: &ElementDecl{Name: xdm.QName{Local: "a"}}}
+				}
+				m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: Unbounded,
+					Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}})
+				if err != nil {
+					t.Fatalf("compile: %v", err)
+				}
+				if err := checkUPA(m, "t", CheckOptions{}); err != nil {
+					t.Fatalf("with %s every state exceeds the budget, so nothing "+
+						"was examined, yet a violation was reported: %v", f.name, err)
+				}
+				if !m.upaSkipped {
+					t.Errorf("with %s the ambiguous %d-wide model was scanned in "+
+						"full rather than declined; the schema above therefore "+
+						"loaded for some other reason and this test proves nothing",
+						f.name, n)
+				}
+			})
+		})
+	}
+}
+
+// TestUPABudgetDoesNotFireOnRealSchemas pins the threshold against the
+// measurement that chose it.
+//
+// Instrumented over every schema in this tree, the widest state a real schema
+// produces is 19 positions in testdata/xsdtests (15,464 schemas) and 72 in
+// testdata/xslt30-test, whose widest file is
+// tests/expr/type-expr/variousTypesSchemaExpr.xsd. maxUPAStateWidth is 256:
+// 3.5x the widest real state and 8x the XSD suite's.
+//
+// A regression that lowered the threshold — or that made the gate fire at or
+// below the width it is supposed to clear — would not show up as a test
+// failure anywhere else, because a skipped check returns nil exactly as a
+// passed one does. The conformance marks would not move either: skipping makes
+// MORE schemas load, and the suite counts agreement, so a schema wrongly
+// skipped that happens to be unambiguous still agrees. This is the only thing
+// standing between the budget and silently switching UPA off.
+func TestUPABudgetDoesNotFireOnRealSchemas(t *testing.T) {
+	const widestReal = 72
+	if maxUPAStateWidth <= widestReal {
+		t.Fatalf("maxUPAStateWidth is %d, at or below the widest state a real schema "+
+			"in this tree produces (%d, in testdata/xslt30-test/tests/expr/type-expr/"+
+			"variousTypesSchemaExpr.xsd). The budget would decline the UPA check on "+
+			"legitimate input, which switches the constraint off silently.",
+			maxUPAStateWidth, widestReal)
+	}
+	m := compileWideOptional(t, widestReal)
+	if err := checkUPA(m, "t", CheckOptions{}); err != nil {
+		t.Fatalf("a %d-wide model of distinct optional elements is unambiguous: %v",
+			widestReal, err)
+	}
+	if m.upaSkipped {
+		t.Errorf("the UPA check was DECLINED on a %d-position state, which is the "+
+			"widest any real schema in this tree produces. The budget is too low: "+
+			"legitimate schemas are loading unchecked.", widestReal)
+	}
+}
+
+// TestUPABudgetProductionValues pins the shipped numbers, for the reason
+// TestMaxPositionsProductionValue does: the boundary tests above run at forced
+// values, and this is what keeps that substitution honest.
+func TestUPABudgetProductionValues(t *testing.T) {
+	if maxUPAStateWidth != 256 {
+		t.Errorf("maxUPAStateWidth is %d, want 256; if this change is deliberate, "+
+			"update this test and docs/security.md", maxUPAStateWidth)
+	}
+	if maxUPAPairTests != 1<<22 {
+		t.Errorf("maxUPAPairTests is %d, want %d; if this change is deliberate, "+
+			"update this test and docs/security.md", maxUPAPairTests, 1<<22)
+	}
+}

@@ -106,25 +106,54 @@ failure mode. The harness was validated by sabotage: making the swallowed
 each report "no violation" was caught, with a concrete schema and document in
 the failure message.
 
-**One load-time algorithm is not budgeted, and the omission is deliberate
-rather than overlooked.** `checkUPA` (`xsd/upa.go`) is the Unique Particle
-Attribution check, and its cost is O(states x pairs): `maxPositions` bounds the
-number of positions but not the pairwise scan over them, so the work is cubic
-in the size of a content model. Measured through the public `Load` API on a
-schema of nothing but optional elements: 116 KB takes 12.6s and 115 MB, 163 KB
-takes 1m45s and 369 MB, roughly 8x per doubling. `xsd/complexity_fuzz_test.go`
-records this in its inventory and asserts the growth exponent so it cannot
-worsen unnoticed.
+**The last unbudgeted load-time algorithm now has a budget.** `checkUPA`
+(`xsd/upa.go`) is the Unique Particle Attribution check, and its cost was
+O(states x pairs): `maxPositions` bounded the number of positions but not the
+pairwise scan over them, so the work was cubic in the size of a content model.
+Measured through the public `Load` API on a sequence of n optional elements,
+the densest follow relation the shortest schema text can produce: n=256 26ms,
+n=512 216ms, n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests, about 8x
+per doubling. Extrapolated to `maxPositions` = 8192 that is roughly fourteen
+minutes and over a gigabyte for one ~320 KB schema document.
 
-The reason it is still here is measurement rather than optimism. Instrumented
-over every schema in this tree -- 11,610 of them, the whole W3C suite included
--- the widest state any real schema produces is 19 positions; the adversarial
-shape above reaches 2,048. So a caller loading schemas it wrote is nowhere near
-this, and a caller loading schemas an attacker wrote should not be doing so
-without a timeout in any case. The fix is a decision between bounding the scan
-and rewriting the element-vs-element test as a name-bucket intersection, and it
-is tracked rather than pretended away. Until then: **do not load untrusted
-schemas without a wall-clock limit around the call.**
+Two budgets now bound it. `maxUPAStateWidth` (256) is checked on `len(state)`
+**before** the triangular loop begins, so no part of the quadratic cost is paid
+before the gate notices, and a state is either scanned whole or declined whole
+— a half-examined state would be a check reporting "no violation" having looked
+at some pairs and not others. `maxUPAPairTests` (2^22) is cumulative across all
+the states of one model, because the width gate alone does not bound the total:
+8192 positions in 8192 states of width 255 each pass the width gate and still
+perform ~260 million pair tests. With both in place the same n=2048 schema
+loads in 0.51s rather than 12.0s, and the curve is quadratic — the cost of
+building the follow relation — rather than cubic.
+
+The threshold is chosen from measurement. Instrumented over every schema in
+this tree, the widest state a real schema produces is **19** positions in
+`testdata/xsdtests` (15,464 schemas) and **72** in `testdata/xslt30-test`,
+whose widest single file is
+`tests/expr/type-expr/variousTypesSchemaExpr.xsd`; the adversarial shape above
+reaches 2,048. So 256 is 3.5x the widest real state and 8x the XSD suite's, and
+cannot fire on legitimate input, while capping one state's scan at ~32,000 pair
+tests. `TestUPABudgetDoesNotFireOnRealSchemas` pins that from below, because a
+threshold quietly lowered would not fail anything else: a declined check
+returns nil exactly as a passed one does, and the conformance marks would not
+move either, since skipping makes *more* schemas load and the suite counts
+agreement.
+
+**Exceeding either budget SKIPS the check; it never rejects the schema.** That
+is the policy already established where a content model is too big to compile
+at all (`upa.go:179` skips and keeps the schema), and it is the only sound
+direction: UPA is a constraint on the schema, so a schema the checker declined
+to examine is one whose ambiguity is unknown, and refusing it would turn a
+resource bound into a conformance failure and make the set of schemas that load
+depend on a constant. Skipping can only ever be more permissive, which is what
+`xsd/budget_soundness_test.go` requires of every budget in this package.
+
+A skip is recorded rather than silent: `contentModel.upaSkipped` marks a model
+whose check was declined, because a declined check and a clean one are
+otherwise indistinguishable from the outside — both return nil. The prior
+advice to wrap untrusted loads in a wall-clock limit remains good practice, but
+it is no longer load-bearing for this particular algorithm.
 
 **The distinction that matters**, and the single most useful idea this file has
 produced — it decides whether a numeric constant in this code is a feature or a
