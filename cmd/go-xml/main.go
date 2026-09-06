@@ -250,6 +250,8 @@ Exit status: 0 if every input transformed, 1 otherwise.
 		externalEnts: *allowExternalEnts,
 		xinclude:     *xinclude,
 		maxDepth:     *maxDepth,
+
+		baseOutputURI: baseOutputURI(*outPath, *resultDir),
 	}
 
 	// A batch is processed to the end by default only when asked: stopping at
@@ -329,6 +331,10 @@ type transformCfg struct {
 	externalEnts bool
 	xinclude     bool
 	maxDepth     int
+	// baseOutputURI is where this run's output is actually going, as a URI.
+	// Unlike the library, the CLI knows that destination, so it supplies one
+	// rather than leaving fn:current-output-uri absent everywhere.
+	baseOutputURI string
 }
 
 func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformCfg) error {
@@ -395,6 +401,12 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		// -allow-unparsed-text turned it on. Passing it unconditionally keeps
 		// the gate in one place rather than two.
 		Texts: cfg.resolver,
+		// Section 19.1 leaves the base output URI implementation-defined, and
+		// notes that it "will often be convenient" for it to be "the same as
+		// the location to which the principal result document is serialized".
+		// The library defaults to none because it never writes files; the CLI
+		// does know where the output goes, so it says so.
+		BaseOutputURI: cfg.baseOutputURI,
 	})
 	if err != nil {
 		return err
@@ -563,6 +575,49 @@ func parseXPathVersion(s string) (*xpath.Version, error) {
 		return nil, fmt.Errorf("-xpath-version %q: expected 2.0, 3.0 or 3.1", s)
 	}
 	return &v, nil
+}
+
+// baseOutputURI is the URI the principal result is destined for.
+//
+// Section 19.1 makes the base output URI implementation-defined, noting that
+// "it will often be convenient for the base output URI to be the same as the
+// location to which the principal result document is serialized". The CLI
+// knows that location, so it reports it: fn:current-output-uri then answers
+// the destination rather than the empty sequence, and section 24.3 leaves it
+// there for an xsl:result-document with no href, which is exactly the case
+// issue #3 was reduced from.
+//
+// A directory is spelled with a trailing slash. That is not cosmetic: a
+// relative @href resolved against "file:///d/out" names a sibling of "out",
+// while against "file:///d/out/" it names a file inside it, which is the
+// containment -result-dir promises.
+func baseOutputURI(outPath, resultDir string) string {
+	if outPath != "" {
+		return fileURI(outPath)
+	}
+	dir := resultDir
+	if dir == "" {
+		// With neither flag the principal result goes to stdout, which has no
+		// URI of its own. The working directory is the location a relative
+		// href written on that command line would mean, and it is what Saxon
+		// reports for the same invocation.
+		wd, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		dir = wd
+	}
+	return dirURI(dir)
+}
+
+// dirURI is fileURI for a directory, which differs only in the trailing
+// slash that makes a relative reference resolve inside it.
+func dirURI(path string) string {
+	u := fileURI(path)
+	if u != "" && !strings.HasSuffix(u, "/") {
+		u += "/"
+	}
+	return u
 }
 
 // fileURI turns a filesystem path into an absolute file: URI.

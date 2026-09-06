@@ -106,7 +106,7 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; internal subset only |
-| **Tests** | 1,465 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,469 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -742,7 +742,12 @@ Every remote-reference mechanism is off unless you turn it on.
   The CLI opts in with `-result-dir` and refuses any `href` resolving outside
   it, symlinks included. An `xsl:result-document` with no `href` names no file
   at all: section 24.3 leaves the current output URI at the base output URI, so
-  it is written to the principal output, and needs no flag.
+  it is written to the principal output, and needs no flag. The CLI sets that
+  base output URI from where the output actually goes — the `-o` file, the
+  `-result-dir` directory, or the working directory, a directory being spelled
+  with a trailing slash — so `fn:current-output-uri()` reports the destination.
+  The library still defaults to none, since it never writes files; section 19.1
+  makes the choice implementation-defined and permits it to be absent.
 
 The CLI mirrors these: `-allow-dir` opens document access, `-allow-doctype`
 opens the parser, and `-timeout` bounds the transform. All three are off or
@@ -1220,7 +1225,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,465 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,469 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

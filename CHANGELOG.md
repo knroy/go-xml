@@ -8,6 +8,42 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+**`fn:current-output-uri()` reported the stylesheet's own location from the
+CLI, not the output destination.** Found while checking the fix above against
+Martin Honnen's *exact* stylesheet from issue #3 — the reduction used at the
+time had dropped the `current-output-uri()` call that reveals it. Inside an
+href-less `xsl:result-document`, Saxon HE 13 reports the directory the output
+is going to and `go-xml` reported `file:///.../result-document-no-href-test1.xsl`,
+the stylesheet itself. In the principal tree with no `xsl:result-document` at
+all, Saxon reports the same directory and `go-xml` returned the empty sequence.
+
+The engine was right and deliberate: XSLT 3.0 section 19.1 makes the base
+output URI implementation-defined, it "is acceptable for the base output URI
+to be absent", and a library that never writes files has no destination to
+name — so `TransformOptions.BaseOutputURI` still defaults to none, and
+`fn:current-output-uri` still answers the empty sequence for an embedding
+caller who supplies nothing. That default is unchanged.
+
+The bug was that `cmd/go-xml` never set it, although the CLI — unlike the
+library — does know where the output is going. Section 19 notes that "it will
+often be convenient for the base output URI to be the same as the location to
+which the principal result document is serialized", and section 24.3 sets the
+current output URI to the base output URI "on initial invocation of a
+stylesheet component", leaving it there for an `xsl:result-document` with no
+`href`. Reporting the stylesheet's URI answered with neither the destination
+nor absence. The command now derives one from the actual destination: `-o FILE`
+gives that file's `file://` URI, `-result-dir DIR` gives that directory's with
+a trailing slash, and with neither the process working directory, again with a
+trailing slash. The slash is load-bearing — a relative reference resolved
+against `file:///d/out` names a sibling of `out`, while against
+`file:///d/out/` it names a file inside it.
+
+Containment is unaffected. The `-result-dir` check that refuses an `href`
+escaping the directory works on the raw `@href` rather than on the resolved
+URI, so a base output URI cannot loosen it; `href="../escape.xml"` is still
+refused and nothing is written outside the directory, which is now tested
+explicitly.
+
 **An `xsl:result-document` with no `href` produced no output from the CLI.**
 Reported as issue #3 by Martin Honnen, reduced from a stylesheet XSpec had
 transpiled — its report used `format="Q{...}xml-report-serialization-parameters"`
