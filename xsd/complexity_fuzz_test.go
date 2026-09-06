@@ -68,10 +68,14 @@ import (
 //	                                                              maxUPAPairTests (2^22) is
 //	                                                              cumulative across a model's
 //	                                                              states. Exceeding either
-//	                                                              SKIPS the check and records
-//	                                                              contentModel.upaSkipped --
-//	                                                              it never rejects. Was the
-//	                                                              last entry here with no
+//	                                                              REFUSES the schema with an
+//	                                                              error wrapping
+//	                                                              xdm.ErrResourceLimit -- it
+//	                                                              never skips, because UPA is
+//	                                                              a normative constraint and
+//	                                                              an unchecked one silently
+//	                                                              accepted is a false accept.
+//	                                                              Was the last entry here with no
 //	                                                              budget at all; the cubic
 //	                                                              cost it had is still pinned
 //	                                                              by TestUPACostIsCubicInPositions,

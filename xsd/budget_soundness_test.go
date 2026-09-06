@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -700,20 +701,154 @@ func upaCases() []derivationCase {
 	}
 }
 
-// TestUPABudgetSoundness forces the UPA budgets so low that every state is
-// declined, and asserts the skip is only ever MORE permissive.
+// loadSchemaErr is loadSchema, but hands back the error itself rather than its
+// text. The UPA budget refusal must be distinguishable from a cos-nonambig
+// verdict by errors.Is, and a string cannot carry that.
+func loadSchemaErr(t *testing.T, src string, v Version) error {
+	t.Helper()
+	sdoc, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, lerr := Load(sdoc.Root, "", Options{Version: v})
+	return lerr
+}
+
+// ambiguousChoice builds a complex type whose content model is ambiguous at
+// EVERY n: a sequence repeated twice around a choice of n identically named
+// elements. Every branch of the choice competes with every other, and the
+// repetition makes the follow set of each position the whole choice, so every
+// state is n wide.
 //
-// This is the one direction that matters. A skipped UPA check makes an
-// ambiguous schema load, which is a false ACCEPT of a *schema* — but the
-// invariant this file enforces is stated over the budgeted path against the
-// exact path, and the guarantee is that the budget never turns an accepted
-// schema into a rejected one. A budget that could reject is a budget that
-// changes the set of schemas that load, which is a conformance failure; the
-// permissive direction is a declined check, which is what the skip is.
+// It is the shape that exposed the defect this block now guards. At n=4 the
+// state is narrow enough to scan and the schema is rejected as cos-nonambig; at
+// n=300 it crosses maxUPAStateWidth. Before the fix the second case LOADED —
+// the same violation, the opposite verdict, decided by a resource bound.
+func ambiguousChoice(n int) string {
+	var b strings.Builder
+	b.WriteString(`<xs:complexType name="t"><xs:sequence maxOccurs="2"><xs:choice>`)
+	for i := 0; i < n; i++ {
+		b.WriteString(`<xs:element name="dup" type="xs:string"/>`)
+	}
+	b.WriteString(`</xs:choice></xs:sequence></xs:complexType>`)
+	return wrap(b.String())
+}
+
+// TestUPAOverBudgetAmbiguousSchemaIsRefused is the regression test for the
+// false accept.
 //
-// TestUPASkipStillRejectsDocuments above is the companion for the other half:
-// where a skip arises from a model that would not compile, documents are still
-// refused at validate time.
+// UPA is a normative schema-component constraint: a schema that violates it is
+// invalid. A budget that skipped the check therefore did not decline to answer,
+// it answered "valid" without looking. The n=300 schema below is ambiguous, and
+// must now FAIL to load — with a resource-limit refusal, because what the
+// checker actually knows is "I could not decide", not "this is ambiguous".
+func TestUPAOverBudgetAmbiguousSchemaIsRefused(t *testing.T) {
+	err := loadSchemaErr(t, ambiguousChoice(300), Version10)
+	if err == nil {
+		t.Fatalf("FALSE ACCEPT: a genuinely ambiguous schema with a state wider "+
+			"than maxUPAStateWidth (%d) loaded with no error. A budget must never "+
+			"turn \"I could not prove the constraint\" into \"the constraint holds\".",
+			maxUPAStateWidth)
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("errors.Is(%v, ErrResourceLimit) = false; a caller cannot tell "+
+			"\"too complex to check\" from \"your schema is ambiguous\"", err)
+	}
+	if !strings.Contains(err.Error(), "cannot be checked") {
+		t.Errorf("message %q does not say the check was declined", err)
+	}
+	// A refusal is NOT a verdict, and must not claim to be one.
+	if strings.Contains(err.Error(), "cos-nonambig") {
+		t.Errorf("the refusal %v reports the cos-nonambig code, but nothing was "+
+			"examined; a declined check must not masquerade as a violation", err)
+	}
+}
+
+// TestUPAGenuineViolationIsNotAResourceLimit is the other polarity. The same
+// shape narrow enough to scan must report the real constraint, and must NOT
+// carry the sentinel — a caller that retried on ErrResourceLimit would retry a
+// load that can never succeed.
+func TestUPAGenuineViolationIsNotAResourceLimit(t *testing.T) {
+	err := loadSchemaErr(t, ambiguousChoice(4), Version10)
+	if err == nil {
+		t.Fatal("a choice of 4 identically named elements is ambiguous and must be rejected")
+	}
+	if !strings.Contains(err.Error(), "cos-nonambig") {
+		t.Errorf("rejected, but not by UPA: %v", err)
+	}
+	if errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("a genuine cos-nonambig violation %v reports as a resource limit; "+
+			"a caller would retry a load that can never succeed", err)
+	}
+}
+
+// TestUPAOverBudgetUnambiguousSchemaIsAlsoRefused pins the price of the fix,
+// deliberately and in the open.
+//
+// This is a BEHAVIOUR CHANGE. A legitimate, unambiguous schema with a state
+// wider than maxUPAStateWidth loaded before the budget existed and loaded while
+// the budget skipped; it now FAILS. That is the unavoidable cost of refusing to
+// guess: the checker cannot tell a wide-and-fine model from a wide-and-broken
+// one without doing the work the budget forbids, and of the two available
+// answers only the refusal is honest.
+//
+// It is safe in practice only because the threshold is far above anything real
+// — 256 against a widest measured state of 19 across 15,464 W3C schemas and 72
+// in the XSLT corpus. TestUPABudgetDoesNotFireOnRealSchemas is what keeps that
+// gap; it matters more now than it did, because firing no longer means
+// "unchecked", it means "rejected".
+func TestUPAOverBudgetUnambiguousSchemaIsAlsoRefused(t *testing.T) {
+	// Distinct names throughout: this model is unambiguous, and at a
+	// normal budget it loads.
+	const n = 8
+	var b strings.Builder
+	b.WriteString(`<xs:complexType name="t"><xs:sequence>`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, `<xs:element name="e%d" type="xs:string" minOccurs="0"/>`, i)
+	}
+	b.WriteString(`</xs:sequence></xs:complexType>`)
+	src := wrap(b.String())
+
+	if err := loadSchemaErr(t, src, Version10); err != nil {
+		t.Fatalf("a sequence of %d distinctly named optional elements is "+
+			"unambiguous and must load at the production budget: %v", n, err)
+	}
+	withUPABudgets(2, -1, func() {
+		err := loadSchemaErr(t, src, Version10)
+		if err == nil {
+			t.Fatalf("with maxUPAStateWidth=2 the %d-wide model was scanned in "+
+				"full; the budget did not fire, so this test proves nothing", n)
+		}
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("an unambiguous schema refused over budget must be refused as "+
+				"a RESOURCE LIMIT, not as a constraint violation: %v", err)
+		}
+	})
+}
+
+// TestUPABudgetSoundness states the property the UPA budget actually has.
+//
+// The invariant the rest of this file enforces — "budgeted accepts => exact
+// accepts" — is the WRONG property for UPA, and permitted exactly the false
+// accept above: a budget that skips its check accepts everything, which
+// satisfies "never rejects what the exact path accepts" while silently
+// admitting invalid schemas. The four construction budgets bound how much of a
+// thing gets BUILT, and declining to build it makes the thing unusable later;
+// this budget bounds a normative CHECK, and declining a check has no later
+// safety net, because the schema has already loaded.
+//
+// So the property here is two-sided:
+//
+//	budgeted accepts  => exact accepts   (no new rejections of valid schemas
+//	                                      dressed up as verdicts)
+//	budgeted declines => an ERROR carrying xdm.ErrResourceLimit
+//	                                     (never silent acceptance)
+//
+// Every case below is forced fully over budget, so the second clause is what is
+// exercised: under every forcing the load must fail, and fail as a resource
+// limit — for the invalid cases AND the valid ones alike, because a declined
+// check cannot tell them apart. That indistinguishability is the point: it is
+// why the refusal is labelled a resource limit rather than a verdict.
 func TestUPABudgetSoundness(t *testing.T) {
 	for _, c := range upaCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -732,44 +867,55 @@ func TestUPABudgetSoundness(t *testing.T) {
 				{"both=0", 0, 0},
 			}
 			for _, f := range forcings {
-				var forced bool
-				var why string
+				var err error
 				withUPABudgets(f.width, f.pairs, func() {
-					forced, why = loadSchema(c.schema, c.ver)
+					err = loadSchemaErr(t, c.schema, c.ver)
 				})
-				// The load direction: a budget must never turn a
-				// schema that loads into one that does not.
-				if exact && !forced {
-					t.Errorf("UNSOUND IN THE REJECT DIRECTION: with %s the schema was REJECTED (%s), "+
-						"but the exact path accepts it. A budget must decline a check, "+
-						"never fail one.\n  schema: %s", f.name, why, c.schema)
+				// A declined check must never be an acceptance.
+				// This is the clause the old harness lacked.
+				if err == nil {
+					t.Errorf("FALSE ACCEPT: with %s every state is over budget, so "+
+						"UPA was never checked, yet the schema LOADED. A budget may "+
+						"decline to answer; it must not answer \"valid\".\n  schema: %s",
+						f.name, c.schema)
+					continue
+				}
+				// And the refusal must be labelled as one, so a
+				// caller is never told an undecided schema is
+				// invalid.
+				if !errors.Is(err, xdm.ErrResourceLimit) {
+					t.Errorf("with %s the schema was refused as %v, without "+
+						"xdm.ErrResourceLimit; a budget refusal must be "+
+						"distinguishable from a constraint verdict.\n  schema: %s",
+						f.name, err, c.schema)
 				}
 			}
 		})
 	}
 }
 
-// TestUPABudgetDeclineIsRecorded pins that a skip is observable. A declined
-// check and a clean one both return nil from checkUPA, so without the record on
-// the model there is no way for a caller or a test to tell "this model is
-// unambiguous" from "nobody looked". The two tests below depend on this being
-// true, and so does the claim in docs/security.md.
-func TestUPABudgetDeclineIsRecorded(t *testing.T) {
+// TestUPABudgetRefusalIsObservable replaces TestUPABudgetDeclineIsRecorded.
+//
+// That test existed because a declined check and a clean one both returned nil,
+// so the decline had to be recorded on the model (contentModel.upaSkipped) for
+// anything to observe it. Refusing instead makes the decline its own signal:
+// checkUPA returns an error, so the field was dead and is gone. What remains
+// worth pinning is that the two outcomes are still told apart — a width-8 model
+// passes at the production budget and is refused under a forced one.
+func TestUPABudgetRefusalIsObservable(t *testing.T) {
 	m := compileWideOptional(t, 8)
 	if err := checkUPA(m, "t", CheckOptions{}); err != nil {
 		t.Fatalf("a sequence of distinct optional elements is unambiguous: %v", err)
 	}
-	if m.upaSkipped {
-		t.Fatalf("at the production budget a width-8 model must not be skipped")
-	}
 	withUPABudgets(2, -1, func() {
 		m := compileWideOptional(t, 8)
-		if err := checkUPA(m, "t", CheckOptions{}); err != nil {
-			t.Fatalf("a declined check must not report a violation: %v", err)
-		}
-		if !m.upaSkipped {
-			t.Errorf("with maxUPAStateWidth=2 a width-8 model was scanned in full; " +
+		err := checkUPA(m, "t", CheckOptions{})
+		if err == nil {
+			t.Fatalf("with maxUPAStateWidth=2 a width-8 model was scanned in full; " +
 				"the budget did not fire, so nothing bounds the triangular scan")
+		}
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("the refusal %v does not carry xdm.ErrResourceLimit", err)
 		}
 	})
 }
@@ -793,33 +939,22 @@ func compileWideOptional(t *testing.T, n int) *contentModel {
 	return m
 }
 
-// TestUPABudgetFiresAndSchemaStillLoads drives the adversarial shape and pins
-// both halves of the policy: the budget FIRES, and the schema still LOADS.
+// TestUPABudgetFiresAndSchemaIsRefused replaces
+// TestUPABudgetFiresAndSchemaStillLoads, whose second half asserted precisely
+// the property that was wrong: that an over-budget schema still loads.
 //
-// The second half is the load-bearing one. checkContentModelConstraints'
-// existing compile-failure path (upa.go:179) skips the check and keeps the
-// schema, and this budget follows it exactly: a model too expensive to examine
-// is declined, never rejected. Were it a rejection instead, the set of schemas
-// that load would depend on a resource bound, and the conformance marks in
-// tests/ratchet.txt would move.
-//
-// The gate is PER STATE, so a model may have some states declined and others
-// scanned exactly, and a violation found in a state that WAS scanned is a real
-// violation which must still be reported. The shape here is chosen so that
-// every state is wide: a repeating choice of n same-named elements has n
-// positions, and the follow set of each is all n, so forcing the width below n
-// declines every state and nothing is examined at all.
+// It pins both halves of the corrected policy: the budget FIRES, and the schema
+// is REFUSED as a resource limit. The shape is ambiguous and every one of its
+// states is n wide, so forcing the width below n puts every state over budget
+// and nothing is examined at all — which is exactly the case that must not be
+// mistaken for a pass.
 //
 // It runs at a forced budget rather than driving 2,048 particles, for the
 // reason TestMaxPositionsRealBoundary records: at the production numbers this
-// shape costs 12 seconds and 115MB per load, and three of them once blew CI's
-// deadline under -race. The comparison being asserted is len(state) against the
-// limit, which does not care which absolute number plays the limit's part.
-func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
-	// An AMBIGUOUS model in which EVERY state is n wide: a repeating
-	// choice of n elements all named "a". At the normal budget the schema
-	// is rejected; under a forced budget every state is declined and it
-	// must load.
+// shape costs 12 seconds and 115MB per load. The comparison being asserted is
+// len(state) against the limit, which does not care which absolute number plays
+// the limit's part.
+func TestUPABudgetFiresAndSchemaIsRefused(t *testing.T) {
 	const n = 32
 	var b strings.Builder
 	b.WriteString(`<xs:element name="r"><xs:complexType><xs:choice maxOccurs="unbounded">`)
@@ -829,11 +964,17 @@ func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
 	b.WriteString(`</xs:choice></xs:complexType></xs:element>`)
 	src := wrap(b.String())
 
-	if ok, why := loadSchema(src, Version10); ok {
+	// At the production budget it is scanned, and rejected on the merits.
+	err := loadSchemaErr(t, src, Version10)
+	if err == nil {
 		t.Fatalf("a repeating choice of %d particles all named \"a\" is ambiguous "+
 			"and must be rejected at the production budget, but it loaded", n)
-	} else if !strings.Contains(why, "cos-nonambig") {
-		t.Fatalf("rejected, but not by UPA: %s", why)
+	}
+	if !strings.Contains(err.Error(), "cos-nonambig") {
+		t.Fatalf("rejected, but not by UPA: %v", err)
+	}
+	if errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("a scanned violation must not report as a resource limit: %v", err)
 	}
 
 	for _, f := range []struct {
@@ -845,16 +986,21 @@ func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
 	} {
 		t.Run(f.name, func(t *testing.T) {
 			withUPABudgets(f.width, f.pairs, func() {
-				ok, why := loadSchema(src, Version10)
-				if !ok {
-					t.Fatalf("with %s the schema was REJECTED (%s); a model too "+
-						"expensive to check must be SKIPPED, not refused — "+
-						"otherwise a resource bound decides which schemas load",
-						f.name, why)
+				err := loadSchemaErr(t, src, Version10)
+				if err == nil {
+					t.Fatalf("with %s the schema LOADED. Every state is over "+
+						"budget, so UPA examined nothing — and an ambiguous "+
+						"schema was accepted because the checker declined to "+
+						"look at it.", f.name)
+				}
+				if !errors.Is(err, xdm.ErrResourceLimit) {
+					t.Errorf("with %s the refusal %v does not carry "+
+						"xdm.ErrResourceLimit", f.name, err)
 				}
 			})
-			// And the budget really is what let it through: the same
-			// model, checked directly, must record the skip.
+			// And the budget really is what refused it: the same
+			// model, checked directly, must refuse rather than
+			// report a violation it never observed.
 			withUPABudgets(f.width, f.pairs, func() {
 				ps := make([]*Particle, n)
 				for i := range ps {
@@ -866,15 +1012,15 @@ func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
 				if err != nil {
 					t.Fatalf("compile: %v", err)
 				}
-				if err := checkUPA(m, "t", CheckOptions{}); err != nil {
-					t.Fatalf("with %s every state exceeds the budget, so nothing "+
-						"was examined, yet a violation was reported: %v", f.name, err)
-				}
-				if !m.upaSkipped {
-					t.Errorf("with %s the ambiguous %d-wide model was scanned in "+
-						"full rather than declined; the schema above therefore "+
-						"loaded for some other reason and this test proves nothing",
+				cerr := checkUPA(m, "t", CheckOptions{})
+				if cerr == nil {
+					t.Fatalf("with %s the ambiguous %d-wide model returned no error",
 						f.name, n)
+				}
+				if !errors.Is(cerr, xdm.ErrResourceLimit) {
+					t.Errorf("with %s every state exceeds the budget, so nothing "+
+						"was examined, yet the error is a verdict rather than a "+
+						"refusal: %v", f.name, cerr)
 				}
 			})
 		})
@@ -890,37 +1036,36 @@ func TestUPABudgetFiresAndSchemaStillLoads(t *testing.T) {
 // tests/expr/type-expr/variousTypesSchemaExpr.xsd. maxUPAStateWidth is 256:
 // 3.5x the widest real state and 8x the XSD suite's.
 //
-// A regression that lowered the threshold — or that made the gate fire at or
-// below the width it is supposed to clear — would not show up as a test
-// failure anywhere else, because a skipped check returns nil exactly as a
-// passed one does. The conformance marks would not move either: skipping makes
-// MORE schemas load, and the suite counts agreement, so a schema wrongly
-// skipped that happens to be unambiguous still agrees. This is the only thing
-// standing between the budget and silently switching UPA off.
+// This test matters MORE than it did when the budget skipped. A regression that
+// lowered the threshold used to switch UPA off silently on legitimate input;
+// now it REFUSES that input, and a valid schema stops loading. The failure is
+// louder but the guard is the same, and it is the only thing standing between
+// the budget and rejecting real work.
 func TestUPABudgetDoesNotFireOnRealSchemas(t *testing.T) {
 	const widestReal = 72
 	if maxUPAStateWidth <= widestReal {
 		t.Fatalf("maxUPAStateWidth is %d, at or below the widest state a real schema "+
 			"in this tree produces (%d, in testdata/xslt30-test/tests/expr/type-expr/"+
-			"variousTypesSchemaExpr.xsd). The budget would decline the UPA check on "+
-			"legitimate input, which switches the constraint off silently.",
+			"variousTypesSchemaExpr.xsd). The budget would refuse the UPA check on "+
+			"legitimate input, and valid schemas would stop loading.",
 			maxUPAStateWidth, widestReal)
 	}
 	m := compileWideOptional(t, widestReal)
 	if err := checkUPA(m, "t", CheckOptions{}); err != nil {
-		t.Fatalf("a %d-wide model of distinct optional elements is unambiguous: %v",
+		t.Fatalf("a %d-wide model of distinct optional elements is unambiguous and "+
+			"is the widest any real schema in this tree produces; the budget "+
+			"refused it, so legitimate schemas are being rejected: %v",
 			widestReal, err)
-	}
-	if m.upaSkipped {
-		t.Errorf("the UPA check was DECLINED on a %d-position state, which is the "+
-			"widest any real schema in this tree produces. The budget is too low: "+
-			"legitimate schemas are loading unchecked.", widestReal)
 	}
 }
 
 // TestUPABudgetProductionValues pins the shipped numbers, for the reason
 // TestMaxPositionsProductionValue does: the boundary tests above run at forced
 // values, and this is what keeps that substitution honest.
+//
+// It is load-bearing in a second way since the budget began refusing rather
+// than skipping: these two numbers now decide which valid schemas load, so
+// lowering either is a compatibility change, not a tuning knob.
 func TestUPABudgetProductionValues(t *testing.T) {
 	if maxUPAStateWidth != 256 {
 		t.Errorf("maxUPAStateWidth is %d, want 256; if this change is deliberate, "+

@@ -134,26 +134,67 @@ whose widest single file is
 `tests/expr/type-expr/variousTypesSchemaExpr.xsd`; the adversarial shape above
 reaches 2,048. So 256 is 3.5x the widest real state and 8x the XSD suite's, and
 cannot fire on legitimate input, while capping one state's scan at ~32,000 pair
-tests. `TestUPABudgetDoesNotFireOnRealSchemas` pins that from below, because a
-threshold quietly lowered would not fail anything else: a declined check
-returns nil exactly as a passed one does, and the conformance marks would not
-move either, since skipping makes *more* schemas load and the suite counts
-agreement.
+tests. `TestUPABudgetDoesNotFireOnRealSchemas` pins that from below, and it is
+the load-bearing test of the pair: since the budget refuses rather than skips,
+a threshold quietly lowered stops legitimate schemas from loading.
 
-**Exceeding either budget SKIPS the check; it never rejects the schema.** That
-is the policy already established where a content model is too big to compile
-at all (`upa.go:179` skips and keeps the schema), and it is the only sound
-direction: UPA is a constraint on the schema, so a schema the checker declined
-to examine is one whose ambiguity is unknown, and refusing it would turn a
-resource bound into a conformance failure and make the set of schemas that load
-depend on a constant. Skipping can only ever be more permissive, which is what
-`xsd/budget_soundness_test.go` requires of every budget in this package.
+**Exceeding either budget REFUSES the schema; it never skips the check.** An
+earlier revision of this budget did skip, on the reasoning that it matched the
+compile-failure precedent at `upa.go:179` and that a more permissive budget is
+always the safe one. That reasoning was wrong, and the fix is recorded here
+because the wrong version was written down in this file first.
 
-A skip is recorded rather than silent: `contentModel.upaSkipped` marks a model
-whose check was declined, because a declined check and a clean one are
-otherwise indistinguishable from the outside — both return nil. The prior
-advice to wrap untrusted loads in a wall-clock limit remains good practice, but
-it is no longer load-bearing for this particular algorithm.
+UPA is a **normative** schema-component constraint (XSD 1.1 Part 1,
+"Constraint on Complex Type Definition Schema Components", `cos-nonambig`): a
+schema that violates it is *invalid*. Skipping the check therefore did not
+decline to answer — it answered "valid" for a schema whose validity was never
+established. The observable defect: a repeating choice of n identically named
+elements is ambiguous at every n, yet at n=4 it was rejected as `cos-nonambig`
+and at n=300 it loaded clean, the verdict decided purely by whether the state
+width crossed `maxUPAStateWidth`. Same violation, opposite verdict, chosen by a
+resource constant.
+
+The governing principle is the one this file states everywhere else: **a
+resource budget may decline to answer, but must never turn "I could not prove
+the constraint" into "the constraint holds".** So:
+
+| outcome | result |
+| --- | --- |
+| proven valid | accept |
+| proven invalid | reject with `cos-nonambig` |
+| cannot decide | refuse, carrying `xdm.ErrResourceLimit` |
+
+The refusal wraps `xdm.ErrResourceLimit`, exactly as the `MaxDepth` refusal in
+`xsd/validate.go` does, so a caller can tell "your schema is ambiguous" from
+"this schema is too complex for me to check" — the first can never succeed on
+retry, the second can, under a higher budget. `errors.Is(err,
+xdm.ErrResourceLimit)` is true for the refusal and false for a genuine
+`cos-nonambig`.
+
+**This is a behaviour change, and it is stated plainly:** an *unambiguous*
+schema with a state wider than `maxUPAStateWidth` loaded before this budget
+existed and loaded while the budget skipped, and now FAILS. That cost is
+unavoidable — the checker cannot distinguish a wide-and-fine model from a
+wide-and-broken one without doing the work the budget forbids, and of the two
+answers available only the refusal is honest. It is tolerable only because of
+the gap between 256 and the widest real state measured (19 across 15,464 W3C
+schemas, 72 in the XSLT corpus): nothing real reaches it, and the conformance
+marks in `tests/ratchet.txt` (XSD 1.0 39347, XSD 1.1 41532) are unchanged by
+the switch from skipping to refusing.
+
+`contentModel.upaSkipped` is gone. It existed because a declined check and a
+clean one both returned nil and were otherwise indistinguishable; a refusal is
+its own signal, so the field was dead. The prior advice to wrap untrusted loads
+in a wall-clock limit remains good practice, but it is no longer load-bearing
+for this particular algorithm.
+
+One neighbouring path is **not** changed by this and is recorded as a known
+gap: when `compileContentModel` fails (`upa.go:179`, `maxPositions` exceeded)
+the model is skipped and the schema still loads unchecked. It is the same
+defect class, but it has a mitigation this one did not — a model that cannot be
+compiled cannot be validated against either, so every document submitted to it
+is refused at validate time (`TestUPASkipStillRejectsDocuments`). The schema
+component is still wrongly accepted; the unsoundness does not reach documents.
 
 **The distinction that matters**, and the single most useful idea this file has
 produced — it decides whether a numeric constant in this code is a feature or a

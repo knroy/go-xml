@@ -203,13 +203,15 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 		return nil
 	}
 	// The order of a map walk is not stable, and a schema author comparing
-	// two runs should see the same list.
-	msgs := make([]string, len(errs))
-	for i, e := range errs {
-		msgs[i] = e.Error()
-	}
-	sort.Strings(msgs)
-	return &SchemaErrors{Errors: sortedErrors(msgs)}
+	// two runs should see the same list. Sort the errors THEMSELVES by
+	// message rather than rebuilding them from their text: a resource-limit
+	// refusal carries xdm.ErrResourceLimit, and re-wrapping the string
+	// would strip the sentinel and make a refusal indistinguishable from a
+	// verdict.
+	sort.SliceStable(errs, func(i, j int) bool {
+		return errs[i].Error() < errs[j].Error()
+	})
+	return &SchemaErrors{Errors: errs}
 }
 
 // sortQNames orders names so that a walk driven by them is reproducible.
@@ -263,14 +265,39 @@ func sortedErrors(msgs []string) []error {
 // and still performs ~260 million pair tests. The cumulative cap makes the
 // work linear-bounded in the worst case whatever the shape.
 //
-// The policy on exceeding either is the one already established at
-// checkContentModelConstraints' compile failure (upa.go:179): the check is
-// SKIPPED and the schema still loads. It is NOT a rejection. UPA is a
-// constraint on the schema, and a schema the checker declined to examine is
-// one whose ambiguity is unknown — refusing it would turn a budget into a
-// conformance failure and change the set of schemas that load. Skipping can
-// only ever be MORE permissive, which is the direction budget_soundness_test.go
-// requires of every budget in this package.
+// The policy on exceeding either is REFUSAL, not a skip.
+//
+// An earlier revision of this budget skipped the check and let the schema load,
+// on the reasoning that this matched the compile-failure precedent below and
+// that being more permissive is always the safe direction for a budget. That
+// reasoning was wrong. UPA is a NORMATIVE schema-component constraint (XSD 1.1
+// Part 1, "Constraint on Complex Type Definition Schema Components",
+// cos-nonambig): a schema that violates it is INVALID. Skipping the check
+// therefore did not decline to answer — it answered "valid" for a schema whose
+// validity was unknown. Concretely, a repeating choice of n identical elements
+// is ambiguous at every n, yet at n=4 it was rejected and at n=300 it loaded
+// clean, the verdict decided purely by whether the state width crossed
+// maxUPAStateWidth.
+//
+// A resource budget may DECLINE to answer, but must never turn "I could not
+// prove the constraint" into "the constraint holds". So:
+//
+//	proven valid   -> accept
+//	proven invalid -> reject with cos-nonambig
+//	cannot decide  -> refuse with a resource-limit error
+//
+// The refusal carries xdm.ErrResourceLimit so a caller can tell "your schema is
+// ambiguous" from "this schema is too complex for me to check", exactly as the
+// MaxDepth refusal in validate.go does. This is the same convention every other
+// refusal in this tree uses.
+//
+// This does change the set of schemas that load: an unambiguous schema with a
+// state wider than maxUPAStateWidth now fails where it once loaded. That is
+// accepted deliberately. The widest state any real schema in this tree
+// produces is 19 (testdata/xsdtests, 15,464 schemas) and 72 (the XSLT corpus),
+// against a threshold of 256, so nothing real reaches it —
+// TestUPABudgetDoesNotFireOnRealSchemas exists to keep that true, and matters
+// more now that firing REJECTS.
 //
 // They are vars only so tests may lower them; they are never assigned in
 // production.
@@ -287,10 +314,10 @@ var (
 // same element.
 //
 // A state wider than maxUPAStateWidth, or a model whose cumulative pair tests
-// would exceed maxUPAPairTests, is SKIPPED rather than rejected; skipped is
-// recorded on the model so a caller or a test can observe that the check was
-// declined. See maxUPAStateWidth for why, and for the measurements behind the
-// numbers.
+// would exceed maxUPAPairTests, is REFUSED: checkUPA returns an error wrapping
+// xdm.ErrResourceLimit and the schema fails to load. It is not skipped, because
+// a skipped normative constraint is a false accept. See maxUPAStateWidth for
+// why, and for the measurements behind the numbers.
 func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 	type upaState struct {
 		positions []int
@@ -309,11 +336,26 @@ func checkUPA(m *contentModel, where string, opts CheckOptions) error {
 		state := st.positions
 		// Bound the WORK before any of it is done. A state too wide to
 		// scan, or one that would exhaust what is left of the model's
-		// cumulative budget, is declined whole — see maxUPAStateWidth.
+		// cumulative budget, means this model's ambiguity cannot be
+		// decided within the budget — and an undecided normative
+		// constraint must be refused, never assumed to hold. See
+		// maxUPAStateWidth.
 		pairs := len(state) * (len(state) - 1) / 2
-		if len(state) > maxUPAStateWidth || pairs > budget {
-			m.upaSkipped = true
-			continue
+		if len(state) > maxUPAStateWidth {
+			return fmt.Errorf(
+				"%s: Unique Particle Attribution cannot be checked: a state of "+
+					"the content model has %d competing positions, over the limit "+
+					"of %d; the schema is refused because its ambiguity is "+
+					"undecided, not because it is known to be ambiguous: %w",
+				where, len(state), maxUPAStateWidth, xdm.ErrResourceLimit)
+		}
+		if pairs > budget {
+			return fmt.Errorf(
+				"%s: Unique Particle Attribution cannot be checked: the content "+
+					"model needs more than %d position-pair comparisons; the "+
+					"schema is refused because its ambiguity is undecided, not "+
+					"because it is known to be ambiguous: %w",
+				where, maxUPAPairTests, xdm.ErrResourceLimit)
 		}
 		budget -= pairs
 		for i := 0; i < len(state); i++ {

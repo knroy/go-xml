@@ -30,19 +30,54 @@ is 19 positions in `testdata/xsdtests` (15,464 schemas) and 72 in
 `testdata/xslt30-test`, against 2,048 for the adversarial shape, so 256 is 3.5x
 the widest real state and 8x the XSD suite's.
 
-Exceeding either budget SKIPS the check and never rejects the schema, following
-the policy already in place where a content model is too big to compile at all.
-UPA is a constraint on the schema, so declining to examine one must not decide
-whether it loads -- a resource bound that rejected would make the set of
-loadable schemas depend on a constant. Both XSD conformance marks are
-unchanged, 39,347 and 41,532, which is the check that the budget never fires on
-real input. A skip sets `contentModel.upaSkipped` rather than passing silently,
-because a declined check and a clean one both return nil and are otherwise
-indistinguishable; `xsd/budget_soundness_test.go` uses that to assert the
-budget fires on the adversarial shape, stays clear at width 72, and is
-one-directional. The new tests were validated by sabotage: made never to fire,
-and made to reject instead of skip, each caught with the schema in the failure
-message.
+Exceeding either budget REFUSES the schema, with an error wrapping
+`xdm.ErrResourceLimit`. Both XSD conformance marks are unchanged, 39,347 and
+41,532, which is the check that the budget never fires on real input.
+
+**An earlier, unreleased revision of this same entry got that backwards, and
+this corrects it before release.** That revision skipped the check and let the
+schema load, and argued the skip was safe because it matched the precedent
+where a content model too big to compile is skipped (`upa.go:179`). The
+precedent was itself the wrong shape, so matching it propagated the defect
+rather than justifying it. Unique Particle Attribution is a *normative*
+schema-component constraint (XSD 1.1 Part 1, `cos-nonambig`): a schema
+violating it is invalid, so skipping the check did not decline to answer, it
+answered "valid" without looking. An invalid schema loaded. Concretely: a
+sequence repeated twice around a choice of n identically named elements is
+ambiguous at every n, but at n=4 it was rejected as `cos-nonambig` and at n=300
+it loaded clean -- the same violation given opposite verdicts by whether the
+state width crossed 256.
+
+The rule a budget must follow, which the rest of this codebase already
+observes: it may decline to answer, but must never turn "I could not prove the
+constraint" into "the constraint holds". Proven valid accepts, proven invalid
+rejects with `cos-nonambig`, and undecided now refuses with
+`xdm.ErrResourceLimit` -- the same convention `Validate`'s `MaxDepth` refusal
+uses, so `errors.Is(err, xdm.ErrResourceLimit)` distinguishes "too complex to
+check" from "your schema is ambiguous". Sorting the schema errors no longer
+rebuilds them from their text, which had stripped the sentinel.
+
+This is a behaviour change and is stated as one: an *unambiguous* schema with a
+state wider than 256 loaded before the budget existed and while it skipped, and
+now fails. The checker cannot separate a wide-and-fine model from a
+wide-and-broken one without the work the budget forbids, and of the two
+available answers only the refusal is honest. Nothing real is affected -- the
+widest state measured is 19 across 15,464 W3C schemas and 72 in the XSLT
+corpus, against a threshold of 256 -- and
+`TestUPABudgetDoesNotFireOnRealSchemas` guards that gap, mattering more now
+that firing rejects rather than merely skipping.
+
+`contentModel.upaSkipped` is removed: it existed only because a declined check
+and a clean one both returned nil, and a refusal is its own signal. The
+soundness harness in `xsd/budget_soundness_test.go` carried the wrong property
+for this budget -- "budgeted accepts implies exact accepts" is satisfied
+trivially by a budget that skips and accepts everything -- and now also
+requires that a declined check be an error carrying the sentinel. The
+compile-failure skip at `upa.go:179` is left as-is and documented in
+`docs/security.md` as a known gap: it accepts a schema component it never
+checked, but a model that cannot be compiled cannot be validated against
+either, so no document slips through it. The new tests were validated by
+sabotage: with the fix reverted, each fails with the schema in the message.
 
 ## v1.2.2 — 2026-09-05
 
