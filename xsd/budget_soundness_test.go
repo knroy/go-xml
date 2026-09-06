@@ -514,7 +514,7 @@ func TestMaxPositionsRealBoundary(t *testing.T) {
 				}
 				p := &Particle{MinOccurs: 1, MaxOccurs: 1,
 					Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}
-				m, err := compileContentModel(p)
+				m, err := compileContentModel(p, 0)
 				if n <= limit {
 					if err != nil {
 						t.Fatalf("n=%d is within the budget but failed: %v", n, err)
@@ -545,6 +545,118 @@ func TestMaxPositionsProductionValue(t *testing.T) {
 	if maxPositions != 8192 {
 		t.Errorf("maxPositions is %d, want 8192; if this change is deliberate, "+
 			"update this test and docs/options.md", maxPositions)
+	}
+	// The exported default is the one hosts actually get, and it is a
+	// memory bound: at ~400 bytes per position 8192 caps one model at about
+	// 3.3 MB. Raising it grants proportional memory to whoever wrote the
+	// schema, so it must not drift silently either.
+	if DefaultMaxContentModelPositions != 8192 {
+		t.Errorf("DefaultMaxContentModelPositions is %d, want 8192; raising the "+
+			"default authorises proportional memory for every host that does not "+
+			"set MaxContentModelPositions — see docs/security.md",
+			DefaultMaxContentModelPositions)
+	}
+}
+
+// TestMaxContentModelPositionsOptionTakesEffect proves the option is wired to
+// the thing it names, in both directions: a model refused at the default must
+// load when the budget admits it, and a budget below the model must refuse.
+//
+// The shape is a plain sequence of n elements, so exactly n positions — the
+// arithmetic is visible rather than inferred.
+func TestMaxContentModelPositionsOptionTakesEffect(t *testing.T) {
+	const n = 300
+	var b strings.Builder
+	b.WriteString(`<xs:element name="r"><xs:complexType><xs:sequence>`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, `<xs:element name="e%d" type="xs:string"/>`, i)
+	}
+	b.WriteString(`</xs:sequence></xs:complexType></xs:element>`)
+	src := wrap(b.String())
+
+	load := func(limit int) error {
+		sdoc, err := xdm.ParseString(src, xdm.ParseOptions{})
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		_, lerr := Load(sdoc.Root, "", Options{MaxContentModelPositions: limit})
+		return lerr
+	}
+
+	// Below the model: refused, and refused as a LIMIT rather than as a
+	// verdict on a schema that is in fact perfectly valid.
+	if err := load(n - 1); !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("MaxContentModelPositions=%d is below the model's %d positions, "+
+			"so the load must be refused as a resource limit; got %v", n-1, n, err)
+	}
+	// At and above the model: loads and is fully checked.
+	if err := load(n); err != nil {
+		t.Errorf("MaxContentModelPositions=%d exactly admits a %d-position model, "+
+			"so the schema must load: %v", n, n, err)
+	}
+	// Zero selects the default, which is far above this model.
+	if err := load(0); err != nil {
+		t.Errorf("MaxContentModelPositions=0 means DefaultMaxContentModelPositions "+
+			"(%d), which admits a %d-position model: %v",
+			DefaultMaxContentModelPositions, n, err)
+	}
+}
+
+// TestMaxContentModelPositionsAppliesToValidation is the plumbing invariant.
+//
+// The budget is retained on the Schema rather than read from a global so that
+// validation compiles under the SAME limit the load-time constraint checks
+// used. If validation silently fell back to the default, a schema loaded at a
+// raised budget would pass its checks and then fail to validate anything —
+// or, worse in the other direction, a schema whose constraints were never
+// decided could still enforce a content model. The load and the validation
+// must agree about which models exist.
+func TestMaxContentModelPositionsAppliesToValidation(t *testing.T) {
+	const n = 300
+	var b strings.Builder
+	b.WriteString(`<xs:element name="r"><xs:complexType><xs:sequence>`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, `<xs:element name="e%d" type="xs:string"/>`, i)
+	}
+	b.WriteString(`</xs:sequence></xs:complexType></xs:element>`)
+
+	sdoc, err := xdm.ParseString(wrap(b.String()), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Loaded at a budget that admits the model exactly.
+	s, err := Load(sdoc.Root, "", Options{MaxContentModelPositions: n})
+	if err != nil {
+		t.Fatalf("load at MaxContentModelPositions=%d: %v", n, err)
+	}
+
+	var inst strings.Builder
+	inst.WriteString(`<r>`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&inst, `<e%d>x</e%d>`, i, i)
+	}
+	inst.WriteString(`</r>`)
+	idoc, err := xdm.ParseString(inst.String(), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse instance: %v", err)
+	}
+	// The assertion with teeth. The package default is forced below the
+	// model BEFORE the first validation, so the model has not yet been
+	// compiled and cached: whichever budget modelFor consults is the one
+	// actually used. If it read the global, the model would fail to compile
+	// and the document would be refused; because it reads the budget the
+	// schema was loaded with, the document validates.
+	//
+	// Ordering matters here. Validating once first would populate the
+	// model cache, after which lowering the global proves nothing at all —
+	// the compile never happens a second time.
+	op := maxPositions
+	defer func() { maxPositions = op }()
+	maxPositions = 1
+	if err := s.Validate(idoc.Root, ValidateOptions{}); err != nil {
+		t.Errorf("validation compiled the content model against the package "+
+			"default rather than the budget the schema was loaded with "+
+			"(MaxContentModelPositions=%d): %v", n, err)
 	}
 }
 
@@ -783,6 +895,68 @@ func TestUPAGenuineViolationIsNotAResourceLimit(t *testing.T) {
 	}
 }
 
+// TestUncompilableModelIsRefusedNotSkipped closes the case 2c461c7 left open
+// and recorded in docs/security.md.
+//
+// checkContentModelConstraints compiles every content model and ran its checks
+// on the ones that compiled; a model that did not compile was skipped with a
+// bare `continue`, and the schema went on to load with Unique Particle
+// Attribution, Element Declarations Consistent and both wildcard and
+// substitution EDC never performed. The schema was accepted having proven
+// nothing — the same false accept the width gate above corrects, one level out
+// and gating every content-model constraint rather than UPA alone.
+//
+// The shape is the ambiguousChoice model, which is ambiguous at every n, with
+// maxPositions forced below its position count so the compile fails. Before
+// the fix it LOADED.
+func TestUncompilableModelIsRefusedNotSkipped(t *testing.T) {
+	op := maxPositions
+	defer func() { maxPositions = op }()
+	maxPositions = 2
+
+	err := loadSchemaErr(t, ambiguousChoice(8), Version10)
+	if err == nil {
+		t.Fatalf("FALSE ACCEPT: a genuinely ambiguous schema whose content model "+
+			"could not be compiled (maxPositions=%d) loaded with no error. Every "+
+			"content-model constraint was skipped, so the schema was accepted "+
+			"having proven nothing.", maxPositions)
+	}
+	if !errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("errors.Is(%v, ErrResourceLimit) = false; a caller cannot tell "+
+			"\"too complex to check\" from \"your schema is ambiguous\". Note that "+
+			"checkContentModelConstraints sorts its errors, and sorting that "+
+			"rebuilds them from their text would strip the sentinel", err)
+	}
+	if !strings.Contains(err.Error(), "cannot be checked") {
+		t.Errorf("message %q does not say the checks were declined", err)
+	}
+	// A refusal is not a verdict. Nothing was examined, so no constraint
+	// code may appear.
+	if strings.Contains(err.Error(), "cos-nonambig") ||
+		strings.Contains(err.Error(), "cos-element-consistent") {
+		t.Errorf("the refusal %v reports a constraint code, but no constraint "+
+			"was checked; a declined check must not masquerade as a violation", err)
+	}
+}
+
+// TestCompilableAmbiguousModelIsStillAVerdict is the other polarity, and it is
+// what keeps the two paths distinguishable. The same shape small enough to
+// compile must be rejected on the merits, with the constraint's own code and
+// WITHOUT the sentinel: a caller that retried on ErrResourceLimit would retry a
+// load that can never succeed however much budget it is given.
+func TestCompilableAmbiguousModelIsStillAVerdict(t *testing.T) {
+	err := loadSchemaErr(t, ambiguousChoice(8), Version10)
+	if err == nil {
+		t.Fatal("a choice of 8 identically named elements is ambiguous and must be rejected")
+	}
+	if !strings.Contains(err.Error(), "cos-nonambig") {
+		t.Errorf("rejected, but not by UPA: %v", err)
+	}
+	if errors.Is(err, xdm.ErrResourceLimit) {
+		t.Errorf("a genuine cos-nonambig violation %v reports as a resource limit", err)
+	}
+}
+
 // TestUPAOverBudgetUnambiguousSchemaIsAlsoRefused pins the price of the fix,
 // deliberately and in the open.
 //
@@ -933,7 +1107,7 @@ func compileWideOptional(t *testing.T, n int) *contentModel {
 			Term: &ElementDecl{Name: xdm.QName{Local: fmt.Sprintf("e%d", i)}}}
 	}
 	m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: 1,
-		Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}})
+		Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}, 0)
 	if err != nil {
 		t.Fatalf("compiling %d optional particles: %v", n, err)
 	}
@@ -1009,7 +1183,7 @@ func TestUPABudgetFiresAndSchemaIsRefused(t *testing.T) {
 						Term: &ElementDecl{Name: xdm.QName{Local: "a"}}}
 				}
 				m, err := compileContentModel(&Particle{MinOccurs: 1, MaxOccurs: Unbounded,
-					Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}})
+					Term: &ModelGroup{Compositor: CompositorChoice, Particles: ps}}, 0)
 				if err != nil {
 					t.Fatalf("compile: %v", err)
 				}

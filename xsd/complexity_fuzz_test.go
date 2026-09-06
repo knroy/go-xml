@@ -375,9 +375,16 @@ func growthExponent(small, large float64) float64 {
 //	n=4096 162866 bytes  1m45.10s  369MB
 //
 // Each doubling costs about 8x the last, and every one of these loads
-// SUCCEEDS: no budget refuses them. Extrapolating the same curve to
-// maxPositions=8192 gives roughly fourteen minutes and over a gigabyte for a
+// SUCCEEDS: no budget refuses them. Extrapolating the same curve to a model of
+// 8192 positions gives roughly fourteen minutes and over a gigabyte for a
 // single ~320KB schema document.
+//
+// That projection is what motivated maxUPAStateWidth, and it is the DENSE
+// shape — which that gate now owns, refusing 1024 positions in 68ms so the
+// curve above is never actually walked to its end. The position budget guards
+// a different hazard: the SPARSE model, cheap to scan and enormous, where
+// ~400 bytes per position is the cost that matters. See
+// DefaultMaxContentModelPositions.
 //
 // The assertion is on the exponent, not the wall time, so the test is
 // machine-independent and runs at sizes costing milliseconds. It measures at
@@ -433,7 +440,8 @@ func TestUPACostIsCubicInPositions(t *testing.T) {
 // TestUPATriangularScanAtForcedBudget drives checkUPA's cost at the boundary
 // cheaply, using the forced-budget technique from TestMaxPositionsRealBoundary.
 //
-// At the production maxPositions of 8192 a dense model costs minutes. At a
+// A dense model of 8192 positions would cost minutes if it were ever built;
+// maxUPAStateWidth refuses it long before that. At a
 // forced 256 the same triangular scan runs in milliseconds and still exercises
 // the full path: compile, then checkUPA over every follow set. What is being
 // pinned is that the number of pair tests really is the cube of the position
@@ -449,7 +457,7 @@ func TestUPATriangularScanAtForcedBudget(t *testing.T) {
 			}
 			p := &Particle{MinOccurs: 1, MaxOccurs: 1,
 				Term: &ModelGroup{Compositor: CompositorSequence, Particles: ps}}
-			m, err := compileContentModel(p)
+			m, err := compileContentModel(p, 0)
 			if err != nil {
 				t.Fatalf("n=%d within forced budget %d but declined: %v", n, limit, err)
 			}
@@ -588,7 +596,7 @@ func TestGroupOccursDoesNotUnroll(t *testing.T) {
 			Term: &ModelGroup{Compositor: CompositorSequence, Particles: []*Particle{leaf}}}
 		outer := &Particle{MinOccurs: 1, MaxOccurs: 1,
 			Term: &ModelGroup{Compositor: CompositorSequence, Particles: []*Particle{inner}}}
-		m, err := compileContentModel(outer)
+		m, err := compileContentModel(outer, 0)
 		if err != nil {
 			t.Fatalf("maxOccurs=%d declined: %v", maxOcc, err)
 		}

@@ -64,7 +64,8 @@ rejecting direction:
 `xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
 `DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
-`branchLimit` · `maxPositions` · `maxUPAStateWidth` · `maxUPAPairTests` ·
+`branchLimit` · `xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
+`maxUPAPairTests` ·
 `maxSubstitutionClosure` · `TransformOptions.MaxDepth` · the RELAX NG
 derivative bound · the XPath regex step and depth budgets.
 
@@ -114,8 +115,15 @@ pairwise scan over them, so the work was cubic in the size of a content model.
 Measured through the public `Load` API on a sequence of n optional elements,
 the densest follow relation the shortest schema text can produce: n=256 26ms,
 n=512 216ms, n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests, about 8x
-per doubling. Extrapolated to `maxPositions` = 8192 that is roughly fourteen
-minutes and over a gigabyte for one ~320 KB schema document.
+per doubling. Extrapolated to a model of 8192 positions that is roughly
+fourteen minutes and over a gigabyte for one ~320 KB schema document.
+
+That extrapolation describes the **dense** shape, and it is now historical
+rather than reachable: `maxUPAStateWidth` refuses a dense model of 1024
+positions in 68ms, long before the position budget is approached. The
+projection is kept because it is why the width gate exists, not because it is
+what the position budget prevents — those are two different bounds guarding two
+different shapes, and the section below separates them.
 
 Two budgets now bound it. `maxUPAStateWidth` (256) is checked on `len(state)`
 **before** the triangular loop begins, so no part of the quadratic cost is paid
@@ -295,13 +303,85 @@ n=2,048, a model `checkUPA`'s width gate refuses at n>=512 regardless. All
 three are recorded with these numbers in the inventory in
 `xsd/complexity_fuzz_test.go`.
 
-One neighbouring path is **not** changed by this and is recorded as a known
-gap: when `compileContentModel` fails (`upa.go:179`, `maxPositions` exceeded)
-the model is skipped and the schema still loads unchecked. It is the same
-defect class, but it has a mitigation this one did not — a model that cannot be
-compiled cannot be validated against either, so every document submitted to it
-is refused at validate time (`TestUPASkipStillRejectsDocuments`). The schema
-component is still wrongly accepted; the unsoundness does not reach documents.
+That neighbouring path — when `compileContentModel` itself fails and the model
+was skipped, leaving the schema to load unchecked — **was** recorded here as a
+known gap and is now closed. `checkContentModelConstraints` refuses instead of
+skipping: the refusal wraps `xdm.ErrResourceLimit` and carries no constraint
+code, because nothing was examined and a refusal must not be mistaken for a
+verdict in either direction. It gates every content-model constraint rather
+than UPA alone — Unique Particle Attribution, Element Declarations Consistent,
+and both the wildcard and substitution EDC checks — so a schema that reaches
+the end of that loop has had all of them performed or has been refused.
+
+The refusal wraps the sentinel for **every** compile failure, not only the
+position-budget ones, and that is a deliberate over-approximation.
+`compileContentModel` reports a budget decline ("more than N positions") and a
+structural fault (a model group that reaches itself, an unexpected term, an
+unknown compositor) as plain errors with nothing distinguishing them, so the
+caller cannot separate the retryable case from the permanent one. Both mean the
+constraints are undecided, so both are refused; the underlying error is wrapped,
+so its text still says which occurred. Separating them properly means giving
+the structural faults their own sentinel in `xsd/automaton.go`, which is worth
+doing and has not been done.
+
+### The position budget is a memory bound, and it is host-tunable
+
+`Options.MaxContentModelPositions` (default `DefaultMaxContentModelPositions` =
+8192) bounds the positions in any one compiled content model. It is the bound
+whose justification recorded here was **wrong for years**, and the correction
+matters more than the number.
+
+The original reasoning was that the follow relation is quadratic in the
+position count, so the budget bounded *time*. That half is now stale:
+quadratic follow cost is a property of **dense** models, and `maxUPAStateWidth`
+(256) owns those, refusing a dense sequence of 1024 optional elements in 68ms
+without the position budget ever being consulted. Measured on time alone the
+position budget looks redundant — a sparse model of two million positions
+compiles and is fully checked in 600ms.
+
+Measured on **memory** it is the only thing standing between a schema of a few
+kilobytes and gigabytes of allocation. The shape is a group DAG in which each
+of n groups references the next twice: valid, acyclic, tiny, and expanding to
+2^(n-1) positions at a flat ~400 bytes each.
+
+| n | positions | time | memory | schema size |
+|---|---|---|---|---|
+| 16 | 2^15 | 10.7ms | 12 MB | 1.7 KB |
+| 20 | 2^19 | 155ms | 201 MB | 2.2 KB |
+| 22 | 2^21 | 577ms | 786 MB | 2.4 KB |
+| 24 | 2^23 | 2.47s | 3452 MB | 2.7 KB |
+
+Time makes that model look affordable; memory is what makes it an attack. "An
+unbounded model is a way to be handed an unbounded allocation" was the right
+half of the original reasoning and is still exactly right.
+
+The gate is **incremental**: it fires having already allocated in proportion to
+the limit, so the limit is what a hostile schema can actually reserve, not
+merely the point at which it is turned away.
+
+| limit | refused in | peak memory |
+|---|---|---|
+| 8192 | 2.4ms | 2 MB |
+| 1,048,576 | 263ms | 360 MB |
+| 4,194,304 | 1.08s | 1521 MB |
+
+**Raising it authorises proportional memory.** A host that sets 2^23 is
+accepting that a 2.7 KB schema may allocate 3.4 GB, and it is exposed as an
+option because a trusted generated schema may legitimately need the room — not
+because the default is conservative. The default is the value a host gets when
+it expresses no opinion, and it stays at 8192.
+
+Zero means the default, and is resolved in `compileContentModel` rather than
+normalised at `Load`, so there is a single place the default is applied. The
+budget is retained on the `Schema` and used by validation as well as by the
+load-time checks, so a model always compiles under the limit its constraints
+were checked under: a schema whose constraints were never decided must not go
+on to enforce a content model, and one loaded at a raised budget must not fail
+to validate against it.
+
+`NewSequenceMatcher` is the one caller that cannot honour a per-load budget —
+it takes a bare `*Particle` and its caller is the DTD validator, which has no
+`Options` — so it compiles at the package default.
 
 **The distinction that matters**, and the single most useful idea this file has
 produced — it decides whether a numeric constant in this code is a feature or a

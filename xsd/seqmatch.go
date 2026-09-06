@@ -22,8 +22,14 @@ type SequenceMatcher struct {
 }
 
 // NewSequenceMatcher compiles p for repeated matching.
+//
+// The model is bounded by DefaultMaxContentModelPositions. This entry takes a
+// bare particle rather than a Schema — the DTD validator is its caller, and a
+// DTD has no Options to carry — so there is no per-load budget to honour here
+// and the default is the only bound available. A caller needing a different
+// one goes through Load, where Options.MaxContentModelPositions applies.
 func NewSequenceMatcher(p *Particle) (*SequenceMatcher, error) {
-	m, err := compileContentModel(p)
+	m, err := compileContentModel(p, 0)
 	if err != nil {
 		return nil, err
 	}

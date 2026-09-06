@@ -227,6 +227,7 @@ schema, err := xsd.LoadFile("main.xsd", xsd.Options{
 |---|---|---|---|
 | `Version` | `Version` | `Version10` | Selects XSD 1.0 or 1.1. The zero value is 1.0 so that a schema written for 1.0 does not silently acquire 1.1's relaxations — 1.1 changes which *schemas* are legal, not only which documents. |
 | `MaxDocuments` | `int` | `DefaultMaxDocuments` = 512 | How many documents one assembly may read, following `import`, `include` and `redefine`. |
+| `MaxContentModelPositions` | `int` | `DefaultMaxContentModelPositions` = 8192 | Positions in any one compiled content model — the **memory** bound on a model, at ~400 bytes per position, so ~3.3 MB by default. A model over the limit is not compiled and the schema is refused with `xdm.ErrResourceLimit`; its constraints are undecided, never assumed to hold. Raising it authorises proportional memory. See [security](security.md). |
 | `Resolver` | `Resolver` | none configured | How a `schemaLocation` becomes bytes. Nothing is fetched unless you supply one; the nil default follows the grant the entry point already made — `Load` refuses a named location, `LoadFile` and `LoadFiles` root a `FileResolver` at the directories they were handed. See below. |
 | `ParseOptions` | `xdm.ParseOptions` | zero | Applied to every document the assembly reads. |
 | `LaxUPA` | `bool` | enforce | Relaxes Unique Particle Attribution. Some published schemas violate it; this loads them anyway. |

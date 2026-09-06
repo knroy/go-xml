@@ -286,6 +286,7 @@ like any other:
 | option | default | bounds |
 |---|---|---|
 | `Options.MaxDocuments` | 512 | documents one assembly may read |
+| `Options.MaxContentModelPositions` | 8192 | positions in one content model, ~3.3 MB |
 | `Options.ParseOptions` | refuses DOCTYPE | entity expansion in schema documents |
 | `ParseOptions.MaxBytes` | 64 MB | the size of one document read |
 | `ParseOptions.MaxNodes` | 10,000,000 | the size of one tree, ~2 GB |
@@ -293,6 +294,17 @@ like any other:
 | `ValidateOptions.MaxErrors` | 100 | failures collected before stopping |
 | `ValidateOptions.MaxDepth` | 1000 | validation recursion, and so its stack use |
 | `DefaultMaxMatchStates` | 4096 | simultaneous content-model readings per element |
+
+`MaxContentModelPositions` exists because a content model can be far larger
+than the text describing it. A group DAG in which each of n groups references
+the next twice is valid, acyclic and a couple of kilobytes, yet expands to
+2^(n-1) positions: at n=24 that is a 2.7 KB schema asking for 3.4 GB. Cost is
+flat at ~400 bytes per position, so the default caps one model at about 3.3 MB.
+A model over the limit is not built, and the schema is **refused** — its
+Unique Particle Attribution and Element Declarations Consistent constraints
+could not be checked, and an undecided constraint is never reported as
+satisfied. Raising the limit grants memory in proportion, which is a decision
+for the host rather than for whoever wrote the schema.
 
 `MaxDocuments` exists because a schema that includes a generator of schemas
 would otherwise be a way to spend the process. `MaxErrors` exists because a

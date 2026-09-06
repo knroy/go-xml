@@ -175,8 +175,48 @@ func checkContentModelConstraints(s *Schema, opts CheckOptions) error {
 	}
 
 	for _, site := range sites {
-		m, err := compileContentModel(site.particle)
+		m, err := compileContentModel(site.particle, s.maxPositions)
 		if err != nil {
+			// A model that will not compile is a model none of the
+			// checks below can run against, so the schema arrives at
+			// the end of this loop with Unique Particle Attribution
+			// (cos-nonambig), Element Declarations Consistent
+			// (cos-element-consistent) and both wildcard and
+			// substitution EDC UNPERFORMED. Skipping here therefore
+			// did not decline to answer, it answered "valid" for a
+			// schema whose validity was never established — the same
+			// defect 2c461c7 corrected in checkUPA's own width gate,
+			// and left recorded as open in docs/security.md.
+			//
+			// It is refused for the reason stated there:
+			//
+			//	proven valid   -> accept
+			//	proven invalid -> reject with the constraint's code
+			//	cannot decide  -> refuse with a resource-limit error
+			//
+			// The refusal wraps xdm.ErrResourceLimit and does not
+			// carry a constraint code, because nothing was examined
+			// and a refusal must not be mistaken for a verdict in
+			// either direction.
+			//
+			// It wraps the sentinel for EVERY compile failure, not
+			// only the maxPositions ones, and that is a deliberate
+			// over-approximation. compileContentModel reports a
+			// budget decline ("more than %d positions") and a
+			// structural fault (a model group that reaches itself,
+			// an unexpected term, an unknown compositor) as plain
+			// fmt.Errorf values with no sentinel between them, so
+			// this caller cannot tell the retryable case from the
+			// permanent one without inventing a distinction the
+			// error values do not carry. Both mean the same thing
+			// here — the constraints are undecided — so both are
+			// refused, and the underlying error is wrapped so its
+			// text still says which of the two happened.
+			errs = append(errs, fmt.Errorf(
+				"%s: the content model constraints cannot be checked: %w; "+
+					"the schema is refused because those constraints are "+
+					"undecided, not because they are known to be violated: %w",
+				site.where, err, xdm.ErrResourceLimit))
 			continue
 		}
 		where := site.where
@@ -238,12 +278,19 @@ func sortedErrors(msgs []string) []error {
 //
 // The scan inside one state is triangular — len(state)^2/2 pair tests — and a
 // model of n positions can have O(n) states, so the total is cubic in the
-// position count while maxPositions bounds only n. Measured through the public
-// Load API on a sequence of n optional elements, which is the densest follow
-// relation the shortest schema text can produce: n=256 26ms, n=512 216ms,
-// n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests — about 8x per
-// doubling. Extrapolated to maxPositions=8192 that is ~14 minutes and over a
-// gigabyte for one ~320KB schema document.
+// position count while the position budget bounds only n. Measured through the
+// public Load API on a sequence of n optional elements, which is the densest
+// follow relation the shortest schema text can produce: n=256 26ms, n=512
+// 216ms, n=1024 1.67s, n=2048 12.0s and 1,431,655,424 pair tests — about 8x
+// per doubling. Extrapolated to a model of 8192 positions that is ~14 minutes
+// and over a gigabyte for one ~320KB schema document.
+//
+// This gate is what makes that extrapolation unreachable rather than merely
+// projected: it refuses a dense model of 1024 positions in 68ms, so the
+// position budget is never the binding constraint on this shape. The two
+// bounds guard different hazards — this one dense models, and
+// DefaultMaxContentModelPositions the sparse-but-enormous ones where memory,
+// not time, is the cost.
 //
 // 256 is chosen from measurement, not from taste. Instrumented over every
 // schema in this tree, the widest state a real schema produces is 19 positions

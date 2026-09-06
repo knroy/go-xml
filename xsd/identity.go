@@ -2,6 +2,7 @@ package xsd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -22,8 +23,8 @@ import (
 // one subtree.
 type nodeTable struct {
 	// entries maps a key sequence to the element it was found on. The
-	// sequence is joined with a separator that cannot appear in a value,
-	// so that ("a", "b") and ("a b") are distinct keys.
+	// sequence is encoded injectively by joinKeySequence, so that
+	// ("a", "b") and ("a b") are distinct keys.
 	//
 	// A sequence that two SIBLING subtrees both define is absent: the
 	// merge deletes it, because an ancestor's keyref cannot say which of
@@ -87,12 +88,75 @@ func (t *nodeTable) mergeEntry(k string, n *xdm.Node) {
 	t.entries[k] = n
 }
 
-// keySep separates the fields of a key sequence.
+// joinKeySequence encodes the fields of a key sequence into one map key.
 //
-// It is a unit separator rather than a space because a field value may contain
-// spaces: joining ["a b"] and ["a", "b"] on a space would make them equal and
-// silently merge two different keys.
-const keySep = "\x1f"
+// The encoding is length-prefixed — "<len>:<field>" per field — rather than a
+// join on a separator, because ANY separator is inside the value space and so
+// can be injected by a field value. A unit separator was used here on the
+// reasoning that U+001F cannot appear in content; that is an XML 1.0 fact, not
+// an XSD one. XML 1.1 §2.2 admits it (as a character reference), and a
+// ·schema normalized value· reaching keyString need not have come through a
+// 1.0 character check at all. With the separator inside the value space the
+// two-field sequences ("a\x1fb", "c") and ("a", "b\x1fc") both join to
+// "a\x1fb\x1fc", so xs:key and xs:unique report cvc-identity-constraint.4.1 on
+// a document whose key sequences are distinct, and xs:keyref resolves
+// cvc-identity-constraint.4.3 against a key it does not equal. §3.11.4 clause
+// 4 compares key-sequences MEMBER BY MEMBER; the encoding therefore has to be
+// injective on the sequence, not merely on its concatenation.
+//
+// Length-prefixing is injective because the decimal length is delimited by the
+// ":" that cannot occur before it, so each field's extent is fixed before its
+// bytes are read: no field content can be mistaken for structure. That keeps
+// ("a","b") apart from ("ab") — "1:a1:b" against "2:ab" — and ("","a") apart
+// from ("a","") — "0:1:a" against "1:a0:". The empty sequence, which a
+// constraint with no fields cannot produce but which costs nothing to admit,
+// encodes as "".
+func joinKeySequence(seq []string) string {
+	var b strings.Builder
+	for _, f := range seq {
+		b.WriteString(strconv.Itoa(len(f)))
+		b.WriteByte(':')
+		b.WriteString(f)
+	}
+	return b.String()
+}
+
+// splitKeySequence recovers the fields joinKeySequence encoded.
+//
+// It exists only so a failed keyref can name the sequence it was looking for in
+// the same comma-separated form it always did. It is total: a string this
+// package did not encode decodes to nil, and the caller falls back to printing
+// it as it stands rather than reporting a truncated sequence.
+func splitKeySequence(joined string) []string {
+	out := []string{}
+	for i := 0; i < len(joined); {
+		colon := strings.IndexByte(joined[i:], ':')
+		if colon < 0 {
+			return nil
+		}
+		n, err := strconv.Atoi(joined[i : i+colon])
+		if err != nil || n < 0 {
+			return nil
+		}
+		i += colon + 1
+		if i+n > len(joined) {
+			return nil
+		}
+		out = append(out, joined[i:i+n])
+		i += n
+	}
+	return out
+}
+
+// renderKeySequence writes an encoded key sequence the way a person reads it:
+// the fields, comma-separated, as the message has always shown them.
+func renderKeySequence(joined string) string {
+	fields := splitKeySequence(joined)
+	if fields == nil {
+		return joined
+	}
+	return strings.Join(fields, ", ")
+}
 
 // icTables is the set of node tables for one element, keyed by the constraint
 // they belong to.
@@ -338,7 +402,7 @@ func (v *validator) buildNodeTable(el *xdm.Node, ic *IdentityConstraint, below *
 			continue
 		}
 
-		joined := strings.Join(seq, keySep)
+		joined := joinKeySequence(seq)
 		if v.icStats != nil {
 			v.icStats.TableOps++
 		}
@@ -454,7 +518,7 @@ func (v *validator) checkKeyref(el *xdm.Node, ic *IdentityConstraint, tables icT
 			v.fail(node, "cvc-identity-constraint.4.3",
 				"keyref %q: no matching %s for %q",
 				ic.Name.Local, ic.Refer.Name.Local,
-				strings.ReplaceAll(joined, keySep, ", "))
+				renderKeySequence(joined))
 		}
 	}
 	return tbl
@@ -485,7 +549,7 @@ func (v *validator) cachedKeySequence(node *xdm.Node, ic *IdentityConstraint) (j
 	}
 	seq, complete, ok := v.keySequence(node, ic)
 	if ok && complete {
-		joined = strings.Join(seq, keySep)
+		joined = joinKeySequence(seq)
 	}
 	v.keySeqCache[k] = cachedSeq{joined: joined, complete: complete, ok: ok}
 	return joined, complete, ok

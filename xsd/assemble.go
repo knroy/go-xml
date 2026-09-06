@@ -29,6 +29,21 @@ type Options struct {
 	// to spend the process. Zero means DefaultMaxDocuments.
 	MaxDocuments int
 
+	// MaxContentModelPositions bounds the number of positions in any one
+	// compiled content model. A model that exceeds it is not compiled, and
+	// the schema is refused with an error wrapping xdm.ErrResourceLimit —
+	// the constraints on that model are then undecided, and an undecided
+	// normative constraint is never reported as satisfied.
+	//
+	// It is the memory bound on one model: cost is flat at roughly 400
+	// bytes per position, so the default of 8192 caps one model at about
+	// 3.3 MB. Raising it AUTHORISES PROPORTIONAL MEMORY — a host that sets
+	// 2^23 is accepting that a 2.7 KB schema may allocate 3.4 GB. See
+	// DefaultMaxContentModelPositions for the measurements.
+	//
+	// Zero means DefaultMaxContentModelPositions.
+	MaxContentModelPositions int
+
 	// Version selects XSD 1.0 or 1.1. The zero value is 1.0, because a
 	// schema written for 1.0 must not acquire 1.1's relaxations by
 	// accident — 1.1 changes which schemas are legal, not only which
@@ -77,6 +92,34 @@ func (o Options) checkOptions() CheckOptions {
 // DefaultMaxDocuments bounds an assembly that does not set MaxDocuments.
 const DefaultMaxDocuments = 512
 
+// DefaultMaxContentModelPositions bounds a schema that does not set
+// Options.MaxContentModelPositions.
+//
+// This is a MEMORY bound, and it is the only thing standing between a schema
+// of a few kilobytes and gigabytes of allocation. A group DAG in which each of
+// n groups references the next twice is valid, acyclic and tiny, yet expands
+// to 2^(n-1) positions. Measured through Load, cost is flat at ~400 bytes per
+// position:
+//
+//	n=16   2^15 positions    10.7ms      12 MB
+//	n=20   2^19 positions     155ms     201 MB
+//	n=22   2^21 positions     577ms     786 MB
+//	n=24   2^23 positions    2.47s     3452 MB   <- from a 2.7 KB schema
+//
+// 8192 positions is therefore about 3.3 MB for one model. The gate is
+// INCREMENTAL — it fires having already allocated in proportion to the limit,
+// so the limit is what is actually reserved, not merely what is refused:
+//
+//	limit 8192      refused in 2.4ms      2 MB
+//	limit 1048576   refused in 263ms    360 MB
+//	limit 4194304   refused in 1.08s   1521 MB
+//
+// Raising it is a deliberate grant of memory to whoever wrote the schema. A
+// host that does so is accepting that cost; it is exposed as an option because
+// a trusted generated schema may legitimately need it, not because the default
+// is conservative.
+const DefaultMaxContentModelPositions = 8192
+
 // Load assembles a schema from a document and everything it includes, imports
 // or redefines.
 //
@@ -106,6 +149,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	s := NewSchema()
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
+	s.maxPositions = opts.MaxContentModelPositions
 	a := &assembler{
 		schema: s,
 		opts:   opts,
@@ -319,6 +363,7 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	s := NewSchema()
 	s.Version = opts.Version
 	s.xpathVersion = opts.XPathVersion
+	s.maxPositions = opts.MaxContentModelPositions
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
 		schema: s,

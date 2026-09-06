@@ -1215,7 +1215,7 @@ func (v *validator) modelFor(t *ComplexType) (*contentModel, error) {
 		}
 		return m.(*contentModel), nil
 	}
-	m, err := compileContentModel(t.Particle)
+	m, err := compileContentModel(t.Particle, v.schema.maxPositions)
 	if err != nil {
 		v.schema.models.Store(t, err)
 		return nil, err

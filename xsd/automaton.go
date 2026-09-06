@@ -32,6 +32,12 @@ import (
 // Both Xerces and Saxon hit this (XERCESJ-1227 is still open) and both moved to
 // runtime counters. Counters are what this uses.
 type contentModel struct {
+	// maxPositions bounds len(positions) while this model is being built.
+	// It is per-model rather than global so that a Schema loaded with
+	// Options.MaxContentModelPositions compiles every model — at load and
+	// at validation alike — under the budget it was loaded with.
+	maxPositions int
+
 	// positions are the leaf terms, one per occurrence in the tree.
 	positions []*position
 
@@ -121,8 +127,16 @@ type counter struct {
 }
 
 // compileContentModel builds the automaton for a complex type's particle.
-func compileContentModel(p *Particle) (*contentModel, error) {
-	m := &contentModel{active: map[*ModelGroup]bool{}}
+//
+// limit bounds the number of positions; zero means
+// DefaultMaxContentModelPositions. Callers holding a Schema pass its retained
+// budget, so a model validates under the same limit its constraints were
+// checked under — see Schema.maxPositions.
+func compileContentModel(p *Particle, limit int) (*contentModel, error) {
+	if limit <= 0 {
+		limit = maxPositions
+	}
+	m := &contentModel{active: map[*ModelGroup]bool{}, maxPositions: limit}
 	if p == nil {
 		m.nullable = true
 		return m, nil
@@ -189,12 +203,29 @@ type frag struct {
 	nullable bool
 }
 
-// maxPositions bounds the automaton size.
+// maxPositions is the default bound on the automaton size, used when no
+// Schema-retained budget applies. Options.MaxContentModelPositions overrides
+// it per load; DefaultMaxContentModelPositions documents the measurements.
 //
-// A content model large enough to exceed this is either generated or hostile.
-// The bound exists because the follow relation is quadratic in the number of
-// positions, so an unbounded model is a way to be handed an unbounded
-// allocation — the failure Xerces and Saxon both hit.
+// It is a MEMORY bound. The original justification recorded here — that the
+// follow relation is quadratic in the number of positions — is no longer the
+// binding one: that cost is a property of DENSE models, and maxUPAStateWidth
+// (256) refuses those long before 8192 positions is reached. A dense sequence
+// of 1024 optional elements is refused by the width gate in 68ms, never
+// reaching this limit at all.
+//
+// What this bound still owns, and nothing else does, is the SPARSE model: wide,
+// cheap to scan, and enormous. A group DAG of n groups each referencing the
+// next twice is valid, acyclic, and a couple of kilobytes, yet expands to
+// 2^(n-1) positions at a flat ~400 bytes each — 3.4 GB at n=24. Time alone
+// makes that model look affordable (2.5s); memory is what makes it an attack.
+// "An unbounded model is a way to be handed an unbounded allocation" was the
+// right half of the original reasoning, and it is still exactly right.
+//
+// The gate is INCREMENTAL: it fires having already allocated in proportion to
+// the limit, so the limit is what a hostile schema can actually reserve. That
+// is why raising it is a grant of memory, not merely a relaxed refusal.
+//
 // The invariant on exceeding it: build returns an error, which means the
 // procedure DECLINED to decide — explicitly NOT "no violation was found".
 // Every caller must therefore take a conservative path. See
@@ -202,7 +233,7 @@ type frag struct {
 // differentially by forcing the budget pathologically low.
 //
 // It is a var only so tests may lower it; it is never assigned in production.
-var maxPositions = 8192
+var maxPositions = DefaultMaxContentModelPositions
 
 // build walks a particle, adding positions and follow edges, and returns the
 // fragment data for it.
@@ -231,9 +262,9 @@ func (m *contentModel) build(p *Particle, enclosing int) (frag, error) {
 	var err error
 	switch t := p.Term.(type) {
 	case *ElementDecl, *Wildcard:
-		if len(m.positions) >= maxPositions {
+		if len(m.positions) >= m.maxPositions {
 			return frag{}, fmt.Errorf(
-				"content model has more than %d positions", maxPositions)
+				"content model has more than %d positions", m.maxPositions)
 		}
 		idx := len(m.positions)
 		m.positions = append(m.positions, &position{
@@ -403,9 +434,9 @@ func (m *contentModel) buildAll(g *ModelGroup, scope int) (frag, error) {
 	// A group reference to an all group inside an all group contributes
 	// its members directly; see flattenAll.
 	for _, p := range flattenAll(g) {
-		if len(m.positions) >= maxPositions {
+		if len(m.positions) >= m.maxPositions {
 			return frag{}, fmt.Errorf(
-				"content model has more than %d positions", maxPositions)
+				"content model has more than %d positions", m.maxPositions)
 		}
 		idx := len(m.positions)
 		m.positions = append(m.positions, &position{

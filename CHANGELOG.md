@@ -6,7 +6,62 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Fixed
+
+**A content model that would not compile skipped every constraint on it, and
+the schema loaded anyway.** `checkContentModelConstraints` compiled each model
+and ran Unique Particle Attribution, Element Declarations Consistent and both
+wildcard and substitution EDC against it; when the compile failed it moved on
+with a bare `continue`. The schema then loaded with all four constraints
+UNPERFORMED — accepted having proven nothing. `2c461c7` fixed exactly this in
+`checkUPA`'s own width gate and recorded this neighbour as an open gap; it is
+now closed the same way. The refusal wraps `xdm.ErrResourceLimit` and carries
+no constraint code, because nothing was examined and a refusal must not be
+mistaken for a verdict in either direction. Errors are sorted as values, so the
+sentinel survives to `errors.Is`.
+
+The two reasons a compile can fail — a position budget declining, and a
+structurally impossible model such as a group that reaches itself — are not
+distinguishable at this caller: both arrive as plain errors with nothing
+separating them. Both mean the constraints are undecided, so both refuse, and
+the underlying error is wrapped so its text still says which. Giving the
+structural faults their own sentinel is worth doing and has not been done.
+
 ### Added
+
+**`Options.MaxContentModelPositions` makes the position budget host-tunable,
+and the reason it exists is now the right one.** The bound was justified here
+as guarding quadratic follow-set cost. That is a property of DENSE models, and
+`maxUPAStateWidth` has owned those since `2c461c7` — it refuses a dense model
+of 1024 positions in 68ms, so the position budget is never the binding
+constraint on that shape. Judged on time alone the budget looks redundant: a
+sparse model of two million positions compiles and is fully checked in 600ms.
+
+It is a MEMORY bound, and on that axis it is the only thing between a
+kilobyte-scale schema and gigabytes. A group DAG of n groups each referencing
+the next twice is valid, acyclic and tiny, yet expands to 2^(n-1) positions at
+a flat ~400 bytes each: n=24 is a 2.7 KB schema asking for 3.4 GB. The gate is
+incremental, firing having already allocated in proportion to the limit, so the
+limit is what a hostile schema can actually reserve. Raising it therefore
+AUTHORISES that memory — which is why it is an option a host sets rather than a
+number that was quietly too low. The default stays 8192, about 3.3 MB per
+model.
+
+The budget is retained on the `Schema` and used by validation as well as by the
+load-time checks, so a model always compiles under the limit its constraints
+were checked under. `NewSequenceMatcher` takes a bare particle and has no
+`Options` to consult — its caller is the DTD validator — so it uses the
+default.
+
+**`TestGroupDAGLoadsInGraphTime` asserted a promise that was never
+satisfiable.** It required a successful load at n=40 — 2^39 positions, some 220
+GB — and passed only because the silent skip above let an uncompilable model
+through as a clean load. The timing guarantee it was written for, that group
+cycle detection is graph-proportional rather than path-proportional, now
+applies at every n; the verdict is asserted only where it means something, with
+a model inside the budget required to load and one beyond it required to be
+refused as a resource limit.
+
 
 **`op:same-key` is written down as a relation, and the canonical map key is
 tested against it.** `xdm.MapKeyOf` encodes "these two values are the same map

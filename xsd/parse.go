@@ -247,6 +247,21 @@ type Schema struct {
 	// alternatives in this schema are compiled in, from Options.
 	xpathVersion xpath.Version
 
+	// maxPositions bounds any one compiled content model, from Options.
+	// It is retained rather than read from a package global so that
+	// validation compiles under the SAME budget the load-time constraint
+	// checks used: a model too large to check at load must not become a
+	// model that validates documents, or the schema would be enforcing a
+	// content model whose UPA and EDC were never decided.
+	//
+	// Zero means "the package default", resolved in compileContentModel
+	// rather than normalised here. That keeps ONE place where the default
+	// is applied: normalising at Load would pin the value at assembly time
+	// and silently override the package-level default, which is what the
+	// differential budget harness lowers to prove that a declined build
+	// never reads as an accept.
+	maxPositions int
+
 	// sourcePaths records the documents this schema was loaded from, so
 	// that WithInstanceLocations can assemble them again alongside the ones
 	// an instance names. A schema is not the union of its documents — a
