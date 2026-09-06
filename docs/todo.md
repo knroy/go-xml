@@ -51,17 +51,13 @@ It is not a version-string rewrite. XML 1.1 changes what the *language* is:
   translator becomes version-dependent — which reaches `xpath`, not just
   `xsd`.
 
-It also has a dependency worth recording before the work starts rather than
-after. `xsd/identity.go` joins a composite key sequence on `keySep = "\x1f"`,
-which is safe today only because U+001F cannot appear in XML 1.0 character
-data. Under 1.1 it can, and two different field tuples would then produce the
-same joined string — a false key match. The tuple representation has to stop
-being a joined string before 1.1 lands, not after.
-
-`TestIdentityKeySeparatorUnreachableInXML10` pins the premise rather than
-leaving it as a note here: it asserts that the parser refuses U+001F in
-character data. Whoever makes 1.1 documents parse will see it fail, which is
-the intended way to find this paragraph.
+The blocking dependency this entry used to name is closed. `xsd/identity.go`
+joined a composite key sequence on `keySep = "\x1f"`, which only held because
+U+001F cannot appear in XML 1.0 character data; the encoding is now
+length-prefixed and injective for any field content, so 1.1 no longer has to
+wait on it. `TestIdentityKeySeparatorUnreachableInXML10` still pins the 1.0
+premise, and will fail when 1.1 documents parse — by then it is a signal to
+retire the test, not a false key match to fix.
 
 Cost: substantial. Buys: correctness for documents that really are 1.1, and
 an end to the silent misreading above. Scoping it properly needs the W3C
@@ -69,45 +65,24 @@ an end to the silent misreading above. Scoping it properly needs the W3C
 corpora under `testdata/` do not exercise 1.1, so there is no measurement of
 the gap here, only the two defects named above.
 
-### 1.2 DTD validation — done, internal subset only
+### 1.2 DTD validation — external subset outstanding
 
-**Implemented.** The `dtd` package parses `<!ELEMENT>`, `<!ATTLIST>` and
-`<!ENTITY>` and validates against them: content models, attribute defaults,
-enumerations, and `ID`/`IDREF`. Content models reuse nothing from
-`xsd/automaton.go` in the end — DTD's are simple enough to decide directly.
+The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and `<!ENTITY>`:
+content models, attribute defaults, enumerations, `ID`/`IDREF`. Entity
+expansion is bounded by count and by total expanded size, and nothing external
+is fetched without a caller-supplied resolver.
 
-The security posture was the design rather than a footnote on it, as this
-entry argued it had to be: **entity expansion is the attack surface
-`AllowDOCTYPE` exists to refuse**, so expansion is bounded by count and by
-total expanded size, and nothing external is fetched without a resolver the
-caller supplies. Both are exercised — a billion-laughs bomb is refused in
-microseconds.
+**What is left:** the external subset. Parameter entities work only within the
+internal one, so a document whose DTD lives in a separate file validates
+against whatever it declares inline and no more.
 
-What is *not* implemented is the external subset, and parameter entities only
-work within the internal one. A document whose DTD lives in a separate file
-validates against whatever it declares inline and no more.
+### 1.3 RELAX NG — compact syntax outstanding
 
-### 1.3 RELAX NG — done, XML syntax only
+100% of James Clark's suite (965 of 965 assertions), XML syntax only.
 
-**Implemented**, at 100% of James Clark's suite (965 of 965 assertions).
-It is a separate engine, as expected: derivatives over patterns rather than a
-finite automaton, because `interleave` is not a Glushkov construction. The
-datatype library delegates to the XSD types, which was the reuse the earlier
-estimate hoped for.
-
-The cost estimate was roughly right for the engine and badly wrong about where
-the work would go. Over half the conformance suite is schemas that must be
-*rejected*, so most of the effort was the restriction rules of section 7 and
-the scattered constraints of sections 4.16–4.19 — not the derivative
-algorithm, which is short.
-
-**What is left:**
-
-* **The compact syntax** is not implemented. It is a second parser over the
-  same model, so it costs a parser and nothing else — the compiler, the
-  restrictions and the validator are all reached through the same tree.
-* Nothing in the suite. The last failure needed markup inside an entity's
-  replacement text, which was a gap in `xdm` and is fixed.
+**What is left:** the compact syntax. It is a second parser over the same
+model, so it costs a parser and nothing else — the compiler, the restriction
+rules and the validator are all reached through the same tree.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 
@@ -227,124 +202,10 @@ indirect: pass the map through `TransformOptions.Params` to a top-level
 
 ## 2. Bugs
 
-### 2.1 XSD: 41 disagreements on 1.0, 38 on 1.1 — none of them a defect
-
-Both directions are closed. The ~700 schema false accepts this entry used to
-count are implemented, and the false rejects with them; schema-validity
-agreement is 99.91% on 1.0 and 99.93% on 1.1.
-
-What is left is not work: the bulk of the 79 are cases where the suite's own
-`status` records that the W3C challenged the expected result, 44 of those (22
-per version) being the single open bug 4113 — the regex general-category tests
-written against Unicode 3.1, where passing means freezing a Unicode 3.1 table
-and being wrong about modern text. Check the metadata before assuming a
-disagreement is ours, and note the status is on the `<current>` element, not
-on `<expected>`.
-
-The counts here fell from 51 and 47 when two harness defects were fixed:
-`indeterminate` expectations stopped being scored as "must be invalid", and
-`iri-001`'s schema, which builds its RFC 3986 patterns from an internal DTD
-subset, stopped being loaded with `AllowDOCTYPE` off.
-
-The principle this entry argued for still holds and is worth keeping: **a
-false reject breaks a caller outright, a false accept only fails to catch
-someone else's mistake.** They are not symmetric, and a single percentage
-treats them as though they were. That is why the tables above split them.
-
-It also holds that a suite at its ceiling is not proof of exactness — see 3.1.
-
-### 2.2 XSLT: a union's selected member was lost on every tree copy — fixed
-
-`<xsl:template match="Date[data(.) instance of StandardDate]">` never matched,
-where `StandardDate` is a simple type named by an `xsl:import-schema`. The
-plain `match="Date"` won instead and copied the source text through.
-
-Found behind `validation-0201`, whose row in
-[conformance-gaps.md](conformance-gaps.md) had been filed as a harness fix.
-Normalising the serializer difference that row described was implemented and
-measured, and the case still failed; this is what sat behind it.
-
-The two candidate causes this entry named — the annotation being absent, or the
-type name not resolving in the pattern's static context — were **both wrong**,
-and measurement was what settled it. A probe over the validated tree showed
-every `Date` carrying `TypeAnnotation="DateType"` and `UnionMember="StandardDate"`,
-and a trace at the `instance of` match site showed the type resolving correctly.
-
-The real cause is one line further out. `Date` has type `DateType`, a complex
-type with simple content extending a *union*; XSD §3.14.4 selects a union's
-member per value, so the winning member is recorded separately on the node and
-is what atomisation reads — a union's own derivation chain runs to
-`xs:anySimpleType` and stops. Three copy sites carried `TypeAnnotation` and
-dropped `UnionMember` beside it: `stripCopyNode` in `xslt/transform.go`,
-`xdmbuild.DeepCopy`, and the parentless attribute copy in `xslt/copyfuncs.go`.
-The stylesheet declares `<xsl:strip-space elements="*"/>`, so every `Date`
-reaching a template had been through a copy and atomised to `xs:untypedAtomic`.
-
-Fixed by carrying `UnionMember` at all three, which is what `xdm/xinclude.go`
-already did. The output for `validation-0201` is now byte-identical to the
-expected file apart from whitespace; the case still fails on the indent width,
-which is implementation-defined, so it gains no suite case. Covered by
-`xslt/unionmember_test.go`.
-
-### 2.3 QName values do not resolve their prefix — fixed
-
-An `xs:QName` value used to be checked only lexically: prefix and local name
-had to be NCNames, and `xmlns` was rejected as a prefix because nothing can
-bind it. But a prefix that was simply *undeclared* was accepted, because the
-lexical check had no access to the element's in-scope namespaces.
-
-Fixed as the entry said it would have to be: the instance node is threaded
-through as `validateSimpleValueIn`, and the binding is checked in
-`xsd/validate_simple.go` where the node is still in hand rather than among the
-facets. Part 2 §3.2.18 makes the namespace name part of the value, so an
-unbound prefix denotes no value at all and is now `cvc-datatype-valid.1.2.1`.
-It buys one test on the suite; it was done for the correctness, not the number.
-
-### 2.4 XPath: `$e-1` names a variable — retracted, not a defect
-
-Recorded here as the one known defect the suite does not cover. It is not a
-defect: the QT3 suite writes `$tz-10` and `$in-xml-1` itself and uses them as
-single variables, and `prod/NameTest.xml`'s `K-NameTest-3` (`foo- foo`,
-expecting `XPST0003`) states that a name takes a trailing hyphen even before
-whitespace. A fix that made `$e- 1` subtraction broke that case in all four
-suites. See [known-gaps.md](known-gaps.md); pinned by `xpath/hyphen_test.go`.
-
-### 2.5 XPath: no in-scope failures
-
-XPath 2.0, 3.0 and 3.1 are all at 100%. The last case to fall was
-`fn-matches-51`, the one shape this deliberately refuses by default, and it is
-worth stating why so nobody re-litigates it:
-
-Backreferences are now resolved where doing so is exact. RE2 has none, but it
-returns capture positions, and a backreference is only hard when the group it
-names can match more than one width: RE2 gives a single submatch assignment —
-the greedy one — so for `(a*)\1` against `"aa"` it reports the group as `"aa"`,
-leaving nothing for the backreference, and a comparison answers **false** where
-the truth is *true* (`"a"` + `"a"`).
-
-When every named group has a *fixed* width there is nothing to enumerate, the
-greedy assignment is the only assignment, and capture-and-compare is exact. It
-runs in RE2's linear time — measured, 64,000 characters in 567 µs — so **the
-default path adds no backtracking engine and the linear-time guarantee is
-intact**.
-
-The split is by what can be decided, not by what a caller asked for: an engine
-that answers correctly or says it cannot is safe on always; one that guesses is
-not safe at any setting. Outside the decidable subset the default raises
-`FORX0002`.
-
-The general case *is* implemented, behind `xpath.SetBacktrackingRegex(true)`
-(`-backtracking-regex` on the command line) and off by default, because it has
-no linear-time guarantee and patterns can come from document data. A step
-budget bounds every match and exhausting it is an error, never a silent "no
-match". Both XSLT harnesses and the QT3 harness now enable it for their runs, where
-the suite's patterns are trusted input, so the nine XSLT
-`regex`/`analyze-string` failures and `fn-matches-51` all pass and the measured
-figures include them. It stays off by default in production.
-
-An earlier version of this file argued the whole thing was not worth doing,
-having reasoned about capture-and-compare in general and missed that the
-fixed-width case is not a guess. See [known-gaps.md](known-gaps.md).
+None open. Every entry this section used to carry is fixed or was retracted as
+not a defect; the reasoning that is still worth keeping lives in
+[known-gaps.md](known-gaps.md) and the CHANGELOG, not here. A todo list that
+records its own successes stops being a todo list.
 
 ---
 
@@ -461,7 +322,7 @@ Recorded so they are not proposed again as oversights:
   exists behind `xpath.SetBacktrackingRegex(true)`; what remains a non-goal is
   turning it on by default, since patterns can come from document data. The
   fixed-width case is *not* in this list: it has one possible assignment, so
-  comparison is exact, and it is on always. See 2.5.
+  comparison is exact, and it is on always. See [known-gaps.md](known-gaps.md).
 * **`xsi:schemaLocation` in instances, by default** — honouring it lets the
   document choose its own schema. Available opt-in behind a namespace
   allowlist; see `Schema.WithInstanceLocations`.
