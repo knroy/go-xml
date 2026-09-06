@@ -21,8 +21,22 @@
 //     reference checks XSD defines.
 //
 // What DTD has that XSD does not is the *external* subset, which is a file
-// reference. Fetching one is the attack AllowDOCTYPE exists to gate, so it is
-// not read: a DOCTYPE naming an external subset validates against whatever its
-// internal subset declares, and Validate says so rather than pretending the
-// document was fully checked.
+// reference, along with the parameter entities and conditional sections that
+// only exist there.
+//
+// # Two entry points
+//
+// Parse reads a DOCTYPE's internal subset and fetches nothing. It is what a
+// caller wants for a document that arrived over the wire and whose DTD is
+// wholly inline.
+//
+// Load reads both subsets. Fetching the external one is the attack
+// AllowDOCTYPE exists to gate, so it happens only through a caller-supplied
+// LoadOptions.Resolver — nil in the zero value, following
+// xsd.Options.Resolver. With none, a DOCTYPE naming an external subset is
+// REFUSED rather than validated against half a DTD: the external subset
+// routinely holds every element declaration in the language, so reporting a
+// document valid against the internal half alone would turn "I could not read
+// the constraints" into "the constraints hold". LoadOptions.InternalSubsetOnly
+// is how a caller asks for that partial reading deliberately.
 package dtd

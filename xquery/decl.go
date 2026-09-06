@@ -26,6 +26,37 @@ type varDecl struct {
 	// body is set instead of init when the initialiser is a constructor,
 	// which the expression parser cannot read; see parseDeclBody.
 	body []node
+	// private records the %private annotation, which §4.15 makes scoping: a
+	// private variable is visible only inside the module that declares it,
+	// so an "import module" contributes the public ones and leaves these
+	// behind. In a main module it has no effect, there being no outside to
+	// hide from. modules-pub-priv-2 is the case that needs it.
+	private bool
+	// home is the static context of the module that DECLARED this variable,
+	// set only for one imported through "import module" and nil for the
+	// importing module's own.
+	//
+	// §4.12 is explicit that an imported variable's initialiser is evaluated
+	// in its own module's static context, not the importer's: the two modules
+	// have different namespace bindings, a different default element
+	// namespace and a different base URI, and an initialiser that resolved a
+	// prefix against the importer's prolog would read a name its author never
+	// wrote. See scope.
+	home *staticContext
+}
+
+// scope returns the static context a declaration's body must be evaluated in:
+// its own module's where it was imported, and the query's where it was not.
+//
+// This is the whole of what makes an imported declaration behave as though it
+// were still in its own module, and it is why the imported declarations are
+// kept beside the query's own rather than merged into them -- a merged list
+// has nowhere left to record which module each one came from.
+func (d *varDecl) scope(q *Query) *staticContext {
+	if d.home != nil {
+		return d.home
+	}
+	return q.sc
 }
 
 // nsXQueryOptions is the namespace §4.16 reserves for option declarations and
@@ -47,8 +78,22 @@ type funcDecl struct {
 	external bool
 	// private records the %private annotation. In a main module it has no
 	// effect — there is nothing outside the module to hide from — and it is
-	// kept so that a later module implementation has it.
+	// what "import module" filters on: §4.15 makes a private function visible
+	// only inside its own module. modules-pub-priv-2 is the case.
 	private bool
+	// home is the static context of the module that declared this function,
+	// nil for the importing module's own. See varDecl.home for why an
+	// imported declaration keeps its own module's context.
+	home *staticContext
+}
+
+// scope returns the static context this function's body must run in. See
+// varDecl.scope.
+func (d *funcDecl) scope(q *Query) *staticContext {
+	if d.home != nil {
+		return d.home
+	}
+	return q.sc
 }
 
 type funcParam struct {
@@ -73,7 +118,7 @@ type contextItemDecl struct {
 // The initialiser is compiled but not run. Two variables may not share a name
 // — XQST0049 — which is checked here because both declarations are in this
 // module and nothing later can change the answer.
-func (p *parser) parseVarDecl() error {
+func (p *parser) parseVarDecl(private bool) error {
 	p.pos += len("variable")
 	p.skipSpaceAndComments()
 	if !p.consume("$") {
@@ -101,7 +146,7 @@ func (p *parser) parseVarDecl() error {
 				name.Lexical())
 		}
 	}
-	d := &varDecl{name: name}
+	d := &varDecl{name: name, private: private}
 	p.skipSpaceAndComments()
 	if p.consumeKeyword("as") {
 		p.skipSpaceAndComments()
@@ -582,6 +627,26 @@ func (q *Query) registerFunctions(parent xpath.FunctionLibrary) *xpath.Library {
 	}
 	lib := xpath.NewLibrary(parent)
 	q.registerFormatNumber(lib)
+	// The imported functions are registered before this module's own, so that
+	// a name declared in both is this module's. That order cannot actually be
+	// observed -- checkImportedNames has already refused the clash as
+	// XQST0034 -- and it is the safe direction if a case is ever found that
+	// the check does not reach.
+	//
+	// Only the PUBLIC ones. §4.15 makes a %private function visible inside
+	// its own module alone, so a call to one from the importing module must
+	// be XPST0017, which is what not registering it produces.
+	// modules-pub-priv-2 is the case.
+	for _, m := range q.modules {
+		for _, d := range m.visibleFuncs() {
+			lib.Add(xpath.Function{
+				Name:      d.name,
+				Arity:     len(d.params),
+				Call:      q.callDeclared(d),
+				Signature: declaredSignature(d),
+			})
+		}
+	}
 	for _, d := range q.funcs {
 		lib.Add(xpath.Function{
 			Name:      d.name,
@@ -591,6 +656,92 @@ func (q *Query) registerFunctions(parent xpath.FunctionLibrary) *xpath.Library {
 		})
 	}
 	return lib
+}
+
+// privateBindings binds a library module's private global variables for the
+// duration of one of its own function bodies.
+//
+// They are evaluated here rather than with the public globals because they
+// must not outlive the body: bound on the shared context they would be
+// visible to the importing module, which §4.15 forbids. A private global that
+// is never read by a body that runs is therefore never evaluated at all,
+// which is also what a lazily initialised global should do.
+func (q *Query) enterModule(home *staticContext, ctx *xpath.Context) (
+	*xpath.Context, error) {
+	m := q.moduleFor(home)
+	if m == nil {
+		return ctx, nil
+	}
+	sub := *ctx
+	if lib := q.modLibs[home]; lib != nil {
+		sub.Funcs = lib
+	}
+	out := &sub
+	for _, d := range m.vars {
+		if !d.private {
+			continue
+		}
+		// Evaluated against the context being built, so that one private
+		// global may name another. A private global that no body reads is
+		// still initialised here, which costs a module its own declarations
+		// and nothing more.
+		v, err := q.evalVar(d, out)
+		if err != nil {
+			return nil, err
+		}
+		out = out.WithVar(d.name, v)
+	}
+	return out, nil
+}
+
+// moduleFor finds the imported module a static context belongs to.
+func (q *Query) moduleFor(sc *staticContext) *libModule {
+	for _, m := range q.modules {
+		if m.sc == sc {
+			return m
+		}
+	}
+	return nil
+}
+
+// moduleLib returns the function library a library module's own bodies run
+// against: its own declarations, private ones included, chained onto the
+// query's library so that the builtins and the modules it imported are still
+// reachable.
+//
+// It is looked up by the module's static context, which is the identity each
+// declaration carries in home. The libraries are built once at compile time
+// and stored on the Query, because a Query is immutable and safe for
+// concurrent use -- building one per call would be neither.
+func (q *Query) moduleLib(sc *staticContext) *xpath.Library {
+	return q.modLibs[sc]
+}
+
+// buildModuleLibs builds one function library per imported module.
+//
+// Each is the query's own library -- builtins, this module's declarations and
+// every imported module's public half -- with the module's OWN declarations
+// added in front, private ones included. So a module sees everything it can
+// legally see and nothing it cannot: its own private functions, which §4.15
+// scopes to it, and the public functions of what it imported, which the
+// query's library already carries.
+func (q *Query) buildModuleLibs() {
+	if len(q.modules) == 0 {
+		return
+	}
+	q.modLibs = make(map[*staticContext]*xpath.Library, len(q.modules))
+	for _, m := range q.modules {
+		lib := xpath.NewLibrary(q.lib)
+		for _, d := range m.funcs {
+			lib.Add(xpath.Function{
+				Name:      d.name,
+				Arity:     len(d.params),
+				Call:      q.callDeclared(d),
+				Signature: declaredSignature(d),
+			})
+		}
+		q.modLibs[m.sc] = lib
+	}
 }
 
 // declaredSignature records the declared types so that a typed function test
@@ -658,7 +809,27 @@ func (q *Query) callDeclared(d *funcDecl) func(*xpath.Context, []xdm.Sequence) (
 			}
 			inner = inner.WithVar(pm.name, conv)
 		}
-		out, err := q.evalBody(d.body, d.expr, inner)
+		// A declaration imported from a library module runs against THAT
+		// module's function library, not the importing module's. §4.15
+		// makes %private visible inside its own module, so a public function
+		// calling a private one in the same module must find it -- which the
+		// importer's library, built from the public half alone, cannot
+		// answer. modules-pub-priv-1 is exactly this: the public defs:g
+		// calls the private defs:f, and registering only the public half
+		// left the call unresolvable from either side.
+		if d.home != nil {
+			// An imported function's body runs inside its OWN module: its
+			// library, private functions included, and its private globals.
+			// §4.15 scopes both to the module rather than withholding them
+			// from it, and binding them on the shared context instead would
+			// make them readable by the importer, which modules-pub-priv-4
+			// asserts they are not. See enterModule.
+			var err error
+			if inner, err = q.enterModule(d.home, inner); err != nil {
+				return nil, err
+			}
+		}
+		out, err := q.evalBody(d.body, d.expr, inner, d.scope(q))
 		if err != nil {
 			return nil, err
 		}
@@ -671,20 +842,28 @@ func (q *Query) callDeclared(d *funcDecl) func(*xpath.Context, []xdm.Sequence) (
 
 // evalBody runs either a compiled expression or a parsed node list, which are
 // the two shapes a function body and a variable initialiser can have.
-func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context) (xdm.Sequence, error) {
+//
+// sc is the static context the body was WRITTEN in, which for a declaration
+// imported from a library module is that module's and not this query's. See
+// varDecl.scope.
+func (q *Query) evalBody(body []node, expr *compiledExpr, ctx *xpath.Context,
+	sc *staticContext) (xdm.Sequence, error) {
+	if sc == nil {
+		sc = q.sc
+	}
 	if expr != nil {
 		// Through eval, for the reason enclosed.sequence does the same: an
 		// XQuery-only primary compileExpr lifted out of a function body or a
 		// variable initialiser is bound to a variable that only bind knows
 		// about, and eval is what applies bind.
-		return expr.eval(&evalContext{xp: ctx, sc: q.sc})
+		return expr.eval(&evalContext{xp: ctx, sc: sc})
 	}
 	if body == nil {
 		return nil, nil
 	}
-	out := xdmbuild.New(policy{sc: q.sc})
+	out := xdmbuild.New(policy{sc: sc})
 	ref := &builderRef{b: out}
-	ec := &evalContext{xp: ctx, sc: q.sc}
+	ec := &evalContext{xp: ctx, sc: sc}
 	for _, n := range body {
 		if err := n.eval(ref, ec); err != nil {
 			return nil, err
@@ -727,7 +906,7 @@ func (q *Query) bindVariables(ctx *xpath.Context) (*xpath.Context, error) {
 	}
 	// The declarations are visited in source order so that an error is
 	// reported for the first one that has it, which is what a reader expects.
-	for _, d := range q.vars {
+	for _, d := range q.allVars() {
 		if err := b.visit(d); err != nil {
 			return nil, err
 		}
@@ -775,10 +954,37 @@ type varBinder struct {
 // gone.
 func (b *varBinder) version() XQVersion { return b.q.sc.xqVersion }
 
+// allVars is every global variable in scope for the IMPORTING module: its own
+// declarations and the public ones of every module it imported (§4.12).
+//
+// A private variable is deliberately absent. §4.15 scopes it to its own
+// module, and the context these bindings land on is the one the importing
+// module's expressions evaluate against -- so a private name bound here would
+// be readable by the importer, which modules-pub-priv-4 asserts it is not.
+// Where a module's own body needs its own private globals, they are bound for
+// the duration of that body instead; see privateBindings.
+//
+// The imported ones come first, so that a walk in source order initialises a
+// library's variables before the module that uses them where the graph allows
+// it. Where it does not -- a module whose variable depends on its importer's,
+// which mutual recursion permits -- the binder's dependency walk reorders
+// them, and a genuine circularity is caught there.
+func (q *Query) allVars() []*varDecl {
+	if len(q.modules) == 0 {
+		return q.vars
+	}
+	out := make([]*varDecl, 0, len(q.vars))
+	for _, m := range q.modules {
+		out = append(out, m.visibleVars()...)
+	}
+	return append(out, q.vars...)
+}
+
 // newVarBinder prepares a walk, or returns nil when the module declares no
 // global variables and there is nothing to walk.
 func (q *Query) newVarBinder(ctx *xpath.Context) *varBinder {
-	if len(q.vars) == 0 {
+	all := q.allVars()
+	if len(all) == 0 {
 		return nil
 	}
 	// Keyed by the name *as it would be written*, because the dependency scan
@@ -786,8 +992,8 @@ func (q *Query) newVarBinder(ctx *xpath.Context) *varBinder {
 	// one module the prefix identifies the namespace exactly — XQST0033
 	// forbids binding one twice — so this is as precise as the Clark name
 	// would be, and it is what the scan can produce.
-	byName := make(map[string]*varDecl, len(q.vars))
-	for _, d := range q.vars {
+	byName := make(map[string]*varDecl, len(all))
+	for _, d := range all {
 		byName[d.name.Lexical()] = d
 		if d.name.Prefix == "" && d.name.URI != "" {
 			// A name written "Q{uri}local" has no prefix to be found under,
@@ -801,7 +1007,7 @@ func (q *Query) newVarBinder(ctx *xpath.Context) *varBinder {
 		q:      q,
 		ctx:    ctx,
 		byName: byName,
-		state:  make(map[string]int, len(q.vars)),
+		state:  make(map[string]int, len(all)),
 	}
 }
 
@@ -886,7 +1092,18 @@ func (b *varBinder) visit(d *varDecl) error {
 				// permissive answer there rather than gaining a static error
 				// the specification does not ask for. See the comment above
 				// on extvardef-011.
-				if deferred || (b.pathViaFunc && b.version().atLeast30()) {
+				// A cycle that crosses a MODULE boundary is dynamic at 3.0
+				// and later for the same reason a function-mediated one is:
+				// §4.12 permits mutually recursive modules, so the import
+				// graph no longer gives the variables of two modules a
+				// static order, and whether the loop actually closes is
+				// something only evaluation can say. modules-28a and
+				// errata8-001a are the pair that pin it -- the identical
+				// modules are XQST0054 or XQST0093 at XQ10 (modules-28,
+				// errata8-001) and XQDY0054 at XQ30+.
+				crossModule := d.home != dep.home
+				if deferred ||
+					((b.pathViaFunc || crossModule) && b.version().atLeast30()) {
 					continue
 				}
 				return fmt.Errorf(
@@ -1221,7 +1438,33 @@ func (q *Query) evalVar(d *varDecl, ctx *xpath.Context) (xdm.Sequence, error) {
 				d.name.Lexical())
 		}
 	}
-	v, err := q.evalBody(d.body, d.init, ctx)
+	// An imported variable's initialiser runs against its OWN module, exactly
+	// as an imported function's body does: it may call that module's private
+	// functions and read its private globals, both of which §4.15 scopes to
+	// the module rather than withholding from it. The fixture for
+	// modules-pub-priv-1 is a global whose initialiser calls the private
+	// mod:f(), which the importing module's library cannot answer.
+	if d.home != nil {
+		if d.private {
+			// A private global is initialised BY enterModule, so it must not
+			// re-enter it -- that would recurse. It still needs its own
+			// module's function library, which is the part of the module
+			// context that does not depend on the globals.
+			if lib := q.modLibs[d.home]; lib != nil {
+				sub := *ctx
+				sub.Funcs = lib
+				ctx = &sub
+			}
+		} else {
+			// An imported variable's initialiser runs inside its own module
+			// for the same reasons a function body does.
+			var err error
+			if ctx, err = q.enterModule(d.home, ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
+	v, err := q.evalBody(d.body, d.init, ctx, d.scope(q))
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,7 @@ Being precise about which one you need saves the most time:
 |---|---|---|
 | the XML is **well-formed** — tags balance, entities resolve | any XML parser | ✅ `xdm.ParseString` |
 | the XML matches a **structural schema** (XSD) | a schema validator | ✅ `xsd.LoadFile` + `Schema.Validate` |
-| the XML matches a **DTD** | a validating parser | ✅ `dtd.Parse` + `dtd.Validate` (internal subset only) |
+| the XML matches a **DTD** | a validating parser | ✅ `dtd.Parse` + `dtd.Validate`, or `dtd.Load` for the external subset |
 | the XML matches a **RELAX NG** schema | a different validator | ✅ `relaxng.Compile` + `Schema.Validate` |
 | the XML satisfies **business rules** — cross-field arithmetic, code lists, conditional requirements | Schematron, compiled to XSLT | ✅ this is the use case |
 
@@ -50,15 +50,42 @@ That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
 subset of what an `xsd.Particle` expresses, so there is no second engine.
 
-Two things to know before relying on it:
+`dtd.Parse` reads the internal subset alone and fetches nothing. To validate
+against a DTD that lives in another file, use `dtd.Load`:
 
-* **An external subset is never fetched.** Fetching one is the attack
-  `AllowDOCTYPE` exists to gate. `DTD.HasExternalSubset` records that one was
-  named, so a caller knows the check was partial rather than clean.
+```go
+d, err := dtd.Load(tree.DocType, dtd.LoadOptions{
+    Resolver: &dtd.FileResolver{Root: "/srv/dtds"},
+    BaseURI:  "file:///srv/docs/order.xml",
+})
+err = dtd.Validate(tree.Root, d, dtd.Options{})
+```
+
+That reads both halves and applies them together: parameter entities span the
+two subsets with XML 1.0 §2.8's precedence (the internal subset is read first
+and its declarations bind), a `%pe;` in the external subset may expand to whole
+declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
+are resolved, including nested ones.
+
+Three things to know before relying on it:
+
+* **Nothing is fetched without a `Resolver`, and with none the load is
+  refused.** `dtd.Load` returns an error wrapping `dtd.ErrNoResolver` rather
+  than validating against the internal subset alone — half a DTD proves
+  nothing, and reporting success on it would turn "I could not read the
+  constraints" into "the constraints hold". Pass `LoadOptions.InternalSubsetOnly`
+  to ask for the partial reading deliberately.
+* **A resolver hands control of what this process reads to whoever wrote the
+  DOCTYPE.** `FileResolver` is confined to one `Root`, refusing `..`, absolute
+  paths, symlinks leading out and any non-`file` scheme; `MapResolver` reads
+  from memory and touches no disk. Expansion across both subsets is charged to
+  one shared budget, so a billion-laughs bomb split between them meets the same
+  limit a wholly internal one does. See [security.md](security.md).
 * **A partial internal subset is common.** A document declaring a few things
   locally and naming an external DTD for the rest reports every other element
   as undeclared, which is strictly correct and useless. `Options.AllowUndeclared`
-  skips those; what *is* declared stays enforced.
+  skips those; what *is* declared stays enforced. `DTD.HasExternalSubset`
+  records that a DOCTYPE named one.
 
 `ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
 are not fed back into the data model, which is why `fn:id` still falls back to
@@ -70,8 +97,8 @@ source rather than globally.
 
 ## RELAX NG
 
-`relaxng` validates against RELAX NG's XML syntax, at 100% of James Clark's
-conformance suite (965 of 965 assertions).
+`relaxng` validates against RELAX NG in both its notations, at 100% of James
+Clark's conformance suite (965 of 965 assertions).
 
 ```go
 schema, err := xdm.ParseString(rngSource, xdm.ParseOptions{})
@@ -88,6 +115,28 @@ if err != nil {
 }
 err = s.Validate(doc.Root)
 ```
+
+### The compact syntax
+
+A schema written in the compact syntax is compiled by `CompileCompact`, and
+`ParseCompact` returns the XML-syntax tree on its own for a caller converting
+between the two notations:
+
+```go
+s, err := relaxng.CompileCompact(rncSource, relaxng.Options{})
+```
+
+The compact syntax is not a second implementation of the language. It is
+parsed into the XML syntax and handed to the same compiler, so the section 7
+restrictions, the datatype library and the validator are reached through one
+tree and the two notations cannot come to disagree about what a schema means.
+A test asserts that directly: for a schema written both ways, the two parsers
+must produce structurally identical trees.
+
+`include` and `external` reach a `Resolver` exactly as `<include>` and
+`<externalRef>` do, and are refused when none is supplied. A `Resolver`
+returns an XML-syntax document, so one serving compact schemas calls
+`ParseCompact` itself.
 
 It is a separate engine rather than a use of the XSD automaton, because RELAX
 NG validates by a different model: a schema *is* a pattern, and validation

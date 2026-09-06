@@ -6,6 +6,158 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added
+
+**DTD external subsets.** `dtd.Load` reads the second half of a DTD — the one
+a `<!DOCTYPE r SYSTEM "r.dtd">` names and every previous release ignored — and
+validates against both halves together. `dtd.Parse` is unchanged and still
+fetches nothing.
+
+Implemented: the external subset itself; parameter entities spanning the two
+subsets, with XML 1.0 §2.8's precedence (the internal subset is read first, and
+where both declare a name the internal one binds and the external one is
+ignored rather than being an error); parameter-entity references at declaration
+level, the `%pe;` that expands to whole declarations and is legal only in the
+external subset, which is how every modular DTD is built; and conditional
+sections, `<![INCLUDE[` and `<![IGNORE[` (§3.4), including nested ones, where
+an IGNORE's contents are not read as declarations but its delimiters are still
+counted — otherwise the first inner `]]>` ends the outer section and everything
+after it is read when it should not be.
+
+**Nothing is fetched by default, and the refusal is loud.**
+`dtd.LoadOptions.Resolver` is nil in the zero value, following
+`xsd.Options.Resolver` and `xdm.ParseOptions.ExternalEntities`. With no
+resolver, a DOCTYPE naming an external subset is **refused** with an error
+wrapping `dtd.ErrNoResolver` rather than validated against the internal subset
+alone. That choice is the repository's governing invariant applied to a new
+input path: the external subset routinely holds every `<!ELEMENT>` in the
+language, so validating against the internal half would report a document valid
+without a single one of its constraints having been checked — "I could not read
+the constraints" must never become "the constraints hold". The old reading is
+still reachable and now has to be asked for, with
+`LoadOptions.InternalSubsetOnly`.
+
+`dtd.FileResolver` reads from a directory and is confined to it: `..`, an
+absolute path and a symlink leading out are each refused before the file is
+opened, and a non-`file` scheme is refused before the filesystem is touched at
+all. `dtd.MapResolver` resolves from memory and reads nothing. A system
+identifier is treated as a URI rather than a path (§4.2.2), so
+`file:///C:/dtd/r.dtd` names drive C rather than a host called `C:`.
+
+**The bounds are shared, not per-subset.** An external subset is a new way to
+deliver a billion-laughs bomb, so parameter-entity expansion across both
+subsets is charged to one counter (`MaxEntityBytes`, 1 MB by default) alongside
+the bytes read (`MaxExternalBytes`, 4 MB) and the resources fetched
+(`MaxExternalDocuments`, 64, following `xsd.DefaultMaxDocuments` in shape).
+What is charged is the size substitution *produces*, not the few dozen
+characters of `%a8;%a8;...` that produce it. A ladder cut in half between the
+two subsets, each half harmless alone, is refused by the shared budget with an
+error wrapping `xdm.ErrResourceLimit`; removing that charge makes the test hang
+until the timeout rather than fail, which is what the bomb going off looks
+like. Parameter-entity recursion is refused by name on the first revisit
+(§4.1), so a cycle of any length through either subset is a well-formedness
+error rather than a budget that eventually runs out.
+
+
+**RELAX NG's compact syntax.** `relaxng.CompileCompact` compiles a schema
+written in the compact notation, and `relaxng.ParseCompact` returns the
+XML-syntax tree on its own, for a caller converting `.rnc` to `.rng`.
+
+It is not a second implementation of the language. The parser translates to
+the XML syntax and hands the result to the existing compiler, so the section 7
+restrictions, the datatype library and the derivative engine are reached
+through one tree; the two notations cannot come to disagree about what a
+schema means, because only one of them is ever compiled. A test asserts that
+property directly, comparing the trees the two parsers produce for the same
+schema written both ways, across twenty-five constructs.
+
+Implemented: grammars, `start`, `define` and the `|=` and `&=` combine
+operators; `element`, `attribute`, `text`, `empty`, `notAllowed`, `list`,
+`mixed`, `grammar`, `parent` and `external`; the `|`, `,` and `&` infix
+operators — with their mutual non-associativity enforced rather than resolved
+by an invented precedence — and the `?`, `*` and `+` postfix ones; name
+classes including `*`, `prefix:*` and `-` except; `namespace`, `default
+namespace` and `datatypes` declarations; `include` with `inherit` and
+overrides; `div`; annotations in both the `[ ... ]` and `>> name [ ... ]`
+forms; `##` documentation comments, which become `a:documentation`; `~`
+literal concatenation, triple-quoted literals and the `\x{}` escape; datatype
+parameters; `#` comments and the `\` identifier escape.
+
+Two things are worth stating plainly. James Clark's spectest is XML syntax
+only and carries no `.rnc` cases, and the compact syntax specification is not
+vendored in this repository, so the grammar was implemented from the OASIS
+specification as understood rather than checked against a vendored text; the
+evidence of completeness is instead the nine real-world `.rnc` files in
+`testdata`, some 760KB including the 356KB DocBook 5.1 schema, every one of
+which parses. And a bracketed annotation is validated and then discarded
+rather than carried onto the tree — nothing downstream reads one, so
+validation is unaffected, but a `.rnc` to `.rng` conversion loses them.
+`ParseCompact` refuses what it cannot parse rather than reading past it: the
+grammar's own `>>` follow-annotation operator was found and implemented
+because the DocBook schema failed to parse without it, which is the failure
+mode this was built to have.
+
+**XQuery `import module`.** `xquery` implements module import (XQuery 3.1
+§4.12), which every previous release parsed and then refused with `XQST0059`.
+A library module is found by target namespace, contributes its public
+functions and variables to the importing module, and may import modules of its
+own.
+
+Implemented: the `at` clause and the location-free form; the module store
+(`Options.Modules`) and the resolver (`Options.ModuleResolver`); public and
+private visibility (§4.15), where an import takes the public half and a
+module's own bodies still reach its private one; the duplicate rules
+`XQST0034` (function) and `XQST0049` (variable) across the imported set;
+`XQST0047` for one namespace imported twice, `XQST0048` for a module declaring
+outside its own target namespace, `XQST0073` for a module importing itself,
+and `XQST0059` for a module that cannot be found or that declares a namespace
+other than the one it was registered under. `import schema` is unchanged and
+still refused: it needs the in-scope schema definitions in the static context,
+which this package does not have, so `validate` still raises `XQDY0084`.
+
+**A cycle of module imports is not an error, and that is the finding the
+design turns on.** XQuery 1.0 §4.11 raised `XQST0093` for any cycle; XQuery
+3.0 removed the static rule, and modules may be mutually recursive. The suite
+settles it without ambiguity: `errata8-002` and `errata8-002a` carry the
+*identical* pair of mutually importing modules and differ only in their spec
+dependency, and the answer is `XQST0093` at XQ10 and the value `10` at XQ30+.
+So the loader publishes a module before following its imports and returns the
+partial module on a revisit rather than refusing it. What is left is a
+circularity among the *values*, which is dynamic — `XQDY0054`, per
+`modules-28a` — and a cycle that crosses a module boundary is dynamic for the
+same reason a function-mediated one is: once mutual recursion is legal there
+is no static order for two modules' variables to be in.
+
+The dead-code version of that guard was caught by sabotage rather than by
+reading. The in-progress check was written *after* the already-loaded check,
+and since a module is published before its imports are followed, a revisit
+during a cycle matched both — so the XQuery 1.0 branch was unreachable.
+Forcing every cycle to be fatal left `errata8-002a` passing, which is what
+revealed it.
+
+**Nothing is fetched by default.** `Options.ModuleResolver` is nil in the zero
+value, following `xsd.Options.Resolver`. With no resolver an `at` location is
+**never opened** — not tried and failed, not opened — so evaluating a query
+does not grant its author the filesystem, and an import the store cannot
+answer is `XQST0059`. The exposure is worse than a schema's and the default is
+the same: an `at` location is a string chosen by whoever wrote the query, and
+a query is the more commonly untrusted of the two inputs. `MapModuleResolver`
+answers from memory and ignores location hints entirely, which §4.12 permits
+because they are hints. Sabotaging the default to open the hint let
+`/etc/passwd` be read and parsed as a module, which is the test that pins it.
+
+**The bounds refuse rather than truncate.** `Options.MaxModules` (512,
+following `xsd.DefaultMaxDocuments` in shape and value) bounds the modules one
+compilation may load transitively; `Options.MaxModuleBytes` (16 MB) bounds the
+source text read, cumulatively across the compilation rather than per module,
+because a budget spent one module at a time is not spent at all. Exceeding
+either **fails the compilation** with an error wrapping `xdm.ErrResourceLimit`
+and is deliberately *not* `XQST0059`: the budget declined to answer, and "no
+such module" would be a claim about the store that is not true. A query
+compiled against the modules that happened to fit is the failure this is
+arranged to prevent — a partial static context is how an import comes to look
+successful while half a library is missing.
+
 ### Fixed
 
 **`fn:current-output-uri()` reported the stylesheet's own location from the

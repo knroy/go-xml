@@ -104,12 +104,30 @@ func (p *parser) parseProlog() error {
 			if err := p.checkImportSyntax(what); err != nil {
 				return err
 			}
-			// A module or schema import needs a resolver for the imported
-			// module's own text, which this package does not yet have. It is
-			// refused by name so that the failure says what is missing
-			// rather than pointing at a token.
+			p.pos = save + len("import")
+			p.skipSpaceAndComments()
+			if what == "module" {
+				// The import is recorded here and resolved by the module
+				// loader afterwards; see parser.moduleImports for why the
+				// parser does not follow it itself.
+				if err := p.parseModuleImport(); err != nil {
+					return err
+				}
+				p.skipSpaceAndComments()
+				if !p.consume(";") {
+					return p.errorf(
+						"XPST0003: expected %q after a declaration", ";")
+				}
+				continue
+			}
+			// A schema import needs the in-scope schema definitions in the
+			// static context, which this package does not have: there is
+			// nowhere to put the components a schema would contribute, so an
+			// import that appeared to succeed would leave "validate" judging
+			// against an empty set. It is refused by name rather than
+			// half-honoured. See docs/todo.md §1.5.
 			p.pos = save
-			return p.errorf("XQST0059: %s import is not implemented yet", what)
+			return p.errorf("XQST0059: schema import is not implemented yet")
 		}
 
 		what := p.peekKeyword()
@@ -142,7 +160,7 @@ func (p *parser) parseProlog() error {
 					err = p.errorf("XQST0106: a function declaration may "+
 						"carry at most one of %s and %s", "%public", "%private")
 				case isVar:
-					err = p.parseVarDecl()
+					err = p.parseVarDecl(private)
 				default:
 					err = p.parseFunctionDeclBody(private)
 				}
@@ -175,7 +193,7 @@ func (p *parser) parseProlog() error {
 			err = p.parseContextItemDecl(once, &inSecond)
 		case "variable":
 			inSecond = true
-			err = p.parseVarDecl()
+			err = p.parseVarDecl(false)
 		case "function":
 			inSecond = true
 			err = p.parseFunctionDecl()
@@ -1229,4 +1247,152 @@ func (p *parser) checkImportSyntax(what string) error {
 	}
 	return p.errorf("XQST0057: a schema import that binds the prefix %q "+
 		"must name a target namespace", prefix)
+}
+
+// parseModuleImport reads "import module [namespace P =] URI [at L1, L2, ...]"
+// (§4.12), with the cursor just past "import".
+//
+// The declaration is recorded rather than acted on. Two things follow from
+// that and both are deliberate: the prefix binding is applied immediately, so
+// that a later declaration in this same prolog can use it, while the module
+// itself is not fetched until the loader runs with a budget in hand.
+//
+// The syntax errors this can raise have already been reported by
+// checkImportSyntax, which the prolog runs first so that a fault the text
+// settles is reported before anything about resolution is.
+func (p *parser) parseModuleImport() error {
+	p.skipSpaceAndComments()
+	if !p.consumeKeyword("module") {
+		return p.errorf("XPST0003: expected %q", "module")
+	}
+	p.skipSpaceAndComments()
+	imp := moduleImport{}
+	if p.consumeKeyword("namespace") {
+		p.skipSpaceAndComments()
+		imp.prefix = p.scanNCName()
+		if imp.prefix == "" {
+			return p.errorf("XPST0003: expected a prefix after %q",
+				"import module namespace")
+		}
+		p.skipSpaceAndComments()
+		if !p.consume("=") {
+			return p.errorf("XPST0003: expected %q in a module import", "=")
+		}
+		p.skipSpaceAndComments()
+	}
+	uri, err := p.parseURILiteral()
+	if err != nil {
+		return err
+	}
+	// §4.12 trims the URI literal of leading and trailing whitespace before
+	// it is used as a namespace, which module-URIs-1 asserts by importing
+	// through a literal padded on both sides.
+	imp.ns = strings.TrimSpace(uri)
+	if imp.ns == "" {
+		return p.errorf("XQST0088: the target namespace of a module import " +
+			"may not be a zero-length string")
+	}
+	if imp.prefix != "" {
+		// §4.12: two module imports may not bind the same prefix, and neither
+		// may an import and a "declare namespace". The check is the prolog's
+		// own XQST0033 rather than a code of the import's, because the fault
+		// is the double binding and not the import.
+		if p.declaredNS[imp.prefix] {
+			return p.errorf(
+				"XQST0033: the prefix %q is already bound in this prolog",
+				imp.prefix)
+		}
+		if err := p.sc.bind(imp.prefix, imp.ns); err != nil {
+			return p.errorf("%s", err.Error())
+		}
+		p.declaredNS[imp.prefix] = true
+	}
+	p.skipSpaceAndComments()
+	if p.consumeKeyword("at") {
+		// The "at" clause is a list of location HINTS (§4.12), and this
+		// parser's only job is to collect them. Whether any is opened is
+		// decided by Options.ModuleResolver, which fetches nothing when the
+		// caller configured nothing -- see noModuleResolver.
+		for {
+			p.skipSpaceAndComments()
+			loc, err := p.parseURILiteral()
+			if err != nil {
+				return err
+			}
+			imp.hints = append(imp.hints, strings.TrimSpace(loc))
+			p.skipSpaceAndComments()
+			if !p.consume(",") {
+				break
+			}
+		}
+	}
+	// §4.12 forbids importing one target namespace twice in one prolog. The
+	// two imports would contribute the same declarations, so the second is
+	// XQST0047 rather than a harmless repeat.
+	for _, prev := range p.moduleImports {
+		if prev.ns == imp.ns {
+			return p.errorf(
+				"XQST0047: the module namespace %q is imported twice", imp.ns)
+		}
+	}
+	// §4.12: a module may not import itself, which is the one cycle that is
+	// an error at every version -- it is not mutual recursion but a module
+	// whose own declarations would be added to itself twice.
+	if p.inLibrary && imp.ns == p.moduleNS {
+		return p.errorf(
+			"XQST0073: the module %q imports itself", imp.ns)
+	}
+	p.moduleImports = append(p.moduleImports, imp)
+	return nil
+}
+
+// parseModuleDecl reads "module namespace P = URI;" (§4.12), which is what
+// makes a library module a library module, and returns the target namespace.
+//
+// It is not part of the prolog: [4] LibraryModule ::= ModuleDecl Prolog puts
+// it before, exactly where a version declaration sits relative to both. A main
+// module has none, and reaching this from the main-module path would be the
+// grammar error refuseUnimplemented already reports.
+func (p *parser) parseModuleDecl() (string, error) {
+	p.skipSpaceAndComments()
+	if !p.consumeKeyword("module") {
+		return "", p.errorf(
+			"XPST0003: a library module must begin with %q", "module namespace")
+	}
+	p.skipSpaceAndComments()
+	if !p.consumeKeyword("namespace") {
+		return "", p.errorf("XPST0003: expected %q", "namespace")
+	}
+	p.skipSpaceAndComments()
+	prefix := p.scanNCName()
+	if prefix == "" {
+		return "", p.errorf("XPST0003: expected a prefix in a module declaration")
+	}
+	p.skipSpaceAndComments()
+	if !p.consume("=") {
+		return "", p.errorf("XPST0003: expected %q in a module declaration", "=")
+	}
+	p.skipSpaceAndComments()
+	uri, err := p.parseURILiteral()
+	if err != nil {
+		return "", err
+	}
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		// §4.12: "the module declaration must not specify a zero-length
+		// string as the target namespace", because nothing could then import
+		// it -- an import's namespace may not be empty either.
+		return "", p.errorf("XQST0088: the target namespace of a library " +
+			"module may not be a zero-length string")
+	}
+	if err := p.sc.bind(prefix, uri); err != nil {
+		return "", p.errorf("%s", err.Error())
+	}
+	p.declaredNS[prefix] = true
+	p.moduleNS = uri
+	p.skipSpaceAndComments()
+	if !p.consume(";") {
+		return "", p.errorf("XPST0003: expected %q after a module declaration", ";")
+	}
+	return uri, nil
 }

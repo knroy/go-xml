@@ -53,6 +53,55 @@ type Options struct {
 	// err, which §3.16 binds so that "catch err:FODC0002" works with no
 	// declaration. None of them need to appear here.
 	Namespaces map[string]string
+
+	// Modules are library modules available to "import module" (§4.12),
+	// registered by target namespace with their source text.
+	//
+	// This is the module store the specification leaves to the
+	// implementation, and it is the only way to import a module that grants
+	// the query no reach whatever: the caller supplies the text, so nothing
+	// is opened and nothing is fetched. An import with no "at" clause names
+	// a namespace and nothing else, and resolves against this.
+	//
+	// The store is consulted before ModuleResolver, so a registered module
+	// shadows any location a query might name for that namespace.
+	Modules []Module
+
+	// ModuleResolver locates a library module that Modules does not have.
+	// When nil, NOTHING IS FETCHED: an "at" location is never opened, and an
+	// import that the store cannot answer raises XQST0059.
+	//
+	// It is off by default for the reason xsd.Options.Resolver is — it hands
+	// control of what this process reads to whoever wrote the query — and the
+	// exposure here is worse than a schema's, because an "at" location is a
+	// string chosen by the query's author and a query is the more commonly
+	// untrusted input of the two. A host that sets this is granting the
+	// queries it compiles the reach the resolver has, and should give one
+	// that is rooted or table-driven rather than one that will open anything.
+	//
+	// MapModuleResolver answers from memory and follows no location at all.
+	ModuleResolver ModuleResolver
+
+	// MaxModules bounds how many library modules one compilation may load,
+	// counting those reached transitively. A module that imports two modules
+	// that each import two more is a fan-out with no natural bound, in the
+	// same shape as a schema's include graph. Zero means DefaultMaxModules.
+	//
+	// Exceeding it FAILS the compilation with an error wrapping
+	// xdm.ErrResourceLimit. It never yields a query compiled against the
+	// modules that fitted: a partial static context is how an import comes to
+	// look successful while half a library is missing.
+	MaxModules int
+
+	// MaxModuleBytes bounds the total source text one compilation may read
+	// through ModuleResolver and Modules, cumulatively rather than per
+	// module — a budget spent one module at a time is not spent at all. Zero
+	// means DefaultMaxModuleBytes.
+	//
+	// Exceeding it fails the compilation with an error wrapping
+	// xdm.ErrResourceLimit, on the same reasoning as MaxModules: a truncated
+	// module is a module whose declarations are partly missing.
+	MaxModuleBytes int64
 }
 
 // A Query is a compiled query, safe for concurrent use.
@@ -88,6 +137,18 @@ type Query struct {
 	// here rather than per evaluation because a Query is immutable and safe
 	// for concurrent use, and building it once is what keeps it so.
 	lib *xpath.Library
+
+	// modLibs is the function library each imported module's own bodies run
+	// against, keyed by that module's static context. See Query.moduleLib.
+	modLibs map[*staticContext]*xpath.Library
+
+	// modules are the library modules this query imported, transitively, in
+	// initialisation order (§4.12). They are held on the Query rather than
+	// merged into vars and funcs so that the two stay distinguishable: an
+	// imported variable is initialised in its OWN module's static context,
+	// not the importer's, and merging them would lose the context each one
+	// has to be evaluated in.
+	modules []*libModule
 }
 
 // Compile compiles a query.
@@ -100,10 +161,14 @@ type Query struct {
 // expression compiles too, since every XPath 3.1 expression is an XQuery
 // expression.
 //
-// Two things parse and are then refused rather than mis-parsed, because both
-// need a module store this package does not have: "import schema", which
-// leaves the in-scope schema definitions empty and so makes validate raise
-// XQDY0084, and "import module", which raises XQST0059.
+// "import module" is implemented (§4.12): a library module is found in
+// Options.Modules or through Options.ModuleResolver, and contributes its
+// public functions and variables. Nothing is fetched unless a resolver was
+// configured -- see Options.ModuleResolver.
+//
+// "import schema" still parses and is then refused rather than mis-parsed. It
+// needs the in-scope schema definitions in the static context, which this
+// package does not have, so it raises XQST0059 and validate raises XQDY0084.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
@@ -164,10 +229,26 @@ func Compile(src string, opts Options) (*Query, error) {
 	// can name a format through a prefix a constructor bound. See
 	// parser.ctorPrefixes and staticContext.resolveFormatName.
 	sc.ctorPrefixes = p.ctorPrefixes
+	// The imports are followed now that the whole prolog has been read. They
+	// are followed here rather than in the parser because the budget is
+	// per-compilation: a module that loaded its own imports could not be
+	// counted against the same allowance. See moduleLoader.
+	mods, err := loadModules(p.moduleImports, opts, sc)
+	if err != nil {
+		return nil, err
+	}
 	q := &Query{body: body, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
 		contextItem: p.contextItem, formats: p.formats,
-		serialization: p.serialization}
+		serialization: p.serialization, modules: mods}
+	// §4.12 adds the imported declarations to this module's static context,
+	// so a clash between an import and this module -- or between two imports
+	// -- is the same error a duplicate declaration within one module is.
+	if err := checkImportedNames(mods, q.vars, q.funcs); err != nil {
+		return nil, err
+	}
 	q.lib = q.registerFunctions(nil)
+	// Built after q.lib, which each module's own library chains onto.
+	q.buildModuleLibs()
 	if err := q.checkStaticCalls(); err != nil {
 		return nil, err
 	}
@@ -224,7 +305,7 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 // and the query's own declarations sit in front.
 func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	sub := *ctx
-	if len(q.funcs) > 0 || len(q.formats) > 0 {
+	if len(q.funcs) > 0 || len(q.formats) > 0 || len(q.modules) > 0 {
 		if ctx.Funcs == nil || ctx.Funcs == xpath.FunctionLibrary(q.lib.Parent) {
 			sub.Funcs = q.lib
 		} else {
@@ -265,7 +346,7 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	if b == nil {
 		return out, nil
 	}
-	for _, d := range q.vars {
+	for _, d := range q.allVars() {
 		if err := b.visit(d); err != nil {
 			return nil, err
 		}
@@ -311,7 +392,7 @@ func (q *Query) bindContextItem(ctx *xpath.Context, b *varBinder) (
 		}
 		sub = *b.ctx
 	}
-	seq, err := q.evalBody(d.body, d.init, &sub)
+	seq, err := q.evalBody(d.body, d.init, &sub, q.sc)
 	if err != nil {
 		return nil, err
 	}

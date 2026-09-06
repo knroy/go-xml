@@ -86,6 +86,31 @@ type parser struct {
 	// same to a serialiser, but the map is only allocated when there is
 	// something to put in it.
 	serialization map[string]string
+
+	// inLibrary marks this parser as reading a library module rather than a
+	// main module (§4.12).
+	//
+	// It changes one thing about the prolog and nothing else: %private is
+	// scoping, and scoping only means something where there is an outside to
+	// hide from. A main module has none, so the annotation is recorded and
+	// ignored there; a library module's private declarations are the ones an
+	// import must not contribute.
+	inLibrary bool
+
+	// moduleNS is the target namespace a library module declared, empty in a
+	// main module. It is read by one rule: §4.12 forbids a module importing
+	// itself, and self-import is the one cycle that is an error at every
+	// version of XQuery.
+	moduleNS string
+
+	// moduleImports records the "import module" declarations, in source
+	// order, so that the module loader can follow them.
+	//
+	// They are recorded rather than followed here because the parser has no
+	// budget and no view of what else has been loaded. A module that followed
+	// its own imports could not be counted, and the count is what bounds a
+	// cyclic or fanning import graph. See moduleLoader.
+	moduleImports []moduleImport
 }
 
 // compiledExpr is an expression compiled by xpath, kept with the source it

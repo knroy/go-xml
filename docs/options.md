@@ -104,6 +104,7 @@ syntax error does *not* carry the sentinel.
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPST0003` | the query is syntactically invalid |
+| `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
@@ -737,6 +738,42 @@ has no form for one — so `xsd` rejects them outright under both versions.
 
 ---
 
+## dtd.LoadOptions
+
+Passed to `dtd.Load`, which reads a DOCTYPE and, when one is named and a
+resolver permits it, the external subset too. `dtd.Parse` takes no options and
+fetches nothing; `Load` with the zero value fetches nothing either.
+
+```go
+d, err := dtd.Load(tree.DocType, dtd.LoadOptions{
+    Resolver: &dtd.FileResolver{Root: "/srv/dtds"},
+    BaseURI:  "file:///srv/docs/order.xml",
+})
+```
+
+| Field | Type | Zero value | What it does |
+|---|---|---|---|
+| `Resolver` | `Resolver` | none configured | How an external subset's system identifier becomes bytes. Nothing is fetched unless you supply one, and a DOCTYPE naming an external subset is then **refused** with an error wrapping `dtd.ErrNoResolver` — not validated against the internal half. Off by default because a resolver hands control of what this process reads to whoever wrote the DOCTYPE. `FileResolver` reads from one directory; `MapResolver` reads from memory and touches no disk. |
+| `BaseURI` | `string` | empty | The URI the DOCTYPE's own system identifier resolves against, normally the document's. A module declared *inside* the external subset resolves against **that subset's** URI instead, per XML 1.0 §4.4.3, which is what makes a modular DTD in a subdirectory find its siblings. |
+| `InternalSubsetOnly` | `bool` | off | Validates against the internal subset alone, fetching nothing and without the `ErrNoResolver` refusal. It exists so the pre-external-subset reading is still reachable — but only by asking for it. `DTD.HasExternalSubset` still reports that the result is partial, and `Options.AllowUndeclared` is the companion that makes a partial subset usable. |
+| `MaxExternalDocuments` | `int` | `DefaultMaxExternalDocuments` = 64 | How many external resources one load may read — the subset itself and every parameter-entity module it pulls in. Follows `xsd.MaxDocuments` in shape. |
+| `MaxExternalBytes` | `int64` | `DefaultMaxExternalBytes` = 4 MB | Total bytes read from external resources. A bound on the whole load rather than on one file, because a hundred 512 KB files is the same exhaustion as one 50 MB file and only a total sees both. |
+| `MaxEntityBytes` | `int64` | `DefaultMaxEntityBytes` = 1 MB | Total **expanded** size of parameter entities, **across both subsets**. This is the billion-laughs bound, and the shared counter is the point: a ladder cut in half between the internal and external subsets meets one budget rather than one per subset. What is charged is the size substitution produces, not the `%a8;%a8;…` that produces it. |
+
+All three limits follow the house rule — `0` is the default, `n` is your
+number, `-1` is no limit. Exceeding any of them raises an error wrapping
+`xdm.ErrResourceLimit`, and there is no path on which a subset that could not
+be read or could not be bounded becomes an empty one that the document then
+validates cleanly against.
+
+`FileResolver` has one field of its own, `MaxBytes` (zero means
+`DefaultMaxResolverBytes` = 4 MB, negative means no limit), bounding what a
+single call puts in memory. `Root` is not optional in practice: an empty one
+means the process's working directory, which is almost never what you want for
+a document that arrived over the wire.
+
+---
+
 ## xquery.Options
 
 The zero value is the specification's defaults, so `xquery.Options{}` is a
@@ -756,6 +793,10 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `Construction` | `Construction` | `declare construction` | `PreserveTypes` (zero) keeps a copied node's type annotation; `StripTypes` replaces it with `xs:untyped`. |
 | `DefaultElementNamespace` | `string` | `declare default element namespace` | Applied to an unprefixed *element* name. Never to an attribute name. |
 | `Namespaces` | `map[string]string` | `declare namespace` | Extra prefix bindings. |
+| `Modules` | `[]Module` | *(the module store)* | Library modules `import module` may find, registered by target namespace with their source. Consulted before `ModuleResolver`, and reads nothing. |
+| `ModuleResolver` | `ModuleResolver` | *(none)* | Locates a module `Modules` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. |
+| `MaxModules` | `int` | *(none)* | Modules one compilation may load, transitively. Zero means `DefaultMaxModules` (512). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
+| `MaxModuleBytes` | `int64` | *(none)* | Total module source one compilation may read, cumulatively. Zero means `DefaultMaxModuleBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be
 listed: `xml`, `xs`, `xsi`, `fn`, `local`, `math`, `map` and `array` from
@@ -767,9 +808,16 @@ markup is **stripped**, so `<a>  <b/>  </a>` constructs `<a><b/></a>`.
 
 A query is *code*, not data. The sandbox is the same as everywhere else in
 this library — `fn:doc`, `fn:collection` and `fn:unparsed-text` all refuse
-without a resolver — but an untrusted query can still spend arbitrary CPU and
-memory, so bound it with `ctx.Ctx` and a timeout the way
-[server.md](server.md) does for stylesheets.
+without a resolver, and so does `import module` — but an untrusted query can
+still spend arbitrary CPU and memory, so bound it with `ctx.Ctx` and a timeout
+the way [server.md](server.md) does for stylesheets.
+
+`import module` follows that rule exactly. `ModuleResolver` is nil in the zero
+value, so an `at` location is **never opened** and a query cannot read a file
+by naming one; `Modules` and `MapModuleResolver` supply modules from memory
+without reading anything. See [security.md](security.md) for why the two
+bounds refuse the compilation rather than compiling against the modules that
+fitted.
 
 See [xquery.md](xquery.md) for the guide.
 

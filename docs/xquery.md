@@ -126,6 +126,10 @@ query could have made itself:
 | `Construction` | `declare construction` | `PreserveTypes` |
 | `DefaultElementNamespace` | `declare default element namespace` | no namespace |
 | `Namespaces` | `declare namespace` | the predeclared set |
+| `Modules` | *(the module store)* | empty |
+| `ModuleResolver` | *(none)* | **nil — nothing is fetched** |
+| `MaxModules` | *(none)* | `DefaultMaxModules` (512) |
+| `MaxModuleBytes` | *(none)* | `DefaultMaxModuleBytes` (16 MB) |
 
 `Namespaces` adds bindings as though the prolog had declared them. Nine
 prefixes are bound already and never need to appear: `xml`, `xs`, `xsi`, `fn`,
@@ -200,16 +204,57 @@ accepted at every version rather than refused at the earlier ones. This is a
 permissive divergence: a 1.0 module that a conforming 1.0 processor would
 reject is accepted here, but no module is given a wrong *answer*.
 
+## Importing modules
+
+`import module` finds a library module by its **target namespace** (§4.12).
+The `at` clause is a set of location *hints*, which the specification lets a
+processor ignore — and with no resolver configured, this one does not merely
+ignore them, it never opens them:
+
+```go
+lib := xquery.Module{
+    Namespace: "http://example.com/util",
+    Source: `module namespace u="http://example.com/util";
+             declare function u:double($x) { $x * 2 };`,
+}
+q, err := xquery.Compile(
+    `import module namespace u="http://example.com/util"; u:double(21)`,
+    xquery.Options{Modules: []xquery.Module{lib}})
+```
+
+An imported module contributes its **public** functions and variables. A
+`%private` one stays behind — but is still visible to the module's own bodies,
+which is the half of §4.15 that is easy to get backwards: private scopes a
+declaration *to* its module rather than withholding it from it.
+
+Modules may be **mutually recursive**. XQuery 1.0 forbade any cycle of imports
+with `XQST0093`; 3.0 removed that rule, so two modules importing each other is
+legal and only a circularity among the *values* is an error — `XQDY0054`, and
+dynamic, because once the imports may loop there is no static order for two
+modules' variables to be in.
+
+To supply modules at run time rather than up front, set a `ModuleResolver`.
+`MapModuleResolver` answers from a table and reads nothing:
+
+```go
+opts := xquery.Options{ModuleResolver: xquery.MapModuleResolver{
+    Modules: map[string]string{"http://example.com/util": src},
+}}
+```
+
+Writing one that reads the filesystem or the network is a deliberate grant to
+whoever wrote the query. See [security.md](security.md).
+
 ## What is not implemented
 
-Two declarations parse and are then refused, rather than being mis-parsed.
-Both need a module store this package does not have:
+One declaration parses and is then refused, rather than being mis-parsed:
 
-* **`import module`** raises `XQST0059`.
 * **`import schema`** leaves the in-scope schema definitions empty, so
-  `validate { … }` raises `XQDY0084`.
+  `validate { … }` raises `XQDY0084`. It needs the imported components to
+  reach the static context, which this package has nowhere to put; see
+  [todo.md](todo.md) §1.5.
 
-Everything else in 3.1 is implemented: every FLWOR clause — `for`, `let`,
+Everything else in 3.1 is implemented, `import module` included: every FLWOR clause — `for`, `let`,
 `where`, `group by`, `order by`, `count`, and both the tumbling and sliding
 window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
@@ -248,9 +293,11 @@ which the suite does not cover.
 ## Security
 
 The same defaults as the rest of the library. A query cannot read a file or
-open a socket unless you give it something that can: `fn:doc` and
-`fn:collection` resolve through a resolver that is **nil by default**, and a
-nil resolver fetches nothing. See [security.md](security.md).
+open a socket unless you give it something that can: `fn:doc`, `fn:collection`
+and `import module` all resolve through a resolver that is **nil by default**,
+and a nil resolver fetches nothing. An `import module ... at "/etc/passwd"` is
+not attempted and refused — it is never opened, and the import fails with
+`XQST0059`. See [security.md](security.md).
 
 Note that a query is *code*. Compiling one from untrusted input is closer to
 `eval` than to parsing a document — the sandbox above bounds what it can

@@ -62,6 +62,9 @@ rejecting direction:
 
 `xdm.ParseOptions` `MaxBytes` / `MaxDepth` / `MaxNodes` ·
 `xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
+`xquery.Options` `MaxModules` / `MaxModuleBytes` ·
+`dtd.LoadOptions` `MaxExternalDocuments` / `MaxExternalBytes` /
+`MaxEntityBytes` · `dtd.FileResolver.MaxBytes` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
 `DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
 `branchLimit` · `xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
@@ -500,6 +503,63 @@ documents including a third — is legal and must be included twice, which
 
 ---
 
+## XQuery `import module`: a resource named by the query
+
+Module import was added after the seventh audit, and it is the second feature
+where the **input itself names a resource to read** — XInclude above is the
+first. An `import module ... at "..."` location is a string chosen by whoever
+wrote the query, and a query is the more commonly untrusted of the two inputs a
+host supplies: a stylesheet is usually the host's own, a query is often not.
+
+The answer is the house pattern, applied without exception.
+`xquery.Options.ModuleResolver` is **nil in the zero value**, exactly as
+`xsd.Options.Resolver` is, and with no resolver configured an `at` location is
+**never opened** — not attempted and failed, not opened. The import then fails
+with `XQST0059`, which is §4.12's code for "no module found", and the message
+names the option that would have allowed it rather than the location it
+declined to read. So evaluating a query cannot grant its author the filesystem
+or the network, and a query with no import never consults a resolver at all.
+
+Two ways to supply modules read nothing. `Options.Modules` registers source
+text directly, keyed by target namespace; `MapModuleResolver` answers from an
+in-memory table and **ignores location hints entirely**, which §4.12 permits
+because the hints are hints and the target namespace is the identity. A host
+that wants locations followed must say so, and should give a rooted or
+table-driven resolver rather than one that will open anything.
+
+The claim was checked by sabotage rather than by reading: making the default
+resolver fall back to opening the hint let `/etc/passwd` be opened and parsed
+as a library module. `TestNoResolverDoesNotFetch` fails against that change and
+asserts both halves — that the error is `XQST0059`, and that it does *not* name
+the location, since a message quoting a parse failure or a permission error
+would mean the file had been read.
+
+**The two bounds refuse; they never truncate.** `MaxModules` (512, following
+`xsd.DefaultMaxDocuments` in shape and value) bounds the modules one
+compilation may load transitively, because a module that imports two modules
+that each import two more is a fan-out with no natural bound — the same shape
+as a schema's include graph. `MaxModuleBytes` (16 MB) bounds the source text
+read, **cumulatively across the compilation** rather than per module, because a
+budget spent one module at a time is not spent at all; the read is limited as
+it happens rather than checked afterwards, so an oversized module is not first
+brought into memory and then rejected.
+
+Exceeding either **fails the compilation** with an error wrapping
+`xdm.ErrResourceLimit`, and deliberately *not* with `XQST0059`. That
+distinction is this file's governing invariant applied to a new path: the
+budget declined to answer, and reporting "no such module" would be a claim
+about the store that is not true — the module may well be there, under a higher
+limit. A caller can tell the two apart with `errors.Is`, and only one of them
+can succeed on retry.
+
+What must never happen is a query compiled against the modules that happened to
+fit. A truncated or partial set of imports is a static context missing
+declarations, and evaluating against it is how an import comes to look
+successful while half a library is absent — the same failure a skipped UPA
+check was, in a different package. So there is no partial success: the
+compilation fails, and `TestMaxModulesIsEnforced` asserts that the refusal
+neither succeeds nor borrows `XQST0059` to explain itself.
+
 ## What fuzzing has ruled out, and what it has not
 
 Every audit finding in this document was reasoned about and then asserted by a
@@ -772,6 +832,92 @@ threshold to infer a semantic fact.* Before the split, a cycle here was caught
 only by the depth counter, and the error said the schemas nested too deeply —
 true of the counter, false of the schema. `relaxng/include_cycle_test.go` and
 `xdm/xinclude_limits_test.go` hold the two failures apart at both sites.
+
+### The DTD external subset: a new input path, closed by default
+
+`dtd.Load` reads the half of a DTD that `<!DOCTYPE r SYSTEM "r.dtd">` names.
+That is a new way for an untrusted document to make this process read
+something, so it is gated the way every other one here is, and the gate is the
+zero value rather than a flag someone has to remember.
+
+**Default closed.** `dtd.LoadOptions.Resolver` is nil unless a caller sets it,
+following `xsd.Options.Resolver` and `xdm.ParseOptions.ExternalEntities`. With
+none, nothing is fetched. `dtd.Parse`, which never fetched, is unchanged and
+still takes no options at all.
+
+**The refusal is loud, and that is the load-bearing decision.** With no
+resolver, a DOCTYPE naming an external subset is *refused* — an error wrapping
+`dtd.ErrNoResolver` — rather than validated against the internal subset alone.
+The quiet alternative is the defect class the invariant at the top of this
+document names. A DTD is a closed description and the external subset routinely
+holds every `<!ELEMENT>` in the language, with the internal one holding a
+handful of overrides; validating against the internal half would report a
+document valid without a single constraint having been checked, or would report
+every element undeclared, which a caller silences with `AllowUndeclared` and is
+then back to the first case. Neither has proven anything. The pre-existing
+reading is still reachable and now has to be asked for, by name:
+`LoadOptions.InternalSubsetOnly`. `TestNoResolverRefusesRatherThanValidatingHalfADTD` pins both halves, and
+`TestInternalSubsetOnlyFetchesNothingEvenWithAResolver` pins that the refusal
+happens *before* a resolver would be consulted rather than being an error
+message over a fetch that already happened.
+
+**The bounds are shared with the internal subset, not additional to it.** An
+external subset is a new way to deliver a billion-laughs bomb: half the ladder
+inline, half in a file. A design with a per-subset budget admits exactly that
+product, so there is one counter:
+
+| bound | default | what it counts |
+|---|---|---|
+| `MaxEntityBytes` | 1 MB | **expanded** parameter-entity bytes, across both subsets |
+| `MaxExternalBytes` | 4 MB | bytes read from external resources, whole load |
+| `MaxExternalDocuments` | 64 | resources fetched, the subset and every module |
+
+Two details are the whole defence. What is charged is the size substitution
+*produces*, not the raw text that produces it — `%a8;%a8;…` is thirty
+characters however large `%a8;` expands to, and charging the raw form charges a
+doubling ladder a few dozen bytes a rung. And the charge lands on the *loader*
+rather than on the string builder of the call in progress, or every nested call
+and every subset would get a fresh allowance. Fetched bytes are charged
+*before* the text is scanned, on the model of `entityChargeReader` above, so an
+oversized resource is refused on the strength of its own length without the
+expander being handed it, and the read itself is capped so a resolver returning
+an endless stream cannot hang the load before the check runs.
+
+`TestBombSplitAcrossSubsetsIsRefused` builds one ladder cut in half between the
+subsets and asserts each half harmless alone before asserting the pair refused,
+so what it measures is the sharing and not merely a large file. Removing the
+expansion charge was tried: it does not make that test fail politely, it makes
+`TestBillionLaughsInTheExternalSubsetIsRefused` run until the two-minute
+timeout panic, which is what the bomb going off looks like.
+
+**Parameter-entity recursion is refused by name, not by budget.** XML 1.0 §4.1
+makes a recursive entity a well-formedness error, so a name already being
+substituted is detected on the first revisit — a cycle of any length, through
+either subset, fails immediately rather than doubling until a limit catches it.
+
+**Conditional sections cannot leak.** `<![IGNORE[` contents are not read as
+declarations, but the nested `<![` and `]]>` delimiters inside them still are
+counted (§3.4). Without that count the first inner `]]>` closes the outer
+section and every declaration after it is applied when it should not be —
+which is a wrong *verdict*, not a resource question. Removing the count was
+tried; `TestNestedConditionalSections` catches it, naming the leaked
+declaration.
+
+**No filesystem or network in `dtd` itself.** The package constructs no path
+and opens no socket. `dtd.FileResolver` is the only component that touches a
+disk and is confined to one `Root`: `..`, an absolute path and a symlink
+leading out are each refused *after* symlink resolution and before the file is
+opened, and a non-`file` scheme is refused before the filesystem is consulted
+at all, so `http://` is a clear refusal rather than a confusing "no such file".
+`dtd.MapResolver` reads from memory and is the one that is safe to hand an
+untrusted document without further thought. A system identifier is treated as a
+URI rather than a path (XML 1.0 §4.2.2), which is also what makes
+`file:///C:/dtd/r.dtd` name drive C rather than a host called `C:`.
+
+**There is no partial-DTD path.** A resolver that errors, one that returns no
+content and no error, and any budget that runs out all make `Load` return an
+error. None of them produces a `*DTD` that a caller would then validate
+against.
 
 ### All resolution defaults are closed
 

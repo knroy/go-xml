@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,469 `func Test` declarations, clean under `-race` |
+| Tests | 1,525 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -65,24 +65,90 @@ an end to the silent misreading above. Scoping it properly needs the W3C
 corpora under `testdata/` do not exercise 1.1, so there is no measurement of
 the gap here, only the two defects named above.
 
-### 1.2 DTD validation — external subset outstanding
+### 1.2 DTD validation — notations and entity-typed attributes outstanding
 
-The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and `<!ENTITY>`:
-content models, attribute defaults, enumerations, `ID`/`IDREF`. Entity
-expansion is bounded by count and by total expanded size, and nothing external
-is fetched without a caller-supplied resolver.
+The `dtd` package validates against `<!ELEMENT>`, `<!ATTLIST>` and
+`<!ENTITY>`: content models, attribute defaults, enumerations, `ID`/`IDREF`.
 
-**What is left:** the external subset. Parameter entities work only within the
-internal one, so a document whose DTD lives in a separate file validates
-against whatever it declares inline and no more.
+**The external subset now loads.** `dtd.Load` reads the half of a DTD that
+`<!DOCTYPE r SYSTEM "r.dtd">` names, and validates against both halves
+together. Parameter entities span the two subsets with XML 1.0 §2.8's
+precedence — the internal subset is read first and its declarations bind,
+later ones being ignored rather than an error — and a `%pe;` in the external
+subset may expand to whole declarations, which is what makes a modular DTD
+work. Conditional sections, `<![INCLUDE[` and `<![IGNORE[` (§3.4), are
+resolved after expansion, since the keyword is normally itself a parameter
+entity, and they nest.
 
-### 1.3 RELAX NG — compact syntax outstanding
+Nothing is fetched without a caller-supplied `LoadOptions.Resolver`, and with
+none a DOCTYPE naming an external subset is **refused** rather than validated
+against half a DTD — `LoadOptions.InternalSubsetOnly` is how a caller asks for
+the partial reading deliberately. Expansion across both subsets is charged to
+one shared budget, so a bomb split between them meets the same limit a wholly
+internal one does. See [security.md](security.md) and
+[options.md](options.md).
 
-100% of James Clark's suite (965 of 965 assertions), XML syntax only.
+**What is left**, and none of it is large:
 
-**What is left:** the compact syntax. It is a second parser over the same
-model, so it costs a parser and nothing else — the compiler, the restriction
-rules and the validator are all reached through the same tree.
+* **`NOTATION` is parsed but not enforced.** An `<!ATTLIST … NOTATION (a|b)>`
+  restricts the value to the listed names, which is checked, but nothing
+  verifies that each name was declared by a `<!NOTATION>`. XML 1.0 §3.3.1
+  makes the missing declaration a validity error.
+* **`ENTITY` and `ENTITIES` attribute types are not checked** against the
+  unparsed entities actually declared, for the same reason: the notion of a
+  declared-but-unparsed entity lives in `xdm`, and the check would have to
+  read it back out.
+* **The W3C `xmlconf` suite is not vendored**, so there is no external
+  measurement of any of this — `testdata/` holds the QT3, XSD, XSLT 3.0,
+  RELAX NG, DocBook xslTNG and XSpec corpora and no XML conformance suite.
+  Vendoring it is the one thing that would turn "the tests we wrote pass" into
+  a number.
+
+### 1.3 RELAX NG — compact syntax implemented, unverified against a suite
+
+100% of James Clark's suite (965 of 965 assertions). Both notations are
+supported: `CompileCompact` and `ParseCompact` read the compact syntax.
+
+The compact parser translates to the XML syntax and compiles that, so it added
+a parser and nothing else — the section 7 restrictions, the datatype library
+and the validator are reached through the same tree, and a test asserts that
+the two notations produce structurally identical trees for the same schema.
+
+**What is implemented:** grammars, `start`, `define` and the `|=` and `&=`
+combine operators; `element`, `attribute`, `text`, `empty`, `notAllowed`,
+`list`, `mixed`, `grammar`, `parent` and `external`; the `|`, `,` and `&`
+infix operators with their non-associativity enforced, and the `?`, `*` and
+`+` postfix ones; name classes including `*`, `prefix:*` and `-` except;
+`namespace`, `default namespace` and `datatypes` declarations; `include` with
+`inherit` and overrides; `div`; annotations in both the `[ ... ]` and the
+`>> name [ ... ]` forms, and `##` documentation comments; `~` literal
+concatenation, triple-quoted literals and the `\x{}` escape; datatype
+parameters; `#` comments and the `\` identifier escape.
+
+**What is left:**
+
+* **No conformance suite.** James Clark's spectest is XML syntax only and
+  carries no `.rnc` cases, and the compact syntax specification is not
+  vendored here, so the grammar was implemented from the OASIS specification
+  as understood rather than checked against a vendored text. The evidence that
+  it is complete is the nine real-world `.rnc` files in `testdata` — about
+  760KB, the largest being the DocBook 5.1 schema at 356KB — all of which
+  parse, plus the round-trip property against the XML syntax. That is
+  circumstantial where a suite would be decisive.
+* **Annotations are parsed and discarded.** A `[ ... ]` or `>> name [ ... ]`
+  annotation is checked for well-formedness and then dropped rather than
+  carried onto the tree as a foreign element. Nothing downstream reads them —
+  the compiler skips any element outside the RELAX NG namespace — so this
+  costs nothing in validation, but a caller using `ParseCompact` to convert
+  `.rnc` to `.rng` loses them. A `##` documentation comment *is* carried,
+  as `a:documentation`.
+* **Section 7.3 refuses most real schemas.** Seven of the nine `.rnc` files in
+  `testdata` compile only if section 7.3 is excused: this package requires a
+  `<oneOrMore>` ancestor over an `<attribute>` with an open name class, and
+  those schemas write `<zeroOrMore>`. It is not a compact-syntax defect — the
+  XML-syntax equivalent is refused identically — but it is the largest thing
+  standing between this package and real-world RELAX NG, and it should be
+  settled against the spec.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 
@@ -105,21 +171,35 @@ wildcards, identity constraints and notations; all of it has since landed.
 
 ---
 
-### 1.5 XQuery module import — the last structural gap in `xquery`
+### 1.5 XQuery schema import — the last structural gap in `xquery`
 
-`import module` raises `XQST0059` and `import schema` leaves the in-scope
-schema definitions empty, so `validate { … }` raises `XQDY0084`. Both parse
-correctly and are then refused; neither is mis-parsed.
+`import module` is **implemented** (§4.12) — see
+[CHANGELOG.md](../CHANGELOG.md). What remains here is `import schema`, which
+still parses and is then refused with `XQST0059`, leaving the in-scope schema
+definitions empty so that `validate { … }` raises `XQDY0084`. It is not
+mis-parsed; it is refused by name.
 
-**What it buys.** Beyond the XQuery cases themselves, it is the one thing
-blocking `fn:load-xquery-module`, which is why three XPath 3.1 cases are out
-of scope rather than passing — see
-[reaching-100.md](reaching-100.md).
+**What `import module` cost, for calibration.** A module store
+(`Options.Modules`), a resolver (`Options.ModuleResolver`, nil by default like
+every other one here), two bounds that refuse rather than truncate, and a
+loader that publishes a module before following its imports — because a cycle
+of module imports is *not* an error at XQuery 3.0 and later, which the suite
+settles by carrying the identical module pair under two spec dependencies with
+opposite expected results.
 
-**What it costs.** A module store and a resolver, plus the cycle detection
-that `import` needs. It is the same shape of problem as `xsd`'s schema
-assembly, and the resolver must default to nil like every other one here, or
-a query gains the ability to fetch.
+**What `import schema` costs, and why it is a bigger job than it looks.** Not
+a resolver — `xsd` already has one, and the module loader's shape transfers.
+The cost is that the imported components have to reach the *static context*:
+§2.1.1's in-scope schema definitions are what `validate`, `instance of` and a
+`SchemaElementTest` are judged against, and this package's `staticContext`
+has nowhere to put them. That is PSVI plumbing between `xsd` and `xquery`
+rather than another loader, and it is the reason the two halves of `import`
+were separated rather than done together.
+
+**What it buys.** The `validate` expression, the schema-aware type tests, and
+the QT3 cases that depend on a typed input. It does **not** unblock
+`fn:load-xquery-module`; that needed the module half, which now exists — see
+[reaching-100.md](reaching-100.md) for what actually changed there.
 
 ### 1.6 A host API for JSON, and a context item that is not a node
 

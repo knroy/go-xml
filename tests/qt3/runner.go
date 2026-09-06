@@ -544,10 +544,6 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		rep.Outcome, rep.Reason = Skip, why
 		return rep
 	}
-	if len(tc.Modules) > 0 {
-		rep.Outcome, rep.Reason = Skip, "needs module import"
-		return rep
-	}
 
 	env, err := r.resolveEnv(ts, tc)
 	if err != nil {
@@ -749,8 +745,16 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// the parameters the query itself stated, and Eval hands back only
 		// the sequence.
 		var q *xquery.Query
-		q, res.err = xquery.Compile(tc.Test.Query,
-			xqueryOptions(ns, r.testSetURI(ts)))
+		opts := xqueryOptions(ns, r.testSetURI(ts))
+		// A case's <module> elements are the library modules "import module"
+		// is to find. They are registered by target namespace rather than
+		// resolved from their location, which is what §4.12 permits and what
+		// keeps the harness from granting a query the filesystem: the "at"
+		// hints in these queries are never opened.
+		opts.Modules, res.err = r.caseModules(ts, tc)
+		if res.err == nil {
+			q, res.err = xquery.Compile(tc.Test.Query, opts)
+		}
 		if res.err == nil {
 			res.serialParams = q.SerializationOptions()
 			// §25.1: "if no document can be found at the specified location,
@@ -2491,6 +2495,30 @@ func (r *Runner) testSetURI(ts *TestSet) string {
 // relative "declare base-uri" against it. A query that declares no base URI
 // never sees it, so the five cases above are untouched, while -4 and -5 get
 // the absolute base their declarations need.
+// caseModules reads the library modules a test case declares, for
+// Options.Modules.
+//
+// The catalog gives each one a target namespace and a file, and the file is
+// read here rather than through a resolver: the harness knows which files the
+// suite intends, and a resolver would let the query's own "at" hints decide
+// instead. That is the same reason Options.ModuleResolver is left nil.
+func (r *Runner) caseModules(ts *TestSet, tc *TestCase) ([]xquery.Module, error) {
+	if len(tc.Modules) == 0 {
+		return nil, nil
+	}
+	out := make([]xquery.Module, 0, len(tc.Modules))
+	for _, m := range tc.Modules {
+		// ts.Dir is relative to the suite root, as loadDocURI's join is.
+		path := filepath.Join(r.Root, ts.Dir, filepath.FromSlash(m.File))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, xquery.Module{Namespace: m.URI, Source: string(src)})
+	}
+	return out, nil
+}
+
 func xqueryOptions(ns xpath.NamespaceResolver, declBase string) xquery.Options {
 	opts := xquery.Options{DeclarationBaseURI: declBase}
 	if ns == nil {

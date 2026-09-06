@@ -14,9 +14,22 @@ type DTD struct {
 	// Attributes maps an element name to its declared attributes.
 	Attributes map[string][]*Attribute
 	// HasExternalSubset records that the DOCTYPE named a SYSTEM or PUBLIC
-	// identifier. Nothing is fetched, so validation is against the internal
-	// subset alone and callers are told rather than misled.
+	// identifier.
+	//
+	// Parse fetches nothing, so with it this means validation is against the
+	// internal subset alone and callers are told rather than misled. Load
+	// with a Resolver does fetch, and then this says only that there was one
+	// — ExternalSubset holds what was read.
 	HasExternalSubset bool
+	// ExternalSubset is the external subset's text as it stood after
+	// parameter-entity substitution and conditional-section resolution, when
+	// Load read one. Empty otherwise.
+	//
+	// It is the text rather than the declarations because the declarations
+	// are already merged into Elements and Attributes; this exists so a
+	// caller can see what the DOCTYPE actually pulled in, which for a modular
+	// DTD is not something any single file contains.
+	ExternalSubset string
 }
 
 // ContentKind is what an element's content model permits.
@@ -86,10 +99,7 @@ func Parse(directive string) (*DTD, error) {
 	if strings.TrimSpace(directive) == "" {
 		return nil, nil
 	}
-	d := &DTD{
-		Elements:   map[string]*Element{},
-		Attributes: map[string][]*Attribute{},
-	}
+	d := newDTD()
 	head, subset := splitSubset(directive)
 	// A SYSTEM or PUBLIC identifier in the head names an external subset.
 	if f := fields(head); len(f) >= 2 {
@@ -101,12 +111,35 @@ func Parse(directive string) (*DTD, error) {
 		}
 	}
 
+	if err := declarationsInto(d, subset); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// newDTD is the empty ruleset both entry points start from.
+func newDTD() *DTD {
+	return &DTD{
+		Elements:   map[string]*Element{},
+		Attributes: map[string][]*Attribute{},
+	}
+}
+
+// declarationsInto reads the declarations of an already-expanded subset into
+// d.
+//
+// It is separate from Parse so that Load can hand it the two subsets
+// concatenated, internal first. Every rule here is first-declaration-wins, so
+// that ordering is by itself XML 1.0 §2.8's precedence: where both subsets
+// declare a name the internal one binds and the external one is ignored, which
+// §2.8 makes not an error.
+func declarationsInto(d *DTD, subset string) error {
 	for _, decl := range declarations(subset) {
 		switch {
 		case strings.HasPrefix(decl, "ELEMENT"):
 			el, err := parseElement(decl[len("ELEMENT"):])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if el != nil {
 				// XML §3.2: an element may be declared only once. A repeat is
@@ -119,11 +152,28 @@ func Parse(directive string) (*DTD, error) {
 			}
 		case strings.HasPrefix(decl, "ATTLIST"):
 			for _, a := range parseAttList(decl[len("ATTLIST"):]) {
+				// XML §3.3: where an attribute is defined more than once
+				// for the same element, the FIRST definition binds and the
+				// rest are ignored. With the internal subset placed first
+				// that is exactly §2.8's precedence, so the two rules are
+				// one line of code.
+				if attrDeclared(d.Attributes[a.Element], a.Name) {
+					continue
+				}
 				d.Attributes[a.Element] = append(d.Attributes[a.Element], a)
 			}
 		}
 	}
-	return d, nil
+	return nil
+}
+
+func attrDeclared(decls []*Attribute, name string) bool {
+	for _, a := range decls {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // splitSubset separates the DOCTYPE head from the bracketed internal subset.

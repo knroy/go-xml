@@ -180,7 +180,10 @@ func collectStaticCalls(n node, add func(*compiledExpr)) {
 // only the first is acceptable.
 func (q *Query) checkBodyVars(ctx *xpath.Context) error {
 	global := map[string]bool{}
-	for _, d := range q.vars {
+	// The imported globals are in scope in this module's function bodies too
+	// (§4.12), so a body naming one is not an unbound reference.
+	// modules-pub-priv-15 is a local:test() whose body reads $defs:one.
+	for _, d := range q.allVars() {
 		global[d.name.Clark()] = true
 	}
 	for _, d := range q.funcs {

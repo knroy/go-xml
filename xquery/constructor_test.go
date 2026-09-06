@@ -248,9 +248,11 @@ func TestDuplicateAttributeIsAnError(t *testing.T) {
 	}
 }
 
+// Only "import schema" is still refused by name. "import module" was refused
+// the same way until it was implemented; what it does now — including the
+// XQST0059 it raises for a module nothing supplies — is in module_test.go.
 func TestUnimplementedIsNamed(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
-		{`import module namespace m = "urn:x"; 1`, "import"},
 		{`import schema namespace s = "urn:x"; 1`, "import"},
 	} {
 		_, err := run(t, c.src, xquery.Options{})

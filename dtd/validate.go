@@ -73,9 +73,13 @@ const DefaultMaxErrors = 100
 // since without it the parse fails before this is reachable.
 //
 // What is checked: element content models, attribute presence (#REQUIRED and
-// #FIXED), enumerated attribute values, and ID/IDREF. What is not: anything
-// declared in an *external* subset, which is not fetched — Validate reports
-// that as a limitation rather than passing the document silently.
+// #FIXED), enumerated attribute values, and ID/IDREF.
+//
+// Which declarations reach here is decided by how the DTD was read, not by
+// this function. Parse reads the internal subset alone, and a DTD from it
+// carries HasExternalSubset so a caller knows the check was partial; Load with
+// a Resolver reads both subsets, and everything either one declares is applied
+// on the same terms.
 func Validate(doc *xdm.Node, d *DTD, opts Options) error {
 	if doc == nil {
 		return fmt.Errorf("dtd: nil document")

@@ -110,29 +110,39 @@ processor. **Nothing to do here, and doing it would be wrong.**
 security). They are counted as fixable here, which is the less flattering
 reading.
 
-### 0 — no XQuery module loader (now out of scope, not failing)
+### 0 — `fn:load-xquery-module` (still out of scope, and now for one reason only)
 
 `fn-load-xquery-module-003`, `-004`, `fn-function-lookup-764`.
 
-These no longer count against anything: the set declares the feature
+These still do not count against anything: the set declares the feature
 `satisfied="true"` and then overrides fourteen cases to `satisfied="false"`, so
 the harness treats `fn-load-xquery-module` as an unsupported feature and the
-cases fall out of scope. That is what took XPath 3.1 to 100%. The reasoning
-below is why they are out of scope rather than a gap.
+cases fall out of scope. That is what took XPath 3.1 to 100%.
 
-`fn:load-xquery-module` compiles an XQuery library module. This engine now
-implements XQuery too, in [`xquery`](../xquery/), but not *module import*:
-`import module` raises `XQST0059`, so there is no module store for this
-function to load from. F&O 3.1 anticipates exactly this: **FOQM0006 is defined
-as "the implementation does not support the load-xquery-module function"**, and
-raising it is the conforming answer.
+**The module store now exists.** `xquery` implements `import module` (§4.12) —
+a store, a resolver, transitive loading and the cycle rule — so the reason
+given here previously ("there is no module store for this function to load
+from") no longer holds. Measured after that work, the three cases are
+**unchanged: still out of scope, neither passing nor failing.** XPath 3.1 stays
+at 21786/21786, and the XQuery mark rose from 29800 to 29901.
 
-Two of the suite's own cases cannot both pass — `-003` wants FOQM0002 ("cannot
-be located") for an expression `-903` wants FOQM0006 for. Locating a module is
-something only a processor could do.
+What is left is not a missing engine but the suite's own contradiction, which
+was always the second half of the reason. `-003` and `-004` want **FOQM0002**
+("the module cannot be located") for `fn:load-xquery-module("http://nonexistent/module")`,
+while `-903` wants **FOQM0006** ("the implementation does not support
+load-xquery-module") for an expression of the same shape. A processor can
+satisfy one set or the other and not both, and F&O 3.1 defines FOQM0006
+precisely so that a processor without the function may say so — raising it is
+the conforming answer, and it is what the fourteen overridden cases assert.
 
-**To fix: implement module import in `xquery`,** then bridge the function to
-it. The engine is no longer the missing piece; the module store is.
+Bridging the function to the new module store would therefore trade three
+out-of-scope cases for a different three, and would additionally require
+deciding what a *dynamically* named module URI may fetch. That is the same
+question `Options.ModuleResolver` answers statically by fetching nothing
+without a resolver, and a function that resolved a URI computed at run time
+would need its own answer to it. **To fix: not the engine, and not the store —
+a policy for run-time module URIs, plus a choice about which half of the suite
+to satisfy.**
 
 ### 1 — the suite contradicts itself
 
