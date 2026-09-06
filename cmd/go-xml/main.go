@@ -102,8 +102,10 @@ func run() error {
 				"namespace https://github.com/knroy/go-xml")
 
 		resultDir = flag.String("result-dir", "",
-			"write xsl:result-document outputs into this directory; without it a "+
-				"stylesheet that produces secondary results is an error")
+			"write xsl:result-document outputs with an href into this directory; "+
+				"without it a stylesheet that produces such results is an error. "+
+				"An xsl:result-document with no href names no file and goes to "+
+				"the principal output, needing no flag")
 
 		maxDepth = flag.Int("max-depth", 0,
 			"bound template recursion; 0 uses the default, negative removes the "+
@@ -404,7 +406,17 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		}
 	}
 
-	if err := writeSecondary(res.Secondary, cfg.resultDir); err != nil {
+	// An xsl:result-document with no href writes to the principal output, not
+	// to a file. XSLT 3.0 section 24.3 changes the current output URI only
+	// "during execution of an xsl:result-document instruction with an href
+	// attribute"; with no href it stays the base output URI, which is the
+	// principal result. So those documents are split out here and serialized
+	// below alongside the principal tree rather than demanding -result-dir.
+	// The engine already raises XTDE1490 when the principal tree also has
+	// content, or when a second href-less instruction runs, so at most one
+	// reaches this point and it never collides with res.Serialize.
+	principal, secondary := splitSecondary(res.Secondary)
+	if err := writeSecondary(secondary, cfg.resultDir); err != nil {
 		return err
 	}
 
@@ -422,6 +434,20 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 		fmt.Fprintf(os.Stdout, "<!-- %s -->\n", inPath)
 	}
 
+	// Each href-less result document is serialized with its own settings —
+	// its @format names an xsl:output declaration that the principal tree's
+	// settings would not honour — so it is written through its own Serialize
+	// rather than folded into res.
+	for i := range principal {
+		if err := principal[i].Serialize(out, nil); err != nil {
+			return err
+		}
+		fmt.Fprintln(out)
+	}
+	if len(principal) > 0 {
+		return nil
+	}
+
 	if err := res.Serialize(out); err != nil {
 		return err
 	}
@@ -429,7 +455,26 @@ func transformOne(sheet *xslt.Stylesheet, inPath, outPath string, cfg transformC
 	return nil
 }
 
-// writeSecondary writes the documents produced by xsl:result-document.
+// splitSecondary separates the href-less result documents from those that
+// name a file.
+//
+// Section 24.3 leaves the current output URI at the base output URI for an
+// xsl:result-document with no href, so those belong to the principal output
+// and never reach the -result-dir machinery below.
+func splitSecondary(results []xslt.SecondaryResult) (principal, secondary []xslt.SecondaryResult) {
+	for _, r := range results {
+		if r.Href == "" {
+			principal = append(principal, r)
+		} else {
+			secondary = append(secondary, r)
+		}
+	}
+	return principal, secondary
+}
+
+// writeSecondary writes the documents produced by xsl:result-document that
+// name an href. An href-less one goes to the principal output instead and is
+// filtered out by splitSecondary before it gets here.
 //
 // Without -result-dir a stylesheet that produces secondary results is an
 // error rather than a silent drop: the author asked for several documents, and
@@ -463,9 +508,6 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 	}
 
 	for _, r := range results {
-		if r.Href == "" {
-			return fmt.Errorf("xsl:result-document has no href, so there is no file to write")
-		}
 		// An absolute href is refused rather than joined. filepath.Join would
 		// silently reinterpret "/tmp/x.xml" as "<root>/tmp/x.xml", which is
 		// safely contained but writes somewhere the stylesheet did not name —

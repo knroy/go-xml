@@ -8,6 +8,38 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+**An `xsl:result-document` with no `href` produced no output from the CLI.**
+Reported as issue #3 by Martin Honnen, reduced from a stylesheet XSpec had
+transpiled — its report used `format="Q{...}xml-report-serialization-parameters"`
+with no `href` at all. The command refused it twice over: without `-result-dir`
+it demanded the flag, and with the flag it answered "xsl:result-document has no
+href, so there is no file to write". Saxon writes the document to the principal
+output, and so must this.
+
+The bug was entirely in `cmd/go-xml`; the engine was already correct. XSLT 3.0
+section 24.3 changes the current output URI only "during execution of an
+`xsl:result-document` instruction **with an `href` attribute**", so with no
+`href` it stays the base output URI — and section 19 makes the point directly:
+the `href` default "is the zero-length string", which "is a valid relative URI
+reference" resolving to the base output URI itself. The instruction therefore
+writes to the principal result, not to a secondary file, and needs no
+`-result-dir`. `splitSecondary` now separates those from the ones naming a
+file, and they are serialized to stdout or to `-o` alongside the principal
+tree, each with its own `@format` settings rather than the principal
+declaration's.
+
+Results *with* an `href` are untouched: they still require `-result-dir`, and
+the containment check that keeps a stylesheet-controlled `href` inside it —
+symlinks resolved first — is unchanged. Nor does this open a way to write two
+documents to one URI: XTDE1490 already covered both collisions the spec names
+in its note on that error ("it is an error to evaluate more than one
+`xsl:result-document` instruction that omits the `href` attribute, or to
+evaluate any `xsl:result-document` instruction that omits the `href` attribute
+if an initial final result tree is created implicitly"), and the engine raises
+it for each. W3C `error-1490c` is exactly the second case, and Saxon 9.8 passes
+it; `position-2201` is the legal shape, an href-less instruction alone in the
+template, and it passes too.
+
 **A content model that would not compile skipped every constraint on it, and
 the schema loaded anyway.** `checkContentModelConstraints` compiled each model
 and ran Unique Particle Attribution, Element Declarations Consistent and both
