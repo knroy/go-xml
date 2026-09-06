@@ -385,10 +385,24 @@ func (n *nfa) accepts(set map[int]bool) bool {
 // particleSubsumes decides XSD 1.1 §3.4.6.4 for r against b by language
 // inclusion, returning ok=false when it declines.
 //
-// It declines rather than guesses whenever the construction cannot be exact:
-// an all group, a recursive model, a range too wide to unroll, or a wildcard
-// pair whose name sets it cannot compare precisely. Every decline returns the
-// question to the 1.0 table in restrict.go.
+// It declines rather than guesses whenever the construction cannot be exact.
+// Two of those are shape-driven and deterministic: an all group, which
+// allSubsumes answers instead, and a recursive model group. Two are budgets an
+// input can be built to reach: subsumeMaxStates, when unrolling an occurrence
+// range makes the automaton too large, and subsumeMaxProduct, when the product
+// exploration visits too many pairs -- a distinct cap, reached by a model that
+// is adversarially branchy rather than merely repetitive. The last is a
+// wildcard pair whose name sets it cannot compare precisely, which defers to
+// nsSubset rather than refusing.
+//
+// Every decline returns the question to the 1.0 table in restrict.go, and that
+// is sound in the one direction that matters: each rule there accepts only by
+// producing a positional embedding of the derived model into the base, so an
+// accept always carries a witness. Removing an accepting path -- which is all
+// a decline does -- cannot manufacture one. The table's incompleteness is
+// therefore confined to false rejects. Pinned by TestRestrictionBudgetSoundness
+// and TestSubsumeDeclineIsNotAcceptance, which run the comparison with both
+// budgets forced to zero so only the table answers.
 func particleSubsumes(r, b *Particle) (error, bool) {
 	rn, ok := buildNFA(r)
 	if !ok {

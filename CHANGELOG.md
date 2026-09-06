@@ -8,6 +8,86 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+**The substitution closure is bounded, and the pairwise overlap test that
+depended on it is no longer quadratic.** The UPA budget above bounds the
+pairwise scan by counting position pairs, and it counts each pair as one
+because it was written assuming a pair test is O(1). `elementNamesOverlap`
+(`xsd/upa.go`) made that assumption false: it decided whether two element
+declarations can match the same name by looping one substitution-group closure
+inside the other, O(|a|*|b|) for a single pair. Nothing in the package measured
+the closure, so the quadratic factor was invisible to every budget in it. A
+content model of 64 positions -- well inside `maxUPAStateWidth` of 256 -- whose
+declarations each carried a closure of 255 spent 28.5 SECONDS inside
+`checkUPA`; 32 positions at closure 2048 spent 90 seconds. `maxPositions`,
+`maxUPAStateWidth` and `maxUPAPairTests` were satisfied throughout.
+
+That half is fixed by algorithm rather than by budget, deliberately: a bound is
+the right answer only when the work is irreducible, and a set intersection
+computed by brute force is not. It now intersects through a map, O(|a|+|b|),
+and the 90-second shape costs 574ms.
+`TestElementNamesOverlapIsLinearInClosureSize` asserts the growth rate rather
+than a wall-clock threshold, so a regression to the nested form is caught as
+one.
+
+Holding the pair count FIXED at 2,016 and varying only the closure isolates the
+cause: 64 positions cost 2.3s at closure 64, 8.1s at 128 and 31.1s at 256 -- 4x
+per doubling of a quantity `maxUPAPairTests` does not measure, while the pairs
+it does measure never changed. At 128 positions, closure 512, the same shape
+took 18m4s and LOADED. Those five shapes now cost 437ms, 816ms, 1.53s, 12.1s
+and 25.0s: 2x per closure doubling, 43x faster at the largest.
+
+`linkSubstitutionGroups` (`xsd/assemble.go`) builds that closure, once, and was
+itself unbounded and quadratic: a chain of n elements each substituting for the
+one before gives the i-th head a closure of n-i, so n=4096 built 8,386,560
+entries and allocated 1.35GB from a 273KB schema document, 4x per doubling.
+`maxSubstitutionClosure` (2^16 = 65,536) now caps the total membership entries
+a schema may produce, counted as the walk visits them.
+
+It is ONE budget rather than two, and that makes it a ceiling instead of a sum.
+Both algorithms are expensive for the same reason -- a single number computed
+in a single place -- so independent per-check budgets would let one schema
+spend both. The usual objection to a shared budget, that one legitimately
+expensive check starves another, does not apply: this is not a pool of work
+drawn down by whoever runs first, it is a bound on the SIZE of a shared data
+structure, enforced once when that structure is built and before any check
+reads it.
+
+Exceeding it REFUSES the schema, with an error wrapping
+`xdm.ErrResourceLimit`. It does not truncate the closure. Truncation looks like
+the conservative choice and is the opposite of one: substitution membership
+decides which elements a particle matches, so a dropped member does not give a
+smaller correct answer -- it makes a valid document fail to validate, and it
+hides the `cos-nonambig` or `cos-element-consistent` violation that the dropped
+member was the cause of. That is exactly the false accept the UPA entry above
+was written to correct.
+
+The threshold rests on a census. Instrumented over all 15,702 `.xsd` files in
+this tree -- `testdata/xsdtests`, `testdata/xslt30-test`, `testdata/qt3tests`,
+`testdata/relaxng`, `testdata/xsltng`, `testdata/xspec` and `w3cschemas` --
+loaded at both 1.0 and 1.1, the largest total closure any real schema produces
+is 50 entries, in `testdata/xslt30-test/admin/catalog-schema.xsd`, whose widest
+single closure is 26 members. 65,536 is over 1,300x that, and
+`TestSubstitutionClosureBudgetDoesNotFireOnRealSchemas` pins the gap from
+below. Both conformance marks are unchanged: 39,347 on 1.0 and 41,532 on 1.1.
+
+`xsd/budget_soundness_test.go` states the two-sided property for this budget as
+it does for UPA -- over budget must produce a resource-limit error for valid
+and invalid schemas alike, because an uncomputed closure cannot tell them apart
+-- and `TestSubstitutionClosureRefusalIsNotATruncation` drives an invalid
+schema whose fault lies in the last member of a chain. Both were validated by
+sabotage: made to truncate and carry on, the harness reported FALSE ACCEPT with
+the schema in the message.
+
+Three neighbouring checks were measured and deliberately left unbudgeted, since
+a budget on work that cannot be made expensive is dead code that adds only a
+way to reject valid input. `checkSubstitutionEDC` dedups by name into a map, so
+it is linear in the closure: 9ms at its worst constructible shape, against
+574ms for `checkUPA` on the same schema. `checkWildcardEDC` measures 0ms at 512
+wildcards against 512 locals and never runs there, because `checkUPA` rejects
+that model first. `addFollow`'s dup-scan is dominated by the automaton build
+and sits inside a model `checkUPA`'s width gate already refuses. The numbers
+are recorded in the inventory in `xsd/complexity_fuzz_test.go`.
+
 **The last unbudgeted load-time algorithm is bounded.** v1.2.2 wrote down that
 `checkUPA` had no budget of its own: `maxPositions` bounds the number of
 positions in a content model but not the pairwise scan over them, so Unique
@@ -78,6 +158,62 @@ compile-failure skip at `upa.go:179` is left as-is and documented in
 checked, but a model that cannot be compiled cannot be validated against
 either, so no document slips through it. The new tests were validated by
 sabotage: with the fix reverted, each fails with the schema in the message.
+
+### Hardened
+
+**The XPath optimiser's foldability decision is arity-aware.** No expression
+was ever mis-folded; this moves an invariant from somewhere it held by accident
+to the place that decides it.
+
+`foldableFunction` keyed its allowlist on the QName alone. XPath overloads on
+arity, and F&O 3.0 gives the two forms of a name different properties: it
+declares `fn:string#0`, `fn:number#0` and `fn:string-length#0`
+*context-dependent* and *focus-dependent* — each reads the context item — while
+`fn:string#1`, `fn:number#1` and `fn:string-length#1` are *context-independent*
+and *focus-independent*. Keying on the name admitted all six. `string()` then
+reached `foldConstant`, and `isClosed`'s loop over an empty argument list
+succeeded vacuously, so nothing between the allowlist and the evaluator
+objected to folding a call whose value is a property of the focus.
+
+What stopped it was one layer further down and for an unrelated reason:
+`evalToLiteral` evaluates against `NewContext(nil, ...)`, so the call raised
+XPDY0002 and the `err != nil` arm returned the unfolded tree. That is not a
+guarantee. It makes the optimiser's correctness a property of what happens to
+fail rather than of what it declines to attempt, it is nowhere stated, and it
+degrades silently in the direction of miscompiling: give `evalToLiteral` a
+focus for any unrelated reason and every `string()` in every stylesheet freezes
+to that seed's value at compile time. The failure mode is a wrong answer from a
+correct program, with no error anywhere.
+
+`foldableFunction` now takes the arity and admits those three names only at
+arity 1. The rest of the allowlist was audited against F&O 3.0 the same way:
+`fn:true#0` and `fn:false#0` are the only other zero-arity entries and are
+focus-independent constants, and no other allowlisted name has a zero-arity
+form at all. `fn:normalize-space#0` is focus-dependent for the same reason but
+was never allowlisted. The `xs:` branch admits its whole namespace without
+consulting arity, which is sound only while no constructor has a zero-arity
+form; that premise is now asserted against the builtin library rather than
+assumed, so a future zero-arity constructor fails a test instead of inheriting
+the same latent hole.
+
+The distinction between the two layers is what the tests now pin. Reverting the
+arity check alone does *not* fail the 1,600-case differential harness — the
+empty focus still covers it — which is precisely the demonstration that the old
+safety was incidental, so `TestFoldableFunctionArity` asserts the structural
+property directly. Reverting the arity check *and* giving `evalToLiteral` a
+focus, the realistic future regression, fails the harness in 204 subtests with
+`string()` folded to the seed under every non-empty focus. QT3 is unchanged at
+29,800 in-scope passing.
+
+A full `FunctionProperties` record on `Function` — deterministic,
+focus-dependent, collation-dependent, timezone-dependent — driving foldability
+from declared metadata was considered and deliberately not built. `Function`
+already carries an optional `Signature` that is annotated on a handful of the
+~200 registered name/arity entries, and metadata is only load-bearing if every
+entry has it: a foldability rule reading a field left at its zero value on 190
+functions would be a worse allowlist, defaulting silently instead of listing
+explicitly. The allowlist names 22 functions and the pass folds arithmetic; the
+metadata is the right shape when something else needs it too.
 
 ## v1.2.2 — 2026-09-05
 

@@ -246,11 +246,14 @@ func runEquivCorpus(t *testing.T, corpus []string, opt func(Expr) Expr) {
 // focus is still run against the empty one, where both sides must agree on
 // raising XPDY0002.
 var equivCorpus = []string{
-	// Focus-dependent calls at zero arity. foldableFunction is keyed on QName
-	// alone, with no arity, so "string" and "number" reach foldConstant even
-	// when written with no argument -- at which point isClosed's loop over
-	// zero arguments trivially succeeds. Whether that actually folds is
-	// decided downstream, in evalToLiteral, and this group is what settles it.
+	// Focus-dependent calls at zero arity. foldableFunction is keyed on the
+	// QName *and the arity*, and refuses "string", "number" and
+	// "string-length" at arity 0 because F&O declares those three forms
+	// focus-dependent: they read the context item. Before the arity was part
+	// of the key they reached foldConstant -- isClosed's loop over an empty
+	// argument list succeeds vacuously -- and were saved only by evalToLiteral
+	// raising XPDY0002 on its empty focus. This group is what settles that the
+	// answer is the same either way, under every focus.
 	`string()`,
 	`number()`,
 	`string-length()`,
@@ -282,6 +285,40 @@ var equivCorpus = []string{
 	`root(.)`,
 	`upper-case(string())`,
 	`concat(string(), 'x')`,
+
+	// The three names whose zero-arity form the arity check now refuses, in
+	// both arities and wrapped so the refusal has to survive being an operand.
+	// The one-arity forms must still fold; the zero-arity ones must not, and
+	// both trees must agree under every focus either way.
+	`string-length(string())`,
+	`string-length(string(.))`,
+	`number(string())`,
+	`string(number())`,
+	`string-length() + 1`,
+	`number() + 1`,
+	`concat(string-length(), 'x')`,
+	`not(string() = '')`,
+	`count((string(), number()))`,
+	`string-length('hello') + string-length()`,
+	`if (string() = '') then 1 else 2`,
+	`upper-case(string(.))`,
+	`lower-case(string())`,
+	`substring(string(), 1, 2)`,
+	`translate(string(), 'a', 'b')`,
+	`boolean(string())`,
+	`exists(string())`,
+	`empty(string())`,
+	`reverse((string(), 'x'))`,
+	`avg((string-length(), 2))`,
+	`sum((string-length(), 2))`,
+	`abs(number())`,
+	`ceiling(number())`,
+	`floor(number())`,
+	`round(number())`,
+	`round-half-to-even(number())`,
+	`xs:string(string())`,
+	`xs:integer(string-length())`,
+	`xs:double(number())`,
 
 	// Collation-sensitive functions. optimize.go withholds these because the
 	// default collation is set after compilation; collations-1006 makes
@@ -530,28 +567,33 @@ func foldsToLiteral(t *testing.T, src string, opt func(Expr) Expr) bool {
 	return ok
 }
 
-// TestFocusDependentZeroArityDoesNotFold is the specific claim worth pinning
-// down on its own, because the reasoning is subtle and the code does not state
-// it anywhere.
+// TestFocusDependentZeroArityDoesNotFold pins the invariant the arity check
+// exists to state: a focus-dependent call is never a candidate for folding.
 //
-// foldableFunction is keyed on the QName with no arity parameter, so "string",
-// "number" and "string-length" are admitted whether they are written with an
-// argument or without. Nothing between foldConstant and evalToLiteral rejects
-// the zero-argument spelling: isClosed's loop over an empty argument list
-// succeeds vacuously. The reason string() is not folded to a constant is one
-// layer further down -- evalToLiteral evaluates against NewContext(nil, ...),
-// the call raises XPDY0002 because there is no context item, and the "err !=
-// nil" arm returns the unfolded tree.
+// It is asserted at two levels, and the distinction is the whole point of the
+// change. The *structural* assertion is that foldableFunction itself says no
+// for fn:string#0, fn:number#0 and fn:string-length#0 -- all three are
+// declared ·focus-dependent· by F&O 3.0, because they read the context item,
+// while their one-argument forms are focus-independent. The *behavioural*
+// assertion is that foldConstant does not fold them.
 //
-// That makes the safety here *incidental*: it rests on the accident that every
+// Before the arity was part of foldableFunction's key, only the behavioural
+// half held, and it held incidentally: the zero-arity spellings reached
+// foldConstant (isClosed's loop over an empty argument list succeeds
+// vacuously) and were rejected one layer further down, where evalToLiteral
+// evaluates against NewContext(nil, ...) and the call raises XPDY0002. That
+// made the optimiser's correctness rest on the accident that every
 // focus-dependent function in the allowlist happens to raise on an absent
-// focus, not on any rule that says a focus-dependent call must not be folded.
-// This test records the property so that a future change which makes any of
-// these return a value instead of raising -- a default focus, a more forgiving
-// fn:string -- fails here rather than silently freezing a constant.
+// focus, rather than on any rule forbidding the fold. Giving evalToLiteral a
+// focus for some unrelated reason would have turned it into a miscompilation
+// silently. Nothing was ever mis-folded; the safety was just in the wrong
+// place.
+//
+// The behavioural assertion alone cannot tell those two worlds apart, which is
+// why the structural one is here.
 func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
-	// Every one of these is in foldableFunction's allowlist (or reaches it via
-	// the fn: namespace) and takes an implicit focus argument.
+	// The zero-arity forms of allowlisted names: refused by foldableFunction
+	// itself, which is the new invariant.
 	for _, src := range []string{
 		`string()`, `number()`, `string-length()`,
 	} {
@@ -560,35 +602,64 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			// It must reach foldConstant at all -- otherwise this test is
-			// asserting nothing and would keep passing if the allowlist gained
-			// an arity check for a different reason.
 			call, ok := e.(*FuncCall)
 			if !ok {
 				t.Fatalf("%s parsed as %T, not a FuncCall", src, e)
 			}
-			if !foldableFunction(call.Name) {
-				t.Fatalf("%s: foldableFunction says no, so this test no longer "+
-					"exercises the path it was written for", src)
+			if len(call.Args) != 0 {
+				t.Fatalf("%s parsed with %d args, want 0", src, len(call.Args))
+			}
+			if foldableFunction(call.Name, len(call.Args)) {
+				t.Errorf("foldableFunction(%s, 0) = true; the zero-arity form "+
+					"is focus-dependent and must never be a fold candidate. "+
+					"It is currently unfolded only because evalToLiteral has "+
+					"an empty focus, which is not a guarantee.", call.Name.Local)
+			}
+			// isClosed must agree: it is the other caller, and a focus-dependent
+			// call appearing as a *sub*-expression must keep its parent unfoldable.
+			if isClosed(e) {
+				t.Errorf("isClosed(%s) = true", src)
 			}
 			if _, folded := foldConstant(e); folded {
 				t.Fatalf("%s FOLDED to a constant. A focus-dependent call was "+
 					"frozen at compile time; every stylesheet using it now sees "+
 					"the empty-focus answer.", src)
 			}
-			// And confirm the reason, so the test says why rather than just that.
-			if _, err := Parse(src, equivNS{}); err != nil {
-				t.Fatalf("reparse: %v", err)
-			}
+			// The empty-focus error is the *old* mechanism. It is still true,
+			// and recording it keeps the two layers distinguishable: if this
+			// stops holding, the structural check above is what carries the
+			// invariant, and that is the intended state.
 			if _, err := e.Eval(NewContext(nil, Builtins())); xdm.ErrorCode(err) != "XPDY0002" {
-				t.Errorf("%s in an empty focus: got %v, want XPDY0002 -- the "+
-					"absence of folding depends on this error", src, err)
+				t.Logf("%s in an empty focus: got %v, not XPDY0002 -- the "+
+					"incidental protection is gone and only the arity check remains",
+					src, err)
+			}
+		})
+	}
+
+	// The one-argument forms are focus-independent and must stay foldable:
+	// the arity check has to be a refusal of arity 0, not of the name.
+	for _, src := range []string{
+		`string('x')`, `number('1.5')`, `string-length('hello')`,
+	} {
+		t.Run(src+"/still-folds", func(t *testing.T) {
+			e, err := Parse(src, equivNS{})
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			call := e.(*FuncCall)
+			if !foldableFunction(call.Name, len(call.Args)) {
+				t.Fatalf("foldableFunction(%s, %d) = false; the arity check "+
+					"has disabled the one-argument form too", call.Name.Local, len(call.Args))
+			}
+			if _, folded := foldConstant(e); !folded {
+				t.Errorf("%s no longer folds", src)
 			}
 		})
 	}
 
 	// The functions that are focus-dependent but *not* in the allowlist are
-	// safe for the stated reason instead, and that should stay true.
+	// refused by the name, and that should stay true.
 	for _, src := range []string{
 		`normalize-space()`, `name()`, `local-name()`, `position()`, `last()`,
 		`base-uri()`, `root()`,
@@ -602,7 +673,7 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s parsed as %T", src, e)
 			}
-			if foldableFunction(call.Name) {
+			if foldableFunction(call.Name, len(call.Args)) {
 				t.Errorf("%s is focus-dependent but foldableFunction admits it; "+
 					"it is then folded only if it happens to raise on an empty focus", src)
 			}
@@ -610,5 +681,89 @@ func TestFocusDependentZeroArityDoesNotFold(t *testing.T) {
 				t.Fatalf("%s FOLDED to a constant", src)
 			}
 		})
+	}
+}
+
+// TestFoldableFunctionArity is the direct table for foldableFunction, covering
+// every name in the allowlist at every arity the builtin library registers it
+// at, plus the arities it does not. A name is admitted only at an arity whose
+// F&O signature is ·focus-independent·.
+func TestFoldableFunctionArity(t *testing.T) {
+	for _, tc := range []struct {
+		local string
+		arity int
+		want  bool
+	}{
+		// The three overloaded on focus-dependence. F&O 3.0 declares the
+		// zero-argument form of each ·context-dependent· and ·focus-dependent·
+		// and the one-argument form ·context-independent· and
+		// ·focus-independent·.
+		{"string", 0, false}, {"string", 1, true},
+		{"number", 0, false}, {"number", 1, true},
+		{"string-length", 0, false}, {"string-length", 1, true},
+
+		// fn:true#0 and fn:false#0 are the only other zero-arity entries in the
+		// allowlist, and both are focus-independent constants.
+		{"true", 0, true},
+		{"false", 0, true},
+
+		// Everything else in the allowlist has no zero-arity form at all, so
+		// arity is not load-bearing for it -- but the check must not have
+		// broken the arities that do exist.
+		{"abs", 1, true},
+		{"ceiling", 1, true},
+		{"floor", 1, true},
+		{"round", 1, true}, {"round", 2, true},
+		{"round-half-to-even", 1, true}, {"round-half-to-even", 2, true},
+		{"count", 1, true},
+		{"sum", 1, true}, {"sum", 2, true},
+		{"avg", 1, true},
+		{"concat", 2, true}, {"concat", 3, true},
+		{"upper-case", 1, true},
+		{"lower-case", 1, true},
+		{"substring", 2, true}, {"substring", 3, true},
+		{"translate", 3, true},
+		{"not", 1, true},
+		{"boolean", 1, true},
+		{"empty", 1, true},
+		{"exists", 1, true},
+		{"reverse", 1, true},
+
+		// Not in the allowlist at any arity: focus-dependent, collation-
+		// dependent, or otherwise reading the dynamic context.
+		{"normalize-space", 0, false}, {"normalize-space", 1, false},
+		{"position", 0, false},
+		{"last", 0, false},
+		{"name", 0, false}, {"name", 1, false},
+		{"current-dateTime", 0, false},
+		{"starts-with", 2, false},
+		{"compare", 2, false},
+		{"doc", 1, false},
+	} {
+		name := xdm.QName{URI: xdm.NSFN, Local: tc.local}
+		if got := foldableFunction(name, tc.arity); got != tc.want {
+			t.Errorf("foldableFunction(fn:%s, %d) = %v, want %v",
+				tc.local, tc.arity, got, tc.want)
+		}
+	}
+
+	// The xs: constructor branch returns true for the whole namespace without
+	// looking at arity. That is only sound while no constructor has a
+	// zero-arity form -- a zero-arity constructor would be the same latent
+	// problem in a place the arity check does not reach. Assert the premise
+	// against the builtin library rather than trusting it.
+	b := Builtins()
+	for _, local := range []string{
+		"string", "boolean", "decimal", "float", "double", "integer", "long",
+		"int", "short", "byte", "anyURI", "QName", "date", "time", "dateTime",
+		"duration", "dayTimeDuration", "yearMonthDuration", "untypedAtomic",
+		"NCName", "Name", "token", "normalizedString", "hexBinary",
+		"base64Binary", "gYear", "gMonth", "gDay",
+	} {
+		if _, ok := b.Lookup(xdm.QName{URI: xdm.NSXS, Local: local}, 0); ok {
+			t.Errorf("xs:%s has a zero-arity form; the xs: branch of "+
+				"foldableFunction admits the whole namespace without checking "+
+				"arity, and now needs the same treatment fn:string got", local)
+		}
 	}
 }

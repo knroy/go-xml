@@ -119,7 +119,7 @@ func foldConstant(e Expr) (Expr, bool) {
 		return evalToLiteral(e)
 
 	case *FuncCall:
-		if !foldableFunction(v.Name) {
+		if !foldableFunction(v.Name, len(v.Args)) {
 			return nil, false
 		}
 		for _, a := range v.Args {
@@ -170,7 +170,7 @@ func isClosed(e Expr) bool {
 		}
 		return true
 	case *FuncCall:
-		if !foldableFunction(v.Name) {
+		if !foldableFunction(v.Name, len(v.Args)) {
 			return false
 		}
 		for _, a := range v.Args {
@@ -187,28 +187,51 @@ func isClosed(e Expr) bool {
 	return false
 }
 
-// foldableFunction reports whether calling fn during compilation is safe.
+// foldableFunction reports whether calling fn at arity during compilation is
+// safe.
 //
 // The list is an allowlist rather than a denylist of the obviously unsafe
 // ones. A function is foldable only if it is pure, deterministic, and reads
 // nothing from the dynamic context — which rules out fn:position, fn:last,
 // fn:current-dateTime, fn:doc, and anything collation- or timezone-sensitive,
 // and would rule out a user-defined function even if it happened to be pure.
-func foldableFunction(name xdm.QName) bool {
+//
+// Arity is part of the question, not a detail of it. XPath overloads on arity,
+// and F&O gives the two forms of a name different properties: fn:string#1,
+// fn:number#1 and fn:string-length#1 are focus-independent, while fn:string#0,
+// fn:number#0 and fn:string-length#0 are all declared ·focus-dependent· —
+// they read the context item. Keying the allowlist on the name alone said
+// "foldable" for all six.
+//
+// Nothing was ever mis-folded by that: evalToLiteral evaluates against an
+// empty focus, so the zero-arity forms raised XPDY0002 and the unfolded tree
+// came back. But that is the wrong thing to be relying on. It makes the
+// optimiser's correctness a property of what happens to fail rather than of
+// what it declines to attempt, and it fails silently in the direction of
+// mis-compiling if evalToLiteral is ever given a focus. The arity check states
+// the invariant where the decision is made.
+func foldableFunction(name xdm.QName, arity int) bool {
 	switch name.URI {
 	case xdm.NSXS:
-		// The xs: constructors are pure conversions of their argument.
+		// The xs: constructors are pure conversions of their argument. Every
+		// one of them is registered at arity 1 only — there is no zero-arity
+		// constructor to admit a focus dependency — so the whole namespace
+		// stays foldable.
 		return true
 	case xdm.NSFN:
 	default:
 		return false
 	}
 	switch name.Local {
+	case "string", "number", "string-length":
+		// Only the explicit-argument form. The zero-arity form is the context
+		// item's, and the context item is not known at compile time.
+		return arity == 1
 	case "abs", "ceiling", "floor", "round", "round-half-to-even",
 		"count", "sum", "avg",
-		"concat", "string-length", "upper-case", "lower-case",
+		"concat", "upper-case", "lower-case",
 		"substring", "translate",
-		"not", "true", "false", "boolean", "number", "string",
+		"not", "true", "false", "boolean",
 		"empty", "exists", "reverse":
 		return true
 	}

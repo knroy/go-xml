@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/knroy/go-xml/xdm"
 )
@@ -1074,5 +1075,330 @@ func TestUPABudgetProductionValues(t *testing.T) {
 	if maxUPAPairTests != 1<<22 {
 		t.Errorf("maxUPAPairTests is %d, want %d; if this change is deliberate, "+
 			"update this test and docs/security.md", maxUPAPairTests, 1<<22)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Substitution closure budget
+// ---------------------------------------------------------------------------
+
+// withSubstBudget runs fn with maxSubstitutionClosure set to n, restoring it
+// afterwards.
+//
+// Like the UPA budgets and unlike the four at the top of this file, this one
+// bounds the input to a normative CHECK rather than the construction of
+// something that becomes unusable when it is declined. Substitution membership
+// decides which elements a particle matches, so a closure that is not computed
+// is not a smaller correct answer — it is a content model whose UPA and
+// Element Declarations Consistent verdicts are both unknown.
+func withSubstBudget(n int, fn func()) {
+	o := maxSubstitutionClosure
+	defer func() { maxSubstitutionClosure = o }()
+	maxSubstitutionClosure = n
+	fn()
+}
+
+// substCases are schemas whose acceptance turns on the substitution closure:
+// each invalid shape paired with the valid shape it is one edit away from.
+//
+// Both polarities are required for the same reason the UPA cases are. A budget
+// that truncated the closure instead of refusing would still accept every
+// valid case here, and would also accept the invalid ones — because the member
+// that causes the violation is exactly the member truncation drops. A suite of
+// valid schemas alone cannot see that.
+func substCases() []derivationCase {
+	// A head, and a member substituting for it under a name that a LOCAL
+	// particle in the same content model also declares, with a different
+	// type. That is cos-element-consistent: "n" means two things in one
+	// model, once directly and once through the group.
+	//
+	// The conflict must come from the like-named LOCAL particle, not from
+	// the member's own type. e-props-correct.4 (parse_decl.go) already
+	// requires a member's type to derive from its head's, and it is checked
+	// at parse time, before the closure exists — so a member typed
+	// incompatibly with its head never reaches this budget at all. The
+	// member here is typed xs:string like its head; it is the local "n" of
+	// type xs:date beside it that makes the model inconsistent.
+	edcBad := wrap(`
+	  <xs:element name="head" type="xs:string"/>
+	  <xs:element name="n" type="xs:string" substitutionGroup="head"/>
+	  <xs:complexType name="t"><xs:sequence>
+	    <xs:element name="n" type="xs:date"/>
+	    <xs:element ref="head"/>
+	  </xs:sequence></xs:complexType>`)
+	// The same schema with the local particle's type agreed: valid, and
+	// valid only after the closure has been consulted.
+	edcGood := wrap(`
+	  <xs:element name="head" type="xs:string"/>
+	  <xs:element name="n" type="xs:string" substitutionGroup="head"/>
+	  <xs:complexType name="t"><xs:sequence>
+	    <xs:element name="n" type="xs:string"/>
+	    <xs:element ref="head"/>
+	  </xs:sequence></xs:complexType>`)
+	// A choice between a head and one of its own members: the two branches
+	// can both match the member's name, so the model is ambiguous. This is
+	// UPA reached THROUGH the closure — elementNamesOverlap is the only
+	// reason the two particles compete at all.
+	upaBad := wrap(`
+	  <xs:element name="head" type="xs:string"/>
+	  <xs:element name="mem" type="xs:string" substitutionGroup="head"/>
+	  <xs:complexType name="t"><xs:choice>
+	    <xs:element ref="head"/>
+	    <xs:element ref="mem"/>
+	  </xs:choice></xs:complexType>`)
+	// The same choice where the second branch is NOT in the group, so the
+	// names cannot overlap.
+	upaGood := wrap(`
+	  <xs:element name="head" type="xs:string"/>
+	  <xs:element name="mem" type="xs:string" substitutionGroup="head"/>
+	  <xs:element name="other" type="xs:string"/>
+	  <xs:complexType name="t"><xs:choice>
+	    <xs:element ref="head"/>
+	    <xs:element ref="other"/>
+	  </xs:choice></xs:complexType>`)
+	return []derivationCase{
+		{"subst/edc-conflicting-types", edcBad, false, Version11},
+		{"subst/edc-agreeing-types", edcGood, true, Version11},
+		{"subst/upa-head-vs-member", upaBad, false, Version10},
+		{"subst/upa-head-vs-outsider", upaGood, true, Version10},
+	}
+}
+
+// TestSubstitutionClosureBudgetSoundness states the two-sided property, the
+// same one TestUPABudgetSoundness states and for the same reason.
+//
+// maxSubstitutionClosure bounds a structure that two normative constraints are
+// decided FROM — Unique Particle Attribution and Element Declarations
+// Consistent. Declining to build it therefore leaves both undecided, and an
+// undecided normative constraint must be refused, never assumed to hold:
+//
+//	budgeted accepts  => exact accepts
+//	budgeted declines => an ERROR carrying xdm.ErrResourceLimit
+//
+// Every case is forced fully over budget, so the second clause is what is
+// exercised — and it is exercised on the VALID cases as well as the invalid
+// ones, because a closure that was never computed cannot tell them apart. That
+// indistinguishability is why the refusal reports a limit rather than a
+// verdict.
+func TestSubstitutionClosureBudgetSoundness(t *testing.T) {
+	for _, c := range substCases() {
+		t.Run(c.name, func(t *testing.T) {
+			exact, exactWhy := loadSchema(c.schema, c.ver)
+			if exact != c.valid {
+				t.Fatalf("case is mislabelled: at the normal budget got accepted=%v (%s), want %v",
+					exact, exactWhy, c.valid)
+			}
+			// 0 is the only forcing guaranteed to be over budget for
+			// every case: the gate counts members VISITED, so a
+			// one-member closure fits within a limit of 1.
+			for _, limit := range []int{0} {
+				var err error
+				withSubstBudget(limit, func() {
+					err = loadSchemaErr(t, c.schema, c.ver)
+				})
+				if err == nil {
+					t.Errorf("FALSE ACCEPT: with maxSubstitutionClosure=%d the "+
+						"substitution closure was never computed, so neither UPA nor "+
+						"Element Declarations Consistent could be decided over it, "+
+						"yet the schema LOADED. A budget may decline to answer; it "+
+						"must not answer \"valid\".\n  schema: %s", limit, c.schema)
+					continue
+				}
+				if !errors.Is(err, xdm.ErrResourceLimit) {
+					t.Errorf("with maxSubstitutionClosure=%d the schema was refused as "+
+						"%v, without xdm.ErrResourceLimit; a budget refusal must be "+
+						"distinguishable from a constraint verdict.\n  schema: %s",
+						limit, err, c.schema)
+				}
+			}
+		})
+	}
+}
+
+// TestSubstitutionClosureGenuineViolationIsNotAResourceLimit is the other
+// polarity: at the production budget the same schemas must report the real
+// constraint, and must NOT carry the sentinel. A caller that retried on
+// ErrResourceLimit would otherwise retry a load that can never succeed.
+func TestSubstitutionClosureGenuineViolationIsNotAResourceLimit(t *testing.T) {
+	for _, c := range substCases() {
+		if c.valid {
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			err := loadSchemaErr(t, c.schema, c.ver)
+			if err == nil {
+				t.Fatal("case is labelled invalid but loaded at the production budget")
+			}
+			if errors.Is(err, xdm.ErrResourceLimit) {
+				t.Errorf("a genuine constraint violation %v reports as a resource "+
+					"limit; a caller would retry a load that can never succeed", err)
+			}
+		})
+	}
+}
+
+// TestSubstitutionClosureRefusalIsNotATruncation is the property that
+// separates this budget from the tempting cheap alternative.
+//
+// Truncating the closure — keeping the first N members and dropping the rest —
+// would let every schema load, which looks like the conservative choice and is
+// the opposite of one. The dropped member is precisely the one that causes a
+// violation, so truncation converts "invalid" into "accepted" without ever
+// reporting that it did. This test drives an invalid schema whose fault lies in
+// the LAST member of a chain and checks that the over-budget outcome is a
+// refusal rather than a load.
+func TestSubstitutionClosureRefusalIsNotATruncation(t *testing.T) {
+	// A chain h0 <- h1 <- ... <- tail, every member typed xs:string like the
+	// head so e-props-correct.4 is satisfied and the schema survives to the
+	// closure. The content model names a LOCAL "tail" of type xs:date, which
+	// conflicts with the chain's last member. Only the full closure of h0
+	// reaches that member, so only the full closure sees the violation.
+	const n = 12
+	var b strings.Builder
+	b.WriteString(`<xs:element name="h0" type="xs:string"/>`)
+	for i := 1; i < n-1; i++ {
+		fmt.Fprintf(&b, `<xs:element name="h%d" type="xs:string" substitutionGroup="h%d"/>`, i, i-1)
+	}
+	fmt.Fprintf(&b, `<xs:element name="tail" type="xs:string" substitutionGroup="h%d"/>`, n-2)
+	b.WriteString(`<xs:complexType name="t"><xs:sequence>` +
+		`<xs:element name="tail" type="xs:date"/>` +
+		`<xs:element ref="h0"/>` +
+		`</xs:sequence></xs:complexType>`)
+	src := wrap(b.String())
+
+	err := loadSchemaErr(t, src, Version11)
+	if err == nil {
+		t.Fatalf("the chain's last member declares \"tail\" as xs:string beside a "+
+			"local \"tail\" of xs:date; that is cos-element-consistent and must "+
+			"be rejected at the production budget (chain length %d)", n)
+	}
+	if errors.Is(err, xdm.ErrResourceLimit) {
+		t.Fatalf("rejected as a resource limit at the production budget: %v", err)
+	}
+
+	// Now force the budget below the chain length. The member carrying the
+	// fault is beyond it, so a truncating implementation would load this
+	// schema clean.
+	withSubstBudget(n/2, func() {
+		err := loadSchemaErr(t, src, Version11)
+		if err == nil {
+			t.Fatalf("FALSE ACCEPT: with maxSubstitutionClosure=%d the closure "+
+				"stopped short of the member that makes this schema invalid, and "+
+				"the schema LOADED. A budget that truncates a substitution closure "+
+				"does not give a smaller correct answer, it hides the violation "+
+				"the dropped member causes.", n/2)
+		}
+		if !errors.Is(err, xdm.ErrResourceLimit) {
+			t.Errorf("over budget the refusal %v does not carry "+
+				"xdm.ErrResourceLimit", err)
+		}
+	})
+}
+
+// TestSubstitutionClosureBudgetDoesNotFireOnRealSchemas pins the threshold
+// against the census that chose it.
+//
+// Instrumented over all 15,702 .xsd files in this tree — testdata/xsdtests,
+// testdata/xslt30-test, testdata/qt3tests, testdata/relaxng, testdata/xsltng,
+// testdata/xspec and w3cschemas — loaded at both 1.0 and 1.1, the largest total
+// closure any real schema produces is 50 membership entries, in
+// testdata/xslt30-test/admin/catalog-schema.xsd, whose widest single closure is
+// 26 members. maxSubstitutionClosure is 65,536: over 1,300x the widest real
+// schema in this tree.
+//
+// The gap matters because firing REJECTS. A regression that lowered this
+// threshold would not quietly degrade an analysis, it would stop valid schemas
+// from loading.
+func TestSubstitutionClosureBudgetDoesNotFireOnRealSchemas(t *testing.T) {
+	const widestReal = 50
+	if maxSubstitutionClosure <= widestReal {
+		t.Fatalf("maxSubstitutionClosure is %d, at or below the largest total "+
+			"substitution closure a real schema in this tree produces (%d, in "+
+			"testdata/xslt30-test/admin/catalog-schema.xsd). The budget would "+
+			"refuse legitimate input and valid schemas would stop loading.",
+			maxSubstitutionClosure, widestReal)
+	}
+	// And the widest real schema really does load, rather than merely
+	// comparing below a constant. A star of one head with widestReal
+	// members reproduces that census maximum in a single closure.
+	var b strings.Builder
+	b.WriteString(`<xs:element name="head" type="xs:string"/>`)
+	for i := 0; i < widestReal; i++ {
+		fmt.Fprintf(&b, `<xs:element name="m%d" type="xs:string" substitutionGroup="head"/>`, i)
+	}
+	b.WriteString(`<xs:complexType name="t"><xs:sequence>` +
+		`<xs:element ref="head" minOccurs="0"/></xs:sequence></xs:complexType>`)
+	if err := loadSchemaErr(t, wrap(b.String()), Version11); err != nil {
+		t.Fatalf("a substitution group of %d members is the largest any real schema "+
+			"in this tree produces, and it must load: %v", widestReal, err)
+	}
+}
+
+// TestSubstitutionClosureProductionValue pins the shipped number, for the
+// reason TestUPABudgetProductionValues does: the boundary tests above run at
+// forced values, and this keeps that substitution honest. Since the budget
+// refuses rather than truncates, this number decides which valid schemas load,
+// so lowering it is a compatibility change rather than a tuning knob.
+func TestSubstitutionClosureProductionValue(t *testing.T) {
+	if maxSubstitutionClosure != 1<<16 {
+		t.Errorf("maxSubstitutionClosure is %d, want %d; if this change is "+
+			"deliberate, update this test and docs/security.md",
+			maxSubstitutionClosure, 1<<16)
+	}
+}
+
+// TestElementNamesOverlapIsLinearInClosureSize guards the algorithm change that
+// made a budget here unnecessary.
+//
+// elementNamesOverlap once looped one substitution closure inside the other, so
+// a single pair test cost O(|a|*|b|) while checkUPA's maxUPAPairTests counted it
+// as ONE. No budget in the package measured the closure, so the quadratic factor
+// was invisible to all of them: 32 positions at closure 2048 spent 90 seconds
+// inside checkUPA with maxPositions, maxUPAStateWidth and maxUPAPairTests all
+// satisfied. Intersecting through a map made the same shape cost 574ms.
+//
+// The property asserted is a GROWTH RATE, not a wall-clock threshold, for the
+// reason complexity_fuzz_test.go records. Doubling the closure size must roughly
+// double the cost; the quadratic form would quadruple it.
+func TestElementNamesOverlapIsLinearInClosureSize(t *testing.T) {
+	// Two heads whose closures are disjoint and equal in size, so every
+	// comparison runs to completion instead of short-circuiting on a hit.
+	build := func(n int) (a, b *ElementDecl) {
+		mk := func(prefix string) *ElementDecl {
+			h := &ElementDecl{Name: xdm.QName{Local: prefix}}
+			subs := make([]*ElementDecl, n)
+			for i := range subs {
+				subs[i] = &ElementDecl{
+					Name: xdm.QName{Local: fmt.Sprintf("%s_m%d", prefix, i)}}
+			}
+			h.substitutable = subs
+			return h
+		}
+		return mk("x"), mk("y")
+	}
+	cost := func(n, iters int) time.Duration {
+		a, b := build(n)
+		start := time.Now()
+		for i := 0; i < iters; i++ {
+			if elementNamesOverlap(a, b) {
+				t.Fatal("disjoint closures must not overlap")
+			}
+		}
+		return time.Since(start)
+	}
+	const iters = 200
+	// Warm up, so the first measurement does not pay for lazy allocation.
+	cost(1024, 10)
+	small := cost(1024, iters)
+	large := cost(4096, iters)
+	// A 4x increase in closure size. Linear predicts ~4x cost; the old
+	// nested form predicts ~16x. 8x is the midpoint, and a generous
+	// allowance for timer noise on a loaded machine.
+	if large > small*8 {
+		t.Errorf("elementNamesOverlap cost grew from %v at closure 1024 to %v at "+
+			"closure 4096 — more than the 8x that separates linear from "+
+			"quadratic growth over a 4x size increase. The map intersection has "+
+			"regressed to a nested loop, and checkUPA's pair budget does not "+
+			"bound the difference.", small, large)
 	}
 }

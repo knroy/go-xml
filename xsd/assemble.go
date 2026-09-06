@@ -129,7 +129,9 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if err := a.p.finish(); err != nil {
 		return nil, err
 	}
-	a.linkSubstitutionGroups()
+	if err := a.linkSubstitutionGroups(); err != nil {
+		return nil, err
+	}
 	// Particle Valid (Restriction) is checked last: it needs every base
 	// resolved, every content model spliced, and — for clause 2.1's
 	// substitution-group expansion — the substitution closure already
@@ -356,7 +358,9 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	if err := a.p.finish(); err != nil {
 		return nil, err
 	}
-	a.linkSubstitutionGroups()
+	if err := a.linkSubstitutionGroups(); err != nil {
+		return nil, err
+	}
 	// Particle Valid (Restriction) is checked last: it needs every base
 	// resolved, every content model spliced, and — for clause 2.1's
 	// substitution-group expansion — the substitution closure already
@@ -1097,17 +1101,81 @@ func declaresTargetNS(root *xdm.Node) bool {
 	return root.Attr("", "targetNamespace") != nil
 }
 
+// maxSubstitutionClosure bounds the TOTAL number of substitution-group
+// membership entries one schema may produce — the sum, over every global
+// element declaration, of the size of its transitive substitution closure.
+//
+// It is one budget rather than several because the two expensive algorithms it
+// bounds are expensive for the SAME reason, and that reason is this one number.
+//
+// The closure is quadratic in the element count and is built here, once. A
+// chain of n elements where each substitutes for the one before gives the i-th
+// head a closure of n-i, so the total is n^2/2 entries. Measured through the
+// public Load API on exactly that chain: n=512 10ms, n=1024 39ms, n=2048 152ms
+// and 2,096,128 entries, n=4096 633ms and 8,386,560 entries — 4x per doubling,
+// and 1.35GB allocated for one 273KB schema document. The schema text grows
+// linearly while the structure it builds grows as its square, which is the
+// signature this budget exists to cut.
+//
+// The second algorithm is the one that made this urgent. elementNamesOverlap
+// (upa.go) compares two declarations by looping over both their closures, so a
+// single pair test costs O(C^2) where C is the closure size. checkUPA's
+// maxUPAPairTests budget counts that pair as ONE, because it was written on the
+// assumption that a pair test is O(1). It is not, and the gap is not small: a
+// model of just 64 positions, far inside maxUPAStateWidth of 256, whose
+// declarations each carry a closure of 255, spends 28.5 SECONDS inside checkUPA
+// — and at closure 2048 with 32 positions, 90 seconds. Neither maxPositions nor
+// either UPA budget sees any of it, because none of them measures the closure.
+//
+// Bounding the closure at its source fixes both, and does so as a CEILING
+// rather than a sum. A per-check budget on each of the two would let one
+// adversarial schema spend both, so the worst case would be their total; and
+// the usual argument against sharing — that one legitimately expensive check
+// starves another — does not apply here, because this is not a pool of work
+// drawn down by whoever runs first. It is a bound on the SIZE of a single
+// shared data structure, enforced once when that structure is built, before any
+// check consumes it. Every consumer sees the same bound and none can exhaust it
+// for the others.
+//
+// 65,536 is chosen from a census, not from taste. Instrumented over all 15,702
+// .xsd files in this tree (testdata/xsdtests, testdata/xslt30-test,
+// testdata/qt3tests, testdata/relaxng, testdata/xsltng, testdata/xspec and
+// w3cschemas), loaded at both 1.0 and 1.1, the largest total any real schema
+// produces is 50 entries, in
+// testdata/xslt30-test/admin/catalog-schema.xsd, whose widest single closure is
+// 26 members. The threshold is therefore over 1,300x the widest real schema in
+// this tree, while capping the closure build at ~65k entries (tens of
+// milliseconds) and one elementNamesOverlap pair test at C^2 for the largest C
+// the total permits.
+//
+// Exceeding it REFUSES the schema, with an error wrapping xdm.ErrResourceLimit.
+// It does not truncate the closure and carry on. A truncated closure is not a
+// smaller correct answer: substitution membership decides which elements a
+// particle matches, so dropping members would make a document that should be
+// valid fail to validate, and — worse in the direction this file cares about —
+// would hide a cos-element-consistent or cos-nonambig violation that the
+// dropped member was the cause of. That is the same false accept the UPA budget
+// was corrected to avoid: an unexamined normative constraint reported as
+// satisfied. See maxUPAStateWidth in upa.go for the policy in full.
+//
+// It is a var only so tests may lower it; it is never assigned in production.
+var maxSubstitutionClosure = 1 << 16 // 65,536
+
 // linkSubstitutionGroups fills the transitive substitution group membership
 // cached on each element declaration.
 //
 // This runs after every document is read because a member may be declared in a
 // document that had not been read when its head was. The closure is transitive:
 // if B substitutes for A and C for B, then C substitutes for A.
-func (a *assembler) linkSubstitutionGroups() {
-	linkSubstitutionGroups(a.schema)
+//
+// It returns an error wrapping xdm.ErrResourceLimit when the closure would
+// exceed maxSubstitutionClosure entries in total; see that constant for why the
+// bound is shared, and why exceeding it refuses rather than truncates.
+func (a *assembler) linkSubstitutionGroups() error {
+	return linkSubstitutionGroups(a.schema)
 }
 
-func linkSubstitutionGroups(s *Schema) {
+func linkSubstitutionGroups(s *Schema) error {
 	// Schema.Elements is a map, so ranging it directly would seed `direct`
 	// in a different order on every run and leave {substitution group}
 	// membership in a different order with it. That is not cosmetic:
@@ -1154,6 +1222,12 @@ func linkSubstitutionGroups(s *Schema) {
 	// members come out in the order `direct` holds them, which the sort
 	// above made deterministic; popping from the back would reverse each
 	// level and put a head's own members in descending name order.
+	// total counts the membership entries produced so far, across every
+	// head. It is checked as the closure is built rather than afterwards,
+	// because the cost being bounded is the building: a schema that would
+	// produce a gigabyte of entries must not produce them and then be told
+	// the answer was too big.
+	total := 0
 	for _, name := range names {
 		head := s.Elements[name]
 		var out []*ElementDecl
@@ -1166,6 +1240,19 @@ func linkSubstitutionGroups(s *Schema) {
 				continue
 			}
 			seen[d] = true
+			// Counted per member VISITED, not per member kept: a
+			// blocked member still costs the walk that reached it,
+			// and still pushes its own members onto the queue.
+			total++
+			if total > maxSubstitutionClosure {
+				return fmt.Errorf(
+					"substitution group membership cannot be computed: the "+
+						"schema's substitution closures exceed %d total members; "+
+						"the schema is refused because its content-model "+
+						"constraints cannot be decided within that bound, not "+
+						"because any of them is known to be violated: %w",
+					maxSubstitutionClosure, xdm.ErrResourceLimit)
+			}
 			// A member is substitutable only if the derivation
 			// taking its type to the head's is not in the head's
 			// {disallowed substitutions} (§3.3.6). block= on the
@@ -1183,6 +1270,7 @@ func linkSubstitutionGroups(s *Schema) {
 		}
 		head.substitutable = out
 	}
+	return nil
 }
 
 // Substitutable returns the element declarations that may substitute for this

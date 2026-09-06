@@ -81,14 +81,76 @@ import (
 //	                                                              by TestUPACostIsCubicInPositions,
 //	                                                              which measures at n=128/256,
 //	                                                              below the width gate.
-//	substitution-closure overlap  elementNamesOverlap,        NO BUDGET. Nested loop over
-//	                              upa.go:338                  two substitutable slices.
-//	substitution EDC              checkSubstitutionEDC, :487  NO BUDGET. positions x closure.
-//	wildcard EDC                  checkWildcardEDC, :575      NO BUDGET. <= positions^2.
-//	follow-set dedup              addFollow, automaton.go:425 NO BUDGET. Linear dup-scan per
-//	                                                          edge within maxPositions.
-//	substitution closure BFS      linkSubstitutionGroups,     NO BUDGET. Run once per global
-//	                              assemble.go:1110            element: O(N^2) over elements.
+//	substitution closure BFS      linkSubstitutionGroups,     BUDGETED as of the entry
+//	                              assemble.go                 below. maxSubstitutionClosure
+//	                                                          (2^16 = 65,536) caps the TOTAL
+//	                                                          membership entries one schema
+//	                                                          produces, counted as the walk
+//	                                                          visits them. Exceeding it
+//	                                                          REFUSES with an error wrapping
+//	                                                          xdm.ErrResourceLimit; it does
+//	                                                          not truncate, because a
+//	                                                          truncated closure hides the
+//	                                                          cos-nonambig or
+//	                                                          cos-element-consistent
+//	                                                          violation the dropped member
+//	                                                          causes. Was O(N^2) unbounded:
+//	                                                          a chain of 4,096 elements
+//	                                                          built 8,386,560 entries and
+//	                                                          1.35GB from a 273KB document.
+//	substitution-closure overlap  elementNamesOverlap,        NO BUDGET, AND NONE NEEDED --
+//	                              upa.go                      but for an ALGORITHM change,
+//	                                                          not because it was ever cheap.
+//	                                                          It looped one closure inside
+//	                                                          the other, O(|a|*|b|) per pair,
+//	                                                          while checkUPA's
+//	                                                          maxUPAPairTests counted the
+//	                                                          pair as ONE. No budget in the
+//	                                                          package measured the closure,
+//	                                                          so the quadratic factor was
+//	                                                          invisible to all of them: 32
+//	                                                          positions at closure 2,048
+//	                                                          spent 90 SECONDS inside
+//	                                                          checkUPA with maxPositions,
+//	                                                          maxUPAStateWidth and
+//	                                                          maxUPAPairTests all satisfied.
+//	                                                          It now intersects through a
+//	                                                          map, O(|a|+|b|), which
+//	                                                          maxSubstitutionClosure bounds.
+//	                                                          The same shape costs 574ms.
+//	                                                          Pinned by
+//	                                                          TestElementNamesOverlapIsLinearInClosureSize.
+//	substitution EDC              checkSubstitutionEDC,       NO BUDGET, AND NONE NEEDED:
+//	                              upa.go                      positions x closure, but it
+//	                                                          dedups by NAME into a map, so
+//	                                                          the work is linear in the
+//	                                                          closure and each step is a map
+//	                                                          lookup. Measured at its worst
+//	                                                          constructible shape -- 32
+//	                                                          heads, closure 2,048, 65,536
+//	                                                          entries -- it costs 9ms, while
+//	                                                          checkUPA on the same schema
+//	                                                          costs 574ms. Bounded anyway by
+//	                                                          maxSubstitutionClosure.
+//	wildcard EDC                  checkWildcardEDC, upa.go    NO BUDGET, AND NONE NEEDED:
+//	                                                          <= positions^2, so maxPositions
+//	                                                          bounds it, and it cannot be
+//	                                                          made expensive. At 512
+//	                                                          wildcards against 512 locals it
+//	                                                          measures 0ms -- and never runs
+//	                                                          at all, because checkUPA
+//	                                                          rejects that model first. A
+//	                                                          budget here would be dead code.
+//	follow-set dedup              addFollow, automaton.go     NO BUDGET, AND NONE NEEDED:
+//	                                                          linear dup-scan per edge within
+//	                                                          maxPositions. The densest
+//	                                                          follow relation the shortest
+//	                                                          schema text can produce costs
+//	                                                          495ms at n=2,048, dominated by
+//	                                                          the automaton build rather than
+//	                                                          the dup scan, and checkUPA's
+//	                                                          width gate refuses that model
+//	                                                          at n>=512 regardless.
 //	derivation matching           recurseLaxUnordered :1254,  NO BUDGET, no memoisation, no
 //	                              recurseUnordered :1281,     depth limit. Terminates only
 //	                              mapAndSum :1562             because checkGroupCycles

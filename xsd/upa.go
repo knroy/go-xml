@@ -440,22 +440,52 @@ func positionsCompete(a, b *position, version Version) bool {
 // declaration if a member of the list contains it in its substitution group, so
 // the comparison is between the *sets* of names each can match rather than
 // between the two declared names.
+//
+// The two name sets are intersected through a map rather than by looping over
+// one inside the other. That is not a micro-optimisation. The nested form is
+// O(|a|*|b|) per PAIR, while checkUPA's maxUPAPairTests budget counts the pair
+// as ONE — it was written assuming a pair test is O(1) — so the quadratic
+// factor was invisible to every budget in the package. Measured through the
+// public Load API, a model of 64 positions whose declarations each carried a
+// closure of 255 spent 28.5 seconds inside checkUPA, and 32 positions at
+// closure 2048 spent 90 seconds; maxPositions, maxUPAStateWidth and
+// maxUPAPairTests were all satisfied throughout, because none of them measures
+// the closure. Intersecting through a map makes one pair test O(|a|+|b|), which
+// is a cost maxSubstitutionClosure (assemble.go) genuinely bounds.
+//
+// A budget was considered here instead and rejected: a bound is the right
+// answer only when the work is irreducible, and this work was not. Refusing a
+// schema for a cost that a map lookup removes would reject legitimate input to
+// avoid an expense the caller need never have paid.
 func elementNamesOverlap(a, b *ElementDecl) bool {
 	if a.Name == b.Name {
 		return true
+	}
+	for _, sub := range b.substitutable {
+		if sub.Name == a.Name {
+			return true
+		}
 	}
 	for _, sub := range a.substitutable {
 		if sub.Name == b.Name {
 			return true
 		}
-		for _, other := range b.substitutable {
-			if sub.Name == other.Name {
-				return true
-			}
-		}
 	}
-	for _, sub := range b.substitutable {
-		if sub.Name == a.Name {
+	if len(a.substitutable) == 0 || len(b.substitutable) == 0 {
+		return false
+	}
+	// The two closures are intersected. The smaller set is the one
+	// indexed, so the map built is never larger than the shorter closure.
+	small, large := a.substitutable, b.substitutable
+	if len(small) > len(large) {
+		small, large = large, small
+	}
+	names := make(map[xdm.QName]bool, len(small))
+	for _, sub := range small {
+		names[sub.Name] = true
+	}
+	for _, sub := range large {
+		if names[sub.Name] {
 			return true
 		}
 	}

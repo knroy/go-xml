@@ -64,7 +64,8 @@ rejecting direction:
 `xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
 `DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
-`branchLimit` · `maxPositions` · `TransformOptions.MaxDepth` · the RELAX NG
+`branchLimit` · `maxPositions` · `maxUPAStateWidth` · `maxUPAPairTests` ·
+`maxSubstitutionClosure` · `TransformOptions.MaxDepth` · the RELAX NG
 derivative bound · the XPath regex step and depth budgets.
 
 "Refused loudly" needed qualifying, and now it holds in both halves. A limit
@@ -187,6 +188,112 @@ clean one both returned nil and were otherwise indistinguishable; a refusal is
 its own signal, so the field was dead. The prior advice to wrap untrusted loads
 in a wall-clock limit remains good practice, but it is no longer load-bearing
 for this particular algorithm.
+
+**The substitution closure is now bounded too, and one budget covers both
+algorithms that depend on it.** `linkSubstitutionGroups` (`xsd/assemble.go`)
+builds the transitive substitution-group membership of every global element,
+once, before any content-model constraint is checked. It was quadratic and
+unbounded: a chain of n elements where each substitutes for the one before
+gives the i-th head a closure of n-i, so the structure is n^2/2 entries from a
+schema text that grew linearly. Measured through the public `Load` API on that
+chain — n=512 10ms, n=1024 39ms, n=2048 152ms, n=4096 633ms and **8,386,560
+entries, 1.35GB allocated for one 273KB schema document**, 4x per doubling.
+
+The second algorithm is why this was urgent rather than merely untidy.
+`elementNamesOverlap` (`xsd/upa.go`) decides whether two element declarations
+can match the same name, and it did so by looping one substitution closure
+inside the other — O(|a|·|b|) for a *single pair test*. `checkUPA`'s
+`maxUPAPairTests` budget counts that pair as **one**, because it was written on
+the assumption that a pair test is O(1). It is not, and nothing else in the
+package measured the closure either. The gap is not marginal: a content model
+of just 64 positions — well inside `maxUPAStateWidth` of 256 — whose
+declarations each carry a closure of 255 spends **28.5 seconds** inside
+`checkUPA`, and 32 positions at closure 2,048 spends **90 seconds**, with
+`maxPositions`, `maxUPAStateWidth` and `maxUPAPairTests` all satisfied
+throughout. A budget can only bound what it measures, and none of them measured
+this.
+
+`elementNamesOverlap` was fixed by **algorithm rather than by budget**, and the
+distinction is deliberate. A bound is the right answer only when the work is
+irreducible; this work was a set intersection computed by brute force. It now
+intersects through a map, O(|a|+|b|) per pair, and the 90-second shape costs
+574ms. Refusing a schema for a cost that a map lookup removes would reject
+legitimate input to avoid an expense the caller never needed to pay.
+`TestElementNamesOverlapIsLinearInClosureSize` asserts the growth rate — a 4x
+increase in closure size must not cost more than 8x — so a regression to the
+nested form is caught as such rather than as a slow test.
+
+The worst case measured on the pre-fix code is worse than the figures above,
+and is recorded because it isolates the cause. Holding the PAIR COUNT FIXED at
+2,016 and varying only the closure size, a 64-position model cost 2.3s at
+closure 64, 8.1s at 128 and 31.1s at 256 — 4x per doubling of a quantity
+`maxUPAPairTests` does not measure, while the number of pairs it does measure
+never changed. At 128 positions the same shape cost 3m55s at closure 256 and
+**18m4s at closure 512**, and it LOADED: an 18-minute schema load inside every
+budget the package had. After the fix those same five shapes cost 437ms, 816ms,
+1.53s, 12.1s and 25.0s — 2x per closure doubling instead of 4x, a 43x
+improvement at the largest, and the speedup widens with size, which is the
+signature of removing a quadratic factor rather than a constant one.
+
+`maxSubstitutionClosure` (2^16 = 65,536) then bounds what remains: the total
+membership entries one schema may produce, counted as the walk visits them.
+
+**It is one budget, not two, and that is a ceiling rather than a sum.** Both
+expensive algorithms are expensive for the same reason, and that reason is a
+single number computed in a single place. Independent per-check budgets would
+let one adversarial schema spend both, making the worst case their total; the
+shared bound makes it a maximum. The usual argument against sharing — that one
+legitimately expensive check starves another — does not apply, because this is
+not a pool of work drawn down by whichever consumer runs first. It is a bound
+on the **size of a shared data structure**, enforced once when that structure
+is built, before any check reads it. Every consumer sees the same bound and
+none can exhaust it for the others.
+
+**Exceeding it REFUSES the schema; it does not truncate the closure.** The
+truncating alternative is the tempting one and is the more dangerous by far,
+because it looks conservative. Substitution membership decides which elements a
+particle matches, so dropping members is not a smaller correct answer: a
+document that should validate would fail, and — in the direction this file
+cares about — a `cos-nonambig` or `cos-element-consistent` violation caused by
+the dropped member would vanish, reported as satisfied by a check that never
+saw it. That is precisely the false accept the UPA budget was corrected to
+avoid.
+
+`xsd/budget_soundness_test.go` states the same two-sided property it states for
+UPA — over budget must produce an error wrapping `xdm.ErrResourceLimit`, for
+valid and invalid schemas alike, because a closure that was never computed
+cannot tell them apart — and `TestSubstitutionClosureRefusalIsNotATruncation`
+drives an invalid schema whose fault lies in the last member of a chain,
+proving the over-budget outcome is a refusal rather than a load. Both were
+validated by sabotage: made to truncate and carry on, the harness reported
+`FALSE ACCEPT` naming the schema; the `elementNamesOverlap` fix reverted to the
+nested loop was caught by growth rate, 945ms at closure 1,024 against 13.7s at
+4,096.
+
+The threshold rests on a census, not on taste. Instrumented over all 15,702
+`.xsd` files in this tree — `testdata/xsdtests`, `testdata/xslt30-test`,
+`testdata/qt3tests`, `testdata/relaxng`, `testdata/xsltng`, `testdata/xspec`
+and `w3cschemas` — loaded at both 1.0 and 1.1, the largest total closure any
+real schema produces is **50 membership entries**, in
+`testdata/xslt30-test/admin/catalog-schema.xsd`, whose widest single closure is
+26 members. 65,536 is over 1,300x that.
+`TestSubstitutionClosureBudgetDoesNotFireOnRealSchemas` pins the gap from
+below, and it matters for the same reason the UPA one does: firing rejects.
+Both conformance marks are unchanged — XSD 1.0 39,347 and XSD 1.1 41,532.
+
+**Three neighbouring checks were examined and deliberately left unbudgeted**,
+because a budget on work that cannot be made expensive is dead code that only
+adds a way to reject valid input. `checkSubstitutionEDC` is positions x
+closure, but it dedups by name into a map, so its work is linear and each step
+is a lookup: at its worst constructible shape — 32 heads, closure 2,048, 65,536
+entries — it costs **9ms**, against 574ms for `checkUPA` on the same schema.
+`checkWildcardEDC` is bounded by `maxPositions` at positions^2 and measures
+**0ms** at 512 wildcards against 512 locals; it never even runs on that shape,
+because `checkUPA` rejects the model first. `addFollow`'s linear dup-scan sits
+within `maxPositions` and is dominated by the automaton build — 495ms at
+n=2,048, a model `checkUPA`'s width gate refuses at n>=512 regardless. All
+three are recorded with these numbers in the inventory in
+`xsd/complexity_fuzz_test.go`.
 
 One neighbouring path is **not** changed by this and is recorded as a known
 gap: when `compileContentModel` fails (`upa.go:179`, `maxPositions` exceeded)
