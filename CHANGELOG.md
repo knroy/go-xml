@@ -6,6 +6,65 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added
+
+**`op:same-key` is written down as a relation, and the canonical map key is
+tested against it.** `xdm.MapKeyOf` encodes "these two values are the same map
+key" as a string, so that a lookup is one map access rather than a scan. That
+is the right implementation, but it left the relation itself unstated: the only
+description of the rule was the shape of the strings `MapKeyOf` happened to
+build, and a property phrased over the encoding cannot contradict the encoding.
+Every recent defect in this area had that form.
+
+`SameKey(a, b)` (`xdm/samekey_oracle_test.go`) now spells the W3C relation out
+directly, from the specification rather than from the code, and
+`TestMapKeyOfMatchesSameKey` asserts that the two agree on all 12,544 ordered
+pairs of a 112-value corpus. The property is a biconditional on purpose:
+"same key implies `SameKey`" alone is satisfied by an encoding that gives every
+value a distinct key, and the converse alone by one that gives every value the
+same key. Only both directions together rule out both degenerate answers -- the
+same asymmetry that let an earlier one-sided soundness property accept a UPA
+budget which skipped its own check.
+
+`TestSameKeyIsAnEquivalence` guards the oracle in turn: a relation that is not
+reflexive, symmetric and transitive cannot be implemented by any canonical key
+at all, so without it the differential test could be measuring against nothing.
+
+Four independent sabotages of `MapKeyOf` -- removing the zoned-instant
+normalisation, keying durations lexically, applying the implicit timezone to
+unzoned values, and merging the string family into the numeric one -- are each
+caught, as is a sabotage of the oracle itself.
+
+### Documented
+
+**The five Gregorian types are keyed correctly, and the asymmetry against
+`xs:date`/`xs:time`/`xs:dateTime` is intended.** An audit reported that
+`MapKeyOf` has a semantic path for only three of the eight calendar types, so
+that `xs:gYear('2015Z')` and `xs:gYear('2015-05:00')` fail to collide where the
+equivalent `xs:time` pair collides, and proposed extending the instant
+normalisation to all eight. Measurement refuted it: those two `gYear` values
+are not equal under `eq` either, because a `gYear` carrying an offset denotes a
+different value rather than the same one spelled differently, so the miss is
+correct. The proposed fix is one of the four sabotages above, and the new
+differential test rejects it.
+
+The genuine distinction the investigation surfaced is between the two canonical
+keys the codebase maintains, which implement two DIFFERENT relations and must
+not be reconciled. `xpath.GroupingKey` substitutes the implicit timezone into
+an unzoned value, so `xs:date('2015-04-08')` and `xs:date('2015-04-08Z')` group
+together. `xdm.MapKeyOf` does not, so those same two values are separate map
+entries -- `same-key-013`, `-014` and `-015` build a three-entry map from
+exactly that pair and require all three entries to survive. A map key that
+depended on the implicit timezone would make one map have different sizes in
+different dynamic contexts. Both keys are now documented as answering different
+questions rather than as one of them being behind the other.
+
+Applying the proposed change drops the XQuery lane from 29,800 passing to
+29,791, with `same-key-013`, `-014` and `-015` each failing on
+`assert map:size($result?1) eq 3`. Those three cases are `XQ31+`, so they are
+out of scope in the XPath lane and only the XQuery lane gates them; the
+`TestQT3XQuery` ratchet mark is what catches this particular regression.
+
 ### Fixed
 
 **The substitution closure is bounded, and the pairwise overlap test that

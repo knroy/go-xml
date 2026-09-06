@@ -845,6 +845,12 @@ func clampPosition(pos *xdm.Atomic, past int) int {
 // one group, but their string forms differ. Keying on the string put them in
 // two.
 //
+// This is NOT xdm.MapKeyOf. Grouping applies the implicit timezone to an
+// unzoned value, which is why the pair above group together; a map key does
+// not, and same-key-013 through -015 require that pair to stay in separate
+// entries. See the commentary on xdm.MapKeyOf for why the two must not be
+// reconciled.
+//
 // coll may be nil, in which case strings key on themselves.
 func GroupingKey(a *xdm.Atomic, coll Collation, implicitTZ int) (string, error) {
 	ctx := &Context{ImplicitTimezone: implicitTZ}

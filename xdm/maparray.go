@@ -57,6 +57,20 @@ func NewMap() *MapItem { return &MapItem{index: map[string]int{}} }
 // no type promotion beyond the numeric hierarchy, so 1 and 1.0 collide while
 // "1" stands apart. Encoding that as a string keeps the lookup a plain map
 // access rather than a scan with a comparison function.
+//
+// This is NOT the same relation as xpath.GroupingKey, and the difference is
+// deliberate rather than an omission. Grouping substitutes the implicit
+// timezone into an unzoned value, so xs:date("2015-04-08") and
+// xs:date("2015-04-08Z") fall in one group. A map key must not: same-key-013,
+// -014 and -015 build a three-entry map from exactly that pair and require all
+// three entries to survive, because a key that depended on the implicit
+// timezone would give one map different sizes in different dynamic contexts.
+// The two keys answer different questions; neither is the other lagging behind.
+//
+// The relation this encodes is stated directly as SameKey in
+// samekey_oracle_test.go, and TestMapKeyOfMatchesSameKey asserts that the
+// encoding and the relation agree in both directions. Change one and that test
+// tells you whether the other has to follow.
 func MapKeyOf(a *Atomic) (string, error) {
 	if a == nil {
 		return "", Errorf("XPTY0004", "a map key must be a single atomic value")

@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,450 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,452 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -602,6 +602,26 @@ git stash push -- path/to/fix.go
 go test ./pkg/ -run TestTheRegression -count=1   # must FAIL, with the old error
 git stash pop
 ```
+
+**Where a value is encoded, test the encoding against the relation.** Several
+places here compress a semantic rule into a string so a lookup is one map
+access instead of a scan: `xdm.MapKeyOf` for map keys, `xpath.GroupingKey` for
+`xsl:for-each-group`. The hazard is that the rule then exists only as the shape
+of the strings the encoder happens to build, so any property phrased over the
+encoding is satisfied by the encoding and can never contradict it.
+
+Write the relation out separately, from the specification rather than from the
+code, and assert that the two agree — in **both** directions. One direction is
+always vacuous: "same key implies same value" holds of an encoder that gives
+every value a distinct key, and its converse of one that gives every value the
+same key. `xdm/samekey_oracle_test.go` does this for `op:same-key`, and adds a
+second test that the relation is reflexive, symmetric and transitive, since a
+relation that is not an equivalence cannot be implemented by any canonical key
+and would leave the first test measuring against nothing.
+
+This is the same failure that let a one-sided soundness property accept a UPA
+budget which skipped its own check. A budget, like an encoding, must be tested
+against the thing it claims to approximate, not against itself.
 
 **Say what the case is, and why the answer is what it is.** The tests here
 name the W3C case that motivated them and quote the rule being applied, because
