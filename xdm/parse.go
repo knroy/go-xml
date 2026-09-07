@@ -2,12 +2,13 @@ package xdm
 
 import (
 	"bytes"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"math"
 	"net/url"
 	"strings"
+
+	xml "github.com/knroy/go-xml/internal/xmlfork"
 )
 
 // ParseOptions controls document construction.

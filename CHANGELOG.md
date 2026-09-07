@@ -37,6 +37,64 @@ thinner exactly where those corpora are thick.
 
 ### Fixed
 
+**An optional `<all>` group is a disjunction, and reading it as a range let a
+restriction split two required members apart.** `<all minOccurs="0">` around
+required `a1` and `a2` admits the empty sequence or both elements, and nothing
+in between. `allSubsumes` reduced a base all group to a per-name occurrence
+budget, so that language became `a1: 0..1, a2: 0..1` — which also admits `a1`
+alone. A restriction relaxing `a2` to `minOccurs="0"` was therefore accepted
+though it permits content its base forbids, a false accept and the direction
+that matters. No W3C case covers the shape, so the suite could not see it.
+
+Both sides had to stop flattening. The base keeps its members' floors, and a
+derived branch is charged to whichever alternative it lands in — producing
+nothing takes the skip, meeting every floor takes the full match, and a branch
+that straddles the two takes neither. `allBranchCounts` was flattening
+symmetrically on the derived side, scaling a skippable group by `0..max`; it
+now forks into an empty branch and a match with floor 1. This replaces a
+shape-based discriminator (zero the floors only when the derived side is also a
+group) that scored the suite's cases correctly without deciding the language.
+
+`particlesK006` stays invalid and its sibling `particlesK005` valid — they
+differ in nothing but a floor — and `mgO029`, whose base and derived are
+spelled identically, is still accepted rather than refused as an invalid
+restriction of itself. Conformance is unmoved at 39349 (1.0) and 41536 (1.1),
+with the disagreement sets byte-identical before and after, and the vendored
+corpora unchanged at 185 loaded.
+
+**Two XSD 1.1 "false accepts" investigated, and both are the suite's rather
+than ours.** `MS-Element/elemZ026` and `MS-Particles/particlesZ026a` were
+carried as engine gaps with a named fix waiting: thread each subsumption step's
+particle into `declCompatible` and apply Occurrence Range OK, which language
+inclusion over element *names* never compares. That fix was implemented and
+measured. It flips elemZ026 as predicted and it also re-rejects
+`particlesHa161` and `particlesZ001` — both marked `accepted` by the suite, and
+both recorded in `docs/known-gaps.md` as 1.1 false rejects the subsumption
+engine exists to fix. XSD11 fell 41,536 to 41,534, and `particlesZ026a` moved
+neither way.
+
+The spec says why. XSD 1.1 Part 1 contains no Particle Valid (Restriction) and
+no Occurrence Range OK: §3.9.6 keeps only Particle Correct, Particle Valid
+(Extension) and Particle Emptiable, `range-ok` appears nowhere, and Appendix
+B.4 lists `cos-particle-extend` with no restriction counterpart. §3.4.6.4 is
+two clauses whose first is the entire content-model test — every sequence
+locally valid against R is locally valid against B. The clause the fix would
+have restored was *deleted by 1.1*, along with the rewrite that turns a
+substitution-group head into a choice of unit-occurrence members. That rewrite
+is the whole disagreement: it makes 1.0 compare a derived `{1,unbounded}`
+against a member's `{1,1}` when `(a{1,1}){1,unbounded}` and `a{1,unbounded}`
+are the same language.
+
+Both expectations are disputed upstream and version-unqualified. elemZ026's is
+`status="queried"` on W3C bug 4146 — still `NEW`, keyworded `disputedTest`,
+opened with "the metadata describes the schema as invalid, but it contains no
+obvious error; XSV reports it as valid" — and particlesZ026a's own annotation
+records that the TSTF found its validity implementation-determined and the WG
+never decided. No engine change was made. `xsd/subsume_occurs_test.go` pins the
+result in both directions, including the genuine widenings that inclusion still
+rejects without comparing a bound to a bound, so the proposal is not made a
+third time.
+
 **DocBook 5.0's XSD is refused, and that was investigated as a bug and is not
 one.** The vendored-schema walk's 38 failures are all the DocBook 5.0 XSD under
 `tests/misc/docbook/docbook-xsl-1.79.1/slides/schema/xsd/` — one fault counted

@@ -706,11 +706,13 @@ func TestElementWildcardNotNamespaceSubset(t *testing.T) {
 	})
 }
 
-// An <all> group with {min occurs} 0 may be skipped, so its members' floors
-// are zeroed when the budget is built. That is only sound when the derived
-// side is itself a group that can take the same skip branch; for a bare
-// element declaration the base member's own minOccurs is what binds, and the
-// 1.0 structural table (RecurseAsIfGroup) decides the pair.
+// An <all> group with {min occurs} 0 may be skipped, so its language is the
+// disjunction (empty) | (one full match with every member's own floor met).
+// A derived branch must land in one alternative or the other: producing
+// nothing takes the skip, and meeting every floor takes the full match. A
+// branch that straddles them — a required member relaxed to 0..1, so the
+// branch is neither certainly empty nor certainly a full match — belongs to
+// neither and is rejected.
 //
 // particlesK006 and particlesK005 are the discriminating pair: both restrict
 // <all minOccurs="0"> requiring a1, and they differ in nothing but the
@@ -751,7 +753,7 @@ func TestAllGroupSkippableFloorsNeedSkippableRestriction(t *testing.T) {
 		}
 	})
 
-	t.Run("group restriction keeps the zeroed floors", func(t *testing.T) {
+	t.Run("group restriction takes the same two alternatives", func(t *testing.T) {
 		if err := load11(t, `
 <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
     targetNamespace="http://xsdtesting" xmlns:x="http://xsdtesting">

@@ -39,7 +39,7 @@ overturned that, and the detail is in
 two are cases the suite itself declares out of scope through a dependency the
 harness does not read, and the rest are harness scoring defects — chiefly the
 eight XSD `indeterminate` expectations per version that are silently scored as
-"must be invalid". Five more are open questions, settled neither way. What
+"must be invalid". Four more are open questions, settled neither way. What
 stands between here and 100% is the 103 in Part 2.
 
 The last four to fall are worth recording, because they are the shape of what
@@ -57,9 +57,14 @@ The last four to fall are worth recording, because they are the shape of what
 
 ### The open questions
 
-Five, spread across two suites: three in XQuery and two on XSD 1.1
-(`simple093` and `particlesZ033_g`). Each asks for behaviour the checked-in
-spec text does not settle, so none is counted as a pass or as a defect.
+Four, spread across two suites: three in XQuery and one on XSD 1.1
+(`simple093`). Each asks for behaviour the checked-in spec text does not settle,
+so none is counted as a pass or as a defect. `particlesZ033_g` stood here until
+it was settled: the rule it turns on is the XSD 1.1 wildcard relaxation, which
+the suite's own `XSD1_1TestCategories.xml` states as a feature category, and
+enforcing the 1.0 reading instead costs seventeen valid schemas for the one
+case. Its `invalid` verdict is a 1.0-era expectation the 1.1 run inherits; see
+[known-gaps.md](known-gaps.md).
 `validation-0006` and `strip-space-009` stood here until the audit settled both
 as not implementable, and `validation-0201` — one at each XSLT target, so two
 of the original seven — left when the engine defect behind it was fixed and the

@@ -1767,31 +1767,34 @@ func allSubsumes(r, b *Particle) (error, bool) {
 	// precisely because of how its occurrences may be split between them.
 	// The budget is the range over a whole match of B, not over one
 	// occurrence of B's group. When the group itself may be skipped — B's
-	// {min occurs} is 0 — the empty sequence is locally valid against B, so
-	// every member's floor is 0 however the member spells its own
-	// minOccurs. Reading the member's minOccurs as the budget's floor made
-	// an <all minOccurs="0"> require its content, and rejected mgO029,
-	// whose derived and base groups are textually identical. The derived
-	// side is already scaled this way by allBranchCounts, so this only
-	// restores the symmetry the two sides must share.
-	// ...but zeroing the floors is only sound when the *derived* side is a
-	// group that can be skipped in its own right. particlesK006 is the case
-	// the unconditional reading admits wrongly: B is <all minOccurs="0">
-	// requiring a1, and R is a lone element a1 at 0..1 (its mandatory
-	// one-member <sequence> having been stripped as pointless). Counting
-	// with a zeroed floor, R's 0..1 sits inside a 0..1 budget and the
-	// derivation is accepted — but the suite scores K006 invalid, and its
-	// sibling K005, identical but for a1's minOccurs="1", valid. The two
-	// differ in nothing else, so the floor is what the rule turns on.
+	// {min occurs} is 0 — B's language is a DISJUNCTION: either nothing at
+	// all, or one full match in which every member meets its own floor.
+	// `<all minOccurs="0">` around a required a1 means "skip the group, or
+	// produce a1 exactly once"; it does not make a1 independently optional.
 	//
-	// Deferring to the 1.0 structural table for this shape is what restores
-	// the distinction: RecurseAsIfGroup wraps R as a one-member group of
-	// B's variety, and occurrenceRangeOK then asks whether R's range sits
-	// inside the base member's 1..1 — which 1..1 does and 0..1 does not.
-	// mgO029 keeps its zeroing because R is there a *group*, not a bare
-	// element, and so can take B's skip branch itself.
-	_, rIsGroup := r.Term.(*ModelGroup)
-	baseSkippable := b.MinOccurs == 0 && rIsGroup
+	// Flattening that disjunction into a single 0..max range per name is
+	// what loses the all-or-nothing coupling between members. A base whose
+	// group requires both a1 and a2 admits {} and {a1,a2} but never {a1}
+	// alone, and a per-name range of 0..1 on each cannot say so — it admits
+	// {a1} too, which is a restriction accepted that permits content its
+	// base forbids.
+	//
+	// So the floors stay as the members spell them and the two alternatives
+	// are checked separately: a branch is included in B when it fits the
+	// skip alternative (it produces nothing) OR the full-match alternative
+	// (it meets every budget). branchFitsSkippableBudget does that.
+	//
+	// mgO029 is decided by the first alternative and particlesK006 by the
+	// second. Both spell B as <all minOccurs="0">. mgO029's R is the same
+	// group again, so its one branch produces e1 exactly once and meets the
+	// full-match alternative — a type is no longer refused as an invalid
+	// restriction of itself. particlesK006's R is a lone a1 at 0..1, whose
+	// branch produces a1 zero-or-once: that is neither certainly nothing
+	// nor certainly a full match, so it fits neither alternative and stays
+	// rejected, while its sibling K005 (a1 at 1..1) meets the full match.
+	// The suite scores K006 invalid and K005 valid, and the two files
+	// differ in nothing but that floor.
+	baseSkippable := b.MinOccurs == 0
 	budget := map[xdm.QName]*occBudget{}
 	for _, bp := range flattenAllGroups(bg.Particles) {
 		bd, ok := bp.Term.(*ElementDecl)
@@ -1801,11 +1804,7 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		if _, dup := budget[bd.Name]; dup {
 			return nil, false
 		}
-		bRange := occursOf(bp)
-		if baseSkippable {
-			bRange.min, bRange.eMin = 0, nil
-		}
-		b := &occBudget{decl: bd, occRange: bRange}
+		b := &occBudget{decl: bd, occRange: occursOf(bp)}
 		budget[bd.Name] = b
 		// A base particle naming a substitution group head stands for a
 		// choice over the whole group (clause 2.1), so every member
@@ -1864,6 +1863,12 @@ func allSubsumes(r, b *Particle) (error, bool) {
 		return nil, false
 	}
 	for _, br := range branches {
+		if baseSkippable {
+			if err := branchFitsSkippableBudget(br, budget); err != nil {
+				return err, true
+			}
+			continue
+		}
 		if err := branchFitsBudget(br, budget); err != nil {
 			return err, true
 		}
@@ -2092,15 +2097,36 @@ func allBranchCounts(p *Particle) ([]branchCount, bool) {
 		if !ok {
 			return nil, false
 		}
-		// Repeating a branch multiplies every count in it. An
-		// unbounded repetition makes every name it can produce
-		// unbounded, which is what stops a repeated group from
-		// sneaking past a finite budget.
-		out := make([]branchCount, 0, len(inner))
+		// A group that may be skipped is a disjunction, not a range:
+		// <all minOccurs="0"> around a required e1 means "nothing, or
+		// e1 exactly once", never "e1 zero-or-once". Scaling by 0..max
+		// would flatten those two alternatives into one straddling
+		// range and lose the coupling between the group's members —
+		// the same flattening allSubsumes refuses on the base side.
+		//
+		// Forking keeps them apart: an empty branch for the skip, and
+		// the branches of one-or-more matches for the rest. Each is
+		// then a definite alternative that branchFitsSkippableBudget
+		// can charge to the matching alternative of a skippable base,
+		// which is what lets mgO029 — R and B spelled identically —
+		// meet the base's full-match alternative rather than straddle
+		// it. A group that must match once keeps the plain scaling.
+		rng := occursOf(p)
+		fork := rng.min == 0 && rng.max != 0
+		by := rng
+		if fork {
+			// The non-empty alternative matches the group at
+			// least once, so its floor is 1, not 0.
+			by.min, by.eMin = 1, nil
+		}
+		out := make([]branchCount, 0, len(inner)+1)
+		if fork {
+			out = append(out, branchCount{})
+		}
 		for _, br := range inner {
 			scaled := branchCount{}
 			for name, rng := range br {
-				r := rng.scale(occursOf(p))
+				r := rng.scale(by)
 				scaled[name] = &r
 			}
 			out = append(out, scaled)
@@ -2176,6 +2202,46 @@ func groupBranchCounts(g *ModelGroup) ([]branchCount, bool) {
 		out = next
 	}
 	return out, true
+}
+
+// branchFitsSkippableBudget decides one branch of R against a base all group
+// that may be skipped — B's {min occurs} is 0 — where B's language is the
+// disjunction (empty) | (one full match of the group).
+//
+// A branch is locally valid against B only if EVERY sequence it can produce is,
+// and the branch's counts are ranges, so it must commit to one alternative:
+//
+//   - the skip alternative, taken when the branch produces nothing at all
+//     (every name's maximum is 0), which the empty sequence satisfies; or
+//   - the full-match alternative, taken otherwise, which is the ordinary
+//     budget check with the members' own floors intact.
+//
+// A branch that straddles the two — some name reaching zero on one path and a
+// required member's floor on another, as particlesK006's a1 at 0..1 does — can
+// produce a sequence that is neither empty nor a full match, and B admits no
+// such sequence. Charging it to the full-match alternative is what rejects it,
+// since a range whose minimum is 0 does not sit inside a member's 1..1.
+//
+// Note this is strictly per branch, not per group: a *choice* in R that offers
+// "nothing" and "a full match" as separate branches is fine, because each
+// branch takes its own alternative. Only a single branch that is itself
+// undecided between the two is refused.
+func branchFitsSkippableBudget(br branchCount, budget map[xdm.QName]*occBudget) error {
+	empty := true
+	for _, rng := range br {
+		if rng.max != 0 {
+			empty = false
+			break
+		}
+	}
+	if empty {
+		// B's skip alternative admits the empty sequence, so a branch
+		// that can only be empty needs no budget met. mgO029's sibling
+		// shapes — a restriction that drops the group's content
+		// entirely — are decided here.
+		return nil
+	}
+	return branchFitsBudget(br, budget)
 }
 
 // branchFitsBudget checks one branch of the derived model against the base's

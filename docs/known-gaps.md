@@ -137,6 +137,78 @@ The set is tagged `version="1.0"`, but every group in it cites the 1.1 spec and
 four use `notQName`, which is 1.1-only. Rejecting `notQName` under 1.0 is
 correct; the tests are in the wrong bucket.
 
+### `particlesZ033_g` is a 1.0 verdict scored against a 1.1 run
+
+`MS-Particles/particlesZ033_g` — 1 schema false accept, 1.1 only. Previously
+filed under *Needs an engine change*; measurement moved it here.
+
+The earlier diagnosis in this file was wrong on its central point, and the
+correction is the useful part. It reasoned that since XSD 1.1 switches
+element-against-wildcard competition off, the 1.1 rejection had to come from an
+element-against-element pair, and named two candidates — the two `e2`
+declarations at different nesting levels, and `ref='m1'` against `ref='head'`
+where `m1` substitutes for `head` — both of which it believed `counterForces`
+was suppressing, so it pointed a fix at `exitBlocked`.
+
+Enumerating every state of every content model in the schema shows otherwise.
+Under 1.1 this schema has **no competing pair at all**, suppressed or not.
+`counterForces` is never consulted, and `exitBlocked` never sees the model. The
+two named candidates do not arise:
+
+- The `e2` positions never share a state. The inner `<sequence minOccurs="56">`
+  has to be re-entered or completed, so the outer `e2` is only ever reachable
+  from `follow` sets the inner one is absent from.
+- `m1`-against-`head` is exactly what `particlesZ033_e` and `_f` write, and both
+  are correctly rejected in *both* versions on that pair. `_g` is the variant in
+  which the author replaced it: the inner choice became `m3` against
+  `ref='head'`, and `m3` is a fresh name that overlaps nothing. The remaining
+  `ref='m1'` sits behind `<element e3 minOccurs="2">` in a sequence, so it is
+  not in the model's `first` set and never meets `head`.
+
+What is left is the single pair `ref='m1'` against `<xsd:any/>`, which is what
+rejects the schema under 1.0. `XSD1_1TestCategories.xml` names that relaxation
+outright — "Relaxation of UPA: wildcard/element competition no longer violates
+UPA" — and `s3_10_1v04s` through `s3_10_1ii09s` are written to depend on it. So
+under 1.1 the model is unambiguous by the letter of the rule this suite states,
+and accepting it is right.
+
+The verdict scored against it is a 1.0 verdict. The group carries no `version`
+attribute, its `documentationReference` points at the 2004 XSD 1.0 REC, and its
+one bare `<expected validity="invalid"/>` is therefore inherited by the 1.1 run
+under `appliesAND`. This is the same species of defect as
+`ibmMeta/wildcard.testSet` above: a test in the wrong bucket, not a missing rule.
+
+**The measurement, so it is not retried.** Restoring element-against-wildcard
+competition under 1.1 gains this one case and costs seventeen valid schemas,
+taking the 1.1 total from 41536 to 41494. The false rejects it creates are
+`addB153`, `all006`, `wild030`, `wild047`, `wild049`, `wild050`, `wild052`,
+`wild072`, `wild073`, `s3_3_6v01`, `s3_3_6v04`, `s3_8_6v01`, `s3_8_6ii01`,
+`s3_4_6v01`, `s3_4_6v04`, `s3_10_1v04` and `ste110` — that is, the whole family
+of groups whose subject *is* the relaxation. No narrower rule separates them:
+`_g`'s pair is a counted element against a following wildcard, and `wild047`'s
+is the same shape. One case for seventeen is the wrong direction.
+
+Accepting it is also not a soundness hazard. The runtime in `nfa.go` is a subset
+construction over the counter state, exploring every position in parallel, so an
+element-against-wildcard choice UPA no longer objects to is still resolved
+correctly at validation time. `particlesZ033_g` produces no instance
+disagreement, only the schema one.
+
+**On the history.** `docs/conformance-gaps.md` records this case being settled
+as unfixable in round 3, then *reopened* on the ground that it "was called a
+suite defect without a reading of the rule it turns on". That reading is now on
+record above: the rule is the 1.1 wildcard relaxation the suite itself states as
+a feature category, and the cost of not applying it is seventeen valid schemas.
+The reopening was the right call and the question it asked is answered.
+
+One negative result from the earlier investigation stands and is worth keeping:
+this is **not** a budget decline. Every give-up path in `upa.go` and
+`assemble.go` — the state-width cap, the pair-test cap, `compileContentModel`,
+and the substitution-closure cap — returns an error wrapping
+`xdm.ErrResourceLimit` rather than accepting. The huge occurrence values here
+never inflate the automaton, because occurrences are runtime counts on a counter
+automaton and not states. The cannot-decide invariant holds.
+
 ### `xs:gMonth` old lexical form (bug 6901)
 
 `gMonth002_2061`, `gMonth004_2063`, flagged `queried bug6901`.
@@ -153,30 +225,66 @@ Each of these has a diagnosed cause and at least one attempted fix that was
 measured and reverted. The attempts are recorded because the obvious patch is
 wrong in a way that is not obvious.
 
-### An optional all group is a disjunction, not a scaled budget
+### An optional all group is a disjunction, not a scaled budget — closed
 
-`MS-ModelGroups/mgO029` (schema, 1.1).
+*Constraint, and a retraction of the entry that stood here.* This was filed as
+`MS-ModelGroups/mgO029` failing (schema, 1.1). It no longer fails, and the
+attempt this entry warned against was not the one that landed.
 
-`allSubsumes` turns a base all group into a per-name occurrence budget and
-ignores the *group's* own `minOccurs`, while the derived side folds its group's
-range into its branch counts. That asymmetry rejects `mgO029`, whose base and
-derived are spelled identically — both `<all minOccurs="0">` around a required
-element — so a type is refused as an invalid restriction of itself.
+`allSubsumes` reads a base `<all>` group as a per-name occurrence budget. The
+original bug was that it ignored the *group's* own `minOccurs` while the derived
+side folded its group's range into its branch counts, so the two sides
+disagreed about the same group and mgO029 — whose base and derived are spelled
+identically, both `<all minOccurs="0">` around a required element — was refused
+as an invalid restriction of itself.
 
-Multiplying each budget by the base group's range fixes `mgO029` and breaks
-`particlesK006`, whose own documentation states the distinction:
+The entry recorded that scaling each budget by the base group's range fixes
+mgO029 and breaks `particlesK006`, whose documentation states the distinction:
 
 > B's minOccurs=0, B's maxOccurs=absent, but the element has min=max=1,
 > R's minOccurs=0, R's maxOccurs=1 — expected **invalid**
 
-`<all minOccurs="0">` around a required `a1` means *either the group is skipped
-entirely, or a1 appears exactly once*. It does not mean `a1` is independently
-optional. Scaling to `0..1` flattens a disjunction into a range and loses the
-all-or-nothing coupling that `particlesK006` exists to catch. Net effect of the
-attempt was zero: one false reject fixed, one false accept introduced.
+and prescribed reading the base as *(empty) | (every budget met)*, two
+alternatives checked separately. That prescription was right, and it is what is
+now implemented — but the entry named only half of it.
 
-Deciding both needs the base read as *(empty) | (every budget met)* — two
-alternatives checked separately.
+**The half it missed.** An intermediate fix zeroed the budget floors only when
+the derived side was also a group (`b.MinOccurs == 0 && rIsGroup`). That is a
+discriminator on *shape*, not on language, and it scored mgO029 and K006
+correctly for the wrong reason. It admits a schema neither suite case covers:
+
+```xml
+<!-- B: {} | {a1,a2} — never {a1} alone -->
+<xsd:all minOccurs="0"><xsd:element name="a1"/><xsd:element name="a2"/></xsd:all>
+<!-- R: admits {a1} alone, which B forbids -->
+<xsd:all minOccurs="0"><xsd:element name="a1"/><xsd:element name="a2" minOccurs="0"/></xsd:all>
+```
+
+Flattening each name to `0..1` cannot express the coupling between two required
+members, so this was accepted — a false **accept**, the dangerous direction,
+and invisible to the suite.
+
+**What the two alternatives actually require.** Both sides are disjunctions,
+and both had to be forked:
+
+- *Base.* Floors stay as the members spell them.
+  `branchFitsSkippableBudget` charges a branch producing nothing to the skip
+  alternative and every other branch to the full match. A branch that straddles
+  — K006's `a1` at `0..1`, neither certainly empty nor certainly a full match —
+  fits neither and is rejected.
+- *Derived.* `allBranchCounts` scaled a skippable group by `0..max`, which is
+  the same flattening on the other side. It now forks into an empty branch plus
+  the branches of a match with floor 1. Without this mgO029 still fails: R's own
+  group straddles.
+
+Fixing only the base side reintroduces mgO029; fixing only the derived side
+reintroduces the coupling false accept. Both halves are guarded independently in
+`xsd/allgroup_disjunction_test.go`.
+
+**Measured.** XSD 1.0 total agree 39349, XSD 1.1 total agree 41536 — unchanged,
+with the disagreement sets byte-identical before and after. Vendored corpora
+unchanged at 185 loaded / 38 failed / 7 excluded. The gain is a false accept
+closed that no suite case reaches, which is why it costs nothing on the marks.
 
 ### Regular expression backreferences — two engines, one default
 
@@ -408,15 +516,17 @@ this count the remaining cases are named individually.
 | `MS-IdentityConstraint/idC019` | 1.0, 1.1 | `keyref` resolving `refer` across an unfetched import | open |
 | `MS-DataTypes/anyURI_b006_1356` | 1.0 only | RFC 2396 excluded characters in an `anyURI` enumeration | won't fix — see below |
 | `Simple/simple093` | 1.1 only | `xs:NOTATION` as a union member type | won't fix — see below |
-| `MS-Element/elemZ026` | 1.1 only | occurrence narrowing under a substitution group | needs an engine change |
-| `MS-Particles/particlesZ026a` | 1.1 only | abstract members in the 1.1 subsumption alphabet | needs an engine change |
-| `MS-Particles/particlesZ033_g` | 1.1 only | UPA backstop lost to the 1.1 wildcard relaxation | needs an engine change |
+| `MS-Element/elemZ026` | 1.1 only | a 1.0 substitution-group rewrite XSD 1.1 deleted | won't fix — see below |
+| `MS-Particles/particlesZ026a` | 1.1 only | same, plus a validity the W3C never settled | won't fix — see below |
+| `MS-Particles/particlesZ033_g` | 1.1 only | a 1.0-era `invalid` verdict inherited by the 1.1 run | won't fix — see below |
 
-Three of these are not gaps to be closed. `anyURI_b006` and `simple093` are
+Four of these are not gaps to be closed. `anyURI_b006` and `simple093` are
 cases where the suite contradicts itself, and enforcing either rule costs more
-cases than it buys — both are written up under *Won't fix* below. The three
-1.1-only particle cases share one cause, described under *Deciding is not the
-same as declining* below.
+cases than it buys. `particlesZ033_g` is a 1.0-era expectation the 1.1 run
+inherits, and the only rule that would reject it is the one XSD 1.1 deliberately
+removed — all three are written up under *Won't fix* below. `elemZ026` and
+`particlesZ026a` share one cause, described under *Deciding is not the same as
+declining* below.
 
 These are unwritten rules rather than broken ones: each fails to reject a
 schema that should be rejected. None affects a *valid* schema, which is why the
@@ -458,75 +568,84 @@ shapes production schemas favour and no substitute for them, but far from
 nothing. Pairing each new rule with a valid schema that must still load, in
 `xsd/falseaccept_test.go`, is the third.
 
-### Deciding is not the same as declining (XSD 1.1 subsumption)
+### The range comparison XSD 1.1 deleted (elemZ026, particlesZ026a)
 
 `MS-Element/elemZ026` and `MS-Particles/particlesZ026a` — 2 schema false
-accepts, 1.1 only. Both were diagnosed and deliberately left; what follows is
-what a fix needs, so the next attempt starts from here.
+accepts, 1.1 only. Both are now believed to be **suite artifacts, not gaps**.
+This entry previously proposed a fix; that fix was implemented and measured, it
+made conformance worse, and the spec says it was never the rule. What follows
+replaces it.
 
-`subsume.go` opens by arguing that its procedure is safe because it *declines*
-wherever it cannot decide exactly, leaving the conservative 1.0 table to
-answer. That argument is sound and the decline path upholds it. What it does
-not cover is the *decide* path. `particleSubsumes` returns "included" on
-language inclusion over element **names**, and when it does, it short-circuits
-a 1.0 table that was answering correctly. Name-language inclusion is strictly
-weaker than Content type restricts: `declCompatible` restores four of
-`nameAndTypeOK`'s clauses — nillable, fixed, block, and type restriction — and
-omits the occurrence-range check entirely.
+**What the schemas do.** elemZ026's disagreeing site is not the inner type at
+all. Its `restrictedBasicBitType` narrows `maxOccurs` from `unbounded` to `1`,
+and both versions accept that — narrowing is what a restriction is *for*. The
+divergence is one level out, at `restrictedBasicBitContainerType`: the base
+names a substitution-group head with `maxOccurs="unbounded"`, the derived names
+a concrete member of that group, also unbounded.
 
-elemZ026 is exactly that hole. The derived particle narrows `maxOccurs` from
-`unbounded` to `1` inside a type reached through a substitution group; every
-word of the derived language is a word of the base's, so subsumption says
-"included" and the range is never compared. The suite expects `invalid` in
-both versions with no version qualifier, and 1.0 rejects it correctly — the
-divergence is entirely ours.
+**Why 1.0 rejects it.** Clause 2.1 of Particle Valid (Restriction) rewrites an
+element particle whose declaration heads a substitution group into a *choice*
+over the members. `asSubstitutionChoice` implements that faithfully: the choice
+keeps the original particle's range and each member gets unit occurrence. So
+the base becomes `(mem{1,1}){1,unbounded}` and Elt:Elt compares the derived
+`{1,unbounded}` against a member's `{1,1}`. Occurrence Range OK fails, and the
+error surfaces as "an element declaration is not one of the base's
+alternatives".
 
-particlesZ026a is the same site with a second inconsistency layered on:
-`subsumeAlphabet` and `termAccepts` drop abstract substitution-group members,
-while `asSubstitutionChoice` keeps them and `checkSubstitutionEDC` deliberately
-keeps them under 1.1 per bug 4337. Three engines, two conventions.
+**Why 1.1 accepts it, correctly.** `(a{1,1}){1,unbounded}` and `a{1,unbounded}`
+are the *same language*. The 1.0 rejection is a table artifact — a pairwise
+bound comparison standing in for an inclusion the table cannot compute — and it
+is exactly the class of artifact the 1.1 relaxation exists to remove.
+`particleSubsumes` decides this pair by language inclusion and returns
+"included", which is the right answer.
 
-Two possible fixes, neither small. Declining whenever a step matched through a
-substitution-group member hands the case back to the stricter 1.0 table — sound,
-but it re-rejects the 1.1 schemas the relaxation exists to accept. Adding an
-occurrence clause to `declCompatible` is narrower and probably right, but that
-function sees two `*ElementDecl`s and not the particles carrying the ranges, so
-it needs a signature change threaded through the call path. Either way the
-whole suite must be re-measured in both lanes; this is not a patch.
+**The spec settles it.** XSD 1.1 Part 1 has no Particle Valid (Restriction) and
+no Occurrence Range OK. §3.9.6 retains only Particle Correct, Particle Valid
+(Extension) and Particle Emptiable; Appendix B.4's constraint index lists
+`cos-particle-extend` with no restriction counterpart, and `range-ok` does not
+appear anywhere in the document. §3.4.6.4 (`cos-content-act-restrict`) is two
+clauses, and clause 1 is the whole content-model test: "Every sequence of
+element information items which is ·locally valid· with respect to R is also
+·locally valid· with respect to B." The substitution-group-as-choice rewrite is
+likewise absent — under 1.1 a substitution group enters restriction checking
+only through ·locally valid·, because an element particle's language already
+contains its substitutable members. There is no occurrence clause to restore to
+`declCompatible`, because 1.1 deleted the constraint that clause would express.
 
-Worth recording that the W3C itself calls particlesZ026a's validity
-"implementation-determined" and never resolved it, so it is the weaker of the
-two as a correctness signal. Fixing elemZ026 properly is likely to settle it.
+**The named fix, measured.** Threading each step's particle through `stepNFA`
+into `declCompatible` and applying `occurrenceRangeOK` was implemented in full.
+It flips elemZ026 to `invalid` as predicted — and it also re-rejects
+`particlesHa161` and `particlesZ001`, both marked `accepted` by the suite and
+both documented elsewhere in this file as 1.1 false rejects the subsumption
+engine was *built to fix*. XSD11 fell 41536 → 41534. It is a net loss, and
+`particlesZ026a` does not settle either way. The fix is not narrower than the
+rejected alternative; it is the same 1.0 artifact reintroduced through a
+different door.
 
-### A UPA backstop lost to a correct relaxation (XSD 1.1)
+The reason it fires at all is narrow and accidental. When the head is abstract,
+`asSubstitutionChoice` omits it and `stepNFA` sees a single declaration on the
+base side, so `declCompatible`'s clauses run. When the head is concrete,
+`stepNFA` finds two declarations for the same name, sets `multiple` and returns
+none, so the range would never be compared. A rule that depends on whether the
+base's head happens to be abstract is not Occurrence Range OK under any reading.
 
-`MS-Particles/particlesZ033_g` — 1 schema false accept, 1.1 only.
+**What the suite says.** elemZ026's `<expected validity="invalid"/>` carries
+`status="queried"` against W3C bug 4146, opened by Michael Kay in 2007: "the
+metadata describes the schema as invalid, but it contains no obvious error. XSV
+reports it as valid." The bug is still `NEW`, keyworded `disputedTest`, and its
+whiteboard records an intent to fork a separate 1.1 test that was never done.
+particlesZ026a is weaker still — the TSTF concluded its validity was
+"implementation-determined" and the WG never decided, which the test's own
+annotation says in as many words.
 
-Under 1.0 the `<xsd:any/>` in this model competes with an adjacent `ref='m1'`,
-UPA fires, and the schema is rejected. XSD 1.1 switched element-against-wildcard
-competition off, and *that relaxation is correct* — the suite states it as a
-feature category and `s3_10_1v04s` through `s3_10_1ii09s` depend on it. So the
-1.1 rejection has to come from an element-against-element pair, and two are
-present: the two `e2` declarations at different nesting levels, and `ref='m1'`
-against `ref='head'` where `m1` substitutes for `head`.
-
-Both are suppressed by `counterForces`, which skips a pair when the inner
-position sits inside a counter scope with `min > 1` that the outer is not in.
-That suppression is load-bearing and was already *narrowed* once, to non-initial
-states, specifically to fix `particlesZ033_e` — a substitution head and one of
-its members both at `minOccurs=3`, silently accepted. Widening it back re-breaks
-that case. A fix belongs in `exitBlocked`, which inspects only the inner
-position's unshared scopes and never asks whether the outer position is
-reachable on a later iteration of the same counter, and it carries a high risk
-of over-rejection.
-
-One negative result is worth keeping: this is **not** a budget decline. Every
-give-up path in `upa.go` and `assemble.go` — the state-width cap, the pair-test
-cap, `compileContentModel`, and the substitution-closure cap — returns an error
-wrapping `xdm.ErrResourceLimit` rather than accepting. The huge occurrence
-values here never inflate the automaton, because occurrences are runtime counts
-on a counter automaton and not states. The cannot-decide invariant holds; this
-is a missing rule, not a silent resource accept.
+So both cases are counted against us by a version-unqualified expectation
+written for 1.0 and disputed ever since. Accepting them under 1.1 is what
+§3.4.6.4 clause 1 requires. `xsd/subsume_occurs_test.go` pins that in both
+directions: the two substitution-group restrictions that must keep being
+accepted, and the genuine widenings — `maxOccurs` 2→3, and bounded→unbounded —
+that language inclusion still rejects without ever comparing a bound to a
+bound. Closing these two would mean re-adopting a 1.0 rule at a cost of two
+schemas that really are valid.
 
 ### Restriction of an all group by a wildcard or a named group (XSD 1.1)
 

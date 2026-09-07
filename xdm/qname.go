@@ -1,6 +1,10 @@
 package xdm
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/knroy/go-xml/internal/xmlname"
+)
 
 // QName is an expanded name: namespace URI plus local part, with the prefix
 // retained only for serialisation.
@@ -83,65 +87,13 @@ func IsNCName(s string) bool {
 }
 
 // isNameStartRune and isNameRune are the XML NameStartChar and NameChar
-// productions of XML 1.0 fifth edition, transcribed.
-//
-// The ranges are written out rather than approximated by "anything above
-// Latin-1". The difference matters: NameStartChar deliberately excludes the
-// combining marks and the digits, so U+0E35 THAI CHARACTER SARA II is a legal
-// character *within* a name and an illegal one to begin it. A schema language
-// that gets this wrong accepts names no conforming parser will produce.
-func isNameStartRune(r rune) bool {
-	switch {
-	case r == ':' || r == '_':
-		// The colon is in the production; callers that forbid it — NCName —
-		// reject it before reaching here.
-		return true
-	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
-		return true
-	case r >= 0xC0 && r <= 0xD6:
-		return true
-	case r >= 0xD8 && r <= 0xF6:
-		return true
-	case r >= 0xF8 && r <= 0x2FF:
-		return true
-	case r >= 0x370 && r <= 0x37D:
-		return true
-	case r >= 0x37F && r <= 0x1FFF:
-		return true
-	case r >= 0x200C && r <= 0x200D:
-		return true
-	case r >= 0x2070 && r <= 0x218F:
-		return true
-	case r >= 0x2C00 && r <= 0x2FEF:
-		return true
-	case r >= 0x3001 && r <= 0xD7FF:
-		return true
-	case r >= 0xF900 && r <= 0xFDCF:
-		return true
-	case r >= 0xFDF0 && r <= 0xFFFD:
-		return true
-	case r >= 0x10000 && r <= 0xEFFFF:
-		return true
-	}
-	return false
-}
+// productions of XML 1.0 fifth edition. They live in internal/xmlname so that
+// the forked tokeniser can share this one transcription rather than carry a
+// second copy that could drift from it; see that package for the ranges and
+// why they are written out in full.
+func isNameStartRune(r rune) bool { return xmlname.IsNameStartRune(r) }
 
-func isNameRune(r rune) bool {
-	if isNameStartRune(r) {
-		return true
-	}
-	switch {
-	case r == '-', r == '.', r == 0xB7:
-		return true
-	case r >= '0' && r <= '9':
-		return true
-	case r >= 0x300 && r <= 0x36F:
-		return true
-	case r >= 0x203F && r <= 0x2040:
-		return true
-	}
-	return false
-}
+func isNameRune(r rune) bool { return xmlname.IsNameRune(r) }
 
 // Well-known namespace URIs used throughout the engine.
 const (
