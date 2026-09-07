@@ -12,12 +12,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,183 of 15,183 in scope |
 | XPath 3.0 | 100.00% — 19,244 of 19,244 in scope |
 | XPath 3.1 | 100.00% — 21,786 of 21,786 in scope (0 failing) |
-| XQuery 3.1 | 99.99% — 29,800 of 29,803 in scope (3 failing) |
+| XQuery 3.1 | 99.94% — 29,901 of 29,918 in scope (17 failing) |
 | XSLT 2.0 | 99.87% — 6,149 of 6,157 in scope (8 failing) |
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,555 `func Test` declarations, clean under `-race` |
+| Tests | 1,565 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -27,43 +27,41 @@ to build next and what it would cost.
 
 ## 1. Features
 
-### 1.1 XML 1.1 documents — **the largest single win**
+### 1.1 XML 1.1 documents — **implemented; one layer outstanding**
 
-This entry used to say `encoding/xml` refuses `version="1.1"`. Measured, it
-does not: `1.1` is **accepted** and parsed under 1.0 rules, while `1.2` and
-`2.0` are refused with "only version 1.0 is supported". That is the worse of
-the two behaviours — a 1.1 document is admitted and then silently misread,
-rather than declined.
+XML 1.1 documents are read as XML 1.1. The declaration's version is kept in
+`internal/xmlfork.Decoder`, [2] `Char` and [2a] `RestrictedChar` are enforced
+per version, and §2.11 makes `NEL` and U+2028 line ends. External entities are
+checked against XML §4.3.4: a 1.0 document may not include a 1.1 entity, and an
+unrecognised version is refused rather than assumed compatible. See CHANGELOG.md
+for the mechanism and why the version is not a caller-settable option.
 
-Two consequences visible immediately. `NEL` (U+0085) is a line ending in 1.1
-that must normalise to `#xA`, and it survives as a raw character. And a C1
-character reference such as `&#133;` is legal in 1.1 and illegal in 1.0, but is
-accepted under *both* — so the version gate is missing in the direction that
-admits invalid 1.0 documents as well.
+Two items the old entry listed as blocking turned out not to be. XML 1.0 Fifth
+Edition adopted 1.1's name productions verbatim, so `NameStartChar` and
+`NameChar` are identical between the versions and the tables already in the
+tokeniser are the 1.1 tables. The same holds for `\i` and `\c` in the XSD regex
+translator, which had been budgeted as the widest-reaching item: `classdiff.go`'s
+ranges were compared against `internal/xmlname` across the whole Unicode scalar
+range and disagree nowhere, so the translator is version-independent and correct
+for both.
 
-It is not a version-string rewrite. XML 1.1 changes what the *language* is:
+The `keySep = "\x1f"` dependency is also closed. `xsd/identity.go` is now
+length-prefixed and injective for any field content, so it no longer rests on
+U+001F being unreachable in XML 1.0 character data.
+`TestIdentityKeySeparatorUnreachableInXML10` still pins the 1.0 premise; when it
+fails it is a signal to retire the test, not a key match to fix.
 
-* new name characters (the Dutch ligature ij, and much of the range XML 1.0
-  1st edition excluded);
-* C0 control characters permitted in content and attribute values;
-* `NEL` (U+0085) and U+2028 as line terminators;
-* `\i` and `\c` in a regex mean different sets under 1.1, so the pattern
-  translator becomes version-dependent — which reaches `xpath`, not just
-  `xsd`.
+**What is left is the `dtd` package, which has no version notion.** `dtd.Load`
+takes a DOCTYPE directive string rather than a document, so it never sees an XML
+declaration and has nothing to check §4.3.4 against — its own `stripTextDecl`
+discards the text declaration for the same reason `xdm`'s once did. Closing it
+means giving `dtd` a way to be told the including document's version, which is a
+new API surface rather than a gap closure, and it should not be invented before
+a caller needs it.
 
-The blocking dependency this entry used to name is closed. `xsd/identity.go`
-joined a composite key sequence on `keySep = "\x1f"`, which only held because
-U+001F cannot appear in XML 1.0 character data; the encoding is now
-length-prefixed and injective for any field content, so 1.1 no longer has to
-wait on it. `TestIdentityKeySeparatorUnreachableInXML10` still pins the 1.0
-premise, and will fail when 1.1 documents parse — by then it is a signal to
-retire the test, not a false key match to fix.
-
-Cost: substantial. Buys: correctness for documents that really are 1.1, and
-an end to the silent misreading above. Scoping it properly needs the W3C
-`xmlconf` suite, which this repository does not currently vendor — the other
-corpora under `testdata/` do not exercise 1.1, so there is no measurement of
-the gap here, only the two defects named above.
+Scoping the remainder properly still wants the W3C `xmlconf` suite, which this
+repository does not vendor. The `XmlVersions` cases in the XSD suite are the
+only 1.1 measurement currently available — xv003, xv006, xv008 and xv009 pass.
 
 ### 1.2 DTD validation — notations and entity-typed attributes outstanding
 

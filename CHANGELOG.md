@@ -58,9 +58,38 @@ so the translator is correct for both versions and stays version-independent.
 
 Note that `&#133;` is valid in XML 1.0 as well as 1.1 — `#x85` falls inside
 `[#x20-#xD7FF]` in 1.0's [2] `Char`. It is not whitespace and not a line end in
-1.0, which is the real difference and is what §2.11 above implements. See
-`docs/todo.md` §1.1 for what a 1.1 document still gets wrong, all of it in the
-DTD and external-entity layers rather than the character layer.
+1.0, which is the real difference and is what §2.11 above implements.
+
+**An external entity's version is now checked against the including
+document's.** XML §4.3.4: an XML 1.0 document may not include an XML 1.1
+external entity, while a 1.1 document may include either. The asymmetry is the
+point — 1.1 widens what a name and a character may be, so text that is
+well-formed inside a 1.1 entity can be illegal in the 1.0 document including
+it, and admitting it would let an entity smuggle in constructs the document
+never declared.
+
+`stripTextDecl` used to discard an external entity's text declaration without
+reading it, so the version was parsed and thrown away. It now returns the
+version alongside the stripped text, and `entityTable.checkEntityVersion`
+applies §4.3.4 at all three fetch sites: a general entity, an external subset,
+and a parameter entity. An entity with no text declaration is 1.0 by §4.3.4 and
+legal in both. A version that is neither 1.0 nor 1.1 is **refused rather than
+assumed compatible** — an entity declaring 2.0 is not a 1.0 entity merely
+because we cannot read it.
+
+The including version reaches the entity table from
+`internal/xmlfork.Decoder.IsVersion11`, a read-only accessor. There is
+deliberately no setter, for the same reason the version is not a
+`ParseOptions` field: a caller able to assert a version the text contradicts
+could turn a 1.0 document into a 1.1 one and acquire 1.1's relaxations without
+declaring them. The field defaults to false, so a table built for a document
+whose version was never determined enforces the stricter 1.0 rule — cannot
+decide is never silent acceptance.
+
+What remains is the `dtd` package, which has no version notion at all.
+`dtd.Load` takes a DOCTYPE directive string rather than a document, so it never
+sees an XML declaration and has nothing to check §4.3.4 against. Giving it one
+means a new API surface, not a gap closure. See `docs/todo.md` §1.1.
 
 **The over-strictness guard no longer depends on a licensed corpus.** Adding a
 schema-validity rule risks making it stricter than the spec, and that is the
@@ -90,6 +119,33 @@ as the score. It supplements UBL and CII rather than replacing them: these are
 thinner exactly where those corpora are thick.
 
 ### Fixed
+
+**`xsl:result-document` carried a validation's annotation back and left the
+rest of it behind.** The instruction assesses a document that `toDocument`
+built and then copies the result onto the nodes the output actually records,
+because that copy is what downstream queries see. `copyAnnotationTree` did that
+through `SetTypeAnnotation`, which carries the type's NAME and re-derives is-id
+from it — so `UnionMember`, `DerivedPrimitive` and `ListItem` stayed on the
+tree that is then discarded. The four are one fact in four parts: without the
+member a union-typed value has nothing to build a typed value from and
+atomises to `xs:untypedAtomic`, and without the resolved pair the copy asks the
+process-global registries what the name means, which answer for whichever
+schema loaded last. It is now `CopyTypingFrom`, the operation the other nine
+copy sites already use.
+
+It was found by an audit of every node-copy site, and it was the one site
+reading did not settle — the copy runs BACKWARDS relative to every other, from
+a tree the engine built onto the caller's, so it does not read as a copy site
+at all. A probe on the line measured three arrivals per transform, every one
+carrying resolved typing the destination did not receive, which is what turned
+"possibly dead code" into a fix. Same method as the original diagnosis in this
+family; see docs/known-gaps.md.
+
+The audit also asked whether the seven PSVI properties are still all of them,
+since one added to `xdm.Node` and not to the copy operations would be dropped
+by every site at once. `xdm/typing_test.go` now censuses `Node`'s exported
+fields against the PSVI set and against an explicit list of the deliberate
+exclusions, so a new field fails the build until it is classified.
 
 **An optional `<all>` group is a disjunction, and reading it as a range let a
 restriction split two required members apart.** `<all minOccurs="0">` around

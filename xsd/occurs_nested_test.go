@@ -28,7 +28,7 @@ import (
 //
 // A group with two or more distinct child names was decided correctly all
 // along, which is why no case in either W3C suite covers this and why the bug
-// survived 39,347 XSD 1.0 agreements and 41,532 on 1.1.
+// survived the 39,347 XSD 1.0 agreements and 41,532 on 1.1 standing then.
 func TestNestedOccursBounds(t *testing.T) {
 	valid := func(t *testing.T, body string, doc string) bool {
 		t.Helper()

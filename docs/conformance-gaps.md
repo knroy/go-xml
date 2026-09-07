@@ -2,7 +2,7 @@
 
 Every figure here comes from a full run of the suite it names, with
 `tests/check.sh`. The *Now* and *Failing* columns were re-measured at commit
-`7ed5279` and reproduce; the XSLT 3.0 row's eighteen were checked case by case
+`a8dee9a` and reproduce; the XSLT 3.0 row's thirteen were checked case by case
 against the list in that section, in both directions. The *Fixable*, *Open* and *Can't fix* columns are
 verdicts, not measurements, and were revised by the audit recorded at the foot
 of this file; the *Ceiling* column is what those verdicts imply and is
@@ -14,11 +14,11 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,803 | 29,800 | 99.99% | **3** | 0 | 0 | **3** | 99.99% |
+| **xquery** | QT3 — XQuery 3.1 | 29,918 | 29,901 | 99.94% | **17** | 0 | 0 | **17** | 99.94% |
 | **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 8,625 | 8,612 | 99.85% | **13** | 0 | 0 | **13** | 99.85% |
-| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,347 | 99.90% | **41** | 0 | 0 | **41** | 99.90% |
-| **xsd** | W3C xsdtests 1.1 | 41,570 | 41,532 | 99.91% | **38** | 0 | 0 | **38** | 99.91% |
+| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
+| **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
 | | **Total** | | | | **103** | **0** | **0** | **103** | |
 
@@ -65,7 +65,10 @@ move the denominator or the scoring. They are counted together here because all
 three are work, but they are not the same claim and are labelled individually
 below.
 
-**XQuery's remaining 3**, all of them read:
+**XQuery's remaining 17.** Three are read case by case below; the other
+fourteen fall in four sets not yet diagnosed individually —
+`prod-ModuleImport` (8), `prod-ContextItemDecl` (4),
+`prod-DecimalFormatDecl` and `prod-OptionDecl.serialization` (1 each).
 
 | Cases | Verdict | Why |
 |---|---|---|
@@ -88,7 +91,7 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1 ceiling: 29,800 / 29,803 = 99.99%** — what passes now. Nothing is
+**XQuery 3.1 ceiling: 29,901 / 29,918 = 99.94%** — what passes now. Nothing is
 left that is both fixable and worth the change.
 
 The XSD split is taken largely from the suite's own `status` field rather than
@@ -490,7 +493,7 @@ its rules were settled outright by the XSD 1.1 schema for schemas the suite
 itself ships, which pins the occurrence attributes those elements admit.
 
 That is why schema validity, long the weaker half of these numbers, is now the
-stronger: **99.85%** on 1.0 and **99.88%** on 1.1, against 99.87% and 99.89%
+stronger: **99.97%** on 1.0 and **99.95%** on 1.1, against 99.89% and 99.90%
 for instance validation.
 
 ## What the ceiling consists of
@@ -498,11 +501,17 @@ for instance validation.
 | Set | Cases | Status | Why |
 |---|---:|---|---|
 | `MS-Regex2006-07-15` | 22 per version, 44 in all | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
-| `MS-Schema`, `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, others | 22–23 | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
+| `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, `MS-Particles`, others | 11 (1.0), 12 (1.1) | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
 
-**Not implementable: 43 (XSD 1.0) and 36 (XSD 1.1)** — the remainder after the
-eight `indeterminate` scoring errors per version, `iri-001`, and the two cases
-reopened as questions below.
+**Not implementable: 33 (XSD 1.0) and 34 (XSD 1.1)** — the whole of the
+measured disagreement count, not a remainder subtracted from it. The
+`indeterminate` scoring errors and `iri-001` were the earlier subtrahends, and
+both are fixed: those cases have already left the disagreement counts, so
+deducting them a second time would double-count. Of the 33, 31 carry a
+`queried` or `stable` bugzilla reference and 2 carry `accepted` — `attP031`,
+the suite defect named below, and `particlesZ001`. Of the 34, 32 are
+`queried` or `stable` and 2 are `accepted`, here `simple093` and
+`particlesZ033_g`, both read as questions below.
 
 ### The `notQName` cases are a suite omission, not a gap
 
@@ -576,8 +585,8 @@ That is fixed too, and again moved no suite case — both disagreement lists sta
 identical by name. See *Nested occurrence bounds were wrong in both directions*
 in [known-gaps.md](known-gaps.md).
 
-**XSD measured now: 1.0 — 39,347 / 39,388 = 99.90%. 1.1 — 41,532 / 41,570 =
-99.91%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
+**XSD measured now: 1.0 — 39,356 / 39,388 = 99.92%. 1.1 — 41,543 / 41,576 =
+99.92%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
 on 1.1 have left both sides of the ratio; the driver prints their count so the
 denominator is legible rather than assumed. On 1.0 that is now also the ceiling
 — everything remaining is a suite defect or a `queried` disagreement. On 1.1

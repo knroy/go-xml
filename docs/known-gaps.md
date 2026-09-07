@@ -49,7 +49,16 @@ What this file adds, and that one does not:
 
 ### DOCTYPE is refused by default
 
-`IRI/iri-001` (schema), and any instance carrying a DOCTYPE.
+Any instance carrying a DOCTYPE. **`IRI/iri-001` no longer belongs here** — the
+XSD driver was corrected by **3f2602e** (*"the XSD driver could not read a
+schema built from entities"*) to load schema documents with `AllowDOCTYPE` set,
+since a schema the suite ships is trusted input by construction. `iri-001` and
+its ten masked instance cases now pass, and at `a8dee9a` neither `iri-001` nor
+anything under `wgMeta/IRI.testSet` appears in either lane's disagreements.
+
+The default policy below is unchanged; what changed is that a conformance
+harness pointed at a vendored suite is not the untrusted caller the default
+protects.
 
 A DOCTYPE is the entry point for XXE and entity-expansion attacks. Refusing it
 unless the caller opts in is the correct default for a library that will be
@@ -120,15 +129,21 @@ comment in `facet_check.go` records the measurement so it is not retried.
 
 ### Unicode category drift (bug 4113)
 
-18 cases in `MS-Regex2006-07-15` (`reJ11`, `reJ13`, `reJ19`, …), all flagged
-`queried bug4113` by the W3C.
+**22** cases in `MS-Regex2006-07-15`, identical in both versions, all flagged
+`queried bug4113` by the W3C: `reJ11`, `reJ13`, `reJ19`, `reJ21`, `reJ23`,
+`reJ25`, `reJ29`, `reJ31`, `reJ33`, `reJ35`, `reJ61`, `reJ69`, `reJ75`, `reJ77`,
+`reL98`, `reL99`, `reM98`, `reN99`, `reS21`, `reS42`, `reT63`, `reT84`. (This
+entry said 18 and the ceiling section below said nineteen; both were stale. The
+list is enumerated here so the next re-measurement can diff it rather than
+re-count.) They are two thirds of every disagreement the suite reports against
+this engine — 22 of 33 on 1.0 and 22 of 34 on 1.1.
 
 These assert that `\p{Lu}` rejects characters that *are* uppercase letters in
 current Unicode. The suite was written against Unicode 3.1; the codepoints in
 question — U+1D7A8 among them — were categorised differently then. Matching the
 suite would mean shipping a frozen 2001 character database.
 
-### `ibmMeta/wildcard.testSet` is mislabelled
+### `ibmMeta/wildcard.testSet` is mislabelled — closed, the driver scopes them out
 
 4 cases in 1.0 (`s3_10_6v02s`, `s3_10_1ii08s`, `s3_10_1ii09s`, and one in
 `anyAttribute`).
@@ -136,6 +151,22 @@ suite would mean shipping a frozen 2001 character database.
 The set is tagged `version="1.0"`, but every group in it cites the 1.1 spec and
 four use `notQName`, which is 1.1-only. Rejecting `notQName` under 1.0 is
 correct; the tests are in the wrong bucket.
+
+**They no longer count against the 1.0 mark.** Commit **3104543**
+(*"a case that is never scored must still be counted"*) reclassified them:
+a schema document using `notQName` or `notNamespace` is not a valid 1.0 schema
+document at all, so a 1.0 processor refusing it is conformant rather than wrong,
+and the driver now reports them as **out-of-scope** rather than as false
+rejects. Measured at `a8dee9a` the 1.0 lane reports `out-of-scope 5` and none of
+the four appears among its 33 disagreements. The reasoning above stands; the
+"4 cases" it was costing does not.
+
+That commit also records why `documentationReference` is *not* usable as the
+scoping key, which was measured rather than assumed: 32 groups lacking a
+`version` attribute carry one and 28 of those already agree under 1.0, so
+excluding on it would discard 28 correct results to rescue 4 — shrinking the
+denominator to raise the score. The syntax of the schema document itself is what
+decides it.
 
 ### `particlesZ033_g` is a 1.0 verdict scored against a 1.1 run
 
@@ -382,6 +413,30 @@ named operations on `xdm.Node` -- `CopyTypingFrom` and
 list at each of nine copy sites. `xslt/typingcopy_test.go` pins the preserving
 and stripping halves against a schema pair that redefines the same QName, which
 is the only arrangement in which the loss is observable. See CHANGELOG.md.
+
+A later audit of every site that copies a node found a tenth, and it was found
+the same way the original was: by counting arrivals rather than by reading.
+`copyAnnotationTree` in `xslt/validate.go` carries an assessment BACK, from the
+document `xsl:result-document` validated onto the nodes the result actually
+records, and it still went through `SetTypeAnnotation` — which carries the name
+and re-derives is-id from it, leaving `UnionMember`, `DerivedPrimitive` and
+`ListItem` behind on the copy that is then thrown away. A probe on that line
+measured three arrivals per transform, every one of them carrying resolved
+typing the destination did not receive. It is now `CopyTypingFrom`, and
+`TestResultDocumentCarriesResolvedTyping` pins it.
+
+The direction of that copy is why reading missed it. Every other site copies
+FROM the tree the caller holds; this one copies from a tree the engine built
+and is about to discard, so it does not look like a copy site at all until the
+question is asked as "what arrives here, carrying what?".
+
+That audit also asked whether *seven* is still the whole set, since a property
+added to `xdm.Node` and never added to the operations would be dropped by all
+ten sites at once. It is: `xdm/typing_test.go` censuses `Node`'s exported
+fields against the PSVI list and against an explicit list of the fields that
+are deliberately excluded, so a new field is neither absorbed nor exempted
+silently. `DocumentURI` is the one that looks like it belongs and does not — it
+is the URI a document was RETRIEVED BY, and a copy was not retrieved.
 
 `validation-0201` still fails, on indent width alone — recorded as
 implementation-defined in `docs/conformance-gaps.md` — so this costs and gains
@@ -647,18 +702,36 @@ that language inclusion still rejects without ever comparing a bound to a
 bound. Closing these two would mean re-adopting a 1.0 rule at a cost of two
 schemas that really are valid.
 
-### Restriction of an all group by a wildcard or a named group (XSD 1.1)
+### Restriction of an all group by a wildcard or a named group (XSD 1.1) — closed
 
-`All/all206`, `all218`, `all237`, `Wild/wild049`, `wild050` — 5 schema false
-rejects.
+`All/all206`, `all218`, `all237`, `Wild/wild049`, `wild050` were recorded here
+as 5 schema false rejects. All five load clean under 1.1. The entry outlived the
+fix: `restrict.go` carries named handling for each of the five shapes — a
+wildcard inside a base all group, a named model group merged into one, and the
+two-branch containment `wild050` needs.
 
-XSD 1.1 permits derivations the 1.0 table calls Forbidden: a sequence or a
-wildcard restricting an all group, and a named model group merged into one.
-`allSubsumes` decides the case where every base particle is an element
-declaration, and falls back to the 1.0 table otherwise — sound, but
-conservative, so these five valid schemas are refused. Extending it to cover
-wildcards means deciding how a wildcard's occurrences split between the names
-it spans, which `all244` shows is not a simple count.
+Their XSD 1.0 rejections are **correct** and are not gaps: 1.0's
+`cos-all-limited.1` genuinely forbids a non-element particle in an all group,
+and `wild049`/`wild050` also spell `notQName`, which is 1.1-only.
+
+The `all244` caveat — that a wildcard's occurrences do not split between the
+names it spans by a simple count — was the real constraint, and it was honoured
+rather than worked around. `all244.n` is a negative test and is still rejected,
+with `the base requires a wildcard, which the restriction omits`. That pairing
+is the load-bearing part: the five valid schemas are accepted without the
+invalid twin becoming accepted with them, so completeness was gained without
+trading soundness for it.
+
+**Measured** at `a8dee9a`: XSD 1.0 total agree 39355, XSD 1.1 total agree 41542
+— equal to `tests/ratchet.txt`, with one schema false reject left on 1.1
+(`ste110`) and none of it from this family.
+
+All six shapes are now pinned in `xsd/allgroup_wildcard_test.go`, the five valid
+ones beside `all244.n`. The pairing is the point: the conformance total says
+only that a number moved, never which shape moved it, and a relaxation that
+recovered the five by loosening the wildcard-occurrence rule would take
+`all244.n` with them. The 1.0 lane is pinned in the same file, since
+`cos-all-limited.1` must keep rejecting all six there.
 
 ### Why the occurrence counters are a vector and not a bracket per scope
 
@@ -986,17 +1059,37 @@ and breaks the second. A correct fix needs the two separated rather than one
 range serving both — which is a change to `effectiveTotalRange`'s contract, not
 a change to this wrapper.
 
-### Particle restriction edge cases (XSD)
+### Particle restriction edge cases (XSD) — fixed, all but one
 
-`addB118`, `addB183`, `particlesHa161`, `particlesT002`, `particlesT009`,
-`particlesZ001` — 6 schema false rejects in
-1.1, 2 of which (`addB183`, `particlesZ001`) also fail in 1.0.
+This entry named six schema false rejects in 1.1 — `addB118`, `addB183`,
+`particlesHa161`, `particlesT002`, `particlesT009`, `particlesZ001` — two of
+them failing under 1.0 as well. **Five of the six now pass in both versions.**
+Measured at `a8dee9a`: XSD 1.1 has exactly **one** schema false reject in the
+whole suite, `ste110`, which is `queried bug4957` and disputed rather than
+addressable. XSD 1.0 has two, `ste110` and `particlesZ001`.
 
-Individually diagnosed cases in Particle Valid (Restriction) rather than one
-cluster. `particlesZ001` and `addB183` failing in both versions makes them the
-best entry point: they are bugs in the shared logic, not 1.1-specific gaps.
+`particlesT002`, `particlesT009` and `particlesHa161` were closed by **7495485**
+(*"a choice is unordered, and its optionality is its own"*): `recurseLax` walked
+the base's alternatives left to right, so a derived choice offering them in a
+different order was rejected though a choice imposes no order; and
+`recurseAsIfGroup` wrapped an element at a fixed `1..1`, so an optional element
+restricting an optional choice compared `0..1` against a branch's `1..1`. Both
+relaxations are 1.1-gated, and the three guards they needed are recorded above
+under *Four constraints on the 1.1 restriction relaxations*.
 
-### A collection URI resolves against the static base, not the context item
+`addB183` was closed by **9a6567f** (*"compare fixed value constraints as
+values, not as strings"*). `addB118` no longer disagrees under either version.
+
+**What is left is `particlesZ001`, and only under 1.0.** It is no longer a 1.1
+gap at all — language inclusion decides it there. Its 1.0 refusal is the
+occurrence-carrying wrapper described in the entry immediately above, and the
+suite's own annotation calls the 1.0 rule "ambiguous" while tagging the case as
+intensional restriction, a 1.1 feature; it is listed under *Suite cases that
+should be read as disputed* for that reason. So the "bug in shared logic, best
+entry point" reading this entry rested on is gone: the shared-logic half was
+`addB183`, and it is fixed.
+
+### A collection URI resolves against the static base, not the context item — fixed
 
 Recorded because the reading is not the obvious one. `fn:collection` once
 passed the *context item's* base URI to the resolver, so
@@ -1006,36 +1099,72 @@ the **static** base URI. The item's base remains the fallback for a caller who
 set no static base, and resolving stays the resolver's job — the engine hands
 over the base and does not guess what a URI means to the caller.
 
+`fnCollection` in `xpath/fn_misc.go` now reads `StaticBaseURI` first and falls
+back to the item. `TestCollectionStaticBaseBeatsItemBase` is what pins it: the
+two tests beside it each set only one of the bases, so a context item with no
+base URI cannot tell them apart, and reverting to the item's base passed both.
+The new case gives the item a base that differs from the static one, which is
+the only shape that fails when the wrong base is handed over.
+
 `cta0022` is unaffected either way. With no resolver configured the default is
 still `FODC0002`, which is the point, and the refusal is recorded under *Won't
 fix* above.
 
 ### Instance validation gaps (XSD)
 
-25 real instance false accepts in 1.1 after removing the W3C-flagged ones.
-Diagnosed individually rather than by cluster:
+This section used to list 25 instance false accepts, named case by case. That
+list is gone: every case on it — `Simple/simple001`, `simple002`, `simple016`,
+`simple086`, `ElemDecl/typeDef012*`, `valueConstraint007*`,
+`MS-ComplexType/ctZ013c`/`-d`/`-e`, `MS-IdentityConstraint/idG006`, `idK012`,
+`suntest/idc006.nogen`, `XmlVersions/xv009`, `MS-Schema/schU4`, `schU5`,
+`MS-Additional/isDefault070`, `isDefault077`, `MS-SimpleType/stE054`,
+`MS-Regex/reK6`, `Complex/complex022`, `CTA/cta0006` — was re-measured and
+none of them still disagrees, in either version. `xv009` closed with the
+XML 1.1 parser fork under `internal/xmlfork`; the rest closed with the
+identity-constraint and value-constraint work recorded above.
 
-- `Simple/simple001`, `simple002`, `simple016`, `simple086` — keyref `@ref`,
-  and union member substitutability through a restricted union.
-- `ElemDecl/typeDef012*`, `valueConstraint007*` — element declaration value
-  constraints.
-- `MS-ComplexType/ctZ013c`, `-d`, `-e` — complex type edge cases.
-- `MS-IdentityConstraint/idG006`, `idK012` — identity constraint scoping.
-- `suntest/idc006.nogen` — keyref resolution across a subtree boundary
-  (a false *reject*, so more serious than the rest of this list).
-- `XmlVersions/xv009` — XML 1.1 line-end normalisation, which requires the
-  parser to distinguish XML 1.0 from 1.1 document declarations.
-- `MS-Schema/schU4`, `schU5`, `MS-Additional/isDefault070`, `isDefault077`,
-  `MS-SimpleType/stE054`, `MS-Regex/reK6`, `Complex/complex022`,
-  `CTA/cta0006` — one-off cases, each needing its own diagnosis.
+What remains after re-measuring is three cases, and only one was addressable:
 
-### XPath cases that are not engine bugs
+- `MS-Wildcards/wildZ010` — **fixed.** `namespace=""` was defaulted to
+  `##any`, so a wildcard that admits *nothing* admitted *everything*. §3.10.2
+  defaults only an **absent** `namespace`; a present empty value is an
+  `xs:namespaceList` with no members, which is the empty set. The TSTF ruling
+  on bug 4066 says the same — "no defaulting of the empty string to ##any is
+  licensed by the spec" — and the case is `status="stable"`, not disputed.
+  Worth +1 on each version.
+- `MS-IdentityConstraint/idZ015` — a field selecting an attribute matched by a
+  `lax`/`skip` `anyAttribute`. Open under W3C bug 4063, and left alone.
+- `MS-Attribute/attP031` — the one remaining false *reject*, declined on
+  purpose; the reasoning is under *XSD instance: 1 addressable false reject*
+  below, and has not changed.
 
-`fn-doc-available-5` and `functx-fn-doc-available-1` are **not** engine bugs:
-their environment declares no `uri` for the source, so `fn:document-uri`
-correctly answers with a filesystem path that no resolver knows.
-`fn-in-scope-prefixes-25` needs a namespace declared through a DTD default
-attribute, which `encoding/xml` never parses.
+The lesson is the one this file keeps relearning: a case list is a measurement,
+and it decays. These entries survived several rounds after the bugs behind them
+were already fixed.
+
+### XPath cases that are not engine bugs — closed, all three now pass
+
+This entry named `fn-doc-available-5`, `functx-fn-doc-available-1` and
+`fn-in-scope-prefixes-25` as cases that would keep failing for reasons outside
+the engine. **None of the three fails any more.** Measured at `a8dee9a` with
+`-count=1`: QT3 reports **0 failed** on XPath 2.0 (15,183 in scope), 3.0
+(19,244) and 3.1 (21,786) — 100.00% on each — and the XQuery lane's 17 failures
+are all in `prod-ModuleImport`, `prod-ContextItemDecl`, `app-Demos`,
+`op-same-key`, `prod-DecimalFormatDecl`, `prod-OptionDecl.serialization` and
+`prod-TypeswitchExpr`. None of the three appears in any lane.
+
+The `fn-in-scope-prefixes-25` half was closed outright rather than reclassified:
+its stated blocker was that a namespace declared through a DTD default attribute
+"`encoding/xml` never parses", and **87d618b** (*"apply ATTLIST attribute
+defaults from the internal subset"*) is what parses it. The two
+`doc-available` cases likewise resolve, so the "environment declares no `uri`"
+reading no longer describes a failure.
+
+Kept as a retraction rather than deleted, because the reasoning it gave was the
+plausible kind — *the suite's environment is under-specified, so the case cannot
+pass* — and that reading is available again for any case whose environment looks
+thin. It was wrong here twice over, and the cheap check is to run the lane
+before believing it.
 
 ---
 
@@ -1090,23 +1219,35 @@ of the remaining gap is the suite disagreeing with itself.
 
 ### The ceiling that is not ours
 
+Re-measured at `a8dee9a`. The table that stood here read 51 and 47
+disagreements against 45 and 44 disputed; both columns had drifted down as
+fixes landed and were never re-derived.
+
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
-| disagreements | 51 | 47 |
-| of those, W3C-flagged `queried` or tied to an open bug | 45 | 44 |
+| disagreements | **33** | **34** |
+| of those, W3C-flagged `queried` or tied to an open bug | **31** | **32** |
+| left carrying suite status `accepted` | **2** | **2** |
 
-Those are cases where the W3C's own metadata records a dispute about the
-expected result. Nineteen of them are one cause: bug 4113, the `\p{Lu}`,
-`\p{Ll}` and `\p{Lo}` tests, written against Unicode 3.1 before characters such
-as U+1D7A8 moved between general categories. Passing them means freezing a
-Unicode 3.1 table and being wrong about modern text. **They are a reason to
-stop short of 100%, not a defect to fix.**
+Those first are cases where the W3C's own metadata records a dispute about the
+expected result. **Twenty-two of them are one cause** in each version: bug 4113,
+the `\p{Lu}`, `\p{Ll}` and `\p{Lo}` tests, written against Unicode 3.1 before
+characters such as U+1D7A8 moved between general categories. Passing them means
+freezing a Unicode 3.1 table and being wrong about modern text. **They are a
+reason to stop short of 100%, not a defect to fix.** (This section said
+nineteen and the *Unicode category drift* entry above said 18; the enumerated
+list is now kept there.)
 
-So the ceiling is **99.90% on 1.0 and 99.91% on 1.1**, not 100 — and both are
-where the engine already stands, since none of what remains is fixable. Those
-figures rose without any behaviour changing, when the driver stopped scoring the
-suite's `indeterminate` expectations: 16 cases on 1.0 and 14 on 1.1 prescribe no
-result, so they now leave the ratio instead of being counted as failures.
+The four remaining `accepted` cases are named, and each is argued in this file:
+`attP031` and `particlesZ001` on 1.0, `particlesZ033_g` and `simple093` on 1.1.
+Every one of the four is a suite self-contradiction the relevant entry sets out
+— which is why the addressable column is, in substance, empty on both versions.
+
+So the ceiling is **99.99% on either version**, and the engine stands at
+**99.92% on both** as the driver reports it. Those figures rose without any
+behaviour changing, when the driver stopped scoring the suite's `indeterminate`
+expectations — 16 cases on 1.0 and 14 on 1.1 prescribe no result — and again
+when it moved the four 1.1-syntax `ibmMeta` groups out of scope.
 
 ### XPath: no failures; one case refused by default until the harness enabled it
 
@@ -1129,7 +1270,7 @@ reasoning is under *Regular expression backreferences* above.
 **Closing the last one would cost the linear-time guarantee**, which is a worse
 trade than the case is worth.
 
-### XSD schema-validity: 36 (1.0) and 90 (1.1) that are ours
+### XSD schema-validity: 3 (1.0) and 6 (1.1) that are ours
 
 All false *accepts* — invalid schemas that load.
 
@@ -1143,9 +1284,12 @@ shape has been found here: the particle-restriction constraint had the same
 gap. When adding a schema-component constraint, check that the walk reaching it
 visits anonymous types too.
 
-What remains clusters in 1.0 `MS-Particles`, `MS-Additional` and
-`MS-Wildcards`; in 1.1 `Simple`, `MS-Particles`, `Zone`, `Override` and
-`Open`.
+What remains is short enough to name. Both versions carry `elemM002`
+(queried, bug 29085) and `idC019` (bug 4057); 1.0 adds `anyURI_b006_1356`
+(bug 4048), and 1.1 adds `elemZ026` (bug 4146), `particlesZ026a` (bug 4071),
+`particlesZ033_g` and `simple093` — the last two the only ones the suite
+marks `accepted`, and `simple093` is argued under *Suite cases that should be
+read as disputed* below, where enforcing its rule costs `particlesZ007`.
 
 Each is an unwritten Schema Component Constraint. There is no single change
 here: it is one rule at a time, and **every rule added is a chance to reject a
@@ -1164,10 +1308,12 @@ re-loads the production corpora for exactly this reason, and the W3C's own
 `schema-for-xslt30.xsd` — reached through the XSLT suite in nine seconds —
 proved the sharper guard of the two.
 
-### XSD schema-validity: 6 (1.0) and 1 (1.1) addressable false rejects
+### XSD schema-validity: 2 (1.0) and 1 (1.1) addressable false rejects
 
-The ones that matter, because a false reject breaks a working caller. Most are
-Particle Valid (Restriction). The 1.1 figure was 11 until the suite harness
+The ones that matter, because a false reject breaks a working caller. Both
+versions carry `ste110` (queried, bug 4957); 1.0 adds `particlesZ001`, a
+Particle Valid (Restriction) case argued under *Suite cases that should be
+read as disputed* below. The 1.1 figure was 11 until the suite harness
 began loading schemas with `AllowDOCTYPE` set: `iri-001` and its ten masked
 instance cases were refused for wanting a DOCTYPE, not for anything the
 validator decided.
@@ -1178,19 +1324,20 @@ range onto `recurseAsIfGroup`'s wrapper fixes `particlesZ001`, `Z023` and
 serves two jobs that want opposite answers. A correct fix separates them, which
 is a change to `effectiveTotalRange`'s contract.
 
-Three of the 1.1 entries — `particlesHb008`, `particlesHb011` and
-`particlesZ028` — need XSD 1.1's §3.4.6.4 intensional restriction: genuine
-language inclusion in *both* directions rather than the structural table.
+Three cases that once stood here under 1.1 — `particlesHb008`,
+`particlesHb011` and `particlesZ028` — need XSD 1.1's §3.4.6.4 intensional
+restriction: genuine language inclusion in *both* directions rather than the structural table.
 `particlesHb008` restricts `choice{e1, sequence{e2,e3,e4}}` by a reordered
 `choice{e1, sequence{e2, choice{e3,e4}}}` that no table can relate. That is an
 automaton subsumption engine, not a rule, and two rounds declined it
 deliberately rather than ship a partial one.
 
-### XSD instance: 1 addressable false reject
+### XSD instance: 3 (1.0) and 2 (1.1) addressable false rejects
 
-`attP031.i`, in both versions. `particlesZ040.i` stood here too and no longer
-does; the matcher that decides it is described under *Why the occurrence
-counters are a vector and not a bracket per scope* above.
+`attP031.i` under 1.0, plus `gMonth002_2061.v` and `gMonth004_2063.v` in both
+versions. `particlesZ040.i` stood here too and no longer does; the matcher that
+decides it is described under *Why the occurrence counters are a vector and not
+a bracket per scope* above.
 
 `attP031` is a suite self-contradiction rather than a defect
 here: it declares `use="prohibited"` with a `fixed` value and expects the
@@ -1210,17 +1357,23 @@ accept `att="37"` against a declaration that prohibits the attribute, which is
 a deliberate false accept bought for one suite point. A case that passes
 without a clause behind it is not a fix.
 
-Two further instance false rejects are disputed rather than addressable:
-`gMonth002_2061` and `gMonth004_2063` test the old `--MM--` form under W3C bug
-6901. `cta0022` was in this list and is now fixed — its type alternative's
-XPath was *raising* rather than answering, and a type alternative whose test
+The other two are disputed rather than addressable: `gMonth002_2061` and
+`gMonth004_2063` test the old `--MM--` form under W3C bug 6901. `cta0022` was
+in this list and is now fixed — its type alternative's XPath was *raising* rather than answering, and a type alternative whose test
 raises is silently skipped, so a crash was indistinguishable from a false
 test.
 
 ### Suite cases that should be read as disputed
 
-These carry status `accepted`, so the addressable counts above include them,
-but each is questionable on the suite's own evidence:
+Each carries status `accepted` and each is questionable on the suite's own
+evidence. **Most of them no longer cost anything**, and the list is kept for the
+argument rather than the arithmetic: re-measured at `a8dee9a`, the only two
+still disagreeing are `particlesZ001` (1.0 only) and `simple093` (1.1 only).
+The four `notQName` groups are now scored out-of-scope by the driver (see
+*`ibmMeta/wildcard.testSet` is mislabelled* above), and `particlesK006`,
+`particlesZ007`, `simple004`, `simple005` and `simple006` all agree in both
+versions. The sentence that stood here — "so the addressable counts above
+include them" — was true when written and is not now.
 
 * **Four `notQName` tests are 1.1-only in substance but run under 1.0.**
   `s3_10_1ii08s`/`ii09s` are the only un-versioned groups in `wildcard.testSet`
@@ -1246,13 +1399,17 @@ but each is questionable on the suite's own evidence:
 
 ### Honest summary
 
+Re-measured at `a8dee9a`. The two schema rows read 13 and 12 disagreements and
+named `iri-001` as addressable; both counts were stale and `iri-001` has passed
+since **3f2602e**.
+
 | | now | reachable | what stands in the way |
 |---|---|---|---|
 | XPath 2.0 | **100.00%** | 100.00% | reached |
-| XSD 1.0 instance | **99.89%** | ~99.9% | at the target; 2 addressable false rejects, both recorded as hard |
-| XSD 1.1 instance | **99.90%** | ~99.9% | same |
-| XSD 1.0 schema | **99.91%** | **~99.91%** | 13 disagreements, all queried or suite defects |
-| XSD 1.1 schema | **99.92%** | **~99.92%** | 12 disagreements; `iri-001` is the one addressable case |
+| XSD 1.0 instance | **99.89%** | ~99.99% | 28 disagreements, 27 of them W3C-disputed; `attP031.i` is the lone `accepted` one, and it is a suite self-contradiction |
+| XSD 1.1 instance | **99.90%** | ~99.99% | 27 disagreements, all 27 W3C-disputed |
+| XSD 1.0 schema | **99.97%** | **~99.99%** | 5 disagreements; 4 queried or bug-tied, `particlesZ001` the one `accepted` case and disputed on the suite's own annotation |
+| XSD 1.1 schema | **99.95%** | **~99.99%** | 7 disagreements; 5 queried or bug-tied, `particlesZ033_g` and `simple093` the two `accepted` ones, both argued above as suite defects |
 
 The two schema rows once read `~99.9%`, which contradicted the ceiling derived
 under *What 100% would take* above and could not be reached. The reachable
@@ -1266,8 +1423,10 @@ that work started:
 | `accepted` — addressable | 197 | 311 |
 | `queried` or bug-tied — the ceiling | 52 | 54 |
 
-and today 95 and 154, of which 46 and 103 are addressable. Eighteen of the
-1.0 disputes are bug 4113 alone. Reaching 99.99% would have meant fixing 200
+and today **33 and 34, of which 2 and 2 are addressable** — the intermediate
+figures this paragraph carried (95 and 154, of which 46 and 103) were a
+snapshot from partway through and were never re-derived. Twenty-two of the
+disputes in *each* version are bug 4113 alone. Reaching 99.99% would have meant fixing 200
 of the original 201 1.0 schema disagreements and 313 of the 314 in 1.1 —
 arithmetically impossible without "fixing" tests the W3C itself questions.
 
@@ -1276,9 +1435,9 @@ refusal, the XSD false accepts are volume rather than difficulty, and the false
 rejects are one subsystem that needs its occurrence handling reworked rather
 than patched.
 
-**Note that reaching 100% on XSD is not possible and not desirable.** 48 of the
-1.0 disagreements and 47 of the 1.1 ones are cases the W3C's own metadata
-records a dispute about; nineteen are the bug 4113 general-category tests,
+**Note that reaching 100% on XSD is not possible and not desirable.** 31 of the
+33 1.0 disagreements and 32 of the 34 on 1.1 are cases the W3C's own metadata
+records a dispute about; twenty-two in each are the bug 4113 general-category tests,
 where passing means freezing a Unicode 3.1 table and being wrong about modern
 text.
 

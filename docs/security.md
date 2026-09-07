@@ -191,7 +191,7 @@ wide-and-broken one without doing the work the budget forbids, and of the two
 answers available only the refusal is honest. It is tolerable only because of
 the gap between 256 and the widest real state measured (19 across 15,464 W3C
 schemas, 72 in the XSLT corpus): nothing real reaches it, and the conformance
-marks in `tests/ratchet.txt` (XSD 1.0 39347, XSD 1.1 41532) are unchanged by
+marks in `tests/ratchet.txt` (XSD 1.0 39355, XSD 1.1 41542) are unchanged by
 the switch from skipping to refusing.
 
 `contentModel.upaSkipped` is gone. It existed because a declined check and a
@@ -290,7 +290,7 @@ real schema produces is **50 membership entries**, in
 26 members. 65,536 is over 1,300x that.
 `TestSubstitutionClosureBudgetDoesNotFireOnRealSchemas` pins the gap from
 below, and it matters for the same reason the UPA one does: firing rejects.
-Both conformance marks are unchanged — XSD 1.0 39,347 and XSD 1.1 41,532.
+Both conformance marks are unchanged — XSD 1.0 39,355 and XSD 1.1 41,542.
 
 **Three neighbouring checks were examined and deliberately left unbudgeted**,
 because a budget on work that cannot be made expensive is dead code that only

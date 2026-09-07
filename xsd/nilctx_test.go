@@ -14,8 +14,8 @@ import (
 // one: they are XSLT's validation="strict" path, bounded by what the transform
 // just built. The nil dereference panicked every schema-aware stylesheet --
 // 53 cases on the XSLT 2.0 target and 77 on 3.0 -- while the XSD suites the
-// change was measured against stayed at 39,347 and 41,532, because they never
-// take this path.
+// change was measured against stayed at 39,347 and 41,532 -- the totals at that
+// time -- because they never take this path.
 func TestValidateElementWithoutContext(t *testing.T) {
 	const sch = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
 	  <xs:complexType name="aType"><xs:sequence><xs:element name="b" type="xs:integer" maxOccurs="unbounded"/></xs:sequence></xs:complexType>
