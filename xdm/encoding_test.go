@@ -110,10 +110,9 @@ func TestRewriteEncodingDecl(t *testing.T) {
 }
 
 // TestParseXML11Declaration records that a document declaring XML 1.1 is
-// parsed rather than refused. encoding/xml, which this package uses as its
-// tokeniser, rejects any version but 1.0 outright; the saxonData XmlVersions
-// schemas (xv001..xv009) are ordinary schema documents whose only 1.1 feature
-// is that declaration, so refusing it kept nine valid schemas from loading.
+// parsed rather than refused. The declaration now reaches the tokeniser
+// intact — it used to be rewritten to 1.0 here — and the saxonData
+// XmlVersions schemas (xv001..xv009) load on the strength of it.
 func TestParseXML11Declaration(t *testing.T) {
 	// The 1.1-only character arrives as a character reference in an
 	// attribute value, exactly as xv001 writes it.
@@ -129,26 +128,12 @@ func TestParseXML11Declaration(t *testing.T) {
 }
 
 // TestParseXML11UTF16 covers the other decode path: a UTF-16 document rewrites
-// its encoding declaration, and the version rewrite has to survive that.
+// its ENCODING declaration, and the version must survive that rewrite
+// untouched, so that the tokeniser still sees 1.1.
 func TestParseXML11UTF16(t *testing.T) {
 	b := encodeUTF16(`<?xml version="1.1" encoding="UTF-16"?><r/>`, false)
 	if _, err := Parse(bytes.NewReader(b), ParseOptions{}); err != nil {
 		t.Fatalf("an XML 1.1 UTF-16 document should be accepted: %v", err)
-	}
-}
-
-func TestRewriteVersionDecl(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{`<?xml version="1.1"?><r/>`, `<?xml version="1.0"?><r/>`},
-		{`<?xml version='1.1' encoding="UTF-8"?><r/>`, `<?xml version='1.0' encoding="UTF-8"?><r/>`},
-		// A 1.0 declaration must come through byte for byte.
-		{`<?xml version="1.0"?><r/>`, `<?xml version="1.0"?><r/>`},
-		{`<r/>`, `<r/>`},
-	}
-	for _, c := range cases {
-		if got := rewriteVersionDecl(c.in); got != c.want {
-			t.Errorf("rewriteVersionDecl(%q) = %q, want %q", c.in, got, c.want)
-		}
 	}
 }
 

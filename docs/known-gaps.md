@@ -1068,12 +1068,16 @@ For what is currently fixable, open, or unreachable, and why, see
 [conformance-gaps.md](conformance-gaps.md). For what buying it would cost, see
 [reaching-100.md](reaching-100.md).
 
-XML 1.1 support sits outside all of this. It is not a matter of schemas that
-fail to parse — measured, every schema in the suite's `XmlVersions` set parses
-and loads, because `version="1.1"` is accepted and then read under 1.0 rules.
-The gap is that the reading is wrong, not that it is refused. It is a larger
-piece of work and is described in
-[todo.md](todo.md#11-xml-11-documents--the-largest-single-win).
+XML 1.1 sat outside all of this until the character layer was implemented. The
+gap was never that 1.1 documents were refused — they parsed — but that
+`version="1.1"` was rewritten to `1.0` and the document then read under the
+wrong language's rules. That is fixed: the version reaches the tokeniser, and
+[2] `Char`, [2a] `RestrictedChar` and the §2.11 line ends now follow it. The
+four `XmlVersions` instances that carry C0 controls as character references
+(xv003, xv006, xv008, xv009) parse and are scored, where they were previously
+unreadable. What is still missing is in the external-entity and DTD layers,
+and is described in
+[todo.md](todo.md#11-xml-11-documents--character-rules-done-dtd-side-rules-outstanding).
 
 ---
 

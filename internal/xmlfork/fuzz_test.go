@@ -45,6 +45,25 @@ var tokenSeeds = []string{
 	`<a>&#xD800;</a>`,
 	"<a>\x00</a>",
 	"<a>\xff\xfe</a>",
+
+	// XML 1.1: the version gate, the RestrictedChar reference/literal
+	// split, and the §2.11 line ends. These reach the version11 paths,
+	// which upstream has no equivalent of.
+	`<?xml version="1.1"?><a>&#x7;</a>`,
+	`<?xml version="1.0"?><a>&#x7;</a>`,
+	"<?xml version=\"1.1\"?><a>\x07</a>",
+	`<?xml version="1.1"?><a>&#0;</a>`,
+	"<?xml version=\"1.1\"?><a>x\u0085y</a>",
+	"<?xml version=\"1.1\"?><a>x\u2028y</a>",
+	"<?xml version=\"1.1\"?><a>x\r\u0085y</a>",
+	"<?xml version=\"1.1\"?><a>\u0085</a>",
+	`<?xml version="1.1"?><a b="&#x1f;"/>`,
+	`<?xml version="1.1"?><a><![CDATA[&#x7;]]></a>`,
+	`<?xml version="1.2"?><a/>`,
+	// A truncated declaration, and a stray <?xml?> after content, which
+	// must not retroactively change the version.
+	`<?xml version="1.1"`,
+	`<?xml version="1.0"?><a/><?xml version="1.1"?>`,
 }
 
 // FuzzTokenNoPanic drives the tokeniser to exhaustion over arbitrary bytes.

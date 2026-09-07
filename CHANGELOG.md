@@ -8,6 +8,60 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Added
 
+**XML 1.1 documents are read as XML 1.1.** A document declaring
+`version="1.1"` used to have its declaration rewritten to `1.0` in
+`xdm/encoding.go` before the tokeniser saw it. That was the worse of the two
+possible wrongs: the document was admitted and then read under 1.0's rules
+rather than declined, which is exactly the shape this codebase forbids —
+cannot decide must be an error, never a silent acceptance. The rewrite is
+gone. `internal/xmlfork` now reads the version from the declaration and keeps
+it, in `Decoder.version11`.
+
+The version is taken from the XML declaration and from nowhere else. It is
+deliberately not a `ParseOptions` field: the version is a property of the
+document text, and an option would let a caller assert a version the text
+contradicts. The default stays 1.0, so a document with no declaration, or one
+naming 1.0, gains none of 1.1's relaxations; a version that is neither 1.0 nor
+1.1 is still refused outright.
+
+Three rules follow the version. XML 1.1 [2] `Char` widens to `[#x1-#xD7FF]`,
+making every C0 control but NUL a character — NUL remains illegal in both. [2a]
+`RestrictedChar` then admits those controls *only as character references*: a
+literal control character is still a fatal error, in content, CDATA and
+attribute values alike. And §2.11 makes NEL (`#x85`) and `#x2028` line ends
+that normalise to `#xA`, with `#xD#x85` counting as one; under 1.0 neither is a
+line end and both survive unchanged. A `&#x85;` *reference* denotes the
+character and is never normalised — the two rules that mention `#x85` are
+distinct.
+
+Honouring [2a] meant a structural change to the tokeniser. Upstream validates
+characters in a single scan *after* entity expansion, where `&#x7;` and a
+literal BEL are indistinguishable. A numeric character reference is now checked
+at the point of expansion, and the byte span it produced is recorded so the
+trailing scan skips it. A side effect is that references are validated before
+carriage-return normalisation rather than after, which is where upstream ought
+to have checked them.
+
+W3C `XmlVersions` xv003, xv006, xv008 and xv009 — all valid, all previously
+scored unreadable — now parse. XSD totals rise to 39355 (1.0) and 41542 (1.1),
+with `unreadable` down from 7 to 3 and 29 to 25. QT3 (29901), XSLT (8612,
+6149) and the vendored corpus (185 loaded, 38 failed) are unmoved.
+
+Two changes the previous plan called for turned out to be unnecessary, both
+because XML 1.0 Fifth Edition adopted 1.1's name productions verbatim.
+`NameStartChar` and `NameChar` are identical between the two versions, so the
+5e tables already in the tokeniser are the 1.1 tables. The same holds for `\i`
+and `\c` in the XSD regex translator, which had been budgeted as the
+widest-reaching item: `xpath/classdiff.go`'s ranges were compared against
+`internal/xmlname` across the entire Unicode scalar range and disagree nowhere,
+so the translator is correct for both versions and stays version-independent.
+
+Note that `&#133;` is valid in XML 1.0 as well as 1.1 — `#x85` falls inside
+`[#x20-#xD7FF]` in 1.0's [2] `Char`. It is not whitespace and not a line end in
+1.0, which is the real difference and is what §2.11 above implements. See
+`docs/todo.md` §1.1 for what a 1.1 document still gets wrong, all of it in the
+DTD and external-entity layers rather than the character layer.
+
 **The over-strictness guard no longer depends on a licensed corpus.** Adding a
 schema-validity rule risks making it stricter than the spec, and that is the
 one defect the W3C suite structurally cannot catch: it scores agreement with

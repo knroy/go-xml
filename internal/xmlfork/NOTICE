@@ -46,8 +46,8 @@ document is unreachable. A pre-pass over the bytes is circular: deciding which
 bytes are names requires the parse being delegated.
 
 
-The patch
----------
+The first patch: XML 1.0 5e names
+---------------------------------
 
 Four substantive lines, in the two name-checking functions. Both isName and
 isNameString have the same shape, and each carries two of the four:
@@ -70,8 +70,55 @@ Two things are deleted rather than changed, neither of them behaviour:
     not forked. This package is used as a tokeniser only: xdm consumes
     Decoder, Token and the token types, and nothing else.
 
-Nothing else is changed. In particular the character-range check, entity
-handling, namespace translation and error text are upstream's.
+The second patch: XML 1.1
+-------------------------
+
+Upstream refuses any version but 1.0 outright, so an XML 1.1 document never
+parses. xdm used to work around that by rewriting the declaration to 1.0
+before the tokeniser saw it, which is worse than refusing: the document was
+admitted and then read under the wrong language's rules.
+
+The version is now read from the declaration and kept, in Decoder.version11,
+and it is set from the XML declaration and nowhere else. That is deliberate:
+the version is a property of the document text, so no caller-supplied option
+can assert a version the text contradicts. The default is 1.0 — an absent
+declaration, or one naming 1.0, gets none of 1.1's relaxations.
+
+Four changes carry it, all marked "go-xml: XML 1.1" in the source:
+
+  * Decoder gains `version11` and `sawDecl`. sawDecl stops a stray <?xml?>
+    later in the document from retroactively changing the version of text
+    already read.
+
+  * The version gate in the <?xml?> branch of rawToken accepts "1.1" as well
+    as "1.0", and records which. Anything else is still refused, with the
+    error text widened to name both supported versions.
+
+  * isInCharacterRange11 [2] and isRestrictedChar [2a] join upstream's
+    isInCharacterRange, with charOK/literalCharOK selecting per version.
+
+  * d.text validates a numeric character reference AT THE POINT OF EXPANSION
+    and records the byte span it produced, in a new `refSpan`. The trailing
+    character scan then skips those spans. This is the structural change:
+    XML 1.1 §2.2 admits a RestrictedChar only as a character reference, and
+    upstream's single trailing scan runs after expansion, where a literal
+    control character and a referenced one are the same bytes. The two have
+    to be told apart, and only the expansion site knows which is which.
+
+    A side effect is that references are now checked BEFORE \r normalisation
+    rather than after, which is also where upstream should have checked them.
+
+  * d.text normalises NEL (#x85) and #x2028 to #xA under 1.1 only, per §2.11,
+    including \r#x85 as a single two-character line end. The lead bytes are
+    already in the buffer when the sequence completes, so they are unwritten.
+
+Re-applying this on a newer Go means re-doing the d.text work by hand; it is
+the only part that is not a local substitution. Everything else is additive.
+
+Nothing else is changed. In particular entity handling, namespace translation
+and error text are upstream's, and XML 1.0 behaviour is unchanged except that
+a character reference to a non-character is now caught at the reference
+rather than after normalisation.
 
 
 Re-forking from a newer Go
@@ -79,10 +126,14 @@ Re-forking from a newer Go
 
     cp $GOROOT/src/encoding/xml/xml.go internal/xmlfork/xml.go
 
-then: rename the package to xmlfork; re-apply the four lines above; delete the
-`first`/`second` tables and the post-EscapeText tail as described. The four
-lines are the whole of the semantic patch, and they are marked in the source
-with "go-xml: XML 1.0 5e" so they can be found by grep.
+then: rename the package to xmlfork; re-apply BOTH patches above; delete the
+`first`/`second` tables and the post-EscapeText tail as described.
+
+Every semantic change is marked in the source with a "go-xml:" comment, so
+`grep -n "go-xml:" xml.go` enumerates the whole patch. The first patch is four
+local substitutions. The second is mostly additive — new functions and two
+Decoder fields — except for the d.text changes, which interleave with upstream
+code and have to be re-applied by reading rather than by patch.
 
 Verify with the upstream test suite, which is the real check that the fork is
 still a correct tokeniser. It cannot run against this trimmed copy — it

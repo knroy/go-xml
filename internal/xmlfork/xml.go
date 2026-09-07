@@ -215,6 +215,21 @@ type Decoder struct {
 	linestart      int64
 	offset         int64
 	unmarshalDepth int
+
+	// version11 records that the document declared version="1.1", which
+	// changes what the language is: see isInCharacterRange11 and §2.11
+	// line-end normalisation. It is set from the XML declaration and
+	// nowhere else — the version is a property of the document text, so a
+	// caller must not be able to assert one the text contradicts.
+	//
+	// It defaults to false. A document with no declaration, or one naming
+	// 1.0, is XML 1.0 and acquires none of 1.1's relaxations.
+	version11 bool
+
+	// sawDecl records that the XML declaration has been consumed, so that a
+	// later <?xml ...?> — which is not a declaration, only a stray PI —
+	// cannot retroactively change the version of text already read.
+	sawDecl bool
 }
 
 // NewDecoder creates a new XML parser reading from r.
@@ -631,9 +646,18 @@ func (d *Decoder) rawToken() (Token, error) {
 		if target == "xml" {
 			content := string(data)
 			ver := procInst("version", content)
-			if ver != "" && ver != "1.0" {
-				d.err = fmt.Errorf("xml: unsupported version %q; only version 1.0 is supported", ver)
+			// go-xml: XML 1.1 [23] XMLDecl. The declaration is the only
+			// place the version can be stated, and it precedes all
+			// content, so recording it here is enough to have it in hand
+			// before any character is validated. 1.0 stays the default:
+			// only the literal string "1.1" opts in.
+			if ver != "" && ver != "1.0" && ver != "1.1" {
+				d.err = fmt.Errorf("xml: unsupported version %q; only versions 1.0 and 1.1 are supported", ver)
 				return nil, d.err
+			}
+			if !d.sawDecl {
+				d.sawDecl = true
+				d.version11 = ver == "1.1"
 			}
 			enc := procInst("encoding", content)
 			if enc != "" && enc != "utf-8" && enc != "UTF-8" && !strings.EqualFold(enc, "utf-8") {
@@ -991,6 +1015,9 @@ var entity = map[string]rune{
 func (d *Decoder) text(quote int, cdata bool) []byte {
 	var b0, b1 byte
 	var trunc int
+	// go-xml: byte ranges of d.buf that came from character references
+	// rather than from literal input. See the trailing scan below.
+	var refs []refSpan
 	d.buf.Reset()
 Input:
 	for {
@@ -1072,8 +1099,24 @@ Input:
 					d.buf.WriteByte(';')
 					n, err := strconv.ParseUint(s, base, 64)
 					if err == nil && n <= unicode.MaxRune {
+						// go-xml: a character reference is checked HERE,
+						// while it is still known to be a reference. XML
+						// 1.1 §2.2 permits a RestrictedChar only in this
+						// form, so the distinction is lost the moment the
+						// expansion is appended to d.buf alongside literal
+						// text. Under 1.0 this rejects exactly what the
+						// old trailing scan rejected — including the C1
+						// references that scan let through, because it ran
+						// after \r normalisation had already lost them.
+						if !d.charOK(rune(n)) {
+							d.err = d.syntaxError(fmt.Sprintf("illegal character code %U", rune(n)))
+							return nil
+						}
 						text = string(rune(n))
 						haveText = true
+						// The expanded bytes are not literal text: record
+						// their extent so the trailing scan skips them.
+						refs = append(refs, refSpan{before, before + len(text)})
 					}
 				}
 			} else {
@@ -1126,6 +1169,27 @@ Input:
 			d.buf.WriteByte('\n')
 		} else if b1 == '\r' && b == '\n' {
 			// Skip \r\n--we already wrote \n.
+		} else if d.version11 && b == 0x85 && b1 == 0xC2 {
+			// go-xml: XML 1.1 §2.11 adds NEL (#x85) and #x2028 to the
+			// line ends that must be normalised to #xA, and makes \r\x85
+			// a two-character end like \r\n. This is a literal-text rule
+			// only: a &#x85; reference denotes the character itself and is
+			// left alone, which is why it is handled here in the byte loop
+			// and not after expansion.
+			//
+			// The lead byte is already in d.buf — the sequence is only
+			// recognisable at its last byte — so unwrite it. If \r
+			// preceded, that \r was already written as \n and this NEL
+			// joins it as one line end rather than starting a second.
+			d.buf.Truncate(d.buf.Len() - 1)
+			if b0 != '\r' {
+				d.buf.WriteByte('\n')
+			}
+		} else if d.version11 && b == 0xA8 && b1 == 0x80 && b0 == 0xE2 {
+			// U+2028 LINE SEPARATOR, likewise: drop the two bytes of it
+			// already written and emit #xA.
+			d.buf.Truncate(d.buf.Len() - 2)
+			d.buf.WriteByte('\n')
 		} else {
 			d.buf.WriteByte(b)
 		}
@@ -1136,15 +1200,34 @@ Input:
 	data = data[0 : len(data)-trunc]
 
 	// Inspect each rune for being a disallowed character.
+	//
+	// go-xml: this scan now sees LITERAL text only. Character references
+	// were validated as they were expanded, above, and the bytes they
+	// produced are skipped here — a RestrictedChar is legal in 1.1 as a
+	// reference and illegal written out, and the two are indistinguishable
+	// once both are in d.buf.
 	buf := data
+	off := 0
 	for len(buf) > 0 {
+		if len(refs) > 0 && off >= refs[0].start {
+			// Skip the whole span an expansion contributed.
+			skip := refs[0].end - off
+			if skip > len(buf) {
+				skip = len(buf)
+			}
+			buf = buf[skip:]
+			off += skip
+			refs = refs[1:]
+			continue
+		}
 		r, size := utf8.DecodeRune(buf)
 		if r == utf8.RuneError && size == 1 {
 			d.err = d.syntaxError("invalid UTF-8")
 			return nil
 		}
 		buf = buf[size:]
-		if !isInCharacterRange(r) {
+		off += size
+		if !d.literalCharOK(r) {
 			d.err = d.syntaxError(fmt.Sprintf("illegal character code %U", r))
 			return nil
 		}
@@ -1163,6 +1246,67 @@ func isInCharacterRange(r rune) (inrange bool) {
 		r >= 0x20 && r <= 0xD7FF ||
 		r >= 0xE000 && r <= 0xFFFD ||
 		r >= 0x10000 && r <= 0x10FFFF
+}
+
+// refSpan is a half-open byte range of d.buf produced by expanding a
+// character reference. XML 1.1 §2.2 makes "was this a reference?" a
+// correctness question, and d.buf holds literal and expanded text together, so
+// the answer has to be carried alongside rather than recovered from the bytes.
+type refSpan struct{ start, end int }
+
+// go-xml: XML 1.1 character productions.
+//
+// XML 1.1 [2] Char widens the range to [#x1-#xD7FF] | [#xE000-#xFFFD] |
+// [#x10000-#x10FFFF]: every C0 control except NUL becomes a character, where
+// 1.0 admitted only #x9, #xA and #xD. NUL is still not a character in either
+// version, which is why this is not simply "anything below #x20".
+func isInCharacterRange11(r rune) bool {
+	return r >= 0x1 && r <= 0xD7FF ||
+		r >= 0xE000 && r <= 0xFFFD ||
+		r >= 0x10000 && r <= 0x10FFFF
+}
+
+// isRestrictedChar reports whether r matches XML 1.1 [2a] RestrictedChar:
+//
+//	[#x1-#x8] | [#xB-#xC] | [#xE-#x1F] | [#x7F-#x84] | [#x86-#x9F]
+//
+// A RestrictedChar is a character — it satisfies [2] — but §2.2 permits it to
+// appear "only as character references": written literally it is a fatal
+// error. The gap at #x85 is NEL, which is not restricted because §2.11 makes
+// it a line ending, and the gaps at #x9/#xA/#xD are the 1.0 whitespace that
+// was never restricted.
+//
+// This is what W3C XmlVersions xv003 and xv009 turn on: both spell their
+// control characters as &#x7; and &#xc;, which is legal, and the same bytes
+// written literally would not be.
+func isRestrictedChar(r rune) bool {
+	return r >= 0x1 && r <= 0x8 ||
+		r >= 0xB && r <= 0xC ||
+		r >= 0xE && r <= 0x1F ||
+		r >= 0x7F && r <= 0x84 ||
+		r >= 0x86 && r <= 0x9F
+}
+
+// charOK reports whether r may appear at all in this document, as a literal or
+// as a character reference — XML 1.0 [2] or XML 1.1 [2] according to the
+// version the document declared.
+func (d *Decoder) charOK(r rune) bool {
+	if d.version11 {
+		return isInCharacterRange11(r)
+	}
+	return isInCharacterRange(r)
+}
+
+// literalCharOK reports whether r may appear as a LITERAL character. It is
+// charOK minus the RestrictedChars, which 1.1 admits only via a reference.
+//
+// Under 1.0 the two are the same predicate: 1.0 has no RestrictedChar
+// production because the characters it would name are not characters at all.
+func (d *Decoder) literalCharOK(r rune) bool {
+	if d.version11 {
+		return isInCharacterRange11(r) && !isRestrictedChar(r)
+	}
+	return isInCharacterRange(r)
 }
 
 // Get name space name: name with a : stuck in the middle.
