@@ -38,3 +38,8 @@
 # findings that survive review land in CHANGELOG.md and the docs, and the
 # reports themselves are not redistributed here.
 /docs/audits/
+
+# `go build ./tests/xsdsuite` and `go run` leave the driver binary at the repo
+# root, where it is 11 MB and has twice been staged by accident. The package is
+# a main, so it has no *.test name for the rule above to catch.
+/xsdsuite

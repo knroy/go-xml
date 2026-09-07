@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -151,6 +152,44 @@ func expectedValidity(parent *xdm.Node, tok map[string]bool) (string, string) {
 	return want, status
 }
 
+// notQName and notNamespace are the two wildcard attributes XSD 1.1 Part 1
+// §3.10.1 adds; neither exists in the 1.0 schema for schema documents, so a
+// document using either cannot be a valid 1.0 schema at all.
+var only11Wildcard = regexp.MustCompile(`\bnot(QName|Namespace)\s*=`)
+
+// usesOnly11Syntax reports whether any of these schema documents is written in
+// syntax that exists only in XSD 1.1.
+//
+// This is a fallback for a gap in the suite's own metadata, not a second
+// scoping mechanism. The normative one is the version attribute, whose tokens
+// common/xsts.xsd defines as "the versions and features for which the test is
+// applicable"; appliesOR already implements it, and 463 of the suite's
+// 1.1-feature groups carry it. A handful in ibmMeta do not, and for most of
+// them that is harmless — a 1.0 processor still reaches the prescribed answer.
+// It is not harmless where the suite expects the schema to be *valid*: a 1.0
+// processor must reject a document it cannot even parse, so the group scores as
+// a false reject against a conformant processor.
+//
+// The suite's XSD1_1TestCategories.xml documentationReference is not usable as
+// the signal. common/xsts.xsd documents documentationReference as merely "a
+// link to documentation relevant to a test", and empirically it does not
+// discriminate: 32 groups lacking a version attribute carry one, and 28 of them
+// already agree under 1.0. Excluding on it would discard 28 correct results to
+// rescue 4, shrinking the denominator and inflating the score. The syntax of
+// the schema document itself is the fact that actually decides the question.
+func usesOnly11Syntax(paths []string) bool {
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if only11Wildcard.Match(b) {
+			return true
+		}
+	}
+	return false
+}
+
 func firstLine(s string) string {
 	if i := strings.Index(s, "\n"); i > 0 {
 		return s[:i]
@@ -201,6 +240,14 @@ func main() {
 	// toss. They are counted here so the number stays visible in the
 	// summary rather than silently vanishing from the totals.
 	var sSkip, iSkip int
+	// Cases out of scope for the version under test leave the numerator and
+	// the denominator for the same reason, and are counted here so that
+	// excluding them cannot quietly inflate the percentage.
+	var sOOS, iOOS int
+	// Instances that could not be opened or parsed. Not a pass and not a
+	// fail, but it must never be silently dropped: an unscored case is
+	// indistinguishable from one that was never there.
+	var iUnread int
 
 	for _, set := range sets {
 		f, err := os.Open(set)
@@ -258,6 +305,26 @@ func main() {
 				sStatus = s
 			}
 			if len(schemaPaths) == 0 {
+				continue
+			}
+
+			// A group the suite says produces a *valid* schema, out of
+			// syntax that exists only in 1.1, prescribes no result for a
+			// 1.0 processor: it cannot parse the document, so rejecting
+			// it is conformant rather than wrong. Scoring it as a false
+			// reject measured the 1.1 feature set against the 1.0 lane.
+			// The group's instance tests go with it, because they can
+			// only be validated against the schema that was not built.
+			if !only11 && schemaValid && !sIndet && usesOnly11Syntax(schemaPaths) {
+				if haveSchemaTest {
+					sOOS++
+				}
+				for _, it := range g.ChildElements() {
+					if it.Name.Local == "instanceTest" &&
+						appliesOR(it.AttrValue("version"), tok) {
+						iOOS++
+					}
+				}
 				continue
 			}
 
@@ -337,6 +404,14 @@ func main() {
 				}
 				df, err := os.Open(docPath)
 				if err != nil {
+					// An unreadable instance is not a result. It
+					// left both the numerator and the denominator
+					// unlogged, which is an invisible hole in a
+					// ratchet-guarded number rather than a score.
+					iUnread++
+					fmt.Printf("IUNREAD\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						setName, gname, it.AttrValue("name"), status,
+						filepath.Base(docPath), firstLine(err.Error()))
 					continue
 				}
 				// The base URI is what fn:base-uri() reports, and
@@ -347,6 +422,16 @@ func main() {
 				dt, err := xdm.Parse(df, xdm.ParseOptions{BaseURI: docPath})
 				df.Close()
 				if err != nil {
+					// Likewise for a document the parser cannot
+					// read. Some of these are deliberate: the
+					// suite includes instances that are not
+					// well-formed XML, for which no validity is
+					// prescribed. Either way it is accounted for
+					// and named, not dropped.
+					iUnread++
+					fmt.Printf("IUNREAD\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						setName, gname, it.AttrValue("name"), status,
+						filepath.Base(docPath), firstLine(err.Error()))
 					continue
 				}
 				// The suite expects a conforming processor to
@@ -386,7 +471,9 @@ func main() {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "SCHEMA  agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", sOK, sBad, sSkip, 100*float64(sOK)/float64(sOK+sBad))
-	fmt.Fprintf(os.Stderr, "INSTANCE agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", iOK, iBad, iSkip, 100*float64(iOK)/float64(iOK+iBad))
-	fmt.Fprintf(os.Stderr, "TOTAL   agree %d  disagree %d  indeterminate %d  (%.2f%%)\n", sOK+iOK, sBad+iBad, sSkip+iSkip, 100*float64(sOK+iOK)/float64(sOK+iOK+sBad+iBad))
+	// Every category outside agree/disagree is printed, so that the size of
+	// what is not being scored stays as visible as the percentage itself.
+	fmt.Fprintf(os.Stderr, "SCHEMA  agree %d  disagree %d  indeterminate %d  out-of-scope %d  (%.2f%%)\n", sOK, sBad, sSkip, sOOS, 100*float64(sOK)/float64(sOK+sBad))
+	fmt.Fprintf(os.Stderr, "INSTANCE agree %d  disagree %d  indeterminate %d  out-of-scope %d  unreadable %d  (%.2f%%)\n", iOK, iBad, iSkip, iOOS, iUnread, 100*float64(iOK)/float64(iOK+iBad))
+	fmt.Fprintf(os.Stderr, "TOTAL   agree %d  disagree %d  indeterminate %d  out-of-scope %d  unreadable %d  (%.2f%%)\n", sOK+iOK, sBad+iBad, sSkip+iSkip, sOOS+iOOS, iUnread, 100*float64(sOK+iOK)/float64(sOK+iOK+sBad+iBad))
 }

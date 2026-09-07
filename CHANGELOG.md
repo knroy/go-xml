@@ -6,6 +6,46 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Fixed
+
+**The XSD conformance harness was scoring cases it never ran, and cases it had
+no business running.** Two measurement defects in `tests/xsdsuite`, both of
+which moved a ratchet-guarded number without anyone being able to see it.
+
+An instance document the parser could not open or could not read was dropped by
+a bare `continue`, leaving neither a pass nor a fail — it left the numerator and
+the denominator at once, unlogged. Nine such documents on XSD 1.0 and
+thirty-one on 1.1 were invisible, and on 1.0 two of them had been counted as
+agreements. They are now counted and named as `unreadable`, with the case that
+produced each printed as an `IUNREAD` row. Some are deliberate: the suite ships
+instances that are not well-formed XML, for which no validity is prescribed.
+Either way an unscored case must be visible, because an unscored case is
+otherwise indistinguishable from one that was never there.
+
+Four test groups written in XSD 1.1-only syntax were being scored against the
+1.0 processor and counted as false rejects. A schema document using `notQName`
+or `notNamespace` is not a valid 1.0 schema document at all, so a 1.0 processor
+refusing it is conformant rather than wrong; the suite's own metadata points
+these at `xmlschema11-1`. They are now `out-of-scope`.
+
+The normative scoping mechanism is the `version` attribute, which `appliesOR`
+already implements and which 463 of the suite's 1.1-feature groups carry; a
+handful in `ibmMeta` omit it. `documentationReference` is NOT usable as the
+substitute signal, and this was measured rather than assumed: 32 groups lacking
+a version attribute carry one, and 28 of them already agree under 1.0, so
+excluding on it would discard 28 correct results to rescue 4 — shrinking the
+denominator to raise the score. The syntax of the schema document itself is
+what actually decides the question.
+
+Every category outside agree/disagree is now printed, so the size of what is
+not being scored stays as visible as the percentage.
+
+XSD10 39347 -> 39345, and the ratchet moves down with it. The mark was
+overstated by two: a measurement correction, not a regression. Schema
+disagreements fall 41 -> 37 on 1.0 as the four out-of-scope groups leave.
+XSD11 is unchanged at 41532 — on 1.1 the hidden cases were never miscounted as
+agreements, only surfaced.
+
 ### Added
 
 **DTD external subsets.** `dtd.Load` reads the second half of a DTD — the one
