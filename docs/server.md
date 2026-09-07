@@ -353,6 +353,111 @@ defaults off and why it must stay off for caller input.
 - [ ] Server-level `ReadTimeout`/`WriteTimeout`/`MaxHeaderBytes` set
 - [ ] 400 and 422 distinguished in the response
 
+## A document from another timezone
+
+A service in Amsterdam validating a document written in Riyadh is the case that
+breaks quietly, because nothing errors: a date with no timezone is a *different
+value* from the same reading with one, and the two are compared through an
+**implicit timezone** the processor supplies. Get it wrong and a document is
+accepted or rejected for a reason no one can see in the payload.
+
+Measured against this library, with a schema whose facet is
+`minInclusive="2026-01-01T00:00:00Z"`:
+
+| Instance value | Verdict |
+|---|---|
+| `2026-01-01T02:00:00` (no timezone) | **valid** |
+| `2026-01-01T02:00:00+03:00` (Riyadh) | **invalid** |
+| `2025-12-31T23:00:00Z` (the same instant) | **invalid** |
+
+The first and second rows are the same wall-clock reading and get opposite
+answers; the second and third are the same *instant* and agree. That is correct
+— a value without a timezone is not a point on the world's timeline until one is
+chosen — but it means an unzoned `02:00` from Riyadh is silently read as 02:00
+UTC, three hours earlier than it was written.
+
+### The rule
+
+**Require the timezone rather than inferring it.** XSD 1.1 has a facet for
+exactly this, and it is the only approach that does not depend on a server
+setting:
+
+```xml
+<xs:simpleType name="Timestamp">
+  <xs:restriction base="xs:dateTime">
+    <!-- explicitTimezone="required" rejects "2026-01-01T02:00:00" outright,
+         so no implicit timezone is ever consulted. XSD 1.1 only; the
+         built-in xs:dateTimeStamp is xs:dateTime with this facet already
+         applied, and is the shorter way to say the same thing. -->
+    <xs:explicitTimezone value="required"/>
+  </xs:restriction>
+</xs:simpleType>
+```
+
+```go
+schema, err := xsd.LoadFile("schemas/invoice.xsd", xsd.Options{
+    Version: xsd.Version11, // explicitTimezone is a 1.1 facet
+})
+```
+
+A document that omits the offset is then refused with `cvc-datatype-valid.1`
+naming the facet, which is a diagnosable error rather than a wrong answer. Where
+you control the schema, stop here — the rest of this section is for when you
+do not.
+
+### Where the implicit timezone actually applies
+
+It matters that this is **not** an `xsd.ValidateOptions` field, and that is
+deliberate rather than an omission:
+
+* **Facet comparison** (`minInclusive`, `maxExclusive`, `enumeration`) resolves
+  an unzoned value against **UTC**, fixed. It is not configurable, because a
+  schema is a contract: the same document and schema must produce the same
+  verdict on every machine, and a validator whose answer depended on the host's
+  locale would not be one.
+* **XSD 1.1 assertions and conditional type alternatives** evaluate XPath, and
+  that XPath context also uses UTC.
+* **XSLT and XPath** *are* configurable, because a transform is a computation
+  rather than a contract — `fn:current-date()`, `xsl:sort` over dates and
+  `xsl:for-each-group` on a date key all consult it:
+
+```go
+// Riyadh is UTC+03:00. Offsets are in MINUTES east of UTC, so +3h is 180.
+res, err := sheet.Transform(ctx, tree.Root, xslt.TransformOptions{
+    ImplicitTimezone: 3 * 60,
+})
+```
+
+Never derive that from the server's clock. `time.Local` on the Amsterdam host
+is the *host's* zone, it moves twice a year with daylight saving, and it makes
+the same input produce different output on two machines in a pool. Take it from
+the document, the tenant, or the request — never from the environment:
+
+```go
+// The offset belongs to the data, not to the process. A tenant record or an
+// explicit request field is auditable; time.Local is not.
+tz, ok := tenantOffsetMinutes[req.TenantID]
+if !ok {
+    http.Error(w, "unknown tenant", http.StatusBadRequest)
+    return
+}
+```
+
+### Checklist
+
+* Prefer `xs:dateTimeStamp`, or `explicitTimezone="required"`, and never rely on
+  an implicit timezone for data that crosses a border.
+* Leave XSD facet comparison alone. It is UTC everywhere, on purpose.
+* Set `ImplicitTimezone` explicitly on every `TransformOptions` where dates are
+  sorted, grouped or compared — the zero value is UTC, which is a *choice* worth
+  making deliberately rather than inheriting.
+* Do not use `time.Local`. A pool of servers must not disagree, and daylight
+  saving must not change a verdict.
+* If you accept unzoned values, log the offset you applied. A verdict that
+  depended on an assumption should say which assumption.
+
+---
+
 ## Security posture
 
 Every remote-reference mechanism is off unless you turn it on, but the
