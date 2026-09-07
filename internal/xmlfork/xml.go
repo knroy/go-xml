@@ -553,6 +553,19 @@ func (d *Decoder) autoClose(t Token) (Token, bool) {
 	return nil, false
 }
 
+// IsVersion11 reports whether the document declared version="1.1".
+//
+// go-xml: XML §4.3.4 constrains an external entity's version against the
+// including document's, so the including version has to leave the tokeniser
+// to be compared with one. It is exposed read-only and there is deliberately
+// no setter: the version is a property of the document text, and a caller
+// able to assert one the text contradicts could turn a 1.0 document into a
+// 1.1 one and acquire 1.1's relaxations without declaring them.
+//
+// It is meaningful only once the declaration has been consumed, which is
+// after the first token, since the declaration precedes all content.
+func (d *Decoder) IsVersion11() bool { return d.version11 }
+
 var errRawToken = errors.New("xml: cannot use RawToken from UnmarshalXML method")
 
 // RawToken is like [Decoder.Token] but does not verify that

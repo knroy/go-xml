@@ -194,7 +194,10 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	// replacement text. XML 1.0 section 4.3.1: it is stripped, or it would
 	// reach the including document as a processing instruction in a place
 	// no XML document may have one.
-	text = stripTextDecl(text)
+	text, version := stripTextDecl(text)
+	if err := t.checkEntityVersion(name, version); err != nil {
+		return "", err
+	}
 
 	// Anything the fetched text itself references resolves against the
 	// entity's OWN URI, not the including document's. That is XML section
@@ -205,26 +208,90 @@ func (t *entityTable) resolveExternalText(name string) (string, error) {
 	return text, nil
 }
 
-// stripTextDecl removes an external entity's text declaration.
+// stripTextDecl removes an external entity's text declaration, and reports the
+// version it declared.
 //
 // It is only a text declaration if it is at the very start and is an XML
 // declaration — "<?xml" followed by whitespace or the closing "?>". A
 // processing instruction whose target merely begins with "xml", such as
 // <?xml-stylesheet?>, is content and stays.
-func stripTextDecl(s string) string {
+//
+// The version is returned rather than discarded because XML §4.3.4 makes it
+// load-bearing: an entity that declares 1.1 may not be included by a 1.0
+// document. An entity with no text declaration, or one that omits the version,
+// returns "" and is 1.0 by default — §4.3.4 says an entity without a
+// declaration is treated as 1.0.
+func stripTextDecl(s string) (text, version string) {
 	rest := strings.TrimLeft(s, " \t\r\n")
 	if !strings.HasPrefix(rest, "<?xml") {
-		return s
+		return s, ""
 	}
 	after := rest[len("<?xml"):]
 	if after != "" && !isXMLSpaceByte(after[0]) && !strings.HasPrefix(after, "?>") {
-		return s
+		return s, ""
 	}
 	end := strings.Index(rest, "?>")
 	if end < 0 {
-		return s
+		return s, ""
 	}
-	return rest[end+len("?>"):]
+	return rest[end+len("?>"):], declVersion(rest[:end])
+}
+
+// checkEntityVersion enforces XML §4.3.4 on a fetched external entity.
+//
+// "An XML 1.0 document may not include an XML 1.1 external entity", while a
+// 1.1 document may include either. The asymmetry is the point: 1.1 relaxes
+// what a name and a character may be, so text legal in a 1.1 entity can be
+// illegal in the 1.0 document that includes it, and admitting it would let an
+// entity smuggle in constructs the including document never declared.
+//
+// A version this function does not recognise is refused rather than assumed
+// compatible. An entity declaring 2.0 is not a 1.0 entity just because we
+// cannot read it.
+func (t *entityTable) checkEntityVersion(name, version string) error {
+	switch version {
+	case "", "1.0":
+		// No text declaration, or one naming 1.0. Legal in both.
+		return nil
+	case "1.1":
+		if !t.version11 {
+			return fmt.Errorf("external entity %s declares XML 1.1 but the including document is XML 1.0 (XML §4.3.4)", name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("external entity %s declares unsupported XML version %q", name, version)
+	}
+}
+
+// declVersion reads the version pseudo-attribute out of a text declaration.
+//
+// It scans for the keyword rather than the position, since VersionInfo is
+// first in [77] TextDecl but the same function reads declarations that have
+// only an encoding. A malformed declaration yields "", which the caller treats
+// as undeclared rather than as an error: rejecting the entity here would turn
+// a lax text declaration into a parse failure that no version rule asked for.
+func declVersion(decl string) string {
+	i := strings.Index(decl, "version")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimLeft(decl[i+len("version"):], " \t\r\n")
+	if !strings.HasPrefix(rest, "=") {
+		return ""
+	}
+	rest = strings.TrimLeft(rest[1:], " \t\r\n")
+	if rest == "" {
+		return ""
+	}
+	quote := rest[0]
+	if quote != '\'' && quote != '"' {
+		return ""
+	}
+	end := strings.IndexByte(rest[1:], quote)
+	if end < 0 {
+		return ""
+	}
+	return rest[1 : 1+end]
 }
 
 func isXMLSpaceByte(c byte) bool {
@@ -339,7 +406,10 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	if err != nil {
 		return err
 	}
-	text = stripTextDecl(text)
+	text, version := stripTextDecl(text)
+	if err := t.checkEntityVersion("(external subset)", version); err != nil {
+		return err
+	}
 	t.externalDepth++
 	defer func() { t.externalDepth-- }()
 	text, err = t.expandParameterEntities(text, resolved, 0)
@@ -354,6 +424,11 @@ func (t *entityTable) loadExternalSubset(systemID, publicID, base string) error 
 	if sub == nil {
 		return nil
 	}
+	// The version rule is the including *document's*, not the subset's, so a
+	// table built for declarations read out of an external subset inherits it
+	// rather than starting at the 1.0 default. Without this an entity reached
+	// through a subset would be checked against a version nobody declared.
+	sub.version11 = t.version11
 	t.mergeUnder(sub)
 	return nil
 }
@@ -466,7 +541,11 @@ func (t *entityTable) expandParameterEntities(subset, base string, depth int) (s
 			if err != nil {
 				return "", err
 			}
-			text = stripTextDecl(text)
+			var version string
+			text, version = stripTextDecl(text)
+			if err := t.checkEntityVersion("%"+name, version); err != nil {
+				return "", err
+			}
 			refBase = resolved
 		} else {
 			// An internal parameter entity costs no fetch, so it is charged

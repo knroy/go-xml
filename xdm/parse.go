@@ -443,6 +443,10 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 				// is skipped and the subset is read exactly as before.
 				if opts.ExternalEntities != nil && !opts.entitiesExpanded {
 					ents = newEntityTable(opts.BaseURI)
+					// The DOCTYPE follows the XML declaration, so by now the
+					// decoder has read the version and §4.3.4 can be enforced
+					// against it. See entityTable.checkEntityVersion.
+					ents.version11 = dec.IsVersion11()
 					ents.resolver = opts.ExternalEntities
 					// A parameter entity in the INTERNAL subset is expanded
 					// first, since it is how a document pulls a module of
@@ -494,6 +498,7 @@ func Parse(r io.Reader, opts ParseOptions) (*Tree, error) {
 					ents = parseEntityDecls(d, opts.BaseURI)
 				}
 				if ents != nil && !opts.entitiesExpanded {
+					ents.version11 = dec.IsVersion11()
 					ents.resolver = opts.ExternalEntities
 					// An entity whose replacement text holds markup cannot go
 					// through dec.Entity at all: encoding/xml substitutes that

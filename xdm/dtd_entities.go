@@ -63,6 +63,12 @@ type entityTable struct {
 	// nil by default and is NOT implied by AllowDOCTYPE — see dtd_external.go
 	// for why those two are separate gates.
 	resolver EntityResolver
+	// version11 records that the INCLUDING document declared version="1.1".
+	// XML §4.3.4 constrains an external entity's version against it: a 1.0
+	// document may not include a 1.1 entity, while a 1.1 document may
+	// include either. It defaults to false, so a table built for a document
+	// whose version was never determined enforces the stricter 1.0 rule.
+	version11 bool
 	// externalDecl records what each external entity names and the base its
 	// system identifier resolves against, so that a declaration read from an
 	// external subset resolves relative to that subset.

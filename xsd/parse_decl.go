@@ -818,7 +818,13 @@ func (p *parser) readWildcard(el *xdm.Node) *Wildcard {
 	// words before the comparison also normalises leading and trailing
 	// whitespace, which xs:namespaceList being a list type collapses away.
 	words := splitFields(el.AttrValue("namespace"))
-	if len(words) == 0 {
+	// The ##any default belongs to an *absent* namespace attribute. A
+	// present namespace="" is an xs:namespaceList with no members, so it
+	// denotes the empty set and matches nothing — defaulting it to ##any
+	// would turn a wildcard admitting no element into one admitting every
+	// element. wildZ010 is that case: the TSTF ruled its instance invalid
+	// because no defaulting of the empty string to ##any is licensed.
+	if len(words) == 0 && el.Attr("", "namespace") == nil {
 		words = []string{"##any"}
 	}
 	switch {

@@ -759,7 +759,7 @@ func carryAnnotations(doc *xdm.Node, recorded xdm.Sequence) {
 	}
 }
 
-// copyAnnotationTree copies a node's annotation, and its subtree's, onto the
+// copyAnnotationTree copies a node's typing, and its subtree's, onto the
 // node it was copied from.
 //
 // The walk descends elements and attributes because validation annotates both:
@@ -772,10 +772,18 @@ func copyAnnotationTree(src, dst *xdm.Node) {
 	if src == nil || dst == nil || src.Kind != dst.Kind {
 		return
 	}
-	dst.SetTypeAnnotation(src.TypeAnnotation)
+	// Every PSVI property travels, not the annotation name alone. The source
+	// here is the freshly assessed tree, so it is the one node that holds all
+	// seven; SetTypeAnnotation carries the name and re-derives is-id from it,
+	// which left UnionMember, DerivedPrimitive and ListItem behind on the
+	// discarded copy. Without the member a union-typed value has nothing to
+	// build a typed value from and atomises to xs:untypedAtomic, and without
+	// the resolved pair the copy asks the process-global registries what the
+	// name means -- which answer for whichever schema loaded last.
+	dst.CopyTypingFrom(src)
 	for _, sa := range src.Attrs {
 		if da := dst.Attr(sa.Name.URI, sa.Name.Local); da != nil {
-			da.SetTypeAnnotation(sa.TypeAnnotation)
+			da.CopyTypingFrom(sa)
 		}
 	}
 	var se, de []*xdm.Node

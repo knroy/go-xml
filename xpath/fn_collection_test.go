@@ -154,6 +154,27 @@ func TestCollectionUsesStaticBaseURI(t *testing.T) {
 	}
 }
 
+// When the two bases differ the static one wins. Split from the test above
+// because a context item with no base URI cannot tell the two apart: passing
+// the item's base would look correct there and still be wrong here.
+func TestCollectionStaticBaseBeatsItemBase(t *testing.T) {
+	r := &testCollections{docs: map[string][]string{"books": {`<b>one</b>`}}}
+	tree, err := xdm.ParseString(`<catalog/>`,
+		xdm.ParseOptions{BaseURI: "http://example.com/in-focus/doc.xml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewContext(tree.Root, Builtins())
+	ctx.Collections = r
+	ctx.StaticBaseURI = "http://example.com/expression/"
+	if _, err := Eval(`collection('books')`, ctx, testNS{}); err != nil {
+		t.Fatalf("collection: %v", err)
+	}
+	if r.lastBase != "http://example.com/expression/" {
+		t.Errorf("resolver got base %q, want the static base URI, not the context item's", r.lastBase)
+	}
+}
+
 // With no static base URI the context item's document base is the fallback, so
 // a caller who set neither is not left with nothing to resolve against.
 func TestCollectionFallsBackToItemBase(t *testing.T) {

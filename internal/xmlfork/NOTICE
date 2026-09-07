@@ -84,7 +84,7 @@ the version is a property of the document text, so no caller-supplied option
 can assert a version the text contradicts. The default is 1.0 — an absent
 declaration, or one naming 1.0, gets none of 1.1's relaxations.
 
-Four changes carry it, all marked "go-xml: XML 1.1" in the source:
+Five changes carry it, all marked "go-xml: XML 1.1" in the source:
 
   * Decoder gains `version11` and `sawDecl`. sawDecl stops a stray <?xml?>
     later in the document from retroactively changing the version of text
@@ -111,6 +111,14 @@ Four changes carry it, all marked "go-xml: XML 1.1" in the source:
   * d.text normalises NEL (#x85) and #x2028 to #xA under 1.1 only, per §2.11,
     including \r#x85 as a single two-character line end. The lead bytes are
     already in the buffer when the sequence completes, so they are unwritten.
+
+  * Decoder gains the exported IsVersion11, a read-only accessor. XML §4.3.4
+    constrains an external entity's version against the including document's,
+    so the including version has to leave the tokeniser to be compared with
+    one; xdm/dtd_external.go enforces the rule. There is deliberately no
+    setter, for the same reason version11 is not caller-supplied: a caller
+    able to assert a version the text contradicts could acquire 1.1's
+    relaxations without declaring them.
 
 Re-applying this on a newer Go means re-doing the d.text work by hand; it is
 the only part that is not a local substitution. Everything else is additive.

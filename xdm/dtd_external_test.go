@@ -471,3 +471,76 @@ func TestXMLBaseInsideExternalEntityResolvesAgainstTheEntity(t *testing.T) {
 		t.Errorf("base URI = %q, want it to end in level1/deeper/", frag.BaseURI)
 	}
 }
+
+// >>> XML section 4.3.4. A 1.0 document may not include a 1.1 entity. <<<
+//
+// The rule is asymmetric, so the test is bidirectional: proving the refusal
+// alone would be satisfied by a parser that refused every versioned entity,
+// which is why the 1.1-includes-1.0 direction is asserted beside it.
+//
+// The asymmetry is not arbitrary. XML 1.1 widens what a name and a character
+// may be, so text that is well-formed inside a 1.1 entity can be illegal in
+// the 1.0 document including it; the reverse cannot happen.
+func TestEntityVersionAgainstIncludingDocument(t *testing.T) {
+	const frag11 = `<?xml version="1.1" encoding="UTF-8"?><frag>text</frag>`
+	const frag10 = `<?xml version="1.0" encoding="UTF-8"?><frag>text</frag>`
+	// No text declaration at all. Section 4.3.4 treats such an entity as 1.0,
+	// so it is legal in both.
+	const fragNone = `<frag>text</frag>`
+
+	for _, c := range []struct {
+		name    string
+		docVer  string
+		frag    string
+		wantErr bool
+	}{
+		{"10 includes 11", `<?xml version="1.0"?>`, frag11, true},
+		{"10 includes 10", `<?xml version="1.0"?>`, frag10, false},
+		{"10 includes undeclared", `<?xml version="1.0"?>`, fragNone, false},
+		{"11 includes 11", `<?xml version="1.1"?>`, frag11, false},
+		{"11 includes 10", `<?xml version="1.1"?>`, frag10, false},
+		// A document with no declaration is XML 1.0, and inherits 1.0's
+		// restriction rather than escaping it.
+		{"undeclared includes 11", ``, frag11, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := writeFiles(t, map[string]string{
+				"frag.xml": c.frag,
+				"doc.xml": c.docVer + `<!DOCTYPE r [ <!ENTITY e SYSTEM "frag.xml"> ]>
+<r>&e;</r>`,
+			})
+			err := parseExternalErr(t, dir, "doc.xml")
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("want the include refused, got no error")
+				}
+				if !strings.Contains(err.Error(), "4.3.4") {
+					t.Fatalf("refused for the wrong reason: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("want the include permitted, got %v", err)
+			}
+		})
+	}
+}
+
+// A version this implementation does not know is refused rather than assumed
+// compatible: an entity declaring 2.0 is not a 1.0 entity merely because we
+// cannot read it. Asserted under a 1.1 document so that the refusal cannot be
+// the 4.3.4 rule firing by accident.
+func TestEntityUnknownVersionIsRefused(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"frag.xml": `<?xml version="2.0"?><frag>text</frag>`,
+		"doc.xml": `<?xml version="1.1"?><!DOCTYPE r [ <!ENTITY e SYSTEM "frag.xml"> ]>
+<r>&e;</r>`,
+	})
+	err := parseExternalErr(t, dir, "doc.xml")
+	if err == nil {
+		t.Fatal("want an unknown entity version refused, got no error")
+	}
+	if !strings.Contains(err.Error(), "unsupported XML version") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}

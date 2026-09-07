@@ -424,3 +424,66 @@ func TestStripKeepsIsIDAndClearsIsNilled(t *testing.T) {
 		t.Errorf("CopyTypingFrom did not carry every property: %+v", keep)
 	}
 }
+
+// TestResultDocumentCarriesResolvedTyping covers copyAnnotationTree in
+// xslt/validate.go, the tenth copy site and the one the audit found still
+// hand-writing its field list.
+//
+// It is not a copy in the ordinary direction. xsl:result-document assesses a
+// document that toDocument BUILT, and then carries the assessment BACK onto
+// the nodes the result actually records -- so the source of this copy is the
+// freshly validated tree, which is the node that carries all seven
+// properties, and the destination is what every downstream query sees.
+// SetTypeAnnotation carried the name and derived is-id/is-idrefs from it,
+// which left UnionMember, DerivedPrimitive and ListItem behind: the four facts
+// that are one fact travelled apart.
+//
+// A probe over this path measured three arrivals, every one of them carrying
+// resolved typing the destination did not receive, which is what says the path
+// is live rather than dead.
+func TestResultDocumentCarriesResolvedTyping(t *testing.T) {
+	schemaSrc := typingProbeSchema("decimal")
+	schema := loadTypingProbeSchema(t, schemaSrc)
+	tree, err := xdm.ParseString(typingProbeDoc, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the source: %v", err)
+	}
+	if err := schema.Validate(tree.Root, xsd.ValidateOptions{Annotate: true}); err != nil {
+		t.Fatalf("validating the source: %v", err)
+	}
+	sheet, err := Compile(mustParse(t, `<xsl:stylesheet version="3.0"
+	    xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	    xmlns:p="urn:copyprobe">
+	  <xsl:import-schema namespace="urn:copyprobe" schema-location="p.xsd"/>
+	  <xsl:template match="/">
+	    <xsl:result-document validation="strict">
+	      <xsl:copy-of select="/*"/>
+	    </xsl:result-document>
+	  </xsl:template>
+	</xsl:stylesheet>`), CompileOptions{
+		SchemaResolver: &xsd.MapResolver{
+			ByLocation: map[string]string{"p.xsd": schemaSrc}},
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	out, err := sheet.Transform(context.Background(), tree.Root, TransformOptions{})
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	if len(out.Secondary) != 1 {
+		t.Fatalf("got %d secondary results, want 1", len(out.Secondary))
+	}
+	root := &xdm.Node{Kind: xdm.KindDocument}
+	for _, it := range out.Secondary[0].Nodes {
+		if n, ok := it.(*xdm.Node); ok {
+			root.Children = append(root.Children, n)
+		}
+	}
+
+	// The registries are redefined only now, so everything the engine did was
+	// done while they still agreed with the node. See runTypingProbe.
+	loadTypingProbeSchema(t, typingProbeSchema("string"))
+	checkAtomDecimal(t, findProbe(t, root, "atom"))
+	checkListDecimal(t, findProbe(t, root, "list"))
+}
