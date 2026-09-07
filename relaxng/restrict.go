@@ -98,6 +98,19 @@ type restrictor struct {
 	defines map[string]*xdm.Node
 	// active guards a definition that reaches itself while being expanded.
 	active map[string]bool
+	// inDefine is set while walking a <define> body that no <ref> has led to.
+	//
+	// §4.19 expands every <ref> in place and then discards the <define>, so a
+	// definition has no standing of its own in the simplified grammar that §7
+	// applies to: the enclosing context is whatever each <ref> supplies. The
+	// standalone walk exists only to reach the rules of §7.1, which are
+	// self-contained — list//list is illegal wherever the definition lands.
+	// §7.3's second clause is not self-contained: it asks what encloses the
+	// attribute, and on the standalone walk nothing does yet. Judging it
+	// there is what refused DocBook, XSpec and SVRL, all of which factor an
+	// open name class into a definition; checkCompetition judges those on the
+	// compiled pattern instead, where every <ref> has been expanded.
+	inDefine bool
 }
 
 func (r *restrictor) collect(n *xdm.Node) {
@@ -130,7 +143,7 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		return nil
 	}
 
-	if local == "attribute" {
+	if local == "attribute" && !r.inDefine {
 		if err := checkInfiniteAttributeName(n, stack); err != nil {
 			return err
 		}
@@ -152,6 +165,14 @@ func (r *restrictor) walk(n *xdm.Node, stack []string) error {
 		// against the outer definitions finds a different pattern under the
 		// same name, and reports a restriction the schema does not break.
 		return r.walkNested(n)
+	}
+
+	if local == "define" {
+		// The body is being walked with no <ref> to say where it stands; see
+		// the note on restrictor.inDefine.
+		saved := r.inDefine
+		r.inDefine = true
+		defer func() { r.inDefine = saved }()
 	}
 
 	var kids []string
@@ -843,22 +864,32 @@ func errStringSequence() error {
 // checkInfiniteAttributeName applies the second clause of §7.3.
 //
 // An <attribute> whose name class is infinite — anyName or nsName, which admit
-// unboundedly many names — must sit under a <oneOrMore>. Without one the
+// unboundedly many names — must sit under a repetition. Without one the
 // pattern says "exactly one attribute, of any name", and an element carrying
-// two would match it twice over with nothing to say which. Under a oneOrMore
+// two would match it twice over with nothing to say which. Under a repetition
 // the intent is unambiguous: as many as the document has.
+//
+// The spec writes that requirement as a <oneOrMore> ancestor, and §7 opens by
+// saying it applies to the *simplified* grammar. §4.20 is what makes the two
+// statements agree: it rewrites <zeroOrMore>p as choice(oneOrMore p, empty),
+// so an attribute written under a <zeroOrMore> does have a oneOrMore ancestor
+// by the time §7 looks. This pass runs before compilation, on the tree as
+// written, where that rewrite has not happened yet — so it has to accept a
+// <zeroOrMore> itself in order to ask the question the spec asks. Reading the
+// unsimplified tree with the simplified grammar's rule is what refused
+// DocBook 5.1, XSpec and the SVRL schema, all of which write <zeroOrMore>.
 func checkInfiniteAttributeName(n *xdm.Node, stack []string) error {
 	if !hasInfiniteNameClass(n) {
 		return nil
 	}
 	for _, s := range stack {
-		if s == "oneOrMore" {
+		if s == "oneOrMore" || s == "zeroOrMore" {
 			return nil
 		}
 	}
 	return fmt.Errorf(
 		"relaxng: <attribute> with an open name class needs a <oneOrMore> " +
-			"ancestor to say how many it matches (section 7.3)")
+			"or <zeroOrMore> ancestor to say how many it matches (section 7.3)")
 }
 
 // hasInfiniteNameClass reports whether an attribute's name class admits

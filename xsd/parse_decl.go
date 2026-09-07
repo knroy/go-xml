@@ -1070,6 +1070,23 @@ func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), mi
 // never imports while defining types in its own; deferring that reported
 // nothing at all, since no instance names the offending declaration.
 func (p *parser) deferrableMiss(ns string) bool {
+	// The schema namespace is the one namespace that is closed. Its types
+	// are built in process by buildBuiltins and no document can add to it,
+	// so a name it does not define will never be supplied by a document
+	// read later and the miss is final however the assembly proceeds.
+	//
+	// ownNamespace cannot make this call, because NewSchema seeds Types
+	// with every builtin under NSSchema and so answers true here always.
+	// That is what let xsd015 and xsd016 through: both write type="abc"
+	// under xmlns="...XMLSchema", which resolves to {XMLSchema}abc, and the
+	// deferral then swallowed a reference that can only ever be wrong.
+	// xsd015 declares complexType "abc" in its own target namespace, which
+	// is the trap the test is built around -- the unprefixed QName is
+	// resolved against the default xmlns, not the target namespace, so
+	// {foo}abc is not what type="abc" names.
+	if ns == NSSchema {
+		return false
+	}
 	if p.absentNamespace(ns) {
 		return true
 	}

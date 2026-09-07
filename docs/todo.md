@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 99.85% — 8,612 of 8,625 in scope (13 failing, one deliberate); streaming out of scope, though 92% of those cases pass anyway |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,525 `func Test` declarations, clean under `-race` |
+| Tests | 1,535 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -135,6 +135,11 @@ parameters; `#` comments and the `\` identifier escape.
   760KB, the largest being the DocBook 5.1 schema at 356KB — all of which
   parse, plus the round-trip property against the XML syntax. That is
   circumstantial where a suite would be decisive.
+* **The built-in datatype keywords `string` and `token` are translated as
+  `<ref>`.** `svrl.rnc` writes `attribute xml:* { string }`, and the compact
+  parser emits `<ref name="string"/>` rather than a `<data>`, so compilation
+  fails with `<ref> names "string", which no <define> provides`. Section 7.3
+  used to refuse that schema first, which is why this had not been seen.
 * **Annotations are parsed and discarded.** A `[ ... ]` or `>> name [ ... ]`
   annotation is checked for well-formedness and then dropped rather than
   carried onto the tree as a foreign element. Nothing downstream reads them —
@@ -142,13 +147,66 @@ parameters; `#` comments and the `\` identifier escape.
   costs nothing in validation, but a caller using `ParseCompact` to convert
   `.rnc` to `.rng` loses them. A `##` documentation comment *is* carried,
   as `a:documentation`.
-* **Section 7.3 refuses most real schemas.** Seven of the nine `.rnc` files in
-  `testdata` compile only if section 7.3 is excused: this package requires a
-  `<oneOrMore>` ancestor over an `<attribute>` with an open name class, and
-  those schemas write `<zeroOrMore>`. It is not a compact-syntax defect — the
-  XML-syntax equivalent is refused identically — but it is the largest thing
-  standing between this package and real-world RELAX NG, and it should be
-  settled against the spec.
+* **Section 7.3 refused most real schemas — settled, and it was our rule that
+  was wrong.** Seven of the nine `.rnc` files in `testdata` used to compile
+  only if section 7.3 was excused. Two independent defects, both fixed:
+
+  Section 7 opens by saying it applies to the **simplified** grammar, and
+  section 4.20 rewrites `<zeroOrMore>p` as `choice(oneOrMore p, empty)`. The
+  restriction pass runs *before* compilation, on the tree as written, where
+  that rewrite has not happened — so it looked for a literal `<oneOrMore>`
+  ancestor and refused the `<zeroOrMore>` that DocBook 5.1, XSpec and the SVRL
+  schema all write. Applying a simplified-grammar rule to an unsimplified tree
+  was the whole of it; the check now accepts either spelling.
+
+  Section 4.19 expands every `<ref>` in place and discards the `<define>`, so
+  a definition has no standing of its own in the simplified grammar. An
+  `<attribute>` written directly in a `<define>` body was reached with nothing
+  above it, which is "nothing encloses it *yet*", not "no repetition encloses
+  it" — and judging the clause there refused every schema that factors an open
+  name class into a definition. The standalone walk now defers it; the
+  compiled-pattern check in `checkCompetition` judges those, on the simplified
+  pattern, where each use site has been expanded.
+
+  The RELAX NG specification is **not vendored** here — only `spectest.xml`
+  is — so this reading is argued from section numbers quoted in the existing
+  code and from the behaviour of the seven schemas, not from a vendored text.
+  Jing and libxml2 were not consulted; that DocBook 5.1's own schema is not
+  widely reported as invalid RELAX NG is corroboration, not proof. The suite
+  does not arbitrate it either way: it passes at 965 of 965 both before and
+  after, and contains only nine `zeroOrMore` occurrences in total.
+
+* **`<ref>` expansion is not shared, and costs multiplicatively.** Fixing
+  section 7.3 let DocBook 5.1 reach the compiler for the first time, which is
+  how this surfaced: compilation had **not finished after 140 s**. It is not
+  non-termination. `compileRefNamed` re-compiles a definition's whole body
+  once per `<ref>` that names it and caches nothing, so a grammar whose
+  definitions form a chain — each referring to several others, as a large
+  modular schema does — costs a number of expansions that grows
+  multiplicatively along the chain. Measured: XSpec, with 70 definitions,
+  expands **14,140 times**, a factor of 200; DocBook has roughly 1,500.
+
+  `maxRefExpansions` (200,000) now bounds it, in the spirit of
+  `MaxPatternSize`, which bounds the same shape of blowup during validation.
+  DocBook stops in about 0.2 s with a message that says what happened instead
+  of hanging. **This is containment, not a fix.** The real fix is to share the
+  compiled pattern between `<ref>`s naming the same definition, which the
+  recursion guard makes delicate: the result depends on `inheritedNs`, and
+  `elementDepth` participates in the section 4.19 self-reference check, so a
+  naive cache can both reuse a pattern compiled under a different inherited
+  namespace and mask a legitimate error. Caching on *exit* was tried and does
+  not help — the blowup is in the first traversal, which a completed-entry
+  cache never gets to serve. Until that lands, DocBook-scale schemas are
+  refused rather than compiled.
+
+* **Section 7.3's *first* clause may be over-strict for two `<zeroOrMore>`s.**
+  `xspec.rnc` sequences `xml-ns-attributes` with `common-attributes`, which
+  itself begins with `xml-ns-attributes`, so `attribute xml:* { text }*`
+  appears twice in one group and is refused as "required twice". Two
+  `<zeroOrMore>`s can each match nothing, so whether "required" is the right
+  reading of that shape is a real question — but it is a different clause from
+  the one settled above, and settling it needs the spec text this repository
+  does not vendor.
 
 ### 1.4 Schema Component Constraints — the remaining bulk
 

@@ -577,19 +577,74 @@ func isHexBinary(v string) bool {
 	return true
 }
 
+// isBase64Binary reports whether v is in the lexical space of xs:base64Binary.
+//
+// Part 2 §3.2.16 does not merely require a multiple of four characters: it
+// spells the grammar out quantum by quantum. Every group but the last is four
+// B64 characters; the last is either four B64, or "B16 B64 B16 =", or
+// "B04 B64 = =". B16 is the sixteen B64 characters whose low two bits are zero
+// (AEIMQUYcgkosw048) and B04 the four whose low four bits are zero (AQgw).
+//
+// That last part is the whole point of this function being hand-written rather
+// than a call to encoding/base64: Go's StdEncoding decodes "M0SyLMT=" happily,
+// because it discards the bits the padding declares absent instead of insisting
+// they were written as zero. XSD does insist. base64Binary_enumeration003 turns
+// on exactly that character -- "T" is index 19, so its low two bits are 11, and
+// the "=" that follows says they must be 00. Its three sibling cases, "abc="
+// among them, are labelled valid and end in a B16 character, so the rule
+// separates the suite's own cases rather than trading one for another.
+//
+// Whitespace is skipped because base64Binary's whiteSpace facet is collapse and
+// MIME-wrapped literals arrive with newlines in them; base64DecodedLen skips the
+// same four characters, and the two must agree on what they are counting.
 func isBase64Binary(v string) bool {
-	n := 0
+	const (
+		b16 = "AEIMQUYcgkosw048"
+		b04 = "AQgw"
+	)
+	isB64 := func(r rune) bool {
+		return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' ||
+			r >= '0' && r <= '9' || r == '+' || r == '/'
+	}
+
+	// Strip whitespace first. The grammar is stated over the significant
+	// characters, and a quantum may be split across a line break.
+	buf := make([]rune, 0, len(v))
 	for _, r := range v {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9',
-			r == '+', r == '/', r == '=':
-			n++
-		case r == ' ':
+		switch r {
+		case ' ', '\t', '\n', '\r':
 		default:
+			buf = append(buf, r)
+		}
+	}
+	if len(buf)%4 != 0 {
+		return false
+	}
+	if len(buf) == 0 {
+		return true
+	}
+
+	// Every quantum but the last admits no padding at all.
+	for _, r := range buf[:len(buf)-4] {
+		if !isB64(r) {
 			return false
 		}
 	}
-	return n%4 == 0
+
+	last := buf[len(buf)-4:]
+	if !isB64(last[0]) {
+		return false
+	}
+	switch {
+	case last[3] != '=':
+		return isB64(last[1]) && isB64(last[2]) && isB64(last[3])
+	case last[2] == '=':
+		// "B04 B64 = =" -- two octets dropped, four bits must be zero.
+		return strings.ContainsRune(b04, last[1])
+	default:
+		// "B16 B64 B16 =" -- one octet dropped, two bits must be zero.
+		return isB64(last[1]) && strings.ContainsRune(b16, last[2])
+	}
 }
 
 // isQNameLexical reports whether v is a QName: an optional prefix and a local

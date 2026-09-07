@@ -152,6 +152,9 @@ type compiler struct {
 	// this descent rather than starting a fresh one; nothing bounds it —
 	// see maxRefDepth's removal note in compileRefNamed.
 	depth int
+	// expansions counts every <ref> expanded during this compilation, bounded
+	// by maxRefExpansions.
+	expansions int
 }
 
 // active returns the set of hrefs on the current inclusion path, creating it
@@ -686,10 +689,37 @@ func (c *compiler) compileRef(n *xdm.Node) (pattern, error) {
 	return c.compileRefNamed(normalizeToken(n.AttrValue("name")))
 }
 
+// maxRefExpansions bounds the total number of <ref> expansions one compilation
+// may perform.
+//
+// Expanding a <ref> re-compiles the definition's whole body, and nothing
+// shares that work between two <ref>s naming the same definition. A grammar
+// whose definitions form a chain — each one referring to several others, as a
+// large modular schema does — therefore costs a number of expansions that
+// grows multiplicatively along the chain, not additively. DocBook 5.1 is the
+// measured case: about 1500 definitions, and compilation had not finished
+// after 140 s. A 70-definition schema (XSpec) already expands 14140 times, a
+// factor of 200 over the number of definitions.
+//
+// This is a work budget in the spirit of MaxPatternSize, which bounds the
+// same shape of blowup during validation: it does not make the compilation
+// cheaper, it makes the failure bounded and legible instead of a hang. The
+// fix that would remove the need for it is to share the compiled pattern
+// between <ref>s naming the same definition, which the recursion guard above
+// makes delicate — see docs/todo.md.
+const maxRefExpansions = 200_000
+
 func (c *compiler) compileRefNamed(name string) (pattern, error) {
 	def, ok := c.defines[name]
 	if !ok {
 		return nil, fmt.Errorf("relaxng: <ref> names %q, which no <define> provides", name)
+	}
+	c.expansions++
+	if c.expansions > maxRefExpansions {
+		return nil, fmt.Errorf(
+			"relaxng: compiling this grammar needs more than %d <ref> "+
+				"expansions; it is too large or too densely cross-referenced",
+			maxRefExpansions)
 	}
 	// A definition already being compiled is being reached recursively. That
 	// is legal — a <bar> whose content may hold another <bar> is the ordinary

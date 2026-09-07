@@ -79,6 +79,45 @@ engine and in the harness.
 Note that `cta0022` is unaffected by the hook. With no resolver configured the
 default is still `FODC0002`, which is the point.
 
+### Two schema false accepts the suite contradicts itself on
+
+`MS-DataTypes/anyURI_b006_1356` (1.0) and `Simple/simple093` (1.1). Both are
+invalid schemas this loads, and in both cases the rule that would reject them
+also rejects a schema the same suite labels valid.
+
+**`anyURI_b006`** puts backslashes in `xs:anyURI` enumeration values. The suite
+annotates it "TSTF ruled that strictly speaking, per 1.0, the schema contains
+one or more invalid anyURIs", and expects `invalid` under 1.0 but `valid` under
+1.1 — 1.1 relaxed `anyURI` so that any sequence of characters is in the lexical
+space, which is why this case appears in the 1.0 list only and not the 1.1 one.
+That asymmetry is real and `isAnyURILexical` already implements it.
+
+The rule that would catch it is "reject the RFC 2396 excluded characters", and
+`anyURI_a014`, `a015` and `a016` are why it cannot be written: `a016` puts
+`foo<bar`, `foo>bar` and `foo"bar` in `anyURI` enumerations and is expected
+**valid**, unqualified by version. Backslash and `<>"` are the same production
+in RFC 2396, so no uniform rule separates b006 from a016. The reading the code
+takes — XML Linking §5.4 percent-escapes the excluded characters, so they are
+in the lexical space rather than out of it — is the one that satisfies three
+cases instead of one.
+
+There is a second reason to leave it. Facet-value validation and instance
+validation share one path down to `isAnyURILexical`, with no seam between them,
+so tightening 1.0 `anyURI` would reject every instance value containing a
+Windows path or an unescaped space. UBL is a 1.0 schema set and its documents
+carry exactly those. The one suite case is not worth that.
+
+**`simple093`** names `xs:NOTATION` as a union member type. §3.2.19 does forbid
+using NOTATION directly, and this package enforces that for a restriction base,
+a list item type, and an element or attribute type. The union arm is left
+unenforced because `MS-Particles/particlesZ007` contains
+`<xsd:union memberTypes="xsd:NOTATION"/>` and is labelled **valid**, with a
+dependent instance test that only runs if the schema loads. Both cases carry
+status `accepted`. Enforcing the rule was implemented and measured twice: it
+trades simple093 for particlesZ007 in 1.1 and costs 1.0 two cases outright,
+because simple093 is a `saxonData` case that never runs under 1.0 at all. The
+comment in `facet_check.go` records the measurement so it is not retried.
+
 ### Unicode category drift (bug 4113)
 
 18 cases in `MS-Regex2006-07-15` (`reJ11`, `reJ13`, `reJ19`, …), all flagged
@@ -288,31 +327,121 @@ retraction is not re-litigated. Anyone wanting arithmetic writes a space:
 
 ### Schema-validity rules not yet implemented (XSD)
 
-195 false accepts in 1.0, 305 in 1.1 — invalid schemas this loads without
-complaint. 25 of the 1.0 cases and 26 of the 1.1 cases are W3C-flagged. The
-rest concentrate in:
+**3 schema false accepts in 1.0, 6 in 1.1** — invalid schemas this loads
+without complaint. The figures that stood here before (195 and 305, with a
+nine-row cluster table) were stale by two orders of magnitude: they were
+measured before the bulk of these rules landed, and the cluster table described
+a distribution that no longer exists. There is no cluster left to tabulate. At
+this count the remaining cases are named individually.
 
-| Cluster | 1.1 count | What is missing |
-|---|---|---|
-| `MS-Particles` | 46 | Particle-level Schema Component Constraints |
-| `MS-Schema` | 44 | schema-document structural rules |
-| `MS-SimpleType` | 21 | simple type derivation constraints |
-| `MS-ComplexType` | 18 | complex type derivation constraints |
-| `Wild` | 17 | 1.1 wildcard rules (`notQName`, `notNamespace`) |
-| `Simple` | 16 | 1.1 simple type rules |
-| `CTA` | 16 | conditional type assignment constraints |
-| `Open` / `PopenContent` | 15 | open content and interleave |
-| `Override` | 7 | `xs:override` semantics |
+| Case | Versions | Constraint | Verdict |
+|---|---|---|---|
+| `MS-Element/elemM002` | 1.0, 1.1 | `type="foo"` names an *attribute* declaration | open, small |
+| `MS-IdentityConstraint/idC019` | 1.0, 1.1 | `keyref` resolving `refer` across an unfetched import | open |
+| `MS-DataTypes/anyURI_b006_1356` | 1.0 only | RFC 2396 excluded characters in an `anyURI` enumeration | won't fix — see below |
+| `Simple/simple093` | 1.1 only | `xs:NOTATION` as a union member type | won't fix — see below |
+| `MS-Element/elemZ026` | 1.1 only | occurrence narrowing under a substitution group | needs an engine change |
+| `MS-Particles/particlesZ026a` | 1.1 only | abstract members in the 1.1 subsumption alphabet | needs an engine change |
+| `MS-Particles/particlesZ033_g` | 1.1 only | UPA backstop lost to the 1.1 wildcard relaxation | needs an engine change |
 
-These are unwritten rules rather than broken ones: each rejects a schema that
-should be rejected but currently loads. None of them affects a *valid* schema,
-which is why the false-reject count is two orders of magnitude smaller.
+Three of these are not gaps to be closed. `anyURI_b006` and `simple093` are
+cases where the suite contradicts itself, and enforcing either rule costs more
+cases than it buys — both are written up under *Won't fix* below. The three
+1.1-only particle cases share one cause, described under *Deciding is not the
+same as declining* below.
+
+These are unwritten rules rather than broken ones: each fails to reject a
+schema that should be rejected. None affects a *valid* schema, which is why the
+false-reject count is smaller still — 2 in 1.0 and 1 in 1.1, all of them
+pattern cases unrelated to schema validity.
 
 Adding rules here is the highest-yield remaining work and also the riskiest: a
 rule stricter than the spec starts rejecting real schemas the suite never
 covers. Every change must be measured against both suite directions *and* the
 production corpora (65 UBL + 427 CII), which is the only guard against
 over-strictness.
+
+**A note on that guard when the corpora are absent.** UBL and CII are licensed
+and unvendored, so a checkout without `GOXSLT_UBL`/`GOXSLT_CII` cannot run
+them, and DocBook and XSpec exercise the XSLT engine rather than the schema
+loader. What remains is still substantial and is worth stating, because it is
+easy to conclude there is no guard at all: the suite labels roughly 16,000
+schemas *valid*, and a rule that over-rejects turns one of those into a false
+reject, which the harness counts directly. "False rejects did not rise" over
+that population is a real over-strictness signal — weaker than the corpora on
+the shapes production schemas favour and no substitute for them, but far from
+nothing. Pairing each new rule with a valid schema that must still load, in
+`xsd/falseaccept_test.go`, is the other half.
+
+### Deciding is not the same as declining (XSD 1.1 subsumption)
+
+`MS-Element/elemZ026` and `MS-Particles/particlesZ026a` — 2 schema false
+accepts, 1.1 only. Both were diagnosed and deliberately left; what follows is
+what a fix needs, so the next attempt starts from here.
+
+`subsume.go` opens by arguing that its procedure is safe because it *declines*
+wherever it cannot decide exactly, leaving the conservative 1.0 table to
+answer. That argument is sound and the decline path upholds it. What it does
+not cover is the *decide* path. `particleSubsumes` returns "included" on
+language inclusion over element **names**, and when it does, it short-circuits
+a 1.0 table that was answering correctly. Name-language inclusion is strictly
+weaker than Content type restricts: `declCompatible` restores four of
+`nameAndTypeOK`'s clauses — nillable, fixed, block, and type restriction — and
+omits the occurrence-range check entirely.
+
+elemZ026 is exactly that hole. The derived particle narrows `maxOccurs` from
+`unbounded` to `1` inside a type reached through a substitution group; every
+word of the derived language is a word of the base's, so subsumption says
+"included" and the range is never compared. The suite expects `invalid` in
+both versions with no version qualifier, and 1.0 rejects it correctly — the
+divergence is entirely ours.
+
+particlesZ026a is the same site with a second inconsistency layered on:
+`subsumeAlphabet` and `termAccepts` drop abstract substitution-group members,
+while `asSubstitutionChoice` keeps them and `checkSubstitutionEDC` deliberately
+keeps them under 1.1 per bug 4337. Three engines, two conventions.
+
+Two possible fixes, neither small. Declining whenever a step matched through a
+substitution-group member hands the case back to the stricter 1.0 table — sound,
+but it re-rejects the 1.1 schemas the relaxation exists to accept. Adding an
+occurrence clause to `declCompatible` is narrower and probably right, but that
+function sees two `*ElementDecl`s and not the particles carrying the ranges, so
+it needs a signature change threaded through the call path. Either way the
+whole suite must be re-measured in both lanes; this is not a patch.
+
+Worth recording that the W3C itself calls particlesZ026a's validity
+"implementation-determined" and never resolved it, so it is the weaker of the
+two as a correctness signal. Fixing elemZ026 properly is likely to settle it.
+
+### A UPA backstop lost to a correct relaxation (XSD 1.1)
+
+`MS-Particles/particlesZ033_g` — 1 schema false accept, 1.1 only.
+
+Under 1.0 the `<xsd:any/>` in this model competes with an adjacent `ref='m1'`,
+UPA fires, and the schema is rejected. XSD 1.1 switched element-against-wildcard
+competition off, and *that relaxation is correct* — the suite states it as a
+feature category and `s3_10_1v04s` through `s3_10_1ii09s` depend on it. So the
+1.1 rejection has to come from an element-against-element pair, and two are
+present: the two `e2` declarations at different nesting levels, and `ref='m1'`
+against `ref='head'` where `m1` substitutes for `head`.
+
+Both are suppressed by `counterForces`, which skips a pair when the inner
+position sits inside a counter scope with `min > 1` that the outer is not in.
+That suppression is load-bearing and was already *narrowed* once, to non-initial
+states, specifically to fix `particlesZ033_e` — a substitution head and one of
+its members both at `minOccurs=3`, silently accepted. Widening it back re-breaks
+that case. A fix belongs in `exitBlocked`, which inspects only the inner
+position's unshared scopes and never asks whether the outer position is
+reachable on a later iteration of the same counter, and it carries a high risk
+of over-rejection.
+
+One negative result is worth keeping: this is **not** a budget decline. Every
+give-up path in `upa.go` and `assemble.go` — the state-width cap, the pair-test
+cap, `compileContentModel`, and the substitution-closure cap — returns an error
+wrapping `xdm.ErrResourceLimit` rather than accepting. The huge occurrence
+values here never inflate the automaton, because occurrences are runtime counts
+on a counter automaton and not states. The cannot-decide invariant holds; this
+is a missing rule, not a silent resource accept.
 
 ### Restriction of an all group by a wildcard or a named group (XSD 1.1)
 
@@ -863,6 +992,15 @@ identical but without `fixed` — expects invalid, and both carry status
 is absent, `optional` or `required`, so a prohibited use creates no attribute
 use at all. Making `attP031` pass means treating `fixed` as the discriminator,
 which no clause supports.
+
+That relaxation was measured rather than assumed, in a clean checkout so the
+figure is attributable: keeping a prohibited use that carries `fixed` takes
+XSD 1.0 from 39,345 to 39,346 and leaves 1.1 at 41,532, with no schema-level
+change and no false accept introduced — `attF001` still rejects. So it is a
+clean +1, and it is declined anyway. The same change makes this validator
+accept `att="37"` against a declaration that prohibits the attribute, which is
+a deliberate false accept bought for one suite point. A case that passes
+without a clause behind it is not a fix.
 
 Two further instance false rejects are disputed rather than addressable:
 `gMonth002_2061` and `gMonth004_2063` test the old `--MM--` form under W3C bug

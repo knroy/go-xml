@@ -1305,13 +1305,28 @@ func linkSubstitutionGroups(s *Schema) error {
 			// what fill that set, and ignoring it let a blocked
 			// member substitute anyway.
 			//
-			// The member is still pushed onto the stack: blocking
-			// it does not block what substitutes for *it*, since
-			// each step is judged against the head it names.
+			// A member blocked by a *derivation method* still pushes
+			// its own members, since each step is judged against the
+			// head it names: a type two steps away may reach the head
+			// by a method the block permits even though the
+			// intermediate one does not.
+			//
+			// block="substitution" on the member is different, and is
+			// the one case where the chain is severed. It says nothing
+			// may substitute for that member, so a declaration whose
+			// only route to this head runs through it has no route at
+			// all. elemZ027c is exactly that shape -- a→b→c→d with
+			// block="substitution" on b -- and the suite states the
+			// rule outright: "no substitutionGroup members should be
+			// added if head element has block=substitution". Pruning
+			// only for DerivationSubstitution keeps the method-blocked
+			// walk intact, which particlesDc004 and elemZ027b rely on.
 			if !substitutionBlockedBy(head, d) {
 				out = append(out, d)
 			}
-			queue = append(queue, direct[d]...)
+			if !blocksSubstitutionItself(d) {
+				queue = append(queue, direct[d]...)
+			}
 		}
 		head.substitutable = out
 	}
@@ -1505,6 +1520,21 @@ func (a *assembler) runOverrides() {
 		}
 		a.p.doc, a.p.inOverride = prev, prevOverride
 	}
+}
+
+// blocksSubstitutionItself reports whether d's own block= forbids substitution
+// for d, which makes d the end of any substitution chain passing through it.
+//
+// This is the member's block read as a *head*, which is the only thing block=
+// on an element ever means: §3.3.6 applies {disallowed substitutions} to the
+// element being substituted for. Nothing may stand in for d, so nothing behind
+// d can reach whatever d itself stands in for.
+func blocksSubstitutionItself(d *ElementDecl) bool {
+	blocked := d.DisallowedSubstitutions
+	if ct, ok := d.Type.(*ComplexType); ok {
+		blocked = DerivationSet(uint8(blocked) | uint8(ct.Prohibits))
+	}
+	return blocked.Has(DerivationSubstitution)
 }
 
 // substitutionBlockedBy reports whether a head's {disallowed substitutions}

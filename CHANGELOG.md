@@ -8,6 +8,137 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Fixed
 
+**Three invalid schemas loaded without complaint, and each was a rule that was
+never written rather than one written wrongly.** Schema false accepts fall from
+7 to 3 in XSD 1.0 and from 10 to 6 in 1.1, with no movement in the other
+direction: schema false rejects stay at 2 and 1.
+
+*A base64Binary literal whose padding contradicted its own final quantum.*
+Part 2 §3.2.16 gives the lexical space quantum by quantum, and a final quantum
+written `B16 B64 B16 =` must end in one of the sixteen characters whose low two
+bits are zero — the `=` declares those bits absent, so writing them non-zero is
+a contradiction. `isBase64Binary` counted characters in the alphabet and checked
+the total was a multiple of four, which admits `=A=A` and `M0SyLMT=` alike. It
+now parses the grammar. `encoding/base64` is no help here and is why the gap
+survived: Go decodes `M0SyLMT=` happily, discarding the surplus bits instead of
+insisting they were written as zero. Fixes `base64Binary_enumeration003` in both
+versions. The same change makes the predicate skip tab, newline and carriage
+return as well as space — `base64Binary`'s whiteSpace facet is `collapse`, and
+MIME-wrapped literals were being refused outright — so it loosens in the one
+place it was too strict while tightening in the other.
+
+*`block="substitution"` on an intermediate member did not sever the chain.*
+Computing a head's substitution group, a blocked member was correctly kept out
+of the group but its own members were still enqueued, so in `a→b→c→d` with the
+block on `b`, `a` reached `d` anyway and a restriction could substitute it for
+`d`. §3.3.6 applies `{disallowed substitutions}` to the element being
+substituted *for*: nothing may stand in for `b`, so nothing behind `b` reaches
+what `b` stands in for. The suite states it outright — "no substitutionGroup
+members should be added if head element has block=substitution". The prune is
+written for `DerivationSubstitution` alone, because a member blocked by a
+derivation *method* must still push its own members: one two steps away may
+reach the head by a method the block permits. Fixes `elemZ027_c` in both
+versions.
+
+*A missing type in the schema namespace was deferred as though it might still
+arrive.* §3.3.3 lets an element declaration's missing type be an error only
+where the declaration is used, and that deferral is right while the namespace
+might yet be supplied by a document not read. The schema namespace never can be:
+its types are built in process and no document adds to it. The gate could not
+see this, because `NewSchema` seeds the type table with every builtin under that
+namespace, so "does this assembly define components here" was always true.
+`type="abc"` under `xmlns="...XMLSchema"` therefore resolved to
+`{XMLSchema}abc` and was quietly parked. Fixes `xsd015.e` and `xsd016.e` in both
+versions — the first of which declares a `complexType` named `abc` in its own
+target namespace, which is the trap: the unprefixed QName is resolved against
+the default `xmlns`, not the target namespace.
+
+Each rule is paired in `xsd/falseaccept_test.go` with a valid schema it must
+still accept — a builtin named through the same default `xmlns`, an unblocked
+chain, a method-blocked chain whose walk must continue, MIME-wrapped base64.
+DocBook (577) and XSpec (225) are unchanged. UBL and CII could not be run in
+this checkout, which is recorded in `docs/known-gaps.md` along with what the
+suite's own ~16,000 valid-labelled schemas do and do not substitute for.
+
+**The 22 MS-Regex false accepts are one rule, and that rule is the one the XSLT
+suite forbids us to apply.** All 22 — the fourteen `reJ*` cases plus `reL98`,
+`reL99`, `reM98`, `reN99`, `reS21`, `reS42`, `reT63` and `reT84` — turn on a
+single construct: a positive `\p{...}` category or block escape applied to a
+value containing a character above the basic multilingual plane. Nothing else
+distinguishes them, and every one of their values is entirely inside the
+category the pattern names, so a code-point engine matches and accepts.
+
+XML Schema Part 2 Appendix F builds its regular expressions over the
+"character" of the XSD 1.0 datatype model, and F.1's atom production consumes
+exactly one of them. That unit is a UTF-16 code unit, not a Unicode code point,
+so a supplementary character is two units, both surrogates in D800-DFFF. A
+surrogate carries the general category Cs and lies in no Appendix G block, so
+no positive category escape can match either half. That reading is the only one
+under which the suite is self-consistent: `reS21` requires `\d` not to match
+`#x1D7CE` and `reT63` requires `\D` not to match `#x1D7CD`, yet both code
+points are Nd, and no code-point reading of `\d` and `\D` refuses both. It also
+settles `reL98`/`reL99` against `reM98`/`reN99`, which apply `\p{IsPrivateUse}`
+under three different quantifiers to the same supplementary code points and
+require every one to fail.
+
+Implementing it works, and raises XSD 1.0 from 39345 to 39362 and XSD 1.1 from
+41532 to 41548. It was still reverted, because it costs `catalog-005b` in the
+XSLT 3.0 suite and that is a mark the ratchet holds. `schema-for-xslt30.xsd`
+constrains `xsl:decimal-format/@zero-digit` with `<xs:pattern value="\p{Nd}"/>`,
+and `format-number-051.xsl` sets that attribute to `&#x104a0;`, the Osmanya
+digit zero — supplementary, and Nd. The XSLT WG wrote both files, so it intends
+`\p{Nd}` to match a supplementary Nd character, which is precisely what the
+UTF-16 reading denies. The two requirements are the same pattern applied to the
+same shape of value with opposite expected outcomes; no rule keyed on the
+pattern or the value satisfies both.
+
+The tiebreak is the one already recorded for `IsPrivateUse` in
+`xpath/fn_regex.go`: all 22 XSD assertions are marked `status="queried"` against
+W3C bug 4113 and so are disputed, while `catalog-005b` comes from the later,
+curated XSLT suite and is not. The disputed assertions lose. Narrowing the rule
+to spare Nd would keep twelve of the twenty-two, but there is no principle under
+which Nd differs from Lu with respect to surrogates — that would be a check
+recognising test cases rather than a rule, so it was not written. The cluster is
+left as a known conflict rather than traded against a mark.
+
+**RELAX NG section 7.3 refused seven of the nine real-world schemas in
+`testdata`, and our rule was the thing that was wrong.** An `<attribute>` with
+an open name class — `anyName` or `nsName` — was required to have a literal
+`<oneOrMore>` ancestor. DocBook 5.1, XSpec, the SVRL schema and four others
+write `<zeroOrMore>`, and were refused. Not a compact-syntax defect: the
+XML-syntax equivalent was refused identically.
+
+Section 7 opens by saying it applies to the **simplified** grammar, and section
+4.20 rewrites `<zeroOrMore>p` as `choice(oneOrMore p, empty)` — so under that
+grammar a `<zeroOrMore>` *does* supply the ancestor the rule asks for. The
+restriction pass runs before compilation, on the tree as written, where the
+rewrite has not happened; it was applying a simplified-grammar rule to an
+unsimplified tree. It now accepts either spelling.
+
+Section 4.19 expands every `<ref>` in place and discards the `<define>`, so a
+definition has no standing of its own in the simplified grammar. An
+`<attribute>` sitting directly in a `<define>` body was reached by the
+standalone walk with an empty ancestor stack, which means "nothing encloses it
+yet", not "no repetition encloses it". Judging the clause there refused every
+schema that factors an open name class into a definition and repeats the
+`<ref>`. The standalone walk now defers it to the compiled-pattern check, which
+sees each use site expanded. The rule still bites where it should: a bare
+`<attribute><anyName/></attribute>` with no repetition above it is refused, and
+an `<element>` remains a barrier that an outer repetition does not reach into.
+
+James Clark's spectest passes at 965 of 965 before and after.
+
+**`<ref>` expansion is not shared between references, so a large modular
+grammar compiled in time that grew multiplicatively.** Exposed by the above:
+DocBook 5.1 reached the compiler for the first time and had not finished
+compiling after 140 s. `compileRefNamed` re-compiles a definition's whole body
+once per `<ref>` naming it and caches nothing — XSpec, with 70 definitions,
+expands 14,140 times. A `maxRefExpansions` budget of 200,000 now bounds it, in
+the spirit of the existing `MaxPatternSize`: DocBook is refused in about 0.2 s
+with a message naming the cause instead of hanging. This is containment rather
+than a cure — sharing the compiled pattern between references is the real fix,
+and is recorded in `docs/todo.md` with why it is delicate.
+
 **The XSD conformance harness was scoring cases it never ran, and cases it had
 no business running.** Two measurement defects in `tests/xsdsuite`, both of
 which moved a ratchet-guarded number without anyone being able to see it.

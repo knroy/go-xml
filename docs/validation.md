@@ -182,6 +182,15 @@ always works.
   derivatives over a nested document costs time and memory quadratic in the
   depth, so `ValidateOptions.MaxDepth` bounds it at 1000 by default — raising
   `xdm`'s parser limit does not raise this one.
+* **A very large modular grammar may be refused at compile time.** Expanding a
+  `<ref>` re-compiles the definition's body, and that work is not shared
+  between two references naming the same definition, so a grammar whose
+  definitions form a long chain costs expansions that grow multiplicatively
+  rather than additively. A fixed budget of 200,000 expansions turns what would
+  otherwise be an unbounded compile into an error naming the cause. DocBook 5.1
+  is over that budget and is refused; schemas of ordinary size are far under
+  it. This is a known limitation rather than a design choice — see
+  [todo.md](todo.md).
 
 ## XSD
 
