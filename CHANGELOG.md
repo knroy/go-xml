@@ -6,7 +6,76 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Added
+
+**The over-strictness guard no longer depends on a licensed corpus.** Adding a
+schema-validity rule risks making it stricter than the spec, and that is the
+one defect the W3C suite structurally cannot catch: it scores agreement with
+its own labels, so an over-strict rule surfaces only if the suite happens to
+contain a valid schema of that exact shape. Real schemas catch it — which is
+what UBL and CII were for. Both are licensed and unvendored, so on every
+checkout without `GOXSLT_UBL`/`GOXSLT_CII`, CI included, that guard was
+skipped, and recent schema rules landed without it. The skip was honest; the
+hole was real.
+
+230 real-world `.xsd` files were already in `testdata/` as fixtures for the
+XSLT and XQuery suites, and nothing had ever asked whether they still load.
+`tests/check.sh` now loads each on its own in every run, fast mode included,
+and ratchets the count as `VendoredSchemas` (185). It needs no external
+checkout and has no skip path, so a corpus present but reporting nothing is a
+failure. A new `vendored` mode in `tests/corpora` does the walk, reading at
+XSD 1.1 because it is a superset here.
+
+The 38 failures are one fault counted 38 times — DocBook 5.0's XSD is
+genuinely invalid under §3.8.6 — and 7 schemas are excluded because "does it
+load alone?" has no right answer for them: five fragments whose types come
+from a sibling, and two whose file names are the error codes they exist to
+raise. Each exclusion is named with its reason and **counted in the output**,
+following `tests/xsdsuite`, so the size of what is not scored stays as visible
+as the score. It supplements UBL and CII rather than replacing them: these are
+thinner exactly where those corpora are thick.
+
 ### Fixed
+
+**DocBook 5.0's XSD is refused, and that was investigated as a bug and is not
+one.** The vendored-schema walk's 38 failures are all the DocBook 5.0 XSD under
+`tests/misc/docbook/docbook-xsl-1.79.1/slides/schema/xsd/` — one fault counted
+38 times, since each file includes the same `pool.xsd` — failing with 568
+errors: 281 `cos-element-consistent` and 287 `cos-nonambig`. Refusing a schema
+processed daily by Xerces, Saxon and libxml2 is strong evidence of a defect
+here, so all three error clusters were tested against the suite. No code
+changed; conformance is unmoved at 39349 (1.0) and 41536 (1.1).
+
+The fault minimises to seventeen lines. DocBook's `db.indexterm` (`index.xsd`)
+is a `<xs:choice>` of three named groups, each declaring a **local** element
+`indexterm` with a **different** anonymous type — as are `db.firstterm` /
+`db._firstterm` (`glossary.xsd`) and the five `info` declarations
+(`pool.xsd`). That is `msData/modelGroups/mgR022.xsd` almost verbatim, and all
+22 of `mgR001..mgR022` carry `<expected validity="invalid"/>` with
+`status="accepted"`. The control is exact: `mgQ003` is the same model with the
+second declaration given the **same** type, is expected valid, and loads.
+
+The `cos-nonambig` messages naming one QName against itself — "element
+firstterm and element firstterm can both match the same element" — look wrong
+and are not. `mgS002..mgS005`, `mgQ001` and `mgQ021` produce that shape and are
+all expected invalid; `mgQ021` is two particles for one name with the *same*
+type and is still invalid, so the reading behind `CheckOptions.LaxUPA` would be
+wrong as a default rather than merely off by one. Loading DocBook with `LaxUPA`
+set moves 568 errors to 567. The nine wildcard errors come from `db._any`, a
+bare `<xs:any processContents="skip"/>` in a `<xs:choice>` beside element refs;
+that is relaxed in XSD 1.1, but the files carry no `vc:minVersion` and no
+`version="1.1"`, so 1.0 is the rule that applies to them.
+
+The cause is in DocBook's own tree: its **normative** schema is RELAX NG, and
+`relaxng/index.rng` defines `db.indexterm` as a `<choice>` of three
+`<element name="indexterm">` patterns told apart only by a required `class`
+attribute's value. §3.8.6 requires the particle be determined "without
+examining the content or attributes of that item". The XSD is a lossy machine
+translation of a construct XSD cannot express. A search over all 11,060
+expected-valid schemaTests found no counterexample, and none of the suite's
+schema-level disagreements mentions either constraint. `xsd/docbook_edc_test.go`
+carries the minimised reproductions alongside the valid controls, and
+`docs/known-gaps.md` records the finding.
 
 **Three invalid schemas loaded without complaint, and each was a rule that was
 never written rather than one written wrongly.** Schema false accepts fall from

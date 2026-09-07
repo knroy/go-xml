@@ -284,6 +284,74 @@ no suite case, and `xslt/unionmember_test.go` is what pins it instead.
 Real gaps, together with the constraints and retractions that bound how they
 may be closed. Ordered by how much they cost.
 
+### DocBook 5.0's XSD refuses to load (XSD) — not a defect, DocBook's schema is invalid
+
+`tests/corpora walk testdata/xslt30-test` reports 39 failures, 38 of them the
+DocBook 5.0 XSD under
+`tests/misc/docbook/docbook-xsl-1.79.1/slides/schema/xsd/`. Every one of the 38
+fails identically — the walk loads each file on its own and each includes the
+same `pool.xsd`, so it is one fault counted 38 times — with 568 errors: 281
+`cos-element-consistent` and 287 `cos-nonambig`.
+
+Refusing a schema this widely deployed is strong evidence of a bug here, so it
+was investigated as one. It is not. All three error clusters are genuine
+violations of §3.8.6, and the W3C suite states each outright.
+
+The whole fault reduces to seventeen lines. `db.indexterm` (`index.xsd`) is a
+`<xs:choice>` of three named groups, each declaring a **local** element
+`indexterm` with a **different** anonymous type; `db.firstterm`/`db._firstterm`
+(`glossary.xsd`) and the five `info` declarations (`pool.xsd`) are the same
+shape:
+
+```xml
+<xs:group name="a"><xs:sequence><xs:element name="x" type="xs:string"/></xs:sequence></xs:group>
+<xs:group name="b"><xs:sequence><xs:element name="x" type="xs:int"/></xs:sequence></xs:group>
+<xs:choice><xs:group ref="a"/><xs:group ref="b"/></xs:choice>
+```
+
+That is `msData/modelGroups/mgR022.xsd` almost verbatim, and `mgR002` is the
+inlined form. All 22 of `mgR001..mgR022` carry `<expected validity="invalid"/>`
+with `status="accepted"`, under the documentation *"2 particles with idendical
+element declarations (different type)"* (sic). The `mgQ` series is the control:
+`mgQ003` — the same model with the second `e1` given the **same** type — is
+expected **valid**, and we accept it. The pair differs only in the type, which
+is exactly the distinction `checkElementDeclarationsConsistent` draws.
+
+The suspicious-looking `cos-nonambig` message that names one QName against
+itself — *"element firstterm and element firstterm can both match the same
+element"* — is likewise correct. `mgS002..mgS005` and `mgQ001`/`mgQ021` produce
+that same message shape here and are all expected invalid; `mgQ021` is two
+particles for the same name with the **same** type, still invalid under UPA.
+So the reading behind `CheckOptions.LaxUPA` is not merely off by default, it
+would be wrong as a default: loading DocBook with `LaxUPA` set moves 568 errors
+to 567. These are distinct `*ElementDecl`s with distinct types, not one
+declaration seen twice — the genuinely-same-declaration case
+(`<xs:element ref=>` twice in a sequence) already loads clean.
+
+The nine wildcard errors — *"element abstract and wildcard ##any can both match
+the same element"* — come from `db._any`, a bare `<xs:any processContents="skip"/>`
+sitting in a `<xs:choice>` beside named element refs (`pool.xsd`). That is a
+UPA violation in 1.0 and not in 1.1, but these files carry no `vc:minVersion`
+and no `version="1.1"`: they are 1.0 schemas, and 1.0 is the right rule for
+them. Loading them as 1.1 would be answering a different question.
+
+The cause is visible in DocBook's own tree. The **normative** DocBook schema is
+RELAX NG, and `relaxng/index.rng` defines `db.indexterm` as a `<choice>` of
+three `<element name="indexterm">` patterns distinguished only by the value of a
+required `class` attribute (`singular`/`startofrange`/`endofrange`). RELAX NG
+resolves that by inspecting the attribute. §3.8.6 requires the particle be
+determined *"without examining the content or attributes of that item"*, which
+forbids precisely this. The XSD files are a lossy machine translation of a
+construct XSD cannot express — which is why DocBook ships RELAX NG as normative.
+
+Nothing was changed. A search over all 11,060 expected-valid schemaTests in the
+suite found no case with two same-named local declarations of differing types in
+one content model, so there is no counterexample to the current behaviour; and
+none of the five schema-level disagreements in `xsdtests` mentions `cos-nonambig`
+or `cos-element-consistent` in either direction. Relaxing either check to make
+DocBook load would introduce a false accept against `mgR002` and `mgQ021`
+directly.
+
 ### `xsl:sort` compares arbitrary-precision values through `float64` first (XSLT) — not a defect
 
 `compareAtoms` in `xslt/instructions.go` uses `Float64()` for a value an
@@ -358,20 +426,37 @@ pattern cases unrelated to schema validity.
 Adding rules here is the highest-yield remaining work and also the riskiest: a
 rule stricter than the spec starts rejecting real schemas the suite never
 covers. Every change must be measured against both suite directions *and* the
-production corpora (65 UBL + 427 CII), which is the only guard against
-over-strictness.
+production corpora (65 UBL + 427 CII), which are the strongest guard against
+over-strictness — and, where those are absent, against the 230 real-world
+schemas vendored in `testdata/` (see below).
 
 **A note on that guard when the corpora are absent.** UBL and CII are licensed
 and unvendored, so a checkout without `GOXSLT_UBL`/`GOXSLT_CII` cannot run
 them, and DocBook and XSpec exercise the XSLT engine rather than the schema
-loader. What remains is still substantial and is worth stating, because it is
-easy to conclude there is no guard at all: the suite labels roughly 16,000
-schemas *valid*, and a rule that over-rejects turns one of those into a false
-reject, which the harness counts directly. "False rejects did not rise" over
-that population is a real over-strictness signal — weaker than the corpora on
-the shapes production schemas favour and no substitute for them, but far from
+loader. Three things stand in when they are missing, and it is worth stating
+all three, because it is easy to conclude there is no guard at all.
+
+The first is now a standing check rather than a fallback. 230 real-world
+`.xsd` files ship in `testdata/` as fixtures for the XSLT and XQuery suites,
+and `tests/check.sh` loads each on its own in every run, fast mode included,
+ratcheted as `VendoredSchemas` — 185 load, 38 are DocBook 5.0's genuinely
+invalid schema (above), 7 are excluded as fragments or deliberately invalid
+test data, each named in `vendoredExclude`. A rule that starts rejecting one
+of the 185 fails the build and says so. What this does **not** do is replace
+UBL and CII: these are mostly test fixtures, documentation schemas and
+namespace vocabularies, so they are thinner exactly where the corpora are
+thick — the deep industry vocabularies with long derivation chains, large
+substitution groups and heavy `xs:union`/`xs:key` use that UBL's 65 and CII's
+427 exercise. It catches the over-strict rule that breaks *any* real schema;
+it does not catch the one that breaks only commercial ones.
+
+The second is the suite population: roughly 16,000 schemas are labelled
+*valid*, and a rule that over-rejects turns one of those into a false reject,
+which the harness counts directly. "False rejects did not rise" over that
+population is a real over-strictness signal — weaker than the corpora on the
+shapes production schemas favour and no substitute for them, but far from
 nothing. Pairing each new rule with a valid schema that must still load, in
-`xsd/falseaccept_test.go`, is the other half.
+`xsd/falseaccept_test.go`, is the third.
 
 ### Deciding is not the same as declining (XSD 1.1 subsumption)
 

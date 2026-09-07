@@ -20,15 +20,16 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,535 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,540 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
 | **Real-world stylesheets** | 818 documents | what large stylesheets do that a rule-at-a-time suite does not | constructs those two codebases happen not to use |
 | **Production schema sets** | 65 + CII | what modular published schemas do | industries whose schemas are shaped differently |
+| **Vendored real-world schemas** | 185 of 230 | a schema-validity rule that has become stricter than the spec, on every checkout — no licensed corpus needed | the deep industry vocabularies only UBL and CII carry |
 | **Fuzzing** | 7 targets | a crash, hang or wrong refusal on input nobody would write | anything a coverage-guided search does not reach in the time given |
 | **Generated oracle** | 8,397 documents | a *wrong answer* in the content-model matcher, on shapes nobody wrote a case for | only the occurrence shapes whose language is plain arithmetic — no wildcards, substitution groups, or interleaved choices |
-| **The ratchet** | 9 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
+| **The ratchet** | 10 marks | a silent revert, or a fix that quietly costs more than it gains | a regression in something no suite counts |
 
 **How the first four counts are counted**, because "how many tests" has several
 honest answers and the one meant here is the narrow one. The three that a
@@ -302,6 +303,7 @@ absolute paths and fails a suite that reports no summary.
 | XSpec | `GOXSLT_XSPEC` | `testdata/xspec` | an XSLT compiler written in XSLT |
 | UBL 2.1 | `GOXSLT_UBL` | — | 65 modular production schemas |
 | UN/CEFACT CII | `GOXSLT_CII` | — | EN 16931 and CII schemas |
+| Vendored schemas | *(none)* | `testdata/` | 230 real `.xsd` already in the tree; no variable, it always runs |
 
 Fetching the four W3C suites:
 
@@ -331,6 +333,44 @@ CI, which fetches only the four W3C suites. UBL and CII are licensed and
 cannot be cloned in a workflow at all. **Four skips in a CI log are the normal
 reading**, and `check.sh` says so where it prints them.
 
+### Vendored real-world schemas
+
+The last row has no variable and no skip, which is the point of it. Every
+schema-validity rule risks being *stricter than the spec*, and that is the one
+defect the W3C suite structurally cannot catch: the suite scores agreement with
+its own labels, so an over-strict rule shows up there only if the suite happens
+to contain a valid schema exercising the exact shape. Real schemas catch it —
+which is why UBL and CII exist in this list. But both are licensed, so on every
+checkout that lacks them the guard was simply skipped, and schema rules were
+landing without it.
+
+230 real `.xsd` files are already in the tree as fixtures for the XSLT and
+XQuery suites. `check.sh` loads each one on its own, in every run including
+fast mode, and ratchets how many assemble:
+
+```sh
+go run ./tests/corpora vendored testdata/xslt30-test testdata/qt3tests testdata/xspec
+# vendored schemas: 185 loaded, 38 failed, 7 excluded (of 230)
+```
+
+They are read as XSD 1.1, because it is a superset here — everything that
+assembles under 1.0 also does under 1.1, and the schema-for-schemas in the
+XSLT catalog is 1.1 by its own DOCTYPE.
+
+The 38 failures are one fault counted 38 times: DocBook 5.0's XSD is genuinely
+invalid under §3.8.6, and `docs/known-gaps.md` sets out why at length. The 7
+exclusions are schemas for which "does it load alone?" has no right answer —
+five fragments whose types are declared by a sibling, and two files whose
+names are the error codes they exist to raise. Each is listed with its reason
+in `vendoredExclude` (`tests/corpora/main.go`) and **counted in the output**,
+so the size of what is not being scored stays as visible as the score; the
+convention is `tests/xsdsuite`'s.
+
+This does not replace UBL and CII. These are mostly test fixtures and
+documentation schemas, thinner exactly where those corpora are thick. It
+catches an over-strict rule that breaks *any* real schema; it does not catch
+one that breaks only commercial vocabularies.
+
 ---
 
 ## The ratchet
@@ -345,6 +385,7 @@ TestQT3 29800
 TestQT3XQuery 29800
 TestXSLT30Suite 8612
 TestXSLTSuite 6149
+VendoredSchemas 185
 XSD10 39347
 XSD11 41532
 XSpec 225

@@ -179,6 +179,56 @@ ratchetCount() {
 	fi
 }
 
+# ratchetVendored is ratchetCount for the vendored schema corpus. It is a
+# separate function only because of its failure message: what a drop here
+# MEANS is specific, and the number is useless to whoever reads it in CI
+# unless the message says so.
+#
+# The count is schemas that still assemble. Nothing in this repository makes
+# a real schema stop loading except a schema-validity rule that has become
+# stricter than the spec -- which is the one defect the W3C suite structurally
+# cannot catch, because it scores agreement with its own labels and an
+# over-strict rule only shows up there if the suite happens to contain a valid
+# schema exercising it. So a drop here is not "a test broke"; it is the
+# specific news that a rule added upstream of it now rejects a schema that a
+# human being wrote and shipped.
+ratchetVendored() {
+	_n=$1
+	[ -n "$_n" ] || return 0
+	case "${GOXSLT_RATCHET:-on}" in
+	off) return 0 ;;
+	esac
+	_t=VendoredSchemas
+	_best=$(sed -n "s/^$_t \([0-9]*\)$/\1/p" "$RATCHET_FILE" 2>/dev/null | head -1)
+	if [ -n "$_best" ] && [ "$_n" -lt "$_best" ]; then
+		fail "$_t: $_n real schemas still load, down from $_best.
+    A SCHEMA-VALIDITY RULE HAS BECOME TOO STRICT. These are real schemas that
+    people wrote and shipped, and $((_best - _n)) of them loaded before your
+    change and do not now. That is over-strictness, and it is the one defect
+    the W3C suite cannot see: the suite scores agreement with its own labels,
+    so a rule stricter than the spec shows up there only if the suite happens
+    to contain a valid schema exercising it.
+    Run the corpus to see which, and read the first error of each:
+        go run ./tests/corpora vendored testdata/xslt30-test \\
+            testdata/qt3tests testdata/xspec
+    Fix the rule. Record a new mark ONLY if you have established that
+    rejecting those schemas is correct and the spec requires it:
+        GOXSLT_RATCHET=update tests/check.sh fast"
+		return 0
+	fi
+	if [ "${GOXSLT_RATCHET:-on}" = update ] ||
+		{ [ -n "$_n" ] && [ -z "$_best" ]; } ||
+		{ [ -n "$_best" ] && [ "$_n" -gt "$_best" ]; }; then
+		touch "$RATCHET_FILE"
+		_tmp="$RATCHET_FILE.tmp"
+		grep -v "^$_t " "$RATCHET_FILE" > "$_tmp" 2>/dev/null || true
+		printf '%s %s\n' "$_t" "$_n" >> "$_tmp"
+		sort -o "$RATCHET_FILE" "$_tmp"
+		rm -f "$_tmp"
+		printf -- '--- ratchet: %s high-water mark now %s\n' "$_t" "$_n"
+	fi
+}
+
 QT3=$(abspath "${GOXSLT_QT3:-testdata/qt3tests}")
 XSDTS=$(abspath "${GOXSLT_XSDTS:-testdata/xsdtests}")
 RNG=$(abspath "${GOXSLT_RNG:-testdata/relaxng/spectest.xml}")
@@ -282,7 +332,7 @@ docfigure_cmd() {
 
 section "documented figures"
 _docfig_before=$failed
-docfigure "unit test count" 1535 "$(docfigure_tests)" \
+docfigure "unit test count" 1540 "$(docfigure_tests)" \
 	README.md:109 README.md:1228 docs/testing.md:23 docs/todo.md:20
 docfigure "fuzz target count" 7 "$(docfigure_fuzz)" \
 	README.md:1223 docs/testing.md:29
@@ -328,6 +378,48 @@ GOXSLT_NO_SUITES=1 $GO test -race ./... -count=1 -timeout 25m || fail "race"
 section "w3cschemas (separate module)"
 (cd w3cschemas && $GO build ./... && $GO vet ./... &&
 	$GO test ./... -count=1) || fail "w3cschemas"
+
+section "vendored real-world schemas"
+# The over-strictness guard that is always available.
+#
+# docs/known-gaps.md used to name UBL and CII as the ONLY guard against a
+# schema-validity rule stricter than the spec, and both are licensed corpora
+# that cannot be vendored. So on every checkout that does not already have
+# them -- CI included -- schema rules were landing with that guard skipped.
+# The skip was honest and the hole was real.
+#
+# These 230 schemas are real ones people wrote, they are already in the tree
+# as fixtures for the XSLT and XQuery suites, and until now nothing ever
+# asked whether they still LOAD. That is the same question UBL and CII ask,
+# on a smaller and less commercial sample. It does not replace them: these
+# are mostly test fixtures and documentation schemas, not the deep industry
+# vocabularies UBL and CII exercise, so the blocks below stay exactly as
+# they were.
+#
+# The number that may not go down is how many assemble. That makes this a
+# ratchet rather than an equality check, for the reason the ratchet comment
+# above gives: a schema that starts loading is progress, and only a schema
+# that STOPS loading is the regression this exists to catch. It uses
+# ratchetCount rather than ratchet or ratchetXSD because the driver reports
+# a bare count of its own rather than an "in-scope: N passed" suite summary
+# or the XSD driver's agreement line.
+#
+# Excluded schemas are printed with the count so the size of what is not
+# scored stays visible; see vendoredExclude in tests/corpora for why each is
+# not a standalone schema.
+_vend=$($GO run ./tests/corpora vendored \
+	"$ROOT/testdata/xslt30-test" "$ROOT/testdata/qt3tests" \
+	"$ROOT/testdata/xspec" 2>&1 >/dev/null | tail -1)
+_vend_ok=$(printf '%s' "$_vend" | sed -n 's/^vendored schemas: \([0-9]*\) loaded.*/\1/p')
+if [ -z "$_vend_ok" ]; then
+	fail "vendored schemas: the corpus produced no result.
+    These schemas are vendored in testdata/, so unlike UBL and CII this
+    check has no legitimate skip. A corpus that is present and reports
+    nothing is the failure mode to look for."
+else
+	printf '%s\n' "$_vend"
+	ratchetVendored "$_vend_ok"
+fi
 
 if [ "$MODE" = fast ]; then
 	printf '\n=== fast mode: external suites not run\n'

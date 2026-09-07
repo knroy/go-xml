@@ -5,8 +5,9 @@
 // up only if the suite happens to contain a valid schema exercising it. Real
 // schemas catch it. Re-run this after every schema-validity change.
 //
-//	corpora maindoc <dir>   # load each <dir>/maindoc/*.xsd on its own (UBL)
-//	corpora walk    <dir>   # load every .xsd under <dir> on its own (CII)
+//	corpora maindoc  <dir>    # load each <dir>/maindoc/*.xsd on its own (UBL)
+//	corpora walk     <dir>    # load every .xsd under <dir> on its own (CII)
+//	corpora vendored <dir>... # the same, over the schemas vendored in testdata/
 package main
 
 import (
@@ -22,7 +23,7 @@ import (
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: corpora {maindoc|walk} <dir> [-11]")
+		fmt.Fprintln(os.Stderr, "usage: corpora {maindoc|walk|vendored} <dir>... [-11]")
 		os.Exit(2)
 	}
 	mode, args := os.Args[1], os.Args[2:]
@@ -31,6 +32,13 @@ func main() {
 		runMainDoc(args)
 	case "walk":
 		runWalk(args)
+	case "vendored":
+		// UBL and CII are licensed and cannot be vendored, so the
+		// guard they provide is absent from every checkout that does
+		// not already have them. These schemas are real, are already
+		// here, and answer the same question: does a rule reject a
+		// schema that people actually wrote?
+		runVendored(args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode %q\n", mode)
 		os.Exit(2)
@@ -63,11 +71,7 @@ func runMainDoc(args []string) {
 				ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
 		if err != nil {
 			failed++
-			msg := err.Error()
-			if i := strings.Index(msg, "\n"); i > 0 {
-				msg = msg[:i]
-			}
-			fmt.Printf("LOADFAIL %s\n  %s\n", filepath.Base(m), msg)
+			fmt.Printf("LOADFAIL %s\n  %s\n", filepath.Base(m), firstLine(err.Error()))
 			continue
 		}
 		loaded[filepath.Base(m)] = s
@@ -150,14 +154,89 @@ func runWalk(args []string) {
 				ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
 		if err != nil {
 			failed++
-			msg := err.Error()
-			if i := strings.Index(msg, "\n"); i > 0 {
-				msg = msg[:i]
-			}
-			fmt.Printf("FAIL\t%s\t%s\n", f, msg)
+			fmt.Printf("FAIL\t%s\t%s\n", f, firstLine(err.Error()))
 		} else {
 			ok++
 		}
 	}
 	fmt.Fprintf(os.Stderr, "schemas: %d loaded, %d failed\n", ok, failed)
+}
+
+// Schemas excluded from the vendored corpus, each with the reason it is not a
+// standalone schema. They are COUNTED and NAMED in the summary rather than
+// quietly dropped: the point of this corpus is that a rule which starts
+// rejecting a real schema is visible, and an exclusion list that can grow
+// without being read is the one way to make that number lie.
+//
+// Nothing here is excluded for failing. Each is excluded because loading it
+// alone is not a question with a right answer -- it is a fragment, or it is
+// test data whose whole purpose is to be rejected.
+var vendoredExclude = map[string]string{
+	// Deliberately invalid: the file name is the error code the case exists
+	// to raise. Rejecting these is correct, so scoring them as loads would
+	// reward the wrong behaviour.
+	"XQST0012.xsd": "deliberately invalid test data (refs undeclared element)",
+	"XQST0035.xsd": "deliberately invalid test data (duplicate declaration)",
+
+	// Halves of a target namespace: hats:hatsize is declared by the sibling
+	// qischema041a/042a, and these are imported alongside it by the cases
+	// that use them. Alone they are incomplete by construction.
+	"qischema041.xsd":    "fragment; hats:hatsize comes from qischema041a.xsd",
+	"qischema041dup.xsd": "fragment; hats:hatsize comes from qischema041a.xsd",
+	"qischema042.xsd":    "fragment; hats:hatsize comes from qischema042a.xsd",
+
+	// Refs xs:schema without importing the XSD namespace; it is meant to be
+	// loaded together with the schema-for-schemas, not on its own.
+	"schema-for-xslt30.xsd": "fragment; refs xs:schema without importing it",
+}
+
+// runVendored loads every .xsd under the given roots on its own and reports
+// how many assemble. See the comment on the "vendored" case in main.
+func runVendored(roots []string) {
+	var files []string
+	for _, root := range roots {
+		filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+			if err == nil && !fi.IsDir() && strings.HasSuffix(p, ".xsd") {
+				files = append(files, p)
+			}
+			return nil
+		})
+	}
+	sort.Strings(files)
+
+	var ok, failed, excluded int
+	for _, f := range files {
+		if why, skip := vendoredExclude[filepath.Base(f)]; skip {
+			excluded++
+			fmt.Printf("EXCLUDED\t%s\t%s\n", f, why)
+			continue
+		}
+		// XSD 1.1 is the version these are read at because it is a
+		// superset here: every schema that assembles under 1.0 also
+		// assembles under 1.1, and the schema-for-schemas in the XSLT
+		// catalog is 1.1 by its own DOCTYPE. Reading real schemas at
+		// the older version would score them against a question their
+		// authors never answered.
+		_, err := xsd.LoadFiles([]string{f},
+			xsd.Options{Version: xsd.Version11, Resolver: &xsd.FileResolver{},
+				ParseOptions: xdm.ParseOptions{AllowDOCTYPE: true}})
+		if err != nil {
+			failed++
+			fmt.Printf("FAIL\t%s\t%s\n", f, firstLine(err.Error()))
+			continue
+		}
+		ok++
+	}
+	// Excluded is printed beside the score for the same reason the XSD
+	// driver prints out-of-scope: the size of what is not being measured
+	// has to stay as visible as what is.
+	fmt.Fprintf(os.Stderr, "vendored schemas: %d loaded, %d failed, %d excluded (of %d)\n",
+		ok, failed, excluded, len(files))
+}
+
+func firstLine(s string) string {
+	if i := strings.Index(s, "\n"); i > 0 {
+		return s[:i]
+	}
+	return s
 }
