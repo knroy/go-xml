@@ -128,8 +128,16 @@ cases fall out of scope. That is what took XPath 3.1 to 100%.
 a store, a resolver, transitive loading and the cycle rule — so the reason
 given here previously ("there is no module store for this function to load
 from") no longer holds. Measured after that work, the three cases are
-**unchanged: still out of scope, neither passing nor failing.** XPath 3.1 stays
-at 21786/21786, and the XQuery mark rose from 29800 to 29901.
+**unchanged: still out of scope, neither passing nor failing.** XPath 3.1 stayed
+at 21786/21786 then, and the XQuery mark rose from 29800 to 29901.
+
+Both figures have since moved for an unrelated reason: two stale feature
+labels, `namespace-axis` and `infoset-dtd`, were lifted from the same
+unsupported list, putting XPath 3.1 at 21848/21849 and XQuery at 29933/29950.
+The single XPath failure is `Axes123` (namespace-node identity across two axis
+walks), diagnosed in [conformance-gaps.md](conformance-gaps.md). The
+`fn-load-xquery-module` cases discussed here are unaffected — that label stays
+on the list, for the reason the rest of this section gives.
 
 What is left is not a missing engine but the suite's own contradiction, which
 was always the second half of the reason. `-003` and `-004` want **FOQM0002**

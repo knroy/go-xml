@@ -11,16 +11,16 @@ therefore no longer a measured figure.
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
-| **xpath** | QT3 — XPath 2.0 | 15,183 | 15,183 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.0 | 19,244 | 19,244 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,786 | 21,786 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,918 | 29,901 | 99.94% | **17** | 0 | 0 | **17** | 99.94% |
+| **xpath** | QT3 — XPath 2.0 | 15,222 | 15,221 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
+| **xpath** | QT3 — XPath 3.0 | 19,307 | 19,306 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
+| **xpath** | QT3 — XPath 3.1 | 21,849 | 21,848 | 100.00% | **1** | 0 | 0 | **1** | 100.00% |
+| **xquery** | QT3 — XQuery 3.1 | 29,950 | 29,933 | 99.94% | **17** | 0 | 0 | **17** | 99.94% |
 | **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 8,663 | 8,640 | 99.73% | **23** | 0 | 0 | **23** | 99.73% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **103** | **0** | **0** | **103** | |
+| | **Total** | | | | **106** | **0** | **0** | **106** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -64,6 +64,32 @@ numerator; the other two
 move the denominator or the scoring. They are counted together here because all
 three are work, but they are not the same claim and are labelled individually
 below.
+
+**XPath's single failure, and why the in-scope counts rose.** Two feature
+labels in `tests/qt3/runner.go` had outgrown their meaning: `namespace-axis`
+and `infoset-dtd` were listed as unsupported long after they stopped being so.
+The namespace axis is implemented (`xpath/nsaxis.go`), and the XSLT harness had
+declared `namespace_axis: true` all along — the two harnesses contradicting
+each other is what exposed it. Lifting both moved the *in-scope* count, which
+is the only signal that proves a lift took effect: XPath 2.0 15,183 → 15,222,
+3.0 19,244 → 19,307, 3.1 21,786 → 21,849, XQuery 29,918 → 29,950 in scope
+(29,901 → 29,933 passing) with no new XQuery failure.
+
+`infoset-dtd` lifted clean — 27 more cases per XPath lane, 32 in XQuery, zero
+failures. `namespace-axis` admitted 36 more cases per lane, of which 35 pass
+and one does not: `prod-AxisStep/Axes123`, which asserts node *identity* across
+two namespace-axis walks (`/*/namespace::xlink is /*/namespace::*[. =
+'…/xlink']`). It is XP20+, so it appears in all three XPath lanes and is one
+distinct case rather than three. The cause is structural rather than a wrong
+answer: namespace nodes are *synthesized* per axis walk (`xpath/axes.go`
+allocates a fresh `&xdm.Node` for each in-scope binding), while `is` compares
+Go pointers (`ln == rn` in `xpath/operators.go`), so two walks over the same
+binding can never be identical. Fixing it means giving namespace nodes a stable
+identity — caching them on the element, or comparing on (parent, prefix)
+instead of pointer — which is an engine change rather than a harness one. The
+trade is worth taking: the lift buys 63 in-scope cases at 3.1 for one failure
+that the skip was previously *hiding*, and a visible failure with a known cause
+is better than a silent exclusion.
 
 **XQuery's remaining 17.** Three are read case by case below; the other
 fourteen fall in four sets not yet diagnosed individually —

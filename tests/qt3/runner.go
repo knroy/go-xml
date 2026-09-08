@@ -188,10 +188,21 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 				}
 				continue
 			}
+			// namespace-axis and infoset-dtd are deliberately NOT on this
+			// list. Both were, long after they stopped being true: the
+			// namespace axis is implemented (xpath/nsaxis.go, and the XSLT
+			// harness has declared namespace_axis: true all along -- the two
+			// harnesses contradicting each other is what exposed it), and the
+			// DTD infoset properties the suite asks for are read. Listing
+			// them cost 63 in-scope cases at XPath 3.1 and 32 at XQuery.
+			//
+			// A feature name here is a claim about the engine that has to be
+			// re-measured, not a record of what was once true. Lifting one is
+			// verified by the IN-SCOPE count moving, not the passing count.
 			switch d.Value {
 			case "schemaValidation", "schemaImport", "typedData",
 				"staticTyping", "moduleImport",
-				"namespace-axis", "infoset-dtd", "xpath-1.0-compatibility",
+				"xpath-1.0-compatibility",
 				"fn-transform-XSLT", "fn-transform-XSLT30", "fn-format-integer-CLDR",
 				// fn:load-xquery-module compiles an XQuery library module,
 				// which needs an XQuery processor this engine does not have.

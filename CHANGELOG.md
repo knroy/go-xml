@@ -6,6 +6,40 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
+### Changed
+
+**Two stale QT3 feature labels lifted: `namespace-axis` and `infoset-dtd`.**
+`tests/qt3/runner.go` carried a list of features the engine does not offer, and
+two entries had outgrown their meaning — they described the engine as it once
+was, not as it is. The namespace axis is implemented (`xpath/nsaxis.go`,
+`xpath/axes.go`), and the *other* harness has declared `namespace_axis: true`
+all along: the two harnesses contradicting each other about the same engine is
+what exposed it, and is the strongest evidence either was wrong. This is the
+same defect class as the `higher_order_functions` label already recorded in
+`tests/xslts/deps.go`, which excluded two hundred passing cases. A feature name
+in these tables is a claim that has to be re-measured, not a record.
+
+Lifting both moved the **in-scope** count, which is the only signal that proves
+a lift took effect — a passing count can move for unrelated reasons, and
+deleting a label in the XSLT harness does not even admit the case. Measured per
+stage: `infoset-dtd` alone adds 27 in-scope cases to each XPath lane and 32 to
+XQuery, all passing. `namespace-axis` then adds 36 more per XPath lane, of
+which 35 pass. Totals: XPath 2.0 15,183 → 15,222 in scope, 3.0 19,244 →
+19,307, 3.1 21,786 → 21,849, XQuery 29,918 → 29,950 (29,901 → 29,933 passing,
+its 17 failures unchanged). The `TestQT3` and `TestQT3XQuery` ratchets rise to
+29,933.
+
+The one case that does not pass is `prod-AxisStep/Axes123`, and it is a
+finding rather than a regression: the skip was hiding it. It asserts node
+*identity* across two namespace-axis walks — `/*/namespace::xlink is
+/*/namespace::*[. = '…/xlink']` — and namespace nodes are synthesized fresh on
+every walk (`xpath/axes.go` allocates a new `&xdm.Node` per in-scope binding)
+while `is` compares Go pointers (`ln == rn`), so two walks over one binding can
+never be identical. Being XP20+, it surfaces in all three XPath lanes as the
+same single case. Giving namespace nodes a stable identity is an engine change,
+not a harness one; 63 in-scope cases at 3.1 for one visible, diagnosed failure
+is the right trade, because an excluded failure is not an absent one.
+
 ### Added
 
 **A stylesheet function can be the entry point: `initial-function` and
@@ -187,40 +221,6 @@ as the score. It supplements UBL and CII rather than replacing them: these are
 thinner exactly where those corpora are thick.
 
 ### Fixed
-
-**A fault in an included schema now names the file it is in.** Issue #4 above
-was an error about a stylesheet one file away that said nothing to distinguish
-it from the one the author was reading, and the same shape was live in two more
-places. In `relaxng`, a typo inside a document reached by `<include>` reported
-`relaxng: <zeroOrMore1> is not a RELAX NG element` — true of the construct,
-silent about which of the two files it was written in, so the author audited
-the schema they had written, which was correct. In `xsd`, a bad reference in an
-included document reported `src-resolve: type="t:NoSuchType" uses undeclared
-prefix "t"` with no file and no line, which reached nearly every
-multi-document schema diagnostic. Both now say where: `in <include
-href="lib.rng">: relaxng: …` and `… undeclared prefix "t" (in inner.xsd)`.
-
-The distinction that keeps this from becoming noise is *nesting*, not
-composition: only a document the caller did not name is attributed. RELAX NG
-gets it from the call site — `checkSyntax` and `checkRestrictions` are called
-from three places, and only the `<include>` and `<externalRef>` ones wrap,
-reusing the `<include href=%q>` idiom already used by the errors beside them,
-so the top-level message is unchanged byte for byte. XSD gets it from
-`assembler.rootBases`, the set of documents the caller named — one for `Load`,
-several for `LoadFiles`.
-
-`ParseError` gains a `Document` field rather than a rewritten `Message`, and it
-is rendered as a `(in …)` suffix so the spec's error code still leads: callers
-and the conformance harness match on that prefix, and a fault that gained a
-location must not stop looking like the fault it is. The attribution is keyed
-on the node the fault is on rather than stamped from the parser's current
-document, because most faults are not raised while their document is being
-read — they come from fixups queued during the read and drained in `finish()`,
-by which point the parser has moved on to the last document of the assembly,
-which would have made every deferred fault confidently name the wrong file. The
-node is dropped once the document is filled in, so a returned error does not
-pin the schema tree in memory. Nothing about validation changed; every RELAX NG
-and XSD conformance mark holds.
 
 **A wildcard spelling `namespace=""` admitted every element.** Part 1 §3.10.2
 defaults an *absent* `namespace` attribute to `##any`; a present empty one is
