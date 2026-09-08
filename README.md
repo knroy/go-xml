@@ -96,14 +96,14 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 
 | | |
 |---|---|
-| **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
-| **XPath 3.0** | 100.00% of the W3C QT3 suite (19,244 of 19,244 in scope) |
-| **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.96% of the W3C QT3 suite (29952 of 29964 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
-| **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,640 of 8,663 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
-| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
-| **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
+| **XPath 2.0** | 100.00% of the W3C QT3 suite (15,222 of 15,222 in scope) |
+| **XPath 3.0** | 100.00% of the W3C QT3 suite (19,307 of 19,307 in scope) |
+| **XPath 3.1** | 100% of the W3C QT3 suite (21,863 of 21,863 in scope); maps, arrays, the lookup operator, the JSON family |
+| **XQuery 3.1** | 99.96% of the W3C QT3 suite (29,952 of 29,964 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
+| **XSLT 2.0** | 99.82% of the W3C XSLT suite filtered to 2.0 (6,190 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
+| **XSLT 3.0** | 97.81% of the W3C XSLT suite filtered to 3.0 (11,273 of 11,525 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases and the percentage fell: 193 of the 252 failures are streaming, and 151 of those want the XTSE3430 that a §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.97%** of its *schema-validity* tests (14,383 of 14,388) |
+| **XSD 1.1** | 99.90% instance (26,196 of 26,222); **99.95%** schema-validity (15,347 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
 | **Tests** | 1,595 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
@@ -908,7 +908,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 8,640 is not 8,641. Saxon
+case the engine gives up on purpose, and the reason 11,273 is not 11,274. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call
@@ -940,8 +940,8 @@ stylesheet fails to compile and discovering it did not.
 
 ### 2. Where the QT3 suite still disagrees
 
-**It does not: 15,183 of 15,183 in-scope cases pass, and so do 19,244 on 3.0
-and 21,786 on 3.1.**
+**It does not: 15,222 of 15,222 in-scope cases pass, and so do 19,307 on 3.0
+and 21,863 on 3.1.**
 
 The last case to fall was `fn-matches-51`:
 `fn:matches("ab()cd()ef()gh", "^(ab)([()]*)(cd)([)(]*)ef\4gh$")`. It names
@@ -1431,8 +1431,8 @@ each — so an XSLT 2.0 run is a *filtered* run of the 3.0 suite.
 ```
 $ git clone --depth 1 https://github.com/w3c/xslt30-test.git testdata/xslt30-test
 $ GOXSLT_XSLTS=$PWD/testdata/xslt30-test go test ./tests/xslts/ -v -timeout 1800s
-XSLT suite: 14601 cases, 6157 in scope, 8444 skipped
-in-scope: 6149 passed, 8 failed (99.87%)
+XSLT suite: 14601 cases, 6201 in scope, 8400 skipped
+in-scope: 6190 passed, 11 failed (99.82%)
 ```
 
 `TestXSLT30Suite` measures the same catalog at the 3.0 target; both run on every

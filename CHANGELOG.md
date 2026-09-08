@@ -6,18 +6,6 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ## Unreleased
 
-Conformance at a glance — XPath 3.1 reached 100% of its in-scope suite, and the
-XSLT 3.0 denominator grew by 2,862 cases that four stale feature labels had been
-hiding.
-
-| Suite | Before | After |
-|---|---:|---:|
-| XPath 3.1 | 21,786 / 21,786 | **21,863 / 21,863** (100%) |
-| XQuery 3.1 | 29,901 / 29,918 | **29,952 / 29,964** |
-| XSLT 3.0 | 8,640 / 8,663 | **11,273 / 11,525** |
-| XSLT 2.0 | 6,149 / 6,157 | **6,190 / 6,201** |
-| XSD 1.0 / 1.1 | 39,342 / 41,529 | **39,356 / 41,543** |
-
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
@@ -98,96 +86,96 @@ either direction: every change here was made without spending a case.
 
 ### Headline
 
-| Change | Detail |
-|---|---|
-| Four silent wrong answers are closed | A schema loaded with a zero-value `xsd.Options` read whatever an `xs:include` named, `/etc/hosts` included. INF and NaN passed every facet a schema could write |
-| Two bounds did not bound | The regular-expression caches were bounded against a single goroutine and not against several, peaking at 2,984 entries against a limit of 1,024. `FileResolver.Preload` wrote past its own bound |
-| The documentation is now checked by the gate | Nine conformance marks were already machine-enforced and all nine were correct; the unit test count, which nothing checked, was wrong in four files at once |
-| One limitation is now written down rather than absent | `checkUPA` is the only load-time algorithm with no budget: its cost is cubic in the size of a content model, and 116 KB of legal schema takes 12 seconds |
+| Change | Detail | Commit |
+|---|---|---|
+| Four silent wrong answers are closed | A schema loaded with a zero-value `xsd.Options` read whatever an `xs:include` named, `/etc/hosts` included. INF and NaN passed every facet a schema could write | — |
+| Two bounds did not bound | The regular-expression caches were bounded against a single goroutine and not against several, peaking at 2,984 entries against a limit of 1,024. `FileResolver.Preload` wrote past its own bound | — |
+| The documentation is now checked by the gate | Nine conformance marks were already machine-enforced and all nine were correct; the unit test count, which nothing checked, was wrong in four files at once | — |
+| One limitation is now written down rather than absent | `checkUPA` is the only load-time algorithm with no budget: its cost is cubic in the size of a content model, and 116 KB of legal schema takes 12 seconds | — |
 
 ### Fixed — CI
 
-| Change | Detail |
-|---|---|
-| The `w3cschemas` module was testing a published release, not this tree | A separate module — the W3C documents it bundles are under W3C terms rather than MIT — and it was in no gate at all: absent from `ci.yml`, absent from `tests/check.sh`, and out of reach of `go list ./...` at the root |
-| Investigated, not changed: the `XSpec 225` ratchet mark is correct | Reported as stale on the grounds that the corpus measured 224. Three runs — twice at `HEAD`, once at [`e51ed3f`][e51ed3f] — each transformed 225 of 284 inputs with a byte-identical set of 59 failures, so the mark stands |
-| A unit test that cost minutes broke both CI jobs | `TestMaxPositionsRealBoundary`, added in [`84735c8`][84735c8], compiled three content models of ~8,192 particles to drive `maxPositions` at its edges |
-| `TestQT3` and the RELAX NG spectest are now ratcheted | Both were run and printed but not recorded, so an XPath 2.0 or RELAX NG count could fall without `check.sh` saying anything |
+| Change | Detail | Commit |
+|---|---|---|
+| The `w3cschemas` module was testing a published release, not this tree | A separate module — the W3C documents it bundles are under W3C terms rather than MIT — and it was in no gate at all: absent from `ci.yml`, absent from `tests/check.sh`, and out of reach of `go list ./...` at the root | — |
+| Investigated, not changed: the `XSpec 225` ratchet mark is correct | Reported as stale on the grounds that the corpus measured 224. Three runs — twice at `HEAD`, once at [`e51ed3f`][e51ed3f] — each transformed 225 of 284 inputs with a byte-identical set of 59 failures, so the mark stands | — |
+| A unit test that cost minutes broke both CI jobs | `TestMaxPositionsRealBoundary`, added in [`84735c8`][84735c8], compiled three content models of ~8,192 particles to drive `maxPositions` at its edges | — |
+| `TestQT3` and the RELAX NG spectest are now ratcheted | Both were run and printed but not recorded, so an XPath 2.0 or RELAX NG count could fall without `check.sh` saying anything | — |
 
 ### Security
 
-| Change | Detail |
-|---|---|
-| Two caches with no bound | A bound on a cache is a property of the cache, so every path that writes to one has to obey it; these two did not |
-| Those cache bounds held only on one goroutine | The fix above, and the two bounded caches it left in place, shared an idiom that is not atomic as a group: read an atomic size counter, clear the `sync.Map` wholesale if it is full, then `LoadOrStore` the new entry |
-| `xsd` no longer installs an unconfined file resolver by default | `Load`, `LoadFile`, `LoadFiles` and `WithInstanceLocations` each defaulted a nil `Options.Resolver` to a `FileResolver` with no `Root` — "any readable path", by that field's own comment |
+| Change | Detail | Commit |
+|---|---|---|
+| Two caches with no bound | A bound on a cache is a property of the cache, so every path that writes to one has to obey it; these two did not | — |
+| Those cache bounds held only on one goroutine | The fix above, and the two bounded caches it left in place, shared an idiom that is not atomic as a group: read an atomic size counter, clear the `sync.Map` wholesale if it is full, then `LoadOrStore` the new entry | [`6567f8e`][6567f8e] |
+| `xsd` no longer installs an unconfined file resolver by default | `Load`, `LoadFile`, `LoadFiles` and `WithInstanceLocations` each defaulted a nil `Options.Resolver` to a `FileResolver` with no `Root` — "any readable path", by that field's own comment | — |
 
 ### Documentation
 
-| Change | Detail |
-|---|---|
-| Four claims that the code had already outgrown | Each described behaviour that changed under it, and three of the four understated the risk or overstated what is refused |
-| A retention claim overstated what was measured | `docs/security.md` read "2,000 distinct schema loads ... show **0.00 MB** heap growth after GC". That holds only when the schemas reuse type names |
-| Numbers and counts that had drifted apart between documents | An audit compared every stated conformance figure against `tests/ratchet.txt`, which `tests/check.sh` enforces, and every stated count against the list it introduces |
+| Change | Detail | Commit |
+|---|---|---|
+| Four claims that the code had already outgrown | Each described behaviour that changed under it, and three of the four understated the risk or overstated what is refused | — |
+| A retention claim overstated what was measured | `docs/security.md` read "2,000 distinct schema loads ... show **0.00 MB** heap growth after GC". That holds only when the schemas reuse type names | — |
+| Numbers and counts that had drifted apart between documents | An audit compared every stated conformance figure against `tests/ratchet.txt`, which `tests/check.sh` enforces, and every stated count against the list it introduces | — |
 
 ### Fixed
 
-| Change | Detail |
-|---|---|
-| `INF`, `-INF` and `NaN` no longer satisfy every bound facet | `checkBounds` compared with `big.Rat` and read a lexical with no rational form as "no opinion", returning success: with `xs:double` constrained to `0..100`, `101` was correctly refused while `INF`, `-INF` and `NaN` were all accepted |
-| A derived type could widen a bound to `INF` and the schema still loaded | `compareBoundValues` returned "unordered" for a bound with no rational form and `checkBoundOrder` reads unordered as satisfied, so a restriction that widened its base went unnoticed |
-| A validated `xs:double` that overflowed stopped being a double | Building a typed value from a schema annotation parsed the lexical form with `strconv.ParseFloat` and treated any error as "not a lexical form of this type" |
-| A processing instruction in an internal DTD subset broke the subset scan | XML 1.0 §2.8 admits a PI to `intSubset` — `markupdecl` is "elementdecl \| AttlistDecl \| EntityDecl \| NotationDecl \| PI \| Comment" — and §2.6 makes its content text rather than markup |
+| Change | Detail | Commit |
+|---|---|---|
+| `INF`, `-INF` and `NaN` no longer satisfy every bound facet | `checkBounds` compared with `big.Rat` and read a lexical with no rational form as "no opinion", returning success: with `xs:double` constrained to `0..100`, `101` was correctly refused while `INF`, `-INF` and `NaN` were all accepted | — |
+| A derived type could widen a bound to `INF` and the schema still loaded | `compareBoundValues` returned "unordered" for a bound with no rational form and `checkBoundOrder` reads unordered as satisfied, so a restriction that widened its base went unnoticed | [`a883c0a`][a883c0a] |
+| A validated `xs:double` that overflowed stopped being a double | Building a typed value from a schema annotation parsed the lexical form with `strconv.ParseFloat` and treated any error as "not a lexical form of this type" | — |
+| A processing instruction in an internal DTD subset broke the subset scan | XML 1.0 §2.8 admits a PI to `intSubset` — `markupdecl` is "elementdecl \| AttlistDecl \| EntityDecl \| NotationDecl \| PI \| Comment" — and §2.6 makes its content text rather than markup | — |
 
 ### Changed
 
-| Change | Detail |
-|---|---|
-| A resource refusal can be told apart from a malformed expression | New `xdm.ErrResourceLimit` is a sentinel that resource-exhaustion errors wrap with `%w`, so a caller can ask `errors.Is(err, xdm.ErrResourceLimit)` |
+| Change | Detail | Commit |
+|---|---|---|
+| A resource refusal can be told apart from a malformed expression | New `xdm.ErrResourceLimit` is a sentinel that resource-exhaustion errors wrap with `%w`, so a caller can ask `errors.Is(err, xdm.ErrResourceLimit)` | — |
 
 ### Fixed
 
-| Change | Detail |
-|---|---|
-| A grammar reached through `<include>` was not checked against section 7 | `collectInclude` (`relaxng/compile.go`) ran `checkSyntax` on the included document but not `checkRestrictions`, unlike the top-level and `<externalRef>` paths, which run both |
-| Four silent numeric narrowings: a wrong value, with no error raised | `big.Int.Int64` is *undefined* out of range rather than saturating, so an unbounded `xs:integer` argument arrived as its low 64 bits and the result was computed from that — and in each case the wrapped value was itself plausible, so nothing failed |
-| `fn:round-half-to-even` clamped its precision, which changed answers | The precision argument was clamped to ±4096 before use, which silently changed the answer rather than refusing the request |
-| A backreference pattern was refused for having too many groups | The backreference path rejected any pattern declaring more than 64 capturing groups with `FORX0002`, reachable from `fn:matches`, `fn:replace`, `fn:tokenize` and `fn:analyze-string` |
-| `keyref` rediscovered its targets once per enclosing scope | A `keyref` on a self-embedding element walked the whole remaining subtree once per level: nodes visited grew 3.92x, 3.96x, 3.98x as depth doubled, so a hostile instance against a recursive schema cost quadratic work |
-| Thirteen derivation walks stopped at 32 or 64 steps | Twelve stopped at 32 and one at 64, each walking a type's derivation chain or a node's copy lineage: five in `xdm`, five in `xpath`, two in `xslt` |
-| Nine node-copy sites each hand-picked which type properties to carry | `xdm.Node` records seven PSVI properties — `TypeAnnotation`, `UnionMember`, `DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS`, `IsNilled` — and every place that copied a node wrote its own field list |
-| A second schema silently retyped a document the first had validated | `xdm` keyed `derivedPrimitives`, `listItems` and `unionMembers` by QName alone, process-wide. Mutexes make that race-free, not isolated: the last schema to register a name wins |
-| A circular type longer than 4096 links loaded clean | Reachable from a hostile *schema*, not from an instance. `checkTypeBaseCycles` walks a global type's base chain looking for a return to itself, stopped at `steps < 4096`, and appended **no** error on running out — the permissive verdict |
-| RELAX NG refused a legal chain of 501 definitions | The mirror image of the same mistake, failing in the other direction. `maxRefDepth = 500` was a hard refusal, so a legal chain of 501 definitions became uncompilable with "recurses more than 500 deep" when nothing recursed |
-| A permitted file was read whole with no byte limit | `readConfined` ended in a bare `io.ReadAll`, so every path through the filesystem resolver read a file entirely into memory before anything could refuse it: `fn:doc`, external entities, `fn:unparsed-text`, and XInclude `parse="text"` |
-| An ambiguous key came back at three siblings | `mergeTables` dropped a key sequence that two children both defined, because an ancestor's keyref cannot say which of them it resolves to |
-| The language-inclusion procedure declined any bound above 64 | The subsumption procedure fell back to the structural XSD 1.0 rules above `maxOccurs="64"`, which can refuse a restriction whose language really is a subset |
-| Six base-chain counters were defects, two of them false accepts | Reachable from a schema rather than from an instance. Eleven remaining `seen > 64` and `seen > 256` counters had been recorded as sound on evidence that did not cover them |
-| Occurrence arithmetic is exact, not saturating | Saturating arithmetic fixed an earlier wrap and left two bounds above `occursHuge` comparing equal, so a base of 1e30 restricted by three members of 1e30 was accepted |
-| Identity constraints are linear in the document, not quadratic | Doubling the depth now doubles the work rather than quadrupling it, measured at 2.00x across 240, 480 and 960 where it was 3.98, 3.99 and 4.00. The fix is not a cheaper traversal |
-| A 3 KB schema took 35 seconds to load, in two places | Reachable from a hostile schema. A group referencing the next one twice, 29 times over, is acyclic and valid and fits in 3.0 KB; loading it took 35.8 seconds |
-| Occurrence arithmetic wrapped negative | `occursHuge` is a quarter of the int range, so it survives doubling but not tripling; the derivation checks multiply and sum bounds until they wrap negative |
-| An assertion rejected a valid document 33 elements deep | `maxAnnotateDepth = 32` bounded the walk that types an element and its descendants before an XSD 1.1 assertion runs |
-| Six walks stopped at depth 32 and accepted documents the schema forbids | Reachable from a schema, not from an instance: a deployment with a trusted schema and untrusted documents cannot reach it |
-| An iteration that matches nothing is still an iteration | A sweep of 2,028 combinations of outer bounds, inner bounds and child count found 40 still wrong after the count-vector rewrite — every one a false rejection |
-| A negative `xsd.ValidateOptions.MaxErrors` approved invalid documents | `fail()` stopped recording once `len(v.errs) >= opts.MaxErrors`, with no guard on the limit being positive; at `MaxErrors = -1` the first comparison already held, so nothing was ever recorded |
-| Filesystem confinement is enforced when the file is opened | `resolvePath` called `EvalSymlinks`, compared against the roots, and the file was opened later — a window an attacker who can write to the filesystem could use |
-| The resolver no longer serialises cache misses | `loadTracked` held its mutex across `os.ReadFile` and the parse, so concurrent transforms sharing one resolver loaded modules one at a time whenever the cache was cold |
-| The largest byte limit a caller can name is not a refusal | `ParseOptions.MaxBytes` and `xsd.HTTPResolver.MaxBytes` wrap the reader in `io.LimitReader(r, max+1)`, one byte over so that hitting the limit is distinguishable from a document exactly at it |
-| A schema-aware stylesheet panicked on every run | `ValidateContext` gave `validator` a `ctx` field and a cancellation check on the validation walk; `validateNodeAgainstType` builds the same struct without one, so every schema-aware run dereferenced nil |
-| An XInclude copy dropped the union member on attributes | `copySubtree` carried `UnionMember` on the element and dropped it on the element's attributes — an inconsistency inside one function, and the same half-omission that silently untyped a validated document at three copy sites elsewhere |
-| XSD: nested occurrence bounds are decided exactly | A repeated group whose only child is itself repeating was decided wrongly in *both* directions — false accepts and false rejections from the same arithmetic |
-| A timezone name was read off a saturated instant | `applyPlace` (`xpath/fn_misc.go`) has to put a value on the timeline before it can ask an Olson zone which offset applied at that moment, and it took the second count with `new(big.Float).SetRat(utc).Int64()` |
-| The `[0,60)` second invariant is written down instead of re-derived | The `[s]` and `[f]` components of `fn:format-dateTime` each split `dt.Second` into a whole part and a fraction, narrowing the whole part to `int64` |
+| Change | Detail | Commit |
+|---|---|---|
+| A grammar reached through `<include>` was not checked against section 7 | `collectInclude` (`relaxng/compile.go`) ran `checkSyntax` on the included document but not `checkRestrictions`, unlike the top-level and `<externalRef>` paths, which run both | — |
+| Four silent numeric narrowings: a wrong value, with no error raised | `big.Int.Int64` is *undefined* out of range rather than saturating, so an unbounded `xs:integer` argument arrived as its low 64 bits and the result was computed from that — and in each case the wrapped value was itself plausible, so nothing failed | — |
+| `fn:round-half-to-even` clamped its precision, which changed answers | The precision argument was clamped to ±4096 before use, which silently changed the answer rather than refusing the request | — |
+| A backreference pattern was refused for having too many groups | The backreference path rejected any pattern declaring more than 64 capturing groups with `FORX0002`, reachable from `fn:matches`, `fn:replace`, `fn:tokenize` and `fn:analyze-string` | — |
+| `keyref` rediscovered its targets once per enclosing scope | A `keyref` on a self-embedding element walked the whole remaining subtree once per level: nodes visited grew 3.92x, 3.96x, 3.98x as depth doubled, so a hostile instance against a recursive schema cost quadratic work | [`e125888`][e125888] |
+| Thirteen derivation walks stopped at 32 or 64 steps | Twelve stopped at 32 and one at 64, each walking a type's derivation chain or a node's copy lineage: five in `xdm`, five in `xpath`, two in `xslt` | [`eb5ea72`][eb5ea72] |
+| Nine node-copy sites each hand-picked which type properties to carry | `xdm.Node` records seven PSVI properties — `TypeAnnotation`, `UnionMember`, `DerivedPrimitive`, `ListItem`, `IsID`, `IsIDREFS`, `IsNilled` — and every place that copied a node wrote its own field list | — |
+| A second schema silently retyped a document the first had validated | `xdm` keyed `derivedPrimitives`, `listItems` and `unionMembers` by QName alone, process-wide. Mutexes make that race-free, not isolated: the last schema to register a name wins | [`eb5ea72`][eb5ea72] |
+| A circular type longer than 4096 links loaded clean | Reachable from a hostile *schema*, not from an instance. `checkTypeBaseCycles` walks a global type's base chain looking for a return to itself, stopped at `steps < 4096`, and appended **no** error on running out — the permissive verdict | [`ad2c3dc`][ad2c3dc] |
+| RELAX NG refused a legal chain of 501 definitions | The mirror image of the same mistake, failing in the other direction. `maxRefDepth = 500` was a hard refusal, so a legal chain of 501 definitions became uncompilable with "recurses more than 500 deep" when nothing recursed | — |
+| A permitted file was read whole with no byte limit | `readConfined` ended in a bare `io.ReadAll`, so every path through the filesystem resolver read a file entirely into memory before anything could refuse it: `fn:doc`, external entities, `fn:unparsed-text`, and XInclude `parse="text"` | — |
+| An ambiguous key came back at three siblings | `mergeTables` dropped a key sequence that two children both defined, because an ancestor's keyref cannot say which of them it resolves to | [`28e455a`][28e455a] |
+| The language-inclusion procedure declined any bound above 64 | The subsumption procedure fell back to the structural XSD 1.0 rules above `maxOccurs="64"`, which can refuse a restriction whose language really is a subset | — |
+| Six base-chain counters were defects, two of them false accepts | Reachable from a schema rather than from an instance. Eleven remaining `seen > 64` and `seen > 256` counters had been recorded as sound on evidence that did not cover them | — |
+| Occurrence arithmetic is exact, not saturating | Saturating arithmetic fixed an earlier wrap and left two bounds above `occursHuge` comparing equal, so a base of 1e30 restricted by three members of 1e30 was accepted | [`f88747b`][f88747b] |
+| Identity constraints are linear in the document, not quadratic | Doubling the depth now doubles the work rather than quadrupling it, measured at 2.00x across 240, 480 and 960 where it was 3.98, 3.99 and 4.00. The fix is not a cheaper traversal | [`277599e`][277599e] |
+| A 3 KB schema took 35 seconds to load, in two places | Reachable from a hostile schema. A group referencing the next one twice, 29 times over, is acyclic and valid and fits in 3.0 KB; loading it took 35.8 seconds | — |
+| Occurrence arithmetic wrapped negative | `occursHuge` is a quarter of the int range, so it survives doubling but not tripling; the derivation checks multiply and sum bounds until they wrap negative | [`145d0d1`][145d0d1] |
+| An assertion rejected a valid document 33 elements deep | `maxAnnotateDepth = 32` bounded the walk that types an element and its descendants before an XSD 1.1 assertion runs | [`145d0d1`][145d0d1] |
+| Six walks stopped at depth 32 and accepted documents the schema forbids | Reachable from a schema, not from an instance: a deployment with a trusted schema and untrusted documents cannot reach it | [`3f3cce3`][3f3cce3] |
+| An iteration that matches nothing is still an iteration | A sweep of 2,028 combinations of outer bounds, inner bounds and child count found 40 still wrong after the count-vector rewrite — every one a false rejection | [`0048fde`][0048fde] |
+| A negative `xsd.ValidateOptions.MaxErrors` approved invalid documents | `fail()` stopped recording once `len(v.errs) >= opts.MaxErrors`, with no guard on the limit being positive; at `MaxErrors = -1` the first comparison already held, so nothing was ever recorded | — |
+| Filesystem confinement is enforced when the file is opened | `resolvePath` called `EvalSymlinks`, compared against the roots, and the file was opened later — a window an attacker who can write to the filesystem could use | [`5964c0a`][5964c0a] |
+| The resolver no longer serialises cache misses | `loadTracked` held its mutex across `os.ReadFile` and the parse, so concurrent transforms sharing one resolver loaded modules one at a time whenever the cache was cold | — |
+| The largest byte limit a caller can name is not a refusal | `ParseOptions.MaxBytes` and `xsd.HTTPResolver.MaxBytes` wrap the reader in `io.LimitReader(r, max+1)`, one byte over so that hitting the limit is distinguishable from a document exactly at it | [`f0ffb5b`][f0ffb5b] |
+| A schema-aware stylesheet panicked on every run | `ValidateContext` gave `validator` a `ctx` field and a cancellation check on the validation walk; `validateNodeAgainstType` builds the same struct without one, so every schema-aware run dereferenced nil | — |
+| An XInclude copy dropped the union member on attributes | `copySubtree` carried `UnionMember` on the element and dropped it on the element's attributes — an inconsistency inside one function, and the same half-omission that silently untyped a validated document at three copy sites elsewhere | [`30dc68d`][30dc68d] |
+| XSD: nested occurrence bounds are decided exactly | A repeated group whose only child is itself repeating was decided wrongly in *both* directions — false accepts and false rejections from the same arithmetic | [`17ce36c`][17ce36c] |
+| A timezone name was read off a saturated instant | `applyPlace` (`xpath/fn_misc.go`) has to put a value on the timeline before it can ask an Olson zone which offset applied at that moment, and it took the second count with `new(big.Float).SetRat(utc).Int64()` | — |
+| The `[0,60)` second invariant is written down instead of re-derived | The `[s]` and `[f]` components of `fn:format-dateTime` each split `dt.Second` into a whole part and a fraction, narrowing the whole part to `int64` | — |
 
 ### Changed
 
-| Change | Detail |
-|---|---|
-| Every configurable limit is now tested at its edges | An off-by-one or an overflow at the boundary of a caller-settable limit is precisely what a unit test should catch before an auditor does, and nothing covered the edges of any limit before |
-| `endOfInternalSubset` read comment text as structure | It tracked quotes and brackets but had no comment state, and XML 1.0 §2.8 permits comments in the internal subset while §2.5 says their content is not markup |
-| `xdm`'s own limits did not carry `xdm.ErrResourceLimit` | The package that *defines* the sentinel, and documents it as how a caller tells "the processor declined" from "your input is wrong", applied it to none of its own limits |
-| `MaxBytes` did not bound a UTF-16 document at all | `ParseOptions.MaxBytes` is documented as bounding the source document, and the code says the limit "wraps the reader, so it bounds what is read rather than what a caller remembered to check" |
+| Change | Detail | Commit |
+|---|---|---|
+| Every configurable limit is now tested at its edges | An off-by-one or an overflow at the boundary of a caller-settable limit is precisely what a unit test should catch before an auditor does, and nothing covered the edges of any limit before | [`2ef8dba`][2ef8dba] |
+| `endOfInternalSubset` read comment text as structure | It tracked quotes and brackets but had no comment state, and XML 1.0 §2.8 permits comments in the internal subset while §2.5 says their content is not markup | — |
+| `xdm`'s own limits did not carry `xdm.ErrResourceLimit` | The package that *defines* the sentinel, and documents it as how a caller tells "the processor declined" from "your input is wrong", applied it to none of its own limits | — |
+| `MaxBytes` did not bound a UTF-16 document at all | `ParseOptions.MaxBytes` is documented as bounding the source document, and the code says the limit "wraps the reader, so it bounds what is read rather than what a caller remembered to check" | — |
 
 ## v1.2.1 — 2026-09-03
 
@@ -205,25 +193,25 @@ conformance cases -- the dependency is on standard-library behaviour, not on
 a symbol, which is why a local run with a newer toolchain installed could not
 see it.
 
-| Change | Detail |
-|---|---|
-| A private function of a used package is not callable from outside it | `use-package-003` asked for it and this file had recorded it as needing "the package threaded through the XPath static context", the single largest structural change on the list |
-| An instruction in 1.0 compatibility mode inside a streamable mode | `XTSE3430`. Section 3.9.1 states the rule "notwithstanding anything stated in 19 Streamability": an instruction processed with XSLT 1.0 behavior *is* roaming and free-ranging |
-| The QT3 per-case deadline was measuring the runner | CI reported XQuery 29,799 passing in one run and 29,798 in another, for the same commit, minutes apart, and the ratchet correctly called the second a regression |
-| Verdicts that were re-derived and found wrong | `validation-0201` was filed as fixable in the harness -- the suite does license a driver to "ignore differences in the serialization that are known to be irrelevant", and the case is not a serializer test |
-| Also in this release | Two ratchet marks go **down** and neither is a regression. XSD 1.0 fell from 39,353 to 39,347 and XSD 1.1 rose from 41,525 to 41,532: `indeterminate` expectations stopped being scored as "must be invalid" |
-| system-property('xsl:product-version') was answering 0.1 | It was a constant nobody edited, so it said `0.1` through the 1.0, 1.1 and 1.2 releases -- and a stylesheet dispatching on it, which is the only reason section 18.2 defines the property, got an answer three tags out of date |
-| -allow-dir says where, not what | The flag's help named only `xsl:include` and `document()`. It also governs `xsl:import`, `fn:doc`, `fn:unparsed-text`, external entities and XInclude -- one root list for every reader, each of the riskier ones gated by its own flag on top |
-| An indeterminate expectation is not a demand to reject | `<expected validity="indeterminate"/>` prescribes no result. The W3C uses it where the working group left an area underspecified: `schZ012_a`'s annotation says "The WG decided the spec. is underspecified in this area |
-| An XSLT 3.0 static expression can read a document | The static phase built its evaluation context with no document resolver, so `fn:doc` in a `use-when`, a `static="yes"` variable or a shadow attribute always failed with `FODC0002: document access is disabled` |
-| The gate no longer runs the conformance suites twice | `tests/check.sh` ran its `unit tests` and `race` steps without `GOXSLT_NO_SUITES`, so in an environment that has `testdata/` on disk — which is exactly the conformance job |
-| A base URI is a URI, not a path | `fn:static-base-uri` and `fn:base-uri` returned the filesystem path the file was read from — `C:\Users\m\s.xsl` on Windows |
-| XInclude | `xdm.ProcessXInclude` implements XML Inclusions (XInclude) 1.0, Second Edition, as a pass over an already-parsed tree — which is what the specification says it is: §4 defines XInclude as a transformation from one infoset to another |
-| One scanner for what is not syntax (internal) | XQuery's parser decides which sub-parser reads an expression by scanning ahead over raw source, and that scan has to step over the regions whose bytes look like grammar but are not: string literals, comments (which nest) |
-| Internal: a compiled XQuery expression can no longer be evaluated unsafely | No behaviour changes and no conformance movement; this removes the shape of a bug rather than an instance of one |
-| The declared XQuery version is recorded | `parseVersionDecl` used to read `xquery version "1.0";`, check the literal against a list of three, and throw it away |
-| XQuery conformance: 99.61% to 99.98% | 29,796 of 29,803 QT3 cases in scope, up 107 across seven passes. XPath 2.0/3.0/3.1 stay at 100% and XSLT at 8,606 / 6,149 |
-| Fixed — found by real-world stylesheets | Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and [XSpec](https://github.com/xspec/xspec), two XSLT 3.0 codebases large enough to exercise combinations the W3C suites do not reach. 577 of DocBook's 593 test documents now |
+| Change | Detail | Commit |
+|---|---|---|
+| A private function of a used package is not callable from outside it | `use-package-003` asked for it and this file had recorded it as needing "the package threaded through the XPath static context", the single largest structural change on the list | — |
+| An instruction in 1.0 compatibility mode inside a streamable mode | `XTSE3430`. Section 3.9.1 states the rule "notwithstanding anything stated in 19 Streamability": an instruction processed with XSLT 1.0 behavior *is* roaming and free-ranging | [`7b0562a`][7b0562a] |
+| The QT3 per-case deadline was measuring the runner | CI reported XQuery 29,799 passing in one run and 29,798 in another, for the same commit, minutes apart, and the ratchet correctly called the second a regression | — |
+| Verdicts that were re-derived and found wrong | `validation-0201` was filed as fixable in the harness -- the suite does license a driver to "ignore differences in the serialization that are known to be irrelevant", and the case is not a serializer test | — |
+| Also in this release | Two ratchet marks go **down** and neither is a regression. XSD 1.0 fell from 39,353 to 39,347 and XSD 1.1 rose from 41,525 to 41,532: `indeterminate` expectations stopped being scored as "must be invalid" | — |
+| system-property('xsl:product-version') was answering 0.1 | It was a constant nobody edited, so it said `0.1` through the 1.0, 1.1 and 1.2 releases -- and a stylesheet dispatching on it, which is the only reason section 18.2 defines the property, got an answer three tags out of date | — |
+| -allow-dir says where, not what | The flag's help named only `xsl:include` and `document()`. It also governs `xsl:import`, `fn:doc`, `fn:unparsed-text`, external entities and XInclude -- one root list for every reader, each of the riskier ones gated by its own flag on top | — |
+| An indeterminate expectation is not a demand to reject | `<expected validity="indeterminate"/>` prescribes no result. The W3C uses it where the working group left an area underspecified: `schZ012_a`'s annotation says "The WG decided the spec. is underspecified in this area | [`704222f`][704222f] |
+| An XSLT 3.0 static expression can read a document | The static phase built its evaluation context with no document resolver, so `fn:doc` in a `use-when`, a `static="yes"` variable or a shadow attribute always failed with `FODC0002: document access is disabled` | [`a3ec25e`][a3ec25e] |
+| The gate no longer runs the conformance suites twice | `tests/check.sh` ran its `unit tests` and `race` steps without `GOXSLT_NO_SUITES`, so in an environment that has `testdata/` on disk — which is exactly the conformance job | — |
+| A base URI is a URI, not a path | `fn:static-base-uri` and `fn:base-uri` returned the filesystem path the file was read from — `C:\Users\m\s.xsl` on Windows | — |
+| XInclude | `xdm.ProcessXInclude` implements XML Inclusions (XInclude) 1.0, Second Edition, as a pass over an already-parsed tree — which is what the specification says it is: §4 defines XInclude as a transformation from one infoset to another | — |
+| One scanner for what is not syntax (internal) | XQuery's parser decides which sub-parser reads an expression by scanning ahead over raw source, and that scan has to step over the regions whose bytes look like grammar but are not: string literals, comments (which nest) | — |
+| Internal: a compiled XQuery expression can no longer be evaluated unsafely | No behaviour changes and no conformance movement; this removes the shape of a bug rather than an instance of one | [`b21f5eb`][b21f5eb] |
+| The declared XQuery version is recorded | `parseVersionDecl` used to read `xquery version "1.0";`, check the literal against a list of three, and throw it away | [`78f70d5`][78f70d5] |
+| XQuery conformance: 99.61% to 99.98% | 29,796 of 29,803 QT3 cases in scope, up 107 across seven passes. XPath 2.0/3.0/3.1 stay at 100% and XSLT at 8,606 / 6,149 | — |
+| Fixed — found by real-world stylesheets | Measured against [DocBook xslTNG](https://github.com/docbook/xslt3ng) and [XSpec](https://github.com/xspec/xspec), two XSLT 3.0 codebases large enough to exercise combinations the W3C suites do not reach. 577 of DocBook's 593 test documents now | — |
 
 ## v1.2.0 — 2026-09-02
 
@@ -359,26 +347,26 @@ the fix is a matcher change the suites cannot defend.
 
 ## v1.0.0 — 2026-08-24
 
-| Change | Detail |
-|---|---|
-| Security: three bounds that were not bounding | A third audit. Full detail in [docs/security.md](docs/security.md) |
-| A constraint that never ran against the ordinary spelling | Unique Particle Attribution and Element Declarations Consistent were checked only against a schema's *named* complex types |
-| Circularity, and the exception that terminates every chain | Schema validity reaches 99.51% on XSD 1.0 and 99.11% on 1.1 — both at the ceiling this project's own analysis predicted, with the remainder dominated by tests the W3C's metadata disputes |
-| The harness claimed two mutually exclusive processor configurations | XSD 1.1 schema validity reaches 99.00%, and 10 of the 22 tests gained were never a validator defect. `tests/xsdsuite` claimed support for both `restricted-xpath-in-CTA` and `full-xpath-in-CTA` |
-| Conditional type assignment, all-groups, and open content | Four rules, +12 on XSD 1.1 with XSD 1.0 untouched |
-| XSD 1.1 wildcard attributes | Schema validity reaches 99.47% on XSD 1.0 and 98.85% on 1.1. `namespace` and `notNamespace` on a wildcard are mutually exclusive — they are two spellings of one `{namespace constraint}` property |
-| Restricting xs:anySimpleType, and a contravariant wildcard rule | Schema validity reaches 99.45% on XSD 1.0 and 98.78% on 1.1. `<xs:restriction base="xs:anySimpleType"/>` is now rejected |
-| A valid document was being refused because an assertion crashed | XSD 1.1 defines the default collection in the dynamic context of an assertion or type alternative as the empty sequence |
-| Schema-validity: 99.40% on XSD 1.0, 98.72% on 1.1 | A third round, +29 on 1.0 and +38 on 1.1 with nothing lost. Five rules |
-| Instance validation reaches 99.88% on XSD 1.0 and 99.89% on 1.1 | Instance disagreements fall from 48 to 31 on 1.0 and from 51 to 29 on 1.1, with no schema-side regression. Nine rules, each measured on its own |
-| Schema-validity: 98.60% to 99.19% on XSD 1.0, 97.96% to 98.48% on 1.1 | A second round adds src-redefine 6.2.2 and 7.2.2 (section 4.2.2): a `<group>` or `<attributeGroup>` redefined without a self-reference must be a valid restriction of what it replaces |
-| Schema-validity, first round: the constraint that never ran | 122 schema documents that were accepted despite being invalid are now rejected, with no instance test and no other suite moving |
-| Entity replacement text inside an attribute value is included literally | XML 1.0 section 4.4.5, "Included in Literal": a reference inside an attribute value has its replacement text included *as literal characters*, so a quote in that text is data and does not end the attribute |
-| EXSLT `node-set` | `{http://exslt.org/common}node-set` is available to stylesheets. XSLT 2.0 eliminated the result-tree-fragment type (section J.1.2), so on this processor the conversion is the identity on its argument |
-| Fixed: a multi-digit backreference to an unclosed group was renumbered | In the backtracking matcher, `\10` written inside the tenth group was split into `\1` followed by a literal `0` rather than being rejected |
-| Backtracking regular expressions, off by default | `xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command line, enables a matcher for the backreferences RE2 cannot express: variable-width groups, backreferences in the middle of a pattern, alternation and lazy quantifiers |
-| XSLT 1.0 backwards-compatible behaviour | `[xsl:]version="1.0"` now enables the behaviour XSLT 2.0 section 3.8 and XPath 2.0 section B.1 define for it, instead of raising XTDE0160. Argument coercion takes the first item of a sequence where 2.0 raises a type error |
-| XSLT 2.0 conformance: 98.83% to 99.61% over a scope that grew | 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209); XSD 1.0, QT3 and RELAX NG are unchanged |
+| Change | Detail | Commit |
+|---|---|---|
+| Security: three bounds that were not bounding | A third audit. Full detail in [docs/security.md](docs/security.md) | — |
+| A constraint that never ran against the ordinary spelling | Unique Particle Attribution and Element Declarations Consistent were checked only against a schema's *named* complex types | [`e967628`][e967628] |
+| Circularity, and the exception that terminates every chain | Schema validity reaches 99.51% on XSD 1.0 and 99.11% on 1.1 — both at the ceiling this project's own analysis predicted, with the remainder dominated by tests the W3C's metadata disputes | — |
+| The harness claimed two mutually exclusive processor configurations | XSD 1.1 schema validity reaches 99.00%, and 10 of the 22 tests gained were never a validator defect. `tests/xsdsuite` claimed support for both `restricted-xpath-in-CTA` and `full-xpath-in-CTA` | [`176ce57`][176ce57] |
+| Conditional type assignment, all-groups, and open content | Four rules, +12 on XSD 1.1 with XSD 1.0 untouched | [`176ce57`][176ce57] |
+| XSD 1.1 wildcard attributes | Schema validity reaches 99.47% on XSD 1.0 and 98.85% on 1.1. `namespace` and `notNamespace` on a wildcard are mutually exclusive — they are two spellings of one `{namespace constraint}` property | — |
+| Restricting xs:anySimpleType, and a contravariant wildcard rule | Schema validity reaches 99.45% on XSD 1.0 and 98.78% on 1.1. `<xs:restriction base="xs:anySimpleType"/>` is now rejected | [`01b91ba`][01b91ba] |
+| A valid document was being refused because an assertion crashed | XSD 1.1 defines the default collection in the dynamic context of an assertion or type alternative as the empty sequence | [`da1cde6`][da1cde6] |
+| Schema-validity: 99.40% on XSD 1.0, 98.72% on 1.1 | A third round, +29 on 1.0 and +38 on 1.1 with nothing lost. Five rules | — |
+| Instance validation reaches 99.88% on XSD 1.0 and 99.89% on 1.1 | Instance disagreements fall from 48 to 31 on 1.0 and from 51 to 29 on 1.1, with no schema-side regression. Nine rules, each measured on its own | [`bb803d5`][bb803d5] |
+| Schema-validity: 98.60% to 99.19% on XSD 1.0, 97.96% to 98.48% on 1.1 | A second round adds src-redefine 6.2.2 and 7.2.2 (section 4.2.2): a `<group>` or `<attributeGroup>` redefined without a self-reference must be a valid restriction of what it replaces | — |
+| Schema-validity, first round: the constraint that never ran | 122 schema documents that were accepted despite being invalid are now rejected, with no instance test and no other suite moving | — |
+| Entity replacement text inside an attribute value is included literally | XML 1.0 section 4.4.5, "Included in Literal": a reference inside an attribute value has its replacement text included *as literal characters*, so a quote in that text is data and does not end the attribute | [`e2606cc`][e2606cc] |
+| EXSLT `node-set` | `{http://exslt.org/common}node-set` is available to stylesheets. XSLT 2.0 eliminated the result-tree-fragment type (section J.1.2), so on this processor the conversion is the identity on its argument | — |
+| Fixed: a multi-digit backreference to an unclosed group was renumbered | In the backtracking matcher, `\10` written inside the tenth group was split into `\1` followed by a literal `0` rather than being rejected | — |
+| Backtracking regular expressions, off by default | `xpath.SetBacktrackingRegex(true)`, or `-backtracking-regex` on the command line, enables a matcher for the backreferences RE2 cannot express: variable-width groups, backreferences in the middle of a pattern, alternation and lazy quantifiers | — |
+| XSLT 1.0 backwards-compatible behaviour | `[xsl:]version="1.0"` now enables the behaviour XSLT 2.0 section 3.8 and XPath 2.0 section B.1 define for it, instead of raising XTDE0160. Argument coercion takes the first item of a sequence where 2.0 raises a type error | [`22d2d64`][22d2d64] |
+| XSLT 2.0 conformance: 98.83% to 99.61% over a scope that grew | 6,024 of 6,052 in scope, up from 5,982 of 6,053. 43 tests fixed across two rounds, no regressions. XSD 1.1 gained one instance test (26,158 of 26,209); XSD 1.0, QT3 and RELAX NG are unchanged | [`600e7c0`][600e7c0] |
 
 ## v0.1.0 — 2026-08-22
 
@@ -503,3 +491,32 @@ here so every entry in this file sits under a release.
 [d15b6df]: https://github.com/knroy/go-xml/commit/d15b6df
 [e049991]: https://github.com/knroy/go-xml/commit/e049991
 [e51ed3f]: https://github.com/knroy/go-xml/commit/e51ed3f
+[0048fde]: https://github.com/knroy/go-xml/commit/0048fde
+[01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
+[145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
+[176ce57]: https://github.com/knroy/go-xml/commit/176ce57
+[17ce36c]: https://github.com/knroy/go-xml/commit/17ce36c
+[22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
+[277599e]: https://github.com/knroy/go-xml/commit/277599e
+[28e455a]: https://github.com/knroy/go-xml/commit/28e455a
+[2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
+[30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
+[3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
+[5964c0a]: https://github.com/knroy/go-xml/commit/5964c0a
+[600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
+[6567f8e]: https://github.com/knroy/go-xml/commit/6567f8e
+[704222f]: https://github.com/knroy/go-xml/commit/704222f
+[78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
+[7b0562a]: https://github.com/knroy/go-xml/commit/7b0562a
+[a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
+[a883c0a]: https://github.com/knroy/go-xml/commit/a883c0a
+[ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
+[b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
+[bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
+[da1cde6]: https://github.com/knroy/go-xml/commit/da1cde6
+[e125888]: https://github.com/knroy/go-xml/commit/e125888
+[e2606cc]: https://github.com/knroy/go-xml/commit/e2606cc
+[e967628]: https://github.com/knroy/go-xml/commit/e967628
+[eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
+[f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
+[f88747b]: https://github.com/knroy/go-xml/commit/f88747b

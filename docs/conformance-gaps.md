@@ -11,12 +11,12 @@ therefore no longer a measured figure.
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
-| **xpath** | QT3 — XPath 2.0 | 15,222 | 15,221 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
-| **xpath** | QT3 — XPath 3.0 | 19,307 | 19,306 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
+| **xpath** | QT3 — XPath 2.0 | 15,222 | 15,222 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xpath** | QT3 — XPath 3.0 | 19,307 | 19,307 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,863 | 21,863 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,964 | 29,952 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
-| **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 8,663 | 8,640 | 99.73% | **23** | 0 | 0 | **23** | 99.73% |
+| **xslt** | W3C XSLT 2.0 | 6,201 | 6,190 | 99.82% | **11** | 0 | 0 | **11** | 99.82% |
+| **xslt** | W3C XSLT 3.0 | 11,525 | 11,273 | 97.81% | **252** | 0 | 0 | **252** | 97.81% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -255,7 +255,7 @@ can make truthfully. The reasoning is recorded in `xpath/fn_31.go`.
 the harness's own comparison serializer writing a literal CR, which XML §2.11
 converts to LF on re-parse.
 
-**XPath: 21,786 / 21,786 = 100.00%, on all three versions.**
+**XPath: 21,863 / 21,863 = 100.00%, on all three versions.**
 
 ---
 
@@ -292,13 +292,13 @@ returned to *not implementable* — see its row.
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
 | `validation-0201` | Serialisation differs at offset 46 | **Implementation-defined** | Same case as the 3.0 entry below, and now down to one difference. The engine defect that stood behind the indentation is **fixed**: a union's selected member type was dropped whenever the tree was copied, so `xsl:strip-space` untyped the document and `data(.) instance of StandardDate` went false. With that fixed the output is byte-identical to the expected file apart from whitespace. What remains is the indent width — Saxon writes 3 spaces, this serializer writes 2 — which §20 leaves implementation-defined. See the 3.0 row. |
 
-**XSLT 2.0 ceiling: 6,149 / 6,157 = 99.87%** — the 6,149 that pass now.
+**XSLT 2.0 ceiling: 6,190 / 6,201 = 99.82%** — the 6,190 that pass now.
 `regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
 its two neighbours, not an engine defect, and its 3.0 twin was made
 edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
 also fail here, and both leave the denominator rather than the numerator if the
 corrections below are taken, which would put the 2.0 figure at
-6,149 / 6,155 = 99.90%. `validation-0201`'s remaining difference is the indent
+6,190 / 6,199 = 99.85%. `validation-0201`'s remaining difference is the indent
 width and nothing else: the engine defect that used to stand behind it — a
 union's selected member lost on every tree copy — is fixed, and the output now
 matches the expected file byte for byte apart from whitespace.
@@ -441,7 +441,7 @@ it does not. What is left shares no cause, so each is its own investigation.
 
 | `initial-function-002`, `initial-function-100a`–`100i` | **Driver gap, not an engine gap** | Ten cases that invoke an initial function and then assert about the *raw result sequence* — `$result instance of xs:integer`, `assert-count 2`. The engine returns exactly that sequence (2.3.5's "raw result"), and the values are right: `986572` as an `xs:integer`, `1.0E-10` as an `xs:float`. What fails is the driver: `<output tree="no" serialize="no"/>` asks it not to wrap the result in a document node, but `rawResultVar` in `tests/xslts/catalog.go` binds the raw sequence only when the case ALSO writes `result-var`, and these cases do not. Without it the driver serializes, so every assertion sees a string. The same gap affects any `tree="no"` case lacking `result-var`; it predates the initial-function work and is not specific to it. Fixing it means teaching the driver to bind an implicit `$result` for `tree="no"`, which touches the assertion path every other case runs through. |
 
-**XSLT 3.0 ceiling: 8,640 / 8,663 = 99.73%** — what passes now. `base-uri-052`
+**XSLT 3.0 ceiling: 11,273 / 11,525 = 97.81%** — what passes now. The figure fell when six stale feature labels were lifted and 2,862 previously-excluded cases entered the denominator; 193 of the 252 failures are the streaming family, and 151 of those want an `XTSE3430` that only a §19.8 posture-and-sweep analysis can emit — machinery this engine does not have. Excluding those, the reachable ceiling is about 11,325 of 11,525. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
@@ -632,22 +632,31 @@ made, so it is stated as attainable rather than measured.
 
 # What is skipped, and why that is not a gap
 
-The XSLT 3.0 suite has 14,601 cases; 8,625 are in scope. The 5,976 skipped are
-excluded by *declared dependency*, not by failure:
+The XSLT 3.0 suite has 14,601 cases; 11,525 are in scope. The 3,076 skipped
+are excluded by *declared dependency*, not by failure.
+
+The largest rows this table used to carry are gone. Streaming (2,646),
+XPath 3.1 (98), XML 1.1 (65) and initial-function (38) were all listed as
+unsupported long after they were implemented — six stale labels across two
+harnesses, worth 2,862 cases. They are measured now, which is why the
+denominator grew and the percentage fell: the cases that were being counted as
+"not our business" are counted as ours.
 
 | Skipped | Reason |
 |---:|---|
-| 2,646 | **streaming** — not implemented, deliberately (but see below) |
 | 1,580 | depends on a specific Unicode version |
 | 1,098 | scoped `XSLT20` only |
 | 107 | numbering combinations |
-| 98 | XPath 3.1 features |
 | 96 | year-component values |
-| 65 | XML 1.1 — the parser implements XML 1.0 |
-| 38 | initial function (XSLT 3.0) |
 | 33 | `disable-output-escaping` — the serializer escapes always |
+| 24 | `enable_assertions` — unmodelled dependency |
 | 22 | require schema-awareness to be *absent* |
+| 21 | scoped `XSLT10 XSLT20` |
 | 18 | `xsl-stylesheet-processing-instruction` |
+| 12 | `package_version_resolution` — unmodelled |
+| 12 | `additional_normalization_form` — unmodelled |
+| 7 | `maximum_number_of_decimal_digits` — unmodelled |
+| **3,030** | **listed above; the remaining 46 are single-case reasons** |
 
 Counting these as failures would understate the engine; counting them as passes
 would overstate it. They are reported separately for that reason.

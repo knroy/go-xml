@@ -1138,7 +1138,7 @@ it reports may not be the one that matches, and a comparison against it would
 answer confidently and wrongly.
 
 It passes with `xpath.SetBacktrackingRegex(true)`, which takes QT3 to
-15,183 of 15,183. That figure is not the headline one, because the switch is
+15,222 of 15,222. That figure is not the headline one, because the switch is
 off by default and the headline number reports the default configuration.
 
 Eleven of the twelve backreference cases that used to sit here are fixed. When
