@@ -908,7 +908,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 8,612 is not 8,613. Saxon
+case the engine gives up on purpose, and the reason 8,640 is not 8,641. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call
