@@ -298,7 +298,7 @@ its two neighbours, not an engine defect, and its 3.0 twin was made
 edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
 also fail here, and both leave the denominator rather than the numerator if the
 corrections below are taken, which would put the 2.0 figure at
-6,190 / 6,199 = 99.85%. `validation-0201`'s remaining difference is the indent
+6,193 / 6,199 = 99.90%. `validation-0201`'s remaining difference is the indent
 width and nothing else: the engine defect that used to stand behind it — a
 union's selected member lost on every tree copy — is fixed, and the output now
 matches the expected file byte for byte apart from whitespace.
@@ -443,8 +443,14 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `transform-001`, `transform-005`–`transform-009` | **Fixed** | Six `fn:transform` cases, four distinct causes. (1) `transform-001`: a `stylesheet-location` naming a file that is not there was reported as FOXT0001. FOXT0001 is the code for a transformation the processor cannot *run* — every QT3 case that asserts it does so for an unavailable vendor named in `requested-properties` (“thrown if Saxon is not available”) — while a location that cannot be retrieved identifies no stylesheet, which is FOXT0002. `fn-transform-err-1`'s own modification note (“based on careful reading of the spec”) settles it. (2) `transform-008`: an option written as element content, `<xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>`, arrives as a *text node*, and `transformString` refused it with XPTY0004 on a map that says exactly what a string-valued one says; nodes are now atomized to their string value. (3) `transform-009`: an `xsl:result-document` with **no href** is the principal output — §24.3 changes the current output URI only for an instruction *with* an href — but `transformResultMap` keyed it as a secondary under `""`, leaving `?output` holding the empty tree the stylesheet never wrote to, so the principal serialization came out blank. Same rule `cmd/go-xml` already applies. (4) `transform-005`–`007`: the `package-name` and `package-version` options were not read at all, so the options looked like they identified no stylesheet. They now resolve through the same `PackageResolver` the outer compilation was given, which `Stylesheet` retains for the purpose. Measured: 11,304 → 11,324 passing, 221 → 201 failing; XSLT 2.0 unmoved at 6,193/8 and QT3 unmoved. |
 | `transform-004` | **Not implementable without unpicking `Compile`'s global state** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value; that is a real refactor of shared machinery and out of scope for an error-code fix. |
 
-**XSLT 3.0 ceiling: 11,330 / 11,525 = 98.31%** — what passes now. The figure fell when six stale feature labels were lifted and 2,862 previously-excluded cases entered the denominator; 150 of the 201 failures want an `XTSE3430` that only a §19.8 posture-and-sweep analysis can emit — machinery this engine does not have. Excluding those, the reachable ceiling is about 11,325 of 11,525. `base-uri-052`
-left this list when XInclude was implemented: the environment's
+**XSLT 3.0 ceiling: 11,330 / 11,525 = 98.31%** — what passes now. Of the 195
+remaining, **161 want an `XTSE3430`** that only the §19.8 posture-and-sweep
+analysis can emit, and §19.1 says a non-streaming processor "is not required to
+assess whether constructs are guaranteed-streamable" — so they are not defects
+this engine is obliged to close. The reachable ceiling without implementing
+streamability analysis is therefore about **11,491 of 11,525**.
+
+`base-uri-052` left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
