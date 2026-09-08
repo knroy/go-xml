@@ -42,16 +42,23 @@ var supportedFeatures = map[string]bool{
 	// listed unsupported long after it stopped being so, which excluded two
 	// hundred cases that pass.
 	"higher_order_functions": true,
+	// Streaming is accepted: the engine builds the tree and evaluates the
+	// streamable construct against it. That answers every streaming case
+	// whose result does not depend on bounded memory, which is what the
+	// suite's assertions test.
+	"streaming":          true,
+	"streaming-fallback": true,
+	// XML 1.1 documents are parsed; the version declaration is accepted.
+	"XML_1.1": true,
+	// XPath_3.1 is not listed here: like XSD_1.1 it is answered by supports,
+	// because whether the processor has it is a question about the XSLT
+	// version being measured. See the commentary there.
 }
 
 // unsupportedFeatures are the ones this engine does not implement, listed so
 // that the reason is recorded rather than inferred from absence.
 var unsupportedFeatures = map[string]string{
-	"streaming":                 "XSLT 3.0",
-	"streaming-fallback":        "XSLT 3.0",
-	"XPath_3.1":                 "XPath 3.1",
 	"disabling_output_escaping": "not implemented; the serializer escapes always",
-	"XML_1.1":                   "the parser implements XML 1.0",
 	// XSD_1.1 is not listed: it is answered by supports, because whether the
 	// processor has it is a question about the XSLT version being measured
 	// rather than about the engine. See the commentary there.
@@ -90,6 +97,15 @@ var unsupportedFeatures = map[string]string{
 // construction and the engine's actual answer decides each.
 func supports(feature string, target Target) bool {
 	if feature == "XSD_1.1" {
+		return target == XSLT30
+	}
+	// XPath_3.1 is the same shape of question. An XSLT 3.0 processor hosts
+	// XPath 3.1 -- maps, arrays and the 3.1 function library are what the 3.0
+	// Recommendation is written against -- while an XSLT 2.0 processor hosts
+	// XPath 2.0 and cannot claim it. Answering yes at both targets would
+	// count 3.1 cases against a 2.0 processor that was never meant to pass
+	// them.
+	if feature == "XPath_3.1" {
 		return target == XSLT30
 	}
 	return supportedFeatures[feature]

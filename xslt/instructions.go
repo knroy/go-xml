@@ -168,6 +168,15 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err != nil {
 		return err
 	}
+	// Flatten before copying: an array is a single item holding a sequence of
+	// members, and xsl:copy-of copies what those members are. Unlike
+	// xsl:value-of it does not atomize -- an array of nodes copies the nodes
+	// -- but the flattening step is the same one, and it comes first.
+	//
+	// The switch below matches *xdm.Node and *xdm.Atomic; an *ArrayItem
+	// matched neither and fell off the end, so copy-of over an array produced
+	// nothing at all.
+	seq = xdm.Flatten(seq)
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:
@@ -326,6 +335,17 @@ func (i *copyOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 			}
 		case *xdm.Atomic:
 			out.AppendValue(v)
+		default:
+			// What survives Flatten and is neither a node nor an atomic value
+			// is a map or a function item. Neither has a representation
+			// inside element content, and dropping one silently is what hid
+			// this whole defect: appendOpaqueItem accepts it at the top level
+			// of a sequence and raises XTDE0450 under an open element, which
+			// is what §5.8.1 requires ("it is a dynamic error if the result
+			// sequence contains a function item").
+			if err := appendOpaqueItem(out, it); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

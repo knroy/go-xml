@@ -471,6 +471,17 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 func constructedText(seq xdm.Sequence, sep string) string {
 	var parts []string
 	inText := false
+	// An array is one item holding a sequence of members, and it has to be
+	// replaced by those members before any of the rules below apply: XDM 3.1
+	// defines the atomization of an array as the atomization of its members,
+	// flattened, so data([1,[2,3]]) is (1,2,3) and the three values are then
+	// three separate strings for the joiner to put a separator between.
+	//
+	// Without this the switch below matched neither arm for an *ArrayItem and
+	// dropped it in silence, so xsl:value-of over an array produced the empty
+	// string -- and over ('a',[1,2],'b') produced "a b", losing the members
+	// from the middle of the sequence without any error to say so.
+	seq = xdm.Flatten(seq)
 	for _, it := range seq {
 		switch v := it.(type) {
 		case *xdm.Node:

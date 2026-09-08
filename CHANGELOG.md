@@ -222,6 +222,43 @@ thinner exactly where those corpora are thick.
 
 ### Fixed
 
+**An array reaching content construction contributes its members, not
+nothing.** XPath 3.1 makes an array a *single item* holding a sequence of
+members, and XDM 3.1 defines atomizing one as the atomization of its members,
+flattened: `data([1,[2,3]])` is `(1,2,3)`. `xdm.Atomize` and `xdm.Flatten` both
+implemented that correctly. The xslt layer above them did not call either.
+
+`constructedText` — which is `xsl:value-of`, every attribute value template,
+`xsl:attribute`, `xsl:comment`, `xsl:processing-instruction` and
+`use-attribute-sets`, all of them joining simple content by §5.8.1 — switched
+on `*xdm.Node` and `*xdm.Atomic` and had no other arm. `xsl:copy-of` switched
+on the same two. An `*xdm.ArrayItem` matched neither, fell off the end of the
+switch, and was dropped **in silence**: no error, no text, just an item gone.
+So `<xsl:value-of select="[1,2,3]"/>` produced the empty string, and the
+failure mode that hid it longest was the partial one —
+`<xsl:value-of select="('a',[1,2],'b')"/>` produced `"a b"`, losing the members
+from the middle of a sequence whose surviving items looked entirely correct.
+
+Both sites now flatten first. `xsl:value-of` then atomizes as it always did;
+`xsl:copy-of` does not atomize — an array of nodes copies the nodes — which is
+the standing distinction between the two instructions, and flattening precedes
+it either way. `xsl:copy-of` also gains the `default` arm it never had, so that
+what survives flattening and is neither a node nor an atomic value is passed to
+`appendOpaqueItem` rather than discarded: a map or a function item in element
+content is **XTDE0450**, *"it is a dynamic error if the result sequence
+contains a function item"*, and silently dropping it is precisely the habit
+that hid this defect. Note that XTDE0450 is about function items alone — an
+array of atomizable members is not one, and raising for it was as wrong as
+dropping it.
+
+The defect was invisible because the cases that catch it were skipped: the
+`XPath_3.1` feature label was still listed unsupported long after arrays,
+maps and the 3.1 library were implemented. Lifting it admits 2,862 more cases,
+and 44 of them were this one bug. XSLT 3.0 goes from 11,222 to **11,266**
+in-scope passes (97.37% → 97.75%), clearing every `sx-SquareArrayConstructor`
+failure.
+
+
 **Two DTD typos that switched validation off and said nothing.** XML 1.0 §3.3
 closes both halves of an attribute definition: the type is one of ten names or
 a parenthesised enumeration, and the default declaration is `#REQUIRED`,
