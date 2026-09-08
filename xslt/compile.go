@@ -1503,6 +1503,28 @@ func (c *compiler) compileFunction(el *xdm.Node, precedence int) error {
 	if name == "" {
 		return fmt.Errorf("xsl:function requires a name attribute")
 	}
+	// XTSE3155: a function with no xsl:param children may only declare
+	// streamability="unclassified". The other classifications describe how a
+	// function consumes its streamed ARGUMENT, so a function that takes none
+	// cannot be any of them -- the rule holds without any streamability
+	// analysis, which is why a non-streaming processor can enforce it. Only
+	// the presence of the attribute is read; §19 decides nothing here.
+	if sa := el.Attr("", "streamability"); sa != nil {
+		v := strings.TrimSpace(sa.Value)
+		hasParam := false
+		for _, ch := range el.ChildElements() {
+			if isXSL(ch, "param") {
+				hasParam = true
+				break
+			}
+		}
+		if v != "unclassified" && !hasParam {
+			return fmt.Errorf(
+				"XTSE3155: xsl:function %s has no xsl:param children, so its "+
+					"streamability may only be \"unclassified\", not %q",
+				name, v)
+		}
+	}
 	qn, err := resolveQNameAttr(el, name)
 	if err != nil {
 		return err
