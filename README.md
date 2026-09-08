@@ -101,12 +101,12 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.94% of the W3C QT3 suite (29,901 of 29,918 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 99.85% of the W3C XSLT suite filtered to 3.0 (8,612 of 8,625 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,640 of 8,663 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
 | **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 1,565 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,576 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -131,7 +131,7 @@ true here:
    reports only one, so the answer is `FORX0002` rather than a guess. The XML
    Schema pattern facet has no backreference at all and rejects them outright,
    which is conformant: Appendix F's grammar has no form for one.
-3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.85%, and still
+3. **XSLT 3.0 is the youngest of the measured numbers**, at 99.73%, and still
    the one to check against your own stylesheets first. It no longer has a
    concentration: package composition was about a third of the failures and is
    now 4 of 13, all four documented as unreachable rather than outstanding.
@@ -1225,7 +1225,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,565 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,576 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

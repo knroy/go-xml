@@ -580,6 +580,32 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 			opts.InitialTemplateParams[key] = v
 		}
 	}
+	if tc.Test.InitialFunction != nil {
+		// The catalog resolved the prefix itself, so the expanded name is
+		// passed rather than the lexical one; an unprefixed name is in no
+		// namespace, which initial-function-102d and -102e depend on.
+		local := tc.Test.InitialFunction.Name
+		if _, after, found := strings.Cut(local, ":"); found {
+			local = after
+		}
+		opts.InitialFunction = xdm.QName{
+			URI:   tc.Test.InitialFunction.URI,
+			Local: local,
+		}
+		// The <param> children are the argument list, IN ORDER, and their
+		// count is what fixes the arity -- 2.3.5 infers it from "the length
+		// of the parameter list". So these are appended positionally rather
+		// than keyed by name the way a template's parameters are.
+		for _, p := range tc.Test.InitialFunction.Params {
+			v, err := xpath.Eval(p.Select,
+				xpath.NewContext(nil, xpath.Builtins()), catalogNS{})
+			if err != nil {
+				return nil, fmt.Errorf("initial-function parameter %s: %w",
+					p.Select, err)
+			}
+			opts.InitialFunctionParams = append(opts.InitialFunctionParams, v)
+		}
+	}
 	if tc.Test.InitialMode != nil {
 		opts.InitialMode = tc.Test.InitialMode.Name
 		// <initial-mode> carries <param> children the same way

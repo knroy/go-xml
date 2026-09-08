@@ -8,6 +8,74 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Added
 
+**A stylesheet function can be the entry point: `initial-function` and
+`function-params`.** XSLT 3.0 §2.3.5 makes a named stylesheet function the
+third way into a transformation, beside a named template and an
+apply-templates. Neither the option nor the API existed, and the way it failed
+is the point of the fix. `fn:transform` reads its options by name and ignores
+what it does not recognise, so a map carrying `initial-function` and
+`function-params` silently degraded to `stylesheet-location` alone; the nested
+transform was then invoked with no entry point and raised **XTDE0044**, *"no
+initial match selection and no source document"* — worded as though it were
+about the stylesheet the author was looking at. The reported symptom
+(issue #4) was an `xsl:template name="xsl:initial-template"` that "sometimes
+does not work". It always worked. The error was about a different stylesheet,
+one file away, and said nothing to distinguish them.
+
+`TransformOptions` gains `InitialFunction` (an expanded `xdm.QName`, so a
+caller who has already bound their own prefixes cannot have them re-resolved
+against the stylesheet's) and `InitialFunctionParams`. The arity is inferred
+from the length of that list, which §2.3.5 licenses — *"the arity may be
+inferred from the length of the parameter list"* — and which makes the list
+half the entry point's identity rather than merely its values: naming a
+function and supplying nothing selects the nullary one, and gets **XTDE0041**
+if none exists. Arguments are converted by the declared parameter types and
+the result by the declared `as` type, because the call goes through the same
+`userFunction.call` an ordinary call does; that is also what gives it the
+absent focus §2.3.5 requires. The raw result is returned as a sequence and not
+pushed through the content constructor, so `initial-function-101a` gets the
+integer `144` rather than a text node spelling it.
+
+**The initial-function visibility rule is not the initial-template one.**
+XTDE0041 requires a function *"whose visibility is public or final"*, and
+unlike the template and mode rules this bites outside `xsl:package` too.
+`initial-function-905` invokes `my:private` — no `visibility` attribute, plain
+`xsl:stylesheet` — and requires the error; the 2017 amendment *"Initial
+function must be public (bug 30082)"* added `visibility="public"` to every
+non-error case in the set, on stylesheets that are likewise not packages, which
+would be pointless if the rule were package-scoped. Scoping it to packages, as
+`eligibleInitialTemplate` does, let `-905` through. It governs only what may be
+an *entry point*; `evaluateMayCall` keeps its package-scoped reading for what a
+stylesheet may call internally.
+
+**Unrecognised `fn:transform` options are still ignored, deliberately.** This
+was investigated as a possible soundness bug — a component that cannot handle
+an option should decline rather than proceed — and the suite is explicit that
+here it should proceed. `fn-transform-48` is titled *"Transform with additional
+unrecognised option which is ignored"*, passes `"another-option" : "dummy"`
+beside valid keys, and asserts the transform *succeeds*. Every FOXT0002 case in
+`fn/transform.xml` is about recognised options combined illegally (`err-2`:
+`stylesheet-text` with `stylesheet-location`; `err-3`: with `stylesheet-node`;
+`initial-mode` with `initial-template`) or insufficiently (`err-1`), never
+about a key the spec does not define. Rejecting unknown keys would have turned
+a passing conformance case red. The one refusal added is narrow and is about a
+*recognised* key: `function-params` without `initial-function` names the
+arguments of no function, and is FOXT0002.
+
+**XTDE0044 from inside `fn:transform` now names the stylesheet.** The
+top-level message is unchanged; on the nested path the identity is appended —
+`(in the stylesheet invoked by fn:transform: stylesheet-location "x.xsl")` —
+for the entry-point codes only, and by wrapping with `%w` so `xdm.ErrorCode`
+still reads the code through it and suite matching is unaffected.
+
+The XSLT 3.0 suite's `initial-function` set was being skipped wholesale as an
+unimplemented feature; 38 cases are now in scope and 28 pass, taking the 3.0
+figure from 8,612 to 8,640. The ten that remain are a driver gap rather than an
+engine one — they assert against the raw sequence via `<output tree="no"/>`
+without a `result-var` for the driver to bind, so it serializes and every
+`instance of` assertion sees a string. See `docs/conformance-gaps.md`. The
+XSLT 2.0 lane is unmoved at 6,149, an initial function being a 3.0 entry point.
+
 **XML 1.1 documents are read as XML 1.1.** A document declaring
 `version="1.1"` used to have its declaration rewritten to `1.0` in
 `xdm/encoding.go` before the tokeniser saw it. That was the worse of the two

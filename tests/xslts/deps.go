@@ -178,7 +178,9 @@ func inScope(set *TestSet, tc *TestCase, target Target) (bool, string) {
 			return false, "xsl:package (XSLT 3.0)"
 		}
 	}
-	if tc.Test.InitialFunction != nil {
+	// An initial function is an XSLT 3.0 entry point, so a 2.0 run cannot
+	// reach it; a 3.0 run now can. See TransformOptions.InitialFunction.
+	if tc.Test.InitialFunction != nil && target == XSLT20 {
 		return false, "initial function (XSLT 3.0)"
 	}
 	// A case that dereferences a document only the network can supply is out

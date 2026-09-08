@@ -349,6 +349,7 @@ func resolveInitialTemplateNames(data []byte, set *TestSet) error {
 		for _, nt := range []*NamedThing{
 			set.Cases[i].Test.InitialTemplate,
 			set.Cases[i].Test.InitialMode,
+			set.Cases[i].Test.InitialFunction,
 		} {
 			if nt == nil {
 				continue
@@ -405,7 +406,16 @@ func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string
 			switch t.Name.Local {
 			case "test-case":
 				caseName = attrValue(t, "name")
-			case "initial-template":
+			case "initial-template", "initial-function":
+				// The catalog binds the prefix on the invocation element
+				// itself, and encoding/xml does not resolve a QName held in
+				// an attribute value. <initial-function> needs this for the
+				// same reason <initial-template> does, and more sharply:
+				// initial-function-102e writes an UNPREFIXED name inside a
+				// default-namespace declaration and expects XTDE0041,
+				// because an unprefixed function name is always in no
+				// namespace -- so a resolver that guessed from the default
+				// namespace would turn that error case into a pass.
 				name := attrValue(t, "name")
 				if prefix, _, hasPrefix := strings.Cut(name, ":"); hasPrefix &&
 					caseName != "" {
@@ -436,7 +446,7 @@ func scanInitialTemplateNames(data []byte) (map[string]string, map[string]string
 			switch t.Name.Local {
 			case "test-case":
 				caseName = ""
-			case "initial-template", "initial-mode":
+			case "initial-template", "initial-mode", "initial-function":
 				inInvocation = false
 			}
 		}

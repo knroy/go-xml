@@ -2,6 +2,8 @@ package xslt
 
 import (
 	"bytes"
+	"fmt"
+
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
 )
@@ -69,6 +71,65 @@ func transformString(m *xdm.MapItem, name string) (string, bool, error) {
 	return a.String(), true, nil
 }
 
+// transformQName reads a QName-valued option.
+//
+// The value must be read structurally rather than through String(), which
+// gives a QName's LEXICAL form and so drops the namespace URI: reading
+// QName('http://example.com/mf','evaluate') as a string yields "evaluate" and
+// would look up a function in no namespace. A string is still accepted, since
+// the option is commonly written as one, and then names a function in no
+// namespace -- there is no prefix context in an options map to resolve
+// against.
+func transformQName(m *xdm.MapItem, name string) (xdm.QName, bool, error) {
+	seq, ok := transformOption(m, name)
+	if !ok {
+		return xdm.QName{}, false, nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return xdm.QName{}, true, xdm.ErrType(
+			"fn:transform: %s must be a single value", name)
+	}
+	a, ok := it.(*xdm.Atomic)
+	if !ok {
+		return xdm.QName{}, true, xdm.ErrType(
+			"fn:transform: %s must be a QName or string, got %s",
+			name, it.TypeName())
+	}
+	if q := a.QName(); q != nil {
+		return *q, true, nil
+	}
+	return xdm.QName{Local: a.String()}, true, nil
+}
+
+// transformArray reads an array-valued option as the ordered argument list it
+// stands for -- function-params is the only one.
+func transformArray(m *xdm.MapItem, name string) ([]xdm.Sequence, bool, error) {
+	seq, ok := transformOption(m, name)
+	if !ok {
+		return nil, false, nil
+	}
+	it, err := seq.Single()
+	if err != nil {
+		return nil, true, xdm.ErrType(
+			"fn:transform: %s must be a single array", name)
+	}
+	arr, ok := it.(*xdm.ArrayItem)
+	if !ok {
+		return nil, true, xdm.ErrType(
+			"fn:transform: %s must be an array, got %s", name, it.TypeName())
+	}
+	out := make([]xdm.Sequence, 0, arr.Len())
+	for i := 1; i <= arr.Len(); i++ {
+		mem, merr := arr.Member(i)
+		if merr != nil {
+			return nil, true, merr
+		}
+		out = append(out, mem)
+	}
+	return out, true, nil
+}
+
 // transformParams reads a map-valued option -- stylesheet-params and its
 // siblings -- as the name-keyed bindings a transform takes.
 //
@@ -134,6 +195,8 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 	topts.Params = nil
 	topts.InitialTemplate = ""
 	topts.InitialTemplateURI = ""
+	topts.InitialFunction = xdm.QName{}
+	topts.InitialFunctionParams = nil
 	topts.InitialMode = ""
 	topts.InitialMatchSelection = nil
 	topts.InitialTemplateParams = nil
@@ -161,6 +224,32 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 	} else if ok {
 		topts.InitialTemplate = v
 	}
+	// initial-function and function-params are read as a pair. 2.3.5 infers
+	// the arity from "the length of the parameter list", so the arguments are
+	// not merely values but half the entry point's identity, and an absent
+	// function-params is the empty list -- an invocation of the nullary
+	// function of that name, which is XTDE0041 if the stylesheet has none.
+	// That is why the array is read even when the option is absent rather
+	// than left nil to mean "unspecified".
+	if fname, ok, ferr := transformQName(opts, "initial-function"); ferr != nil {
+		return nil, ferr
+	} else if ok {
+		topts.InitialFunction = fname
+		args, _, aerr := transformArray(opts, "function-params")
+		if aerr != nil {
+			return nil, aerr
+		}
+		topts.InitialFunctionParams = args
+	} else if _, present, aerr := transformArray(opts, "function-params"); aerr != nil {
+		return nil, aerr
+	} else if present {
+		// function-params without initial-function names arguments for no
+		// function. FOXT0002 is the code for options that do not identify a
+		// coherent invocation, which is what err-2 and err-3 use it for.
+		return nil, xdm.Errorf("FOXT0002",
+			"fn:transform: function-params was supplied without "+
+				"initial-function, so it names the arguments of no function")
+	}
 	if v, ok, verr := transformString(opts, "initial-mode"); verr != nil {
 		return nil, verr
 	} else if ok {
@@ -177,9 +266,47 @@ func runNestedTransform(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (xdm
 
 	res, err := sheet.Transform(rt.goCtx, source, topts)
 	if err != nil {
-		return nil, err
+		return nil, annotateNested(err, opts)
 	}
 	return transformResultMap(opts, res)
+}
+
+// annotateNested names the nested stylesheet in an entry-point error.
+//
+// XTDE0044 raised inside fn:transform reads "no initial match selection and no
+// source document", worded for a caller who invoked the processor directly. On
+// this path that is actively misleading: the stylesheet without an entry point
+// is the one fn:transform just loaded, not the one the author is looking at,
+// and the report sent a user hunting through an outer stylesheet whose
+// xsl:initial-template was present and correct all along. See issue #4.
+//
+// Only the entry-point codes are annotated, and only by appending the
+// identity: the message and the code are otherwise left exactly as the engine
+// wrote them, so error-code matching in the suites is unaffected. Wrapping
+// with %w keeps xdm.ErrorCode able to read the code through the wrapper.
+func annotateNested(err error, opts *xdm.MapItem) error {
+	switch xdm.ErrorCode(err) {
+	case "XTDE0044", "XTDE0040", "XTDE0041", "XTDE0045":
+	default:
+		return err
+	}
+	return fmt.Errorf("%w (in the stylesheet invoked by fn:transform: %s)",
+		err, nestedStylesheetLabel(opts))
+}
+
+// nestedStylesheetLabel describes which stylesheet fn:transform was running,
+// in whatever terms the options made available.
+func nestedStylesheetLabel(opts *xdm.MapItem) string {
+	if loc, ok, err := transformString(opts, "stylesheet-location"); err == nil && ok {
+		return fmt.Sprintf("stylesheet-location %q", loc)
+	}
+	if _, ok := transformOption(opts, "stylesheet-node"); ok {
+		return "the stylesheet supplied as stylesheet-node"
+	}
+	if _, ok := transformOption(opts, "stylesheet-text"); ok {
+		return "the stylesheet supplied as stylesheet-text"
+	}
+	return "an unidentified stylesheet"
 }
 
 // nestedStylesheet compiles the stylesheet the options name.

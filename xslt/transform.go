@@ -96,6 +96,34 @@ type TransformOptions struct {
 	// happens to spell another namespace with the same prefix.
 	InitialTemplateURI string
 
+	// InitialFunction names a stylesheet function to invoke as the entry
+	// point, which is the third way into a stylesheet beside a template and
+	// an apply-templates. Section 2.3.5 calls it the initial function.
+	//
+	// The name is expanded: a caller naming a function from outside the
+	// stylesheet has already bound its own prefixes, and resolving a second
+	// time against the stylesheet's declarations could select a different
+	// function that spells another namespace with the same prefix. This is
+	// the same hazard InitialTemplateURI exists for, and the QName form
+	// avoids it outright rather than needing a companion field.
+	//
+	// Leave it zero to use one of the other entry points. It is mutually
+	// exclusive with InitialTemplate and with an initial mode.
+	InitialFunction xdm.QName
+
+	// InitialFunctionParams are the arguments of the initial function call,
+	// in order. Section 2.3.5 makes the arity of the entry point the LENGTH
+	// OF THIS LIST -- "in the design of a concrete API, the arity may be
+	// inferred from the length of the parameter list" -- so this is not
+	// merely the values but also the half of the function's identity that
+	// InitialFunction does not carry.
+	//
+	// A nil list therefore selects arity zero rather than meaning "unset":
+	// the spec gives no way to name an initial function without also fixing
+	// its arity, so a caller naming a function and supplying no parameters is
+	// asking for the nullary one, and gets XTDE0041 if none exists.
+	InitialFunctionParams []xdm.Sequence
+
 	// InitialTemplateParams are the values supplied for the initial
 	// template's non-tunnel parameters, keyed by the parameter name in Clark
 	// notation. InitialTemplateTunnelParams are its tunnel parameters, which
@@ -200,19 +228,45 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 	// source-free stylesheet run at all.
 	defaultEntry := xdm.QName{URI: xdm.NSXSL, Local: "initial-template"}.Clark()
 	useDefaultEntry := false
+	// An initial function is a THIRD entry point beside a template and an
+	// apply-templates, and the three are alternatives: naming a function as
+	// well as a template or a mode asks for two starting points at once, and
+	// honouring one would silently discard the other. XTDE0047 is the code
+	// the spec gives that mistake for the template/mode pair, and the same
+	// reasoning names it here.
+	initialFn := opts.InitialFunction.Local != ""
+	if initialFn {
+		if opts.InitialTemplate != "" {
+			return nil, fmt.Errorf(
+				"XTDE0047: the invocation specifies both an initial function "+
+					"%s and an initial template %q",
+				opts.InitialFunction.Lexical(), opts.InitialTemplate)
+		}
+		if m := opts.InitialMode; m != "" && m != "#default" && m != "#unnamed" {
+			return nil, fmt.Errorf(
+				"XTDE0047: the invocation specifies both an initial function "+
+					"%s and an initial mode %q",
+				opts.InitialFunction.Lexical(), m)
+		}
+	}
 	// XTDE0044: naming an initial mode is asking for an apply-templates, and
 	// an apply-templates needs something to select from. The initial match
 	// selection defaults to the global context item, which this engine takes
 	// from the source document, so no source means no selection at all. The
 	// name is not consulted: #default and #unnamed specify a mode just as a
 	// QName does, and error-0044a/aa/ac use all three.
-	if source == nil && opts.InitialMode != "" && opts.InitialTemplate == "" &&
-		opts.InitialMatchSelection == nil {
+	if source == nil && !initialFn && opts.InitialMode != "" &&
+		opts.InitialTemplate == "" && opts.InitialMatchSelection == nil {
 		return nil, fmt.Errorf(
 			"XTDE0044: the invocation specifies initial mode %q but supplies "+
 				"no initial match selection", opts.InitialMode)
 	}
-	if source == nil && opts.InitialTemplate == "" &&
+	// An initial function is an entry point in its own right and needs no
+	// source document: 2.3.5 evaluates it with an absent focus, so "no
+	// selection and no source" is not a defect of that invocation. Without
+	// this exemption a stylesheet entered at a function raised XTDE0044
+	// complaining about a document it was never going to read.
+	if source == nil && !initialFn && opts.InitialTemplate == "" &&
 		opts.InitialMatchSelection == nil {
 		if _, ok := s.named[defaultEntry]; !ok {
 			// An invocation that names no template starts by applying
@@ -322,7 +376,41 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 
 	out := newOutputBuilder()
 
-	if useDefaultEntry {
+	// rawResult carries the initial function's return value, which is a
+	// sequence rather than a tree. It is kept beside the output builder
+	// instead of being appended to it because 2.3.5 calls the value "the raw
+	// result of the invocation": pushing xs:integer 144 through the content
+	// constructor would turn it into a text node, and initial-function-101a
+	// asserts the result is still 144. Post-processing that raw sequence into
+	// a tree is the CALLER's option under 2.3.6, not something to do here.
+	var rawResult xdm.Sequence
+	haveRaw := false
+
+	// A function name always has a local part, so an empty one is the unset
+	// state; the URI alone cannot distinguish it, since a function in no
+	// namespace is perfectly ordinary.
+	if opts.InitialFunction.Local != "" {
+		fn, err := s.initialFunction(opts)
+		if err != nil {
+			return nil, err
+		}
+		// The arguments are passed unconverted: xpath.Function.Call is
+		// userFunction.call, which applies the declared parameter types with
+		// the function conversion rules and the declared "as" type to the
+		// result, exactly as 2.3.5 requires. Converting here as well would
+		// double-convert and, worse, report the wrong error code -- the
+		// suite's initial-function-102b wants XPTY0004 from that conversion.
+		//
+		// The focus is absent because rt was built with a nil source on this
+		// path and userFunction.call clears it regardless; 2.3.5's note is
+		// that the initial function, "like all stylesheet functions", is
+		// evaluated with an absent focus.
+		res, err := fn.Call(rt.ctx, opts.InitialFunctionParams)
+		if err != nil {
+			return nil, err
+		}
+		rawResult, haveRaw = res, true
+	} else if useDefaultEntry {
 		t := s.named[defaultEntry]
 		for _, p := range t.Params {
 			if p.Required && !p.Tunnel {
@@ -548,8 +636,13 @@ func (s *Stylesheet) Transform(ctx context.Context, source *xdm.Node, opts Trans
 		}
 	}
 
+	nodes := out.Sequence()
+	if haveRaw {
+		nodes = rawResult
+	}
+
 	return &Result{
-		Nodes:     out.Sequence(),
+		Nodes:     nodes,
 		Messages:  *rt.messages,
 		Warnings:  *rt.warnings,
 		Secondary: *rt.secondary,

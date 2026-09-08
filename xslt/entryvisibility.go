@@ -194,6 +194,88 @@ func (s *Stylesheet) eligibleInitialTemplate(name xdm.QName) bool {
 	return vis == "public" || vis == "final"
 }
 
+// initialFunction resolves the entry point named by InitialFunction, or
+// reports XTDE0041.
+//
+// Section 2.3.5: "It is a dynamic error if the invocation of the stylesheet
+// specifies a function name and arity that does not match the expanded QName
+// and arity of a named stylesheet function defined in the stylesheet, whose
+// visibility is public or final." Both halves of that sentence are checked
+// here, and both report the same code -- a caller who named a private function
+// and a caller who named no function at all have made the same class of
+// mistake, and the spec gives them the same code.
+//
+// The arity comes from len(InitialFunctionParams), per the note that "the
+// arity may be inferred from the length of the parameter list".
+//
+// Declares rather than Lookup is the right question: Lookup chains to the
+// parent library, so it would happily find fn:concat and let a caller enter
+// the stylesheet at a BUILTIN. Only the stylesheet's own functions are entry
+// points, and Declares is the method that exists for exactly that distinction.
+func (s *Stylesheet) initialFunction(opts TransformOptions) (xpath.Function, error) {
+	name := opts.InitialFunction
+	arity := len(opts.InitialFunctionParams)
+	if !s.funcs.Declares(name, arity) {
+		return xpath.Function{}, fmt.Errorf(
+			"XTDE0041: no stylesheet function named %s with %d argument(s)",
+			name.Lexical(), arity)
+	}
+	if !s.eligibleInitialFunction(name, arity) {
+		return xpath.Function{}, fmt.Errorf(
+			"XTDE0041: the stylesheet function %s with %d argument(s) is not "+
+				"public, so a transform may not start at it",
+			name.Lexical(), arity)
+	}
+	fn, ok := s.funcs.Lookup(name, arity)
+	if !ok {
+		// Declares said yes, so this is unreachable; returning the same code
+		// rather than panicking keeps a library invariant change from turning
+		// into a crash in a caller's process.
+		return xpath.Function{}, fmt.Errorf(
+			"XTDE0041: no stylesheet function named %s with %d argument(s)",
+			name.Lexical(), arity)
+	}
+	return fn, nil
+}
+
+// eligibleInitialFunction reports whether an invocation may start at the named
+// stylesheet function, XTDE0041.
+//
+// Section 2.3.5 attaches the same visibility condition to the initial function
+// that 3.5.2 attaches to the initial template: XTDE0041 is raised unless the
+// name and arity match "a named stylesheet function defined in the stylesheet,
+// WHOSE VISIBILITY IS PUBLIC OR FINAL". The suite pins it -- initial-function-905
+// invokes my:private and expects XTDE0041, and every non-error case in that
+// set was amended in 2017 to add visibility="public" under the note "Initial
+// function must be public (bug 30082)".
+//
+// Unlike eligibleInitialTemplate and the mode rule, this is NOT confined to a
+// real xsl:package, and the suite is explicit about the difference.
+// initial-function-905 invokes my:private -- declared in a plain
+// xsl:stylesheet with no visibility attribute at all -- and requires XTDE0041.
+// Its siblings settle it from the other side: the 2017-03-28 amendment "Initial
+// function must be public (bug 30082)" added visibility="public" to every
+// non-error case in the set, and those stylesheets are plain xsl:stylesheet
+// documents too. Those added attributes would be pointless if the rule only
+// bit inside a package.
+//
+// So the default of private, 3.5.2, is honoured here wherever the function was
+// declared. That is a narrower exposure than it sounds: it governs only which
+// functions may be an ENTRY POINT, and says nothing about which a stylesheet
+// may call internally, which is evaluateMayCall's separate question and keeps
+// its package-scoped reading.
+func (s *Stylesheet) eligibleInitialFunction(name xdm.QName, arity int) bool {
+	vis, ok := s.functionVisibility[functionVisibilityKey(name, arity)]
+	if !ok {
+		// No record means no xsl:function declaration was seen for this name
+		// and arity. Declares has already vouched for its existence, so this
+		// is a function the library holds without a declaration behind it,
+		// and refusing it here would be refusing on no evidence.
+		return true
+	}
+	return vis == "public" || vis == "final"
+}
+
 // exposedVisibility answers the visibility the containing package's xsl:expose
 // declarations give a component declaration, or "" where none matches.
 //
