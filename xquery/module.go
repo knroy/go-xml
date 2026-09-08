@@ -149,11 +149,29 @@ type Module struct {
 	BaseURI string
 }
 
-// moduleKey identifies a loaded module. The target namespace alone is the key,
-// because §4.12 makes the namespace the identity and the location a hint: two
-// imports of one namespace through different hints are one module, and
-// importing it twice must not initialise its variables twice.
-type moduleKey string
+// moduleKey identifies a loaded module: its target namespace and, when the
+// host registered several modules under that namespace, which of them this is.
+//
+// §4.12 makes the namespace the identity for IMPORTING -- two imports of one
+// namespace through different hints are one import, and importing it twice
+// must not initialise its variables twice -- but it does not make the
+// namespace the identity for STORING. "All public variables and public
+// functions in the contexts of modules whose target namespace is M must be
+// accessible in the importing module" is plural: one namespace may be spread
+// across several modules, and each is a separate compilation unit with its own
+// prolog, static context and declarations. Keying the store by namespace alone
+// kept the last one registered and lost the rest, which is what made
+// modules-30/-31/-32 fail with XPST0017 and hid the collisions that
+// modules-collide-fn-001 and -var-001 assert.
+//
+// The seq field is that "which of them": 0 for a module fetched through the
+// resolver, and the store index for one taken from Options.Modules. It never
+// distinguishes two modules that §4.12 says are the same, because a namespace
+// with a single registration always yields seq 0.
+type moduleKey struct {
+	ns  string
+	seq int
+}
 
 // libModule is a compiled library module.
 //
@@ -208,9 +226,11 @@ type moduleLoader struct {
 	// count and bytes are the budget spent so far.
 	count int
 	bytes int64
-	// registered is Options.Modules keyed by namespace, for the store lookup
-	// that happens before the resolver is consulted.
-	registered map[string]Module
+	// registered is Options.Modules grouped by namespace, for the store lookup
+	// that happens before the resolver is consulted. Several modules may share
+	// one namespace, so this is a slice rather than a single Module -- see
+	// moduleKey.
+	registered map[string][]Module
 }
 
 // newModuleLoader prepares a loader, applying the defaults for the bounds and
@@ -232,13 +252,16 @@ func newModuleLoader(opts Options) *moduleLoader {
 		opts:       opts,
 		loaded:     map[moduleKey]*libModule{},
 		loading:    map[moduleKey]bool{},
-		registered: make(map[string]Module, len(opts.Modules)),
+		registered: make(map[string][]Module, len(opts.Modules)),
 	}
 	for _, m := range opts.Modules {
-		// A later registration of one namespace replaces an earlier one,
-		// which is the ordinary map rule and the only one that does not need
-		// an error code the specification has not defined for it.
-		l.registered[m.Namespace] = m
+		// Every registration of a namespace is kept, in the order given.
+		// §4.12 makes all of them contribute their public declarations to an
+		// importing module, so dropping the earlier ones would lose
+		// declarations the importer is entitled to see -- and would also hide
+		// the XQST0049/XQST0034 clash between two of them, which
+		// checkImportedNames can only find if it is shown both.
+		l.registered[m.Namespace] = append(l.registered[m.Namespace], m)
 	}
 	return l
 }
@@ -253,7 +276,32 @@ func newModuleLoader(opts Options) *moduleLoader {
 // the importing module's declared version; see checkModuleCycle.
 func (l *moduleLoader) load(imp moduleImport, base string, ver XQVersion) (
 	*libModule, error) {
-	key := moduleKey(imp.ns)
+	// A namespace the host registered more than once is several modules, and
+	// §4.12 makes every one of them contribute. They are loaded in
+	// registration order and the FIRST is returned, because the return value
+	// only reports whether the import resolved -- the declarations reach the
+	// importing module through l.modules(), which carries them all.
+	if regs := l.registered[imp.ns]; len(regs) > 1 {
+		var first *libModule
+		for i := range regs {
+			m, err := l.loadOne(imp, base, ver, i)
+			if err != nil {
+				return nil, err
+			}
+			if first == nil {
+				first = m
+			}
+		}
+		return first, nil
+	}
+	return l.loadOne(imp, base, ver, 0)
+}
+
+// loadOne loads the seq'th module registered for the import's namespace, or
+// the single module a resolver supplies when the store has none.
+func (l *moduleLoader) loadOne(imp moduleImport, base string, ver XQVersion,
+	seq int) (*libModule, error) {
+	key := moduleKey{ns: imp.ns, seq: seq}
 	// The in-progress check comes FIRST. A module is published into loaded
 	// before its own imports are followed -- that is what lets a cycle find
 	// it -- so a revisit during a cycle is present in BOTH maps, and testing
@@ -276,7 +324,7 @@ func (l *moduleLoader) load(imp moduleImport, base string, ver XQVersion) (
 		return m, nil
 	}
 
-	src, baseURI, err := l.fetch(imp, base)
+	src, baseURI, err := l.fetch(imp, base, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +356,7 @@ func (l *moduleLoader) load(imp moduleImport, base string, ver XQVersion) (
 // module the host supplied needs no reach at all and a location hint does.
 // That order also means a host can shadow a location with a known-good module,
 // which is the whole point of a store.
-func (l *moduleLoader) fetch(imp moduleImport, base string) (string, string, error) {
+func (l *moduleLoader) fetch(imp moduleImport, base string, seq int) (string, string, error) {
 	l.count++
 	if l.count > l.opts.MaxModules {
 		// The budget declines to answer; it does not answer "no module". A
@@ -321,7 +369,8 @@ func (l *moduleLoader) fetch(imp moduleImport, base string) (string, string, err
 				"raise it if this is legitimate: %w",
 			l.opts.MaxModules, xdm.ErrResourceLimit)
 	}
-	if m, ok := l.registered[imp.ns]; ok {
+	if regs := l.registered[imp.ns]; seq < len(regs) {
+		m := regs[seq]
 		if err := l.spend(int64(len(m.Source)), imp.ns); err != nil {
 			return "", "", err
 		}
@@ -548,7 +597,12 @@ func (l *moduleLoader) modules() []*libModule {
 			rest = append(rest, k)
 		}
 	}
-	sort.Slice(rest, func(i, j int) bool { return rest[i] < rest[j] })
+	sort.Slice(rest, func(i, j int) bool {
+		if rest[i].ns != rest[j].ns {
+			return rest[i].ns < rest[j].ns
+		}
+		return rest[i].seq < rest[j].seq
+	})
 	for _, k := range rest {
 		out = append(out, l.loaded[k])
 	}

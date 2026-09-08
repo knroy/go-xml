@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,590 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,593 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -44,7 +44,7 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 2.0 15,183 + XQuery 3.1 29,918 + XSLT 2.0 6,157 + XSLT 3.0 8,625
+  table: XPath 2.0 15,183 + XQuery 3.1 29,964 + XSLT 2.0 6,157 + XSLT 3.0 8,625
   + XSD 1.0 39,388 + XSD 1.1 41,576 + RELAX NG 965. XPath 3.0 and 3.1 are not
   added again — the QT3 catalog is one corpus measured at three versions, and
   the 2.0 figure is the whole of it that this engine claims. An earlier
@@ -381,8 +381,8 @@ seen. `check.sh` fails when a count goes **down**.
 ```
 DocBook 577
 RelaxNGSpectest 965
-TestQT3 29933
-TestQT3XQuery 29933
+TestQT3 29952
+TestQT3XQuery 29952
 TestXSLT30Suite 8640
 TestXSLTSuite 6149
 VendoredSchemas 185

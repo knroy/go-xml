@@ -133,9 +133,9 @@ at 21786/21786 then, and the XQuery mark rose from 29800 to 29901.
 
 Both figures have since moved for an unrelated reason: two stale feature
 labels, `namespace-axis` and `infoset-dtd`, were lifted from the same
-unsupported list, putting XPath 3.1 at 21848/21849 and XQuery at 29933/29950.
-The single XPath failure is `Axes123` (namespace-node identity across two axis
-walks), diagnosed in [conformance-gaps.md](conformance-gaps.md). The
+unsupported list, putting XPath 3.1 at 21863/21863 and XQuery at 29952/29964.
+`Axes123` (namespace-node identity across two axis walks) was the single XPath
+failure that lift exposed, and is now fixed — see `xdm.Node.Is`. The
 `fn-load-xquery-module` cases discussed here are unaffected — that label stays
 on the list, for the reason the rest of this section gives.
 

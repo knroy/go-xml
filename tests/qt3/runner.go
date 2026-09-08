@@ -160,6 +160,55 @@ func NewRunner(root string, cat *Catalog) *Runner {
 	return r
 }
 
+// mergeDeps combines a test set's dependencies with a case's, letting the case
+// override its set PER (TYPE, VALUE) rather than additively or wholesale.
+//
+// The catalog's idiom is that a set declares a feature satisfied="true" and an
+// individual case overrides that same feature to satisfied="false", meaning
+// the case is the one written for a processor that LACKS the feature. Merging
+// additively kept both copies, and the gate below skips if ANY copy is not
+// "false", so the override could never win: all fourteen of
+// fn-load-xquery-module-901..914 were excluded by the set's declaration they
+// exist to contradict.
+//
+// The other harness, tests/xslts/deps.go, overrides PER KIND -- a case that
+// states any feature drops every feature the set stated. That is too coarse
+// here, and its comment records what too coarse costs in the other direction:
+// read as wholesale it once lost the set's version gate and ran 1,500
+// regex-syntax cases as if they were XSLT 2.0 tests.
+//
+// Per (type, value) is narrower than either, and safe in both directions. A
+// case only ever displaces the set's dependency it literally restates, so the
+// set's <spec> gate survives every case that declares a feature, and survives
+// a case that declares a DIFFERENT spec value too -- both are kept and the
+// additive reading stands there.
+//
+// That last part is what the per-kind rule gets wrong, and it was measured
+// rather than reasoned about. Widening this to per-kind admits cases whose
+// spec puts them out of scope, and they do not pass: the four lanes go from
+// 0/0/0/17 failures to 1/2/2/23. Two constraints are not a replacement -- a
+// set saying XP31+ and a case saying XQ31+ both bind -- so the additive
+// reading of spec is not merely the conservative choice, it is the correct
+// one. Per (type, value) keeps it while still letting the feature override
+// win, which is the whole of the fix: +14 cases, no new failures.
+func mergeDeps(set, tc []Dependency) []Dependency {
+	if len(tc) == 0 {
+		return set
+	}
+	overridden := make(map[[2]string]bool, len(tc))
+	for _, d := range tc {
+		overridden[[2]string{d.Type, d.Value}] = true
+	}
+	out := make([]Dependency, 0, len(set)+len(tc))
+	for _, d := range set {
+		if overridden[[2]string{d.Type, d.Value}] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return append(out, tc...)
+}
+
 // unsupportedSpec reports whether a dependency puts the case out of scope for
 // the target version.
 //
@@ -207,11 +256,19 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 				// fn:load-xquery-module compiles an XQuery library module,
 				// which needs an XQuery processor this engine does not have.
 				// The set declares the feature satisfied="true" and then
-				// overrides fourteen cases to satisfied="false" -- those
-				// fourteen are the ones written for a processor without it,
-				// and they pass. The rest describe what a processor that has
-				// one would do, and are out of scope for the same reason the
-				// XQuery specs above are.
+				// overrides fourteen cases -- 901..914 -- to
+				// satisfied="false": those fourteen are the ones written for
+				// a processor without it, and they are in scope. The rest
+				// describe what a processor that has one would do, and are
+				// out of scope for the same reason the XQuery specs above
+				// are.
+				//
+				// The fourteen were long claimed here to pass, which was a
+				// claim about cases that never ran: the merge was additive,
+				// so the set's satisfied="true" copy survived alongside the
+				// case's "false" one and this test skipped on the former.
+				// They run now -- see mergeDeps -- and they do pass, which is
+				// what the +14 in the XQuery figure is.
 				"fn-load-xquery-module",
 				"non_empty_sequence_collection", "collection-stability",
 				"directory-as-collection-uri", "simple-uca-fallback",
@@ -549,9 +606,8 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		}
 	}()
 
-	deps := append(append([]Dependency{}, ts.Dependencies...),
-		tc.Dependencies...)
-	if why := unsupportedSpec(deps, r.Target); why != "" {
+	if why := unsupportedSpec(mergeDeps(ts.Dependencies, tc.Dependencies),
+		r.Target); why != "" {
 		rep.Outcome, rep.Reason = Skip, why
 		return rep
 	}

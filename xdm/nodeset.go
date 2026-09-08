@@ -58,8 +58,12 @@ func SortDocumentOrder(seq Sequence) Sequence {
 	})
 	out := make(Sequence, 0, len(nodes))
 	var prev *Node
+	// Is, not ==: the sort has already placed nodes the engine considers the
+	// same adjacently, and for a namespace node "the same" is not the same
+	// pointer -- the axis synthesizes a fresh one per walk, so a union of two
+	// namespace:: steps over one element kept both copies of every binding.
 	for _, n := range nodes {
-		if prev != nil && n == prev {
+		if prev != nil && prev.Is(n) {
 			continue
 		}
 		out = append(out, n)
@@ -75,15 +79,17 @@ func Union(a, b Sequence) Sequence {
 
 // Intersect returns the nodes present in both sequences, in document order.
 func Intersect(a, b Sequence) Sequence {
-	in := make(map[*Node]bool, len(b))
+	// Keyed on Identity rather than the pointer so that the set operators
+	// agree with the "is" operator about what one node is.
+	in := make(map[IdentityKey]bool, len(b))
 	for _, it := range b {
 		if n, ok := it.(*Node); ok {
-			in[n] = true
+			in[n.Identity()] = true
 		}
 	}
 	var out Sequence
 	for _, it := range a {
-		if n, ok := it.(*Node); ok && in[n] {
+		if n, ok := it.(*Node); ok && in[n.Identity()] {
 			out = append(out, n)
 		}
 	}
@@ -92,15 +98,15 @@ func Intersect(a, b Sequence) Sequence {
 
 // Except returns the nodes of a that are not in b, in document order.
 func Except(a, b Sequence) Sequence {
-	in := make(map[*Node]bool, len(b))
+	in := make(map[IdentityKey]bool, len(b))
 	for _, it := range b {
 		if n, ok := it.(*Node); ok {
-			in[n] = true
+			in[n.Identity()] = true
 		}
 	}
 	var out Sequence
 	for _, it := range a {
-		if n, ok := it.(*Node); ok && !in[n] {
+		if n, ok := it.(*Node); ok && !in[n.Identity()] {
 			out = append(out, n)
 		}
 	}

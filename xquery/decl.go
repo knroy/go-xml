@@ -626,7 +626,7 @@ func (q *Query) registerFunctions(parent xpath.FunctionLibrary) *xpath.Library {
 		parent = xpath.Builtins()
 	}
 	lib := xpath.NewLibrary(parent)
-	q.registerFormatNumber(lib)
+	q.registerFormatNumber(lib, q.sc, q.formats)
 	// The imported functions are registered before this module's own, so that
 	// a name declared in both is this module's. That order cannot actually be
 	// observed -- checkImportedNames has already refused the clash as
@@ -732,6 +732,13 @@ func (q *Query) buildModuleLibs() {
 	q.modLibs = make(map[*staticContext]*xpath.Library, len(q.modules))
 	for _, m := range q.modules {
 		lib := xpath.NewLibrary(q.lib)
+		// Ahead of this module's own functions, so that a format-number
+		// written in it resolves its format names against its own prolog
+		// rather than the importing query's. Registered only when the module
+		// declares a format: otherwise the parent's — the main module's —
+		// remains reachable, which is what a module with no decimal-format
+		// declaration of its own should see.
+		q.registerFormatNumber(lib, m.sc, m.formats)
 		for _, d := range m.funcs {
 			lib.Add(xpath.Function{
 				Name:      d.name,

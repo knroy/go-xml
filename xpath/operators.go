@@ -119,8 +119,10 @@ func (e *BinaryOp) evalNodeComparison(ctx *Context) (xdm.Sequence, error) {
 	switch e.Op {
 	case "is":
 		// Identity, not value equality: two elements with identical content
-		// are not "is"-equal.
-		return xdm.One(xdm.NewBoolean(ln == rn)), nil
+		// are not "is"-equal. Node.Is is pointer equality for every stored
+		// node and additionally recognises the two synthesized namespace
+		// nodes a pair of namespace:: walks makes for one binding.
+		return xdm.One(xdm.NewBoolean(ln.Is(rn))), nil
 	case "<<":
 		return xdm.One(xdm.NewBoolean(ln.Compare(rn) < 0)), nil
 	default:

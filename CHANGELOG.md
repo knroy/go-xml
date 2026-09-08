@@ -8,6 +8,45 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 ### Changed
 
+**Namespace nodes now have the identity XDM gives them.** The namespace axis
+does not return stored nodes — it synthesizes one per in-scope binding on every
+walk — so two walks over one binding handed back two pointers, and `is`
+compared the pointers. `/*/namespace::xlink is /*/namespace::*[. = '...']`
+answered false where the spec requires true. `xdm.Node.Is` now defers to the
+identity the rest of the engine already used: `Order()`, which `fn:generate-id`
+and `<<` read, and which `SetSynthesizedOrder` derives from the owning element
+and the prefix. The set operators (`intersect`, `except`, `fn:innermost`,
+`fn:outermost`) key on a matching `xdm.IdentityKey` so they agree with `is`
+rather than splitting one node into two map entries. Deliberately narrow: only
+`KindNamespace` participates, because two *parentless* nodes of any other kind
+share tree nil and order zero, and widening this would call them identical.
+QT3 `Axes123` now passes and `Axes122` — which asserts the same prefix on a
+*different* element is a different node — still does.
+
+**A library module's globals are scoped to what that module imported.** Function
+bodies in a library module were checked against a flat pool of every global from
+every loaded module, so a module could read `$foo:test` having imported no `foo`,
+merely because its importer had. §4.12 scopes an import to the module that
+writes it; `cbcl-module-003` asserts `XPST0008` for exactly that and was
+answering `"Hello!"`. Two related fixes ride along: a namespace registered more
+than once in `Options.Modules` is several modules, not one — the store keyed on
+namespace alone kept the last and lost the rest — and `fn:format-number` in a
+library module now resolves its format names against *its own* prolog rather
+than the importing query's (§4.4, `decimal-format-21`).
+
+**QT3 set and case dependencies merge per (type, value).** The merge was
+additive, so where a set declares a feature `satisfied="true"` and a case
+overrides it to `"false"` — the catalog's idiom for "this case is the one
+written for a processor that lacks the feature" — both copies survived and the
+gate skipped on the set's. All fourteen of `fn-load-xquery-module-901..914`
+were excluded by the declaration they exist to contradict. Per (type, value) is
+narrower than the per-kind rule the XSLT harness uses, which would drop the
+set's `<spec>` gate; that alternative was measured, not assumed, and takes the
+four lanes from 0/0/0/17 failures to 1/2/2/23.
+
+XQuery 3.1 29,901 → 29,952 of 29,964 in scope; XPath 3.1 21,848 → 21,863 of
+21,863 — the first lane to reach 100%.
+
 **Two stale QT3 feature labels lifted: `namespace-axis` and `infoset-dtd`.**
 `tests/qt3/runner.go` carried a list of features the engine does not offer, and
 two entries had outgrown their meaning — they described the engine as it once

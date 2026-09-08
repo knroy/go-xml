@@ -399,6 +399,78 @@ func (n *Node) SetSynthesizedOrder(owner *Node, offset int) {
 // Tree returns the containing tree.
 func (n *Node) Tree() *Tree { return n.tree }
 
+// Is reports whether n and o are the same node, which is what the "is"
+// operator asks and what XDM means by node identity.
+//
+// For every node the parser builds this is pointer equality, because each such
+// node exists exactly once. Namespace nodes are the exception: they are not
+// stored, they are synthesized on demand from the element's in-scope bindings,
+// so a second walk over the same axis hands back a fresh pointer for a binding
+// that is, by every other measure the engine applies, the same node. Comparing
+// those pointers made "/*/namespace::xlink is /*/namespace::*[. = '...']"
+// answer false where the spec requires true.
+//
+// Order() is the identity the rest of the engine already uses — fn:generate-id
+// is defined as "N" plus this number, and Compare reads the same field — and
+// SetSynthesizedOrder derives it from the owning element and the binding's
+// position in the sorted prefix list. So two synthesized nodes for one
+// element and prefix already share it, and two for different elements, or
+// different prefixes on one element, already do not. Deferring to it here
+// makes "is" agree with generate-id, with "<<" and ">>", and with the
+// document-order deduplication a path expression performs, rather than
+// standing alone as the only operator that could see one node as two.
+func (n *Node) Is(o *Node) bool {
+	if n == o {
+		return true
+	}
+	if n == nil || o == nil {
+		return false
+	}
+	// Only namespace nodes are synthesized, so only they can be the same node
+	// behind two pointers. Widening this to every kind would make two distinct
+	// parentless nodes — which share tree nil and order zero until something
+	// numbers them — compare identical.
+	if n.Kind != KindNamespace || o.Kind != KindNamespace {
+		return false
+	}
+	// A parentless namespace node is identical only to itself, which the
+	// pointer test above has already ruled out: with no owning element there
+	// is no binding for a second walk to re-derive.
+	if n.Parent == nil || o.Parent == nil {
+		return false
+	}
+	return n.Parent == o.Parent && n.Name.Local == o.Name.Local
+}
+
+// IdentityKey is a comparable value equal for two node references exactly when
+// Is reports them the same node, for use as a map key where a bare *Node
+// pointer would split one synthesized namespace node into two entries.
+//
+// Set membership — fn:intersect, fn:except, fn:innermost, fn:outermost — is
+// keyed on this rather than on the pointer so that the set operators agree
+// with "is". Every kind but namespace keys on the pointer itself, so this
+// costs nothing and changes nothing for them.
+type IdentityKey struct {
+	ptr    *Node
+	parent *Node
+	prefix string
+}
+
+// Identity returns the key that stands for this node's identity.
+func (n *Node) Identity() IdentityKey {
+	if n == nil {
+		return IdentityKey{}
+	}
+	// A parentless namespace node has nothing to key on but itself: without
+	// an owning element there is no binding for a second walk to re-derive,
+	// and keying every such node on the same zero parent would merge nodes
+	// that are genuinely distinct.
+	if n.Kind == KindNamespace && n.Parent != nil {
+		return IdentityKey{parent: n.Parent, prefix: n.Name.Local}
+	}
+	return IdentityKey{ptr: n}
+}
+
 // Compare orders two nodes in document order, returning -1, 0 or 1. Nodes in
 // different trees are ordered by tree id, which is stable within a transform.
 func (n *Node) Compare(o *Node) int {

@@ -186,7 +186,48 @@ func (q *Query) checkBodyVars(ctx *xpath.Context) error {
 	for _, d := range q.allVars() {
 		global[d.name.Clark()] = true
 	}
-	for _, d := range q.funcs {
+	if err := q.checkFuncVars(q.funcs, global, ctx); err != nil {
+		return err
+	}
+	// A LIBRARY module's bodies are checked against what THAT module can see,
+	// which is its own globals and those of the modules it imported itself --
+	// not the flat pool above. §4.12 scopes an import to the module that
+	// writes it, so a module that imported no foo may not read $foo:test even
+	// though its importer imported foo and the variable is loaded and bound.
+	// Pooling the globals made that reference resolve and the query answer
+	// "Hello!"; cbcl-module-003 asserts XPST0008 for exactly it.
+	for _, m := range q.modules {
+		vis := map[string]bool{}
+		for _, d := range m.vars {
+			// Its own globals, private ones included: §4.15 hides a private
+			// declaration from OTHER modules, not from its own bodies.
+			vis[d.name.Clark()] = true
+		}
+		for _, other := range q.modules {
+			// Only what m ITSELF imported. Ranging over every loaded
+			// module regardless would restore the flat pool this loop
+			// exists to abolish, just one level down: a module would
+			// still see a namespace it never imported, merely because
+			// some sibling did.
+			if other == m || !m.imported(other.ns) {
+				continue
+			}
+			for _, d := range other.visibleVars() {
+				vis[d.name.Clark()] = true
+			}
+		}
+		if err := q.checkFuncVars(m.funcs, vis, ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkFuncVars is the body of checkBodyVars for one module's functions,
+// judged against the set of global names that module may see.
+func (q *Query) checkFuncVars(funcs []*funcDecl, global map[string]bool,
+	ctx *xpath.Context) error {
+	for _, d := range funcs {
 		// inspect, not eval: the free variables are read off the compiled
 		// form, and nothing is run. An expression with lifted operands is
 		// skipped rather than inspected, because the lifter's own invented

@@ -13,8 +13,8 @@ therefore no longer a measured figure.
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,222 | 15,221 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
 | **xpath** | QT3 — XPath 3.0 | 19,307 | 19,306 | 99.99% | **1** | 0 | 0 | **1** | 99.99% |
-| **xpath** | QT3 — XPath 3.1 | 21,849 | 21,848 | 100.00% | **1** | 0 | 0 | **1** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,950 | 29,933 | 99.94% | **17** | 0 | 0 | **17** | 99.94% |
+| **xpath** | QT3 — XPath 3.1 | 21,863 | 21,863 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xquery** | QT3 — XQuery 3.1 | 29,964 | 29,952 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
 | **xslt** | W3C XSLT 2.0 | 6,157 | 6,149 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 8,663 | 8,640 | 99.73% | **23** | 0 | 0 | **23** | 99.73% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
@@ -72,12 +72,12 @@ The namespace axis is implemented (`xpath/nsaxis.go`), and the XSLT harness had
 declared `namespace_axis: true` all along — the two harnesses contradicting
 each other is what exposed it. Lifting both moved the *in-scope* count, which
 is the only signal that proves a lift took effect: XPath 2.0 15,183 → 15,222,
-3.0 19,244 → 19,307, 3.1 21,786 → 21,849, XQuery 29,918 → 29,950 in scope
-(29,901 → 29,933 passing) with no new XQuery failure.
+3.0 19,244 → 19,307, 3.1 21,786 → 21,863, XQuery 29,918 → 29,964 in scope
+(29,901 → 29,952 passing) with no new XQuery failure.
 
 `infoset-dtd` lifted clean — 27 more cases per XPath lane, 32 in XQuery, zero
-failures. `namespace-axis` admitted 36 more cases per lane, of which 35 pass
-and one does not: `prod-AxisStep/Axes123`, which asserts node *identity* across
+failures. `namespace-axis` admitted 36 more cases per lane, all of which now pass.
+One did not at first: `prod-AxisStep/Axes123`, which asserts node *identity* across
 two namespace-axis walks (`/*/namespace::xlink is /*/namespace::*[. =
 '…/xlink']`). It is XP20+, so it appears in all three XPath lanes and is one
 distinct case rather than three. The cause is structural rather than a wrong
@@ -117,7 +117,7 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1 ceiling: 29,901 / 29,918 = 99.94%** — what passes now. Nothing is
+**XQuery 3.1 ceiling: 29,952 / 29,964 = 99.96%** — what passes now. Nothing is
 left that is both fixable and worth the change.
 
 The XSD split is taken largely from the suite's own `status` field rather than

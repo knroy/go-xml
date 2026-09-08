@@ -99,14 +99,14 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 2.0** | 100.00% of the W3C QT3 suite (15,183 of 15,183 in scope) |
 | **XPath 3.0** | 100.00% of the W3C QT3 suite (19,244 of 19,244 in scope) |
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,786 in scope); maps, arrays, the lookup operator, the JSON family |
-| **XQuery 3.1** | 99.94% of the W3C QT3 suite (29,901 of 29,918 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
+| **XQuery 3.1** | 99.96% of the W3C QT3 suite (29952 of 29964 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,149 of 6,157 in scope); verified against Saxon-HE 12.4 on two production corpora |
 | **XSLT 3.0** | 99.73% of the W3C XSLT suite filtered to 3.0 (8,640 of 8,663 in scope). Streaming is not implemented, and its 2,646 cases are out of scope rather than failing — though measured with that gate lifted, 92% of them pass anyway — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,967 of 24,995); **99.91%** of its *schema-validity* tests (14,380 of 14,393) |
 | **XSD 1.1** | 99.90% instance (26,189 of 26,216); **99.93%** schema-validity (15,343 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 1,590 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,593 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -1225,7 +1225,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,590 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,593 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |
@@ -1476,7 +1476,7 @@ by 461 in one step.
 FOTS 3.1 and covers XQuery as well as XPath 3.0/3.1. Each is measured on its
 own denominator, because a case that needs a language the target does not
 claim says nothing about that target's conformance: the XPath targets exclude
-the XQuery-only cases, and the XQuery target runs 29,918 of the suite's 31,821
+the XQuery-only cases, and the XQuery target runs 29964 of the suite's 31,821
 with 1,903 skipped. Counting an out-of-scope case as a pass is how a
 conformance number becomes meaningless.
 
