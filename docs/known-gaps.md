@@ -143,31 +143,6 @@ current Unicode. The suite was written against Unicode 3.1; the codepoints in
 question — U+1D7A8 among them — were categorised differently then. Matching the
 suite would mean shipping a frozen 2001 character database.
 
-### `ibmMeta/wildcard.testSet` is mislabelled — closed, the driver scopes them out
-
-4 cases in 1.0 (`s3_10_6v02s`, `s3_10_1ii08s`, `s3_10_1ii09s`, and one in
-`anyAttribute`).
-
-The set is tagged `version="1.0"`, but every group in it cites the 1.1 spec and
-four use `notQName`, which is 1.1-only. Rejecting `notQName` under 1.0 is
-correct; the tests are in the wrong bucket.
-
-**They no longer count against the 1.0 mark.** Commit **3104543**
-(*"a case that is never scored must still be counted"*) reclassified them:
-a schema document using `notQName` or `notNamespace` is not a valid 1.0 schema
-document at all, so a 1.0 processor refusing it is conformant rather than wrong,
-and the driver now reports them as **out-of-scope** rather than as false
-rejects. Measured at `a8dee9a` the 1.0 lane reports `out-of-scope 5` and none of
-the four appears among its 33 disagreements. The reasoning above stands; the
-"4 cases" it was costing does not.
-
-That commit also records why `documentationReference` is *not* usable as the
-scoping key, which was measured rather than assumed: 32 groups lacking a
-`version` attribute carry one and 28 of those already agree under 1.0, so
-excluding on it would discard 28 correct results to rescue 4 — shrinking the
-denominator to raise the score. The syntax of the schema document itself is what
-decides it.
-
 ### `particlesZ033_g` is a 1.0 verdict scored against a 1.1 run
 
 `MS-Particles/particlesZ033_g` — 1 schema false accept, 1.1 only. Previously
@@ -445,7 +420,30 @@ no suite case, and `xslt/unionmember_test.go` is what pins it instead.
 ## Open
 
 Real gaps, together with the constraints and retractions that bound how they
-may be closed. Ordered by how much they cost.
+may be closed. Ordered by how much they cost. Entries marked *closed* or *not a
+defect* are kept here rather than collapsed into *Fixed* because their bodies
+are the argument that bounds a neighbouring gap; the one-line records of
+everything else that closed are under *Fixed*.
+
+### The `dtd` package cannot enforce XML §4.3.4
+
+`xdm` checks an external entity's declared version against the including
+document's: a 1.0 document may not include a 1.1 entity, an unrecognised
+version is refused rather than assumed compatible, and a table whose version
+was never determined enforces the stricter 1.0 rule. `dtd` does none of this,
+and the reason is structural rather than an oversight.
+
+`dtd.Load` takes a DOCTYPE *directive string*, not a document. It therefore
+never sees an XML declaration and has nothing to compare an entity's version
+against — its own `stripTextDecl` discards the text declaration for exactly
+the reason `xdm`'s once did. Closing it means giving `dtd` a way to be told
+the including document's version, which is a new API surface, not a gap
+closure. **It should wait for a caller that needs it**: inventing the
+parameter now would fix the shape of something no test exercises.
+
+Nothing in the suites scores this. The `XmlVersions` cases reach the parser
+through `xdm`, which is checked; a caller reaching `dtd.Load` directly is the
+uncovered path.
 
 ### DocBook 5.0's XSD refuses to load (XSD) — not a defect, DocBook's schema is invalid
 
@@ -514,47 +512,6 @@ none of the five schema-level disagreements in `xsdtests` mentions `cos-nonambig
 or `cos-element-consistent` in either direction. Relaxing either check to make
 DocBook load would introduce a false accept against `mgR002` and `mgQ021`
 directly.
-
-### `xsl:sort` compares arbitrary-precision values through `float64` first (XSLT) — not a defect
-
-`compareAtoms` in `xslt/instructions.go` uses `Float64()` for a value an
-`xs:double` cannot hold, but it is *sound*: the doubles are a pre-filter, and
-it falls through to an exact `Rat().Cmp` when they compare equal, so
-`xsl:sort` orders 10^400, 10^400+1 and 10^400+2 correctly. Recorded here
-because the arbitrary-precision audit flags the call site and the reason it is
-safe is not local to it.
-
-### A hyphen after a variable reference is part of the name (XPath, XQuery) — not a defect, retracted
-
-`$e-1` evaluates as a reference to a variable named `e-1` rather than as
-`$e - 1`. This was recorded here as a defect, on the grounds that Saxon and
-BaseX read it as subtraction. That was wrong, and the QT3 suite settles it
-twice over.
-
-**The suite writes such names itself and depends on them.**
-`app/fo-spec-examples.xml` binds `let $tz-10 := xs:dayTimeDuration("-PT10H")`
-and then passes `$tz-10` to `fn:adjust-dateTime-to-timezone` as a single
-variable; `$in-xml-1` and `$in-xml-2` account for 106 further uses. If a hyphen
-before a digit ended a name, every one of those cases would fail. They pass.
-
-**And it states the trailing case outright.** `prod/NameTest.xml`'s
-`K-NameTest-3` is `foo- foo`, described as "'foo-' is an invalid nametest.
-Whitespace is wrong", expecting `XPST0003`. So a name absorbs a final hyphen
-*even when whitespace follows*, and the result is a syntax error rather than
-subtraction.
-
-That second point was found the expensive way. An earlier reading of this held
-that `$e- 1` should be subtraction because whitespace after the hyphen proves
-the hyphen cannot continue the name — plausible, and wrong. Implemented as a
-one-line lookahead in `lexNCName`, it broke `K-NameTest-3` in all four suites
-at once: XPath 2.0 15,183 to 15,182, 3.0 19,244 to 19,243, 3.1 21,786 to
-21,785, XQuery 29,800 to 29,799. Reverted. The counts alone would have shown
-four losses with no gains; the case list showed it was one case, four times.
-
-The rule is plain longest-match over `NameChar` with no lookahead, and this
-engine implements it. `xpath/hyphen_test.go` pins the whole table so the
-retraction is not re-litigated. Anyone wanting arithmetic writes a space:
-`$e - 1`.
 
 ### Schema-validity rules not yet implemented (XSD)
 
@@ -1059,57 +1016,6 @@ and breaks the second. A correct fix needs the two separated rather than one
 range serving both — which is a change to `effectiveTotalRange`'s contract, not
 a change to this wrapper.
 
-### Particle restriction edge cases (XSD) — fixed, all but one
-
-This entry named six schema false rejects in 1.1 — `addB118`, `addB183`,
-`particlesHa161`, `particlesT002`, `particlesT009`, `particlesZ001` — two of
-them failing under 1.0 as well. **Five of the six now pass in both versions.**
-Measured at `a8dee9a`: XSD 1.1 has exactly **one** schema false reject in the
-whole suite, `ste110`, which is `queried bug4957` and disputed rather than
-addressable. XSD 1.0 has two, `ste110` and `particlesZ001`.
-
-`particlesT002`, `particlesT009` and `particlesHa161` were closed by **7495485**
-(*"a choice is unordered, and its optionality is its own"*): `recurseLax` walked
-the base's alternatives left to right, so a derived choice offering them in a
-different order was rejected though a choice imposes no order; and
-`recurseAsIfGroup` wrapped an element at a fixed `1..1`, so an optional element
-restricting an optional choice compared `0..1` against a branch's `1..1`. Both
-relaxations are 1.1-gated, and the three guards they needed are recorded above
-under *Four constraints on the 1.1 restriction relaxations*.
-
-`addB183` was closed by **9a6567f** (*"compare fixed value constraints as
-values, not as strings"*). `addB118` no longer disagrees under either version.
-
-**What is left is `particlesZ001`, and only under 1.0.** It is no longer a 1.1
-gap at all — language inclusion decides it there. Its 1.0 refusal is the
-occurrence-carrying wrapper described in the entry immediately above, and the
-suite's own annotation calls the 1.0 rule "ambiguous" while tagging the case as
-intensional restriction, a 1.1 feature; it is listed under *Suite cases that
-should be read as disputed* for that reason. So the "bug in shared logic, best
-entry point" reading this entry rested on is gone: the shared-logic half was
-`addB183`, and it is fixed.
-
-### A collection URI resolves against the static base, not the context item — fixed
-
-Recorded because the reading is not the obvious one. `fn:collection` once
-passed the *context item's* base URI to the resolver, so
-`collection("collection1")` asked about whichever document was in focus rather
-than about what the expression named. The spec resolves the argument against
-the **static** base URI. The item's base remains the fallback for a caller who
-set no static base, and resolving stays the resolver's job — the engine hands
-over the base and does not guess what a URI means to the caller.
-
-`fnCollection` in `xpath/fn_misc.go` now reads `StaticBaseURI` first and falls
-back to the item. `TestCollectionStaticBaseBeatsItemBase` is what pins it: the
-two tests beside it each set only one of the bases, so a context item with no
-base URI cannot tell them apart, and reverting to the item's base passed both.
-The new case gives the item a base that differs from the static one, which is
-the only shape that fails when the wrong base is handed over.
-
-`cta0022` is unaffected either way. With no resolver configured the default is
-still `FODC0002`, which is the point, and the refusal is recorded under *Won't
-fix* above.
-
 ### Instance validation gaps (XSD)
 
 This section used to list 25 instance false accepts, named case by case. That
@@ -1141,32 +1047,6 @@ What remains after re-measuring is three cases, and only one was addressable:
 The lesson is the one this file keeps relearning: a case list is a measurement,
 and it decays. These entries survived several rounds after the bugs behind them
 were already fixed.
-
-### XPath cases that are not engine bugs — closed, all three now pass
-
-This entry named `fn-doc-available-5`, `functx-fn-doc-available-1` and
-`fn-in-scope-prefixes-25` as cases that would keep failing for reasons outside
-the engine. **None of the three fails any more.** Measured at `a8dee9a` with
-`-count=1`: QT3 reports **0 failed** on XPath 2.0 (15,183 in scope), 3.0
-(19,244) and 3.1 (21,786) — 100.00% on each — and the XQuery lane's 17 failures
-are all in `prod-ModuleImport`, `prod-ContextItemDecl`, `app-Demos`,
-`op-same-key`, `prod-DecimalFormatDecl`, `prod-OptionDecl.serialization` and
-`prod-TypeswitchExpr`. None of the three appears in any lane.
-
-The `fn-in-scope-prefixes-25` half was closed outright rather than reclassified:
-its stated blocker was that a namespace declared through a DTD default attribute
-"`encoding/xml` never parses", and **87d618b** (*"apply ATTLIST attribute
-defaults from the internal subset"*) is what parses it. The two
-`doc-available` cases likewise resolve, so the "environment declares no `uri`"
-reading no longer describes a failure.
-
-Kept as a retraction rather than deleted, because the reasoning it gave was the
-plausible kind — *the suite's environment is under-specified, so the case cannot
-pass* — and that reading is available again for any case whose environment looks
-thin. It was wrong here twice over, and the cheap check is to run the lane
-before believing it.
-
----
 
 ## What would move the numbers
 
@@ -1370,7 +1250,8 @@ evidence. **Most of them no longer cost anything**, and the list is kept for the
 argument rather than the arithmetic: re-measured at `a8dee9a`, the only two
 still disagreeing are `particlesZ001` (1.0 only) and `simple093` (1.1 only).
 The four `notQName` groups are now scored out-of-scope by the driver (see
-*`ibmMeta/wildcard.testSet` is mislabelled* above), and `particlesK006`,
+*`ibmMeta/wildcard.testSet` scored in the wrong lane* under *Fixed*), and
+`particlesK006`,
 `particlesZ007`, `simple004`, `simple005` and `simple006` all agree in both
 versions. The sentence that stood here — "so the addressable counts above
 include them" — was true when written and is not now.
@@ -1487,6 +1368,32 @@ root rather than the document that named them, which skipped 461 cases as
 "source unavailable" rather than counting them; in-scope cases went from 14,720
 to 15,181. Recorded because a suppressed case is not a passing one, and the
 count moved without any engine behaviour changing. See CHANGELOG.
+
+**`ibmMeta/wildcard.testSet` scored in the wrong lane.** 1.1 cases counted
+against the 1.0 run; the driver now scopes them out and counts the exclusion
+(harness, not engine). Closed by **3104543**.
+
+**`xsl:sort` through `float64`.** Investigated as a precision defect and
+retracted: doubles pre-filter and an exact `Rat.Cmp` decides ties, so the
+comparison is sound and stays linear.
+
+**A hyphen after a variable reference.** Reported as a lexing defect and
+retracted — `$e-1` is one name, and QT3 writes such names itself.
+
+**Particle restriction edge cases (XSD).** `particlesT002`, `T009` and `Ha161`
+closed by **7495485**, `addB183` by **9a6567f** (false rejects). Only
+`particlesZ001` remains, recorded under *the occurrence-carrying wrapper*
+above.
+
+**A collection URI resolved against the context item.** `fn:collection` now
+resolves against the static base URI, with the item's base as the fallback.
+The two tests that guarded it both passed when it was reverted — each set only
+one of the two bases — so `TestCollectionStaticBaseBeatsItemBase` pins the
+distinction.
+
+**Three XPath cases predicted to keep failing.** `fn-doc-available-5`,
+`functx-fn-doc-available-1` and `fn-in-scope-prefixes-25` all pass; the
+DTD-defaulting blocker was closed by **87d618b**.
 
 ## Related
 

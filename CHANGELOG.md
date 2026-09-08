@@ -120,6 +120,32 @@ thinner exactly where those corpora are thick.
 
 ### Fixed
 
+**A wildcard spelling `namespace=""` admitted every element.** Part 1 §3.10.2
+defaults an *absent* `namespace` attribute to `##any`; a present empty one is
+an `xs:namespaceList` with no members, so it denotes the empty set and matches
+nothing. `readWildcard` defaulted on the word count alone, which turned a
+wildcard admitting no element into one admitting all of them — a false accept
+in the direction that matters, since the schema author wrote the narrower
+thing. `MS-Wildcards/wildZ010` is that case, `status="stable"`, and it is the
+only conformance-moving fix in this round: **XSD 1.0 rises to 39356 and XSD
+1.1 to 41543**, both marks raised in `tests/ratchet.txt`. `NSEnumerated` with
+an empty list already rejected everything, so no matching logic changed.
+
+**Two fixes that were already correct are now defended.** `fn:collection`
+resolves its argument against the static base URI, and both tests guarding
+that passed when the implementation was reverted to use the context item's
+base — each set only one of the two bases, so neither could tell the right
+ordering from the wrong one. The five all-group-by-wildcard schemas closed in
+571e5b5 were guarded only by the aggregate conformance count, which names no
+case when it moves. Both now have tests that fail when the behaviour does:
+`TestCollectionStaticBaseBeatsItemBase`, and `xsd/allgroup_wildcard_test.go`
+pinning the five valid schemas beside `all244.n`, whose *rejection* is the
+load-bearing half — a relaxation that accepted the five by loosening the
+wildcard-occurrence rule would accept `all244.n` too. Sabotaging the
+emptiability check leaves `all244.n` rejected by a *different* rule, which a
+bare `err != nil` assertion would accept, so the tests assert on the
+diagnostic text.
+
 **`xsl:result-document` carried a validation's annotation back and left the
 rest of it behind.** The instruction assesses a document that `toDocument`
 built and then copies the result onto the nodes the output actually records,
