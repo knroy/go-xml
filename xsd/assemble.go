@@ -151,10 +151,11 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	s.xpathVersion = opts.XPathVersion
 	s.maxPositions = opts.MaxContentModelPositions
 	a := &assembler{
-		schema: s,
-		opts:   opts,
-		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
+		schema:    s,
+		opts:      opts,
+		seen:      map[docKey]bool{},
+		rootBases: map[string]bool{},
+		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 	// The root document is marked seen before anything else runs. Without
 	// it a schema that is imported back by one of its own imports — legal,
@@ -163,6 +164,7 @@ func Load(root *xdm.Node, baseURI string, opts Options) (*Schema, error) {
 	if baseURI != "" {
 		a.seen[docKey{location: baseURI}] = true
 	}
+	a.rootBases[baseURI] = true
 	a.push(root, baseURI, "", false)
 	if err := a.run(); err != nil {
 		return nil, err
@@ -366,10 +368,11 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 	s.maxPositions = opts.MaxContentModelPositions
 	s.sourcePaths = append([]string(nil), paths...)
 	a := &assembler{
-		schema: s,
-		opts:   opts,
-		seen:   map[docKey]bool{},
-		p:      &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
+		schema:    s,
+		opts:      opts,
+		seen:      map[docKey]bool{},
+		rootBases: map[string]bool{},
+		p:         &parser{schema: s, attrsDone: map[*ComplexType]bool{}, assembled: true},
 	}
 
 	for _, path := range paths {
@@ -391,6 +394,9 @@ func LoadFiles(paths []string, opts Options) (*Schema, error) {
 		if resolved != "" {
 			a.seen[docKey{location: canonicalLocation(resolved)}] = true
 		}
+		// Named on the command line, so the caller knows about it: its
+		// faults are not attributed to a file they did not expect.
+		a.rootBases[resolved] = true
 		a.push(tree.Root, resolved, "", false)
 	}
 
@@ -532,6 +538,13 @@ type assembler struct {
 	queue  []pending
 	p      *parser
 	count  int
+
+	// rootBases holds the locations of the documents the caller named
+	// directly. Faults in those are reported without naming the file — the
+	// caller is already looking at it — which is what confines the
+	// attribution to documents they would not otherwise think to open.
+	// LoadFiles names several, so this is a set rather than one string.
+	rootBases map[string]bool
 
 	// pendingOverrides are the XSD 1.1 <xs:override> elements awaiting the
 	// same treatment, minus the self-reference binding: an override's
@@ -764,6 +777,11 @@ func (a *assembler) run() error {
 // readOne reads one document's components and queues what it references.
 func (a *assembler) readOne(root *xdm.Node, item pending) error {
 	doc := &schemaDoc{root: root, baseURI: item.base}
+	// A fault in this document should name it — unless it is the document
+	// the caller handed to Load, which they are already looking at.
+	if !a.rootBases[item.base] {
+		a.p.noteDocument(root, item.base)
+	}
 	if attr := root.Attr("", "targetNamespace"); attr != nil {
 		// §3.15.2 (schema-namespace): targetNamespace names a
 		// namespace, and "" names none. A document meaning "no target

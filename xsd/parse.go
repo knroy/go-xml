@@ -1,6 +1,7 @@
 package xsd
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -94,6 +95,20 @@ type ParseError struct {
 	Message string
 	// Line and Column locate it, when the node carried a position.
 	Line, Column int
+	// Document names the schema document the fault is in, when that is not
+	// the document the caller passed to Load. A fault in the caller's own
+	// document leaves this empty: they are already looking at it, and
+	// repeating its name on every line would be noise. It is set for a
+	// document reached through <xs:include>, <xs:import>, <xs:redefine> or
+	// <xs:override> — the case where the message otherwise describes a
+	// fault in a file the reader has no reason to suspect.
+	Document string
+
+	// node is the element the fault is on, kept so that Document can be
+	// filled in once the parse finishes. It is not exported: it is an
+	// implementation detail of attributing the fault, and holding a tree
+	// node in a returned error would keep the whole document alive.
+	node *xdm.Node
 }
 
 // Error implements error.
@@ -107,18 +122,62 @@ func (e *ParseError) Error() string {
 		b.WriteString(": ")
 	}
 	b.WriteString(e.Message)
+	// The document goes last so that the code still leads: callers and the
+	// conformance harness match on the prefix, and a fault that gained a
+	// location must not stop looking like the fault it is.
+	if e.Document != "" {
+		fmt.Fprintf(&b, " (in %s)", e.Document)
+	}
 	return b.String()
 }
 
 // errorAt builds a ParseError located at a node.
+//
+// It does not fill in Document: errorAt has no parser, and the map from a node
+// to the document it came from lives on the parse. p.errorAt is the form that
+// names the file; this one is kept for the handful of callers that have no
+// parser to hand.
 func errorAt(n *xdm.Node, code, format string, args ...any) *ParseError {
-	e := &ParseError{Code: code, Message: fmt.Sprintf(format, args...)}
+	e := &ParseError{Code: code, Message: fmt.Sprintf(format, args...), node: n}
 	if n != nil {
 		if line, col, ok := n.Position(); ok {
 			e.Line, e.Column = line, col
 		}
 	}
 	return e
+}
+
+// noteDocument records where a nested schema document was read from, so that a
+// fault anywhere in it can name the file.
+//
+// base is empty for the document the caller supplied, and nothing is recorded
+// for it: its faults read as they always have.
+func (p *parser) noteDocument(root *xdm.Node, base string) {
+	if root == nil || base == "" {
+		return
+	}
+	if p.docNames == nil {
+		p.docNames = map[*xdm.Node]string{}
+	}
+	p.docNames[root.Root()] = base
+}
+
+// attributeFaults fills in the Document of every fault that is in a document
+// the caller did not supply, and releases the tree nodes the faults held.
+//
+// It runs once, at the end of the parse, rather than at each of the ~250 sites
+// that build a fault: by then every document has been recorded, which is not
+// true while the first of them is still being read. The node is dropped on the
+// way out so that a returned error does not pin the schema document in memory.
+func (p *parser) attributeFaults() {
+	for _, err := range p.errs {
+		var pe *ParseError
+		if !errors.As(err, &pe) || pe.node == nil {
+			continue
+		}
+		pe.Document = p.docNames[pe.node.Root()]
+		pe.node = nil
+	}
 }
 
 // parser reads schema documents into components.
@@ -131,6 +190,24 @@ func errorAt(n *xdm.Node, code, format string, args ...any) *ParseError {
 type parser struct {
 	schema *Schema
 	doc    *schemaDoc
+
+	// docNames maps a schema document's root node to the location it was
+	// read from, for the documents that are *not* the one the caller passed
+	// to Load. It is what lets a fault name the file it is in.
+	//
+	// It is keyed on the node rather than read from p.doc at the moment the
+	// error is built because most faults are not raised while their document
+	// is being read: they come from fixups, queued during the read and
+	// drained in finish(), by which time p.doc has moved on — usually to the
+	// last document of the assembly, which is the wrong answer and a
+	// confidently wrong one. A node belongs to one document for as long as
+	// it exists, so it still answers correctly from inside a deferred
+	// closure.
+	//
+	// Only nested documents are recorded, so a single-document parse never
+	// allocates: the absent entry *is* the "this is the caller's own
+	// document" case.
+	docNames map[*xdm.Node]string
 
 	// exactMin and exactMax hold the exact occurrence bounds read by the
 	// most recent occurs call, non-nil only when the bound was too large
@@ -479,6 +556,10 @@ func (p *parser) finish() error {
 	if len(p.errs) == 0 {
 		return nil
 	}
+	// Every document is known by now, so each fault can be told which one it
+	// came from. Faults raised while a document was being read and faults
+	// raised by a fixup long afterwards are attributed the same way.
+	p.attributeFaults()
 	return &SchemaErrors{Errors: p.errs}
 }
 

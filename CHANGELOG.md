@@ -188,6 +188,40 @@ thinner exactly where those corpora are thick.
 
 ### Fixed
 
+**A fault in an included schema now names the file it is in.** Issue #4 above
+was an error about a stylesheet one file away that said nothing to distinguish
+it from the one the author was reading, and the same shape was live in two more
+places. In `relaxng`, a typo inside a document reached by `<include>` reported
+`relaxng: <zeroOrMore1> is not a RELAX NG element` — true of the construct,
+silent about which of the two files it was written in, so the author audited
+the schema they had written, which was correct. In `xsd`, a bad reference in an
+included document reported `src-resolve: type="t:NoSuchType" uses undeclared
+prefix "t"` with no file and no line, which reached nearly every
+multi-document schema diagnostic. Both now say where: `in <include
+href="lib.rng">: relaxng: …` and `… undeclared prefix "t" (in inner.xsd)`.
+
+The distinction that keeps this from becoming noise is *nesting*, not
+composition: only a document the caller did not name is attributed. RELAX NG
+gets it from the call site — `checkSyntax` and `checkRestrictions` are called
+from three places, and only the `<include>` and `<externalRef>` ones wrap,
+reusing the `<include href=%q>` idiom already used by the errors beside them,
+so the top-level message is unchanged byte for byte. XSD gets it from
+`assembler.rootBases`, the set of documents the caller named — one for `Load`,
+several for `LoadFiles`.
+
+`ParseError` gains a `Document` field rather than a rewritten `Message`, and it
+is rendered as a `(in …)` suffix so the spec's error code still leads: callers
+and the conformance harness match on that prefix, and a fault that gained a
+location must not stop looking like the fault it is. The attribution is keyed
+on the node the fault is on rather than stamped from the parser's current
+document, because most faults are not raised while their document is being
+read — they come from fixups queued during the read and drained in `finish()`,
+by which point the parser has moved on to the last document of the assembly,
+which would have made every deferred fault confidently name the wrong file. The
+node is dropped once the document is filled in, so a returned error does not
+pin the schema tree in memory. Nothing about validation changed; every RELAX NG
+and XSD conformance mark holds.
+
 **A wildcard spelling `namespace=""` admitted every element.** Part 1 §3.10.2
 defaults an *absent* `namespace` attribute to `##any`; a present empty one is
 an `xs:namespaceList` with no members, so it denotes the empty set and matches
