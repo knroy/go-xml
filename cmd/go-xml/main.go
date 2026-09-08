@@ -496,6 +496,34 @@ func splitSecondary(results []xslt.SecondaryResult) (principal, secondary []xslt
 // Each href is resolved inside dir and checked for containment, because an
 // href is stylesheet-controlled and "../../etc/thing" would otherwise let a
 // transform write anywhere the process can reach.
+// isPlatformAbsolute reports whether an href is absolute on ANY platform,
+// spelled textually so the answer does not change with the host.
+//
+// filepath.IsAbs answers for the operating system it was compiled for, which
+// is the wrong question for a stylesheet: "C:/out.xml" is absolute on Windows
+// and, on Unix, an ordinary relative name. Left to IsAbs alone the same
+// stylesheet was refused on one platform and, on the other, quietly made a
+// directory called "C:" inside the result directory -- writing a file nobody
+// named rather than reporting the href it could not honour.
+//
+// Three spellings are absolute somewhere: a leading slash (POSIX), a
+// drive-letter prefix, and a UNC path. The check is on the href as written
+// rather than on the filesystem, so a host with no C: drive answers the same
+// as one with.
+func isPlatformAbsolute(href string) bool {
+	if strings.HasPrefix(href, "/") || strings.HasPrefix(href, `\\`) {
+		return true
+	}
+	// A drive letter: one ASCII letter, a colon, then a separator or nothing.
+	if len(href) >= 2 && href[1] == ':' {
+		c := href[0]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
 func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 	if len(results) == 0 {
 		return nil
@@ -525,7 +553,7 @@ func writeSecondary(results []xslt.SecondaryResult, dir string) error {
 		// safely contained but writes somewhere the stylesheet did not name —
 		// and a caller reading the href back would look in the wrong place.
 		href := filepath.FromSlash(r.Href)
-		if filepath.IsAbs(href) || strings.HasPrefix(r.Href, "/") {
+		if filepath.IsAbs(href) || isPlatformAbsolute(r.Href) {
 			return fmt.Errorf(
 				"xsl:result-document href %q is absolute; it must be relative to -result-dir",
 				r.Href)
