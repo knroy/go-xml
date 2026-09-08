@@ -67,7 +67,7 @@ and its declarations bind), a `%pe;` in the external subset may expand to whole
 declarations, and conditional sections — `<![INCLUDE[` and `<![IGNORE[`, §3.4 —
 are resolved, including nested ones.
 
-Three things to know before relying on it:
+Four things to know before relying on it:
 
 * **Nothing is fetched without a `Resolver`, and with none the load is
   refused.** `dtd.Load` returns an error wrapping `dtd.ErrNoResolver` rather
@@ -86,6 +86,16 @@ Three things to know before relying on it:
   as undeclared, which is strictly correct and useless. `Options.AllowUndeclared`
   skips those; what *is* declared stays enforced. `DTD.HasExternalSubset`
   records that a DOCTYPE named one.
+* **A declaration outside XML 1.0 §3.3's closed sets is reported, not
+  skipped.** The attribute type is one of ten names or an enumeration, and the
+  default declaration is `#REQUIRED`, `#IMPLIED`, `#FIXED AttValue` or a
+  literal. A one-character typo — `IDREFF`, `#REQUIRE` — used to leave the
+  attribute unconstrained and silent, so `<!ATTLIST r a CDATA #REQUIRE>` on a
+  document omitting `a` passed. Validate now says which attribute went
+  unchecked and why, for the reason `HasExternalSubset` exists: a caller has to
+  be able to tell a validated attribute from an unexamined one. The
+  declaration is kept rather than the parse failed, so the rest of the subset
+  still applies.
 
 `ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
 are not fed back into the data model, which is why `fn:id` still falls back to

@@ -75,6 +75,13 @@ const DefaultMaxErrors = 100
 // What is checked: element content models, attribute presence (#REQUIRED and
 // #FIXED), enumerated attribute values, and ID/IDREF.
 //
+// An attribute whose declared type or default declaration is outside the sets
+// XML 1.0 §3.3 closes is reported here rather than skipped. Such a declaration
+// constrains the attribute somehow and this package cannot say how, so leaving
+// it silent would report an unexamined attribute as valid — the one thing this
+// package must never do. Compare HasExternalSubset, which says the same about
+// declarations that were never read.
+//
 // Which declarations reach here is decided by how the DTD was read, not by
 // this function. Parse reads the internal subset alone, and a DTD from it
 // carries HasExternalSubset so a caller knows the check was partial; Load with
@@ -253,6 +260,10 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 				v.fail(path, "attribute %s is #FIXED %q but is %q",
 					d.Name, d.Value, val)
 			}
+		case AttrInvalid:
+			v.fail(path, "attribute %s has an unrecognised default "+
+				"declaration %s, so its presence was not checked",
+				d.Name, d.Value)
 		}
 		if !have {
 			continue
@@ -273,6 +284,19 @@ func (v *validator) checkAttributes(el *xdm.Node, path string) {
 			for _, r := range strings.Fields(val) {
 				v.refs = append(v.refs, idref{r, path})
 			}
+		case "CDATA", "NMTOKEN", "NMTOKENS", "ENTITY", "ENTITIES",
+			"NOTATION", "ENUMERATION":
+			// Declared, and either unconstrained (CDATA) or constrained by
+			// something this package does not yet check. Silence here is a
+			// deliberate gap in coverage, not a failure to recognise the
+			// declaration.
+		default:
+			// XML 1.0 §3.3.1 closes the type position to the names above.
+			// Without this branch an unrecognised type — "IDREFF" for
+			// "IDREFS" — falls through to no check at all, and the caller
+			// cannot tell an attribute that passed from one never examined.
+			v.fail(path, "attribute %s is declared with the unrecognised "+
+				"type %s, so its value was not checked", d.Name, d.Type)
 		}
 	}
 }

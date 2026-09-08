@@ -236,3 +236,109 @@ func TestAllowUndeclared(t *testing.T) {
 		t.Error("a declared element's content model must still be applied")
 	}
 }
+
+// A default declaration outside the closed set of XML 1.0 §3.3.2 was read as a
+// bare default value, so "#REQUIRE" for "#REQUIRED" turned a required
+// attribute into one defaulting to the string "#REQUIRE" and the missing
+// attribute went unreported. A component may decline to answer; it must not
+// turn "I could not check this" into "this is valid".
+func TestUnrecognisedAttributeDefault(t *testing.T) {
+	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r/>`
+	err := check(t, bad)
+	if err == nil {
+		t.Fatal("a #-prefixed token that is not a keyword must be reported")
+	}
+	if want := "unrecognised default declaration #REQUIRE"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+	// The report does not depend on the attribute being absent: the
+	// declaration itself is what could not be applied.
+	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRE>]><r a="x"/>`); err == nil {
+		t.Error("the declaration is unenforceable whether or not the attribute is present")
+	}
+
+	// Every legal default declaration must keep working untouched.
+	valid := []string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRED>]><r a="x"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #IMPLIED>]><r/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "v">]><r a="v"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA "dflt">]><r a="other"/>`,
+	}
+	for _, src := range valid {
+		if err := check(t, src); err != nil {
+			t.Errorf("%s should be valid: %v", src, err)
+		}
+	}
+	// And the constraints they express must still bite.
+	invalid := map[string]string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #REQUIRED>]><r/>`:        "required attribute a is missing",
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #FIXED "v">]><r a="w"/>`: `attribute a is #FIXED "v" but is "w"`,
+	}
+	for src, want := range invalid {
+		err := check(t, src)
+		if err == nil {
+			t.Errorf("%s should be invalid", src)
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// The switch over the attribute type had no default, so a misspelt type was
+// never enforced and never mentioned: "IDREFF" for "IDREF" let a dangling
+// reference validate clean. An unrecognised type is a type this package cannot
+// enforce, and the caller has to be told which of the two it got.
+func TestUnrecognisedAttributeType(t *testing.T) {
+	const bad = `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFF #IMPLIED>]><r ref="nowhere"/>`
+	err := check(t, bad)
+	if err == nil {
+		t.Fatal("a type outside XML 1.0 3.3.1 must be reported, not skipped")
+	}
+	if want := "unrecognised type IDREFF"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r n NMTOKENN #IMPLIED>]><r n="a b"/>`); err == nil {
+		t.Error("a misspelt NMTOKEN must be reported")
+	}
+
+	// Every type the spec closes the set to must stay silent, so that the new
+	// branch reports only what is genuinely unrecognised.
+	valid := []string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a CDATA #IMPLIED>]><r a="anything at all"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ID #IMPLIED>]><r a="i1"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NMTOKEN #IMPLIED>]><r a="tok"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NMTOKENS #IMPLIED>]><r a="a b"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITY #IMPLIED>]><r a="e"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITIES #IMPLIED>]><r a="e f"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n1"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (x|y) #IMPLIED>]><r a="x"/>`,
+		`<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY><!ATTLIST r ref IDREF #IMPLIED><!ATTLIST c id ID #IMPLIED>]><r ref="i1"><c id="i1"/></r>`,
+		`<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY><!ATTLIST r ref IDREFS #IMPLIED><!ATTLIST c id ID #IMPLIED>]><r ref="i1 i1"><c id="i1"/></r>`,
+	}
+	for _, src := range valid {
+		if err := check(t, src); err != nil {
+			t.Errorf("%s should be valid: %v", src, err)
+		}
+	}
+	// The types that are enforced must keep biting.
+	invalid := map[string]string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREF #IMPLIED>]><r ref="nowhere"/>`:                          `IDREF "nowhere" matches no ID`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFS #IMPLIED>]><r ref="a b"/>`:                             `IDREF "a" matches no ID`,
+		`<!DOCTYPE r [<!ELEMENT r (c,c)><!ELEMENT c EMPTY><!ATTLIST c id ID #IMPLIED>]><r><c id="d"/><c id="d"/></r>`: `duplicate ID "d"`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (x|y) #IMPLIED>]><r a="z"/>`:                                    `attribute a = "z" is not one of x, y`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n3"/>`:                        `attribute a = "n3" is not one of n1, n2`,
+	}
+	for src, want := range invalid {
+		err := check(t, src)
+		if err == nil {
+			t.Errorf("%s should be invalid", src)
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}

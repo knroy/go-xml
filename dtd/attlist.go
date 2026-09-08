@@ -43,6 +43,14 @@ func parseAttList(body string) []*Attribute {
 				a.Value = unquote(f[i])
 				i++
 			}
+		case strings.HasPrefix(d, "#"):
+			// Not one of the three keywords, and an unquoted literal cannot
+			// begin with "#". Recorded as invalid rather than read as the
+			// default value "#REQUIRE", which would silently demote a
+			// required attribute to an optional one.
+			a.Default = AttrInvalid
+			a.Value = d
+			i++
 		default:
 			a.Default = AttrDefaulted
 			a.Value = unquote(d)

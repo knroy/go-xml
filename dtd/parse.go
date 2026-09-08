@@ -71,6 +71,17 @@ const (
 	AttrFixed
 	// AttrDefaulted is a bare "v": supplied when absent.
 	AttrDefaulted
+	// AttrInvalid is a "#"-prefixed token that is none of the three
+	// keywords — "#REQUIRE" for "#REQUIRED", say.
+	//
+	// XML 1.0 §3.3.2 closes this position to #REQUIRED, #IMPLIED, #FIXED and
+	// a literal; a literal cannot begin with "#" unquoted. So the token
+	// constrains the attribute somehow and this package cannot say how,
+	// which is not the same as a bare default value that happens to look odd.
+	// Validate reports it rather than assuming, because reading "#REQUIRE" as
+	// the default string "#REQUIRE" turns a required attribute into an
+	// optional one and reports the document clean.
+	AttrInvalid
 )
 
 // Attribute is one attribute definition within an <!ATTLIST>.
@@ -78,7 +89,13 @@ type Attribute struct {
 	Element string
 	Name    string
 	// Type is the declared type: CDATA, ID, IDREF, IDREFS, NMTOKEN,
-	// NMTOKENS, ENTITY, ENTITIES, NOTATION, or an enumeration.
+	// NMTOKENS, ENTITY, ENTITIES, NOTATION, or ENUMERATION for a
+	// parenthesised list.
+	//
+	// XML 1.0 §3.3.1 closes the set to those; anything else is kept verbatim
+	// so Validate can report it rather than dropping it. A type it does not
+	// recognise is a type it cannot enforce, and saying so is the only way a
+	// caller can tell a checked attribute from an unchecked one.
 	Type string
 	// Enum holds the permitted values of an enumeration or NOTATION type.
 	Enum    []string

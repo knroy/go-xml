@@ -222,6 +222,49 @@ thinner exactly where those corpora are thick.
 
 ### Fixed
 
+**Two DTD typos that switched validation off and said nothing.** XML 1.0 §3.3
+closes both halves of an attribute definition: the type is one of ten names or
+a parenthesised enumeration, and the default declaration is `#REQUIRED`,
+`#IMPLIED`, `#FIXED AttValue`, or a literal. `dtd` treated neither set as
+closed, in the same shape twice — an unmatched branch that turns *"I do not
+recognise this"* into a benign default.
+
+`parseAttList`'s `default` case read any remaining token as a bare default
+value, `#` and all. So `<!ATTLIST r a CDATA #REQUIRE>` — one character short of
+`#REQUIRED` — became an attribute defaulting to the string `"#REQUIRE"`, and a
+document omitting `a` validated clean where the intended declaration reports
+*"required attribute a is missing"*. An unquoted literal cannot begin with
+`#`, so that token is never a default value; it is now `AttrInvalid`, a new
+`AttrDefault`, and Validate reports it. `checkAttributes`'s switch over the
+type had no `default` at all, so `IDREFF` for `IDREFS` was recorded, matched
+nothing, and was never enforced: `ref="nowhere"` passed where the correctly
+spelled declaration reports *"IDREF ... matches no ID in the document"*.
+
+Both are reported at validation rather than rejected at parse, which is the
+part that took deciding. `Parse` deliberately skips constructs its grammar does
+not model, so that an unusual declaration leaves a document *less* constrained
+instead of wrongly rejected — but that reasoning covers a construct this
+package does not know, not a malformed instance of one it does. An ATTLIST is
+recognised; only the token in a closed position is wrong, and reading it as
+something else is exactly the guess `Parse` says it does not make. Failing the
+whole parse would be worse still: it discards every other declaration in the
+subset and leaves the caller checking nothing. So the declaration is kept
+verbatim and the finding is delivered where findings already go, saying which
+attribute went unchecked and why. That is the same service `HasExternalSubset`
+performs for declarations never read — a caller could previously not tell a
+validated attribute from an unexamined one, which is the real defect behind
+both typos.
+
+The known-good branch lists the types the spec closes the set to, including
+the ones this package does not yet enforce (`NMTOKEN`, `ENTITY`, and the rest
+are recognised but unchecked — a gap in coverage, deliberately silent, not a
+failure to recognise the declaration). No conformance suite covers `dtd`, so
+`TestUnrecognisedAttributeDefault` and `TestUnrecognisedAttributeType` are the
+only guard: each asserts on the diagnostic text rather than `err != nil`, and
+each pins every legal type and default declaration alongside the typo, because
+a fix that rejects valid DTDs is worse than the bug it replaces.
+
+
 **A wildcard spelling `namespace=""` admitted every element.** Part 1 §3.10.2
 defaults an *absent* `namespace` attribute to `##any`; a present empty one is
 an `xs:namespaceList` with no members, so it denotes the empty set and matches
