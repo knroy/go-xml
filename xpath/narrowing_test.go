@@ -277,6 +277,15 @@ func TestNarrowingRoundNegativePrecision(t *testing.T) {
 // valid codepoint, so a wrapping conversion returns "A" instead of refusing.
 func TestNarrowingCodepointsToString(t *testing.T) {
 	for _, v := range narrowLadder {
+		// The ladder exists to witness 64-bit narrowing, and "1" is on it
+		// because every other rung's neighbour is. It is a valid codepoint:
+		// XML 1.1 [2] Char begins at #x1, and this engine implements 1.1
+		// (isXMLChar). Asserting FOCH0001 for it would be asserting the
+		// character model, which TestCodepointsToStringValidates and
+		// TestCodepointsToStringAdmitsC0 do directly, on both sides.
+		if v.lit == "1" {
+			continue
+		}
 		t.Run(v.name, func(t *testing.T) {
 			expr := fmt.Sprintf("codepoints-to-string(%s)", v.lit)
 			wantCode(t, expr, "FOCH0001")

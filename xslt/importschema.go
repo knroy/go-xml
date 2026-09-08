@@ -331,3 +331,25 @@ func (c *compiler) tryResolveSchemaByNamespace(ns string) *xsd.Schema {
 	}
 	return loaded
 }
+
+// SetSchemaIfAbsent installs sch as the stylesheet's schema when the
+// stylesheet declared no xsl:import-schema of its own, and reports whether it
+// did so.
+//
+// A schema-aware processor holds one schema cache, and a stylesheet compiled
+// against it can validate using any component in that cache -- XSLT 2.0
+// section 3.14 makes an xsl:import-schema satisfiable "using a schema that is
+// already known to the processor". A caller that has loaded a schema
+// externally, as the W3C test suite's own driver does for an environment's
+// <schema>, needs to say so for a validation="strict" to find anything at all.
+//
+// It refuses to displace a schema the stylesheet built for itself: a
+// declaration named by xsl:import-schema is the one the stylesheet asked for,
+// and a caller merging into it should use Schema() and merge, not this.
+func (s *Stylesheet) SetSchemaIfAbsent(sch *xsd.Schema) bool {
+	if s == nil || sch == nil || s.schema != nil {
+		return false
+	}
+	s.schema = sch
+	return true
+}

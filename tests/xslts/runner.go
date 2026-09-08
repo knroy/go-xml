@@ -478,9 +478,23 @@ func (r *Runner) transform(set *TestSet, tc *TestCase) (*xslt.Result, error) {
 	// mergeInto keeps what xsl:import-schema already put there: a declaration
 	// the stylesheet imported by name is the one it asked for, and an
 	// environment schema for the same name must not displace it.
-	if sch := ss.Schema(); sch != nil {
-		if es := envSchema(set, r.environment(set, tc)); es != nil {
+	//
+	// When the stylesheet declared no xsl:import-schema at all the
+	// environment's schema is installed as the stylesheet's own rather than
+	// merged into a schema that does not exist. The suite's reference driver
+	// does exactly this: c:validated-document builds its stylesheet with one
+	// synthesised <xsl:import-schema> per environment <schema>, unconditionally
+	// and without consulting the stylesheet under test. streamable-021, -042
+	// and -043 each declare the "loans" environment with its loans.xsd and then
+	// validate with validation="strict" while importing nothing themselves --
+	// streamable-021 has the import commented out -- so without this the
+	// components were loaded and discarded and every one reported XTSE1660,
+	// validation requires a schema and none was imported.
+	if es := envSchema(set, r.environment(set, tc)); es != nil {
+		if sch := ss.Schema(); sch != nil {
 			mergeInto(sch, es)
+		} else {
+			ss.SetSchemaIfAbsent(es)
 		}
 	}
 

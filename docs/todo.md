@@ -9,15 +9,15 @@ Current position:
 |---|---|---|
 | XSD 1.0 | 14,383 / 14,388 (99.97%) | 24,973 / 25,000 (99.89%) |
 | XSD 1.1 | 15,347 / 15,354 (99.95%) | 26,196 / 26,222 (99.90%) |
-| XPath 2.0 | 100.00% — 15,222 of 15,222 in scope |
-| XPath 3.0 | 100.00% — 19,307 of 19,307 in scope |
-| XPath 3.1 | 100.00% — 21,863 of 21,863 in scope (0 failing) |
-| XQuery 3.1 | 99.96% — 29,952 of 29,964 in scope (12 failing) |
+| XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
+| XPath 3.0 | 100.00% — 19,302 of 19,302 in scope |
+| XPath 3.1 | 100.00% — 21,838 of 21,838 in scope (0 failing) |
+| XQuery 3.1 | 99.96% — 29,918 of 29,930 in scope (12 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 98.33% — 11,332 of 11,525 in scope (193 failing); 161 of those 193 need the §19.8 streamability analysis |
+| XSLT 3.0 | 98.45% — 11,346 of 11,525 in scope (179 failing); 150 of those 179 need the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,627 `func Test` declarations, clean under `-race` |
+| Tests | 1,626 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -44,6 +44,36 @@ translator, which had been budgeted as the widest-reaching item: `classdiff.go`'
 ranges were compared against `internal/xmlname` across the whole Unicode scalar
 range and disagree nowhere, so the translator is version-independent and correct
 for both.
+
+`fn:codepoints-to-string` follows the same version. `xpath.isXMLChar` used the
+XML 1.0 `[2] Char` production, whose first range starts at `#x20`, so building a
+backspace or a form feed from its codepoint was `FOCH0001` on an engine that had
+already chosen 1.1 everywhere else -- and `tests/xslts/deps.go` claims the
+`XML_1.1` feature to the XSLT harness on our behalf. It now starts at `#x1`, as
+1.1 does; `#x0` and the surrogates stay out at either version. XSLT 3.0 4.1
+makes the choice ours in as many words: "Implementations may support any
+version ... it is thus implementation-defined which versions and editions of XML
+and XML Namespaces are supported." Saxon 9.8 reads it the same way and passes
+`xml-to-json-D015`, `-D017` and `-D018`, which this now does too.
+
+The version still decides whether such a character can be *written down*, and
+that decision stays in the serializer: XDM makes no distinction between a 1.0
+and a 1.1 tree (4.1), so a C0 control is an ordinary string value and only
+becomes `SERE0006` when an XML 1.0 serialization is asked to spell it.
+
+The QT3 harness records the split rather than picking a side. Both ends of the
+`xml-version` dependency are out of scope, because the suite pairs them --
+`K-CodepointToStringFunc-8` carries the 1.0 dependency and says why in its
+description, "Codepoint 8 is invalid in XML 1.0 but valid in XML 1.1" -- and
+this engine has 1.1's character model but not the rest of 1.1. Admitting the
+1.1 half was measured and rejected: it takes XQuery from 29,952 passed / 12
+failed to 29,936 / 26.
+
+**What is still missing beyond `dtd` is `fn:serialize`'s `undeclare-prefixes`.**
+`xslt/serialize.go` implements it (11.7); `xpath/fn_serialize.go` writes
+`xmlns:p=""` unconditionally, so the 1.1-only `serialize-xml-035/036/135/136`
+cases would fail if they were admitted. The `version` parameter itself now
+reaches the XML declaration there, which it did not before.
 
 The `keySep = "\x1f"` dependency is also closed. `xsd/identity.go` is now
 length-prefixed and injective for any field content, so it no longer rests on

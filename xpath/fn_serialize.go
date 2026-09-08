@@ -77,7 +77,8 @@ func registerSerialize(l *Library) {
 			sb.WriteString("<!DOCTYPE html>\n")
 		}
 		if opts.method == "xml" && (!opts.omitXMLDecl || opts.standalone != "") {
-			sb.WriteString(`<?xml version="1.0" encoding="UTF-8"`)
+			sb.WriteString(`<?xml version="` + xmlDeclVersion(opts.version) +
+				`" encoding="UTF-8"`)
 			if opts.standalone != "" {
 				sb.WriteString(` standalone="` + opts.standalone + `"`)
 			}
@@ -154,6 +155,10 @@ type serializeOptions struct {
 	// given. It appears in the XML declaration, so asking for it also forces
 	// the declaration to be written.
 	standalone string
+	// version is the XML version announced in the declaration. Only 1.0 and
+	// 1.1 exist; anything else is written as 1.0, because a declaration is a
+	// claim the reading parser acts on rather than an echo of what was asked.
+	version string
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
 	// normalize applies the Unicode normalization form the serialization
@@ -307,7 +312,12 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 				// character the named encoding could not have held, so the
 				// name is kept rather than dropped.
 				opts.encoding = val
-			case "version", "media-type",
+			case "version":
+				// xslt/serialize.go carries this through for the XSLT
+				// serializer; this is its twin. On the accept-and-ignore list
+				// it announced 1.0 over output the caller asked to be 1.1.
+				opts.version = val
+			case "media-type",
 				"doctype-public", "doctype-system", "cdata-section-elements",
 				"normalization-form", "undeclare-prefixes",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
@@ -503,18 +513,24 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 		// An empty head still receives the encoding declaration, so it cannot
 		// take the self-closing shortcut. HTML has no self-closing syntax for
 		// a non-void element anyway.
-		htmlHead := opts.method == "html" && n.Name.Local == "head" && n.Name.URI == ""
+		htmlHead := isHTMLContentTypeHead(n, opts)
 		if len(n.Children) == 0 && !htmlHead {
 			sb.WriteString("/>")
 			return
 		}
 		sb.WriteString(">")
-		// The HTML method declares the output encoding inside head. The
-		// serialization spec words this as an http-equiv meta element, but
-		// HTML5 replaced it with meta/@charset and the suite accepts either;
-		// the modern spelling is what a browser reading this would expect.
-		if opts.method == "html" && n.Name.Local == "head" && n.Name.URI == "" {
-			sb.WriteString(`<meta charset="UTF-8">`)
+		// The HTML method declares the output encoding inside head, as an
+		// http-equiv meta element. The HTML5 meta/@charset spelling was used
+		// here on the belief that the suite accepts either; it does not.
+		// output-0716 asks for the serialization to match
+		// "<head>...<meta http-equiv=\"Content-Type\"" and output-0702 the
+		// same with a content attribute, and neither regex admits a charset
+		// attribute in its place. The full serializer already writes this
+		// form -- see the meta branch of writeElement in xslt/serialize.go --
+		// so the two spellings were also disagreeing with each other.
+		if htmlHead {
+			sb.WriteString(
+				`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">`)
 		}
 		// An element named by cdata-section-elements has its text written as
 		// a CDATA section instead of with escaping, which is what the
@@ -556,6 +572,40 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	case xdm.KindNamespace:
 		sb.WriteString(n.Value)
 	}
+}
+
+// xmlDeclVersion is the version an XML declaration may announce.
+//
+// Only 1.0 and 1.1 are XML versions, so an unimplemented one is written as 1.0
+// rather than echoed back: the declaration is a claim the reading parser acts
+// on, and announcing a version nothing implements would be worse than
+// announcing the one the output actually conforms to.
+func xmlDeclVersion(v string) string {
+	// Trimmed, as the XSLT twin does: the parameter's lexical space permits
+	// surrounding whitespace, and the two serializers must not disagree about
+	// whether version=" 1.1 " is 1.1.
+	if strings.TrimSpace(v) == "1.1" {
+		return "1.1"
+	}
+	return "1.0"
+}
+
+// isHTMLContentTypeHead reports whether this element is the <head> that the
+// html output method injects a content-type meta into.
+//
+// The namespace test mirrors the full serializer's: under the html method
+// every element is HTML by definition, so no namespace and the XHTML one both
+// count. output-0702 builds its <head> under a default xmlns of
+// http://www.w3.org/1999/xhtml and asks to see the meta; a stricter test on
+// no-namespace alone left it out. output-0214 and -0215, which build a <head>
+// in a deliberately alien namespace and assert no meta appears, run through
+// the full serializer rather than this one, and are excluded here anyway.
+//
+// The name is matched case-insensitively because HTML element names are.
+func isHTMLContentTypeHead(n *xdm.Node, opts serializeOptions) bool {
+	return opts.method == "html" &&
+		strings.EqualFold(n.Name.Local, "head") &&
+		(n.Name.URI == "" || n.Name.URI == "http://www.w3.org/1999/xhtml")
 }
 
 // elementName renders a node's name with its prefix, when it has one.
@@ -802,7 +852,13 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.encoding = v
-		case "version", "media-type", "doctype-public",
+		case "version":
+			v, err := strParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.version = v
+		case "media-type", "doctype-public",
 			"doctype-system", "normalization-form",
 			"undeclare-prefixes", "byte-order-mark", "escape-uri-attributes",
 			"include-content-type", "suppress-indentation",

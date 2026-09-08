@@ -144,6 +144,30 @@ func applyToNode(rt *runtime, node *xdm.Node, mode string,
 	params map[string]xdm.Sequence, tunnels map[string]xdm.Sequence,
 	out *outputBuilder) error {
 
+	// XTTE3100/XTTE3110 are stated against "an xsl:apply-templates
+	// instruction in a particular mode", and every way a node reaches a rule
+	// is one. 2.3.3 defines the initial match selection so: "the processing
+	// then corresponds to the effect of the xsl:apply-templates
+	// instruction". 6.7.3 writes the shallow-copy built-in rule out as a
+	// template whose body is literally
+	//
+	//   <xsl:apply-templates select="@*" mode="M"/>
+	//   <xsl:apply-templates select="node()" mode="M"/>
+	//
+	// so the recursion into a copied element's attributes and children is
+	// two more apply-templates in the same mode, and the nodes it selects
+	// are within the error's reach. Checking here rather than at each
+	// selection site covers the initial selection, the built-in descents and
+	// the array-member unwrapping with one test; the two callers that
+	// already checked before calling now merely repeat it. mode-1438
+	// declares typed="yes" over an untyped source and has no
+	// xsl:apply-templates of its own: the document node it starts from
+	// carries no type annotation to object to, and only the descent into
+	// <book> reaches an element that does.
+	if err := rt.sheet.checkModeTyped(node, mode); err != nil {
+		return err
+	}
+
 	t, next, err := rt.sheet.findTemplateFrom(node, mode, rt.ctx, 0)
 	if err != nil {
 		return err

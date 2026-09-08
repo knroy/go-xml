@@ -1109,6 +1109,19 @@ func (r *Result) Tree() *xdm.Node {
 	return tree.Root
 }
 
+// stripInputAnnotations applies input-type-annotations="strip" to a source
+// tree loaded at run time, and returns root unchanged when the stylesheet did
+// not ask for stripping.
+//
+// The principal input is stripped in Transform; this is the same rule for the
+// other trees 4.4 lists, which xsl:source-document reads.
+func (s *Stylesheet) stripInputAnnotations(root *xdm.Node) *xdm.Node {
+	if root == nil || root.Kind != xdm.KindDocument || !s.stripTypeAnnotations {
+		return root
+	}
+	return s.stripTypeAnnotationsFrom(root)
+}
+
 // stripTypeAnnotations returns a copy of the tree with every type annotation
 // removed, as input-type-annotations="strip" requires.
 //

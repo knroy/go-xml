@@ -35,11 +35,6 @@ import (
 type mergeInstr struct {
 	sources []*mergeSource
 	action  []Instruction
-	// streamed records that some xsl:merge-source asked for streaming, which
-	// section 15.7 makes the context size absent inside the action. That is
-	// observable — last() must raise XPDY0002 — so it is carried even though
-	// nothing else about streaming is.
-	streamed bool
 }
 
 // mergeSource is a compiled xsl:merge-source: one merge source definition.
@@ -208,9 +203,6 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 			}
 			seenNames[src.name] = true
 		}
-		if src.streamable() {
-			instr.streamed = true
-		}
 	}
 
 	// XTDE2210 compares the key attributes across sources. The attributes are
@@ -229,9 +221,6 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 	instr.action = action
 	return instr, nil
 }
-
-// streamable reports whether the source asked for streamed evaluation.
-func (s *mergeSource) streamable() bool { return s.streamed }
 
 func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error) {
 	ns := newNSResolver(n, "")
@@ -575,13 +564,14 @@ func (i *mergeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		}
 	}
 
+	// 15.7 states the size unconditionally: "The context size is the number
+	// of groups, that is, the number of distinct sets of merge key values."
+	// There is no streaming exception — the section's focus rules say nothing
+	// about streamability, and the phrase "context size is absent" appears
+	// nowhere in the specification. Forcing a zero size for a streamed merge
+	// made last() raise XPDY0002 inside an action that is entitled to it,
+	// which is bug 29120 and what merge-084 tests.
 	size := len(groups)
-	if i.streamed {
-		// 15.7: with any streamable source the context size is absent, so
-		// last() inside the action raises XPDY0002. A size of zero is how
-		// this engine spells an absent one.
-		size = 0
-	}
 	for g, grp := range groups {
 		binding := &mergeGroupBinding{names: names, named: named,
 			items: make([]xdm.Sequence, len(i.sources))}
@@ -772,6 +762,30 @@ func (s *mergeSource) collect(rt *runtime, idx int, keys []*sortKey,
 		seq, err := s.sel.Eval(sub.ctx)
 		if err != nil {
 			return nil, err
+		}
+		// 15.4: with streamable="yes" the select expression "is implicitly
+		// used as the argument of a call on the snapshot function ... whether
+		// or not streamed processing is actually used, and whether or not the
+		// processor supports streaming". So this is not a streaming
+		// optimisation that a non-streaming engine may skip — it changes the
+		// answer, and the same section says how: "An attempt to navigate
+		// outside the portion of the source document delivered by the
+		// snapshot function will typically not cause an error, but will
+		// return empty results."
+		//
+		// The wrap goes here, before the merge keys are computed, because the
+		// section requires both to see it: "merge keys for each selected node
+		// are computed with reference to this snapshot, and the
+		// current-merge-group function ... delivers snapshots of the selected
+		// nodes". merge-079 selects city-list/record/city and then reads
+		// $g/ancestor::record[1]//temp from the action; a snapshot keeps the
+		// ancestors but none of their other children, so that step is empty.
+		if s.streamed {
+			snap := make(xdm.Sequence, len(seq))
+			for j, it := range seq {
+				snap[j] = noteCopy(rt, it, snapshotItem(it))
+			}
+			seq = snap
 		}
 		entries := make([]mergeEntry, len(seq))
 		for p, it := range seq {

@@ -128,7 +128,7 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 		return nil, fmt.Errorf("FODC0002: cannot retrieve %q: %w", href, err)
 	}
 	if i.validation.isDefault() {
-		return fragmentOf(tree.Root, href)
+		return fragmentOf(rt.sheet.stripInputAnnotations(tree.Root), href)
 	}
 	copied := xdm.NewTree()
 	copied.Root.BaseURI = tree.Root.BaseURI
@@ -139,7 +139,14 @@ func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) 
 	if err := i.validation.assess(rt, copied.Root); err != nil {
 		return nil, err
 	}
-	return fragmentOf(copied.Root, href)
+	// Stripping happens after assessment, not instead of it. 3.5 scopes
+	// input-type-annotations to the source trees of 4.4, and "any document
+	// read using xsl:stream" — this instruction's former name — is one of
+	// them. validation="strict" still has to run: an invalid document is an
+	// error whether or not the annotations it would have produced survive.
+	// Only the annotations go, which is what makes
+	// "data(.) instance of xs:decimal" false over a validated document.
+	return fragmentOf(rt.sheet.stripInputAnnotations(copied.Root), href)
 }
 
 // fragmentOf applies the fragment identifier of href, if there is one, to the

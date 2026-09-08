@@ -468,6 +468,42 @@ func stringJoin(seq xdm.Sequence, sep string) string {
 // separator behave as the specification's own example describes — five text
 // nodes concatenate to "12345" while five atomic values become "1 2 3 4 5" —
 // so it cannot be skipped by joining the raw items.
+// constructedTextChecked is constructedText for a caller that must report the
+// dynamic error step 3 allows rather than let a function item vanish.
+//
+// Section 5.8.2 builds simple content in seven steps, and the third is "the
+// sequence is atomized (which may cause a dynamic error)". Atomizing a
+// function item is FOTY0013, so xsl:attribute over a sequence holding one is
+// required to fail. constructedText cannot say so — it has no error return and
+// fourteen call sites — and its switch matched neither arm for a function
+// item, so the item was dropped in silence and select="1, 2, false#0" built
+// a="1 2" instead of failing.
+func constructedTextChecked(seq xdm.Sequence, sep string) (string, error) {
+	if _, err := xdm.AtomizeChecked(nonTextItems(seq)); err != nil {
+		return "", err
+	}
+	return constructedText(seq, sep), nil
+}
+
+// nonTextItems drops the text nodes from a sequence, leaving what step 3
+// actually atomizes.
+//
+// Steps 1 and 2 handle text nodes on their own terms — dropped when empty,
+// merged when adjacent — and constructedText already implements that. Passing
+// them to AtomizeChecked would be harmless but pointless; what matters is that
+// every other item is offered to it, so a function item anywhere in the
+// sequence is reported.
+func nonTextItems(seq xdm.Sequence) xdm.Sequence {
+	out := make(xdm.Sequence, 0, len(seq))
+	for _, it := range xdm.Flatten(seq) {
+		if n, ok := it.(*xdm.Node); ok && n.Kind == xdm.KindText {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
 func constructedText(seq xdm.Sequence, sep string) string {
 	var parts []string
 	inText := false

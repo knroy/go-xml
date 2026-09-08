@@ -1566,6 +1566,48 @@ func (r restrictedLibrary) Lookup(name xdm.QName, arity int) (xpath.Function, bo
 	if name.URI == xdm.NSFN && xsltOnlyFunctions[name.Local] {
 		return xpath.Function{}, false
 	}
+	return r.lookupVisible(name, arity)
+}
+
+// LookupDynamic implements xpath.DynamicFunctionLibrary: it answers for
+// fn:function-lookup and the other places that resolve a name against the
+// *dynamic* context rather than the static one.
+//
+// The xsltOnlyFunctions hiding is deliberately not applied here. 10.4.1 places
+// that exclusion in the target expression's static context -- under "Function
+// signatures", beside the in-scope variables and the statically known
+// collations -- so it governs a call written out in the expression, which is
+// what Lookup above answers and what evaluate-047 asserts when it writes
+// document('http://www.w3.org') and requires XTDE3160. 10.4.2 then says of the
+// dynamic context that "all other aspects [...] are the same as the dynamic
+// context for the xsl:evaluate instruction itself", and its own note takes for
+// granted that fn:document can be reached from inside a target expression: "a
+// processor may disallow access using the doc or document functions to
+// documents in local filestore" would have nothing to disallow otherwise.
+//
+// F&O 16.1.1 resolves fn:function-lookup against "the named functions
+// component of the dynamic context", and adds that where a function is absent
+// from the static context "the results depend on what is present in the
+// dynamic context, which is implementation-defined". evaluate-048 is the case
+// this settles -- it looks fn:document up dynamically, is titled "A dynamic
+// call to fn:document() may or may not succeed (spec bug 30049)", and accepts
+// either the document or XTDE3160, but not the XPTY0004 that calling an empty
+// sequence produced.
+//
+// The stylesheet's own private functions stay hidden either way: that rule is
+// about which components this package may see at all, not about when the name
+// is resolved.
+func (r restrictedLibrary) LookupDynamic(
+	_ *xpath.Context, name xdm.QName, arity int,
+) (xpath.Function, bool) {
+	return r.lookupVisible(name, arity)
+}
+
+// lookupVisible is the part of the restriction both lookups share: a function
+// the stylesheet declares is reachable only if this package may call it.
+func (r restrictedLibrary) lookupVisible(
+	name xdm.QName, arity int,
+) (xpath.Function, bool) {
 	if r.sheetFuncs != nil && r.sheetFuncs.Declares(name, arity) &&
 		r.sheet != nil && !r.sheet.evaluateMayCall(name, arity) {
 		return xpath.Function{}, false

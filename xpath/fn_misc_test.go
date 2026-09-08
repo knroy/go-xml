@@ -1,6 +1,7 @@
 package xpath
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -874,6 +875,27 @@ func TestNamespaceAxisOrderIsStable(t *testing.T) {
 		// The positional predicate is the reason the order matters.
 		if got := evalStr(t, doc, `name(/r/namespace::*[1])`); got != "a" {
 			t.Fatalf("namespace::*[1] = %q, want %q", got, "a")
+		}
+	}
+}
+
+// TestCodepointsToStringAdmitsC0 pins the XML 1.1 half of the character model.
+//
+// isXMLChar used the XML 1.0 [2] Char production, which starts its first range
+// at #x20, so codepoints-to-string(8) was FOCH0001. That contradicted
+// tests/xslts/deps.go, which claims the XML_1.1 feature to the conformance
+// harness; XSLT 3.0 4.1 makes the version implementation-defined, and having
+// chosen 1.1 the C0 controls are Char. The three codepoints below are the ones
+// xml-to-json-D015, -D017 and -D018 construct -- backspace, bell and form feed
+// -- each of which Saxon 9.8 accepts.
+//
+// U+0000 stays out at either version, and TestCodepointsToStringValidates keeps
+// it there: XML 1.1 [2] Char begins at #x1, not #x0.
+func TestCodepointsToStringAdmitsC0(t *testing.T) {
+	for _, cp := range []int{7, 8, 12, 1, 0x1F} {
+		expr := fmt.Sprintf("string-to-codepoints(codepoints-to-string(%d))", cp)
+		if got := evalStr(t, testDoc, expr); got != fmt.Sprint(cp) {
+			t.Errorf("%s = %q, want %d", expr, got, cp)
 		}
 	}
 }

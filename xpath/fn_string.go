@@ -460,19 +460,34 @@ func encodeForURI(s string) string {
 	return sb.String()
 }
 
-// isXMLChar reports whether a codepoint may appear in an XML 1.0 document.
+// isXMLChar reports whether a codepoint may appear in an XML document, at the
+// version of XML this engine implements.
 //
-// The excluded ranges are not arbitrary: most C0 controls, the surrogate block
-// (which has no meaning outside UTF-16 encoding), and the two permanently
-// unassigned characters at the end of the BMP. Writing an excluded codepoint
-// with WriteRune silently produced U+FFFD instead of failing, so a stylesheet
+// The excluded ranges are not arbitrary: U+0000, the surrogate block (which has
+// no meaning outside UTF-16 encoding), and the two permanently unassigned
+// characters at the end of the BMP. Writing an excluded codepoint with
+// WriteRune silently produced U+FFFD instead of failing, so a stylesheet
 // building a string from computed codepoints got a replacement character where
 // it expected an error.
+//
+// The C0 controls other than TAB, LF and CR are admitted, because this engine
+// implements XML 1.1: [2] Char there is [#x1-#xD7FF] | [#xE000-#xFFFD] |
+// [#x10000-#x10FFFF], where XML 1.0 starts the first range at #x20. XSLT 3.0
+// 4.1 makes the choice ours -- "Implementations may support any version ... it
+// is thus implementation-defined which versions and editions of XML and XML
+// Namespaces are supported" -- and tests/xslts/deps.go already claims XML_1.1,
+// so refusing #x8 here contradicted a promise the harness makes on our behalf.
+// Saxon 9.8 passes xml-to-json-D015, -D017 and -D018 on the same reading; the
+// three cases construct a backspace, a bell and a form feed by codepoint.
+//
+// The version does still decide whether such a character can be WRITTEN DOWN,
+// and that decision lives in the serializer, not here: XDM makes no distinction
+// between an XML 1.0 and an XML 1.1 tree (XSLT 3.0 4.1), so a C0 control is a
+// string value at either version and only becomes SERE0006 when an XML 1.0
+// serialization is asked to spell it. See xslt/serialize.go.
 func isXMLChar(c int64) bool {
 	switch {
-	case c == 0x9, c == 0xA, c == 0xD:
-		return true
-	case c >= 0x20 && c <= 0xD7FF:
+	case c >= 0x1 && c <= 0xD7FF:
 		return true
 	case c >= 0xE000 && c <= 0xFFFD:
 		return true

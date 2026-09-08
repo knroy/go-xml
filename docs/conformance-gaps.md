@@ -11,16 +11,16 @@ therefore no longer a measured figure.
 | Component | Suite | In scope | Passing | Now | Failing | Fixable | Open | Can't fix | Ceiling |
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
-| **xpath** | QT3 — XPath 2.0 | 15,222 | 15,222 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xpath** | QT3 — XPath 3.0 | 19,307 | 19,307 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,863 | 21,863 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,964 | 29,952 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
+| **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xpath** | QT3 — XPath 3.0 | 19,302 | 19,302 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xpath** | QT3 — XPath 3.1 | 21,838 | 21,838 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xquery** | QT3 — XQuery 3.1 | 29,930 | 29,918 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 11,525 | 11,332 | 98.33% | **193** | 0 | 0 | **193** | 98.33% |
+| **xslt** | W3C XSLT 3.0 | 11,525 | 11,346 | 98.45% | **179** | 0 | 0 | **179** | 98.45% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **106** | **0** | **0** | **106** | |
+| | **Total** | | | | **103** | **0** | **0** | **103** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -117,7 +117,7 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1 ceiling: 29,952 / 29,964 = 99.96%** — what passes now. Nothing is
+**XQuery 3.1 ceiling: 29,918 / 29,930 = 99.96%** — what passes now. Nothing is
 left that is both fixable and worth the change.
 
 The XSD split is taken largely from the suite's own `status` field rather than
@@ -255,7 +255,7 @@ can make truthfully. The reasoning is recorded in `xpath/fn_31.go`.
 the harness's own comparison serializer writing a literal CR, which XML §2.11
 converts to LF on re-parse.
 
-**XPath: 21,863 / 21,863 = 100.00%, on all three versions.**
+**XPath: 21,838 / 21,838 = 100.00%, on all three versions.**
 
 ---
 
@@ -291,6 +291,18 @@ returned to *not implementable* — see its row.
 | `sequence-0132` | `XTSE0010` where `XTTE0570` is wanted | **Not implementable** | Settled directly by the 2.0 REC, without needing the `sequence-2401a` argument this row used to make (the two are different constructs: 2401 has `@select` *and* content, 0132 has content and no `@select`). §11.10's element syntax summary gives `xsl:sequence` a **mandatory** `select` and `<!-- Content: xsl:fallback* -->`; §3.9 XTSE0010 fires "if a required attribute is omitted, or if the content of the element does not correspond to the content that is allowed". So XTSE0010 is the correct 2.0 answer and it is static, raised before any type check could reach XTTE0570. The stylesheet itself carries `<?error XTSE0010?>`, and Saxon 9.8 and Parrot 2017 both report `wrongError` with "Expected XTSE0010" — an older catalog wanted our answer. The `XSLT20+` scope is stale metadata: the expectation was edited to XTTE0570 in 2017 and 2018 without narrowing the scope to 3.0. |
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
 | `validation-0201` | Serialisation differs at offset 46 | **Implementation-defined** | Same case as the 3.0 entry below, and now down to one difference. The engine defect that stood behind the indentation is **fixed**: a union's selected member type was dropped whenever the tree was copied, so `xsl:strip-space` untyped the document and `data(.) instance of StandardDate` went false. With that fixed the output is byte-identical to the expected file apart from whitespace. What remains is the indent width — Saxon writes 3 spaces, this serializer writes 2 — which §20 leaves implementation-defined. See the 3.0 row. |
+
+All three `regex-syntax-xslt20` verdicts were re-derived from the data rather
+than taken on trust, and each held. The engine was probed directly against the
+catalog's own `match` and `nonmatch` lists, which reduced each disagreement to
+its exact codepoints: `-0984` misses U+2308 and U+2309 and nothing else,
+`-0985` misses U+1369–U+1371 and nothing else, `-0987` admits U+0346 and
+nothing else. Go's `unicode` tables then name the cause — U+2308/09 are `Ps`/`Pe`
+(so `\w`, defined by subtracting `\p{P}`, excludes them), U+1369–71 are `No`
+(so `\p{Nd}` excludes them), U+0346 is `Mn` and inside 5th edition's blanket
+`[#x0300-#x036F]`. `Saxon_9.8.xml` reports all three `notRun`, and the
+`<modified ... change="Drop x2308 and x2309, characters reclassified"/>` note on
+the 3.0 twin `regex-syntax-0984` is still there. Nothing to do.
 
 **XSLT 2.0 ceiling: 6,193 / 6,201 = 99.87%** — the 6,193 that pass now.
 `regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
@@ -415,6 +427,7 @@ them separate, and `override-t-003a` is the case.
 | Cases | Verdict | Why |
 |---|---|---|
 | `streamable-141` | **Fixed** | It wanted XTSE3430 for `version="1.0"` on an `xsl:apply-templates` inside a `streamable="yes"` mode, and the old verdict was that this needs the §19.8 streamability analysis. It does not. §3.9.1 states the rule *"notwithstanding anything stated in 19 Streamability"*: an instruction processed with XSLT 1.0 behavior **is** roaming and free-ranging, by declaration rather than as a consequence of any posture inference. That makes it checkable without the analysis, and `checkStreamableCompat` in `xslt/staticerrors.go` now checks exactly it — a template whose `@mode` names a mode declared streamable, containing an element that states `version="1.0"`. Nothing wider: a processor that does not stream is not required to assess whether anything else is guaranteed-streamable. Measured at +1 on the 3.0 target (8,611 → 8,612) with the 2.0 failing list byte-identical. The earlier −4 and −177 measurement was a different change — skipping the case through the *set's* unsupported feature, which swept up cases that pass today. |
+| `streamable-021`, `streamable-042`, `streamable-043` | **Fixed — a driver gap, not an engine gap** | All three failed `XTSE1660: validation requires a schema; none was imported`. Each declares the `loans` environment, whose `<schema file="loans.xsd"/>` loads cleanly (2 elements, 90 types), and then validates with `validation="strict"` while declaring **no** `xsl:import-schema` of its own — `streamable-021`'s is commented out. `tests/xslts/runner.go` merged the environment's schema only into a schema the stylesheet had already built, so where `ss.Schema()` was nil the components were loaded and thrown away and strict validation had nothing to look in. The suite's own reference driver settles what should happen: `c:validated-document` in `runner/run-tests.xsl` builds its stylesheet with one synthesised `<xsl:import-schema>` per environment `<schema>`, **unconditionally** and without consulting the stylesheet under test, and XSLT 2.0 §3.14 makes an import satisfiable "using a schema that is already known to the processor". The harness now installs the environment schema when the stylesheet declared none, through a new `Stylesheet.SetSchemaIfAbsent`, which refuses to displace a schema `xsl:import-schema` built — that case still merges, so a declaration the stylesheet named by hand keeps priority. Measured in an isolated worktree: XSLT 3.0 11,332 → **11,335** passing, 193 → **190** failing, the three being exactly these; XSLT 2.0 unmoved at 6,193 / 8. The blast radius is the 33 test-sets that declare a `<schema>`, and all 33 were measured on both trees: only `streamable` moves (106 → 109 passing), every other set identical, `streamable-044` — which imports the same schema itself — still passing. |
 | `docbook-001` | **Not implementable** | EXSLT `exsl:document`, 19 times in `chunker.xsl` alone. |
 
 Two left this list. `docbook-004` was never an EXSLT case — it was filed as one
@@ -443,12 +456,12 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `transform-001`, `transform-005`–`transform-009` | **Fixed** | Six `fn:transform` cases, four distinct causes. (1) `transform-001`: a `stylesheet-location` naming a file that is not there was reported as FOXT0001. FOXT0001 is the code for a transformation the processor cannot *run* — every QT3 case that asserts it does so for an unavailable vendor named in `requested-properties` (“thrown if Saxon is not available”) — while a location that cannot be retrieved identifies no stylesheet, which is FOXT0002. `fn-transform-err-1`'s own modification note (“based on careful reading of the spec”) settles it. (2) `transform-008`: an option written as element content, `<xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>`, arrives as a *text node*, and `transformString` refused it with XPTY0004 on a map that says exactly what a string-valued one says; nodes are now atomized to their string value. (3) `transform-009`: an `xsl:result-document` with **no href** is the principal output — §24.3 changes the current output URI only for an instruction *with* an href — but `transformResultMap` keyed it as a secondary under `""`, leaving `?output` holding the empty tree the stylesheet never wrote to, so the principal serialization came out blank. Same rule `cmd/go-xml` already applies. (4) `transform-005`–`007`: the `package-name` and `package-version` options were not read at all, so the options looked like they identified no stylesheet. They now resolve through the same `PackageResolver` the outer compilation was given, which `Stylesheet` retains for the purpose. Measured: 11,304 → 11,324 passing, 221 → 201 failing; XSLT 2.0 unmoved at 6,193/8 and QT3 unmoved. |
 | `transform-004` | **Not implementable without unpicking `Compile`'s global state** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value; that is a real refactor of shared machinery and out of scope for an error-code fix. |
 
-**XSLT 3.0 ceiling: 11,332 / 11,525 = 98.33%** — what passes now. Of the 193
-remaining, **161 want an `XTSE3430`** that only the §19.8 posture-and-sweep
+**XSLT 3.0 ceiling: 11,346 / 11,525 = 98.45%** — what passes now. Of the 179
+remaining, **150 want an `XTSE3430`** that only the §19.8 posture-and-sweep
 analysis can emit, and §19.1 says a non-streaming processor "is not required to
 assess whether constructs are guaranteed-streamable" — so they are not defects
 this engine is obliged to close. The reachable ceiling without implementing
-streamability analysis is therefore about **11,491 of 11,525**.
+streamability analysis is therefore about **11,496 of 11,525**.
 
 `base-uri-052` left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are

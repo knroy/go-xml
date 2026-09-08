@@ -1133,13 +1133,17 @@ func (i *attributeInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err != nil {
 			return err
 		}
-		value = constructedText(seq, sep)
+		if value, err = constructedTextChecked(seq, sep); err != nil {
+			return err
+		}
 	} else {
 		sub := newOutputBuilder()
 		if err := execSequence(i.body, rt.temporaryOutputBefore30(), sub); err != nil {
 			return err
 		}
-		value = constructedText(sub.Sequence(), sep)
+		if value, err = constructedTextChecked(sub.Sequence(), sep); err != nil {
+			return err
+		}
 	}
 	// Assessment happens before the attribute joins the output, so that a
 	// failure reports the attribute the stylesheet asked for rather than
