@@ -1339,6 +1339,16 @@ func applyOutputValues(el *xdm.Node, value func(string) string, o *OutputSetting
 	if v := value("version"); v != "" {
 		o.Version = v
 	}
+	// xsl:result-document spells it "output-version": §3.5 renames the
+	// attribute there because "version" on that element would collide with
+	// the xsl:version an XSLT element may carry. It sets the same parameter,
+	// so it is read into the same field. Read after "version" and not before,
+	// because only one of the two can appear on any given element -- the
+	// order matters only in that a caller merging both spellings gets the
+	// result-document one, which is the more specific.
+	if v := value("output-version"); v != "" {
+		o.Version = v
+	}
 	if v := value("html-version"); v != "" {
 		o.HTMLVersion = strings.TrimSpace(v)
 	}

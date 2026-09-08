@@ -151,7 +151,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 			if enc == "" {
 				enc = "UTF-8"
 			}
-			decl := `<?xml version="1.0" encoding="` + enc + `"`
+			decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
 			if opts.Standalone != "" {
 				decl += ` standalone="` + opts.Standalone + `"`
 			}
@@ -294,7 +294,7 @@ func serialize(w io.Writer, seq xdm.Sequence, opts OutputSettings, charMap map[r
 		if enc == "" {
 			enc = "UTF-8"
 		}
-		decl := `<?xml version="1.0" encoding="` + enc + `"`
+		decl := `<?xml version="` + xmlDeclVersion(opts) + `" encoding="` + enc + `"`
 		if opts.Standalone != "" {
 			decl += ` standalone="` + opts.Standalone + `"`
 		}
@@ -1192,6 +1192,32 @@ func (s *serializer) escapeTextRun(sb *strings.Builder, text string) {
 				fmt.Fprintf(sb, "&#%d;", r)
 				continue
 			}
+			// The C0 controls other than TAB, LF and CR. XML 1.0 has no
+			// spelling for them at all -- they are outside [2] Char, and a
+			// character reference does not help, because [66] CharRef is
+			// constrained to Char too. XML 1.1 admits them, but only written
+			// as references: [2a] RestrictedChar excludes them from the
+			// literal text a document may contain.
+			//
+			// So the version decides between a reference and an error, and
+			// there is no third option where the character is written as
+			// itself. It was: the range fell past every arm above into
+			// WriteRune, and the output held a raw \x01 that no parser at
+			// either version will read back. SERE0006 is the code for a
+			// character the chosen version cannot represent, which is what
+			// xml-version-030 asserts for a BEL under version="1.0".
+			if r < 0x20 && r != '\t' && r != '\n' {
+				if !s.xml11() {
+					if s.err == nil {
+						s.err = fmt.Errorf("SERE0006: character #x%X cannot "+
+							"be output as XML 1.0; it is not a valid XML "+
+							"character at that version", r)
+					}
+					return
+				}
+				fmt.Fprintf(sb, "&#%d;", r)
+				continue
+			}
 		}
 		switch r {
 		case '&':
@@ -1277,6 +1303,27 @@ func (s *serializer) writeCData(text string) {
 // representable reports whether the declared encoding can hold this
 // character. Only the ASCII-limited encodings restrict anything; the Unicode
 // ones hold every character by construction.
+// xmlDeclVersion is the version the XML declaration announces.
+//
+// Only "1.1" is distinguished. xsl:output/@version is a token the specification
+// leaves open -- a processor may be asked for a version it does not implement,
+// and §serialization "XML Output Method: the version parameter" says the
+// declaration states the version of XML being produced. This serializer
+// produces 1.0 unless asked for 1.1, so anything else is written as 1.0 rather
+// than echoed back: announcing "3.7" would describe the output falsely, and a
+// declaration is a claim a parser acts on.
+func xmlDeclVersion(opts OutputSettings) string {
+	if strings.TrimSpace(opts.Version) == "1.1" {
+		return "1.1"
+	}
+	return "1.0"
+}
+
+// xml11 reports whether the output method is producing XML 1.1.
+func (s *serializer) xml11() bool {
+	return strings.TrimSpace(s.opts.Version) == "1.1"
+}
+
 func (s *serializer) representable(r rune) bool {
 	if r < 0x80 {
 		return true
@@ -1453,7 +1500,13 @@ func (s *serializer) escapeAttrMapped(v string, uri bool) (string, bool) {
 			// language="Jack&amp;Jill", written before the raw content
 			// begins, keeps its escape.
 			sb.WriteString(run)
-		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll():
+		case len(s.charMap) == 0 && !s.html && s.encodingHoldsAll() &&
+			!strings.ContainsFunc(run, isC0Control):
+			// The run-at-once spelling needs one more condition than the
+			// encoding: escapeAttr is a free function and cannot see the
+			// output version, so a run holding a C0 control goes the
+			// per-rune way where the version is known. Same asymmetry the
+			// comment above describes for the encoding.
 			sb.WriteString(escapeAttr(run))
 		default:
 			s.writeAttrRuns(&sb, run)
@@ -1516,8 +1569,32 @@ func (s *serializer) escapeURIs() bool {
 // browsers have historically remapped to windows-1252 characters, so a
 // reference — which names a Unicode code point unambiguously — is the only
 // spelling that survives being read back.
+// isC0Control reports whether r is a C0 control that needs the version-aware
+// treatment -- the block minus TAB, LF and CR, which are legal in both
+// versions and escaped for an unrelated reason.
+func isC0Control(r rune) bool {
+	return r < 0x20 && r != '\t' && r != '\n' && r != '\r'
+}
+
 func (s *serializer) escapeAttrRune(r rune) string {
 	if s.html && r >= 0x7F && r <= 0x9F || !s.representable(r) {
+		return fmt.Sprintf("&#%d;", r)
+	}
+	// The C0 controls, on the same terms as element text: 1.1 writes them as
+	// references, 1.0 has no spelling for them and the attempt is SERE0006.
+	// TAB, LF and CR are excluded because escapeAttr already writes all three
+	// as references -- an attribute value normaliser would otherwise turn
+	// them into spaces -- so they never reach this arm as a problem.
+	// xml-version-007 and -008 assert the reference spelling here.
+	if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && (!s.html || s.xhtml) {
+		if !s.xml11() {
+			if s.err == nil {
+				s.err = fmt.Errorf("SERE0006: character #x%X cannot be "+
+					"output as XML 1.0; it is not a valid XML character "+
+					"at that version", r)
+			}
+			return ""
+		}
 		return fmt.Sprintf("&#%d;", r)
 	}
 	if s.html && r == '"' {

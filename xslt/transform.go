@@ -1200,9 +1200,20 @@ func stripAnnotationCopy(n *xdm.Node) *xdm.Node {
 //
 // Indentation and the other settings are deliberately left at their defaults
 // rather than inherited, for the same reason.
+//
+// The version is the one exception, and it is not a rendering choice: XML 1.1
+// [2] Char admits the C0 controls and 1.0 does not, so the version decides
+// whether a character can be written down at all rather than how it looks. A
+// tree holding &#x1; is a legal 1.1 document and has no 1.0 spelling, so
+// serialising it as 1.0 does not render it differently -- it fails, which is
+// SERE0006 and correct. Forcing 1.0 here made the harness compare an assertion
+// against the truncated prefix of an error it had discarded (xml-version-002
+// and -020 stopped at "<out>"), reporting a defect in the transform where the
+// only defect was in how the comparison asked for the text.
 func SerializeAsXML(r *Result) string {
 	var sb strings.Builder
-	_ = serialize(&sb, r.Nodes, OutputSettings{Method: "xml"}, r.charMap)
+	_ = serialize(&sb, r.Nodes,
+		OutputSettings{Method: "xml", Version: r.output.Version}, r.charMap)
 	return sb.String()
 }
 
