@@ -101,12 +101,12 @@ conformance cases. See [docs/testing.md](docs/testing.md).
 | **XPath 3.1** | 100% of the W3C QT3 suite (21,863 of 21,863 in scope); maps, arrays, the lookup operator, the JSON family |
 | **XQuery 3.1** | 99.96% of the W3C QT3 suite (29,952 of 29,964 in scope); constructors, FLWOR, the prolog, try/catch, switch, typeswitch, windows |
 | **XSLT 2.0** | 99.87% of the W3C XSLT suite filtered to 2.0 (6,193 of 6,201 in scope); verified against Saxon-HE 12.4 on two production corpora |
-| **XSLT 3.0** | 98.31% of the W3C XSLT suite filtered to 3.0 (11,330 of 11,525 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 150 of the 201 failures want the XTSE3430 that a §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
+| **XSLT 3.0** | 98.33% of the W3C XSLT suite filtered to 3.0 (11,332 of 11,525 in scope). Streaming is now measured rather than excluded, which is why the denominator grew by 2,862 cases: 150 of the 201 failures want the XTSE3430 that a §19.8 posture-and-sweep analysis would emit — see [Where it fails](#where-it-fails). Also measured against DocBook xslTNG and XSpec — see [Real-world stylesheets](#real-world-stylesheets) |
 | **XSD 1.0** | 99.89% of the W3C xsdtests *instance* tests (24,973 of 25,000); **99.97%** of its *schema-validity* tests (14,383 of 14,388) |
 | **XSD 1.1** | 99.90% instance (26,196 of 26,222); **99.95%** schema-validity (15,347 of 15,354); opt-in via `Version11` |
 | **RELAX NG** | 100% of James Clark's spectest (965 of 965 assertions); XML and compact syntax |
 | **DTD** | content models, attribute defaults, enumerations, `ID`/`IDREF`; external subset, parameter entities across both subsets, conditional sections — via `dtd.Load` with a caller-supplied resolver, nothing fetched by default |
-| **Tests** | 1,625 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
+| **Tests** | 1,626 `func Test` declarations, clean under `-race` (a few subtests skip without the corpora below) |
 | **Production schemas** | UBL 2.1, UN/CEFACT CII, Factur-X/ZUGFeRD, Peppol BIS 3.0 — 88 schemas load, instances validate clean |
 | **API** | 1.2; the exported surface is stable and additive over 1.1, and a breaking change means 2.0 with a new module path |
 
@@ -908,7 +908,7 @@ What they found, none of which the suites covered:
 
 **One deliberate divergence.** Confining the private-function default to a real
 `xsl:package` costs W3C `evaluate-045`, which asserts the strict reading — one
-case the engine gives up on purpose, and the reason 11,330 is not 11,331. Saxon
+case the engine gives up on purpose, and the reason 11,332 is not 11,333. Saxon
 does not enforce it either: its own XSLT 3.0 results report `evaluate-045` as
 `wrongError`. Inside an `xsl:package`, declared visibility is honoured exactly
 as before. The alternative was that no stylesheet outside a package can call
@@ -1225,7 +1225,7 @@ back, is in [docs/testing.md](docs/testing.md).
 
 | method | what it catches | what it misses |
 |---|---|---|
-| **Unit tests** (1,625 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** (1,626 `func Test` declarations) | places where a plausible implementation is quietly wrong | anything nobody thought to write a test for |
 | **Spec inventories** | features absent entirely | features present but behaving wrongly |
 | **Saxon differential** | subtle behavioural divergence on real stylesheets | constructs the corpora do not use |
 | **W3C QT3 suite** | systematic conformance across 15,183 cases | XSLT (it is an XPath suite) |

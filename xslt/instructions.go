@@ -703,6 +703,21 @@ func (i *copyInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if i.noInherit {
 			blockNamespaceInheritance(sub.Open())
 		}
+		if i.noNamespaces {
+			// §5.8.3 namespace fixup still applies: dropping the source's
+			// namespace nodes does not license a tree where the copy's own
+			// name, or an attribute name the body wrote, has no namespace
+			// node to resolve its prefix. The serialiser writes the
+			// declaration a name needs whether the tree carries it or not,
+			// so the omission was invisible in the output -- but the
+			// namespace axis reads the tree, and in-scope-prefixes() on the
+			// copy answered with only the bindings it inherited from wherever
+			// it landed. si-copy-020 and si-copy-026 ask exactly that.
+			// xsl:element already repairs its result this way; xsl:copy did
+			// not, because with copy-namespaces="yes" the copied nodes cover
+			// every name and there was nothing left to repair.
+			fixupNamespaces(sub.Open())
+		}
 		// The copy is assessed once it is complete, since validity is a
 		// property of the whole element and its content.
 		return i.validation.assess(rt, sub.Open())
