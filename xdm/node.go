@@ -343,7 +343,7 @@ func (n *Node) Order() int {
 		for root.Parent != nil {
 			root = root.Parent
 		}
-		base = int(detachedRootID(root)) + detachedIDBias
+		base = int(detachedRootID(root))
 		// Within the tree the root identity is only half the answer: every
 		// node under it still carries the zero order it was built with, so
 		// they all reduced to the same number. fn:generate-id() is built on
@@ -369,10 +369,6 @@ func (n *Node) Order() int {
 
 // treeIDStride separates one tree's identity range from the next.
 const treeIDStride = 1 << 20
-
-// detachedIDBias keeps identities handed to unfinalized roots clear of the
-// tree ids, which are drawn from a separate counter starting at one.
-const detachedIDBias = 1 << 20
 
 // SetSynthesizedOrder places a node the parser did not build into the document
 // order of an existing tree, immediately after owner.
@@ -492,13 +488,7 @@ func (n *Node) Compare(o *Node) int {
 		return compareDetached(n, o)
 	}
 	if n.tree != o.tree {
-		ni, oi := 0, 0
-		if n.tree != nil {
-			ni = n.tree.id
-		}
-		if o.tree != nil {
-			oi = o.tree.id
-		}
+		ni, oi := crossTreeRank(n), crossTreeRank(o)
 		switch {
 		case ni < oi:
 			return -1
@@ -577,8 +567,17 @@ func compareDetached(n, o *Node) int {
 // The numbers are handed out on first comparison rather than at construction:
 // the vast majority of constructed nodes are never compared across trees, and
 // the alternative is a counter increment on every element a transform builds.
-var detachedIDNext int64
-
+//
+// They come from nextTreeID, the counter the parser draws a Tree's id from,
+// rather than from one of their own. A separate counter has to be kept clear
+// of the tree ids by a fixed offset, and a fixed offset is only ever right
+// until a long enough run overruns it: with detachedIDBias at 1<<20, the
+// xslt30 suite reached tree id 1272658 and parsed documents began sorting
+// after constructed ones again, which is what left "(...PRICE union
+// $insertion)" with the variable's elements first in a full run and correct
+// when the test-set ran alone. One counter has no offset to overrun, and it
+// orders the two kinds of tree by the sequence in which they were actually
+// made.
 func detachedRootID(root *Node) int64 {
 	// The number lives on the node rather than in a side table so that it
 	// dies with the node: a table keyed by *Node would pin every constructed
@@ -586,11 +585,34 @@ func detachedRootID(root *Node) int64 {
 	if id := atomic.LoadInt64(&root.detachedID); id != 0 {
 		return id
 	}
-	id := atomic.AddInt64(&detachedIDNext, 1)
+	id := int64(nextTreeID())
 	if !atomic.CompareAndSwapInt64(&root.detachedID, 0, id) {
 		return atomic.LoadInt64(&root.detachedID)
 	}
 	return id
+}
+
+// crossTreeRank returns the number that orders n's tree against another's.
+//
+// A node the parser built carries its Tree's id. A node built by a sequence
+// constructor carries no Tree at all, and reading its id as the zero value
+// put every such node ahead of every parsed document -- so
+// "(/BOOKLIST/BOOKS/ITEM/PRICE union $insertion)" came back with the
+// variable's two elements first. Asking detachedRootID instead gives it a
+// number from the same counter the parser draws tree ids from, so the two
+// kinds of tree are ordered by when each was made. The spec leaves the
+// relative order of nodes in different trees implementation-dependent and
+// requires only that it be stable; this makes it so, and makes Compare agree
+// with the identity Order() hands out.
+func crossTreeRank(n *Node) int {
+	if n.tree != nil {
+		return n.tree.id
+	}
+	root := n
+	for root.Parent != nil {
+		root = root.Parent
+	}
+	return int(detachedRootID(root))
 }
 
 // numberDetachedRoot stamps an identity number on the root of the untracked

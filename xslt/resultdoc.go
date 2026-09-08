@@ -257,7 +257,20 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// its assertions against these nodes, not against the serialised text,
 	// so a separator that existed only in the document node toDocument built
 	// would be invisible to /text() = '+++'.
-	nodes := insertItemSeparator(sub.Sequence(), settings.ItemSeparator)
+	// ...except under the adaptive and json methods, which are not subject to
+	// sequence normalisation at all (Serialization 3.1 §2 applies it to "the
+	// XML, XHTML, HTML and Text output methods" only) and which separate
+	// their own items -- adaptive with this very parameter, §10. Inserting it
+	// here as well wrote it twice: result-document-0304 asks for
+	// map{"a":22}|<elem/>|a="5" and got the "|" as an inserted text item and
+	// again as adaptive's own join, around its default newline. serialize.go
+	// dispatches both methods ahead of insertItemSeparator for this reason;
+	// this is the same rule on the path that builds the recorded nodes.
+	sepMethod := strings.ToLower(settings.Method)
+	nodes := sub.Sequence()
+	if sepMethod != "adaptive" && sepMethod != "json" {
+		nodes = insertItemSeparator(nodes, settings.ItemSeparator)
+	}
 	if resolvedHref != "" {
 		for _, it := range nodes {
 			if n, ok := it.(*xdm.Node); ok {
@@ -276,8 +289,12 @@ func (i *resultDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 		cm = settings.InlineCharMap
 	}
 	// Normalisation has already run over these nodes, so the serialiser must
-	// not run it a second time and double every separator.
-	settings.ItemSeparator = nil
+	// not run it a second time and double every separator. The adaptive and
+	// json methods are the exception: nothing was inserted above, so their
+	// separator has to survive for the serialiser to apply.
+	if sepMethod != "adaptive" && sepMethod != "json" {
+		settings.ItemSeparator = nil
+	}
 	*rt.secondary = append(*rt.secondary, SecondaryResult{
 		Href:    href,
 		BaseURI: resolvedHref,

@@ -223,6 +223,12 @@ func (c *compiler) compileLiteralElement(n *xdm.Node) (Instruction, error) {
 	instr := &literalElemInstr{
 		name: n.Name, attrSets: sets, baseURI: n.BaseURI,
 		pkg: compilePackage,
+		// §11.1: the property is spelled xsl:inherit-namespaces here,
+		// because an unprefixed name on a literal result element is an
+		// output attribute rather than a directive. It applies to this
+		// element alone -- unlike exclude-result-prefixes, it is not
+		// inherited from an ancestor.
+		noInherit: noXSLAttr(n, "inherit-namespaces"),
 	}
 	if instr.validation, err = compileValidation(n, ""); err != nil {
 		return nil, err
@@ -660,7 +666,7 @@ func (c *compiler) compileValueOf(n *xdm.Node, ns xpath.NamespaceResolver) (Inst
 }
 
 func (c *compiler) compileApplyTemplates(n *xdm.Node, ns xpath.NamespaceResolver) (Instruction, error) {
-	instr := &applyTemplatesInstr{}
+	instr := &applyTemplatesInstr{streamed: inDeclaredStreamable(n)}
 	if sel := n.AttrValue("select"); sel != "" {
 		comp, err := compileExpr(sel, ns)
 		if err != nil {
@@ -748,7 +754,8 @@ func (c *compiler) compileCallTemplate(n *xdm.Node, ns xpath.NamespaceResolver) 
 	if err != nil {
 		return nil, err
 	}
-	instr := &callTemplateInstr{name: qn, params: params, compat: compatModeAt(n)}
+	instr := &callTemplateInstr{name: qn, params: params, compat: compatModeAt(n),
+		streamed: inDeclaredStreamable(n)}
 	// XTSE0680 is checked after every module has compiled, because the
 	// template being called may be declared below this call or in a module
 	// imported afterwards. The call is recorded here, where the source

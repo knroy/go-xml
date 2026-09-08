@@ -88,3 +88,138 @@ func TestSourceDocumentAppliesXMLIDFragment(t *testing.T) {
 		})
 	}
 }
+
+// xsl:source-document/@href resolves against the base URI of the instruction
+// element, which an xml:base on it or an ancestor moves.
+//
+// 18.1 obtains the document "the same as for the doc function", and fn:doc
+// resolves a relative reference against the static base URI of the expression.
+// That is a per-element property: xml:base on the xsl:template (or on any
+// ancestor of the instruction) changes it. The engine used the stylesheet
+// module's own base instead, so an href beside a relocated base was looked for
+// beside the module, and the suite's non-stream-004 and stream-004 -- whose
+// template carries xml:base="../../.." and asks for catalog.xml -- failed with
+// FODC0002 naming a path under the stylesheet's own directory.
+func TestSourceDocumentResolvesAgainstXMLBase(t *testing.T) {
+	// A stylesheet in <root>/sub/deep, and the document one level up in
+	// <root>/sub, reached by an xml:base of "..". Built with filepath.Join so
+	// the layout is native on every platform.
+	root := t.TempDir()
+	deep := filepath.Join(root, "sub", "deep")
+	if err := os.MkdirAll(deep, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "sub", "catalog.xml")
+	if err := os.WriteFile(target, []byte(`<catalog n="up"/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A decoy of the same name beside the stylesheet. Without the fix the
+	// engine finds this one, so the test would pass for the wrong reason if
+	// the resolution were merely "some catalog.xml".
+	decoy := filepath.Join(deep, "catalog.xml")
+	if err := os.WriteFile(decoy, []byte(`<catalog n="beside"/>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	src := `<xsl:transform xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+		<xsl:output omit-xml-declaration="yes"/>
+		<xsl:template name="xsl:initial-template" xml:base="..">
+			<xsl:source-document streamable="no" href="catalog.xml">
+				<xsl:copy-of select="."/>
+			</xsl:source-document>
+		</xsl:template>
+	</xsl:transform>`
+	// A file: URI, not a bare path: xml:base is resolved as a URI reference,
+	// and filepath.ToSlash keeps that correct where the separator is "\\".
+	path := "file://" + filepath.ToSlash(filepath.Join(deep, "s.xsl"))
+	r, err := NewFileResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Compile(stree.Root, CompileOptions{Resolver: r, BaseURI: path})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := s.Transform(context.Background(), nil,
+		TransformOptions{InitialTemplate: "initial-template",
+			InitialTemplateURI: xdm.NSXSL, Documents: r})
+	if err != nil {
+		t.Fatalf("transform: %v", err)
+	}
+	if got, want := strings.TrimSpace(res.String()), `<catalog n="up"/>`; got != want {
+		t.Errorf("xml:base was not applied: got %q, want %q", got, want)
+	}
+}
+
+// An @href that is not a URI at all is FODC0005, not FODC0002.
+//
+// F&O separates the two: FODC0002 is a resource that could not be retrieved,
+// FODC0005 an argument that is not a valid URI. The distinction is whether
+// retrieval was ever attempted, so the check runs before the resolver is
+// consulted -- and therefore does not depend on one being configured.
+//
+// The suite's non-stream-006 and stream-006 ask for "c:\my\doc\books.xml": a
+// native Windows filename. Its backslashes are not legal URI characters, so it
+// is not a URI reference on any platform, and the leading "c:" must not be
+// read as a URI scheme -- which is what produced the wrong FODC0002 ("scheme
+// \"c\" is not permitted"). The assertion is on the code, because an error of
+// either kind would otherwise look alike.
+func TestSourceDocumentInvalidURIIsFODC0005(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		href string
+		want string
+	}{
+		// A Windows drive-letter path. The case that matters: it must be
+		// rejected as a non-URI rather than dispatched to a "c" scheme, and
+		// it must behave the same on Windows, macOS and Linux, since a
+		// filesystem path is not a URI reference anywhere.
+		{"windows drive letter path", `c:\my\doc\books.xml`, "FODC0005"},
+		// A bare backslash is enough; the drive letter is not what makes it
+		// invalid.
+		{"backslash separator", `my\doc.xml`, "FODC0005"},
+		// A truncated percent-escape is the other non-URI form.
+		{"bad percent escape", `books%zz.xml`, "FODC0005"},
+		// A well-formed URI for a document that is not there stays
+		// FODC0002: it is a retrieval failure, not a malformed argument.
+		// This is what keeps the new check from swallowing the old error.
+		{"absent document is still FODC0002", `absent.xml`, "FODC0002"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := `<xsl:transform xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+				<xsl:template name="xsl:initial-template">
+					<xsl:source-document streamable="no" href="` + tc.href + `">
+						<in/>
+					</xsl:source-document>
+				</xsl:template>
+			</xsl:transform>`
+			path := filepath.Join(dir, "s.xsl")
+			r, err := NewFileResolver(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stree, err := xdm.ParseString(src, xdm.ParseOptions{BaseURI: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Compile(stree.Root, CompileOptions{Resolver: r, BaseURI: path})
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			_, err = s.Transform(context.Background(), nil,
+				TransformOptions{InitialTemplate: "initial-template",
+					InitialTemplateURI: xdm.NSXSL, Documents: r})
+			if err == nil {
+				t.Fatalf("href %q: expected %s, got no error", tc.href, tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("href %q: expected %s, got: %v", tc.href, tc.want, err)
+			}
+		})
+	}
+}

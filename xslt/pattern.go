@@ -112,7 +112,12 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 	// Where a PredicatePattern may stand is a grammar rule, not a matching
 	// one, so it is settled before any alternative is compiled; see
 	// checkPredicatePatternPlacement.
-	if patternsAllow30(ns) {
+	// The placement rule travels with the form: wherever "." is admitted as a
+	// pattern it is admitted only as a whole one, so the gate here matches
+	// the one predicatePatternAllowed applies below. Leaving this on the
+	// module's version alone let a version="2.0" module write ".|a" and get a
+	// working pattern, where a 3.0 module gets XTSE0340 for the same text.
+	if patternsAllow30(ns) || processorAtLeast30() {
 		if err := checkPredicatePatternPlacement(src, alts); err != nil {
 			return nil, err
 		}
@@ -154,7 +159,8 @@ func CompilePattern(src string, ns xpath.NamespaceResolver) (*Pattern, error) {
 			// pattern30.go.
 			g, gerr := compileGeneralPattern(alt, ns)
 			if gerr == nil && g != nil &&
-				(patternsAllow30(ns) || variablePatternAllowed(alt)) {
+				(patternsAllow30(ns) || variablePatternAllowed(alt) ||
+					predicatePatternAllowed(alt)) {
 				p.general = append(p.general, g)
 				continue
 			}

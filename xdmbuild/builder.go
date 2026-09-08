@@ -807,8 +807,39 @@ func (b *Builder) Items() xdm.Sequence { return b.items }
 // inside element content, so it is accepted at the top level and refused
 // under an open element. Both languages refuse it; they differ only in the
 // code, which is why the fault is reported rather than named here.
+// An ARRAY is the exception, and only under an open element. XTDE0450 is
+// worded against a function item — "It is a dynamic error if the result
+// sequence contains a function item" (XSLT 3.0 §5.7.1) — and an array is not
+// one for this rule: content construction flattens it and contributes its
+// members. The XSLT 3.0 test suite says so in as many words, naming
+// output-0713/0714/0715 "An array is flattened by the XML output method",
+// and arrays-304/305 build element content from xsl:sequence over an array
+// and assert the members' values. Flattening is recursive, because a member
+// may itself be an array, which is exactly what xdm.Flatten does.
+//
+// At the TOP level the array stays an array: that is what lets an
+// xsl:variable declared as="array(*)" be built by a sequence constructor, and
+// what an xsl:function returning an array depends on.
 func (b *Builder) AppendOpaque(it xdm.Item) error {
 	if b.open != nil {
+		if arr, ok := it.(*xdm.ArrayItem); ok {
+			for _, m := range xdm.Flatten(xdm.Sequence{arr}) {
+				switch v := m.(type) {
+				case *xdm.Node:
+					b.AppendNode(v)
+				case *xdm.Atomic:
+					b.AppendValue(v)
+				default:
+					// A function item or a map among the members is still
+					// what XTDE0450 is about, and Flatten has already
+					// unwrapped every array around it.
+					if err := b.AppendOpaque(m); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
 		return b.policy.Err(FaultFunctionItem,
 			fmt.Sprintf("a %s cannot be added to the content of element %s",
 				it.TypeName(), b.open.Name.Lexical()))

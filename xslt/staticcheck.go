@@ -526,6 +526,17 @@ func checkAttrValue(el *xdm.Node, a *xdm.Node, ad attrDef) error {
 	if isXSL(el, "message") && a.Name.Local == "terminate" {
 		allow = allow || processorAtLeast30()
 	}
+	// The serialization attributes of xsl:result-document are the same case:
+	// §3.5 declares each as { boolean }, and the schema-for-stylesheets types
+	// them xsl:yes-or-no, "the values 'true' or 'false', or '1' or '0' are
+	// accepted as synonyms". result-document-0304 writes
+	// omit-xml-declaration="true" in a version="2.0" module and is scoped
+	// XSLT30+, exactly as message-0009 writes terminate="true" there -- and
+	// beside build-tree="false", which this table already admits. So what
+	// decides is whether the processor implements 3.0.
+	if isXSL(el, "result-document") {
+		allow = allow || processorAtLeast30()
+	}
 	if alias, ok := boolAliases[v]; ok && allow {
 		for _, want := range ad.values {
 			if alias == want {

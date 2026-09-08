@@ -40,6 +40,12 @@ type Stylesheet struct {
 	// reference against when there is no context node to take one from — a
 	// transform started from a named template has none.
 	baseURI string
+	// pkgResolver is CompileOptions.PackageResolver, kept so that a
+	// stylesheet fn:transform loads by package-name can be resolved the same
+	// way xsl:use-package resolves one. The options map names a package
+	// rather than locating it, so without the resolver the outer transform
+	// was given there is nothing to look it up in.
+	pkgResolver PackageResolver
 	// maxVersion is CompileOptions.MaxVersion, the XSLT version this
 	// processor is acting as. Zero means uncapped, and so 3.0.
 	//
@@ -643,6 +649,7 @@ func Compile(doc *xdm.Node, opts CompileOptions) (*Stylesheet, error) {
 			funcs:            newStylesheetFuncs(),
 			baseURI:          stylesheetBase(doc, opts.BaseURI),
 			compat:           opts.Compat,
+			pkgResolver:      opts.PackageResolver,
 			maxVersion:       opts.MaxVersion,
 			// Method is deliberately left empty. Its default is not "xml"
 			// but a choice made from the result tree — a document whose

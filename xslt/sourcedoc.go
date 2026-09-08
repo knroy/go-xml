@@ -34,6 +34,13 @@ type sourceDocumentInstr struct {
 	// but XTDE3362 bars a non-streamable accumulator from being read over a
 	// document the stylesheet asked to stream, so the request is recorded.
 	streamed bool
+	// baseURI is the base URI of the xsl:source-document element itself,
+	// which is the stylesheet module's own unless an xml:base on the element
+	// or an ancestor overrides it. 18.1 resolves @href "as for the doc
+	// function", and fn:doc resolves against the static base URI of the
+	// expression -- a per-element property, not a per-module one. Taking the
+	// module's base instead ignored xml:base, which non-stream-004 catches.
+	baseURI string
 }
 
 func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
@@ -42,7 +49,8 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		return nil, fmt.Errorf(
 			"XTSE0010: xsl:source-document requires an href attribute")
 	}
-	href, err := compileAVT(hrefSrc, newNSResolver(n, ""))
+	ns := newNSResolver(n, "")
+	href, err := compileAVT(hrefSrc, ns)
 	if err != nil {
 		return nil, fmt.Errorf("in xsl:source-document/@href: %w", err)
 	}
@@ -55,7 +63,7 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 		return nil, err
 	}
 	return &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable"))}, nil
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI}, nil
 }
 
 func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -87,13 +95,29 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 // document in place would change what a later fn:doc of the same URI — or a
 // second xsl:source-document over it — sees.
 func (i *sourceDocumentInstr) load(rt *runtime, href string) (*xdm.Node, error) {
+	// A URI that is not a URI at all is FODC0005, and it is reported before
+	// any retrieval is attempted -- so it does not depend on whether a
+	// resolver is configured, and it is not the FODC0002 that a resource
+	// which merely could not be fetched raises. non-stream-006 asks for
+	// "c:\my\doc\books.xml": a Windows filename, whose backslashes are not
+	// legal URI characters, so it is rejected here rather than being read as
+	// a "c" scheme.
+	if err := validSourceDocumentURI(href); err != nil {
+		return nil, err
+	}
 	docs := rt.ctx.Docs
 	if docs == nil {
 		return nil, fmt.Errorf(
 			"FODC0002: document access is disabled (no resolver configured): %q",
 			href)
 	}
-	base := rt.ctx.StaticBaseURI
+	// 18.1 resolves @href as fn:doc does, against the static base URI of the
+	// expression -- the base URI of the xsl:source-document element, which an
+	// xml:base on it or an ancestor may move.
+	base := i.baseURI
+	if base == "" {
+		base = rt.ctx.StaticBaseURI
+	}
 	if base == "" {
 		if n, ok := rt.ctx.Item.(*xdm.Node); ok {
 			base = n.BaseURI
@@ -168,4 +192,38 @@ func fragmentOf(root *xdm.Node, href string) (*xdm.Node, error) {
 // conformance harness's preloaded sources already do.
 func (s validationSpec) isDefault() bool {
 	return s.typeName == nil && s.mode == validateStrip
+}
+
+// validSourceDocumentURI rejects an @href that is not a usable URI reference,
+// with the FODC0005 that F&O reserves for exactly that: "the resource ... is
+// not a valid URI". It is a distinct condition from FODC0002, which is what a
+// well-formed URI that could not be retrieved raises -- the difference being
+// whether retrieval was ever attempted.
+//
+// Two forms are caught. A "%" that does not introduce a two-digit escape is
+// not a legal percent-encoding, and a backslash is not a legal URI character
+// at all: it appears in an href only when a native Windows filename has been
+// written where a URI belongs ("c:\my\doc\books.xml"). That case matters
+// beyond tidiness, because the leading "c:" otherwise parses as a URI scheme,
+// and the failure is then reported as an unsupported scheme -- a retrieval
+// error for something that was never a URI. The check is on the string, not on
+// the host filesystem, so it behaves identically on Windows, macOS and Linux:
+// a Windows path is not a URI anywhere, including on Windows.
+func validSourceDocumentURI(href string) error {
+	if strings.ContainsRune(href, '\\') {
+		return fmt.Errorf(
+			"FODC0005: %q is not a valid URI: a backslash is not a legal URI "+
+				"character (a filesystem path is not a URI reference)", href)
+	}
+	for i := 0; i < len(href); i++ {
+		if href[i] != '%' {
+			continue
+		}
+		if i+2 >= len(href) || !isHexByte(href[i+1]) || !isHexByte(href[i+2]) {
+			return fmt.Errorf("FODC0005: %q is not a valid URI: %% must "+
+				"introduce a two-digit escape", href)
+		}
+		i += 2
+	}
+	return nil
 }

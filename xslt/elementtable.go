@@ -258,6 +258,14 @@ var xsltElements = map[string]elementDef{
 	"attribute-set": {attrs: map[string]attrDef{
 		"name":               {required: true},
 		"use-attribute-sets": {},
+		// Both are 3.0 additions to the element's syntax summary (§10.2).
+		// Listing @streamable is what makes si-lre-906's streamable="Yes"
+		// an XTSE0020: the capitalised spelling is not one of the six
+		// xsl:yes-or-no values, and with no entry here it was never checked.
+		"visibility": {processor30: true, values: []string{
+			"public", "private", "final", "abstract"}},
+		"streamable": {processor30: true, values: []string{
+			"yes", "no", "true", "false", "1", "0"}},
 	}},
 	"function": {attrs: map[string]attrDef{
 		"name":     {required: true},
@@ -532,6 +540,12 @@ var xsltElements = map[string]elementDef{
 		"zero-digit":         {},
 		"digit":              {},
 		"pattern-separator":  {},
+		// processor30, not since30: format-number-069a writes this in a
+		// version="2.0" module and is scoped XSLT30+, so what decides is
+		// whether the processor implements 3.0 rather than the module's
+		// @version. XSLT 3.0 added the name alongside XPath 3.1's
+		// scientific notation.
+		"exponent-separator": {processor30: true},
 	}},
 	"message": {attrs: map[string]attrDef{
 		"select": {},

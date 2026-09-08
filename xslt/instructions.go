@@ -817,6 +817,12 @@ type literalElemInstr struct {
 	// validation carries xsl:validation and xsl:type, which a literal result
 	// element may have exactly as xsl:element may.
 	validation validationSpec
+	// noInherit records xsl:inherit-namespaces="no". Section 11.1 gives a
+	// literal result element the same property xsl:element and xsl:copy
+	// carry under an unprefixed name, and with the same effect: the
+	// namespace nodes created for this element are not copied down to its
+	// children, which under XML 1.1 output is written as an undeclaration.
+	noInherit bool
 }
 
 type attrTemplate struct {
@@ -923,6 +929,9 @@ func (i *literalElemInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	if err := execSequence(i.body, rt, sub); err != nil {
 		return err
+	}
+	if i.noInherit {
+		blockNamespaceInheritance(sub.Open())
 	}
 	// §5.8.3: an element in a namespace must carry a namespace node for it.
 	// exclude-result-prefixes is what makes this reachable -- it drops the

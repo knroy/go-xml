@@ -2,6 +2,7 @@ package xslt
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -113,4 +114,19 @@ func regexDialect(ctx *xpath.Context) xpath.Version {
 		return ctx.RegexVersion
 	}
 	return ctx.Version
+}
+
+// noXSLAttr is noAttr for an attribute written in the XSLT namespace, which
+// is how a literal result element spells the properties an XSLT instruction
+// writes unprefixed.
+func noXSLAttr(el *xdm.Node, name string) bool {
+	a := el.Attr(xdm.NSXSL, name)
+	if a == nil {
+		return false
+	}
+	switch strings.TrimSpace(a.Value) {
+	case "yes", "true", "1":
+		return false
+	}
+	return true
 }

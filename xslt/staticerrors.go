@@ -1053,8 +1053,48 @@ func checkLiteralResultXSLAttrs(el *xdm.Node) error {
 				"XTSE0805: xsl:%s is not an attribute this specification "+
 					"defines on a literal result element", a.Name.Local)
 		}
+		if err := checkLiteralResultXSLAttrValue(el, a); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// literalResultXSLAttrValues gives the closed value set of those attributes an
+// LRE spells with the xsl: prefix that have one. The rest -- the prefix lists,
+// the collation and namespace URIs, use-attribute-sets, use-when -- take a
+// value no table can enumerate and are absent.
+//
+// inherit-namespaces is the one the suite pins: namespace-2633 writes
+// xsl:inherit-namespaces=" " and expects XTSE0020. §3.5 compares "the value of
+// the attribute after removing leading and trailing whitespace", so " " is the
+// empty string and not one of the permitted values. Only the name was being
+// checked here, so any value at all was accepted -- and the reader that then
+// asked whether the value was "yes" treated the unrecognised spelling as "no",
+// which silently inverted the element's meaning.
+var literalResultXSLAttrValues = map[string][]string{
+	"inherit-namespaces": {"yes", "no", "true", "false", "1", "0"},
+	"expand-text":        {"yes", "no", "true", "false", "1", "0"},
+	"validation":         {"strict", "lax", "preserve", "strip"},
+	"default-validation": {"preserve", "strip"},
+}
+
+// checkLiteralResultXSLAttrValue applies XTSE0020 to one xsl:-prefixed
+// attribute of a literal result element.
+func checkLiteralResultXSLAttrValue(el *xdm.Node, a *xdm.Node) error {
+	want, ok := literalResultXSLAttrValues[a.Name.Local]
+	if !ok {
+		return nil
+	}
+	v := strings.TrimSpace(a.Value)
+	for _, w := range want {
+		if v == w {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"XTSE0020: attribute xsl:%s=%q on a literal result element is not "+
+			"one of %s", a.Name.Local, a.Value, strings.Join(want, ", "))
 }
 
 // effectiveForwards reports whether el is processed with forwards compatible

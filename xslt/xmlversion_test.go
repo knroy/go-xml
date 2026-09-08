@@ -163,3 +163,105 @@ func TestResultDocumentOutputVersion(t *testing.T) {
 		t.Errorf("C0 control not written as a reference: %q", b.String())
 	}
 }
+
+// TestLiteralResultInheritNamespaces pins xsl:inherit-namespaces on a literal
+// result element. Section 11.1 gives an LRE the same property xsl:element and
+// xsl:copy carry unprefixed, and it was read by neither the compiler nor the
+// instruction: the children went on inheriting the parent's bindings, so the
+// undeclaration XML 1.1 output is supposed to show was never owed and never
+// written. xml-version-026/031/032/035/037/039/042 are the cases.
+//
+// The child in the negative arms is built by xsl:element rather than written
+// literally, and that is deliberate. A literal result element copies every
+// binding in scope on it in the stylesheet, so an LRE child always redeclares
+// the prefix for itself and blockNamespaceInheritance passes it over --
+// forcing noInherit on unconditionally changes nothing there, and a negative
+// arm built that way would stay green under a fix that undeclared
+// everywhere. xsl:element copies no stylesheet bindings, so its child holds
+// only what it inherits, and the difference between yes and no is visible.
+func TestLiteralResultInheritNamespaces(t *testing.T) {
+	const head = `<?xml version="1.1"?>
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="2.0">
+<xsl:output method="xml" version="1.1" undeclare-prefixes="yes"/>`
+
+	// The positive half, spelled as the conformance cases spell it: the
+	// stopped binding is written as the undeclaration XML 1.1 permits.
+	t.Run("no blocks inheritance and undeclares", func(t *testing.T) {
+		out, err := runSheet(t, head+`
+<xsl:template match="/">
+  <doc xmlns:a="http://a/" xsl:inherit-namespaces="no">
+    <chap xsl:inherit-namespaces="no">
+      <para/>
+      <para xmlns:a=""/>
+    </chap>
+  </doc>
+</xsl:template>
+</xsl:stylesheet>`)
+		if err != nil {
+			t.Fatalf("serialize: %v", err)
+		}
+		if !strings.Contains(out, `xmlns:a=""`) {
+			t.Errorf("no namespace undeclaration in the output: %q", out)
+		}
+	})
+
+	// The same shape with an xsl:element child, which is the arm the two
+	// negative ones are compared against.
+	t.Run("no blocks a computed child too", func(t *testing.T) {
+		out, err := runSheet(t, head+`
+<xsl:template match="/">
+  <doc xmlns:a="http://a/" xsl:inherit-namespaces="no">
+    <xsl:element name="chap"><para xmlns:a=""/></xsl:element>
+  </doc>
+</xsl:template>
+</xsl:stylesheet>`)
+		if err != nil {
+			t.Fatalf("serialize: %v", err)
+		}
+		if !strings.Contains(out, `<chap xmlns:a=""`) {
+			t.Errorf("the computed child was not undeclared: %q", out)
+		}
+	})
+
+	// The negative half, and the one that matters: undeclaring everywhere
+	// would satisfy the arms above and be badly wrong. With the default the
+	// binding is inherited, so there is nothing to undeclare and the output
+	// must carry no empty declaration at all.
+	t.Run("yes is the default and inherits", func(t *testing.T) {
+		out, err := runSheet(t, head+`
+<xsl:template match="/">
+  <doc xmlns:a="http://a/">
+    <xsl:element name="chap"><para xmlns:a=""/></xsl:element>
+  </doc>
+</xsl:template>
+</xsl:stylesheet>`)
+		if err != nil {
+			t.Fatalf("serialize: %v", err)
+		}
+		if strings.Contains(out, `xmlns:a=""`) {
+			t.Errorf("a prefix was undeclared although it is inherited: %q", out)
+		}
+		if !strings.Contains(out, `xmlns:a="http://a/"`) {
+			t.Errorf("the binding was not declared at all: %q", out)
+		}
+	})
+
+	// An explicit yes is the same as omitting it, and is what tells apart a
+	// fix that reads the attribute's value from one that merely notices it
+	// is present.
+	t.Run("an explicit yes still inherits", func(t *testing.T) {
+		out, err := runSheet(t, head+`
+<xsl:template match="/">
+  <doc xmlns:a="http://a/" xsl:inherit-namespaces="yes">
+    <xsl:element name="chap"><para xmlns:a=""/></xsl:element>
+  </doc>
+</xsl:template>
+</xsl:stylesheet>`)
+		if err != nil {
+			t.Fatalf("serialize: %v", err)
+		}
+		if strings.Contains(out, `xmlns:a=""`) {
+			t.Errorf("inherit-namespaces=\"yes\" undeclared a prefix: %q", out)
+		}
+	})
+}

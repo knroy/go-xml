@@ -445,6 +445,42 @@ func applyToAtomic(rt *runtime, item xdm.Item, mode string,
 
 	t, next := rt.sheet.findAtomicTemplateFrom(item, mode, rt.ctx, 0)
 	if t == nil {
+		// The built-in rule for an ARRAY applies templates to its members.
+		//
+		// It runs only when no explicit rule matched, which is the whole of
+		// the distinction. square-array-019 writes
+		// match=".[. instance of array(*)]" and expects that rule to fire on
+		// the array itself, so the array cannot be unwrapped before rule
+		// matching; arrays-301 and arrays-302 write no rule for the array and
+		// expect its four member elements to be processed, so it cannot be
+		// left unprocessed either.
+		//
+		// The unwrapping happens ahead of the on-no-match switch below
+		// because it is not the "no match" behaviour of the members --
+		// arrays-302 declares on-no-match="shallow-skip" and still expects
+		// the four <element> results its explicit match="*" rule produces.
+		// 6.7.5 makes shallow-skip empty "for atomic values and functions
+		// (including maps)"; an array is neither, and the members go on to
+		// find their own rules in the same mode.
+		if arr, ok := item.(*xdm.ArrayItem); ok {
+			members := xdm.Flatten(xdm.Sequence{arr})
+			size := len(members)
+			for idx, m := range members {
+				sub := rt.withCurrent(m, idx+1, size)
+				if node, ok := m.(*xdm.Node); ok {
+					if err := applyToNode(sub, node, mode,
+						params, tunnels, out); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := applyToAtomic(sub, m, mode,
+					params, tunnels, out); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		// The built-in rule for an atomic value copies it, which is what
 		// text-only-copy does for a text node. @on-no-match replaces that
 		// wholesale, exactly as it does for a node: match-256 selects an
@@ -1059,6 +1095,20 @@ func stripXPathComments(src string) string {
 func variablePatternAllowed(src string) bool {
 	return processorAtLeast30() &&
 		strings.HasPrefix(strings.TrimSpace(stripXPathComments(src)), "$")
+}
+
+// predicatePatternAllowed is variablePatternAllowed for the other 3.0 pattern
+// form the module's version would otherwise withhold, "." with an optional
+// PredicateList.
+//
+// The reasoning is the one variablePatternAllowed sets out, and si-fork-115 is
+// the case: a version="2.0" module, scoped XSLT30+, whose xsl:mode and
+// xsl:source-document are 3.0 throughout and whose template rule is written
+// match=".". It is the only match="." in a module below 3.0 anywhere in the
+// suite, and no test asks for XTSE0340 on one, so nothing depends on the
+// module's version deciding this form.
+func predicatePatternAllowed(src string) bool {
+	return processorAtLeast30() && isPredicatePatternForm(src)
 }
 
 // failMultipleMatchAtomic is failMultipleMatch for an atomic value.

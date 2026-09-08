@@ -25,6 +25,11 @@ type applyTemplatesInstr struct {
 	// can match an atomic value, so accepting it would silently drop the
 	// item the author meant to process.
 	atomicOK bool
+	// streamed records that the instruction is written inside a
+	// declared-streamable construct, which makes it an invocation construct
+	// that sets the current group and current grouping key to absent. See
+	// inDeclaredStreamable.
+	streamed bool
 }
 
 func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -78,6 +83,17 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 	}
 	defer rt.ascend()
 
+	// The select expression and the parameters were evaluated above, in this
+	// instruction's own context, where the grouping is still in scope.
+	// Section 14.4 takes the group away only from the template rule being
+	// entered. A separate variable, not a reassignment: withoutGroupingScope
+	// copies the runtime, and the deferred ascend must decrement the depth on
+	// the one descend incremented.
+	disp := rt
+	if i.streamed {
+		disp = rt.withoutGroupingScope()
+	}
+
 	size := len(seq)
 	for idx, it := range seq {
 		if err := rt.ctx.Err(); err != nil {
@@ -89,7 +105,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 			// patterns that can match one. Its built-in rule, section 6.7.1,
 			// is to copy it to the result — which is also what a 2.0 module
 			// did for the values it let through.
-			sub := rt.withCurrent(it, idx+1, size)
+			sub := disp.withCurrent(it, idx+1, size)
 			if err := applyToAtomic(sub, it, i.effectiveMode(rt),
 				params, tunnels, out); err != nil {
 				return err
@@ -99,7 +115,7 @@ func (i *applyTemplatesInstr) Execute(rt *runtime, out *outputBuilder) error {
 		if err := rt.sheet.checkModeTyped(node, i.effectiveMode(rt)); err != nil {
 			return err
 		}
-		sub := rt.withCurrent(node, idx+1, size)
+		sub := disp.withCurrent(node, idx+1, size)
 		if err := applyToNode(sub, node, i.effectiveMode(rt), params, tunnels, out); err != nil {
 			return err
 		}
@@ -581,6 +597,10 @@ type callTemplateInstr struct {
 	// compat records that the xsl:call-template was written in a 1.0 scope,
 	// which exempts it from XTSE0680. See checkCallTemplateParams.
 	compat bool
+	// streamed records that the call is written inside a declared-streamable
+	// construct, which makes it an invocation construct that sets the current
+	// group and current grouping key to absent. See inDeclaredStreamable.
+	streamed bool
 }
 
 func (i *callTemplateInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -596,9 +616,21 @@ func (i *callTemplateInstr) Execute(rt *runtime, out *outputBuilder) error {
 		return err
 	}
 	defer rt.ascend()
+	// The parameters were evaluated above, in the caller's context, where the
+	// grouping is still in scope: section 14.4 takes the group away from the
+	// template being entered, not from the expressions the caller writes to
+	// supply it.
+	//
+	// A separate variable, not a reassignment of rt: withoutGroupingScope
+	// copies the runtime, and the deferred ascend above must decrement the
+	// depth on the one descend incremented.
+	sub := rt
+	if i.streamed {
+		sub = rt.withoutGroupingScope()
+	}
 	// Unlike apply-templates, call-template does not change the focus: the
 	// context node, position and size carry into the called template.
-	return runTemplate(rt, t, params, tunnels, out)
+	return runTemplate(sub, t, params, tunnels, out)
 }
 
 // userFunction is a compiled xsl:function.

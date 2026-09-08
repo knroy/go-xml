@@ -33,6 +33,39 @@ func (rt *runtime) withoutGroupingScope() *runtime {
 	return sub.withVar(groupingScopeVar, nil)
 }
 
+// inDeclaredStreamable reports whether n is lexically contained in a
+// declared-streamable construct.
+//
+// Section 14.4 makes an invocation construct's effect on the current group
+// and the current grouping key depend on where the construct is written, not
+// on what it reaches: one inside a declared-streamable construct sets both to
+// absent, and one outside leaves them alone. So this is settled at compile
+// time from the source element, and the streamability analysis the rule
+// belongs to plays no part -- the answer is the same whether or not the
+// construct would actually stream.
+//
+// The declared-streamable constructs are listed in section 19.2: a template
+// rule in a mode declared streamable, xsl:stream and its REC spelling
+// xsl:source-document, and xsl:attribute-set, xsl:function, xsl:merge,
+// xsl:accumulator and xsl:global-context-item that say streamable="yes". A
+// streamable mode is not visible from the element, so the mode case is left
+// to the caller; only the lexical ones are answered here.
+func inDeclaredStreamable(n *xdm.Node) bool {
+	for a := n; a != nil; a = a.Parent {
+		if a.Kind != xdm.KindElement || a.Name.URI != xdm.NSXSL {
+			continue
+		}
+		switch a.Name.Local {
+		case "stream", "source-document", "attribute-set", "function",
+			"merge", "accumulator", "global-context-item":
+			if isYes(a.AttrValue("streamable")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // groupingInScope reports whether a grouping is in scope at this point.
 func groupingInScope(ctx *xpath.Context) bool {
 	seq, _ := ctx.LookupVar(groupingScopeVar)

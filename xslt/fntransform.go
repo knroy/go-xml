@@ -63,6 +63,14 @@ func transformString(m *xdm.MapItem, name string) (string, bool, error) {
 		return "", true, xdm.ErrType(
 			"fn:transform: %s must be a single value", name)
 	}
+	// A node is atomized rather than refused. An option written as element
+	// content -- <xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>
+	// -- arrives as a text node, not a string, and the value it stands for is
+	// its string value. Refusing it raised XPTY0004 on a map that says exactly
+	// what a string-valued one says.
+	if n, ok := it.(*xdm.Node); ok {
+		return n.StringValue(), true, nil
+	}
 	a, ok := it.(*xdm.Atomic)
 	if !ok {
 		return "", true, xdm.ErrType(
@@ -320,6 +328,38 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 		return nil, err
 	}
 
+	// package-name names a library package by its name and version range,
+	// exactly as xsl:use-package does, rather than locating a file. It is a
+	// fourth spelling of "which stylesheet", so it is tried alongside the
+	// other three, and it resolves through the same PackageResolver the
+	// caller gave the outer compilation -- a nested transform that could
+	// reach packages the outer one could not would be a hole in the sandbox.
+	if name, ok, nerr := transformString(opts, "package-name"); nerr != nil {
+		return nil, nerr
+	} else if ok {
+		// An absent package-version means "any version", which is the same
+		// default xsl:use-package applies when it states no version.
+		vers, _, verr := transformString(opts, "package-version")
+		if verr != nil {
+			return nil, verr
+		}
+		if vers == "" {
+			vers = "*"
+		}
+		if rt.sheet.pkgResolver == nil {
+			return nil, xdm.Errorf("FOXT0002",
+				"fn:transform: package-name %q cannot be resolved "+
+					"(no package resolver configured)", name)
+		}
+		root, perr := rt.sheet.pkgResolver.ResolvePackage(name, vers)
+		if perr != nil {
+			return nil, xdm.Errorf("FOXT0002",
+				"fn:transform: cannot retrieve package %q version %q: %v",
+				name, vers, perr)
+		}
+		return compileNested(rt, root, base)
+	}
+
 	if seq, ok := transformOption(opts, "stylesheet-node"); ok {
 		it, serr := seq.Single()
 		if serr != nil {
@@ -349,10 +389,12 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 		return nil, lerr
 	} else if ok {
 		if rt.opts.Documents == nil {
-			// The same refusal fn:doc gives, under fn:transform's own code:
-			// FOXT0001 is "the transformation cannot be invoked", and it
-			// cannot be when the stylesheet it names cannot be read.
-			return nil, xdm.Errorf("FOXT0001",
+			// A stylesheet-location that cannot be read identifies no
+			// stylesheet, which is FOXT0002 rather than FOXT0001. FOXT0001 is
+			// the code for a transformation this processor cannot RUN -- the
+			// QT3 cases raise it only for an unavailable vendor named in
+			// requested-properties, never for a file that is not there.
+			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: document access is disabled "+
 					"(no resolver configured): %q", loc)
 		}
@@ -367,7 +409,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 		if mr := moduleResolverFor(rt.opts.Documents); mr != nil {
 			root, abs, merr := mr.ResolveModule(loc, base)
 			if merr != nil {
-				return nil, xdm.Errorf("FOXT0001",
+				return nil, xdm.Errorf("FOXT0002",
 					"fn:transform: cannot retrieve stylesheet-location %q: %v",
 					loc, merr)
 			}
@@ -375,7 +417,7 @@ func nestedStylesheet(ctx *xpath.Context, rt *runtime, opts *xdm.MapItem) (*Styl
 		}
 		tree, derr := rt.opts.Documents.ResolveDocument(loc, base)
 		if derr != nil {
-			return nil, xdm.Errorf("FOXT0001",
+			return nil, xdm.Errorf("FOXT0002",
 				"fn:transform: cannot retrieve stylesheet-location %q: %v", loc, derr)
 		}
 		return compileNested(rt, tree.Root, loc)
@@ -406,6 +448,11 @@ func compileNested(rt *runtime, root *xdm.Node, base string) (*Stylesheet, error
 	sheet, err := Compile(root, CompileOptions{
 		Resolver: mr,
 		BaseURI:  base,
+		// The nested stylesheet may itself use packages, and it resolves them
+		// through the same resolver the outer compilation was given -- which
+		// is also what lets a stylesheet loaded BY package-name be found at
+		// all when it in turn names one.
+		PackageResolver: rt.sheet.pkgResolver,
 	})
 	if err != nil {
 		return nil, xdm.Errorf("FOXT0002",
@@ -437,6 +484,25 @@ func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 	if perr != nil {
 		return nil, perr
 	}
+	// An xsl:result-document with no href IS the principal output. Section
+	// 24.3 changes the current output URI only "during execution of an
+	// xsl:result-document instruction with an href attribute"; with none it
+	// stays the base output URI, which names the principal result. Keying it
+	// as a secondary under "" left the principal entry holding the empty tree
+	// the stylesheet never wrote to, so ?output serialized to nothing. The
+	// engine raises XTDE1490 if a second href-less instruction runs or if the
+	// principal tree also has content, so at most one reaches here and it can
+	// never collide with the tree deliverResult just rendered.
+	for _, sec := range res.Secondary {
+		if sec.Href != "" {
+			continue
+		}
+		v, verr := deliverSecondary(format, sec)
+		if verr != nil {
+			return nil, verr
+		}
+		principal = v
+	}
 	// 14.7.1 keys the principal result by the base output URI when there is
 	// one, and by "output" when there is not.
 	key := "output"
@@ -447,6 +513,10 @@ func transformResultMap(opts *xdm.MapItem, res *Result) (xdm.Sequence, error) {
 		return nil, err
 	}
 	for _, sec := range res.Secondary {
+		// The href-less document was folded into the principal entry above.
+		if sec.Href == "" {
+			continue
+		}
 		v, verr := deliverSecondary(format, sec)
 		if verr != nil {
 			return nil, verr

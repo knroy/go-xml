@@ -15,8 +15,8 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 3.0 | 19,307 | 19,307 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,863 | 21,863 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xquery** | QT3 — XQuery 3.1 | 29,964 | 29,952 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
-| **xslt** | W3C XSLT 2.0 | 6,201 | 6,190 | 99.82% | **11** | 0 | 0 | **11** | 99.82% |
-| **xslt** | W3C XSLT 3.0 | 11,525 | 11,273 | 97.81% | **252** | 0 | 0 | **252** | 97.81% |
+| **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
+| **xslt** | W3C XSLT 3.0 | 11,525 | 11,330 | 98.31% | **195** | 0 | 0 | **195** | 98.31% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -292,7 +292,7 @@ returned to *not implementable* — see its row.
 | `import-schema-137` | `XTTE1512` where `XTTE1510` is wanted | **Not implementable** | Both errors are genuinely present: `z:familyname` is absent from `schema061.xsd` (only `surname` is declared) so XTTE1512 is right for that node, while the enclosing `z:person` is invalid against `personType` so XTTE1510 is right for that one. §2.9 settles the choice by declining to: "**It is implementation-dependent which of the several errors is signaled.**" Either answer conforms; the suite tests one processor's order. |
 | `validation-0201` | Serialisation differs at offset 46 | **Implementation-defined** | Same case as the 3.0 entry below, and now down to one difference. The engine defect that stood behind the indentation is **fixed**: a union's selected member type was dropped whenever the tree was copied, so `xsl:strip-space` untyped the document and `data(.) instance of StandardDate` went false. With that fixed the output is byte-identical to the expected file apart from whitespace. What remains is the indent width — Saxon writes 3 spaces, this serializer writes 2 — which §20 leaves implementation-defined. See the 3.0 row. |
 
-**XSLT 2.0 ceiling: 6,190 / 6,201 = 99.82%** — the 6,190 that pass now.
+**XSLT 2.0 ceiling: 6,193 / 6,201 = 99.87%** — the 6,193 that pass now.
 `regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
 its two neighbours, not an engine defect, and its 3.0 twin was made
 edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
@@ -439,9 +439,11 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. |
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file when the audit found it.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 
-| `initial-function-002`, `initial-function-100a`–`100i` | **Driver gap, not an engine gap** | Ten cases that invoke an initial function and then assert about the *raw result sequence* — `$result instance of xs:integer`, `assert-count 2`. The engine returns exactly that sequence (2.3.5's "raw result"), and the values are right: `986572` as an `xs:integer`, `1.0E-10` as an `xs:float`. What fails is the driver: `<output tree="no" serialize="no"/>` asks it not to wrap the result in a document node, but `rawResultVar` in `tests/xslts/catalog.go` binds the raw sequence only when the case ALSO writes `result-var`, and these cases do not. Without it the driver serializes, so every assertion sees a string. The same gap affects any `tree="no"` case lacking `result-var`; it predates the initial-function work and is not specific to it. Fixing it means teaching the driver to bind an implicit `$result` for `tree="no"`, which touches the assertion path every other case runs through. |
+| `initial-function-002`, `initial-function-100a`–`100i` | **Fixed — it was a driver gap, not an engine gap** | Ten cases that invoke an initial function and then assert about the *raw result sequence* — `$result instance of xs:integer`, `assert-count 2`. The engine was never wrong: a direct API call returns `986572` as an `xs:integer` and `1.0E-10` as an `xs:float`, as typed `*xdm.Atomic` items in `Result.Nodes`, which is 2.3.5's raw result exactly. The driver was. `<output tree="no" serialize="no"/>` asks it not to wrap the result in a document node, but `rawResultVar` in `tests/xslts/catalog.go` bound the raw sequence only when the case ALSO wrote `result-var` — an attribute the suite spells exactly once, and which the reference driver never reads at all: grep `runner/` for `result-var` and there is no hit. `run-tests.xsl` selects the raw delivery format on `@tree='no' and not(@serialize='yes')`, and `rawResultVar` now says that and nothing else, defaulting the variable to the ordinary name `result`. The `serialize="yes"` half of the condition is what keeps the `result-document-14xx` and `output-07xx` families on the serialized format they assert against. `assert-count` and `assert-deep-eq` were genuinely missing from `judge.go` and are now translated to `count($result) = n` and `deep-equal($result, (…))`, reusing the engine's own semantics rather than a matcher written in the harness. Measured in a clean worktree so a second agent's concurrent `xslt/` edits could not be mistaken for this change: 11,273 → 11,284 passing, 252 → 241 failing, the eleven being these ten and `sx-arithmetic-004`, with no new failure anywhere and XSLT 2.0 unmoved at 6,190/11. |
+| `transform-001`, `transform-005`–`transform-009` | **Fixed** | Six `fn:transform` cases, four distinct causes. (1) `transform-001`: a `stylesheet-location` naming a file that is not there was reported as FOXT0001. FOXT0001 is the code for a transformation the processor cannot *run* — every QT3 case that asserts it does so for an unavailable vendor named in `requested-properties` (“thrown if Saxon is not available”) — while a location that cannot be retrieved identifies no stylesheet, which is FOXT0002. `fn-transform-err-1`'s own modification note (“based on careful reading of the spec”) settles it. (2) `transform-008`: an option written as element content, `<xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>`, arrives as a *text node*, and `transformString` refused it with XPTY0004 on a map that says exactly what a string-valued one says; nodes are now atomized to their string value. (3) `transform-009`: an `xsl:result-document` with **no href** is the principal output — §24.3 changes the current output URI only for an instruction *with* an href — but `transformResultMap` keyed it as a secondary under `""`, leaving `?output` holding the empty tree the stylesheet never wrote to, so the principal serialization came out blank. Same rule `cmd/go-xml` already applies. (4) `transform-005`–`007`: the `package-name` and `package-version` options were not read at all, so the options looked like they identified no stylesheet. They now resolve through the same `PackageResolver` the outer compilation was given, which `Stylesheet` retains for the purpose. Measured: 11,304 → 11,324 passing, 221 → 201 failing; XSLT 2.0 unmoved at 6,193/8 and QT3 unmoved. |
+| `transform-004` | **Not implementable without unpicking `Compile`'s global state** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value; that is a real refactor of shared machinery and out of scope for an error-code fix. |
 
-**XSLT 3.0 ceiling: 11,273 / 11,525 = 97.81%** — what passes now. The figure fell when six stale feature labels were lifted and 2,862 previously-excluded cases entered the denominator; 193 of the 252 failures are the streaming family, and 151 of those want an `XTSE3430` that only a §19.8 posture-and-sweep analysis can emit — machinery this engine does not have. Excluding those, the reachable ceiling is about 11,325 of 11,525. `base-uri-052`
+**XSLT 3.0 ceiling: 11,330 / 11,525 = 98.31%** — what passes now. The figure fell when six stale feature labels were lifted and 2,862 previously-excluded cases entered the denominator; 150 of the 201 failures want an `XTSE3430` that only a §19.8 posture-and-sweep analysis can emit — machinery this engine does not have. Excluding those, the reachable ceiling is about 11,325 of 11,525. `base-uri-052`
 left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
 about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
@@ -704,6 +706,50 @@ streaming dependency:
   `use-accumulators`, which the working draft states but which `merge-073` and
   `merge-082` contradict: both are success cases in the suite and both pass in
   Saxon 9.8's report. 4 cases.
+
+### Resolving an external resource: base URI, and what is not a URI
+
+Three groups of `xsl:source-document` and `xsl:merge` failures were all about
+resolving an external resource, and only two of them were engine bugs.
+
+* **`@href` ignored `xml:base`.** §18.1 obtains the document "the same as for
+  the `doc` function", and `fn:doc` resolves a relative reference against the
+  static base URI of the *expression* — a per-element property that `xml:base`
+  on the instruction or any ancestor moves. The instruction resolved against
+  the stylesheet module's base instead, so an href beside a relocated base was
+  looked for beside the module. `non-stream-004` and `stream-004`, whose
+  template carries `xml:base="../../.."` and asks for `catalog.xml`, failed
+  with an `FODC0002` naming a path under the stylesheet's own directory. The
+  compiler already captures the element's base for the AVT's namespace
+  resolver; the instruction now keeps it.
+* **A filesystem path was mistaken for a URI.** F&O separates `FODC0002`, a
+  resource that could not be retrieved, from `FODC0005`, an argument that is
+  not a valid URI — the difference being whether retrieval was ever attempted.
+  `non-stream-006` and `stream-006` ask for `c:\my\doc\books.xml`, a native
+  Windows filename. Its backslashes are not legal URI characters, so it is not
+  a URI reference on *any* platform, but the leading `c:` parsed as a URI
+  scheme and the failure came back as an unsupported scheme — a retrieval error
+  for something that was never a URI. `@href` is now checked for backslashes
+  and for malformed percent-escapes before the resolver is consulted, so the
+  code no longer depends on whether a resolver is configured. The check is on
+  the string rather than on the host filesystem, so it answers identically on
+  Windows, macOS and Linux.
+
+* **`merge-097`, `merge-097s`, `merge-097sf` are not fixable, and not bugs.**
+  They call `uri-collection('.?select=merge-097-*.xml')`. The `?select=` query
+  string is a Saxon extension, not something F&O defines, and the test set says
+  so in a comment beside the cases: they "rely on Saxon-format collection URIs
+  ... and [are] therefore not interoperable". None of the three declares an
+  `<environment>` or a `<collection>`, so there is nothing for the harness to
+  honour — the harness supplies a collection resolver only where the
+  environment declares one, precisely so that `fn:collection` keeps refusing
+  everywhere else. The resulting `FODC0002: collections are not configured` is
+  the engine failing closed by design: a collection URI that can name a
+  directory is a file-disclosure vector, and returning an empty sequence
+  instead would make "collections are switched off" indistinguishable from
+  "the collection was empty". Making these three pass would mean either
+  implementing a Saxon-proprietary URI syntax or loosening that confinement,
+  so they stay failing.
 
 ---
 

@@ -27,6 +27,8 @@ type attributeSet struct {
 	// tree it was spliced into. The static cycle check of 10.2.2 is scoped by
 	// it; see checkAttributeSetCycles.
 	pkg int
+	// streamable records @streamable, for the XTSE0730 check below.
+	streamable bool
 }
 
 func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
@@ -43,6 +45,7 @@ func (c *compiler) compileAttributeSet(el *xdm.Node, precedence int) error {
 		name:             qn,
 		importPrecedence: precedence,
 		pkg:              overridingPackage(el, compilePackage),
+		streamable:       yesAttr(el, "streamable"),
 	}
 	for _, u := range strings.Fields(el.AttrValue("use-attribute-sets")) {
 		uq, err := resolveQNameAttr(el, u)
@@ -521,6 +524,37 @@ func (c *compiler) checkAttributeSetRefs() error {
 				"XTSE0710: use-attribute-sets names %q, but no "+
 					"xsl:attribute-set is declared with that name",
 				n.Lexical())
+		}
+	}
+	return c.checkStreamableAttributeSets()
+}
+
+// checkStreamableAttributeSets applies XTSE0730: "If an xsl:attribute set
+// element specifies streamable="yes" then every attribute set referenced in
+// its use-attribute-sets attribute (if present) must also specify
+// streamable="yes"."
+//
+// The rule is one-directional -- a set that is not streamable may use one that
+// is -- so only a streamable set's references are examined. A name that
+// resolves to several declarations is checked in each, since every one of them
+// contributes attributes to the reference.
+func (c *compiler) checkStreamableAttributeSets() error {
+	for _, sets := range c.sheet.attributeSets {
+		for _, as := range sets {
+			if !as.streamable {
+				continue
+			}
+			for _, u := range as.uses {
+				for _, target := range c.sheet.attributeSets[u.name.Clark()] {
+					if target.streamable {
+						continue
+					}
+					return fmt.Errorf(
+						"XTSE0730: xsl:attribute-set %q specifies "+
+							"streamable=\"yes\" but uses %q, which does not",
+						as.name.Lexical(), u.name.Lexical())
+				}
+			}
 		}
 	}
 	return nil

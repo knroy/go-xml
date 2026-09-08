@@ -75,6 +75,7 @@ func (c *compiler) compileDecimalFormat(el *xdm.Node, precedence int) error {
 		{"digit", &df.Digit},
 		{"pattern-separator", &df.PatternSeparator},
 		{"minus-sign", &df.MinusSign},
+		{"exponent-separator", &df.ExponentSeparator},
 	} {
 		if err := runeAttr(spec.attr, spec.dst); err != nil {
 			return err
@@ -207,6 +208,12 @@ var decimalFormatAttrs = []struct {
 		func(d, src *DecimalFormat) { d.PatternSeparator = src.PatternSeparator }},
 	{"minus-sign", func(d *DecimalFormat) any { return d.MinusSign },
 		func(d, src *DecimalFormat) { d.MinusSign = src.MinusSign }},
+	// Deliberately absent from the XTSE1300 duplicate check below: §8.4.2
+	// closes that list at decimal-separator, grouping, percent, per-mille,
+	// zero-digit, digit and pattern-separator. exponent-separator="e" beside
+	// any of them is legal, so checking it would reject valid stylesheets.
+	{"exponent-separator", func(d *DecimalFormat) any { return d.ExponentSeparator },
+		func(d, src *DecimalFormat) { d.ExponentSeparator = src.ExponentSeparator }},
 	{"infinity", func(d *DecimalFormat) any { return d.Infinity },
 		func(d, src *DecimalFormat) { d.Infinity = src.Infinity }},
 	{"NaN", func(d *DecimalFormat) any { return d.NaN },

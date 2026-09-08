@@ -305,6 +305,32 @@ func (r *Runner) judgeIn(a Assertion, res *xslt.Result, root *xdm.Node, redirect
 			"$result instance of "+strings.TrimSpace(a.Value), a.NS, schema,
 			rawVar)
 
+	case "assert-count":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// assert.xsl is "count($result) = number(.)", and it is written that
+		// way here for the same reason assert-type is: the count is of the
+		// result sequence, which is exactly what $result binds. Counting
+		// res.Nodes in Go instead would be right only for the raw cases and
+		// would silently answer 1 for every tree case.
+		return evalAssert(res, root,
+			"count($result) = "+strings.TrimSpace(a.Value), a.NS, schema,
+			rawVar)
+
+	case "assert-deep-eq":
+		if terr != nil {
+			return false, "transform failed: " + firstLine(terr.Error())
+		}
+		// assert.xsl evaluates the assertion's content as an XPath
+		// expression and compares with deep-equal. The content is a sequence
+		// constructor -- initial-function-002 writes "1234,5678" -- so it is
+		// parenthesised rather than pasted in bare, which would otherwise
+		// make deep-equal($result, 1234, 5678) a three-argument call.
+		return evalAssert(res, root,
+			"deep-equal($result, ("+strings.TrimSpace(a.Value)+"))", a.NS,
+			schema, rawVar)
+
 	case "assert-string-value":
 		if terr != nil {
 			return false, "transform failed: " + firstLine(terr.Error())
@@ -861,22 +887,43 @@ func evalAssert(res *xslt.Result, root *xdm.Node, expr string, ns map[string]str
 	// which is the tree the assertion is written about. It admits both shapes
 	// because it never goes through a serialiser, and it is what the suite's
 	// own driver evaluates against.
-	if root == nil {
+	// A raw-result assertion needs no tree: it is written about the sequence
+	// bound below, and asking for a tree of "the xs:integer 986572" has no
+	// answer. Only the tree-shaped assertions need the context item, so the
+	// absence is reported for them alone.
+	if root == nil && rawVar == "" {
 		return false, "the transform produced no result tree"
 	}
 	ctx := xpath.NewContext(root, xpath.Builtins())
+	// The assertion language is not the language of the stylesheet under
+	// test: the catalog's own driver evaluates assertions with the full
+	// function library, and sx-arithmetic-004 writes
+	// "not(has-children(/out))" -- an XPath 3.0 function -- to check a result
+	// produced by a stylesheet the 2.0 rules would otherwise judge. Raising
+	// the library version alone leaves the grammar where evalAssertExpr's
+	// comment puts it, so only which functions exist changes.
+	ctx.LibraryVersion = xpath.XPath31
 	// The suite's own driver binds $result to the result of the
 	// transformation. That is the document node the assertions are written
 	// about, the same tree the context item is: on-empty-115b asks
 	// $result/child::foo of it and seqtor-043b asserts it is a
 	// document-node(). Binding the raw result sequence instead would leave
 	// both without the wrapper the suite expects.
-	ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
-	// A test declaring <output tree="no" result-var="v"/> asks for the raw
-	// result sequence instead of the document node wrapping it. The two are
-	// not interchangeable: a sequence of atomic values has no tree form, and
-	// wrapping it turns eight xs:decimal items into one text node, against
-	// which the deep-equal the test writes can never hold.
+	if root != nil {
+		ctx = ctx.WithVar(xdm.QName{Local: "result"}, xdm.One(root))
+	}
+	// A test declaring <output tree="no"/> without serialize="yes" asks for
+	// the raw result sequence instead of the document node wrapping it. The
+	// two are not interchangeable: a sequence of atomic values has no tree
+	// form, and wrapping it turns eight xs:decimal items into one text node,
+	// against which the deep-equal the test writes can never hold — nor can
+	// the "instance of xs:integer" that initial-function-100b writes, which
+	// a text node answers false to however right the value is.
+	//
+	// This is bound after the document-node binding above, so a raw variable
+	// that is itself named "result" — which is the ordinary case, the suite
+	// naming it explicitly only once — replaces it rather than sitting
+	// alongside it.
 	if rawVar != "" {
 		ctx = ctx.WithVar(xdm.QName{Local: rawVar}, res.Nodes)
 	}

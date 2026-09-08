@@ -276,6 +276,25 @@ func (spec validationSpec) assess(rt *runtime, n *xdm.Node) error {
 		// need nothing.
 		if spec.typeName != nil && spec.typeName.URI == xdm.NSXS {
 			schema = xsd.NewSchema()
+		} else if spec.typeName == nil && spec.mode == validateLax {
+			// XTSE1660 names the values a non-schema-aware processor must
+			// refuse, and lax is not among them: the error fires for "an
+			// [xsl:]type attribute; or an [xsl:]validation or
+			// [xsl:]default-validation attribute with a value other than
+			// strip, preserve, or lax". Lax assessment validates against a
+			// declaration only if one is available, so with no schema at all
+			// there is nothing available, nothing is assessed, and the node
+			// comes out untyped — which is exactly what si-copy-024 and its
+			// seven siblings assert with
+			// "/out/* instance of element(*, xs:untyped)". Raising the static
+			// error here refused stylesheets the spec says must run.
+			//
+			// strict still falls through to the error below: it "indicates
+			// that the stylesheet is expecting to deal with typed data, and
+			// therefore cannot be processed without performing the
+			// validation".
+			stripAnnotations(n)
+			return nil
 		} else {
 			return fmt.Errorf(
 				"XTSE1660: validation requires a schema; none was imported")
