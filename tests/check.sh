@@ -211,6 +211,8 @@ ratchetVendored() {
     Run the corpus to see which, and read the first error of each:
         go run ./tests/corpora vendored testdata/xslt30-test \\
             testdata/qt3tests testdata/xspec
+    Compare like with like: the mark covers all three roots, so a run that
+    omits one reports a smaller count that is not a regression.
     Fix the rule. Record a new mark ONLY if you have established that
     rejecting those schemas is correct and the spec requires it:
         GOXSLT_RATCHET=update tests/check.sh fast"
@@ -407,15 +409,39 @@ section "vendored real-world schemas"
 # Excluded schemas are printed with the count so the size of what is not
 # scored stays visible; see vendoredExclude in tests/corpora for why each is
 # not a standalone schema.
-_vend=$($GO run ./tests/corpora vendored \
-	"$ROOT/testdata/xslt30-test" "$ROOT/testdata/qt3tests" \
-	"$ROOT/testdata/xspec" 2>&1 >/dev/null | tail -1)
+# The roots are only those actually present. The corpus skips a root it
+# cannot find, which shrinks the DENOMINATOR silently -- and a ratchet reads
+# a smaller denominator as schemas that stopped loading. That is exactly what
+# happened: the mark was recorded on a tree holding XSpec, whose test/
+# directory contributes 7 schemas, and CI does not fetch XSpec. It reported
+# "178, down from 185: A SCHEMA-VALIDITY RULE HAS BECOME TOO STRICT" for 7
+# files it had never opened.
+#
+# So the ratchet is only meaningful over a fixed set of roots. Naming which
+# are missing keeps a count taken over fewer of them from being compared
+# against one taken over more.
+_vend_roots=""
+_vend_absent=""
+for _r in xslt30-test qt3tests xspec; do
+	if [ -d "$ROOT/testdata/$_r" ]; then
+		_vend_roots="$_vend_roots $ROOT/testdata/$_r"
+	else
+		_vend_absent="$_vend_absent $_r"
+	fi
+done
+_vend=$($GO run ./tests/corpora vendored $_vend_roots 2>&1 >/dev/null | tail -1)
 _vend_ok=$(printf '%s' "$_vend" | sed -n 's/^vendored schemas: \([0-9]*\) loaded.*/\1/p')
 if [ -z "$_vend_ok" ]; then
 	fail "vendored schemas: the corpus produced no result.
     These schemas are vendored in testdata/, so unlike UBL and CII this
     check has no legitimate skip. A corpus that is present and reports
     nothing is the failure mode to look for."
+elif [ -n "$_vend_absent" ]; then
+	# A count over fewer roots is not comparable with the recorded mark, so
+	# it is reported and skipped rather than ratcheted. Skipped, not passed:
+	# the guard genuinely did not run over what it was calibrated on.
+	printf '%s\n' "$_vend"
+	skip "vendored schemas: not ratcheted --$_vend_absent absent from testdata/ (the mark covers all three roots)"
 else
 	printf '%s\n' "$_vend"
 	ratchetVendored "$_vend_ok"
