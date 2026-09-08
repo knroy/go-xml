@@ -22,8 +22,8 @@ hiding.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| C0 controls serialized raw | `#x1`–`#x1F` fell past every arm of the escaper into a plain rune write, producing output the serializer could not parse back. The version now decides: 1.1 writes character references, 1.0 raises `SERE0006`. | *this* |
-| XML declaration hardcoded `1.0` | `xsl:output/@version="1.1"` was parsed and never reached the declaration. Also mapped `xsl:result-document/@output-version`, which §3.5 renames and nothing read. | *this* |
+| C0 controls serialized raw | `#x1`–`#x1F` fell past every arm of the escaper into a plain rune write, producing output the serializer could not parse back. The version now decides: 1.1 writes character references, 1.0 raises `SERE0006`. | `a45c3a6` |
+| XML declaration hardcoded `1.0` | `xsl:output/@version="1.1"` was parsed and never reached the declaration. Also mapped `xsl:result-document/@output-version`, which §3.5 renames and nothing read. | `a45c3a6` |
 | Arrays dropped from constructed content | An `*xdm.ArrayItem` matched neither arm of a two-arm type switch, so `('a',[1,2],'b')` yielded `"a b"` — members lost from mid-sequence. `xdm.Flatten` was already correct and simply never called. | `be2938e` |
 | Namespace-node identity | The axis synthesizes a node per walk, so `is` compared two fresh pointers and answered false for one binding. `Node.Is` now defers to `Order()`; set operators key on `IdentityKey` to agree. Only `KindNamespace`, since parentless nodes of other kinds share order zero. | `d15b6df` |
 | Library-module variable scope | Bodies were checked against a flat pool of every loaded module's globals, so a module could read `$foo:test` having imported no `foo` (§4.12). | `d15b6df` |
@@ -62,7 +62,7 @@ what the suites *measured*, not what the library does.
 | Four stale feature labels | `streaming`, `streaming-fallback`, `XPath_3.1` and `XML_1.1` sat in `unsupportedFeatures` long after they were implemented, hiding 2,862 XSLT cases. Deleting an entry is not enough — it must *move* to `supportedFeatures` or fall through to "unknown feature". | `be2938e` |
 | Two more stale labels | `namespace-axis` and `infoset-dtd`; the two harnesses had been contradicting each other. | `a820213` |
 | Dependencies merged additively | A set's `satisfied="true"` outlived a case's `"false"`, so all fourteen `fn-load-xquery-module-901..914` were excluded by the declaration they exist to contradict. Now per (type, value) — the per-kind alternative was measured and is worse (0/0/0/17 → 1/2/2/23 failures). | `d15b6df` |
-| `SerializeAsXML` forced 1.0 | Tree assertions compared against the truncated prefix of a discarded error. The version, unlike method and indentation, decides whether a character can be written at all. | *this* |
+| `SerializeAsXML` forced 1.0 | Tree assertions compared against the truncated prefix of a discarded error. The version, unlike method and indentation, decides whether a character can be written at all. | `a45c3a6` |
 | Ratchet read a shrinking corpus as a regression | A count taken over fewer roots is not comparable; it is now skipped, not passed, when a root is absent. | `3b6e685` |
 | Cases never scored went uncounted | A case that is never scored must still appear in the denominator. | `c3a52be` |
 
