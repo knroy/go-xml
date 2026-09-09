@@ -361,7 +361,32 @@ func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c, nil
+	// An imported schema type constrains the value beyond the built-in it
+	// derives from, and the value it produces is an instance of that type
+	// rather than of the bare primitive. Both halves have to be applied here
+	// for the same reason the "cast as" path applies them: CastToDerived
+	// knows only the built-in facet tables, so a restriction of xs:date came
+	// back unconstrained and unannotated.
+	//
+	// Without the annotation the result failed the very type it was converted
+	// to. §3.1.5 atomises a returned element and casts the untypedAtomic to
+	// the declared type, so "declare function hat:purchase(...) as hat:date2003
+	// { <yr>{'2003-06-30' cast as hat:date2003}</yr> }" produced a correct
+	// xs:date and then rejected it, because matching a schema type asks for
+	// the value's annotation and a bare primitive carries none (qischema040,
+	// qischema040a).
+	if t.stype.SchemaType == "" {
+		return c, nil
+	}
+	if t.stype.SchemaValueValid != nil {
+		// The cast result's own lexical form is what the facets are checked
+		// against: c is already in the target's primitive, so for every type
+		// whose canonical form fn:string writes the two agree.
+		if verr := t.stype.SchemaValueValid(c.String()); verr != nil {
+			return nil, verr
+		}
+	}
+	return c.WithDerived(t.stype.SchemaType), nil
 }
 
 // promotes reports whether the conversion rules promote from to to.

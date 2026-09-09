@@ -764,9 +764,30 @@ func declaredSignature(d *funcDecl) []string {
 	return sig
 }
 
+// typeSource renders a declared type the way a typed function test renders the
+// type it is compared against.
+//
+// The COMPILED type, not t.src. The two sides of that comparison are written in
+// different alphabets: a schema type in a sequence type is resolved at parse
+// time into the key the data model records annotations under -- Clark notation,
+// "{uri}local" -- while the source text keeps whatever prefix the query author
+// bound, "s:myUnionType1". Comparing one against the other is comparing a name
+// against a different spelling of the same name, so it answered false for two
+// types that were not merely related but IDENTICAL: instanceof135 declares
+// local:f taking s:myUnionType1 and asks whether it is a
+// function(s:myUnionType1), which is the same type named twice.
+//
+// Rendering through the compiled type puts both sides in the annotation-key
+// alphabet, which is the one the resolution actually happened in. For a
+// built-in the two forms coincide -- "xs:integer" compiles and renders back to
+// "xs:integer" -- so nothing that was passing changes; only a schema-defined
+// name, which could not previously match even itself, does.
 func typeSource(t *sequenceType) string {
 	if t == nil {
 		return "item()*"
+	}
+	if s := t.stype.String(); s != "" {
+		return s
 	}
 	return t.src
 }

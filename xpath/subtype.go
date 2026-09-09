@@ -249,8 +249,131 @@ var atomicAncestors = map[string][]string{
 	"xs:numeric":            {"xs:anyAtomicType"},
 }
 
+// schemaSubsumes is atomicSubsumes for the types an imported schema defines.
+//
+// The built-in table above cannot reach them: a schema type is whatever the
+// author wrote, and the relations that matter -- what it restricts, what a
+// union admits -- are recorded only in the schema. The xsd package registers
+// both as it loads, keyed by annotation name, and a signature reaching here
+// has been rendered into that same alphabet, so the two registries are enough
+// to answer without carrying a schema into the evaluator.
+//
+// Three clauses, all from XPath 3.1 §2.5.6.2's Judgement 1 (subtype-itemtype)
+// over the derives-from relation of §2.5.5:
+//
+//   - RESTRICTION. sub derives from super by walking sub's base chain. That is
+//     the ordinary derivation clause, and it is what makes a restriction of
+//     xs:date a subtype of xs:date (instanceof138).
+//
+//   - MEMBERSHIP. super is a union and sub is one of its members, transitively.
+//     §2.5.5 makes union membership a clause of derives-from in its own right,
+//     so every member type is a subtype of the union (instanceof136, 137).
+//
+//   - SUBSET. both are unions and every member of sub is subsumed by super.
+//     A union is the union of its members' value spaces, so one union is a
+//     subtype of another exactly when its members all fit -- which is why the
+//     suite notes on instanceof139 that "there is a subtype relationship
+//     between union(A,B,C) and union(A,B)", the direction being that the
+//     SMALLER union is the subtype. instanceof140 and 141 are the two mixed
+//     shapes: a union whose members are all integers under xs:integer, and
+//     xs:integer under a union that has xs:decimal among its members.
+//
+// The walk is depth-bounded rather than cycle-tracked because a schema's
+// derivation chain and union membership are both acyclic by construction --
+// xsd rejects a cycle at load -- and a bound keeps a malformed registry from
+// hanging the evaluator instead of merely answering wrongly.
+func schemaSubsumes(super, sub string, depth int) bool {
+	if depth <= 0 {
+		return false
+	}
+	super, sub = annotationKeyOfSpelling(super), annotationKeyOfSpelling(sub)
+	// Restriction: walk sub's base chain up toward super.
+	for base := xdm.DerivedBase(sub); base != ""; base = xdm.DerivedBase(base) {
+		if base == super {
+			return true
+		}
+		if depth--; depth <= 0 {
+			return false
+		}
+	}
+	subParts := xdm.UnionMembersOf(sub)
+	superParts := xdm.UnionMembersOf(super)
+	if len(subParts) == 0 && len(superParts) == 0 {
+		// Neither is a union and the derivation walk above already failed, so
+		// there is no relation left to find. Returning here is also what stops
+		// the recursion: the loop below would otherwise ask the same question
+		// of the same pair one depth lower and answer true on the way out.
+		return false
+	}
+	// Every value of sub has to be a value of super. When sub is a union that
+	// is its members, one at a time; otherwise it is sub itself.
+	if len(subParts) == 0 {
+		subParts = []string{sub}
+	}
+	for _, sp := range subParts {
+		part := spellingOfAnnotationKey(sp)
+		if len(superParts) == 0 {
+			// super is not a union: the part has to reach it directly, which
+			// for a member that is itself a schema type means its own
+			// derivation chain. instanceof140 is this shape -- both members of
+			// s:integer-union derive from xs:integer.
+			if !atomicSubsumesDepth(spellingOfAnnotationKey(super), part, depth-1) {
+				return false
+			}
+			continue
+		}
+		// super is a union: the part has to land in one of its members.
+		ok := false
+		for _, mp := range superParts {
+			if atomicSubsumesDepth(spellingOfAnnotationKey(mp), part, depth-1) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// annotationKeyOfSpelling converts a signature spelling into the key the type
+// registries are indexed by.
+//
+// They differ for the built-ins alone. An annotation key in the XSD namespace
+// is the BARE local name -- AnnotationName drops the namespace for xs: --
+// while a sequence type renders the same type as "xs:date". A schema type in
+// any other namespace is already Clark-notated on both sides and passes
+// through untouched.
+func annotationKeyOfSpelling(s string) string {
+	if rest, ok := strings.CutPrefix(s, "xs:"); ok {
+		return rest
+	}
+	return s
+}
+
+// spellingOfAnnotationKey is the inverse: it puts a registry name back into
+// the alphabet the rest of this file compares in, so that a union member
+// recorded as "date" is asked about as "xs:date" and reaches atomicAncestors.
+func spellingOfAnnotationKey(s string) string {
+	if strings.HasPrefix(s, "{") {
+		return s
+	}
+	return "xs:" + s
+}
+
+// maxSchemaDerivationDepth bounds the registry walks in schemaSubsumes. A
+// derivation chain or union nesting deeper than this is not something a real
+// schema produces; the bound exists so a malformed one cannot hang the walk.
+const maxSchemaDerivationDepth = 64
+
 // atomicSubsumes reports whether super is sub or one of its ancestors.
 func atomicSubsumes(super, sub string) bool {
+	return atomicSubsumesDepth(super, sub, maxSchemaDerivationDepth)
+}
+
+// atomicSubsumesDepth is atomicSubsumes carrying the schema walk's budget.
+func atomicSubsumesDepth(super, sub string, depth int) bool {
 	if super == sub {
 		return true
 	}
@@ -259,7 +382,10 @@ func atomicSubsumes(super, sub string) bool {
 			return true
 		}
 	}
-	return false
+	// Neither is a built-in relation, so ask the schema. A name no schema
+	// registered answers false there too, which is the unchanged behaviour for
+	// every query that imports no schema.
+	return schemaSubsumes(super, sub, depth)
 }
 
 // builtinSignatures records the declared types of library functions, keyed by

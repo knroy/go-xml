@@ -813,7 +813,7 @@ func (s schemaNS) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
 	if !ok {
 		return nil
 	}
-	members := head.Substitutable()
+	members := head.SchemaElementMembers()
 	if len(members) == 0 {
 		return nil
 	}

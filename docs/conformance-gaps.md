@@ -16,7 +16,7 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,285 | 99.80% | **61** | 0 | 0 | **61** | 99.80% |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,304 | 99.86% | **42** | 0 | 0 | **42** | 99.86% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 11,525 | 11,399 | 98.91% | **126** | 0 | 0 | **126** | 98.91% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
@@ -170,11 +170,11 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1: 30,285 / 30,346 = 99.80%** — what passes now. The denominator
+**XQuery 3.1: 30,304 / 30,346 = 99.86%** — what passes now. The denominator
 grew by 416 when `import schema` was implemented and the `schemaImport` feature
 gate came off the harness (29,930 → 30,346); 311 of those 416 newly-admitted
-cases pass and 61 fail, which is the whole of the increase in the failure
-count. The passing count rose by more than 311 — 29,918 → 30,285 — because four
+cases pass and 42 fail, which is the whole of the increase in the failure
+count. The passing count rose by more than 311 — 29,918 → 30,304 — because four
 of the pre-import failures were fixed in the same period, which is why the
 pre-import residue also had to be diffed by name rather than inferred from the
 arithmetic. Three of the five features have since been closed — the cast-target

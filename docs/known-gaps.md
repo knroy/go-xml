@@ -548,10 +548,10 @@ they agree on is the *rule*, not a bug they share.
 
 ### XQuery schema awareness: three features still left (XQuery 3.1)
 
-**91 failures, and none of them a regression.** This entry exists because the
+**42 failures, and none of them a regression.** This entry exists because the
 number is easy to misread. `import schema` was implemented, and implementing it
 brought **416 previously-skipped cases into scope**, of which 335 now pass. The
-in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,285. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,304. The
 twelve failures that predated the work are still exactly those twelve. A lift
 that admits failing cases raises the failure count by construction, and quoting
 the failure count without the denominator beside it would describe a gain as a
@@ -600,10 +600,12 @@ and is the forward-looking half of this entry; what belongs here is the
 measured shape, because it is what says the tail is several features rather
 than one broken import.
 
-The cases cluster by production, not by symptom: `prod-CastExpr.schema` (36),
-`prod-SchemaImport` (13), `prod-InstanceofExpr` (7), `prod-FunctionCall` (3),
-then fours and below -- `prod-CastableExpr` and `fn-json-to-xml` are both
-closed and at 100%. The error
+The cases cluster by production, not by symptom, and
+**`prod-CastExpr.schema` (36) is now all but the whole of it**, with six
+singletons behind it: `prod-TypeswitchExpr`, `prod-FunctionCall`,
+`prod-ContextItemDecl`, `op-same-key`, `misc-CombinedErrorCodes` and
+`app-Demos`, one case each. `prod-SchemaImport`, `prod-InstanceofExpr`,
+`prod-CastableExpr` and `fn-json-to-xml` are closed and at 100%. The error
 codes cluster the same way:
 
 - **Typed input.** A source document does not arrive schema-validated, so a

@@ -252,6 +252,102 @@ func TestSubstitutionGroupClosure(t *testing.T) {
 	}
 }
 
+// TestSchemaElementMembersExcludesAbstractAndNonNillable asserts the two ways
+// SchemaElementMembers is narrower than Substitutable.
+//
+// A schema-element(E) test asks whether a node could have been validated
+// against E or something substitutable for it. Two kinds of member could never
+// yield such a node and so are not in the answer, while both remain in
+// Substitutable because a content model naming E still admits what they lead
+// to:
+//
+//   - an ABSTRACT member, which §3.3.6 forbids from validating any element
+//     itself;
+//   - a member that forbids nilling under a head that permits it, since the
+//     head's test admits a nilled node and the member can never produce one.
+//
+// The shape is the one prod/SchemaImport/substitution11.xsd uses for QT3's
+// substitution-020 through 025.
+func TestSchemaElementMembersExcludesAbstractAndNonNillable(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+		  <xs:element name="head" type="xs:string" nillable="true"/>
+		  <xs:element name="abs" type="xs:string" abstract="true"
+		              nillable="true" substitutionGroup="t:head"/>
+		  <xs:element name="plain" type="xs:string" nillable="true"
+		              substitutionGroup="t:abs"/>
+		  <xs:element name="notNillable" type="xs:string" nillable="false"
+		              substitutionGroup="t:abs"/>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	head := s.Elements[xdm.QName{URI: "urn:t", Local: "head"}]
+	if head == nil {
+		t.Fatal("head was not declared")
+	}
+
+	// Substitutable keeps every member: the abstract one is the only route to
+	// the two below it, so dropping it there would lose them.
+	all := map[string]bool{}
+	for _, d := range head.Substitutable() {
+		all[d.Name.Local] = true
+	}
+	for _, want := range []string{"abs", "plain", "notNillable"} {
+		if !all[want] {
+			t.Errorf("Substitutable() is missing %q; it is %v", want, all)
+		}
+	}
+
+	// SchemaElementMembers keeps only what could validate a node against the
+	// head's test.
+	got := map[string]bool{}
+	for _, d := range head.SchemaElementMembers() {
+		got[d.Name.Local] = true
+	}
+	if !got["plain"] {
+		t.Errorf("schema-element(head) must admit plain; members are %v", got)
+	}
+	if got["abs"] {
+		t.Errorf("an abstract declaration can validate no element, so it must "+
+			"not be a schema-element(head) member; members are %v", got)
+	}
+	if got["notNillable"] {
+		t.Errorf("a non-nillable member cannot stand in for a nillable head, "+
+			"so it must not be a schema-element(head) member; members are %v", got)
+	}
+}
+
+// TestSchemaElementMembersKeepsNillableUnderNonNillableHead asserts the
+// nillability clause runs one way only. A member that permits nilling under a
+// head that does not is fine: it only ever yields nodes the head's own test
+// already admits, so excluding it would reject a legitimate substitution.
+func TestSchemaElementMembersKeepsNillableUnderNonNillableHead(t *testing.T) {
+	docs := map[string]string{
+		"main.xsd": `
+		<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+		           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+		  <xs:element name="head" type="xs:string" nillable="false"/>
+		  <xs:element name="member" type="xs:string" nillable="true"
+		              substitutionGroup="t:head"/>
+		</xs:schema>`,
+	}
+	s, err := loadFromMap(t, "main.xsd", docs)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	head := s.Elements[xdm.QName{URI: "urn:t", Local: "head"}]
+	members := head.SchemaElementMembers()
+	if len(members) != 1 || members[0].Name.Local != "member" {
+		t.Errorf("a nillable member under a non-nillable head must still "+
+			"substitute; members are %v", members)
+	}
+}
+
 // TestSubstitutionGroupCycleTerminates guards the closure against a circular
 // substitution group. The spec bans them, but a malformed schema can still
 // write one and the closure must not hang before the ban can be reported.

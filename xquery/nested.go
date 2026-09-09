@@ -343,6 +343,19 @@ func (p *parser) withTrailingPath(n node) (node, error) {
 		p.pos = save
 		return n, nil
 	}
+	// A validate expression is not a primary, so no step and no predicate may
+	// follow it. [102] ValidateExpr sits with the other ExprSingle forms, well
+	// outside the [128] PrimaryExpr alternatives a StepExpr reaches through
+	// [121] PostfixExpr -- unlike [136] OrderedExpr and [137] UnorderedExpr,
+	// which are primaries and which "/ordered{bid}" of PathExpr-21 relies on.
+	// So "validate { ... }/*" is a syntax error, and taking the "/" as a step
+	// silently returned the children of the validated element instead
+	// (qischema90007). Left for the caller to report, which is what turns the
+	// leftover into the XPST0003 that "validate { ... } bogusword" already got.
+	if _, ok := n.(*validateExpr); ok {
+		p.pos = save
+		return n, nil
+	}
 	src, err := p.scanTrailingPath()
 	if err != nil {
 		return nil, err

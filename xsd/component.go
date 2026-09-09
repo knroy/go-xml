@@ -227,6 +227,50 @@ type ElementDecl struct {
 	substitutable []*ElementDecl
 }
 
+// SchemaElementMembers returns the members of this declaration's substitution
+// group that a schema-element() test admits, transitively and not including
+// the declaration itself.
+//
+// It is NOT the same set as Substitutable(). That set answers a content-model
+// question -- which declarations may appear where a particle names this one --
+// and a *validation episode* checks each candidate against the instance in
+// front of it. A type test has no instance to check: schema-element(E) is
+// asked whether some already-validated node could have been validated against
+// E or something substitutable for it, so the members that could never yield
+// such a node have to be dropped up front. Two do.
+//
+// An ABSTRACT member is dropped because no element is ever validated against
+// an abstract declaration (§3.3.6: an abstract declaration cannot itself
+// validate an element, only its non-abstract substitutes can). It still has to
+// stay in Substitutable(), which is why the filter lives here and not there: a
+// content model naming the head admits the abstract member's own substitutes,
+// so pruning the walk at the abstract declaration would lose them.
+//
+// A member that is NOT nillable is dropped when the head IS. XPath 3.1
+// §2.5.5.3 makes the nilled property part of the element test: a test derived
+// from a nillable declaration admits a nilled node, and a declaration that
+// forbids nilling can never produce one, so it cannot stand in for the head
+// across the whole of what the head's test accepts. The comparison is one-way
+// -- a nillable member under a non-nillable head is fine, since it only ever
+// yields nodes the head's test already admits.
+//
+// substitution-020 through 025 are the four-and-two of exactly this: A is
+// abstract and matches neither head, C is non-nillable under nillable heads
+// and matches neither, while the plain member B matches both.
+func (d *ElementDecl) SchemaElementMembers() []*ElementDecl {
+	var out []*ElementDecl
+	for _, m := range d.substitutable {
+		if m.Abstract {
+			continue
+		}
+		if d.Nillable && !m.Nillable {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // ComponentKind implements Component.
 func (*ElementDecl) ComponentKind() string { return "element declaration" }
 

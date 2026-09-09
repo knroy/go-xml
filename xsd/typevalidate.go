@@ -45,12 +45,24 @@ func (s *Schema) ValidateElement(el *xdm.Node, opts ValidateOptions) error {
 // describe is not thereby invalid. It is the mode that lets a stylesheet
 // validate the parts of its output that are described without having to
 // describe all of it.
+//
+// "Does not describe" is not the same as "has no declaration", though. XSD 1.0
+// §3.3.4 clause 1.2.1.2 resolves an xsi:type attribute and assesses the element
+// against the type it names whether or not a declaration exists, and lax
+// assessment takes that path as readily as strict does -- CanAssessStrictly
+// below states the same rule for the strict side. Skipping on the declaration
+// alone let an element that named its own type escape the assessment it had
+// asked for: "validate lax { <z:person xsi:type='xs:NCName'>abc 123</z:person> }"
+// returned the element instead of the XQDY0027 the invalid NCName owes
+// (qischema90621-err).
 func (s *Schema) ValidateElementLax(el *xdm.Node, opts ValidateOptions) error {
 	if el == nil || el.Kind != xdm.KindElement {
 		return fmt.Errorf("xsd: ValidateElementLax needs an element")
 	}
 	if _, ok := s.Elements[bareName(el.Name)]; !ok {
-		return nil
+		if el.Attr(NSInstance, "type") == nil {
+			return nil
+		}
 	}
 	return s.Validate(el, opts)
 }

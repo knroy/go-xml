@@ -2821,14 +2821,25 @@ func (r *Runner) caseSchemas(env Environment) ([]xquery.Schema, error) {
 			continue
 		}
 		path := filepath.Join(r.Root, filepath.FromSlash(sch.File))
-		src, err := os.ReadFile(path)
+		if _, err := os.Stat(path); err != nil {
+			return nil, err
+		}
+		// Assembled here rather than handed over as source text, for the
+		// reason hintedSchemas gives: a schema document may xs:import or
+		// xs:include a second one beside it, which only an assembly with a
+		// base can follow. qischema032's document imports qischema032a.xsd
+		// for the res:resource type its own restriction bases on, so source
+		// text alone leaves that type undefined.
+		//
+		// The read stays the harness's, not the engine's: LoadFiles confines
+		// its resolver to the directory of the file the catalog named, and
+		// Options.SchemaResolver is still nil, so an "at" hint in the query
+		// opens nothing.
+		components, err := xsd.LoadFiles([]string{path}, xsd.Options{})
 		if err != nil {
 			return nil, err
 		}
-		// No BaseURI: with no resolver configured nothing follows an
-		// xs:include or an xs:import, so there is no relative reference for
-		// one to resolve against. Supplying a base would suggest otherwise.
-		out = append(out, xquery.Schema{Namespace: sch.URI, Source: string(src)})
+		out = append(out, xquery.Schema{Namespace: sch.URI, Components: components})
 	}
 	return out, nil
 }
