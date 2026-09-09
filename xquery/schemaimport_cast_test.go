@@ -462,3 +462,196 @@ func TestSchemaListTypeIsNotAnItemType(t *testing.T) {
 		t.Fatalf("want the list cast target still answerable, got %q", got)
 	}
 }
+
+// canonNS and canonSchema mirror the QT3 suite's own derived.xsd: restrictions
+// whose pattern facet admits ONLY the canonical lexical form of the type's
+// primitive. They are the shapes CastableAs653-658 turn on.
+const canonNS = "http://example.org/canon"
+
+const canonSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:c="http://example.org/canon"
+    targetNamespace="http://example.org/canon"
+    elementFormDefault="qualified">
+  <xs:simpleType name="canonicalDecimal">
+    <xs:restriction base="xs:decimal">
+      <xs:pattern value="-?[0-9]+\.[0-9]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="canonicalDouble">
+    <xs:restriction base="xs:double">
+      <xs:pattern value="-?[0-9]+\.[0-9]+E-?[0-9]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="plainInteger">
+    <xs:restriction base="xs:integer">
+      <xs:pattern value="[0-9]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>`
+
+func withCanon() xquery.Options {
+	return xquery.Options{Schemas: []xquery.Schema{
+		{Namespace: canonNS, Source: canonSchema},
+	}}
+}
+
+func canonQuery(body string) string {
+	return fmt.Sprintf("import schema namespace c = %q;\n%s", canonNS, body)
+}
+
+// TestPatternFacetMatchesCanonicalRepresentation is the first root cause: a
+// pattern facet was tested against the SOURCE value's fn:string form, where
+// F&O 3.0 §18.3.3 requires the canonical lexical representation of the cast
+// RESULT -- W3C bug 26865, which is why CastableAs653-658 carry the title
+// "Pattern must match canonical representation (not the result of string())".
+//
+// The two disagree exactly here. string(xs:decimal(12)) is "12", which the
+// pattern "-?[0-9]+\.[0-9]+" refuses; the canonical decimal is "12.0", which
+// it admits. string(xs:double(93.7)) is "93.7"; the canonical double is
+// "9.37E1", and the pattern demands the exponent.
+func TestPatternFacetMatchesCanonicalRepresentation(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want string
+	}{
+		// CastableAs653/654: an integer reaches a decimal pattern that only
+		// the canonical "12.0" satisfies.
+		{`12 castable as c:canonicalDecimal`, "true"},
+		{`-12 castable as c:canonicalDecimal`, "true"},
+		// CastableAs655-658: the canonical double always carries an exponent,
+		// including for zero, where fn:string writes a bare "0".
+		{`93.7 castable as c:canonicalDouble`, "true"},
+		{`-93.7 castable as c:canonicalDouble`, "true"},
+		{`0.0e0 castable as c:canonicalDouble`, "true"},
+		{`-0.0e0 castable as c:canonicalDouble`, "true"},
+		// NEGATIVE: the canonical form is not a licence to admit everything.
+		// NaN and INF have no canonical form the pattern matches.
+		{`xs:double("NaN") castable as c:canonicalDouble`, "false"},
+		{`xs:double("INF") castable as c:canonicalDouble`, "false"},
+		// NEGATIVE: xs:integer is a primitive in its own right for this rule
+		// (F&O §18.3.1 names it one) and its canonical form is the bare
+		// digits. Canonicalising it as a decimal would write "12.0" and break
+		// a pattern written for integers.
+		{`12 castable as c:plainInteger`, "true"},
+		{`-12 castable as c:plainInteger`, "false"},
+	} {
+		got, err := run(t, canonQuery(c.body), withCanon())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
+	}
+}
+
+// TestCastToCanonicalPatternProducesTheValue is the cast half: "castable as"
+// answering true obliges "cast as" to produce the value, annotated as the type
+// that admitted it.
+func TestCastToCanonicalPatternProducesTheValue(t *testing.T) {
+	got, err := run(t, canonQuery(`12 cast as c:canonicalDecimal`), withCanon())
+	if err != nil {
+		t.Fatalf("a value whose canonical form matches must cast: %v", err)
+	}
+	if got != "12" {
+		t.Fatalf("want the decimal 12, got %q", got)
+	}
+	got, err = run(t, canonQuery(
+		`12 cast as c:canonicalDecimal instance of c:canonicalDecimal`), withCanon())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "true" {
+		t.Fatalf("the cast result must be an instance of the target, got %q", got)
+	}
+}
+
+// TestCastToCanonicalPatternRaisesOnTheFacet pins the negative direction as a
+// specific error rather than as the absence of one: a value whose canonical
+// form the pattern refuses must fail the cast, naming the facet it failed.
+//
+// "-12" IS the canonical xs:integer form, so the refusal here is the pattern's
+// own doing and not a canonicalisation defect -- which is the point. The
+// canonical form is what the facet is applied to; it is not a licence to pass.
+func TestCastToCanonicalPatternRaisesOnTheFacet(t *testing.T) {
+	_, err := run(t, canonQuery(`-12 cast as c:plainInteger`), withCanon())
+	if err == nil {
+		t.Fatal("a canonical form the pattern refuses must not cast")
+	}
+	if !strings.Contains(err.Error(), "pattern facet of plainInteger") {
+		t.Fatalf("want the pattern facet named as the cause, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `"-12"`) {
+		t.Fatalf("want the canonical form that was tested reported, got %v", err)
+	}
+}
+
+// TestImpureUnionListMemberCastsToASequence is the second root cause, and a
+// different bug from the one above despite sharing the cast path.
+//
+// A union holding a list type is impure, so a cast to it is decided by the
+// schema rather than by the pure-union member walk. The value was returned
+// UNCHANGED -- the single string handed in -- where F&O 3.0 §18.3.6 makes a
+// cast to a list type a SEQUENCE, one value per whitespace-separated token
+// ("the effect ... is the same as ... validating it using L as the governing
+// type, and atomizing the resulting node"; its own example has
+// my:coordinates("2 -1") return two xs:integer values).
+//
+// The count is what the suite pins, and it is why cbcl-castable-impure-010 and
+// -020 wanted false: the constructor owes THREE xs:decimal values, and a
+// three-item sequence is castable to nothing -- with or without the "?" that
+// separates -020 from -010, since neither admits three items.
+func TestImpureUnionListMemberCastsToASequence(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want string
+	}{
+		// The list member is reached, so the result is its items.
+		{`count(u:impure("1 2 3"))`, "3"},
+		{`u:impure("1 2 3") instance of xs:decimal+`, "true"},
+		{`string-join(for $d in u:impure("1 2 3") return string($d), "|")`, "1|2|3"},
+		// cbcl-castable-impure-010 and -020: a three-item sequence is not
+		// castable, and the "?" does not change that.
+		{`u:impure("1 2 3") castable as u:impure`, "false"},
+		{`u:impure("1 2 3") castable as u:impure?`, "false"},
+		// BOUNDARY: an ATOMIC member is tried first and keeps a single item,
+		// so a date does not get shredded into a one-item list of decimals.
+		// The item keeps the operand's own type -- an impure union
+		// contributes no value space of its own, so the cast neither
+		// canonicalises nor re-types; only the SHAPE is at issue here.
+		{`count(u:impure("2001-01-01"))`, "1"},
+		{`string(u:impure("2001-01-01"))`, "2001-01-01"},
+		// One item, so it is still castable, which is what separates this
+		// from -010 and -020 above.
+		{`u:impure("2001-01-01") castable as u:impure`, "true"},
+		// BOUNDARY: the source-type rule the list member depends on is
+		// untouched. cbcl-castable-impure-005 is true from an untypedAtomic
+		// and -009 false from an xs:decimal, because a cast to a list member
+		// is defined from a string-like source only.
+		{`xs:untypedAtomic("1 2 3") castable as u:impure`, "true"},
+		{`xs:decimal("1") castable as u:impure`, "false"},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
+	}
+}
+
+// TestPureListTypeConstructorIsUnchanged is the boundary the fix above must
+// not cross: a type that is ITSELF a list already produced a sequence, through
+// the SchemaListType branch, and still must.
+func TestPureListTypeConstructorIsUnchanged(t *testing.T) {
+	got, err := run(t, unionQuery(`count(u:decimals("1 2 3"))`), withUnions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "3" {
+		t.Fatalf("a list constructor must yield one item per token, got %q", got)
+	}
+}

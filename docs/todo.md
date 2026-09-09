@@ -12,12 +12,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.70% — 30,255 of 30,346 in scope (91 failing) |
+| XQuery 3.1 | 99.73% — 30,263 of 30,346 in scope (83 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 98.63% — 11,367 of 11,525 in scope (158 failing); 118 of those 158 need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,728 `func Test` declarations, clean under `-race` |
+| Tests | 1,734 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -323,9 +323,9 @@ actually need typed *input*:
 | XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
 | XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
 | XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
-| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,255 | 12 → 91 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,263 | 12 → 83 |
 
-416 cases came into scope at XQuery and 327 more pass. The 89 added failures
+416 cases came into scope at XQuery and 335 more pass. The 81 added failures
 are a real tail and are listed below rather than hidden: a lift that admits
 failing cases has to be visible, which is why the in-scope count is quoted
 first. `prod-SchemaImport` itself is 15 of 73.
@@ -394,7 +394,46 @@ failing.
   `-009` (`xs:decimal("1")`, false) against the *same* union, and without it the
   first fix above was too permissive in exactly those two cases.
 
-**What is left in the cast sets, and why it is separate work.** The 45 that
+**The canonical form and the list member, closed.** `prod-CastableExpr` went
+8 → 0 (946 / 946) and the XQuery lane 30,255 → 30,263, with the failing set
+diffed by name in both directions: exactly those 8 newly pass and **nothing
+newly fails**. The two groups failed in opposite directions and were **two
+different bugs** that happen to share the cast path:
+
+* **A pattern facet was tested against the source, not the canonical result.**
+  F&O 3.0 §18.3.3 says that where a cast crosses a branch of the hierarchy the
+  pattern is tested against "the canonical lexical representation of the
+  value", and W3C bug 26865 — which revised `CastableAs653`–`658` twice —
+  settled that this means the **cast result**, in the target's own primitive.
+  The cases carry the rule in their titles: "Pattern must match canonical
+  representation (not the result of `string()`)". The engine passed the
+  *source* value's `fn:string` form to the schema, so `12 castable as
+  d:canonicalDecimal` tested `"12"` against `-?[0-9]+\.[0-9]+` and answered
+  false where the canonical `"12.0"` matches. `fn:string` is XPath's
+  serialization and is **not** XSD's canonical form — they disagree exactly
+  here, and `string(xs:double(93.7))` is `"93.7"` where the canonical double
+  is `"9.37E1"`. A new `canonicalLexical` in `xpath/cast.go` answers for the
+  numeric primitives alone, so every other type keeps the lexical form it had.
+  Note this is **not** a rule inside `xsd`, as the old entry predicted:
+  validation is handed a lexical form, and the defect was in *which* form the
+  cast chose to hand it. `xs:integer` is deliberately excluded — F&O §18.3.1
+  names it a primitive in its own right and its canonical form is the bare
+  digits, so a pattern written for integers must keep seeing `"12"`.
+* **A cast to a union's list member returned one item instead of a sequence.**
+  F&O 3.0 §18.3.6 makes a cast to a list type a **sequence**, one value per
+  whitespace-separated token — "the effect … is the same as … validating it
+  using `L` as the governing type, and atomizing the resulting node", with its
+  own example returning two `xs:integer` values from `my:coordinates("2 -1")`.
+  A union holding a list member is *impure*, so the cast is decided by the
+  schema and took a branch that returned the operand unchanged. So
+  `s:impureUnionType("1 2 3")` was one `xs:string` where it owes **three**
+  `xs:decimal` values — and a three-item sequence is castable to nothing,
+  which is why `cbcl-castable-impure-010` and `-020` both want false and why
+  the `?` on `-020` changes nothing. The atomic members are tried first, so
+  `s:impureUnionType("2001-01-01")` still yields one item. This needed a
+  result **shape**, not the annotation the old entry predicted.
+
+**What is left in the cast sets, and why it is separate work.** The 37 that
 remain are not the same feature:
 
 * `prod-CastExpr.schema`, 37. Almost all of it is one thing: a cast to a **list
@@ -405,12 +444,12 @@ remain are not the same feature:
   constructors as first-class **function items** (`#1`, `?`,
   `fn:function-lookup`) for namespace-sensitive types, which is a higher-order
   question rather than a schema one.
-* `prod-CastableExpr`, 8. Six are `CastableAs653`–`658`: a pattern facet must
-  match a value's **canonical** representation rather than the result of
-  `string()`, which is a facet-application rule inside `xsd` and applies to
-  validation as much as to casting. The other two cast a value *back* to the
-  union it was constructed as, which needs the constructor's result to carry
-  the union's annotation — again the fourth bullet.
+*(`prod-CastableExpr` is no longer on this list. It was 8 and is now **0** —
+`prod-CastableExpr` is at 946 / 946. Both halves are described under "The
+canonical form and the list member" below, and **both of this entry's
+predictions about them were wrong**: the pattern rule is not a facet-
+application rule inside `xsd`, and the impure pair needed a result **shape**
+rather than an annotation.)*
 
 **What is still missing, and it is not one thing.** Each of these is a separate
 small feature rather than a bug in the import:

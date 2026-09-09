@@ -216,6 +216,44 @@ type SchemaImpureUnionTypes interface {
 	SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
 }
 
+// SchemaUnionListMember reports the item type of a union's LIST member.
+//
+// It is the other half of the question SchemaUnionAtomicMemberTypes answers.
+// A cast to a list type produces a SEQUENCE -- F&O 3.0 18.3.6 makes the effect
+// "the same as ... validating it using L as the governing type, and atomizing
+// the resulting node", and its own example has my:coordinates("2 -1") return
+// two xs:integer values. So when a string-like source is admitted by a union's
+// list member, the result is that list's items and not the one string that was
+// handed in, and the item type has to be known to build them.
+//
+// The count is what the suite pins. cbcl-castable-impure-010 asks for
+// "s:impureUnionType('1 2 3') castable as s:impureUnionType" to be FALSE: the
+// inner constructor yields THREE xs:decimal values, and a three-item sequence
+// is not castable to anything. Returning the single string made it true.
+//
+// Optional in the same way as the interfaces above: a resolver that does not
+// implement it reports no list member, and the result keeps its old shape.
+type SchemaUnionListMemberType interface {
+	// SchemaUnionListMemberItemType returns the built-in item type of the
+	// named union's list member. ok is false when the union has no list
+	// member, or when its item type is not one of the built-in codes.
+	SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool)
+}
+
+// schemaUnionListMemberOf resolves a lexical type name to the item type of its
+// union's list member, through the same prefix bindings as everything else.
+func schemaUnionListMemberOf(lex string, ns NamespaceResolver) (xdm.TypeCode, bool) {
+	su, ok := ns.(SchemaUnionListMemberType)
+	if !ok {
+		return 0, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return 0, false
+	}
+	return su.SchemaUnionListMemberItemType(name)
+}
+
 // schemaUnionAtomicMembersOf resolves a lexical type name to the atomic member
 // types of a union, pure or not, through the same prefix bindings as the name.
 func schemaUnionAtomicMembersOf(lex string, ns NamespaceResolver) ([]xdm.TypeCode, bool) {

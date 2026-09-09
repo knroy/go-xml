@@ -477,6 +477,45 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			return nil, xdm.Errorf("FORG0001",
 				"%q is not castable to %s: %v", src.String(), e.Type, verr)
 		}
+		// A value admitted through the union's LIST member casts to that
+		// list, and a cast to a list type is a SEQUENCE -- one value per
+		// whitespace-separated token (F&O 3.0 18.3.6, whose own example has
+		// my:coordinates("2 -1") return two xs:integer values). Returning the
+		// single string instead made "s:impureUnionType('1 2 3')" one item,
+		// and the outer castable in cbcl-castable-impure-010 true where the
+		// three-item sequence it owes is castable to nothing.
+		//
+		// The atomic members are tried FIRST, because the members of a union
+		// are tried in declaration order and an atomic match is not a list
+		// match: "s:impureUnionType('2001-01-01')" is the xs:date member and
+		// stays one item. Only a value no atomic member accepts falls through
+		// to the list -- and only from a string-like source, which is the
+		// same rule SchemaSimpleAtomicMembers enforces above.
+		if e.Type.SchemaSimpleListItemType != 0 &&
+			(isStringLike(src.Type) || src.Type == xdm.TypeUntypedAtomic) {
+			atomicTook := false
+			for _, m := range e.Type.SchemaSimpleAtomicMembers {
+				if _, err := CastAtomic(src, m); err == nil {
+					atomicTook = true
+					break
+				}
+			}
+			if !atomicTook {
+				toks := collapseXMLSpaceFields(src.String())
+				out := make(xdm.Sequence, 0, len(toks))
+				for _, tok := range toks {
+					v, err := CastAtomic(xdm.NewString(tok),
+						e.Type.SchemaSimpleListItemType)
+					if err != nil {
+						return nil, xdm.Errorf("FORG0001",
+							"%q is not castable to %s: %v",
+							src.String(), e.Type, err)
+					}
+					out = append(out, v)
+				}
+				return out, nil
+			}
+		}
 		return xdm.One(src), nil
 	}
 
@@ -531,9 +570,24 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// are a further constraint, and without applying them a cast to a
 		// restriction of xs:integer accepted every integer.
 		//
-		// The *source* lexical form is checked rather than the cast result,
-		// because a facet such as a pattern constrains the lexical space and
-		// the cast may have canonicalised it away.
+		// The source lexical form is what a facet is checked against for
+		// every type whose canonical form fn:string already writes -- the
+		// pattern constrains the lexical space, and for those the two agree.
+		//
+		// The numeric primitives are the exception, and F&O 18.3.3 is
+		// explicit: where a cast crosses a branch of the hierarchy the
+		// pattern is tested against "the canonical lexical representation of
+		// the value". W3C bug 26865 settled that this means the CAST RESULT,
+		// in the target's own primitive, and CastableAs653-658 pin it -- each
+		// titled "Pattern must match canonical representation (not the result
+		// of string())". "12 castable as d:canonicalDecimal", against a
+		// pattern of "-?[0-9]+\.[0-9]+", is true because the canonical
+		// decimal is "12.0"; testing the source's "12" made it false.
+		//
+		// out is already in the target's primitive, so its canonical form is
+		// the one the rule asks for. canonicalLexical answers only for the
+		// numerics whose canonical form differs from fn:string, so every
+		// other type keeps the source form it had.
 		//
 		// A QName-valued type is the exception, and has to be: xs:QName and
 		// xs:NOTATION have QNames rather than strings for their value space,
@@ -546,6 +600,11 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		// in the Clark spelling no lexical QName can have. This mirrors what
 		// the constructor path does in qnamedyn.go.
 		lex := src.String()
+		if out != nil {
+			if canon, ok := canonicalLexical(out); ok {
+				lex = canon
+			}
+		}
 		if e.Type.AtomicType == xdm.TypeQName {
 			q := out.QName()
 			// A cast from a STRING produces a QName with no URI, because

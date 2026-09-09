@@ -422,9 +422,13 @@ are deliberately excluded, so a new field is neither absorbed nor exempted
 silently. `DocumentURI` is the one that looks like it belongs and does not — it
 is the URI a document was RETRIEVED BY, and a copy was not retrieved.
 
-`validation-0201` still fails, on indent width alone — recorded as
+`validation-0201` still fails, on whitespace placement — recorded as
 implementation-defined in `docs/conformance-gaps.md` — so this costs and gains
-no suite case, and `xslt/unionmember_test.go` is what pins it instead.
+no suite case, and `xslt/unionmember_test.go` is what pins it instead. Not on
+indent width, as this passage used to say: 3-space indentation was measured
+across the lane and gained nothing. The surviving difference is the newline
+written before a `<style>` whose content is significant text, where Saxon
+writes none; `TestXHTMLIndentsBeforeStyleWithTextContent` pins that.
 
 ## Open
 
@@ -492,7 +496,7 @@ comment — they rely on Saxon's `?select=` collection URIs and declare no
 environment for the harness to honour; `si-copy-117`/`si-copy-of-117` both get
 `XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
 get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
-`validation-0201` (indent width, argued above), `transform-004` (a
+`validation-0201` (whitespace placement, argued above), `transform-004` (a
 `fn:transform` needed during the static phase, which deadlocks on a
 non-reentrant compile mutex — confirmed from a stack trace, and recorded in the
 CHANGELOG), `strip-space-009`, `system-property-012` and a scatter of one-off
@@ -546,18 +550,19 @@ they agree on is the *rule*, not a bug they share.
 
 **91 failures, and none of them a regression.** This entry exists because the
 number is easy to misread. `import schema` was implemented, and implementing it
-brought **416 previously-skipped cases into scope**, of which 327 now pass. The
-in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,255. The
+brought **416 previously-skipped cases into scope**, of which 335 now pass. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,263. The
 twelve failures that predated the work are still exactly those twelve. A lift
 that admits failing cases raises the failure count by construction, and quoting
 the failure count without the denominator beside it would describe a gain as a
 loss.
 
-**Three of the five have since been closed**, taking the tail 203 → 113 → 101:
+**Three of the five have since been closed**, taking the tail 203 → 113 → 101
+→ **93**:
 the cast target rule (an impure or restricted union is a legal cast target even
 though it is not a legal item type), the constructor functions that are defined
 as that cast, and the ItemType purity rule over schema types. `prod-CastableExpr`
-fell 49 → 8, `prod-CastExpr.schema` 47 → 37, `prod-CastExpr` 7 → 0 and
+fell 49 → 8 → **0**, `prod-CastExpr.schema` 47 → 37, `prod-CastExpr` 7 → 0 and
 `prod-FunctionCall` 9 → 2. The entry that recorded the union half as a
 *deliberate* refusal shared with `xslt` was wrong on the reasoning — the suite
 asserts `true`, not an error — and `docs/todo.md` §1.5 now says so; `xslt`'s
@@ -596,7 +601,7 @@ measured shape, because it is what says the tail is several features rather
 than one broken import.
 
 The cases cluster by production, not by symptom: `prod-CastExpr.schema` (36),
-`prod-SchemaImport` (13), `prod-CastableExpr` (8), `prod-InstanceofExpr` (7),
+`prod-SchemaImport` (13), `prod-InstanceofExpr` (7),
 `fn-json-to-xml` (3), `prod-FunctionCall` (3), then fours and below. The error
 codes cluster the same way:
 

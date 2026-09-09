@@ -1357,3 +1357,136 @@ func ratFitsInt(r *big.Rat) bool {
 func bigFitsInt(n *big.Int) bool {
 	return n.IsInt64() && n.Int64() <= math.MaxInt && n.Int64() >= math.MinInt
 }
+
+// canonicalLexical renders a value in the CANONICAL LEXICAL REPRESENTATION of
+// XML Schema, which is the form a pattern facet is tested against when a cast
+// crosses a branch of the type hierarchy.
+//
+// F&O 3.0 18.3.3 says the pattern is tested against "the canonical lexical
+// representation of the value", and W3C bug 26865 settled which value that is:
+// the CAST RESULT, in the target's own primitive, rather than the source. The
+// suite pins it as CastableAs653-658, whose titles read "Pattern must match
+// canonical representation (not the result of string())" -- because fn:string
+// is XPath's serialization and not XSD's canonical form. The two disagree
+// exactly where these cases live: string(xs:decimal(12)) is "12" where the
+// canonical decimal is "12.0", and string(xs:double(93.7)) is "93.7" where the
+// canonical double is "9.37E1".
+//
+// Only the numeric primitives whose canonical form differs from fn:string are
+// given one here. Everything else returns false and the caller keeps the
+// lexical form it already had, which for those types is the canonical one.
+func canonicalLexical(a *xdm.Atomic) (string, bool) {
+	switch a.Type {
+	case xdm.TypeDecimal:
+		// XSD 1.0 Part 2 3.2.3.1: a canonical xs:decimal always carries a
+		// decimal point with at least one digit on each side. An xs:integer
+		// cast to a decimal target is the case bug 26865 turns on, and it is
+		// why "12" has to become "12.0" before the pattern sees it.
+		//
+		// xs:integer is deliberately NOT here. It is a separate primitive for
+		// this purpose (F&O 18.3.1 names it as one), and 3.3.13.1 makes its
+		// canonical form the bare digits: a pattern on a restriction of
+		// xs:integer must keep seeing "12", not "12.0".
+		r := a.Rat()
+		if r == nil {
+			return "", false
+		}
+		return canonicalRatDecimal(r), true
+	case xdm.TypeDouble, xdm.TypeFloat:
+		f := a.Float64()
+		switch {
+		case math.IsNaN(f):
+			return "NaN", true
+		case math.IsInf(f, 1):
+			return "INF", true
+		case math.IsInf(f, -1):
+			return "-INF", true
+		}
+		return canonicalFloatExponential(f), true
+	}
+	return "", false
+}
+
+// canonicalRatDecimal writes an exact rational in canonical xs:decimal form.
+//
+// big.Rat.FloatString rounds to a fixed number of places, so the number of
+// digits actually needed is computed first: a decimal value is a rational
+// whose denominator divides a power of ten, and the smallest such power is the
+// count of fractional digits its canonical form carries. Trailing zeros are
+// then dropped back to the one digit the canonical form must keep.
+func canonicalRatDecimal(r *big.Rat) string {
+	s := r.FloatString(canonicalDecimalPlaces(r))
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		if strings.HasSuffix(s, ".") {
+			s += "0"
+		}
+	} else {
+		s += ".0"
+	}
+	return s
+}
+
+// canonicalDecimalPlaces is the number of fractional digits the canonical form
+// of r needs, found by multiplying out powers of ten until the denominator
+// divides evenly.
+//
+// The bound is not a guess about precision: a denominator that never divides a
+// power of ten is not a decimal at all, and 40 places is past anything a
+// lexical xs:decimal can have produced.
+func canonicalDecimalPlaces(r *big.Rat) int {
+	den := new(big.Int).Set(r.Denom())
+	if den.Sign() == 0 {
+		return 1
+	}
+	ten := big.NewInt(10)
+	acc := big.NewInt(1)
+	rem := new(big.Int)
+	for i := 0; i <= 40; i++ {
+		if rem.Mod(acc, den).Sign() == 0 {
+			if i == 0 {
+				return 1
+			}
+			return i
+		}
+		acc.Mul(acc, ten)
+	}
+	return 40
+}
+
+// canonicalFloatExponential writes a finite float in canonical xs:double or
+// xs:float form: a mantissa in [1,10) -- or exactly 0 -- with a decimal point,
+// an uppercase E, and an exponent with no leading zeros.
+//
+// The uppercase E is not cosmetic. canonicalDouble in fn_serialize.go writes a
+// lowercase "e" for the adaptive serialization method, which is a different
+// job with a different rule; the schema pattern these cases carry is
+// "-?[0-9]+\.[0-9]+E-?[0-9]+", so a lowercase e would not match and
+// CastableAs655-658 would stay false for a new reason.
+func canonicalFloatExponential(f float64) string {
+	// 'E' with -1 precision gives the shortest mantissa that round-trips,
+	// already normalised to one digit before the point.
+	s := strconv.FormatFloat(f, 'E', -1, 64)
+	i := strings.IndexByte(s, 'E')
+	if i < 0 {
+		return s
+	}
+	mant, exp := s[:i], s[i+1:]
+	if !strings.Contains(mant, ".") {
+		// FormatFloat drops a zero fraction ("1E+00"), and the canonical
+		// form requires a digit after the point.
+		mant += ".0"
+	}
+	// Strip the sign and leading zeros FormatFloat pads the exponent with:
+	// "E+01" is written "E1", and "E-05" is written "E-5".
+	neg := strings.HasPrefix(exp, "-")
+	exp = strings.TrimLeft(exp, "+-")
+	exp = strings.TrimLeft(exp, "0")
+	if exp == "" {
+		exp = "0"
+	}
+	if neg && exp != "0" {
+		exp = "-" + exp
+	}
+	return mant + "E" + exp
+}

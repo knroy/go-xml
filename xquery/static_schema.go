@@ -335,3 +335,72 @@ func (sc *staticContext) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.Typ
 	walk(st)
 	return out, true
 }
+
+// SchemaUnionListMemberItemType implements xpath.SchemaUnionListMemberType.
+//
+// It walks the same transitive membership as SchemaUnionAtomicMemberTypes and
+// picks out the member that one deliberately skips: the list. The item type is
+// resolved to a built-in code, because that is what the cast needs in order to
+// build the sequence F&O 3.0 18.3.6 asks for -- one value per whitespace-
+// separated token, each an instance of the list's item type.
+//
+// The first list member wins. A union with two of them is legal XSD but has no
+// bearing here: the members are tried in declaration order, so the first is the
+// one a value would be admitted by.
+func (sc *staticContext) SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool) {
+	if sc.schema == nil {
+		return 0, false
+	}
+	t, ok := sc.schema.Types[name]
+	if !ok {
+		return 0, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok {
+		return 0, false
+	}
+	// A restriction of a union declares no members of its own; the nearest
+	// ancestor that does is the one to walk. This mirrors the descent in
+	// SchemaUnionAtomicMemberTypes so the two agree on which union is meant.
+	for st != nil && st.Variety == xsd.VarietyUnion && len(st.MemberTypes) == 0 {
+		base, ok := st.Base.(*xsd.SimpleType)
+		if !ok || base == st {
+			break
+		}
+		st = base
+	}
+	if st == nil || st.Variety != xsd.VarietyUnion {
+		return 0, false
+	}
+	seen := map[*xsd.SimpleType]bool{}
+	var walk func(u *xsd.SimpleType) (xdm.TypeCode, bool)
+	walk = func(u *xsd.SimpleType) (xdm.TypeCode, bool) {
+		if u == nil || seen[u] {
+			return 0, false
+		}
+		seen[u] = true
+		for _, m := range u.MemberTypes {
+			if m == nil {
+				continue
+			}
+			switch m.Variety {
+			case xsd.VarietyUnion:
+				if c, ok := walk(m); ok {
+					return c, true
+				}
+			case xsd.VarietyList:
+				if item, isList := sc.schema.IsListSimpleType(m.Name); isList {
+					if code, isAtomic, ok := sc.LookupSchemaType(item); ok && isAtomic {
+						return code, true
+					}
+					if c, found := xpath.BuiltinAtomicTypeCode(item.Local); found &&
+						item.URI == xsd.NSSchema {
+						return c, true
+					}
+				}
+			}
+		}
+		return 0, false
+	}
+	return walk(st)
+}

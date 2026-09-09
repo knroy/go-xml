@@ -1160,6 +1160,14 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 			if a, ok := schemaUnionAtomicMembersOf(lex, p.ns); ok {
 				st.SchemaSimpleAtomicMembers = a
 			}
+			// A string-like value the union admits only through its LIST
+			// member casts to that list, and a cast to a list type is a
+			// sequence (F&O 3.0 18.3.6). Recording the item type is what lets
+			// the cast build it; without it the constructor handed back the
+			// single string it was given. See SchemaSimpleListItemType.
+			if item, ok := schemaUnionListMemberOf(lex, p.ns); ok {
+				st.SchemaSimpleListItemType = item
+			}
 			if lex, ns := lex, p.ns; true {
 				st.SchemaValueValid = func(value string) error {
 					known, err := schemaValueValid(lex, ns, value)

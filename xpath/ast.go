@@ -514,6 +514,23 @@ type SequenceType struct {
 	// name denotes such a type, so the atomic-target rule lets it through.
 	SchemaSimpleType bool
 
+	// SchemaSimpleListItemType is the item type of the LIST member of the
+	// impure union SchemaSimpleType marks, when it has one.
+	//
+	// A cast to a list type produces a SEQUENCE, one value per whitespace-
+	// separated token (F&O 3.0 18.3.6). A union holding a list member is
+	// impure, so such a cast arrives here rather than in the list-type branch
+	// above, and without this field the result was the single string handed
+	// in. cbcl-castable-impure-010 is what that cost: the constructor
+	// "s:impureUnionType('1 2 3')" owes three xs:decimal values, and a
+	// three-item sequence is not castable to anything -- so the outer
+	// "castable as s:impureUnionType" is false, where one string made it true.
+	//
+	// Only a string-like source reaches the list member at all; an atomic
+	// source is confined to SchemaSimpleAtomicMembers, which is the rule that
+	// separates -005 from -009. 0 when the union has no list member.
+	SchemaSimpleListItemType xdm.TypeCode
+
 	// SchemaSimpleAtomicMembers are the built-in atomic types an impure union
 	// admits directly, ignoring any list member.
 	//
