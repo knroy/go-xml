@@ -1148,7 +1148,28 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 				}
 				return &CastExpr{Operand: args[0], Type: st}, true
 			}
-			return nil, false
+			// An impure or restricted union still has a constructor, because
+			// the constructor is defined as a cast and a cast to any simple
+			// type in the in-scope schema types is legal. The schema decides
+			// the value. See SchemaSimpleType.
+			st := SequenceType{
+				SchemaType:       annotationKeyOf(lex, p.ns),
+				SchemaSimpleType: true,
+				Occurrence:       "?",
+			}
+			if a, ok := schemaUnionAtomicMembersOf(lex, p.ns); ok {
+				st.SchemaSimpleAtomicMembers = a
+			}
+			if lex, ns := lex, p.ns; true {
+				st.SchemaValueValid = func(value string) error {
+					known, err := schemaValueValid(lex, ns, value)
+					if !known {
+						return nil
+					}
+					return err
+				}
+			}
+			return &CastExpr{Operand: args[0], Type: st}, true
 		}
 		st := SequenceType{
 			SchemaType:         annotationKeyOf(lex, p.ns),
@@ -1598,6 +1619,17 @@ func (p *Parser) parseSequenceType() (SequenceType, error) {
 					// SchemaValueValid above is what actually checks a value.
 					st.SchemaListType = true
 					st.SchemaListItemType = item
+				} else {
+					// An impure or restricted union: known, not atomic,
+					// not a pure union, not a list. It is still a legal
+					// cast target, and the schema decides a value through
+					// SchemaValueValid captured above. See SchemaSimpleType.
+					st.SchemaSimpleType = true
+					// Which members a NON-string source may reach. See
+					// SchemaSimpleAtomicMembers.
+					if a, ok := schemaUnionAtomicMembersOf(t.Val, p.ns); ok {
+						st.SchemaSimpleAtomicMembers = a
+					}
 				}
 				goto occurrence
 			}

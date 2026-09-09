@@ -49,17 +49,12 @@ type seenDecl struct {
 // with no prolog at all reaches the loop's first iteration, matches nothing,
 // and returns immediately.
 func (p *parser) parseProlog() error {
-	// The imports are followed on the way out, whichever way the loop leaves.
-	// A prolog that reads to its end and one that stops at a word which
-	// begins no declaration both have a complete set of imports by then, and
-	// both are followed by a query body whose type names must resolve against
-	// them. See schemaimport.go on why this is here and not where the module
-	// loader runs.
-	err := p.parsePrologDecls()
-	if err != nil {
-		return err
-	}
-	return loadSchemas(p.schemaImports, p.opts, p.sc, p.sc.baseURI)
+	// Each "import schema" is followed where it is READ, not here. A type
+	// name resolves against the static context at the moment the parser
+	// reaches it, and the prolog's own function signatures are parsed where
+	// they stand -- so a schema installed after the loop is a schema those
+	// signatures never see. See parser.loadSchemaImport.
+	return p.parsePrologDecls()
 }
 
 // parsePrologDecls reads the declarations themselves. See parseProlog.
@@ -1537,5 +1532,7 @@ func (p *parser) parseSchemaImport() error {
 		}
 	}
 	p.schemaImports = append(p.schemaImports, imp)
-	return nil
+	// Followed now rather than at the end of the prolog, so that a function
+	// or variable declaration BELOW this import can name the types it brings.
+	return p.loadSchemaImport(imp, p.sc.baseURI)
 }

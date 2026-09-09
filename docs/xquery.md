@@ -1,9 +1,9 @@
 # XQuery
 
-XQuery 3.1, measured at **99.33%** of the W3C QT3 suite (30,143 of 30,346 in
+XQuery 3.1, measured at **99.63%** of the W3C QT3 suite (30,233 of 30,346 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
-416 previously-skipped cases entered the denominator and 225 of them pass, so
-the passing count rose by 225 while the rate fell. No case that passed before
+416 previously-skipped cases entered the denominator and 315 of them pass, so
+the passing count rose by 315 while the rate fell. No case that passed before
 fails now. What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
@@ -268,15 +268,49 @@ q, err := xquery.Compile(
     }})
 ```
 
-The components reach the static context **before the query body is parsed**,
-which is what makes the feature work at all: XQuery resolves type names while
-parsing rather than after, so `h:hatsize` is decided by whether the static
-context knows the name at the moment the parser reads it. (`import module` is
-followed *after* the body, because a module contributes functions and
-variables, and those are resolved late.)
+The components reach the static context **as each import is read**, which is
+what makes the feature work at all: XQuery resolves type names while parsing
+rather than after, so `h:hatsize` is decided by whether the static context
+knows the name at the moment the parser reaches it. That is why the import is
+followed where it stands rather than at the end of the prolog — a function
+signature is parsed where *it* stands, so
+
+```
+import schema namespace h = "http://example.org/hats";
+declare function local:f($a as h:hatsize) { $a };
+```
+
+needs the schema installed by the second line, not merely by the body.
+(`import module` is followed *after* the body, because a module contributes
+functions and variables, and those are resolved late.)
 
 The facets the schema author wrote are applied, not merely the base type: a
 `hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
+
+### Casting to a schema type
+
+An imported simple type is a **cast target** and a **constructor function**,
+which are the same thing: §3.14.2 admits any simple type in the in-scope schema
+types as a cast target, and a constructor is *defined* as that cast. So
+`h:hatsize("8")` and `"8" cast as h:hatsize?` are one expression, and both
+apply the schema's facets.
+
+The rules that are easy to get subtly wrong, and what this implementation
+does:
+
+| Target | Behaviour |
+|---|---|
+| An atomic restriction | Cast to the nearest **built-in ancestor**, not to the XSD primitive, then check the facets. A restriction of `xs:integer` yields an `xs:integer`, so `instance of xs:integer` is true of what the cast just produced. |
+| A **pure** union | Member types are tried in declaration order and the first that accepts the value wins, so the result is an instance of a *member*, never of the union. The member cast runs **first** and the schema is asked about **its** result: `123.12 cast as` a union over `xs:integer` yields `123`, because a cast converts. A member that is itself a restriction still has its own facets applied. |
+| An **impure** or **restricted** union — one carrying facets, or holding a list type | A legal cast target, decided by the schema's own validation. `castable as` answers `true` or `false`; `cast as` raises `FORG0001`. A source that is not `xs:string` or `xs:untypedAtomic` may reach only the union's **atomic** members, because F&O §18.3 defines the cast to a list type from a string alone. |
+| A list type | Castable is the schema's answer over the whole value; the result is one item per whitespace-separated token. |
+
+The purity rule of §2.5 is a rule about **item types**, not about casts. A
+union carrying facets is still refused in `instance of`, in `treat as` and in a
+function signature — a value must not stand in for a faceted union it may not
+satisfy, which is the XSD 1.0 error XSD 1.1 §3.16.6.3 corrected — while the
+same union is a perfectly good cast target, because a cast has a lexical form
+in hand and can put the facets to the schema.
 
 `import schema default element namespace "…"` additionally makes the imported
 namespace the default element **and type** namespace for the rest of the

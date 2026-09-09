@@ -195,6 +195,41 @@ func schemaUnionMemberNamesOf(lex string, ns NamespaceResolver) ([]string, bool)
 	return su.SchemaUnionMemberNames(name)
 }
 
+// SchemaImpureUnionTypes reports the ATOMIC member types of a union without
+// requiring the union to be pure.
+//
+// SchemaUnionMemberTypes refuses an impure union outright, which is right for
+// the ItemType question it answers -- a value must not stand in for a faceted
+// union it may not satisfy. A CAST asks something else: which members a source
+// value may be converted into. F&O defines the cast to a list type from
+// xs:string and xs:untypedAtomic only, so a non-string source may reach a
+// union's atomic members and no others, and that set has to be known even when
+// the union as a whole is impure.
+//
+// Optional, like the other schema interfaces: a resolver that does not
+// implement it simply reports no atomic members, and every non-string source
+// is refused -- the conservative direction.
+type SchemaImpureUnionTypes interface {
+	// SchemaUnionAtomicMemberTypes returns the built-in atomic types the named
+	// union admits directly, transitively through member unions, skipping any
+	// list member. ok is false when the name is not a union at all.
+	SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool)
+}
+
+// schemaUnionAtomicMembersOf resolves a lexical type name to the atomic member
+// types of a union, pure or not, through the same prefix bindings as the name.
+func schemaUnionAtomicMembersOf(lex string, ns NamespaceResolver) ([]xdm.TypeCode, bool) {
+	su, ok := ns.(SchemaImpureUnionTypes)
+	if !ok {
+		return nil, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return nil, false
+	}
+	return su.SchemaUnionAtomicMemberTypes(name)
+}
+
 // schemaUnionMembersOf resolves a lexical type name to the member types of a
 // pure union, through the same prefix bindings as everything else.
 func schemaUnionMembersOf(lex string, ns NamespaceResolver) ([]xdm.TypeCode, bool) {

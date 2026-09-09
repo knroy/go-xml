@@ -435,22 +435,27 @@ are the argument that bounds a neighbouring gap; the one-line records of
 everything else that closed are under *Fixed*.
 
 This section carried no entry for either of the two largest measured gaps —
-177 failures on XSLT 3.0 and 203 on XQuery 3.1 — for as long as they have
+177 failures on XSLT 3.0 and 113 on XQuery 3.1 — for as long as they have
 existed, while the file's own opening promises that a gap without an entry has
 not been measured. Both had been measured; neither had been written down. They
 are first below, because the section is ordered by cost and nothing else here
 is within two orders of magnitude of them.
 
-### §19.8 streamability analysis is not implemented (XSLT 3.0)
+### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**150 of the 177 XSLT 3.0 failures**, and by far the largest single gap in the
-project. Every one of the 150 fails in the same direction: the suite expects
-`XTSE3430` — *this construct is not guaranteed streamable* — and the transform
-succeeds instead.
+**118 of the 158 XSLT 3.0 failures**, and by far the largest single gap in the
+project. The posture-and-sweep lattice now exists — 13 of the spec's 86
+sections, worth 19 cases — but the rules built on it do not: all 43 XSLT
+instruction rules (§19.8.6), streamable stylesheet functions (§19.8.5) and
+accumulators (§19.8.4) are still absent. Every one of the 118 fails in the same
+direction: the suite expects `XTSE3430` — *this construct is not guaranteed
+streamable* — and the transform succeeds instead, because the analysis returns
+`known=false` for a construct it cannot yet model and correctly declines to
+raise an error it has not proved.
 
 That direction is the whole diagnosis. The engine builds a tree and streams
 nothing, so every construct the analysis would reject is one it simply
-executes. It produces the **right answer** for all 150; what it does not
+executes. It produces the **right answer** for all 118; what it does not
 produce is the static refusal §19.8 requires a streaming processor to make
 before running anything. A construct that is not guaranteed streamable is still
 a construct with a well-defined result, and a tree-building processor reaches
@@ -458,10 +463,10 @@ it. So these are not wrong answers, and they are not silent erasure: they are a
 static analysis that was never written.
 
 They cluster by construct rather than by cause, which is what confirms it is
-one missing pass and not 150 defects: `streamable` (29), `si-fork` (11),
-`accumulator` (9), `su-absorbing` (8), and `su-shallow-descent`,
+one missing body of rules and not 118 defects: `streamable` (29), `si-fork`
+(11), `accumulator` (9), `su-absorbing` (8), and `su-shallow-descent`,
 `si-for-each-group` and `merge` (6 each), then a long tail across `su-*`,
-`si-*`, `sf-*` and `sx-*`. Those set counts are of all 177, not of the 150;
+`si-*`, `sf-*` and `sx-*`. Those set counts are of all 158, not of the 118;
 `merge` and `accumulator` each contribute to both groups.
 
 **Closing it is a real analysis, not a check.** §19.8 assigns every expression
@@ -472,10 +477,10 @@ that raises `XTSE3430` on some unstreamable constructs and not others has told
 the caller nothing they can rely on. That is why nothing partial has been
 attempted here.
 
-**Note what it would and would not buy.** It would move 150 cases and take
-XSLT 3.0 from 98.46% to about 99.77%. It would not make the engine stream, and
+**Note what it would and would not buy.** Completing it would move the 118
+cases still wanting an XTSE3430 and take XSLT 3.0 from 98.63% to about 99.65%. It would not make the engine stream, and
 it would not change the result of a single transform that currently succeeds —
-it would convert 150 correct answers into 150 refusals to answer. That is the
+it would convert 118 correct answers into 118 refusals to answer. That is the
 conformant behaviour, and it is worth being explicit that the gain is measured
 in conformance rather than in capability.
 
@@ -499,7 +504,7 @@ waiting behind it.
 that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
-branches on it to choose a fallback. It is the same gap as the 150 above, seen
+branches on it to choose a fallback. It is the same gap as the 118 above, seen
 from the other side, and it stays failing for as long as the analysis is
 missing — which is the correct behaviour, not a cost.
 
@@ -537,27 +542,35 @@ failures in one test set normally means a cluster worth chasing. Here it is
 three independent codepoints reached through three different classes, and what
 they agree on is the *rule*, not a bug they share.
 
-### XQuery schema awareness: five features deliberately left (XQuery 3.1)
+### XQuery schema awareness: three features still left (XQuery 3.1)
 
-**203 failures, and none of them a regression.** This entry exists because the
+**113 failures, and none of them a regression.** This entry exists because the
 number is easy to misread. `import schema` was implemented, and implementing it
-brought **416 previously-skipped cases into scope**, of which 225 pass. The
-in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,143. The
+brought **416 previously-skipped cases into scope**, of which 315 now pass. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,233. The
 twelve failures that predated the work are still exactly those twelve. A lift
 that admits failing cases raises the failure count by construction, and quoting
 the failure count without the denominator beside it would describe a gain as a
 loss.
 
-What the 203 are is a tail of five separate features that `import schema`
+**Two of the five have since been closed**, taking the tail 203 → 113: the cast
+target rule (an impure or restricted union is a legal cast target even though
+it is not a legal item type) and the constructor functions that are defined as
+that cast. `prod-CastableExpr` fell 49 → 8, `prod-CastExpr.schema` 47 → 37 and
+`prod-CastExpr` 7 → 0. The entry that recorded the union half as a *deliberate*
+refusal shared with `xslt` was wrong on the reasoning — the suite asserts
+`true`, not an error — and `docs/todo.md` §1.5 now says so; `xslt`'s refusal is
+correct where it stands, because it stands in an item-type position.
+
+What the remaining 113 are is a tail of separate features that `import schema`
 made *reachable* without making them present. `docs/todo.md` §1.5 names them
 and is the forward-looking half of this entry; what belongs here is the
-measured shape, because it is what says the tail is five features rather than
-one broken import.
+measured shape, because it is what says the tail is several features rather
+than one broken import.
 
-The cases cluster by production, not by symptom: `prod-CastableExpr` (49),
-`prod-CastExpr.schema` (47), `prod-SchemaImport` (29), `prod-FunctionCall`
-(16), `prod-InstanceofExpr` (12), `prod-CastExpr` (7), `fn-json-to-xml` (7),
-`prod-ModuleImport` (5), then a tail of ones and twos. The error codes cluster
+The cases cluster by production, not by symptom: `prod-CastExpr.schema` (37),
+`prod-SchemaImport` (15), `prod-InstanceofExpr` (12), `prod-FunctionCall` (9),
+`prod-CastableExpr` (8), `fn-json-to-xml` (7), then fours and below. The error codes cluster
 the same way and identify the five directly:
 
 - **Typed input.** A source document does not arrive schema-validated, so a
@@ -1303,8 +1316,8 @@ suite", which is no longer a true reading of the file.** It was true of the
 population the audit covered — the XSD and XPath disagreements that stood at
 the time — and it is still true of those: XPath is 100% at all three versions,
 and the XSD remainder is argued case by case above. It is not true of the
-suites as a whole. XSLT 3.0 carries 177 failures of which 150 are one missing
-analysis, and XQuery 3.1 carries 203, and both are eminently fixable; they are
+suites as a whole. XSLT 3.0 carries 158 failures of which 118 are one missing
+analysis, and XQuery 3.1 carries 113, and both are eminently fixable; they are
 written up under *Open* above. A sentence scoped to one audit and left standing
 after the scope changed is the same decay this file keeps recording, so it is
 corrected rather than deleted.

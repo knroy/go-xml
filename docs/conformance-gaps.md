@@ -16,9 +16,9 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,143 | 99.33% | **203** | 0 | 0 | **203** | 99.33% |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,233 | 99.63% | **113** | 0 | 0 | **113** | 99.63% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 11,525 | 11,348 | 98.46% | **177** | 0 | 0 | **177** | 98.46% |
+| **xslt** | W3C XSLT 3.0 | 11,525 | 11,367 | 98.63% | **158** | 0 | 0 | **158** | 98.63% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** | 0 | 0 | **31** | 99.93% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -73,10 +73,10 @@ had been excluding, and lifting the streaming gate admitted the XSLT 3.0
 streaming corpus. Cases that were being counted as "not our business" are
 counted as ours now, which is why the percentages fell while nothing got worse.
 **The other component is that the two largest blocks are single features, not a
-long tail**: 150 of the 177 XSLT 3.0 failures want an `XTSE3430` that only the
+long tail**: 118 of the 158 XSLT 3.0 failures want an `XTSE3430` that only the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
-while 203 of the XQuery failures are the five schema-aware features
+while 113 of the XQuery failures are the three remaining schema-aware features
 [todo.md](todo.md) §1.5 deliberately leaves. Neither is a backlog of defects.
 
 In the *Fixable* column above, "fixable" means "the count can move" — which
@@ -136,7 +136,7 @@ XQST0113, `-050` and `-051` wanting XPTY0004) and
 paragraph read "remaining 17 … `prod-ModuleImport` (8) …
 `prod-DecimalFormatDecl` … (1)"; three module-import cases and the
 decimal-format one have since passed, which is what shrank the pre-import
-residue. It is important that this set has not grown: the 203 XQuery failures
+residue. It is important that this set has not grown: the 113 XQuery failures
 below are cases `import schema` newly *admitted*, not cases it broke, and the
 distinction only holds because the pre-import set was diffed by name rather
 than by count.
@@ -170,27 +170,30 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1: 30,143 / 30,346 = 99.33%** — what passes now. The denominator
+**XQuery 3.1: 30,233 / 30,346 = 99.63%** — what passes now. The denominator
 grew by 416 when `import schema` was implemented and the `schemaImport` feature
-gate came off the harness (29,930 → 30,346); 213 of those 416 newly-admitted
-cases pass and 203 fail, which is the whole of the increase in the failure
-count. The passing count rose by more than 213 — 29,918 → 30,143 — because four
+gate came off the harness (29,930 → 30,346); 303 of those 416 newly-admitted
+cases pass and 113 fail, which is the whole of the increase in the failure
+count. The passing count rose by more than 303 — 29,918 → 30,233 — because four
 of the pre-import failures were fixed in the same period, which is why the
 pre-import residue also had to be diffed by name rather than inferred from the
-arithmetic. The 203
-failures are not one gap but five, each a separate small feature rather than a
-defect in the import: typed *input* documents, constructor functions for
-schema-defined simple types, impure and restricted unions (which `xslt` refuses
-identically, by a shared and deliberate purity rule), annotation propagation
-through a constructor, and substitution groups over validated content. They are
+arithmetic. Two of the five features have since been closed — the cast-target
+rule for impure unions and the constructor functions defined as that cast —
+which is what took the tail 203 → 113. The remaining 113
+failures are not one gap, each a separate small feature rather than a
+defect in the import: typed *input* documents, annotation propagation through a
+constructor, and substitution groups over validated content. They are
 catalogued in [todo.md](todo.md) §1.5.
 
-Where they land bears that out: `prod-CastableExpr` (49) and
-`prod-CastExpr.schema` (47) are the constructor-function gap, `prod-SchemaImport`
-(29) and `prod-InstanceofExpr` (12) the typed-input and annotation ones, and
-`prod-FunctionCall` (16) the union rule, reporting `XPST0008: "lu:restrictedUnion"
-is not a type in the in-scope schema definitions` on the very types §1.5 records
-as deliberately refused. No set outside that catalogue gained a failure.
+Where they land bears that out: `prod-CastExpr.schema` (37) is almost entirely
+one thing — a cast to a **list** type must yield items annotated with the
+list's item type, which is annotation propagation reached from the cast side —
+while `prod-SchemaImport` (15) and `prod-InstanceofExpr` (12) are the
+typed-input and annotation gaps directly. `prod-CastableExpr` is down to 8, six
+of which want a pattern facet matched against a value's *canonical*
+representation rather than the result of `string()`: a facet-application rule
+inside `xsd` that applies to validation as much as to casting. No set outside
+that catalogue gained a failure.
 
 Of the failures that predate schema import, nothing is left that is both
 fixable and worth the change.
@@ -458,7 +461,7 @@ data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
 the data, rather than on Appendix F's own words. That caveat cuts against
 changing anything, not for it.
 
-## XSLT 3.0 — 177 failures
+## XSLT 3.0 — 158 failures
 
 ### Deliberate divergence — 1
 
@@ -477,7 +480,7 @@ what is wrong is the claim that it was closed.
 
 | Cases | Verdict | Why |
 |---|---|---|
-| `evaluate-045` | **Won't fix** — implementable, deliberately not done | It asserts that a stylesheet function with no `visibility` attribute is private, and so unreachable from `xsl:evaluate`. **The suite is right and this row's old spec argument was false.** It claimed visibility is a property of a component of an `xsl:package` and "a plain `xsl:stylesheet` is not one". §3.6 says the opposite verbatim: "When the `xsl:package` element is not used explicitly, **the entire stylesheet comprises a single implicit package**." §3.6.3.1's ladder ends "Otherwise, private", with no carve-out, and `xsl:evaluate`'s static context admits user-defined functions only "provided their visibility is not hidden or private". So XTDE3160 is correct and we diverge knowingly. The reason to diverge is unchanged and is a real one: enforcing it means no stylesheet outside a package can call its own functions from its own `xsl:evaluate`, which breaks deployed stylesheets — DocBook xslTNG does this in all 613 of its test documents — and Saxon diverges the same way (`wrongError` in its own submission). This is a **won't fix, not a can't fix**, and it is excluded from the unfixable count below. |
+| `evaluate-045` | **Won't fix** — implementable, deliberately not done | It asserts that a stylesheet function with no `visibility` attribute is private, and so unreachable from `xsl:evaluate`. **The suite is right and this row's old spec argument was false.** It claimed visibility is a property of a component of an `xsl:package` and "a plain `xsl:stylesheet` is not one". §3.6 says the opposite verbatim: "When the `xsl:package` element is not used explicitly, **the entire stylesheet comprises a single implicit package**." §3.6.3.1's ladder ends "Otherwise, private", with no carve-out, and `xsl:evaluate`'s static context admits user-defined functions only "provided their visibility is not hidden or private". So XTDE3160 is correct and we diverge knowingly. The reason to diverge is unchanged and is a real one: enforcing it means no stylesheet outside a package can call its own functions from its own `xsl:evaluate`, which breaks deployed stylesheets, and Saxon diverges the same way (its XSLT 3.0 submission records no result for the case at all, while its sibling `evaluate-006` — the same stylesheet with `visibility="public"` written on the declaration — passes). The cost is now **measured rather than asserted**: removing the `isPackage` guard from `evaluateMayCall` and re-running the DocBook xslTNG corpus takes it from **577 documents to 67**, so conforming here would break 510 real documents to gain one suite case. This is a **won't fix, not a can't fix**, and it is excluded from the unfixable count below. |
 
 ### Package composition — 4
 
@@ -558,22 +561,116 @@ it does not. What is left shares no cause, so each is its own investigation.
 
 | Case | Verdict | Note |
 |---|---|---|
-| `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. |
+| `accumulator-038` | **Not implementable** | Suite defect, and the audit strengthened rather than weakened it. Its stylesheet is an *explicit* `xsl:package`, so §3.6.3.1's "Otherwise, private" applies to the unannotated `main` template and XTDE0040's own text — "does not match the expanded QName of a named template defined in the stylesheet, **whose visibility is public or final**" — is met. Both 038 and 039 were converted to `xsl:package` by Bug 28410 in 2015; only 039 carries `<modified by="Michael Kay" on="2019-03-05" change="Make main template public"/>` and only 039's stylesheet has `visibility="public"`. A second, independent defence: the wanted XPTY0004 is reachable only *after* entry succeeds, and §2.9 lets an implementation report whichever error it detects first. Note that this verdict depends on the stylesheet being a package — unlike `evaluate-045`, whose old rationale wrongly claimed the visibility rules do not reach a plain `xsl:stylesheet`. Correcting that row removes a latent contradiction between the two. **Re-tested 2026-09-08 and the verdict held, against a hypothesis that failed.** The idea tried was that §3.6.1 — "Unnamed packages are allowed, but they can only be used as the 'top level' of an application; they cannot be the target of an `xsl:use-package` declaration in another package" — leaves an unnamed package with no using package for anything to be private *from*, so the XTDE0040 boundary could not exist. Gating `eligibleInitialTemplate` on a *named* package made this case pass and the suite go from 11,348 to **11,347**: `package-001a` is the identical construct — an unnamed `xsl:package` whose only template is a bare `name="main"` — and its description reads "initial template must be public", expecting XTDE0040. `package-001b` and `package-914a` are the same shape. The suite therefore applies the visibility default to unnamed packages deliberately, and `accumulator-038` is inconsistent with its own neighbours rather than with us. |
 | `strip-space-009` | **Not implementable** | *This case was missing from every list in this file when the audit found it.* It asserts that whitespace survives `xsl:strip-space` under an element whose **ancestor**'s type carries an XSD 1.1 assertion. §4.4 grants no such exemption: it preserves whitespace only where "an element … has a type annotation that is a simple type or a complex type with simple content", and here `p` sits under `xs:any processContents="skip"`, so it has no simple-type annotation at all, while the ancestor's type is `mixed`, not simple content. We implement the §4.4 rule as written. The test's own comment says it exists "in order to exercise different paths in **Saxon**"; Saxon is the only submission that runs it, and passes. Note the caveat below on the spec edition. |
 
 | `initial-function-002`, `initial-function-100a`–`100i` | **Fixed — it was a driver gap, not an engine gap** | Ten cases that invoke an initial function and then assert about the *raw result sequence* — `$result instance of xs:integer`, `assert-count 2`. The engine was never wrong: a direct API call returns `986572` as an `xs:integer` and `1.0E-10` as an `xs:float`, as typed `*xdm.Atomic` items in `Result.Nodes`, which is 2.3.5's raw result exactly. The driver was. `<output tree="no" serialize="no"/>` asks it not to wrap the result in a document node, but `rawResultVar` in `tests/xslts/catalog.go` bound the raw sequence only when the case ALSO wrote `result-var` — an attribute the suite spells exactly once, and which the reference driver never reads at all: grep `runner/` for `result-var` and there is no hit. `run-tests.xsl` selects the raw delivery format on `@tree='no' and not(@serialize='yes')`, and `rawResultVar` now says that and nothing else, defaulting the variable to the ordinary name `result`. The `serialize="yes"` half of the condition is what keeps the `result-document-14xx` and `output-07xx` families on the serialized format they assert against. `assert-count` and `assert-deep-eq` were genuinely missing from `judge.go` and are now translated to `count($result) = n` and `deep-equal($result, (…))`, reusing the engine's own semantics rather than a matcher written in the harness. Measured in a clean worktree so a second agent's concurrent `xslt/` edits could not be mistaken for this change: 11,273 → 11,284 passing, 252 → 241 failing, the eleven being these ten and `sx-arithmetic-004`, with no new failure anywhere and XSLT 2.0 unmoved at 6,190/11. |
 | `transform-001`, `transform-005`–`transform-009` | **Fixed** | Six `fn:transform` cases, four distinct causes. (1) `transform-001`: a `stylesheet-location` naming a file that is not there was reported as FOXT0001. FOXT0001 is the code for a transformation the processor cannot *run* — every QT3 case that asserts it does so for an unavailable vendor named in `requested-properties` (“thrown if Saxon is not available”) — while a location that cannot be retrieved identifies no stylesheet, which is FOXT0002. `fn-transform-err-1`'s own modification note (“based on careful reading of the spec”) settles it. (2) `transform-008`: an option written as element content, `<xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>`, arrives as a *text node*, and `transformString` refused it with XPTY0004 on a map that says exactly what a string-valued one says; nodes are now atomized to their string value. (3) `transform-009`: an `xsl:result-document` with **no href** is the principal output — §24.3 changes the current output URI only for an instruction *with* an href — but `transformResultMap` keyed it as a secondary under `""`, leaving `?output` holding the empty tree the stylesheet never wrote to, so the principal serialization came out blank. Same rule `cmd/go-xml` already applies. (4) `transform-005`–`007`: the `package-name` and `package-version` options were not read at all, so the options looked like they identified no stylesheet. They now resolve through the same `PackageResolver` the outer compilation was given, which `Stylesheet` retains for the purpose. Measured: 11,304 → 11,324 passing, 221 → 201 failing; XSLT 2.0 unmoved at 6,193/8 and QT3 unmoved. |
 | `transform-004` | **Not implementable without unpicking `Compile`'s global state** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value; that is a real refactor of shared machinery and out of scope for an error-code fix. |
 
-**XSLT 3.0 ceiling: 11,348 / 11,525 = 98.46%** — what passes now. Of the 177
-remaining, **150 want an `XTSE3430`** that only the §19.8 posture-and-sweep
-analysis can emit, and §19.1 says a non-streaming processor "is not required to
-assess whether constructs are guaranteed-streamable" — so they are not defects
-this engine is obliged to close. The reachable ceiling without implementing
-streamability analysis is therefore **11,498 of 11,525**, or 99.77% — the 177
-less the 150. It is not an approximation any more: the 150 were counted from
-the run rather than projected, and this figure read "about 11,496" when they
-were an estimate.
+**XSLT 3.0: 11,367 / 11,525 = 98.63%** — the §19.8 analysis now exists and its
+first 13 sections moved 19 cases. Of the 158 remaining, **118 want an
+`XTSE3430`** that only the unwritten rest of that analysis can emit, and §19.1 says a non-streaming
+processor "is not required to assess whether constructs are guaranteed-streamable" —
+so they were never defects this engine was obliged to close. The reachable
+ceiling without implementing streamability analysis is **11,498 of 11,525**, or
+99.77% — the 177 less the 150.
+
+**A foundation for that analysis now exists**, and closes 18 of the 150. See
+*The §19.8 streamability analysis* below for what it covers and what it does
+not; the short version is that the lattice is complete and the construct
+coverage is not, so most of the 150 still want work rather than a decision.
+
+### The §19.8 streamability analysis
+
+The §19 streamability rules are a type-inference pass: every construct carries
+a **posture** (where the nodes it returns sit relative to the streamed input —
+`grounded`, `striding`, `climbing`, `crawling`, `roaming`) and a **sweep** (how
+far evaluation moves the input position — `motionless`, `consuming`,
+`free-ranging`), each computed from its operands and from the **operand usage**
+that says how the construct uses them (`absorption`, `inspection`,
+`transmission`, `navigation`). A construct is guaranteed-streamable exactly
+when it is not free-ranging; `XTSE3430` is the refusal of one that is.
+
+**What exists.** The lattice — the part every construct shares — is complete
+and tested on its own, in `xslt/streamlattice.go` and
+`xslt/streamlattice_test.go`:
+
+| §19 section | Status |
+|---|---|
+| 19.3 combined posture of a choice operand group | complete |
+| 19.4 operand roles, all four usages | complete |
+| 19.5 posture, 19.7 sweep | complete |
+| 19.6 context posture | the `xsl:stream` / streamable `xsl:source-document` clauses only |
+| 19.8.1 general streamability rules | complete, including the absorption downgrade, the choice-group and same-posture escapes, the higher-order rule and the singleton-builtin rule |
+| 19.8.8.3 `if` expressions | complete |
+| 19.8.8.7 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
+| 19.8.8.8 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
+| 19.8.8.9 filter expressions | the motionless-predicate clause; not the numeric-predicate narrowing |
+| 19.8.8.11 variable references | the grounded case (correct wherever no streamable stylesheet function is declared) |
+| 19.8.8.12 context item expression | complete |
+| 19.8.9 built-in function operand usages | the proforma table, ~150 signatures |
+
+Every rule the lattice implements is tested against the worked examples §19.8.2
+gives, cited case by case, so a reader can check the tests against the spec
+rather than against the code they test.
+
+**What does not exist.** Of the 86 rule sections in §19, roughly 13 are covered
+— call it 15%, and the covered ones are deliberately the shared ones rather
+than the numerous ones. Absent entirely:
+
+- **All 43 XSLT instruction rules of §19.8.6.** `xsl:for-each`, `xsl:iterate`,
+  `xsl:for-each-group`, `xsl:fork`, `xsl:merge`, `xsl:apply-templates` and the
+  rest each have their own operand roles and their own context-posture
+  contribution.
+- **Streamable stylesheet functions (§19.8.5) and accumulators (§19.8.4).**
+  These are what the `su-*` test families exercise, and they are the largest
+  single block of the remaining cases.
+- **§19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and quantified
+  expressions, §19.8.8.6 simple mapping (`!`), §19.8.8.10 dynamic calls,
+  §19.8.8.14 inline functions, §19.8.8.15 map expressions.**
+- **The 18 per-function sections of §19.8.9** that do not follow the general
+  rules: `fn:current`, `fn:last`, `fn:position`, `fn:root`, `fn:reverse`,
+  `fn:innermost`, `fn:outermost`, `fn:fold-right`, `fn:function-lookup`, the
+  accumulator pair and the merge pair.
+- **Static type inference.** §19.2's U-types are approximated syntactically.
+  Where the approximation is uncertain it answers in the direction that widens
+  the sweep, which loses precision and never gains a false rejection.
+
+**Why a partial analysis is safe.** A missing rule and a wrong rule fail in
+opposite directions, and only one of them is tolerable. A missing `XTSE3430`
+leaves a test failing; a spurious one rejects a valid stylesheet at compile
+time, where the user has no way around it. The analysis therefore reports
+whether it *modelled* every construct it met, separately from what it
+concluded, and `xslt/streamcheck.go` raises `XTSE3430` only when the answer was
+derived entirely from modelled constructs. An unmodelled construct — a union
+expression, a `for` expression, a map constructor, a stylesheet function with a
+streamability category — is "no opinion", not a failure. The check is further
+confined to `xsl:sequence`, `xsl:copy-of` and `xsl:value-of` whose select is
+evaluated with the streamable container's own focus, and it refuses to descend
+past any instruction that changes the focus, because assessing an inner
+expression against the wrong context posture is exactly how a spurious error
+would arise.
+
+**Measured.** Against the 359 `strm` cases that name a stylesheet, checked
+directly against the catalog's own expectations: 18 cases want `XTSE3430` and
+now get it, 92 want it and still do not, **0 cases that do not want it now get
+it**. The whole 456-stylesheet streaming corpus compiles with no spurious
+refusal. XSLT 2.0 is unmoved at 6,193 / 8, which the structure guarantees as
+well as the measurement — no XSLT 2.0 stylesheet in the suite uses a streamable
+container at all.
+
+**What completing it would take.** The remaining work is wide rather than
+deep: the lattice is the part that had to be right, and the per-construct rules
+are mostly mechanical transcription against it. The 43 instruction rules are
+the bulk, and `xsl:for-each-group`, `xsl:iterate`, `xsl:fork` and `xsl:merge`
+are the four that are genuinely intricate, because each defines its own
+context-posture contribution rather than deferring to the general rules.
+Streamable stylesheet functions need the streaming-parameter posture table of
+§19.8.8.11 and a per-function streamability category, and would unlock the
+`su-*` families. A realistic estimate for the remainder is several times the
+work already done, and it should be taken construct family by construct family,
+each with the negative arm the existing tests establish as the pattern.
 
 `base-uri-052` left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
@@ -921,7 +1018,7 @@ the rest reads as though it were the whole story:
 | Reason | Cases | Where |
 |---|---:|---|
 | **Requires the §19.8 streamability analysis** | 150 | XSLT 3.0. They want an `XTSE3430` refusing a stylesheet as non-streamable, and 136 of them read "the transform succeeded" — the engine computes the right answer and the test wants it to decline. §19.1: a processor that does not stream "is not required to assess whether constructs are guaranteed-streamable". |
-| **Schema-aware features deliberately left** | 203 | QT3 XQuery 3.1, all of them cases `import schema` newly admitted rather than cases it broke. Five features, catalogued in [todo.md](todo.md) §1.5: typed input documents, constructor functions for schema-defined simple types, impure and restricted unions, annotation propagation through a constructor, and substitution groups over validated content. |
+| **Schema-aware features still left** | 113 | QT3 XQuery 3.1, all of them cases `import schema` newly admitted rather than cases it broke. Three features, catalogued in [todo.md](todo.md) §1.5: typed input documents, annotation propagation through a constructor, and substitution groups over validated content. Two more — constructor functions for schema-defined simple types, and casting to an impure or restricted union — have since been implemented, which took this row 203 → 113. |
 
 The remaining 96 are the ones this file reads case by case:
 
@@ -935,7 +1032,7 @@ The remaining 96 are the ones this file reads case by case:
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
 | **Needs a network fetch** | 1 | `evaluate-048` wants `https://www.saxonica.com/welcome/welcome.xml`. `unparsed-text-2003` was here on both targets and has left the denominator; `package-version-011` was here and is fixed — no fetch was ever needed, since `doc('')` names the containing module. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
-| **Feature deliberately not implemented** | 353 | The two rows at the head of this section: 150 XSLT 3.0 cases wanting the §19.8 streamability analysis and 203 XQuery cases wanting the five schema-aware features of [todo.md](todo.md) §1.5. This row read **0** when the streaming gate was still excluding its cases from the denominator and `import schema` had not yet admitted the XQuery ones — the row was empty because the cases were not being counted, which is the failure mode this whole file exists to prevent. `streamable-141` was its last individually-named entry and is **fixed**: §3.9.1 states its rule "notwithstanding anything stated in 19 Streamability", so it never needed the analysis its row claimed. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
+| **Feature deliberately not implemented** | 263 | The two rows at the head of this section: 150 XSLT 3.0 cases wanting the §19.8 streamability analysis and 113 XQuery cases wanting the three remaining schema-aware features of [todo.md](todo.md) §1.5. This row read **0** when the streaming gate was still excluding its cases from the denominator and `import schema` had not yet admitted the XQuery ones — the row was empty because the cases were not being counted, which is the failure mode this whole file exists to prevent. `streamable-141` was its last individually-named entry and is **fixed**: §3.9.1 states its rule "notwithstanding anything stated in 19 Streamability", so it never needed the analysis its row claimed. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
 | **Nested compile deadlocks on package-level state** | 1 | `transform-004` calls `fn:transform` from a `static="yes"` variable, so it must run during the static phase. Registering the function there is correct by §9.7 and two lines; it deadlocks on the non-reentrant `compileMu` guarding `Compile`'s package-level state. Architecture debt with a known change and a stated cost. |
 | **Undiagnosed** | 1 | `evaluate-046` reports `XTDE3400: accumulator static-vars is defined circularly` where the case expects success. Not read. |
 | **Costs more than it gains** | 2 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (a rule separating it from `use-package-291`–`294` exists but rests on quoting, which neither grammar mentions, and would have exactly one instance in the suite). `use-package-003` was here and is now **fixed**: the narrow form of the change its row called for — carrying the declaring package's visibility on the function component and checking it at the call site — turned out to be contained, and gained the case with no regression. |
@@ -956,7 +1053,7 @@ defect, a W3C-challenged expectation, a vendor extension, or a Unicode snapshot
 that has since moved. The twenty-three cases the audit found to be work have
 all since been settled — fixed, or returned to their original verdict with
 better evidence — which is why the *Fixable* and *Open* columns are zero. What
-replaced them is not a backlog either: the 353 cases in the two rows above are
+replaced them is not a backlog either: the 263 cases in the two rows above are
 two named features, one of which the spec explicitly does not require of a
 non-streaming processor and one of which is deliberately deferred with its
 scope written down. The honest summary is "here is what is left, here are the

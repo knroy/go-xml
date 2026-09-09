@@ -72,11 +72,18 @@ type parser struct {
 	opts Options
 
 	// schemaImports accumulates the prolog's "import schema" declarations.
-	// They are followed by loadSchemas at the end of the prolog and BEFORE
-	// the query body is parsed, unlike moduleImports, which are followed
-	// after it: a schema contributes type names, which the body's parser
-	// resolves as it reads. See schemaimport.go.
+	// Each is followed by loadSchemaImport WHERE IT IS READ, unlike
+	// moduleImports, which are followed after the body: a schema contributes
+	// type names, and the parser resolves a type name as it reaches it -- so
+	// the prolog's own function signatures need the schema installed by the
+	// time they are parsed, not merely by the time the body is.
+	// See schemaimport.go.
 	schemaImports []schemaImport
+
+	// schemaLoader is built on the first "import schema" and kept for the
+	// whole prolog, so that each import consults the resolver once and the
+	// components fold into one merged schema. nil for a query with no import.
+	schemaLoader *schemaLoader
 
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration

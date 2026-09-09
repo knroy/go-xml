@@ -1193,6 +1193,16 @@ func checkCastTarget(st SequenceType) error {
 	if st.SchemaListType {
 		return nil
 	}
+	// An impure or restricted union is a legal cast target too. XPath 3.1
+	// 3.14.2 admits any simple type in the in-scope schema types as a
+	// SingleType; the purity rule of 2.5 governs ItemType positions --
+	// "instance of", "treat as", a function signature -- and not this one,
+	// because a cast has the lexical form in hand and can put the union's own
+	// facets to the schema. cbcl-castable-impure-001 asserts
+	// "xs:date('2001-01-01') castable as s:impureUnionType" is true.
+	if st.SchemaSimpleType {
+		return nil
+	}
 	if !st.HasAtomicType {
 		return xdm.Errorf("XPST0003",
 			"a cast target must be an atomic type, got %s", st)

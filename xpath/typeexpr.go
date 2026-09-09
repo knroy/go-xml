@@ -434,6 +434,52 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		return out, nil
 	}
 
+	// A cast to an impure or restricted union is decided entirely by the
+	// schema: ValidateValue tries the member types and then applies the
+	// union's own facets, which is exactly the validity question the cast
+	// asks. The result keeps the operand's own atomic type, because a union
+	// contributes no value space of its own -- a cast to it neither
+	// canonicalises nor re-types. See SchemaSimpleType.
+	if e.Type.SchemaSimpleType {
+		src := atoms[0].(*xdm.Atomic)
+		var verr error
+		if e.Type.SchemaValueValid != nil {
+			verr = e.Type.SchemaValueValid(src.String())
+		}
+		// A cast to a LIST member is defined from xs:string and
+		// xs:untypedAtomic only (F&O 3.0 18.3), so a source that is neither
+		// may reach the union's ATOMIC members and nothing else. Validation
+		// alone cannot see the difference -- it is handed a lexical form and
+		// "1" is a valid one-item list of decimals whatever produced it --
+		// so the source's own type is what decides.
+		//
+		// cbcl-castable-impure-009 is exactly this: xs:decimal("1") against a
+		// union of xs:date and a list of xs:decimal is FALSE, where the same
+		// lexical form as an xs:untypedAtomic (-005) is true.
+		if verr == nil && !isStringLike(src.Type) && src.Type != xdm.TypeUntypedAtomic {
+			reachable := false
+			for _, m := range e.Type.SchemaSimpleAtomicMembers {
+				if _, err := CastAtomic(src, m); err == nil {
+					reachable = true
+					break
+				}
+			}
+			if !reachable {
+				verr = fmt.Errorf(
+					"a %s reaches no atomic member, and a cast to a list "+
+						"member is defined only from a string", src.Type)
+			}
+		}
+		if e.Castable {
+			return xdm.One(xdm.NewBoolean(verr == nil)), nil
+		}
+		if verr != nil {
+			return nil, xdm.Errorf("FORG0001",
+				"%q is not castable to %s: %v", src.String(), e.Type, verr)
+		}
+		return xdm.One(src), nil
+	}
+
 	if !e.Type.HasAtomicType {
 		return nil, fmt.Errorf("XPST0080: cast target must be an atomic type, got %s", e.Type)
 	}
@@ -673,7 +719,17 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 	// An item that is already an instance of one of the members needs no
 	// conversion. xs:untypedAtomic is excluded: it is the type a cast is
 	// there to resolve, and it is never itself a member.
-	if a.Type != xdm.TypeUntypedAtomic {
+	//
+	// The shortcut is taken only when the schema has nothing further to say.
+	// A member may be a RESTRICTION whose facets the member's type code
+	// cannot express -- myUnionType2 is a union of xs:integer and a pattern-
+	// restricted xs:string -- and for such a union "already an xs:string" is
+	// not "already a member": the pattern still has to hold. Returning early
+	// there made "'AD123456789' cast as s:myUnionType2" succeed where
+	// CastAs-UnionType-5a requires FORG0001. With SchemaValueValid present
+	// the loop below reaches the same answer for a value that IS valid,
+	// because CastAtomic to its own type is the identity.
+	if a.Type != xdm.TypeUntypedAtomic && st.SchemaValueValid == nil {
 		for _, m := range st.SchemaUnionMembers {
 			if a.Type == m {
 				return a, nil
@@ -689,12 +745,17 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 		if err != nil {
 			continue
 		}
-		// The built-in cast settles the lexical form of the member. The
-		// union's *declared* validity is a further question when the member
-		// is a restriction carrying facets the type code cannot express, so
-		// the schema is asked as well when it is reachable.
+		// The built-in cast settles the lexical form of the member, and it is
+		// THAT form the schema is asked about -- not the operand's. A cast
+		// converts a value, so "123.12 cast as s:myUnionType1" over a union of
+		// xs:integer and xs:date is the integer 123: the decimal-to-integer
+		// cast truncates, and 123 is what the union then has to admit.
+		// Validating the operand's own "123.12" asked whether the SOURCE was
+		// already in the member's lexical space, which is the question
+		// validation asks and not the one a cast asks -- CastAs-UnionType-3
+		// expects 123 where that reading raised FORG0001.
 		if st.SchemaValueValid != nil {
-			if st.SchemaValueValid(lex) != nil {
+			if st.SchemaValueValid(out.String()) != nil {
 				continue
 			}
 		}

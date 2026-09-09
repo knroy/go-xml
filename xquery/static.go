@@ -72,7 +72,8 @@ type staticContext struct {
 	// It is a single schema rather than one per import because §2.1.1 makes
 	// the in-scope schema definitions ONE set: two imports of different
 	// namespaces contribute to the same table and a name is looked up once.
-	// See loadSchemas, which installs it before the query body is parsed.
+	// See parser.loadSchemaImport, which installs each import where the
+	// declaration is read and so before anything below it is parsed.
 	//
 	// It is shared by child() rather than copied, deliberately: a schema
 	// import is a module-wide declaration and there is no constructor scope

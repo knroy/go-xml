@@ -12,12 +12,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.33% — 30,143 of 30,346 in scope (203 failing) |
+| XQuery 3.1 | 99.63% — 30,233 of 30,346 in scope (113 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
-| XSLT 3.0 | 98.46% — 11,348 of 11,525 in scope (177 failing); 150 of those 177 need the §19.8 streamability analysis |
+| XSLT 3.0 | 98.63% — 11,367 of 11,525 in scope (158 failing); 118 of those 158 need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,685 `func Test` declarations, clean under `-race` |
+| Tests | 1,722 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -323,12 +323,77 @@ actually need typed *input*:
 | XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
 | XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
 | XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
-| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,143 | 12 → 203 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,233 | 12 → 113 |
 
-416 cases came into scope at XQuery and 225 more pass. The 191 added failures
+416 cases came into scope at XQuery and 315 more pass. The 101 added failures
 are a real tail and are listed below rather than hidden: a lift that admits
 failing cases has to be visible, which is why the in-scope count is quoted
-first. `prod-SchemaImport` itself is 44 of 73.
+first. `prod-SchemaImport` itself is 15 of 73.
+
+**The cast tail, closed.** Two of the bullets below were worked and are gone;
+`prod-CastableExpr` fell 49 → 8 and `prod-CastExpr.schema` 47 → 37, taking the
+XQuery lane 30,143 → 30,233 with every other lane unmoved. Five root causes,
+all of them in how a *schema-defined* type reaches a cast:
+
+* **The purity rule was applied to the wrong question.** §2.5 admits only a
+  *pure* union as an **ItemType**, because `instance of` and a function
+  signature must answer from a value's own annotation and a member of a
+  faceted union does not necessarily satisfy that union's facets — the XSD 1.0
+  error XSD 1.1 §3.16.6.3 corrected. But §3.14.2 admits **any** simple type in
+  the in-scope schema types as a **cast target**, and a cast has the lexical
+  form in hand, so the union's own facets can actually be checked. The rule was
+  gating both, so `castable as s:impureUnionType` raised `XPST0003` where
+  `cbcl-castable-impure-001` asserts `true`. The two contexts are now separate:
+  `SchemaSimpleType` marks a cast target the schema decides, and the ItemType
+  positions still refuse an impure union exactly as before. **This is the entry
+  that predicted `xslt` refuses these identically and called it a joint gap —
+  it was wrong.** The suite's own assertion is `<assert-true/>`, not an error,
+  and re-reading §3.14.2 against §2.5 shows why: `xslt`'s refusal is correct
+  where it stands (an ItemType) and was never a statement about casts.
+* **A schema was installed too late for the prolog's own declarations.** The
+  imports were followed at the *end* of the prolog. That is early enough for
+  the query body but not for a function signature, which is parsed where it
+  stands — so `declare function local:f($a as s:dateOrDateTime)` one line below
+  the import that defines it was `XPST0051`. Each import is now followed where
+  it is read. §4.11 requires imports to precede variable and function
+  declarations, so no declaration can see an import it should not.
+* **A cast to a union validated the operand instead of the result.** A cast
+  *converts*; validation asks whether a value is already in a type's lexical
+  space. `castToUnion` put the operand's `"123.12"` to the schema after the
+  member cast had already produced `"123"`, so `123.12 cast as s:myUnionType1`
+  raised where `CastAs-UnionType-3` expects the integer `123`.
+* **A member's own facets were skipped by a shortcut.** An item whose type code
+  already matched a member's was returned untouched — right only when the
+  schema has nothing further to say. A member that is a *restriction* carries
+  facets its type code cannot express, so `"AD123456789"` (a fine `xs:string`)
+  cast to a union over a pattern-restricted `xs:string` succeeded where
+  `CastAs-UnionType-5a` requires `FORG0001`.
+* **A list member is reachable only from a string.** F&O §18.3 defines the cast
+  to a list type from `xs:string` and `xs:untypedAtomic` only, so a source that
+  is neither may reach a union's *atomic* members and no others. Validation
+  alone cannot see this — it is handed a lexical form, and `"1"` is a perfectly
+  good one-item list of decimals whatever produced it. This is the difference
+  between `cbcl-castable-impure-005` (`xs:untypedAtomic("1 2 3")`, true) and
+  `-009` (`xs:decimal("1")`, false) against the *same* union, and without it the
+  first fix above was too permissive in exactly those two cases.
+
+**What is left in the cast sets, and why it is separate work.** The 45 that
+remain are not the same feature:
+
+* `prod-CastExpr.schema`, 37. Almost all of it is one thing: a cast to a **list
+  type** must yield items *annotated with the list's item type*, so
+  `"a b c" cast as s:unionOfLists` has to be an `xs:IDREF*` and not three
+  strings. That is annotation propagation — the fourth bullet below — reached
+  from the cast side rather than from `validate`. The rest wants list and union
+  constructors as first-class **function items** (`#1`, `?`,
+  `fn:function-lookup`) for namespace-sensitive types, which is a higher-order
+  question rather than a schema one.
+* `prod-CastableExpr`, 8. Six are `CastableAs653`–`658`: a pattern facet must
+  match a value's **canonical** representation rather than the result of
+  `string()`, which is a facet-application rule inside `xsd` and applies to
+  validation as much as to casting. The other two cast a value *back* to the
+  union it was constructed as, which needs the constructor's result to carry
+  the union's annotation — again the fourth bullet.
 
 **What is still missing, and it is not one thing.** Each of these is a separate
 small feature rather than a bug in the import:
@@ -338,15 +403,15 @@ small feature rather than a bug in the import:
   `schemaValidation` and `typedData` dependencies name, and the harness still
   skips on them; `prod-CastExpr.schema`'s `(a, b, c) is not an instance of
   xs:IDREF*` is the shape it takes.
-* **Constructor functions for schema types.** `s:unionOfLists(...)` is
-  `XPST0017`: an imported simple type does not become a callable constructor.
-  Roughly 20 cases.
-* **Impure and restricted unions.** §2.5's purity rule refuses a union
-  carrying facets or holding a list type, so `castable as s:impureUnionType`
-  raises rather than answering. `xslt` refuses these identically — the rule is
-  shared and deliberate (XSD 1.1 §3.16.6.3 fixed the 1.0 error that being
-  permissive here would reintroduce) — so this is a joint gap, not a new one.
-  Roughly 40 cases.
+* ~~**Constructor functions for schema types.**~~ **Done.** An imported simple
+  type is now a callable constructor, impure union and list type included,
+  because the constructor is *defined* as a cast and a cast to any simple type
+  in the in-scope schema types is legal.
+* ~~**Impure and restricted unions.**~~ **Done, and the entry's reasoning was
+  wrong.** See "The cast tail, closed" above: the purity rule governs ItemType
+  positions, not cast targets, and the suite asserts `true` rather than an
+  error. `xslt`'s identical refusal is correct where it stands and was never a
+  claim about casts, so this was never a joint gap.
 * **Annotation propagation.** A validated element that is then copied into a
   constructor loses the annotation the assessment stamped, so
   `qischema007`-style cases that validate and then wrap fail.

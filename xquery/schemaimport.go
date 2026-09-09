@@ -408,28 +408,36 @@ func mergeXSDSchema(dst, src *xsd.Schema) {
 	}
 }
 
-// loadSchemas follows every "import schema" in one prolog and installs the
-// result in the static context.
+// loadSchemaImport follows ONE "import schema" and installs what it finds in
+// the static context, at the point in the prolog where the declaration was
+// read.
 //
-// It runs at the END of the prolog and BEFORE the query body is parsed, which
-// is the ordering the whole feature depends on -- see the note at the top of
-// this file. The static context the parser is already holding is the one that
-// gets the schema, so every type name the body then resolves is decided
-// against it.
-func loadSchemas(imports []schemaImport, opts Options, sc *staticContext,
-	base string) error {
-	if len(imports) == 0 {
-		// The common case costs nothing: a query with no schema import never
-		// builds a loader and never consults a resolver, so the bound and the
-		// closed-by-default resolver are invisible to it.
-		return nil
+// The ordering is the whole feature. A type name resolves against the static
+// context at the moment the parser reads it, so a schema installed later than
+// the name is written is a schema the name cannot see. Installing at the end
+// of the prolog was enough for the query BODY, but not for the prolog's own
+// declarations: a function signature is parsed where it stands, so
+//
+//	import schema namespace s="...";
+//	declare function local:f($a as s:dateOrDateTime) { ... };
+//
+// reported XPST0051 for a type the very previous line had imported --
+// Castable-UnionType-36 and its neighbours. §4.11 requires imports to precede
+// variable and function declarations in the prolog, so loading eagerly can
+// never see an import that a declaration ahead of it should not have had.
+//
+// One loader is kept for the whole prolog rather than rebuilt per import, so
+// each import consults the resolver exactly once. The merged schema is
+// re-installed after every import because the loader folds into the same
+// *xsd.Schema, and a query with no import never builds a loader at all -- the
+// bound and the closed-by-default resolver stay invisible to it.
+func (p *parser) loadSchemaImport(imp schemaImport, base string) error {
+	if p.schemaLoader == nil {
+		p.schemaLoader = newSchemaLoader(p.opts)
 	}
-	l := newSchemaLoader(opts)
-	for _, imp := range imports {
-		if err := l.load(imp, base); err != nil {
-			return err
-		}
+	if err := p.schemaLoader.load(imp, base); err != nil {
+		return err
 	}
-	sc.schema = l.merged
+	p.sc.schema = p.schemaLoader.merged
 	return nil
 }

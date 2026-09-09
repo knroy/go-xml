@@ -263,3 +263,75 @@ func (sc *staticContext) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode,
 	}
 	return members, true
 }
+
+// SchemaUnionAtomicMemberTypes implements xpath.SchemaImpureUnionTypes.
+//
+// It is SchemaUnionMemberTypes without the purity gate and without the list
+// members: the question a CAST asks is which members a source value may be
+// converted into, not which members a value may stand in for. A union with a
+// list member is impure and so answers nothing to the ItemType question, but a
+// cast to it from an xs:date still has to see the xs:date member --
+// cbcl-castable-impure-001. The list member is skipped rather than refusing
+// the whole union, because a cast to a list type is defined only from a
+// string-like source, and the caller applies that rule.
+//
+// A union derived by RESTRICTION carries its base's members, which is how
+// s:restrictedUnion reaches the four dates s:approximateDate declares.
+func (sc *staticContext) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if sc.schema == nil {
+		return nil, false
+	}
+	t, ok := sc.schema.Types[name]
+	if !ok {
+		return nil, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok {
+		return nil, false
+	}
+	// A restriction of a union is itself of variety union in XSD's model, but
+	// its own MemberTypes may be empty -- the members come from the base. Walk
+	// down to the nearest ancestor that declares them.
+	for st != nil && st.Variety == xsd.VarietyUnion && len(st.MemberTypes) == 0 {
+		base, ok := st.Base.(*xsd.SimpleType)
+		if !ok || base == st {
+			break
+		}
+		st = base
+	}
+	if st == nil || st.Variety != xsd.VarietyUnion {
+		return nil, false
+	}
+	seen := map[*xsd.SimpleType]bool{}
+	var out []xdm.TypeCode
+	var walk func(u *xsd.SimpleType)
+	walk = func(u *xsd.SimpleType) {
+		if u == nil || seen[u] {
+			return
+		}
+		seen[u] = true
+		for _, m := range u.MemberTypes {
+			if m == nil {
+				continue
+			}
+			switch m.Variety {
+			case xsd.VarietyUnion:
+				walk(m)
+			case xsd.VarietyAtomic:
+				if code, isAtomic, ok := sc.LookupSchemaType(m.Name); ok && isAtomic {
+					out = append(out, code)
+					continue
+				}
+				if c, found := xpath.BuiltinAtomicTypeCode(m.Name.Local); found &&
+					m.Name.URI == xsd.NSSchema {
+					out = append(out, c)
+				}
+			}
+			// VarietyList contributes nothing: a cast to a list member is
+			// reachable only from a string-like source, which the caller
+			// decides without needing the member named here.
+		}
+	}
+	walk(st)
+	return out, true
+}

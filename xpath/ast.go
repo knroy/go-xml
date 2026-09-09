@@ -491,6 +491,46 @@ type SequenceType struct {
 	// Castability does not depend on it -- the schema decides that through
 	// SchemaValueValid -- but the cast's result sequence does.
 	SchemaListItemType xdm.TypeCode
+
+	// SchemaSimpleType marks a named schema simple type that is a legal cast
+	// target but has no shape any of the fields above can describe: an
+	// *impure* union -- one carrying facets, or one holding a list type
+	// anywhere in its transitive membership -- and a union derived by
+	// restriction.
+	//
+	// The distinction from SchemaUnionMembers is which question is being
+	// asked, not which types exist. XPath 3.1 2.5 admits only a *pure* union
+	// as an ItemType, because "instance of" has to answer from a value's own
+	// annotation and a faceted union's members do not necessarily satisfy its
+	// facets -- the XSD 1.0 error 1.1 3.16.6.3 corrected. But 3.14.2 admits
+	// any simple type in the in-scope schema types as a cast target, and a
+	// cast has a lexical form in hand to validate, so the objection does not
+	// arise: castability is the schema's own ValidateValue answer.
+	// cbcl-castable-impure-001 asserts that
+	// "xs:date('2001-01-01') castable as s:impureUnionType" is true, not an
+	// error, and the purity rule still governs every ItemType position.
+	//
+	// SchemaValueValid is what decides a value; this field only says that the
+	// name denotes such a type, so the atomic-target rule lets it through.
+	SchemaSimpleType bool
+
+	// SchemaSimpleAtomicMembers are the built-in atomic types an impure union
+	// admits directly, ignoring any list member.
+	//
+	// It is what separates cbcl-castable-impure-001 from -009. impureUnionType
+	// is a union of xs:date and a list of xs:decimal, and the suite asks for
+	// true from an xs:date and FALSE from an xs:decimal -- even though "1" is
+	// a perfectly good one-item list of decimals. The difference is the SOURCE
+	// type: F&O defines a cast to a list type from xs:string and
+	// xs:untypedAtomic only, so a non-string source can reach a union's ATOMIC
+	// members and nothing else. A string-like source may reach every member,
+	// which is why "1 2 3" as an xs:untypedAtomic is castable (-005) and the
+	// same value already typed as the union is not (-010).
+	//
+	// nil when the type has no atomic member, which refuses every non-string
+	// source -- the right answer for a union over list types alone.
+	SchemaSimpleAtomicMembers []xdm.TypeCode
+
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string
 }
