@@ -23,6 +23,7 @@ package xslt
 // compile time, where the user has no way around it.
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
@@ -687,15 +688,24 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		ops = append(ops, a.withParamOperands(el, nil)...)
 		return combine(ops, false)
 
-	case "stream":
-		// §19.8.4.35. The document the instruction opens is assessed
-		// separately (§18.1); what this rule measures is the effect of the
-		// instruction on the construct that contains it. The two rejecting
-		// clauses concern current-group() and current-merge-group() calls
-		// whose owning instruction is an ancestor of the xsl:stream, which
-		// the analysis below does not distinguish from any other call on
-		// them; both are unmodelled, so a body mentioning either stays
-		// unknown rather than being passed as streamable.
+	case "stream", "source-document":
+		// §19.8.4.35. xsl:source-document is the Recommendation's name for
+		// the instruction this Last Call draft calls xsl:stream; the test
+		// set uses the later name throughout, and the rule is the same one.
+		//
+		// The document the instruction opens is assessed separately (§18.1);
+		// what this rule measures is the effect of the instruction on the
+		// construct that contains it. That separation is the whole point of
+		// the rule: whatever the contained sequence constructor does to the
+		// stream it opens, it does not read the stream of the construct that
+		// encloses it, so it is grounded there.
+		//
+		// The two rejecting clauses concern current-group() and
+		// current-merge-group() calls whose owning instruction is an ancestor
+		// of the instruction, which the analysis below does not distinguish
+		// from any other call on them; both are unmodelled, so a body
+		// mentioning either stays unknown rather than being passed as
+		// streamable.
 		if bodyCallsAny(el, "current-group", "current-merge-group") {
 			return a.unknown()
 		}
@@ -705,9 +715,9 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		return props{postureGrounded, href.sweep}
 
 	default:
-		// xsl:source-document, xsl:where-populated, xsl:on-empty,
-		// xsl:on-non-empty and the declarations. Each needs a rule not
-		// written here; see the coverage note in docs/conformance-gaps.md.
+		// xsl:where-populated, xsl:on-empty, xsl:on-non-empty and the
+		// declarations. Each needs a rule not written here; see the coverage
+		// note in docs/conformance-gaps.md.
 		return a.unknown()
 	}
 }
@@ -1771,7 +1781,15 @@ func (a *instrAnalyzer) merge(el *xdm.Node) props {
 			continue
 		}
 		forEachItem := c.Attr("", "for-each-item")
+		// for-each-source is the Recommendation's name for the attribute
+		// this draft calls for-each-stream; the test set writes the later
+		// name throughout, and the rest of the compiler reads it (merge.go).
+		// Reading only the draft's name made every streamed merge source
+		// look like the select-only case below.
 		forEachStream := c.Attr("", "for-each-stream")
+		if forEachStream == nil {
+			forEachStream = c.Attr("", "for-each-source")
+		}
 		for _, at := range []*xdm.Node{forEachItem, forEachStream} {
 			if at == nil {
 				continue
@@ -1793,6 +1811,93 @@ func (a *instrAnalyzer) merge(el *xdm.Node) props {
 		}
 	}
 	return groundedMotionless
+}
+
+// checkStreamableMergeSources raises XTSE3430 for an xsl:merge-source that
+// asks to be streamed but is not guaranteed-streamable under §15.4.
+//
+// This is a different rule from §19.8.4.25, and it has to be: §19.8.4.25
+// measures only "the (not very interesting) impact of the xsl:merge
+// instruction on the streamability of its containing template rule", and its
+// verdict is grounded and motionless for every merge whose sources are
+// anchored -- which says nothing about whether each source can itself be read
+// as a stream. §15.4 is the rule that does, and it lists four conditions an
+// xsl:merge-source must satisfy to be guaranteed-streamable:
+//
+//	the actual or defaulted attribute value streamable="yes";
+//	the for-each-stream attribute is present;
+//	the expression in the select attribute has striding posture;
+//	sort-before-merge is absent or takes its default value of no.
+//
+// The first two select which sources are in scope; the last two are what can
+// fail. A source that does not ask to be streamed is not checked at all, so
+// this cannot reject a stylesheet that never claimed streaming.
+//
+// The select expression is assessed with a striding context posture, because
+// the node it is rooted at is the document the source opens -- §19.6 gives
+// that posture to the body of any streamed document, and the merge source's
+// select is evaluated against exactly that root.
+func checkStreamableMergeSources(root *xdm.Node, sets map[xdm.QName][]*xdm.Node) error {
+	var err error
+	walkElements(root, func(el *xdm.Node) bool {
+		if err != nil {
+			return false
+		}
+		if !isXSL(el, "merge-source") {
+			return true
+		}
+		// for-each-source is the Recommendation's spelling of
+		// for-each-stream. Without one of them the source is not streamed,
+		// whatever streamable says.
+		stream := el.Attr("", "for-each-stream")
+		if stream == nil {
+			stream = el.Attr("", "for-each-source")
+		}
+		if stream == nil {
+			return true
+		}
+		// "This is also the default value when the for-each-stream
+		// attribute is present" -- so streamable defaults to yes here, and
+		// only an explicit no opts out.
+		if s := strings.TrimSpace(el.AttrValue("streamable")); s != "" && !isYes(s) {
+			return true
+		}
+		sat := el.Attr("", "select")
+		if sat == nil {
+			return true
+		}
+		// Condition 4. sort-before-merge="yes" re-orders the selected nodes,
+		// which cannot be done without holding them, so the source is not
+		// streamable however striding its select is.
+		if isYes(strings.TrimSpace(el.AttrValue("sort-before-merge"))) {
+			err = fmt.Errorf(
+				"xsl:merge-source is streamed but specifies sort-before-merge=\"yes\", "+
+					"so it is not guaranteed-streamable (XTSE3430)")
+			return false
+		}
+		// Condition 3. Only a striding select walks the opened document
+		// once; a crawling one (log//record) revisits descendants, and a
+		// grounded or climbing one is not reading the stream in order.
+		a := &instrAnalyzer{
+			ctxPosture:        postureStriding,
+			ctxAllowsChildren: true,
+			known:             true,
+			attrSets:          sets,
+		}
+		p := a.exprProps(sat.Value, el)
+		if !a.known {
+			return true
+		}
+		if p.posture != postureStriding {
+			err = fmt.Errorf(
+				"the select expression of a streamed xsl:merge-source is %v, "+
+					"but §15.4 requires striding posture, so it is not "+
+					"guaranteed-streamable (XTSE3430)", p.posture)
+			return false
+		}
+		return true
+	})
+	return err
 }
 
 // childNamed returns the first XSLT child of el with the given local name.

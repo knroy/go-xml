@@ -357,16 +357,33 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 	// continue. So whenever a step roams, the prefix up to and including it
 	// is retried as a scanning expression, and the fold carries on from
 	// there.
+	//
+	// Whether the context item each step sees can have children. It starts as
+	// the analyzer's own context and is narrowed by every axis step, so that
+	// a non-step operand later in the path is assessed against the node the
+	// steps before it actually deliver.
+	curAllowsChildren := a.ctxAllowsChildren
+	if x.Root {
+		curAllowsChildren = true
+	}
 	for i, e := range x.Steps {
 		var next props
 		if st, ok := e.(*xpath.Step); ok {
 			next = a.step(st, cur.posture)
+			curAllowsChildren = stepAllowsChildren(st)
 		} else {
 			// A non-step operand in a path, as in "(a|b)/c". Assessed in
-			// the current posture like any other expression.
+			// the current posture like any other expression, and with the
+			// context item that the steps so far deliver: in "@nr/string()"
+			// the context of string() is an attribute, which has no
+			// children, so the absorption is downgraded to inspection and
+			// the step is motionless rather than consuming. Assuming
+			// children here made "chapter/(@nr/string(), @length/string())"
+			// two consuming operands and so roaming, which rejected
+			// streamable-031 -- a case the catalog expects to run.
 			inner := &analyzer{
 				ctxPosture:        cur.posture,
-				ctxAllowsChildren: true,
+				ctxAllowsChildren: curAllowsChildren,
 				known:             a.known,
 				funcs:             a.funcs,
 				streamingParam:    a.streamingParam,
@@ -375,6 +392,7 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				higherOrder:       a.higherOrder,
 			}
 			next = inner.expr(e)
+			curAllowsChildren = inner.allowsChildren(e)
 			a.known = a.known && inner.known
 		}
 		if !next.streamable() {
@@ -871,6 +889,24 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 		return a.allowsChildren(x.Base)
 	case *xpath.Literal:
 		return false
+	case *xpath.BinaryOp:
+		// §19.8.1 asks about the static type T of the whole operand, and for
+		// "|", "intersect" and "except" that type is bounded by the two
+		// operand types: every node the expression can return comes from one
+		// side or the other. So "@* except @length" delivers attributes only
+		// and allows no children, exactly as "@*" alone does.
+		//
+		// Without this, the union rule's deliberate widening to crawling
+		// (§19.8.8.4, "author | author/name") met an absorption usage that
+		// was never downgraded to inspection, and a crawling absorbing
+		// operand is charged free-ranging -- which rejected the
+		// "<xsl:copy-of select='@* except @length'/>" of streamable-046 and
+		// -063, both of which the catalog expects to run.
+		switch x.Op {
+		case "|", "union", "intersect", "except":
+			return a.allowsChildren(x.Left) || a.allowsChildren(x.Right)
+		}
+		return true
 	default:
 		return true
 	}

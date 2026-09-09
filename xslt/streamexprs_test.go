@@ -196,7 +196,14 @@ func TestAnalyzeArrayConstructor(t *testing.T) {
 		// The case from sx-square-array-B.xsl that this turns on: both
 		// members are attribute steps, which read nothing beyond the start
 		// tag, and the array is streamable.
-		{"[@DESC/string(), @CODE/string()]", props{postureGrounded, sweepConsuming},
+		//
+		// Motionless, not consuming: §19.8.1 downgrades an absorption to
+		// inspection when the operand's type cannot hold a node with
+		// children, and the context item of string() here is the attribute
+		// the step before it delivered. So neither member moves the stream
+		// at all -- a stronger statement than "one pass", and the reason
+		// this array would be streamable even outside the fork rule above.
+		{"[@DESC/string(), @CODE/string()]", props{postureGrounded, sweepMotionless},
 			"two attribute members do not make an array unstreamable"},
 	}
 	for _, c := range cases {

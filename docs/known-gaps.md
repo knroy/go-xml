@@ -40,7 +40,7 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 42 of 30,346; XSLT 3.0 has 96 of 11,518;
+failures of 6,201; XQuery 3.1 has 42 of 30,346; XSLT 3.0 has 75 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
 is an account of those 237 cases, or of a decision that produced some of them.
 
@@ -60,7 +60,7 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**74 of the 96 XSLT 3.0 failures**, and by far the largest single gap in the
+**53 of the 75 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice now exists — 13 of the spec's 86
 sections — but the rules built on it do not: all 43 XSLT instruction rules
 (§19.8.6), streamable stylesheet functions (§19.8.5) and accumulators (§19.8.4)
@@ -93,7 +93,7 @@ the caller nothing they can rely on. That is why nothing partial has been
 attempted here.
 
 **Note what it would and would not buy.** Completing it would move the 103
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.17% to about
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.35% to about
 99.80%. It would not make the engine stream, and it would not change the result
 of a single transform that currently succeeds — it would convert 103 correct
 answers into 103 refusals to answer. That is the conformant behaviour, and it

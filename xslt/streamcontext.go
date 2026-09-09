@@ -17,9 +17,14 @@ package xslt
 // So this file is a wiring job, deliberately: it finds the modes a stylesheet
 // declares streamable, finds the template rules in them, and hands each rule's
 // match pattern to the classifier that already exists. Nothing here
-// re-implements §19.8.10, and nothing here judges a rule's BODY -- that needs
-// the §19.8.4 instruction rules against a striding context posture, which is
-// separate work, and guessing at it is how a spurious XTSE3430 would arise.
+// re-implements §19.8.10.
+//
+// The same argument reaches a rule's BODY, which this file also assesses --
+// see checkStreamableModeBodies. Following xsl:apply-templates into the other
+// rules of a mode is not needed to do it: §19.6 makes a template rule of a
+// streamable mode a focus-setting container in its own right, so the body's
+// context posture is striding whatever dispatched to it, and each body is
+// judged alone under the §19.8.4 instruction rules.
 //
 // The same reach argument covers xsl:accumulator-rule: §18.2.8 condition 3
 // requires a streamable accumulator's rule patterns to be motionless, and
@@ -230,4 +235,73 @@ func hasBooleanStaticType(e xpath.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// checkStreamableModeBodies raises XTSE3430 for a template rule in a
+// streamable mode whose BODY is not guaranteed-streamable: §19.8.4's
+// instruction rules assessed against the striding context posture §19.6 gives
+// such a rule.
+//
+// The reach argument that kept bodies out of the analysis was that following
+// xsl:apply-templates into the other rules of a mode is not decidable. §19.6
+// makes that argument unnecessary rather than answering it. Its third clause
+// reads: "If the focus-setting container of C is a template rule whose mode is
+// declared with streamable='yes', then the context posture is striding." A
+// template rule is a focus-setting container in its own right, so its body's
+// context posture is fixed by the rule's own mode declaration -- not by which
+// apply-templates dispatched to it, nor by the posture of the expression that
+// did. Each rule body is therefore assessed independently, exactly as an
+// xsl:source-document body is. There is no fixed point to compute over a
+// mode's rules, and so no termination obligation to discharge.
+//
+// What an xsl:apply-templates INSIDE such a body contributes is its own
+// §19.8.4 rule, which reads the posture of its select expression and never the
+// bodies of the rules it might reach. That locality is what makes the set
+// decidable: "apply-templates select='.//section'" is free-ranging because
+// .//section descends, whatever the section rule then goes on to do.
+//
+// A rule whose @mode is "#all" is not assessed. templateModeNames excludes it,
+// because "#all" names every mode rather than any particular one, and a rule
+// written for every mode cannot be held to the streamability of one of them.
+//
+// The verdict is withheld unless the analysis fully modelled the body (known),
+// which is the guard the whole check rests on.
+func checkStreamableModeBodies(root *xdm.Node) error {
+	streamable := streamableModeNames(root)
+	if len(streamable) == 0 {
+		return nil
+	}
+	sets := attributeSetDeclarations(root)
+	var err error
+	walkElements(root, func(el *xdm.Node) bool {
+		if err != nil {
+			return false
+		}
+		// Only a template rule -- one with a match pattern -- is in a mode,
+		// and only a rule has a mode declaration to take a posture from.
+		if !isXSL(el, "template") || el.Attr("", "match") == nil {
+			return true
+		}
+		inStreamable := false
+		for _, m := range templateModeNames(el) {
+			if streamable[m] {
+				inStreamable = true
+				break
+			}
+		}
+		if !inStreamable {
+			return true
+		}
+		p, known := analyzeSequenceConstructor(el, postureStriding, sets)
+		if known && !p.streamable() {
+			err = fmt.Errorf(
+				"the body of the template rule matching %q in a streamable "+
+					"mode is %v and %v, so it is not "+
+					"guaranteed-streamable (XTSE3430)",
+				el.AttrValue("match"), p.posture, p.sweep)
+			return false
+		}
+		return true
+	})
+	return err
 }

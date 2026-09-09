@@ -36,14 +36,12 @@ import (
 // checkStreamability raises XTSE3430 where the §19.8 analysis shows that a
 // construct inside a streamable context is not guaranteed-streamable.
 //
-// Only xsl:source-document and xsl:stream with streamable="yes" are examined.
-// A streamable mode declared with xsl:mode is not: the constructs reached
-// through it are the bodies of template rules, whose context posture is
-// striding by §19.6, but reaching them means following apply-templates
-// through modes, and an error reported against the wrong template would be
-// worse than none. A streamable mode's rules are still reached for their MATCH
-// PATTERNS, which need no such following: see checkStreamableModePatterns in
-// streamcontext.go.
+// Only xsl:source-document and xsl:stream with streamable="yes" are examined
+// here. A streamable mode declared with xsl:mode is handled separately, in
+// streamcontext.go: §19.6 makes each of its template rules a focus-setting
+// container with a striding context posture, so a rule's match pattern
+// (checkStreamableModePatterns) and its body (checkStreamableModeBodies) are
+// each assessed on their own, without following apply-templates between them.
 func checkStreamability(root *xdm.Node) error {
 	var err error
 	// §19.8.5: the stylesheet's own xsl:function declarations, so that a call
@@ -60,6 +58,13 @@ func checkStreamability(root *xdm.Node) error {
 	// not against each use of it, so it runs whether or not the set is
 	// referenced from a streamable construct.
 	if e := checkDeclaredStreamableAttributeSets(root, sets); e != nil {
+		return e
+	}
+	// §15.4: an xsl:merge-source that asks to be streamed must satisfy the
+	// four conditions there. Like the attribute-set check above, this is a
+	// property of the declaration and not of any enclosing streamable
+	// construct, so it runs over the whole stylesheet.
+	if e := checkStreamableMergeSources(root, sets); e != nil {
 		return e
 	}
 	walkElements(root, func(el *xdm.Node) bool {

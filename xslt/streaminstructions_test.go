@@ -1,6 +1,7 @@
 package xslt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/knroy/go-xml/xdm"
@@ -1054,6 +1055,167 @@ func TestStreamMentioningCurrentGroupIsUnmodelled(t *testing.T) {
 	if known {
 		t.Error("an xsl:stream whose body calls current-group() was reported as modelled; " +
 			"§19.8.4.35 clause 1 turns on which instruction the call binds to, which is not tracked")
+	}
+}
+
+func TestNestedSourceDocumentIsGroundedWithTheSweepOfItsHref(t *testing.T) {
+	// §19.8.4.35 applies to xsl:source-document, which is the
+	// Recommendation's name for the instruction this Last Call draft calls
+	// xsl:stream. The clause is the same one, and so is the reason for it:
+	// the document the inner instruction opens is assessed separately by
+	// §18.1, so whatever its body does to that stream it reads nothing from
+	// the stream of the construct that encloses it. Grounded, with the sweep
+	// of the href value template -- motionless for a literal href.
+	p, known := analyzeInstrSource(t,
+		`<xsl:source-document streamable="yes" href="in.xml"><out/></xsl:source-document>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless,
+		"a nested streamable xsl:source-document")
+}
+
+func TestNestedSourceDocumentGroundsAConsumingBody(t *testing.T) {
+	// The point of the rule that the si-fork and si-iterate cases turn on:
+	// the inner instruction's body may consume the stream it opens without
+	// that consumption counting against the enclosing construct. A body
+	// that would be consuming on its own is still grounded and motionless
+	// as seen from outside. Were this not so, the two-branch xsl:fork the
+	// spec's own §19.8.4.20 example shows would be rejected whenever it sat
+	// inside a source document.
+	p, known := analyzeInstrSource(t,
+		`<xsl:source-document streamable="yes" href="in.xml">`+
+			`<xsl:value-of select="BOOKLIST/BOOKS/ITEM/PRICE"/>`+
+			`</xsl:source-document>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless,
+		"a streamable xsl:source-document whose body consumes the stream it opens")
+}
+
+func TestSourceDocumentSweepFollowsItsHrefValueTemplate(t *testing.T) {
+	// "the sweep is the sweep of the href attribute value template" -- so an
+	// href that reads the enclosing stream makes the instruction consuming,
+	// even though its posture stays grounded. This is the half of the clause
+	// that a literal href cannot exercise, and the half that keeps the rule
+	// from being a blanket grounded/motionless.
+	p, known := analyzeInstrSource(t,
+		`<xsl:source-document streamable="yes" href="{BOOKLIST/BOOKS/ITEM/@HREF}"><out/></xsl:source-document>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		"an xsl:source-document whose href value template reads the enclosing stream")
+}
+
+func TestSourceDocumentMentioningCurrentGroupIsUnmodelled(t *testing.T) {
+	// §19.8.4.35's first two clauses reject the instruction when its body
+	// calls current-group() or current-merge-group() belonging to an
+	// instruction that is an ancestor of it. Which instruction such a call
+	// binds to is not tracked, so the body is reported unmodelled rather
+	// than grounded -- the direction that cannot invent an XTSE3430. This
+	// guard is what keeps si-fork-951's inner current-group() from being
+	// waved through by the new case.
+	_, known := analyzeInstrSource(t,
+		`<xsl:source-document streamable="yes" href="in.xml">`+
+			`<xsl:value-of select="current-group()"/></xsl:source-document>`)
+	if known {
+		t.Error("an xsl:source-document whose body calls current-group() was reported as modelled; " +
+			"§19.8.4.35 clause 1 turns on which instruction the call binds to, which is not tracked")
+	}
+}
+
+// --- §15.4 streamable merging ------------------------------------------------
+
+// mergeSourceSheet wraps one xsl:merge-source attribute list in a stylesheet
+// whose xsl:merge is otherwise well formed and streamable, so that the only
+// thing a compile error can be attributed to is the §15.4 conditions.
+func mergeSourceSheet(atts string) string {
+	return `<xsl:stylesheet version="3.0"
+	 xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	 xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	<xsl:template match="/">
+	 <events>
+	  <xsl:merge>
+	   <xsl:merge-source ` + atts + `>
+	    <xsl:merge-key select="@timestamp"/>
+	   </xsl:merge-source>
+	   <xsl:merge-action><g><xsl:copy-of select="current-merge-group()"/></g></xsl:merge-action>
+	  </xsl:merge>
+	 </events>
+	</xsl:template>
+	</xsl:stylesheet>`
+}
+
+func compileMergeSource(t *testing.T, atts string) error {
+	t.Helper()
+	stree, err := xdm.ParseString(mergeSourceSheet(atts), xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the stylesheet: %v", err)
+	}
+	_, err = Compile(stree.Root, CompileOptions{})
+	return err
+}
+
+func TestStreamedMergeSourceRequiresAStridingSelect(t *testing.T) {
+	// §15.4's third condition: "The expression in the select attribute of
+	// that xsl:merge-source element has striding posture." A path with a
+	// descendant step is crawling, not striding, so the source is not
+	// guaranteed-streamable. This is merge-094, whose own description reads
+	// "not streamable because select expression is crawling".
+	//
+	// §19.8.4.25 cannot catch this: it asks only that the for-each-source
+	// expression be grounded and motionless, which 'log-file-2.xml' is, and
+	// then declares the whole xsl:merge grounded and motionless. The select
+	// is measured against the document the source opens, which is a
+	// different stream, and §15.4 is the rule that measures it.
+	err := compileMergeSource(t,
+		`for-each-source="'log-file-2.xml'" select="log//record" streamable="yes"`)
+	if err == nil {
+		t.Fatal("a streamed xsl:merge-source with a crawling select compiled; " +
+			"§15.4 condition 3 requires striding posture")
+	}
+	if !strings.Contains(err.Error(), "XTSE3430") {
+		t.Fatalf("want XTSE3430, got: %v", err)
+	}
+}
+
+func TestStreamedMergeSourceRejectsSortBeforeMerge(t *testing.T) {
+	// §15.4's fourth condition: "The sort-before-merge attribute of that
+	// xsl:merge-source element is either absent or takes its default value
+	// of no." Re-ordering the selected nodes means holding them, which a
+	// streamed read cannot do. This is merge-095, which is merge-094's
+	// select made striding and sort-before-merge added instead, so the two
+	// cases isolate the two conditions from one another.
+	err := compileMergeSource(t,
+		`for-each-source="'log-file-2.xml'" select="log/day/record" `+
+			`streamable="yes" sort-before-merge="yes"`)
+	if err == nil {
+		t.Fatal(`a streamed xsl:merge-source with sort-before-merge="yes" compiled; ` +
+			"§15.4 condition 4 forbids it")
+	}
+	if !strings.Contains(err.Error(), "XTSE3430") {
+		t.Fatalf("want XTSE3430, got: %v", err)
+	}
+}
+
+func TestStridingMergeSourceIsStreamable(t *testing.T) {
+	// The positive half, and the one that keeps the rule from being a
+	// blanket refusal: §15.4's own worked example streams
+	// select="log/day/record", a striding path, with no sort-before-merge.
+	// It must compile.
+	if err := compileMergeSource(t,
+		`for-each-source="'log-file-2.xml'" select="log/day/record" streamable="yes"`); err != nil {
+		t.Fatalf("§15.4's own example of a streamed merge source was rejected: %v", err)
+	}
+}
+
+func TestUnstreamedMergeSourceIsNotCheckedBy154(t *testing.T) {
+	// §15.4's first two conditions select what is in scope, and a source
+	// that does not ask to be streamed is not. Both spellings of "not
+	// streamed" must pass a select that condition 3 would otherwise reject:
+	// an explicit streamable="no", and a for-each-item source, which has no
+	// stream to be striding against at all.
+	for _, atts := range []string{
+		`for-each-source="'log-file-2.xml'" select="log//record" streamable="no"`,
+		`for-each-item="'log-file-2.xml'" select="log//record"`,
+	} {
+		if err := compileMergeSource(t, atts); err != nil {
+			t.Errorf("an xsl:merge-source that is not streamed was rejected by §15.4: %v\n  %s",
+				err, atts)
+		}
 	}
 }
 
