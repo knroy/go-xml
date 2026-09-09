@@ -11,6 +11,18 @@ type StaticCall struct {
 	// in what a missing function means to the host language, so the caller is
 	// told which it found.
 	Ref bool
+	// StringArgs holds the arguments of a call that are string literals, one
+	// entry per argument position, nil wherever the argument is anything
+	// else. It is empty for a Ref, which has no arguments.
+	//
+	// A host language whose error is about the *value* of a literal argument
+	// can decide it without waiting for the call to be reached: XSLT's
+	// XTDE3490 asks whether the name written in current-merge-group('x')
+	// is one of the merge sources, and says the error "may be reported
+	// statically if it can be detected statically". Only literals are
+	// reported, because an argument that has to be evaluated has no static
+	// value -- which is the same line checkMergeKeyCompatibility draws.
+	StringArgs []*string
 }
 
 // StaticCalls reports every statically named function this expression calls or
@@ -36,6 +48,26 @@ func (c *Compiled) StaticCalls() []StaticCall {
 	return out
 }
 
+// literalStrings reports which of a call's arguments are string literals.
+//
+// The result is nil when none of them is, so a call written without any
+// literal argument -- the overwhelming majority -- costs no allocation.
+func literalStrings(args []Expr) []*string {
+	var out []*string
+	for i, a := range args {
+		lit, ok := a.(*Literal)
+		if !ok || lit.Val == nil || lit.Val.Type != xdm.TypeString {
+			continue
+		}
+		if out == nil {
+			out = make([]*string, len(args))
+		}
+		s := lit.Val.Str()
+		out[i] = &s
+	}
+	return out
+}
+
 // walkCalls appends the calls in e, and in every expression beneath it, to out.
 //
 // A type annotation is descended into as well: an inline function's declared
@@ -46,7 +78,9 @@ func walkCalls(e Expr, out *[]StaticCall) {
 	case nil:
 		return
 	case *FuncCall:
-		*out = append(*out, StaticCall{Name: v.Name, Arity: len(v.Args)})
+		*out = append(*out, StaticCall{
+			Name: v.Name, Arity: len(v.Args), StringArgs: literalStrings(v.Args),
+		})
 		for _, a := range v.Args {
 			walkCalls(a, out)
 		}

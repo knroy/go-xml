@@ -16,9 +16,9 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,280 | 99.78% | **66** | 0 | 0 | **66** | 99.78% |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,285 | 99.80% | **61** | 0 | 0 | **61** | 99.80% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
-| **xslt** | W3C XSLT 3.0 | 11,525 | 11,370 | 98.66% | **155** | 0 | 0 | **155** | 98.66% |
+| **xslt** | W3C XSLT 3.0 | 11,525 | 11,371 | 98.66% | **154** | 0 | 0 | **154** | 98.66% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** | 0 | 0 | **31** | 99.93% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
@@ -73,7 +73,7 @@ had been excluding, and lifting the streaming gate admitted the XSLT 3.0
 streaming corpus. Cases that were being counted as "not our business" are
 counted as ours now, which is why the percentages fell while nothing got worse.
 **The other component is that the two largest blocks are single features, not a
-long tail**: 118 of the 155 XSLT 3.0 failures want an `XTSE3430` that only the
+long tail**: 118 of the 154 XSLT 3.0 failures want an `XTSE3430` that only the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
 while 113 of the XQuery failures are the three remaining schema-aware features
@@ -170,11 +170,11 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1: 30,280 / 30,346 = 99.78%** — what passes now. The denominator
+**XQuery 3.1: 30,285 / 30,346 = 99.80%** — what passes now. The denominator
 grew by 416 when `import schema` was implemented and the `schemaImport` feature
 gate came off the harness (29,930 → 30,346); 311 of those 416 newly-admitted
-cases pass and 66 fail, which is the whole of the increase in the failure
-count. The passing count rose by more than 311 — 29,918 → 30,280 — because four
+cases pass and 61 fail, which is the whole of the increase in the failure
+count. The passing count rose by more than 311 — 29,918 → 30,285 — because four
 of the pre-import failures were fixed in the same period, which is why the
 pre-import residue also had to be diffed by name rather than inferred from the
 arithmetic. Three of the five features have since been closed — the cast-target
@@ -476,7 +476,7 @@ data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
 the data, rather than on Appendix F's own words. That caveat cuts against
 changing anything, not for it.
 
-## XSLT 3.0 — 155 failures
+## XSLT 3.0 — 154 failures
 
 ### Deliberate divergence — 1
 
@@ -583,8 +583,8 @@ it does not. What is left shares no cause, so each is its own investigation.
 | `transform-001`, `transform-005`–`transform-009` | **Fixed** | Six `fn:transform` cases, four distinct causes. (1) `transform-001`: a `stylesheet-location` naming a file that is not there was reported as FOXT0001. FOXT0001 is the code for a transformation the processor cannot *run* — every QT3 case that asserts it does so for an unavailable vendor named in `requested-properties` (“thrown if Saxon is not available”) — while a location that cannot be retrieved identifies no stylesheet, which is FOXT0002. `fn-transform-err-1`'s own modification note (“based on careful reading of the spec”) settles it. (2) `transform-008`: an option written as element content, `<xsl:map-entry key="'stylesheet-location'">a.xsl</xsl:map-entry>`, arrives as a *text node*, and `transformString` refused it with XPTY0004 on a map that says exactly what a string-valued one says; nodes are now atomized to their string value. (3) `transform-009`: an `xsl:result-document` with **no href** is the principal output — §24.3 changes the current output URI only for an instruction *with* an href — but `transformResultMap` keyed it as a secondary under `""`, leaving `?output` holding the empty tree the stylesheet never wrote to, so the principal serialization came out blank. Same rule `cmd/go-xml` already applies. (4) `transform-005`–`007`: the `package-name` and `package-version` options were not read at all, so the options looked like they identified no stylesheet. They now resolve through the same `PackageResolver` the outer compilation was given, which `Stylesheet` retains for the purpose. Measured: 11,304 → 11,324 passing, 221 → 201 failing; XSLT 2.0 unmoved at 6,193/8 and QT3 unmoved. |
 | `transform-004` | **Not implementable without unpicking `Compile`'s global state** | The case calls `fn:transform` from a `static="yes"` variable, so it must run during the *static phase of compilation*. Registering the real function there is a two-line change and is correct by §9.7, which gives a static expression the whole F&O library and excludes nothing. It deadlocks. `Compile` keeps `compileSchema`, `compilePackage`, `overridingDecls`, `packageParent`, `overrideXPathVersion` and `compileMaxVersion` as **package-level variables** guarded by a single non-reentrant `compileMu`, so a nested `Compile` — which is exactly what `fn:transform` must do — blocks forever on a mutex the outer call still holds. Verified by stack trace, not inferred. Making this work means moving that state onto the `compiler` value; that is a real refactor of shared machinery and out of scope for an error-code fix. |
 
-**XSLT 3.0: 11,370 / 11,525 = 98.66%** — the §19.8 analysis now exists and its
-first 13 sections moved 19 cases. Of the 155 remaining, **118 want an
+**XSLT 3.0: 11,371 / 11,525 = 98.66%** — the §19.8 analysis now exists and its
+first 13 sections moved 19 cases. Of the 154 remaining, **118 want an
 `XTSE3430`** that only the unwritten rest of that analysis can emit, and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
 so they were never defects this engine was obliged to close. The reachable

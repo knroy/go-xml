@@ -188,6 +188,17 @@ type libModule struct {
 	funcs   []*funcDecl
 	formats map[string]*xpath.DecimalFormat
 
+	// contextItem is this module's "declare context item", when it made one.
+	//
+	// A library module may not give the context item a VALUE — that is
+	// XQST0113, checked where the declaration is parsed — but it may
+	// constrain its TYPE, and §4.16 makes that constraint bind on whatever
+	// value the importing module ends up with. So the declaration has to
+	// survive the module's compilation rather than being read and dropped;
+	// see Query.bindContextItem, which applies every imported module's type
+	// alongside the main module's own.
+	contextItem *contextItemDecl
+
 	// imports are the target namespaces this module itself imports, in source
 	// order. They are recorded rather than followed at parse time so that the
 	// loader owns the walk and the budget: a module that follows its own
@@ -515,7 +526,8 @@ func (l *moduleLoader) compile(ns, src, baseURI string, importerVer XQVersion) (
 		d.home = sc
 	}
 	m := &libModule{ns: ns, sc: sc, src: src, vars: p.vars, funcs: p.funcs,
-		formats: p.formats, imports: p.moduleImports}
+		formats: p.formats, imports: p.moduleImports,
+		contextItem: p.contextItem}
 	return m, nil
 }
 

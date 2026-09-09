@@ -390,6 +390,16 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 			b.rebase(out)
 		}
 	}
+	// §4.16 lets a library module constrain the context item's type without
+	// supplying its value, and that constraint binds on the value the main
+	// module ends up with: "the context item declarations in all modules must
+	// be consistent", and the item must match each. So this runs whether or
+	// not the main module declared one -- an importer that declares nothing
+	// still owes the imported type -- and it runs after the declaration
+	// above, because that is what settles which value is being checked.
+	if err := q.checkImportedContextItemTypes(out); err != nil {
+		return nil, err
+	}
 	if b == nil {
 		return out, nil
 	}
@@ -399,6 +409,43 @@ func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 		}
 	}
 	return b.ctx, nil
+}
+
+// checkImportedContextItemTypes applies the context item type declared by
+// each imported library module (§4.16).
+//
+// A library module's declaration carries no value — XQST0113 forbids one — so
+// the only thing it contributes is a type, and that type has to be satisfied
+// by whatever context item the query is evaluated with. The check is a match
+// rather than a conversion, on the same rule bindContextItem follows: §4.16
+// says the value must *match* the declared type, and the function conversion
+// rules are not applied to the context item.
+//
+// An absent context item is not this check's complaint. A module that
+// declares a type says what the item must be IF there is one; whether there
+// has to be one at all is bindContextItem's XPDY0002, and reporting an
+// absence here would blame the import for a value the main module never
+// supplied.
+//
+// contextDecl-050 and -051 are the cases. Both import a module declaring
+// "context item as xs:date external" and then supply an xs:integer and an
+// element respectively; both want XPTY0004. Before this the module's
+// declaration was parsed and thrown away with the rest of its prolog, so the
+// queries returned true and false instead of failing.
+func (q *Query) checkImportedContextItemTypes(ctx *xpath.Context) error {
+	if ctx == nil || ctx.Item == nil {
+		return nil
+	}
+	for _, m := range q.modules {
+		if m.contextItem == nil || m.contextItem.typ == nil {
+			continue
+		}
+		if _, err := m.contextItem.typ.match(xdm.Sequence{ctx.Item},
+			"the context item"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bindContextItem applies "declare context item" (§4.16).

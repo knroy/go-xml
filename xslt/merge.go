@@ -214,12 +214,85 @@ func (c *compiler) compileMerge(n *xdm.Node, ns xpath.NamespaceResolver) (Instru
 		return nil, err
 	}
 
+	// XTDE3490 asks whether the name a current-merge-group() call is written
+	// with is one of the sources. Where the name is a string literal that is
+	// decidable now, and the error says it "may be reported statically if it
+	// can be detected statically" -- the same licence checkMergeKeyCompatibility
+	// takes above. Deciding it here is what makes the error reachable at all
+	// for a stylesheet whose input the runtime rejects first: merge-077 names
+	// a source that does not exist, and its input also trips XTDE2220, so the
+	// action it would be reported from never runs.
+	if err := checkMergeGroupNames(actionElem, seenNames); err != nil {
+		return nil, err
+	}
+
 	action, err := c.compileSequence(actionElem, actionElem)
 	if err != nil {
 		return nil, err
 	}
 	instr.action = action
 	return instr, nil
+}
+
+// checkMergeGroupNames reports XTDE3490 for a current-merge-group() call in the
+// merge action whose source name is a string literal naming no merge source.
+//
+// Only @select is scanned. It is where an expression is written in the form
+// this check can decide, and scanning it is enough to reach the error without
+// having to know which of every other attribute is an XPath expression, an
+// attribute value template or a pattern. A call written anywhere else is left
+// to the runtime check in registerMergeFuncs, which is the normative one; this
+// is an early report of the same error, never a different one.
+//
+// A name reached through a nested xsl:merge belongs to that merge, not this
+// one, so the walk stops there: 15.6.1 scopes the current merge group to the
+// innermost xsl:merge-action containing the call.
+func checkMergeGroupNames(action *xdm.Node, names map[string]bool) error {
+	var walk func(n *xdm.Node) error
+	walk = func(n *xdm.Node) error {
+		if n.Kind == xdm.KindElement {
+			if a := n.Attr("", "select"); a != nil {
+				comp, err := compileExpr(a.Value, newNSResolver(n, ""))
+				// A select that does not compile is not this check's error to
+				// report; compileSequence reports it with its own context.
+				if err == nil {
+					if err := checkMergeGroupCalls(comp, names); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, ch := range n.Children {
+			if ch.Kind == xdm.KindElement && isXSL(ch, "merge") {
+				continue // a nested merge rebinds the group; not ours
+			}
+			if err := walk(ch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(action)
+}
+
+// checkMergeGroupCalls tests one compiled expression's current-merge-group()
+// calls against the declared source names.
+func checkMergeGroupCalls(comp *xpath.Compiled, names map[string]bool) error {
+	for _, call := range comp.StaticCalls() {
+		if call.Ref || call.Arity != 1 ||
+			call.Name.URI != xdm.NSFN || call.Name.Local != "current-merge-group" {
+			continue
+		}
+		if len(call.StringArgs) == 0 || call.StringArgs[0] == nil {
+			continue // computed: only the runtime can decide it
+		}
+		if !names[*call.StringArgs[0]] {
+			return fmt.Errorf(
+				"XTDE3490: %q does not name any xsl:merge-source of the current "+
+					"merge operation", *call.StringArgs[0])
+		}
+	}
+	return nil
 }
 
 func (c *compiler) compileMergeSource(n *xdm.Node, idx int) (*mergeSource, error) {
