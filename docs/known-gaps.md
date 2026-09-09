@@ -447,7 +447,7 @@ is within two orders of magnitude of them.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**118 of the 154 XSLT 3.0 failures**, and by far the largest single gap in the
+**103 of the 126 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice now exists — 13 of the spec's 86
 sections, worth 19 cases — but the rules built on it do not: all 43 XSLT
 instruction rules (§19.8.6), streamable stylesheet functions (§19.8.5) and
@@ -470,7 +470,7 @@ They cluster by construct rather than by cause, which is what confirms it is
 one missing body of rules and not 118 defects: `streamable` (29), `si-fork`
 (11), `accumulator` (9), `su-absorbing` (8), and `su-shallow-descent`,
 `si-for-each-group` and `merge` (6 each), then a long tail across `su-*`,
-`si-*`, `sf-*` and `sx-*`. Those set counts are of all 154, not of the 118;
+`si-*`, `sf-*` and `sx-*`. Those set counts are of all 126, not of the 118;
 `merge` and `accumulator` each contribute to both groups.
 
 **Closing it is a real analysis, not a check.** §19.8 assigns every expression
@@ -1371,7 +1371,7 @@ suite", which is no longer a true reading of the file.** It was true of the
 population the audit covered — the XSD and XPath disagreements that stood at
 the time — and it is still true of those: XPath is 100% at all three versions,
 and the XSD remainder is argued case by case above. It is not true of the
-suites as a whole. XSLT 3.0 carries 154 failures of which 118 are one missing
+suites as a whole. XSLT 3.0 carries 126 failures of which 103 are one missing
 analysis, and XQuery 3.1 carries 113, and both are eminently fixable; they are
 written up under *Open* above. A sentence scoped to one audit and left standing
 after the scope changed is the same decay this file keeps recording, so it is

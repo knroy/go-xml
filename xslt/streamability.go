@@ -40,12 +40,45 @@ type analyzer struct {
 	// not turn that into an error, because the cause is a gap in this
 	// implementation rather than a fact about the stylesheet.
 	known bool
+
+	// funcs indexes the stylesheet's own xsl:function declarations, so that
+	// a call on one can be assessed under §19.8.5 instead of abandoning the
+	// enclosing construct. Nil when no declarations were collected, which
+	// leaves every stylesheet function unmodelled as before.
+	funcs map[funcKey]*streamFunc
+
+	// streamingParam names the streaming parameter (§19.8.5) of the function
+	// whose body is being analysed, and paramCategory is that function's
+	// streamability category. Together they drive the §19.8.8.11 rule that
+	// gives a reference to the first parameter of a declared-streamable
+	// function a posture other than grounded. Empty outside such a body.
+	streamingParam xdm.QName
+	paramCategory  streamCategory
+	hasStreamParam bool
+
+	// higherOrder records that the expression now being analysed sits inside
+	// a higher-order operand of some construct between it and the function
+	// body. §19.8.8.11 calls a variable reference "singular" when no such
+	// construct intervenes, and gives the two answers different postures.
+	higherOrder bool
 }
 
 // analyzeExpr returns the posture and sweep of e, and whether every construct
 // within it was one the analysis models.
 func analyzeExpr(e xpath.Expr, ctx posture) (props, bool) {
-	a := &analyzer{ctxPosture: ctx, ctxAllowsChildren: true, known: true}
+	return analyzeExprFuncs(e, ctx, nil)
+}
+
+// analyzeExprFuncs is analyzeExpr with the stylesheet's xsl:function
+// declarations in hand, so that a call on one is assessed under §19.8.5
+// (streamfunctions.go) rather than abandoning the enclosing construct.
+func analyzeExprFuncs(e xpath.Expr, ctx posture, funcs map[funcKey]*streamFunc) (props, bool) {
+	a := &analyzer{
+		ctxPosture:        ctx,
+		ctxAllowsChildren: true,
+		known:             true,
+		funcs:             funcs,
+	}
 	p := a.expr(e)
 	return p, a.known
 }
@@ -76,10 +109,10 @@ func (a *analyzer) expr(e xpath.Expr) props {
 	case *xpath.VarRef:
 		// §19.8.8.11: a variable reference is motionless, and grounded
 		// except when bound to a streaming parameter of a
-		// declared-streamable stylesheet function. Streamable stylesheet
-		// functions are not modelled here, so every variable is grounded --
-		// which is correct for every stylesheet that has none.
-		return groundedMotionless
+		// declared-streamable stylesheet function, where the posture comes
+		// from the function's category and whether the reference is
+		// singular.
+		return a.varRef(x)
 
 	case *xpath.Step:
 		return a.step(x, a.ctxPosture)
@@ -134,6 +167,12 @@ func (a *analyzer) expr(e xpath.Expr) props {
 
 	case *xpath.FuncCall:
 		return a.funcCall(x)
+
+	case *xpath.SimpleMap:
+		// §19.8.8.6: the posture and sweep of "a!b" are those of the right
+		// operand, assessed with a context posture and type taken from the
+		// left operand.
+		return a.simpleMap(x)
 
 	default:
 		// for, some/every, let, inline functions, dynamic calls, named
@@ -210,6 +249,11 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			ctxPosture:        cur.posture,
 			ctxAllowsChildren: a.allowsChildren(x.Base),
 			known:             a.known,
+			funcs:             a.funcs,
+			streamingParam:    a.streamingParam,
+			paramCategory:     a.paramCategory,
+			hasStreamParam:    a.hasStreamParam,
+			higherOrder:       a.higherOrder,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -243,6 +287,11 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			ctxPosture:        base.posture,
 			ctxAllowsChildren: stepAllowsChildren(s),
 			known:             a.known,
+			funcs:             a.funcs,
+			streamingParam:    a.streamingParam,
+			paramCategory:     a.paramCategory,
+			hasStreamParam:    a.hasStreamParam,
+			higherOrder:       a.higherOrder,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -300,6 +349,11 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				ctxPosture:        cur.posture,
 				ctxAllowsChildren: true,
 				known:             a.known,
+				funcs:             a.funcs,
+				streamingParam:    a.streamingParam,
+				paramCategory:     a.paramCategory,
+				hasStreamParam:    a.hasStreamParam,
+				higherOrder:       a.higherOrder,
 			}
 			next = inner.expr(e)
 			a.known = a.known && inner.known
@@ -339,6 +393,16 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 	case *xpath.ContextItem:
 		// "." is the self axis with no predicate.
 		return true
+	case *xpath.VarRef:
+		// A reference to the streaming parameter of a declared-streamable
+		// stylesheet function (§19.8.5) plays the same role at the head of a
+		// path that "." plays: it names the striding node the scan starts
+		// from. "$node//section" is a scanning expression for exactly the
+		// reason ".//section" is. Any other variable is grounded, and a path
+		// rooted at a grounded value never needed the scanning rule.
+		return a.hasStreamParam &&
+			s.Name.URI == a.streamingParam.URI &&
+			s.Name.Local == a.streamingParam.Local
 	case *xpath.Step:
 		switch s.Axis {
 		case xpath.AxisChild, xpath.AxisDescendant,
@@ -365,8 +429,25 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				ctxPosture:        postureStriding,
 				ctxAllowsChildren: stepAllowsChildren(s),
 				known:             true,
+				funcs:             a.funcs,
+				streamingParam:    a.streamingParam,
+				paramCategory:     a.paramCategory,
+				hasStreamParam:    a.hasStreamParam,
+				higherOrder:       a.higherOrder,
 			}
-			if inner.expr(p).sweep != sweepMotionless || !inner.known {
+			sw := inner.expr(p).sweep
+			if !inner.known {
+				// The predicate holds something this analysis does not
+				// model, so "not a scanning expression" is a statement
+				// about the implementation rather than about the path.
+				// Saying so is what keeps the caller from reporting the
+				// resulting roaming verdict as an XTSE3430: si-group-051
+				// filters on current-group(), and without this the whole
+				// path came back roaming with known still true.
+				a.known = false
+				return false
+			}
+			if sw != sweepMotionless {
 				return false
 			}
 		}
@@ -442,8 +523,12 @@ func stepsSelectElements(steps []xpath.Expr) bool {
 // funcCall applies §19.8.9 to a call on a built-in function.
 func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 	if x.Name.URI != fnNS {
-		// An extension or stylesheet function. §19.8.5 gives stylesheet
-		// functions their own rules, which are not modelled.
+		// A stylesheet function is assessed under §19.8.5 (streamfunctions.go).
+		// An extension function, or a stylesheet function this analysis did
+		// not collect, stays unmodelled.
+		if p, ok := a.callProps(x); ok {
+			return p
+		}
 		return a.unknown()
 	}
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
@@ -458,9 +543,14 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		// fn:string(), fn:data(), fn:name() and the rest are equivalent to
 		// the same call on ".".
 		ci := operand{
-			props:          props{a.ctxPosture, sweepMotionless},
-			usage:          usages[0],
-			allowsChildren: true,
+			props: props{a.ctxPosture, sweepMotionless},
+			usage: usages[0],
+			// The implicit argument is ".", so whether absorbing it reads
+			// further from the stream is the context item's question, exactly
+			// as it is for the spelled-out call. Hardcoding true here made
+			// "string()" consuming where "string(.)" was motionless, which
+			// §19.8.1 gives no warrant for: the two are equivalent.
+			allowsChildren: a.ctxAllowsChildren,
 		}
 		return combine([]operand{ci}, false)
 	}
@@ -544,7 +634,7 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 		"minutes-from-duration": {1}, "seconds-from-duration": {1},
 		"months-from-duration": {1}, "years-from-duration": {1},
 		"timezone-from-date": {1}, "timezone-from-dateTime": {1},
-		"timezone-from-time": {1},
+		"timezone-from-time":          {1},
 		"adjust-date-to-timezone":     {1, 2},
 		"adjust-dateTime-to-timezone": {1, 2},
 		"adjust-time-to-timezone":     {1, 2},
@@ -559,25 +649,25 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 	}
 	// The remainder, whose arguments differ from one another.
 	mixed := map[string]map[int][]usage{
-		"head":        {1: {T}},
-		"tail":        {1: {T}},
-		"exactly-one": {1: {T}},
-		"zero-or-one": {1: {T}},
-		"one-or-more": {1: {T}},
-		"remove":      {2: {T, A}},
-		"subsequence": {2: {T, A}, 3: {T, A, A}},
-		"insert-before": {3: {T, A, T}},
-		"unordered":     {1: {T}},
-		"filter":        {2: {N, I}},
-		"for-each":      {2: {N, I}},
-		"for-each-pair": {3: {N, N, I}},
-		"fold-left":     {3: {N, A, I}},
-		"lang":          {2: {A, I}},
-		"id":            {2: {A, N}},
-		"idref":         {2: {A, N}},
-		"element-with-id": {2: {A, N}},
-		"key":             {3: {A, A, N}},
-		"path":            {1: {N}},
+		"head":                     {1: {T}},
+		"tail":                     {1: {T}},
+		"exactly-one":              {1: {T}},
+		"zero-or-one":              {1: {T}},
+		"one-or-more":              {1: {T}},
+		"remove":                   {2: {T, A}},
+		"subsequence":              {2: {T, A}, 3: {T, A, A}},
+		"insert-before":            {3: {T, A, T}},
+		"unordered":                {1: {T}},
+		"filter":                   {2: {N, I}},
+		"for-each":                 {2: {N, I}},
+		"for-each-pair":            {3: {N, N, I}},
+		"fold-left":                {3: {N, A, I}},
+		"lang":                     {2: {A, I}},
+		"id":                       {2: {A, N}},
+		"idref":                    {2: {A, N}},
+		"element-with-id":          {2: {A, N}},
+		"key":                      {3: {A, A, N}},
+		"path":                     {1: {N}},
 		"namespace-uri-for-prefix": {2: {A, I}},
 		"resolve-QName":            {2: {A, I}},
 		"document":                 {2: {A, I}},
@@ -741,4 +831,3 @@ func (a *analyzer) allowsChildren(e xpath.Expr) bool {
 		return true
 	}
 }
-

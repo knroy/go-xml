@@ -317,16 +317,26 @@ func TestStreamabilityIgnoresNonStreamableContexts(t *testing.T) {
 	}
 }
 
-func TestStreamabilityDoesNotDescendPastAFocusChange(t *testing.T) {
-	// xsl:for-each gives its body a context posture derived from its own
-	// select, and §19.8.6's rule for it is not implemented. The analysis must
-	// therefore stop at the boundary rather than assess the inner expression
-	// against the wrong posture. "." inside the for-each is striding, and
-	// "string(.)" there is perfectly streamable.
+func TestStreamabilityAssessesAForEachBodyInItsOwnPosture(t *testing.T) {
+	// §19.8.4.18 assesses the body of an xsl:for-each with the context
+	// posture of its select expression, so the analysis descends into it --
+	// and must use the right posture when it does.
+	//
+	// The select "a/b" is striding, so inside the loop "." is striding too.
+	// A step on the following axis from a striding posture is roaming and
+	// free-ranging by the §19.8.8.8 table (it is one of the "any other
+	// combination" rows), so this stylesheet is correctly rejected.
 	err := compileSrc(t, stylesheetWith(
 		`<xsl:for-each select="a/b"><xsl:value-of select="following::x"/></xsl:for-each>`))
-	if err != nil && strings.Contains(err.Error(), "XTSE3430") {
-		t.Errorf("the analysis must not descend past xsl:for-each: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+		t.Errorf("a for-each body selecting on the following axis must raise XTSE3430, got %v", err)
+	}
+
+	// The companion case, which guards against the rule rejecting every
+	// for-each: a child step from the same striding posture is streamable.
+	if err := compileSrc(t, stylesheetWith(
+		`<xsl:for-each select="a/b"><xsl:value-of select="c"/></xsl:for-each>`)); err != nil {
+		t.Errorf("a streamable for-each body was refused: %v", err)
 	}
 }
 
