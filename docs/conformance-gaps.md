@@ -17,10 +17,10 @@ therefore no longer a measured figure.
 | **xquery** | QT3 — XQuery 3.1 | 29,930 | 29,918 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 11,525 | 11,348 | 98.46% | **177** | 0 | 0 | **177** | 98.46% |
-| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,356 | 99.92% | **32** | 0 | 0 | **32** | 99.92% |
-| **xsd** | W3C xsdtests 1.1 | 41,576 | 41,543 | 99.92% | **33** | 0 | 0 | **33** | 99.92% |
+| **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
+| **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** | 0 | 0 | **31** | 99.93% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **103** | **0** | **0** | **103** | |
+| | **Total** | | | | **99** | **0** | **0** | **99** | |
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -493,7 +493,7 @@ until the audit found it.
 
 ---
 
-# xsd — 79 disagreements
+# xsd — 61 disagreements
 
 The XSD suite measures **agreement with the expected verdict** on each schema
 and instance, which is a different shape from a pass/fail case count. A
@@ -514,8 +514,8 @@ two into one "ceiling" column and described both as challenged, which inverted
 
 | | Total | `accepted` | `queried` | `stable` | no status |
 |---|---:|---:|---:|---:|---:|
-| XSD 1.0 | 41 | **6** | 30 | 5 | 0 |
-| XSD 1.1 | 38 | **2** | 31 | 5 | 0 |
+| XSD 1.0 | 30 | **2** | 26 | 2 | 0 |
+| XSD 1.1 | 31 | **2** | 27 | 2 | 0 |
 
 Those totals are the measured ones, counted from the `<current>` status of each
 disagreeing case. They fell from 51 and 47 when the `indeterminate` scoring bug
@@ -552,15 +552,19 @@ for instance validation.
 | `MS-Regex2006-07-15` | 22 per version, 44 in all | `queried bug4113` | Every single MS-Regex disagreement is the *same* open W3C bug. The expected results are challenged upstream; agreeing with them would mean agreeing with something the working group does not stand behind. |
 | `MS-Element`, `MS-DataTypes`, `MS-IdentityConstraint`, `MS-Particles`, others | 11 (1.0), 12 (1.1) | `queried`/`stable` + bug | Assorted challenged expectations, almost all across the Microsoft-contributed sets. |
 
-**Not implementable: 33 (XSD 1.0) and 34 (XSD 1.1)** — the whole of the
-measured disagreement count, not a remainder subtracted from it. The
+**Not implementable: 30 (XSD 1.0) and 31 (XSD 1.1)** — the whole of the
+measured disagreement count, not a remainder subtracted from it. Two per
+version have left it since this paragraph was written: `elemM002` and `idC019`
+were implementable after all, and are now fixed (see *What is genuinely ours*
+below). The
 `indeterminate` scoring errors and `iri-001` were the earlier subtrahends, and
 both are fixed: those cases have already left the disagreement counts, so
-deducting them a second time would double-count. Of the 33, 31 carry a
+deducting them a second time would double-count. Of the 30, 28 carry a
 `queried` or `stable` bugzilla reference and 2 carry `accepted` — `attP031`,
-the suite defect named below, and `particlesZ001`. Of the 34, 32 are
+the suite defect named below, and `particlesZ001`. Of the 31, 29 are
 `queried` or `stable` and 2 are `accepted`, here `simple093` and
-`particlesZ033_g`, both read as questions below.
+`particlesZ033_g`, both read as questions below. Those four `accepted` cases
+were re-counted from the run and are unchanged by the two fixes.
 
 ### The `notQName` cases are a suite omission, not a gap
 
@@ -597,6 +601,8 @@ is the claim the audit most clearly overturned.
 
 | Case | Version | Verdict |
 |---|---|---|
+| `elemM002` | both | **Was ours — now fixed.** `<xsd:element name="myElem" type="foo"/>` beside `<xsd:attribute name="foo"/>`. §3.3.2 requires `type=` to resolve to a *type definition*; this resolves to a component of the wrong kind, and the schema was loading clean. What hid it is the deferral §3.3.3 grants an element declaration: the unprefixed `type=` lands in the absent namespace, `deferrableMiss` answers true for it, and the reference was carried on the declaration rather than reported. That deferral is right in general — a document read later may supply the type — but no document can turn an attribute declaration into a type definition, so this miss is final at the moment it is made. `resolveTypeRefLazy` now reports a name the assembly defines as a non-type before consulting the deferral. The negative arm is `saxonData Missing/missing001`, which writes `type="absent"` into the same absent namespace of a schema that declares components there — identical in every respect `deferrableMiss` can see — but names nothing at all, so its deferral survives and it still loads. 1.0 schema agreement 14,383 → 14,384, 1.1 15,347 → 15,348, instances unmoved. |
+| `idC019` | both | **Was ours — now fixed.** `schema.identityConstraints` is one flat map over the whole assembly, so the `refer=` fixup could reach a key the asking document has no licence to see. §4.2.6.1 `src-resolve` scopes the licence an `<xs:import>` grants to *the document that wrote it* — which is why `doc.imports` already existed beside the per-assembly `importedNamespaces`; the fixup simply was not consulting it. idC019 imports `idC017a.xsd`, whose `targetNamespace` is `diffNS` and whose `keyref` writes `refer="keyName"` **unprefixed** with no default namespace in scope, so §3.11.2 resolves it to the *absent* namespace rather than to `diffNS`. Nothing in `diffNS` declares that key: the match came from the importing document's own absent namespace, which `idC017a.xsd` never imports. `resolveQName`'s own `checkReferenceImported` cannot catch this, because an unprefixed name with no default namespace in scope returns early through `chameleonQName`, before the switch that calls it. The fixup now captures its declaring document and requires the key's namespace to be that document's own target namespace or one it imports. 1.0 schema agreement 14,384 → 14,385, 1.1 15,348 → 15,349, instances unmoved. |
 | `iri-001` | 1.1 | **Was the harness — now fixed.** `wgData/iri/ElementDeclarations.xsd` is expected valid and we rejected it: the type-library schemas it imports carry an internal DTD subset — `TypeLibrary-URI-RFC3986.xsd` declares one entity per ABNF non-terminal of RFC 3986 so its patterns can be assembled bottom-up — and `tests/xsdsuite` loaded every schema with the default `ParseOptions`, where `AllowDOCTYPE` is off. Nothing was wrong with those schemas and nothing was wrong with the engine: `xsd/assemble.go` already threads the caller's `ParseOptions` through `xs:include` and `xs:import`, so the schema loads once the driver asks for it. The driver now sets `AllowDOCTYPE` on the schema-load path only, leaving external entities off. That recovered the schema test **and** the 12 instance tests the load failure had been suppressing: XSD 1.1 agree 41,519 → 41,532, disagree 39 → 38, with XSD 1.0 and the XPath, XQuery, XSLT 2.0 and XSLT 3.0 suites unchanged case for case. |
 | `indeterminate` cases | both | **Was ours — a harness scoring bug, now fixed.** `schZ012_a`, `schZ015`, `schG14`, `schA2.i`, `schA5.i`, `addC002`, `addB071`, `elemZ031` and, on 1.0 only, `particlesZ026` and `particlesZ026.v` carry `<expected validity="indeterminate"/>`; `schZ012_a`'s own annotation says "The WG decided the spec. is underspecified in this area, so implementations may reasonably differ," and `particlesZ026` records that the TSTF found its validity implementation-determined. `expectedValidity` in `tests/xsdsuite/main.go` read the attribute as `w == "valid"`, so `indeterminate` silently became "must be invalid" and our acceptance scored as a false accept. The driver now treats it as a third outcome, skips the case, and reports the count on its own `indeterminate` column. This removed **10** disagreements on 1.0 and **8** on 1.1 — the earlier estimate of 8 per version missed the two 1.0-only `particlesZ026` cases. Because the cases leave the denominator as well as the numerator, the agreeing counts fell by 6 per version (39,353 → 39,347 and 41,525 → 41,519) while the percentages rose; `tests/ratchet.txt` was lowered to match. |
 | `simple093` | 1.1 | **Not implementable — the suite contradicts itself.** Expected invalid; the schema unions `xs:QName` with `xs:NOTATION`, and Part 2 §3.2.19 does forbid NOTATION being "used directly in a schema", so the case is a correct reading. But `msData particlesZ007` declares a schema containing `<xsd:union memberTypes="xsd:NOTATION"/>` **valid**, and both carry `status="accepted"`. The rule was implemented and measured: 1.1 trades one for the other (agree 41,519 → 41,518) and 1.0 loses two outright (39,347 → 39,345), because particlesZ007 has a dependent instance test and simple093 is not run under 1.0 at all. Reverted; `xsd/facet_check.go` enforces §3.2.19 in the three places the suite is consistent about. |
@@ -634,14 +640,18 @@ That is fixed too, and again moved no suite case — both disagreement lists sta
 identical by name. See *Nested occurrence bounds were wrong in both directions*
 in [known-gaps.md](known-gaps.md).
 
-**XSD measured now: 1.0 — 39,356 / 39,388 = 99.92%. 1.1 — 41,543 / 41,576 =
-99.92%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
+**XSD measured now: 1.0 — 39,358 / 39,388 = 99.92%. 1.1 — 41,545 / 41,576 =
+99.93%.** The `indeterminate` correction is applied, so 16 cases on 1.0 and 14
 on 1.1 have left both sides of the ratio; the driver prints their count so the
-denominator is legible rather than assumed. On 1.0 that is now also the ceiling
-— everything remaining is a suite defect or a `queried` disagreement. On 1.1
-`iri-001` and its 12 masked instance tests have since been recovered; they are
-in the figures above.
-made, so it is stated as attainable rather than measured.
+denominator is legible rather than assumed. This paragraph previously called
+1.0 "now also the ceiling — everything remaining is a suite defect or a
+`queried` disagreement". That was not true, and `elemM002` and `idC019`
+disprove it: both were genuine defects of ours, on both versions, and both are
+now fixed. What remains after them is a suite defect or a `queried`/`stable`
+disagreement on either version — but "the ceiling" is a claim worth
+re-measuring rather than inheriting, which is how these two survived several
+rounds of it. On 1.1 `iri-001` and its 12 masked instance tests have since been
+recovered; they are in the figures above.
 
 ---
 

@@ -13,6 +13,20 @@ type DTD struct {
 	Elements map[string]*Element
 	// Attributes maps an element name to its declared attributes.
 	Attributes map[string][]*Attribute
+	// Notations is the set of names declared by <!NOTATION>.
+	//
+	// It exists only so that Validate can apply XML 1.0 §3.3.1's rule that
+	// every name in a NOTATION attribute's enumeration be declared. The
+	// declaration's own system or public identifier is data for the
+	// application, not for validation, so nothing here keeps it.
+	Notations map[string]bool
+	// Unparsed is the set of entity names declared with an NDATA notation.
+	//
+	// §3.3.1 makes these, and only these, the permitted values of an ENTITY
+	// or ENTITIES attribute: an entity with replacement text is parsed and
+	// naming it there is a validity error just as naming an undeclared one
+	// is.
+	Unparsed map[string]bool
 	// HasExternalSubset records that the DOCTYPE named a SYSTEM or PUBLIC
 	// identifier.
 	//
@@ -139,6 +153,8 @@ func newDTD() *DTD {
 	return &DTD{
 		Elements:   map[string]*Element{},
 		Attributes: map[string][]*Attribute{},
+		Notations:  map[string]bool{},
+		Unparsed:   map[string]bool{},
 	}
 }
 
@@ -178,6 +194,19 @@ func declarationsInto(d *DTD, subset string) error {
 					continue
 				}
 				d.Attributes[a.Element] = append(d.Attributes[a.Element], a)
+			}
+		case strings.HasPrefix(decl, "NOTATION"):
+			if n := notationName(decl[len("NOTATION"):]); n != "" {
+				d.Notations[n] = true
+			}
+		case strings.HasPrefix(decl, "ENTITY"):
+			// Only the unparsed ones are recorded, and only their names: a
+			// parameter entity has already been expanded by the time this
+			// runs, and a parsed general entity is not a permissible value
+			// of an ENTITY attribute, so recording it would defeat the check
+			// rather than inform it.
+			if n := unparsedEntityName(decl[len("ENTITY"):]); n != "" {
+				d.Unparsed[n] = true
 			}
 		}
 	}
@@ -306,6 +335,47 @@ func parseElement(body string) (*Element, error) {
 	el.Kind = ContentChildren
 	el.Particle = p
 	return el, nil
+}
+
+// notationName reads the name from "<!NOTATION name SYSTEM "...">".
+//
+// Only the name is wanted, so the identifiers that follow are not parsed. A
+// body with nothing but a name is still a name: the identifier is required by
+// the grammar, but a declaration this package cannot fully read is better
+// recorded than dropped, since dropping it would turn a declared notation
+// into a spurious validity error.
+func notationName(body string) string {
+	f := fields(body)
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
+}
+
+// unparsedEntityName reads the name from an <!ENTITY> declaration that
+// declares an unparsed entity, and returns "" for any other entity.
+//
+// The two unparsed forms are
+//
+//	name SYSTEM "uri" NDATA notation
+//	name PUBLIC "public" "uri" NDATA notation
+//
+// so it is the NDATA keyword that decides, exactly as in xdm's reader. A
+// parameter entity — "% name ..." — is excluded by the same token, since a
+// parameter entity has no NDATA form; the leading "%" would otherwise make
+// the name "%".
+func unparsedEntityName(body string) string {
+	f := attFields(body)
+	if len(f) < 2 || f[0] == "%" || strings.HasPrefix(f[0], "%") {
+		return ""
+	}
+	for i, tok := range f[1:] {
+		// The notation name must follow NDATA for the declaration to be one.
+		if tok == "NDATA" && i+2 < len(f) {
+			return f[0]
+		}
+	}
+	return ""
 }
 
 func isSpace(r rune) bool {

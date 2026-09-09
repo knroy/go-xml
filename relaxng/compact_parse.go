@@ -193,15 +193,25 @@ const compatibilityNS = "http://relaxng.org/ns/compatibility/annotations/1.0"
 // takesAnnotation lists the elements a documentation annotation may be added
 // to.
 //
-// It is derived from specs rather than written out: an element accepts an
-// annotation child exactly when it accepts pattern children at all, which is
-// what maxPatterns != 0 says. Deriving it means the two cannot disagree — a
+// It is derived from specs rather than written out: §5.2 strips foreign
+// elements before any content-model rule applies, so an annotation is legal
+// on every element except one whose content *is* its text — <value>, where a
+// foreign child would be indistinguishable from the value itself. That is
+// exactly what textOnly says. Deriving it means the two cannot disagree — a
 // hand-written list would have to be revisited every time specs changed, and
 // the failure of forgetting is a schema rejected for a comment.
+//
+// This used to also exclude maxPatterns == 0, so a "##" comment on a <ref>,
+// <empty> or <text> was silently dropped. That was a workaround for
+// checkChildren reading such an element's content with StringValue(), which
+// reached inside the annotation and called its text the element's own; the
+// slides schema in testdata documents a <ref> that way and the .rng twin
+// keeps the annotation. syntax.go now looks only at direct text children, so
+// the workaround is gone and the comment survives the round trip.
 var takesAnnotation = func() map[string]bool {
 	m := map[string]bool{}
 	for name, spec := range specs {
-		if spec.maxPatterns != 0 && !spec.textOnly {
+		if !spec.textOnly {
 			m[name] = true
 		}
 	}
@@ -210,13 +220,11 @@ var takesAnnotation = func() map[string]bool {
 
 // attachDoc puts a documentation annotation onto an element.
 //
-// An element that takes no content does not get one. <ref>, <value>, <empty>
-// and their kind are specified to hold nothing or text only, and syntax.go
-// enforces that — so an annotation grafted onto one turns a schema that was
-// legal into one this package rejects, which is a comment changing the
-// meaning of the schema it comments on. The DocBook 5.1 and slides schemas in
-// testdata both document a <value> and a <ref> this way, and both were
-// rejected until the annotation was dropped here instead.
+// An element whose content is its own text does not get one: on a <value> a
+// foreign child could not be told apart from the value being spelled, so the
+// annotation is dropped there rather than change what the schema says. Every
+// other element takes it, <ref> and <empty> included, because §5.2 removes
+// foreign elements before the content model is judged.
 func (p *compactParser) attachDoc(n *xdm.Node, doc *annotation) {
 	if doc == nil || !takesAnnotation[n.Name.Local] {
 		return

@@ -159,6 +159,11 @@ type serializeOptions struct {
 	// 1.1 exist; anything else is written as 1.0, because a declaration is a
 	// claim the reading parser acts on rather than an echo of what was asked.
 	version string
+	// undeclarePrefixes emits namespace undeclarations -- xmlns:p="" -- for a
+	// prefix the element binds to no namespace. The syntax exists only in XML
+	// 1.1, so asking for it with version 1.0 is SEPM0010; without it the
+	// binding is left out of the output, as the XSLT serializer does.
+	undeclarePrefixes bool
 	// charMap maps a character to the string that replaces it on output.
 	charMap map[rune]string
 	// normalize applies the Unicode normalization form the serialization
@@ -194,6 +199,27 @@ type serializeOptions struct {
 // error, and accepting one silently would let a stylesheet believe it had
 // asked for something it did not get.
 func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, error) {
+	opts, err := readSerializationParams(ctx, args)
+	if err != nil {
+		return opts, err
+	}
+	// undeclare-prefixes needs the xmlns:p="" syntax, which only XML 1.1
+	// permits, so asking for it with version 1.0 is a request the output
+	// cannot express. The XSLT serializer raises the same code for the same
+	// combination; see its checkOutputParams, which gates the check on the
+	// method the same way -- text, html and json write no namespace
+	// declaration at all, so the parameter asks nothing of them.
+	if (opts.method == "xml" || opts.method == "xhtml") &&
+		opts.undeclarePrefixes && xmlDeclVersion(opts.version) != "1.1" {
+		return opts, fmt.Errorf("SEPM0010: undeclare-prefixes requires XML 1.1, " +
+			"but the output version is 1.0")
+	}
+	return opts, nil
+}
+
+// readSerializationParams reads the parameters without validating them
+// against each other; serializationParams wraps it.
+func readSerializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, error) {
 	opts := serializeOptions{method: "xml", omitXMLDecl: true}
 	if len(args) < 2 {
 		return opts, nil
@@ -317,9 +343,18 @@ func serializationParams(ctx *Context, args []xdm.Sequence) (serializeOptions, e
 				// serializer; this is its twin. On the accept-and-ignore list
 				// it announced 1.0 over output the caller asked to be 1.1.
 				opts.version = val
+			case "undeclare-prefixes":
+				// The XSLT serializer honours this parameter and this one
+				// used to ignore it, so the same stylesheet got namespace
+				// undeclarations from xsl:result-document and not from
+				// fn:serialize. See writeNamespaceDecls.
+				if err := checkYesNo(val, p.Name.Local); err != nil {
+					return opts, err
+				}
+				opts.undeclarePrefixes = val == "yes"
 			case "media-type",
 				"doctype-public", "doctype-system", "cdata-section-elements",
-				"normalization-form", "undeclare-prefixes",
+				"normalization-form",
 				"byte-order-mark", "escape-uri-attributes", "include-content-type",
 				"allow-duplicate-names", "json-node-output-method",
 				"suppress-indentation":
@@ -500,7 +535,7 @@ func serializeNode(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	case xdm.KindElement:
 		sb.WriteString("<")
 		sb.WriteString(elementName(n))
-		writeNamespaceDecls(sb, n)
+		writeNamespaceDecls(sb, n, opts)
 		// Attributes are written in the order the document had them, which is
 		// what a round-trip test compares against.
 		for _, a := range n.Attrs {
@@ -618,7 +653,7 @@ func elementName(n *xdm.Node) string {
 // Only those not already in force on the parent: repeating an inherited
 // declaration on every descendant is legal but makes the output differ from
 // what the round-trip tests expect.
-func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
+func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node, opts serializeOptions) {
 	inherited := map[string]string{}
 	for p := n.Parent; p != nil; p = p.Parent {
 		for _, ns := range p.Namespaces {
@@ -631,6 +666,19 @@ func writeNamespaceDecls(sb *strings.Builder, n *xdm.Node) {
 	var decls []decl
 	for _, ns := range n.Namespaces {
 		if inherited[ns.Name.Local] == ns.Value {
+			continue
+		}
+		// A namespace undeclaration for a *prefix* -- xmlns:p="" -- is syntax
+		// only XML 1.1 has, and the parameter that asks for it is
+		// undeclare-prefixes. Without it the binding is left out of the
+		// output, which loses nothing a 1.0 reader can express: a prefix no
+		// name in the subtree uses cannot be missed. The XSLT serializer
+		// makes the same choice in the same words.
+		//
+		// The default-namespace undeclaration xmlns="" is a separate matter:
+		// it is legal in XML 1.0 and is written regardless, since omitting it
+		// would move an element into a namespace it is not in.
+		if ns.Value == "" && ns.Name.Local != "" && !opts.undeclarePrefixes {
 			continue
 		}
 		decls = append(decls, decl{ns.Name.Local, ns.Value})
@@ -858,9 +906,17 @@ func mapSerializationParams(m *xdm.MapItem, opts serializeOptions) (serializeOpt
 				return err
 			}
 			opts.version = v
+		case "undeclare-prefixes":
+			// Typed here, as every boolean in the map form is: the parameter
+			// holds an xs:boolean, not the string "yes".
+			v, err := boolParam(name, val)
+			if err != nil {
+				return err
+			}
+			opts.undeclarePrefixes = v
 		case "media-type", "doctype-public",
 			"doctype-system", "normalization-form",
-			"undeclare-prefixes", "byte-order-mark", "escape-uri-attributes",
+			"byte-order-mark", "escape-uri-attributes",
 			"include-content-type", "suppress-indentation",
 			"html-version", "parameter-document":
 			// Recognised and accepted; this serialiser does not vary its

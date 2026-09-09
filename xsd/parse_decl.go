@@ -1045,6 +1045,27 @@ func (p *parser) resolveTypeRefLazy(el *xdm.Node, ref string, set func(Type), mi
 	p.fixups = append(p.fixups, func() error {
 		t, ok := p.schema.Types[name]
 		if !ok {
+			// A name the assembly does define, as something other
+			// than a type, is wrong rather than missing. The
+			// deferral below exists because a document read later
+			// might still supply the type; no later document can
+			// turn an attribute declaration into a type
+			// definition, so there is nothing to wait for.
+			//
+			// This is what separates elemM002 from missing001.
+			// Both write an unprefixed type= into the absent
+			// namespace of a schema that declares components
+			// there, so deferrableMiss answers the same for each --
+			// but missing001's "absent" names nothing at all,
+			// while elemM002's "foo" is the <xsd:attribute
+			// name="foo"/> beside it. §3.3.2 requires type= to
+			// resolve to a type definition, and this one resolves
+			// to a component of the wrong kind.
+			if _, isAttr := p.schema.Attributes[name]; isAttr {
+				return errorAt(el, "src-resolve",
+					"type %q names an attribute declaration, "+
+						"not a type definition", ref)
+			}
 			if miss != nil && p.deferrableMiss(name.URI) {
 				miss(ref)
 				return nil

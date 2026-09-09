@@ -311,9 +311,9 @@ func TestUnrecognisedAttributeType(t *testing.T) {
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ID #IMPLIED>]><r a="i1"/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NMTOKEN #IMPLIED>]><r a="tok"/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NMTOKENS #IMPLIED>]><r a="a b"/>`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITY #IMPLIED>]><r a="e"/>`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITIES #IMPLIED>]><r a="e f"/>`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n1"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ENTITY e SYSTEM "e.gif" NDATA gif><!NOTATION gif SYSTEM "g"><!ATTLIST r a ENTITY #IMPLIED>]><r a="e"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ENTITY e SYSTEM "e.gif" NDATA gif><!ENTITY f SYSTEM "f.gif" NDATA gif><!NOTATION gif SYSTEM "g"><!ATTLIST r a ENTITIES #IMPLIED>]><r a="e f"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION n1 SYSTEM "1"><!NOTATION n2 SYSTEM "2"><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n1"/>`,
 		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (x|y) #IMPLIED>]><r a="x"/>`,
 		`<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY><!ATTLIST r ref IDREF #IMPLIED><!ATTLIST c id ID #IMPLIED>]><r ref="i1"><c id="i1"/></r>`,
 		`<!DOCTYPE r [<!ELEMENT r (c)><!ELEMENT c EMPTY><!ATTLIST r ref IDREFS #IMPLIED><!ATTLIST c id ID #IMPLIED>]><r ref="i1 i1"><c id="i1"/></r>`,
@@ -325,11 +325,11 @@ func TestUnrecognisedAttributeType(t *testing.T) {
 	}
 	// The types that are enforced must keep biting.
 	invalid := map[string]string{
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREF #IMPLIED>]><r ref="nowhere"/>`:                          `IDREF "nowhere" matches no ID`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFS #IMPLIED>]><r ref="a b"/>`:                             `IDREF "a" matches no ID`,
-		`<!DOCTYPE r [<!ELEMENT r (c,c)><!ELEMENT c EMPTY><!ATTLIST c id ID #IMPLIED>]><r><c id="d"/><c id="d"/></r>`: `duplicate ID "d"`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (x|y) #IMPLIED>]><r a="z"/>`:                                    `attribute a = "z" is not one of x, y`,
-		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n3"/>`:                        `attribute a = "n3" is not one of n1, n2`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREF #IMPLIED>]><r ref="nowhere"/>`:                                                     `IDREF "nowhere" matches no ID`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r ref IDREFS #IMPLIED>]><r ref="a b"/>`:                                                        `IDREF "a" matches no ID`,
+		`<!DOCTYPE r [<!ELEMENT r (c,c)><!ELEMENT c EMPTY><!ATTLIST c id ID #IMPLIED>]><r><c id="d"/><c id="d"/></r>`:                            `duplicate ID "d"`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (x|y) #IMPLIED>]><r a="z"/>`:                                                               `attribute a = "z" is not one of x, y`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION n1 SYSTEM "1"><!NOTATION n2 SYSTEM "2"><!ATTLIST r a NOTATION (n1|n2) #IMPLIED>]><r a="n3"/>`: `attribute a = "n3" is not one of n1, n2`,
 	}
 	for src, want := range invalid {
 		err := check(t, src)
@@ -340,5 +340,180 @@ func TestUnrecognisedAttributeType(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to contain %q", err, want)
 		}
+	}
+}
+
+// XML 1.0 §3.3.1, Notation Attributes: every name in the enumeration of a
+// NOTATION attribute must be declared by a <!NOTATION>. The gap this closes
+// was that the enumeration was applied to the VALUE and never to itself, so a
+// DTD restricting an attribute to notations that do not exist validated.
+func TestNotationMustBeDeclared(t *testing.T) {
+	// The negative arm first, and it is the one that matters: a check that
+	// rejected every NOTATION attribute would pass the positive arm alone.
+	valid := []string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION gif SYSTEM "g"><!NOTATION jpeg SYSTEM "j"><!ATTLIST r a NOTATION (gif|jpeg) #IMPLIED>]><r a="gif"/>`,
+		// Absent is still valid: #IMPLIED means the attribute need not occur,
+		// but the declaration is checked whether or not it does.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION gif SYSTEM "g"><!ATTLIST r a NOTATION (gif) #IMPLIED>]><r/>`,
+		// PUBLIC and the two-identifier form declare a notation just as
+		// SYSTEM does, and the identifiers are no part of the check.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION gif PUBLIC "-//x//NOTATION gif//EN"><!ATTLIST r a NOTATION (gif) #IMPLIED>]><r a="gif"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION gif PUBLIC "-//x//g//EN" "g.dtd"><!ATTLIST r a NOTATION (gif) #IMPLIED>]><r a="gif"/>`,
+		// A plain enumeration is not a NOTATION type and its members are
+		// values, not notation names — nothing declares them anywhere.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a (gif|jpeg) #IMPLIED>]><r a="gif"/>`,
+		// The declaration order is not the reference order: a <!NOTATION>
+		// after the <!ATTLIST> that names it still declares it.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (gif) #IMPLIED><!NOTATION gif SYSTEM "g">]><r a="gif"/>`,
+	}
+	for _, src := range valid {
+		if err := check(t, src); err != nil {
+			t.Errorf("%s should be valid: %v", src, err)
+		}
+	}
+
+	invalid := map[string]string{
+		// Neither name declared.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (gif|jpeg) #IMPLIED>]><r a="gif"/>`: `permits the notation gif, which no <!NOTATION> declares`,
+		// One of two declared: the other must still be reported, or a DTD
+		// need only declare one notation to pass.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!NOTATION gif SYSTEM "g"><!ATTLIST r a NOTATION (gif|jpeg) #IMPLIED>]><r a="gif"/>`: `permits the notation jpeg, which no <!NOTATION> declares`,
+		// The fault is in the DTD, so it is reported even when the document
+		// never carries the attribute.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a NOTATION (gif) #REQUIRED>]><r a="gif"/>`: `permits the notation gif, which no <!NOTATION> declares`,
+	}
+	for src, want := range invalid {
+		err := check(t, src)
+		if err == nil {
+			t.Errorf("%s should be invalid", src)
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// A DTD fault is a property of the declaration, so it is reported once however
+// many elements carry the attribute. Without this the finding buries itself.
+func TestUndeclaredNotationReportedOnce(t *testing.T) {
+	err := check(t, `<!DOCTYPE r [<!ELEMENT r (c,c,c)><!ELEMENT c EMPTY>`+
+		`<!ATTLIST c a NOTATION (gif) #IMPLIED>]>`+
+		`<r><c a="gif"/><c a="gif"/><c a="gif"/></r>`)
+	if err == nil {
+		t.Fatal("an undeclared notation must be reported")
+	}
+	if n := strings.Count(err.Error(), "which no <!NOTATION> declares"); n != 1 {
+		t.Errorf("reported %d times, want 1: %v", n, err)
+	}
+}
+
+// XML 1.0 §3.3.1, Entity Name: the value of an ENTITY attribute must match the
+// name of an unparsed entity — one declared external WITH an NDATA notation.
+// ENTITIES is the same rule over a whitespace-separated list.
+func TestEntityAttributesMustNameUnparsedEntities(t *testing.T) {
+	const decls = `<!NOTATION gif SYSTEM "g">` +
+		`<!ENTITY logo SYSTEM "logo.gif" NDATA gif>` +
+		`<!ENTITY icon PUBLIC "-//x//icon//EN" "icon.gif" NDATA gif>`
+
+	valid := []string{
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITY #IMPLIED>]><r a="logo"/>`,
+		// The PUBLIC form declares an unparsed entity just as SYSTEM does.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITY #IMPLIED>]><r a="icon"/>`,
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITIES #IMPLIED>]><r a="logo icon"/>`,
+		// Irregular whitespace between the names is still whitespace.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITIES #IMPLIED>]><r a="  logo` + "\n\t" + `icon  "/>`,
+		// A repeated name is a name that resolves twice, not an error.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITIES #IMPLIED>]><r a="logo logo"/>`,
+		// Absent is valid; the value rule has nothing to apply to.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITY #IMPLIED>]><r/>`,
+		// A declaration order that puts the entity after the attribute list.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITY #IMPLIED>` + decls + `]><r a="logo"/>`,
+	}
+	for _, src := range valid {
+		if err := check(t, src); err != nil {
+			t.Errorf("%s should be valid: %v", src, err)
+		}
+	}
+
+	invalid := map[string]string{
+		// Never declared at all.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITY #IMPLIED>]><r a="nope"/>`: `attribute a = "nope" names no unparsed entity`,
+		// Declared, but INTERNAL — it has replacement text, so it is parsed
+		// and naming it here is as wrong as naming nothing. This is the arm
+		// that separates "is it declared" from "is it unparsed".
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ENTITY p "text"><!ATTLIST r a ENTITY #IMPLIED>]><r a="p"/>`: `attribute a = "p" names no unparsed entity`,
+		// Declared external but with no NDATA: a parsed external entity.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY><!ENTITY x SYSTEM "x.xml"><!ATTLIST r a ENTITY #IMPLIED>]><r a="x"/>`: `attribute a = "x" names no unparsed entity`,
+		// One good name and one bad in an ENTITIES list: the bad one must
+		// still be found, or a list need only start well to pass.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITIES #IMPLIED>]><r a="logo nope"/>`: `attribute a = "nope" names no unparsed entity`,
+		// An empty ENTITIES value names nothing, and Names requires one.
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>` + decls + `<!ATTLIST r a ENTITIES #IMPLIED>]><r a="   "/>`: `is ENTITIES but is empty`,
+	}
+	for src, want := range invalid {
+		err := check(t, src)
+		if err == nil {
+			t.Errorf("%s should be invalid", src)
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+// A parameter entity is not a general entity and can never be unparsed, so its
+// name must not enter the table — "%pe;" would otherwise let "pe" pass as the
+// value of an ENTITY attribute.
+func TestParameterEntityIsNotUnparsed(t *testing.T) {
+	err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY>`+
+		`<!ENTITY % pe "NDATA gif"><!ATTLIST r a ENTITY #IMPLIED>]><r a="pe"/>`)
+	if err == nil {
+		t.Fatal("a parameter entity must not satisfy an ENTITY attribute")
+	}
+	if want := `attribute a = "pe" names no unparsed entity`; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+}
+
+// A DTD-supplied default is a value like any other: xdm materialises it onto
+// the element, so §3.3.1 applies to it. A check that read only attributes
+// written in the instance would miss it.
+func TestDefaultedEntityValueIsChecked(t *testing.T) {
+	if err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY>`+
+		`<!NOTATION gif SYSTEM "g"><!ENTITY logo SYSTEM "l.gif" NDATA gif>`+
+		`<!ATTLIST r a ENTITY "logo">]><r/>`); err != nil {
+		t.Errorf("a default naming a declared unparsed entity is valid: %v", err)
+	}
+	err := check(t, `<!DOCTYPE r [<!ELEMENT r EMPTY><!ATTLIST r a ENTITY "nope">]><r/>`)
+	if err == nil {
+		t.Fatal("a default naming no unparsed entity must be reported")
+	}
+	if want := `attribute a = "nope" names no unparsed entity`; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+}
+
+// DTD's name sets are exported maps, so a caller may assemble a DTD by hand
+// and leave them nil. Nil must mean "not recorded" rather than "empty", or
+// hand-built rulesets would report every notation and entity as undeclared.
+func TestHandBuiltDTDWithoutNameSets(t *testing.T) {
+	tree, err := xdm.ParseString(
+		`<!DOCTYPE r [<!ELEMENT r EMPTY>]><r a="gif" e="logo"/>`,
+		xdm.ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DTD{
+		Elements: map[string]*Element{"r": {Name: "r", Kind: ContentEmpty}},
+		Attributes: map[string][]*Attribute{"r": {
+			{Element: "r", Name: "a", Type: "NOTATION", Enum: []string{"gif"}},
+			{Element: "r", Name: "e", Type: "ENTITY"},
+		}},
+		// Notations and Unparsed deliberately nil.
+	}
+	if err := Validate(tree.Root, d, Options{}); err != nil {
+		t.Errorf("nil name sets must not make everything undeclared: %v", err)
 	}
 }

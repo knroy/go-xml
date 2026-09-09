@@ -515,8 +515,10 @@ directly.
 
 ### Schema-validity rules not yet implemented (XSD)
 
-**3 schema false accepts in 1.0, 6 in 1.1** — invalid schemas this loads
-without complaint. The figures that stood here before (195 and 305, with a
+**1 schema false accept in 1.0, 4 in 1.1** — invalid schemas this loads
+without complaint. Two of the rules listed here as open have since been
+implemented; their rows are kept below, marked fixed, because the reason each
+was hard to see is the useful part. The figures that stood here before (195 and 305, with a
 nine-row cluster table) were stale by two orders of magnitude: they were
 measured before the bulk of these rules landed, and the cluster table described
 a distribution that no longer exists. There is no cluster left to tabulate. At
@@ -524,13 +526,78 @@ this count the remaining cases are named individually.
 
 | Case | Versions | Constraint | Verdict |
 |---|---|---|---|
-| `MS-Element/elemM002` | 1.0, 1.1 | `type="foo"` names an *attribute* declaration | open, small |
-| `MS-IdentityConstraint/idC019` | 1.0, 1.1 | `keyref` resolving `refer` across an unfetched import | open |
+| `MS-Element/elemM002` | 1.0, 1.1 | `type="foo"` names an *attribute* declaration | **fixed** — see below |
+| `MS-IdentityConstraint/idC019` | 1.0, 1.1 | `keyref` resolving `refer` across a namespace the declaring document never imported | **fixed** — see below |
 | `MS-DataTypes/anyURI_b006_1356` | 1.0 only | RFC 2396 excluded characters in an `anyURI` enumeration | won't fix — see below |
 | `Simple/simple093` | 1.1 only | `xs:NOTATION` as a union member type | won't fix — see below |
 | `MS-Element/elemZ026` | 1.1 only | a 1.0 substitution-group rewrite XSD 1.1 deleted | won't fix — see below |
 | `MS-Particles/particlesZ026a` | 1.1 only | same, plus a validity the W3C never settled | won't fix — see below |
 | `MS-Particles/particlesZ033_g` | 1.1 only | a 1.0-era `invalid` verdict inherited by the 1.1 run | won't fix — see below |
+
+### Two rules that were open after all (elemM002, idC019)
+
+Both were **false accepts** — invalid schemas loading clean — and both are
+fixed. They are recorded together because the reason each was invisible is the
+same shape: a deliberate, correct piece of latitude, applied one step too
+widely.
+
+**`MS-Element/elemM002`.** `<xsd:element name="myElem" type="foo"/>` sits
+beside `<xsd:attribute name="foo"/>`. §3.3.2 requires `type=` to resolve to a
+*type definition*, and this one resolves to a component of the wrong kind.
+
+What hid it is the deferral §3.3.3 grants an element declaration, implemented
+in `deferrableMiss`: a missing type matters only where the declaration is used,
+so an unresolved name may be carried on the component instead of reported. The
+unprefixed `type="foo"` lands in the absent namespace, the schema declares
+components there, and `deferrableMiss` therefore answered true. But the
+deferral exists because a document read *later* might supply the type, and no
+document can turn an attribute declaration into a type definition. The miss is
+final at the moment it is made. `resolveTypeRefLazy` now reports a name the
+assembly defines as something other than a type before it consults the
+deferral at all.
+
+The case that keeps this honest is `saxonData Missing/missing001`. It writes
+`type="absent"` into the absent namespace of a schema that declares components
+there — identical to elemM002 in every respect `deferrableMiss` can see — but
+`absent` names *nothing at all*, so nothing contradicts the deferral and the
+schema still loads, as the suite expects. A check that rejected both would not
+have implemented the rule; it would have broken the deferral.
+
+**`MS-IdentityConstraint/idC019`.** `schema.identityConstraints` is one flat
+map over the whole assembly, so a `refer=` lookup that ignores *which document
+asked* can cross a namespace boundary the asking document never imported.
+§4.2.6.1 `src-resolve` scopes the licence an `<xs:import>` grants to the
+document that wrote it — which is exactly why `doc.imports` already existed
+beside the per-assembly `importedNamespaces`. The `refer=` fixup was not
+consulting it.
+
+idC019 imports `idC017a.xsd`, whose `targetNamespace` is `diffNS` and whose
+`keyref` writes `refer="keyName"` **unprefixed**, with no default namespace in
+scope. §3.11.2 resolves that to the *absent* namespace, not to the target one —
+the distinction that trips readers of every QName-valued attribute in XSD.
+Nothing in `diffNS` declares `keyName`; the match came from the importing
+document's own absent namespace, which `idC017a.xsd` does not import. The
+suite's own annotation states the rule: "TSTF agreed that an un-imported NS
+used in a QName is a schema error."
+
+`resolveQName` already runs `checkReferenceImported` for `refer=`, and it still
+cannot catch this one: an unprefixed name with no default namespace in scope
+returns early through `chameleonQName`, before the switch that calls the check
+is reached. So the test belongs at the fixup, which now captures its declaring
+document and requires the key's namespace to be that document's own target
+namespace or one it imports.
+
+The negative arm is the ordinary case and the common one — a `keyref` naming a
+key in its own target namespace — plus one naming a key across a namespace the
+document *does* import. Dropping the `imports` half of the test breaks the
+second, which is what makes it part of the rule rather than decoration.
+
+Both fixes are covered in `xsd/falseaccept_test.go`, each with the negative arm
+beside it. Measured in an isolated worktree, the two together move XSD 1.0
+schema agreement 14,383 → **14,385** (disagreements 5 → 3) and 1.1 15,347 →
+**15,349** (7 → 5), with both instance lanes unchanged case for case, no new
+disagreement on either version, and the vendored-schema corpus steady at 185
+loaded.
 
 Four of these are not gaps to be closed. `anyURI_b006` and `simple093` are
 cases where the suite contradicts itself, and enforcing either rule costs more
@@ -1164,12 +1231,14 @@ shape has been found here: the particle-restriction constraint had the same
 gap. When adding a schema-component constraint, check that the walk reaching it
 visits anonymous types too.
 
-What remains is short enough to name. Both versions carry `elemM002`
-(queried, bug 29085) and `idC019` (bug 4057); 1.0 adds `anyURI_b006_1356`
-(bug 4048), and 1.1 adds `elemZ026` (bug 4146), `particlesZ026a` (bug 4071),
-`particlesZ033_g` and `simple093` — the last two the only ones the suite
-marks `accepted`, and `simple093` is argued under *Suite cases that should be
-read as disputed* below, where enforcing its rule costs `particlesZ007`.
+What remains is short enough to name. `elemM002` (queried, bug 29085) and
+`idC019` (bug 4057) stood on both versions and are now **fixed** — written up
+under *Two rules that were open after all* above. That leaves 1.0 with
+`anyURI_b006_1356` (bug 4048), and 1.1 with `elemZ026` (bug 4146),
+`particlesZ026a` (bug 4071), `particlesZ033_g` and `simple093` — the last two
+the only ones the suite marks `accepted`, and `simple093` is argued under
+*Suite cases that should be read as disputed* below, where enforcing its rule
+costs `particlesZ007`.
 
 Each is an unwritten Schema Component Constraint. There is no single change
 here: it is one rule at a time, and **every rule added is a chance to reject a

@@ -46,7 +46,10 @@ err = dtd.Validate(tree.Root, d, dtd.Options{})
 ```
 
 That checks `<!ELEMENT>` content models, attribute presence (`#REQUIRED` and
-`#FIXED`), enumerated values, and `ID`/`IDREF`. The content models go through
+`#FIXED`), enumerated values, `ID`/`IDREF`, and §3.3.1's two cross-referencing
+rules — a `NOTATION` attribute's enumeration must name only declared
+`<!NOTATION>`s, and an `ENTITY`/`ENTITIES` attribute must name entities
+declared with `NDATA`. The content models go through
 the same Glushkov automaton the XSD validator uses — a DTD model is a strict
 subset of what an `xsd.Particle` expresses, so there is no second engine.
 
@@ -100,6 +103,14 @@ Four things to know before relying on it:
 `ID`/`IDREF` are checked as a *validity* constraint, but the attribute types
 are not fed back into the data model, which is why `fn:id` still falls back to
 `xml:id` and a conventional `id` attribute.
+
+`NOTATION` and `ENTITY`/`ENTITIES` are checked against the rest of the DTD
+rather than against a value space, so both are skipped when only half the DTD
+was read — `dtd.Parse`, or `dtd.Load` with `InternalSubsetOnly`. A name absent
+from an internal subset may simply be declared in the external one, and
+reporting it would reject a document that is valid. An undeclared notation is
+also reported once per `<!ATTLIST>`, not once per element, because the fault
+is in the declaration.
 
 The default is off for a reason beyond that: a DTD is the entry point for
 entity expansion and XXE, so permitting one is a decision to make per document

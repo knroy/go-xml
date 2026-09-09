@@ -739,3 +739,61 @@ func TestExternalLimitBoundaries(t *testing.T) {
 		t.Errorf("every bound unlimited should load: %v", err)
 	}
 }
+
+// A notation or unparsed entity declared in the external subset satisfies an
+// attribute list declared in the internal one, and the reverse. The check is
+// over the merged DTD, or a modular DTD — where the notations live in one
+// module and the attribute lists in another — would fail wholesale.
+func TestNotationsAndEntitiesSpanBothSubsets(t *testing.T) {
+	opts := mapOpts(map[string]string{
+		"r.dtd": `<!ELEMENT r EMPTY>
+<!NOTATION gif SYSTEM "g">
+<!ENTITY logo SYSTEM "logo.gif" NDATA gif>`,
+	})
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ATTLIST r n NOTATION (gif) #IMPLIED e ENTITY #IMPLIED>
+]>`
+	if err := loadCheck(t, doc+`<r n="gif" e="logo"/>`, opts); err != nil {
+		t.Errorf("declarations from the external subset should satisfy the "+
+			"internal attribute list: %v", err)
+	}
+	// And the check still bites across the join: a name neither subset
+	// declares is still undeclared.
+	if err := loadCheck(t, `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ATTLIST r n NOTATION (gif|jpeg) #IMPLIED>
+]><r n="gif"/>`, opts); err == nil {
+		t.Error("jpeg is declared in neither subset and must be reported")
+	}
+}
+
+// With no resolver a DOCTYPE naming an external subset is refused outright, so
+// the only way to hold half a DTD is to ask for it. Having asked, a caller
+// must not then be told that every notation and entity is undeclared: the
+// declarations may be in the half that was never read. Reporting them would
+// reject a valid document, which is worse than the missing check.
+func TestPartialSubsetDoesNotInventUndeclaredNotations(t *testing.T) {
+	const doc = `<!DOCTYPE r SYSTEM "r.dtd" [
+<!ELEMENT r EMPTY>
+<!ATTLIST r n NOTATION (gif) #IMPLIED e ENTITY #IMPLIED>
+]><r n="gif" e="logo"/>`
+	tree, err := xdm.ParseString(doc, xdm.ParseOptions{AllowDOCTYPE: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Load(tree.DocType, LoadOptions{InternalSubsetOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, d, Options{}); err != nil {
+		t.Errorf("half a DTD cannot say a notation is undeclared: %v", err)
+	}
+	// Parse reads the internal subset alone and must reach the same
+	// conclusion, since it records the same HasExternalSubset.
+	p, err := Parse(tree.DocType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(tree.Root, p, Options{}); err != nil {
+		t.Errorf("Parse: half a DTD cannot say a notation is undeclared: %v", err)
+	}
+}

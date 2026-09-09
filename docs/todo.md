@@ -7,8 +7,8 @@ Current position:
 
 | | schema-validity | instance |
 |---|---|---|
-| XSD 1.0 | 14,383 / 14,388 (99.97%) | 24,973 / 25,000 (99.89%) |
-| XSD 1.1 | 15,347 / 15,354 (99.95%) | 26,196 / 26,222 (99.90%) |
+| XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
+| XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,302 of 19,302 in scope |
 | XPath 3.1 | 100.00% — 21,838 of 21,838 in scope (0 failing) |
@@ -17,7 +17,7 @@ Current position:
 | XSLT 3.0 | 98.46% — 11,348 of 11,525 in scope (177 failing); 150 of those 177 need the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,649 `func Test` declarations, clean under `-race` |
+| Tests | 1,668 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -249,11 +249,38 @@ schemas are marked invalid-by-design and skipped either way". That was true of
 the test driver, not of the suite: skipping them was a measurement bug, and
 they are roughly 14,000 real tests. See the correction in [xsd.md](xsd.md).
 
-What is left: **nothing measurable.** Schema-validity agreement is now 99.86%
-on 1.0 and 99.88% on 1.1, and none of the remaining disagreements is a fixable
-defect — see [conformance-gaps.md](conformance-gaps.md). The area table that
-stood here counted roughly 470 false accepts across attribute declarations,
-wildcards, identity constraints and notations; all of it has since landed.
+What is left: **two rules, and they have now landed.** The entry that stood
+here said "nothing measurable" and that none of the remaining disagreements was
+a fixable defect. Both halves were wrong, and *known-gaps.md* said so at the
+same time — its table marked `elemM002` and `idC019` "open" while this file
+called the area finished. Two entries drifted apart because the figures were
+re-measured and the prose was not.
+
+Both are now closed, and both were false *accepts* — invalid schemas this
+loaded without complaint, which is the direction that matters:
+
+- **`MS-Element/elemM002`** — `type="foo"` naming an `<xsd:attribute
+  name="foo"/>`. §3.3.2 requires `type=` to resolve to a type definition, and
+  this resolves to a component of the wrong kind. What hid it was the deferral
+  §3.3.3 grants an element declaration: the unprefixed name lands in the absent
+  namespace, `deferrableMiss` answers true, and the reference was carried on the
+  declaration instead of reported. The deferral exists because a document read
+  later might supply the type — but no document can turn an attribute
+  declaration into one, so here there is nothing to wait for.
+- **`MS-IdentityConstraint/idC019`** — a `keyref` whose `refer=` reaches a key
+  its own document never imported. §4.2.6.1 scopes an import's licence to the
+  document that wrote it, which is why `doc.imports` exists beside the
+  per-assembly set; the `refer=` fixup was reading the flat assembly-wide map
+  and ignoring who asked. `resolveQName`'s own import check could not catch it,
+  because an unprefixed name with no default namespace in scope returns early
+  through `chameleonQName`.
+
+Measured on an isolated worktree, each version gains exactly these two and
+nothing else moves: 1.0 schema agreement 14,383 → **14,385** (disagreements 5 →
+3), 1.1 15,347 → **15,349** (7 → 5), with both instance lanes unchanged case for
+case and the vendored-schema corpus steady at 185 loaded. What remains after
+them is in [conformance-gaps.md](conformance-gaps.md), and is dominated by the
+22-per-version `MS-Regex` cases the W3C has itself challenged.
 
 ---
 
