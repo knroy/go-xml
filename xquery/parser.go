@@ -64,6 +64,20 @@ type parser struct {
 	// answers for a prefix the module level does not have.
 	ctorPrefixes map[string]string
 
+	// opts are the compilation options, carried here for one purpose: the
+	// schema loader needs the store, the resolver and the budget at the end
+	// of the prolog, which is inside the parser rather than after it. The
+	// module loader takes them as an argument instead, because it runs after
+	// parsing and the call site has them in hand.
+	opts Options
+
+	// schemaImports accumulates the prolog's "import schema" declarations.
+	// They are followed by loadSchemas at the end of the prolog and BEFORE
+	// the query body is parsed, unlike moduleImports, which are followed
+	// after it: a schema contributes type names, which the body's parser
+	// resolves as it reads. See schemaimport.go.
+	schemaImports []schemaImport
+
 	// vars and funcs accumulate the prolog's declarations. They are on the
 	// parser rather than returned from parseProlog because a declaration
 	// later in the prolog may name one earlier — a function body calling

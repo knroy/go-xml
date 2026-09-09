@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // BoundarySpace is the boundary-space policy of §4.3: whether whitespace that
@@ -61,6 +62,22 @@ type staticContext struct {
 	// rebound: a version declaration may appear only once, and only before the
 	// prolog, so there is no scope in which it could change.
 	xqVersion XQVersion
+
+	// schema is the in-scope schema definitions (§2.1.1), assembled from the
+	// module's "import schema" declarations. It is nil when the module
+	// imported none, which is the case for every query that says nothing
+	// about schemas and is what keeps the built-in type table the only one
+	// consulted.
+	//
+	// It is a single schema rather than one per import because §2.1.1 makes
+	// the in-scope schema definitions ONE set: two imports of different
+	// namespaces contribute to the same table and a name is looked up once.
+	// See loadSchemas, which installs it before the query body is parsed.
+	//
+	// It is shared by child() rather than copied, deliberately: a schema
+	// import is a module-wide declaration and there is no constructor scope
+	// in which it could go out of scope.
+	schema *xsd.Schema
 
 	// ns maps a prefix to the URI bound to it. The XML prefix is bound from
 	// the start, as §4.1 requires, and cannot be rebound.

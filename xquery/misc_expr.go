@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/knroy/go-xml/xdm"
+	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // parseOrderedUnordered parses [136] "ordered { Expr }" and [137]
@@ -270,29 +272,29 @@ func (n *stringConstructor) sequence(ctx *evalContext) (xdm.Sequence, error) {
 // parseValidate parses [102] "validate (ValidationMode | type TypeName)?
 // EnclosedExpr", XQuery 3.1 §3.21.
 //
-// Schema import is not implemented, so the in-scope schema definitions are
-// always empty. What that means for the expression depends on the mode, and
-// the two halves are not the same answer:
+// The in-scope schema definitions are what the expression is judged against,
+// and "import schema" is what puts them there. With none imported the two
+// modes are still not the same answer, and the difference is the same one it
+// always was:
 //
 // Strict validation demands a declaration. §3.21 makes it XQDY0084 when "the
 // element does not have a top-level element declaration in the in-scope schema
-// definitions", which is true of every element here, so "validate strict" gets
-// the error a conformant processor with no imports would also give it.
+// definitions", which with no import is true of every element.
 //
 // Lax validation does not demand one. XSD 1.0 §3.3.4 clause 1.2 says lax
 // assessment of an element with no matching declaration is *skipped* — the
 // outcome is "notKnown", which is not an error — and the node comes through
 // unannotated. So "validate lax" over a constructed tree with nothing to
-// validate against succeeds and yields its operand. Refusing it was reading
-// the strict rule onto the lax keyword.
+// validate against succeeds and yields its operand.
 //
-// The mode is therefore kept rather than parsed and dropped. Type annotations
-// still cannot come from a schema, but they can come from xsi:type when it
-// names a built-in, which validateExpr handles; that much needs no import,
-// since the XSD built-ins are always available.
+// "validate type T" is parsed and its type name is kept, so that assessment
+// against a named type can be asked for; with no schema it is the same
+// XQDY0084 that strict is, since the name cannot be a type in an empty set of
+// definitions.
 func (p *parser) parseValidate() (node, bool, error) {
 	save := p.pos
 	lax := false
+	var typeName *xdm.QName
 	p.pos += len("validate")
 	p.skipSpaceAndComments()
 	switch {
@@ -303,9 +305,19 @@ func (p *parser) parseValidate() (node, bool, error) {
 		p.skipSpaceAndComments()
 	case p.consumeKeyword("type"):
 		p.skipSpaceAndComments()
-		if _, _, err := p.parseQName(); err != nil {
+		prefix, local, err := p.parseQName()
+		if err != nil {
 			return nil, true, err
 		}
+		// A TypeName is resolved with the default ELEMENT namespace applied
+		// to an unprefixed name, which is what "import schema default element
+		// namespace" makes it: §4.11 calls the imported namespace the default
+		// element AND TYPE namespace.
+		name, err := p.sc.resolveElementName(prefix, local)
+		if err != nil {
+			return nil, true, err
+		}
+		typeName = &name
 		p.skipSpaceAndComments()
 	}
 	if !p.lookingAt("{") {
@@ -327,20 +339,36 @@ func (p *parser) parseValidate() (node, bool, error) {
 			"XPST0003: a %q expression needs an expression to validate",
 			"validate")
 	}
-	return &validateExpr{body: body, lax: lax}, true, nil
+	return &validateExpr{body: body, lax: lax, typeName: typeName}, true, nil
 }
 
-// validateExpr is a parsed validate expression. Lax validation runs; every
-// other mode fails, because it needs schema definitions that were never
-// imported.
+// validateExpr is a parsed validate expression.
+//
+// The assessment is made against the in-scope schema definitions the module's
+// "import schema" declarations installed on the static context. A module that
+// imported none still evaluates the expression: lax assessment of an element
+// with no declaration is skipped rather than failed, and strict assessment of
+// one is XQDY0084 — which is what a conformant processor with an empty set of
+// definitions owes.
 type validateExpr struct {
 	body *enclosed
 	lax  bool
+	// typeName is the "validate type T" target, nil for the mode forms.
+	typeName *xdm.QName
 }
 
 func (n *validateExpr) eval(out *builderRef, ctx *evalContext) error {
-	_, err := n.sequence(ctx)
-	return err
+	// The result is APPENDED, not discarded. §3.21 makes the value of a
+	// validate expression its validated operand, so "validate lax { <a/> }"
+	// as a whole query yields that element -- and discarding it here made
+	// every validate expression in tail position evaluate to the empty
+	// sequence, which was invisible while strict was the only mode that
+	// reached this at all.
+	seq, err := n.sequence(ctx)
+	if err != nil {
+		return err
+	}
+	return appendSequence(out, seq, ctx.sc)
 }
 
 func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
@@ -362,17 +390,92 @@ func (n *validateExpr) sequence(ctx *evalContext) (xdm.Sequence, error) {
 		return nil, xdm.Errorf("XQTY0030",
 			"validate requires an element or document node")
 	}
-	if !n.lax {
-		return nil, xdm.Errorf("XQDY0084",
-			"validate has no in-scope schema definitions to validate "+
-				"against: schema import is not implemented")
+	schema := ctx.sc.schema
+	if schema == nil {
+		// No "import schema": the in-scope schema definitions are empty.
+		if !n.lax {
+			// Including "validate type T", whose named type cannot be in an
+			// empty set of definitions either.
+			return nil, xdm.Errorf("XQDY0084",
+				"validate has no in-scope schema definitions to validate "+
+					"against: the query imported no schema")
+		}
+		// Lax assessment with empty in-scope schema definitions finds no
+		// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes
+		// that a skipped assessment rather than a failure. The tree therefore
+		// comes through as it was built, with one exception below.
+		annotateBuiltinXSIType(root)
+		return seq, nil
 	}
-	// Lax assessment with empty in-scope schema definitions finds no
-	// declaration for any element, and XSD 1.0 §3.3.4 clause 1.2 makes that
-	// a skipped assessment rather than a failure. The tree therefore comes
-	// through as it was built, with one exception below.
-	annotateBuiltinXSIType(root)
-	return seq, nil
+
+	// §3.21 validates a COPY: "the validate expression returns a new copy of
+	// its operand", so the annotations the assessment stamps must not reach
+	// the node the operand expression yielded, which may be part of an input
+	// document the query can still see. Everything below therefore runs over
+	// the copy, and the copy is what is returned.
+	root = xdmbuild.DeepCopy(root)
+
+	// A document node's validation root is its element child, and the
+	// document-level constraints — ID/IDREF among them — apply over the whole
+	// tree; a bare element is assessed on its own content alone. The
+	// distinction is the same one xslt/validate.go draws and is why
+	// SkipIDConstraints is set for the element case.
+	target, docNode := root, false
+	if target.Kind == xdm.KindDocument {
+		var elem *xdm.Node
+		for _, ch := range target.Children {
+			if ch.Kind == xdm.KindElement {
+				elem = ch
+				break
+			}
+		}
+		if elem == nil {
+			return nil, xdm.Errorf("XQDY0084",
+				"validate: the document node has no element to validate")
+		}
+		target, docNode = elem, true
+	}
+
+	vopts := xsd.ValidateOptions{Annotate: true, SkipIDConstraints: !docNode}
+	var verr error
+	switch {
+	case n.typeName != nil:
+		// "validate type T" assesses against the named type rather than
+		// against a declaration. §3.21: the type must be in the in-scope
+		// schema definitions, and XQDY0084 is what says it is not.
+		if _, ok := schema.Types[xdm.QName{URI: n.typeName.URI,
+			Local: n.typeName.Local}]; !ok {
+			return nil, xdm.Errorf("XQDY0084",
+				"validate type %s: no such type in the in-scope schema "+
+					"definitions", n.typeName.Lexical())
+		}
+		verr = schema.ValidateAgainstType(target, *n.typeName, vopts)
+	case n.lax:
+		verr = schema.ValidateElementLax(target, vopts)
+	default:
+		// CanAssessStrictly rather than a bare declaration lookup: an element
+		// carrying xsi:type is assessed against the type it names even with
+		// no declaration of its own, so refusing it here would report a
+		// missing declaration for a tree the schema can in fact assess.
+		if !schema.CanAssessStrictly(target) {
+			// §3.21 gives XQDY0084 for exactly this: "the element does not
+			// have a top-level element declaration in the in-scope schema
+			// definitions". qischema90131-err and -90151-err are the cases.
+			return nil, xdm.Errorf("XQDY0084",
+				"validate strict: no top-level element declaration for %s "+
+					"in the in-scope schema definitions",
+				target.Name.Lexical())
+		}
+		verr = schema.Validate(target, vopts)
+	}
+	if verr != nil {
+		// §3.21 gives XQDY0027 for a validate expression whose operand was
+		// assessed and found invalid, which is the code every mode shares —
+		// unlike XSLT, which splits it by mode.
+		return nil, xdm.Errorf("XQDY0027",
+			"validate: the operand is not valid: %s", verr.Error())
+	}
+	return xdm.One(root), nil
 }
 
 // annotateBuiltinXSIType stamps the type annotation an xsi:type attribute

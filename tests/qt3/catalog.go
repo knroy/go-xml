@@ -149,6 +149,11 @@ type Source struct {
 	Role string `xml:"role,attr"`
 	File string `xml:"file,attr"`
 	URI  string `xml:"uri,attr"`
+	// Validation asks for the document to arrive already schema-validated and
+	// annotated, which is typed data rather than schema import. The runner
+	// skips such a case rather than supplying an untyped document under a
+	// name that claims otherwise.
+	Validation string `xml:"validation,attr"`
 }
 
 type Param struct {

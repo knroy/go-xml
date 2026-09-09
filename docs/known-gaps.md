@@ -74,19 +74,26 @@ policy that names which namespaces may be resolved.
 
 ### `fn:collection()` raises an error rather than returning empty
 
-`CTA/cta0022` (XSD), 7 cases in QT3 `fn-collection`.
+*The policy is unchanged; nothing scores against it any more.* Both the cases
+this entry was written about have left the disagreement lists — `CTA/cta0022`
+is fixed, and the 7 QT3 `fn-collection` cases pass. Neither appears in the
+current QT3 run. The reasoning is kept because it is the argument for the
+default, and the default is what a future caller will meet.
 
-`cta0022` wants `empty(collection())` to be true. Returning an empty sequence
+`cta0022` wanted `empty(collection())` to be true. Returning an empty sequence
 for an unconfigured collection would let a stylesheet silently process no
-documents and report success, which is worse than an error. `FODC0002` stands.
+documents and report success, which is worse than an error, so `FODC0002`
+stands as the default. What actually made `cta0022` fail was something else
+entirely: its type alternative's XPath was *raising* rather than answering, and
+a type alternative whose test raises is silently skipped, so a crash was
+indistinguishable from a false test. That is fixed.
 
-The 7 QT3 cases are a different matter and are listed under *Open* below: they
-supply real documents through a `<collection>` environment, so they are a
-capability gap rather than a disagreement. That gap is now closed, in the
-engine and in the harness.
+The 7 QT3 cases were never a disagreement about this policy. They supply real
+documents through a `<collection>` environment, so they were a capability gap;
+it is closed, in the engine and in the harness.
 
-Note that `cta0022` is unaffected by the hook. With no resolver configured the
-default is still `FODC0002`, which is the point.
+Note that the default is unaffected by the hook. With no resolver configured it
+is still `FODC0002`, which is the point.
 
 ### Two schema false accepts the suite contradicts itself on
 
@@ -136,7 +143,9 @@ comment in `facet_check.go` records the measurement so it is not retried.
 entry said 18 and the ceiling section below said nineteen; both were stale. The
 list is enumerated here so the next re-measurement can diff it rather than
 re-count.) They are two thirds of every disagreement the suite reports against
-this engine — 22 of 33 on 1.0 and 22 of 34 on 1.1.
+this engine — 22 of 30 on 1.0 and 22 of 31 on 1.1. (Those denominators were
+33 and 34 when this was written; `elemM002` and `idC019` were fixed, and one
+further case per version left with them.)
 
 These assert that `\p{Lu}` rejects characters that *are* uppercase letters in
 current Unicode. The suite was written against Unicode 3.1; the codepoints in
@@ -424,6 +433,157 @@ may be closed. Ordered by how much they cost. Entries marked *closed* or *not a
 defect* are kept here rather than collapsed into *Fixed* because their bodies
 are the argument that bounds a neighbouring gap; the one-line records of
 everything else that closed are under *Fixed*.
+
+This section carried no entry for either of the two largest measured gaps —
+177 failures on XSLT 3.0 and 203 on XQuery 3.1 — for as long as they have
+existed, while the file's own opening promises that a gap without an entry has
+not been measured. Both had been measured; neither had been written down. They
+are first below, because the section is ordered by cost and nothing else here
+is within two orders of magnitude of them.
+
+### §19.8 streamability analysis is not implemented (XSLT 3.0)
+
+**150 of the 177 XSLT 3.0 failures**, and by far the largest single gap in the
+project. Every one of the 150 fails in the same direction: the suite expects
+`XTSE3430` — *this construct is not guaranteed streamable* — and the transform
+succeeds instead.
+
+That direction is the whole diagnosis. The engine builds a tree and streams
+nothing, so every construct the analysis would reject is one it simply
+executes. It produces the **right answer** for all 150; what it does not
+produce is the static refusal §19.8 requires a streaming processor to make
+before running anything. A construct that is not guaranteed streamable is still
+a construct with a well-defined result, and a tree-building processor reaches
+it. So these are not wrong answers, and they are not silent erasure: they are a
+static analysis that was never written.
+
+They cluster by construct rather than by cause, which is what confirms it is
+one missing pass and not 150 defects: `streamable` (29), `si-fork` (11),
+`accumulator` (9), `su-absorbing` (8), and `su-shallow-descent`,
+`si-for-each-group` and `merge` (6 each), then a long tail across `su-*`,
+`si-*`, `sf-*` and `sx-*`. Those set counts are of all 177, not of the 150;
+`merge` and `accumulator` each contribute to both groups.
+
+**Closing it is a real analysis, not a check.** §19.8 assigns every expression
+a posture and a sweep, composes them through every construct, and rejects the
+combinations that would require more than one downward pass. It is a type
+system over the stylesheet, and a partial one is worse than none — a processor
+that raises `XTSE3430` on some unstreamable constructs and not others has told
+the caller nothing they can rely on. That is why nothing partial has been
+attempted here.
+
+**Note what it would and would not buy.** It would move 150 cases and take
+XSLT 3.0 from 98.46% to about 99.77%. It would not make the engine stream, and
+it would not change the result of a single transform that currently succeeds —
+it would convert 150 correct answers into 150 refusals to answer. That is the
+conformant behaviour, and it is worth being explicit that the gain is measured
+in conformance rather than in capability.
+
+The remaining 27 are singletons or near-singletons and are catalogued in
+[conformance-gaps.md](conformance-gaps.md) rather than here. Only three pairs
+share anything: `merge-097`/`-097s`/`-097sf` all fail on `FODC0002`, and the
+CHANGELOG records them as not interoperable on the test set's own maintainer
+comment — they rely on Saxon's `?select=` collection URIs and declare no
+environment for the harness to honour; `si-copy-117`/`si-copy-of-117` both get
+`XTTE1540` where `XTTE1510` is wanted; and `si-fork-814`/`sx-MapExpr-007` both
+get `XQDY0137` for `XTDE3365`. The rest — `docbook-001` (`XTMM9000`, chunking),
+`validation-0201` (indent width, argued above), `transform-004` (a
+`fn:transform` needed during the static phase, which deadlocks on a
+non-reentrant compile mutex — confirmed from a stack trace, and recorded in the
+CHANGELOG), `strip-space-009`, `system-property-012` and a scatter of one-off
+error-code disagreements — share no cause with each other at all. That is the
+useful fact about them: after the streamability pass there is no second cluster
+waiting behind it.
+
+`system-property-012` is not a defect and should not be read as one: it asserts
+that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
+processor that does not conform to the streaming feature to answer `no`, which
+is what this answers. Passing it would mean lying to every stylesheet that
+branches on it to choose a fallback. It is the same gap as the 150 above, seen
+from the other side, and it stays failing for as long as the analysis is
+missing — which is the correct behaviour, not a cost.
+
+### XSLT 2.0: eight failures, and no cause peculiar to the lane
+
+**8 of 6,201.** They are recorded here only because the lane has no entry
+anywhere else and eight is small enough to name: `docbook-001`,
+`format-number-070`, `import-schema-137`, `regex-syntax-xslt20-0984`, `-0985`,
+`-0987`, `sequence-0132` and `validation-0201`.
+
+Nothing here is a 2.0-specific gap in the engine. Three of the eight —
+`docbook-001`, `import-schema-137` and `validation-0201` — fail identically in
+the 3.0 lane and are covered above or in
+[conformance-gaps.md](conformance-gaps.md).
+
+`format-number-070` and `sequence-0132` fail only here, and both are recorded
+in [conformance-gaps.md](conformance-gaps.md) as suite defects:
+`format-number-070` invokes a template the stylesheet does not declare —
+verified, zero `xsl:import`/`xsl:include` and zero `name="main"`. Neither is a
+rule this engine has failed to implement.
+
+The three `regex-syntax-xslt20` cases are the last, and they are the same
+*kind* of case as the 22 `MS-Regex` schema cases under *Unicode category drift*
+above; the CHANGELOG puts them under one heading, "22 MS-Regex false accepts:
+one rule, the same one the XSLT suite exercises". Each asserts a
+single-character class against a single codepoint: `[\w]` against U+2308,
+`[\d]` against U+1369, `[\c]` against U+0346. All three classes are defined by
+Unicode general category, and all three codepoints sit where the assignment has
+moved or is read differently than the suite assumed. Passing them means
+freezing an old character database, which is the same refusal made above for
+the same reason.
+
+Worth stating, because the shape invites the opposite conclusion: three
+failures in one test set normally means a cluster worth chasing. Here it is
+three independent codepoints reached through three different classes, and what
+they agree on is the *rule*, not a bug they share.
+
+### XQuery schema awareness: five features deliberately left (XQuery 3.1)
+
+**203 failures, and none of them a regression.** This entry exists because the
+number is easy to misread. `import schema` was implemented, and implementing it
+brought **416 previously-skipped cases into scope**, of which 225 pass. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,143. The
+twelve failures that predated the work are still exactly those twelve. A lift
+that admits failing cases raises the failure count by construction, and quoting
+the failure count without the denominator beside it would describe a gain as a
+loss.
+
+What the 203 are is a tail of five separate features that `import schema`
+made *reachable* without making them present. `docs/todo.md` §1.5 names them
+and is the forward-looking half of this entry; what belongs here is the
+measured shape, because it is what says the tail is five features rather than
+one broken import.
+
+The cases cluster by production, not by symptom: `prod-CastableExpr` (49),
+`prod-CastExpr.schema` (47), `prod-SchemaImport` (29), `prod-FunctionCall`
+(16), `prod-InstanceofExpr` (12), `prod-CastExpr` (7), `fn-json-to-xml` (7),
+`prod-ModuleImport` (5), then a tail of ones and twos. The error codes cluster
+the same way and identify the five directly:
+
+- **Typed input.** A source document does not arrive schema-validated, so a
+  node atomises as untyped however the query imported. `(a, b, c) is not an
+  instance of xs:IDREF*` is the shape, and it is the `schemaValidation` and
+  `typedData` dependencies the harness still skips on.
+- **Constructor functions for schema types.** `XPST0017: unknown function` —
+  an imported simple type does not become a callable constructor. Roughly 20
+  cases.
+- **Impure and restricted unions.** `XPST0051: invalid type "s:myUnionType"`
+  and its relatives: §2.5's purity rule refuses a union carrying facets or
+  holding a list type, so `castable as` raises rather than answering. `xslt`
+  refuses these identically, which is what says the rule is shared and not a
+  bug in the import.
+- **Schema element and attribute tests.** `XPST0051: invalid type
+  "schema-element(...)"`.
+- **Schemas the harness cannot supply.** `XQST0059: no schema found for
+  namespace`, 19 cases — the import is correct and the schema is not there.
+
+**The error-code mismatches are the interesting minority.** Eleven cases raise
+`XPST0008` where `XQDY0027` is wanted, and smaller groups raise `XPST0017` for
+`FORG0001`, `XPTY0004` for `XPST0051`, and `XPST0051` for `XPTY0117`. Those are
+not missing features — they are the static-versus-dynamic boundary being drawn
+one step too early, and they are the part of this tail that is a defect rather
+than an absence. They are worth separating out precisely because the other 180
+are not defects and it would be easy to let these be counted with them.
 
 ### The `dtd` package cannot enforce XML §4.3.4
 
@@ -747,8 +907,10 @@ invalid twin becoming accepted with them, so completeness was gained without
 trading soundness for it.
 
 **Measured** at `a8dee9a`: XSD 1.0 total agree 39355, XSD 1.1 total agree 41542
-— equal to `tests/ratchet.txt`, with one schema false reject left on 1.1
-(`ste110`) and none of it from this family.
+— which was `tests/ratchet.txt` at the time, with one schema false reject left
+on 1.1 (`ste110`) and none of it from this family. Both totals have since risen
+by three, to 39358 and 41545, on work unrelated to this entry; the ratchet is
+the live figure and this one is the reading that closed the family.
 
 All six shapes are now pinned in `xsd/allgroup_wildcard_test.go`, the five valid
 ones beside `all244.n`. The pairing is the point: the conformance total says
@@ -1134,8 +1296,18 @@ with its own value. The adversarial audit of the XSLT and XSD verdicts found
 the same shape again: of the twenty-three cases it judged fixable, most were
 the harness — chiefly eight XSD `indeterminate` expectations per version
 silently scored as "must be invalid" — and only four were engine defects.
-All twenty-three have since been fixed or reclassified, and the fixable column
-is empty on every suite.
+All twenty-three have since been fixed or reclassified.
+
+**That last sentence used to end "and the fixable column is empty on every
+suite", which is no longer a true reading of the file.** It was true of the
+population the audit covered — the XSD and XPath disagreements that stood at
+the time — and it is still true of those: XPath is 100% at all three versions,
+and the XSD remainder is argued case by case above. It is not true of the
+suites as a whole. XSLT 3.0 carries 177 failures of which 150 are one missing
+analysis, and XQuery 3.1 carries 203, and both are eminently fixable; they are
+written up under *Open* above. A sentence scoped to one audit and left standing
+after the scope changed is the same decay this file keeps recording, so it is
+corrected rather than deleted.
 
 A conformance number is only as honest as the harness producing it, and a
 verdict is only as good as the last time someone re-derived it.
@@ -1166,15 +1338,21 @@ of the remaining gap is the suite disagreeing with itself.
 
 ### The ceiling that is not ours
 
-Re-measured at `a8dee9a`. The table that stood here read 51 and 47
-disagreements against 45 and 44 disputed; both columns had drifted down as
-fixes landed and were never re-derived.
+Re-measured on the current run. The table that stood here read 51 and 47
+disagreements against 45 and 44 disputed, then 33 and 34; every one of those
+columns drifted down as fixes landed and was never re-derived at the time.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---:|---:|
-| disagreements | **33** | **34** |
-| of those, W3C-flagged `queried` or tied to an open bug | **31** | **32** |
+| disagreements | **30** | **31** |
+| of those, W3C-flagged `queried`/`stable` or tied to an open bug | **28** | **29** |
 | left carrying suite status `accepted` | **2** | **2** |
+
+Total agreement is 39358 (1.0) and 41545 (1.1), which is `tests/ratchet.txt`.
+The last movement was `elemM002` and `idC019`, written up under *Two rules that
+were open after all* above; one further case per version left with them. The
+`accepted` column has not moved: `attP031` and `particlesZ001` on 1.0,
+`simple093` and `particlesZ033_g` on 1.1.
 
 Those first are cases where the W3C's own metadata records a dispute about the
 expected result. **Twenty-two of them are one cause** in each version: bug 4113,
@@ -1217,9 +1395,12 @@ reasoning is under *Regular expression backreferences* above.
 **Closing the last one would cost the linear-time guarantee**, which is a worse
 trade than the case is worth.
 
-### XSD schema-validity: 3 (1.0) and 6 (1.1) that are ours
+### XSD schema-validity: 1 (1.0) and 4 (1.1) that are ours
 
-All false *accepts* — invalid schemas that load.
+All false *accepts* — invalid schemas that load. This heading read 3 and 6
+until `elemM002` and `idC019` were fixed on both versions, which the body below
+already recorded; the counts now agree with the table under *Schema-validity
+rules not yet implemented* above.
 
 Four of them were not a missing rule at all. `checkContentModelConstraints`
 walked only the schema's *named* types, so Unique Particle Attribution and
@@ -1281,7 +1462,7 @@ restriction: genuine language inclusion in *both* directions rather than the str
 automaton subsumption engine, not a rule, and two rounds declined it
 deliberately rather than ship a partial one.
 
-### XSD instance: 3 (1.0) and 2 (1.1) addressable false rejects
+### XSD instance: 3 (1.0) and 2 (1.1) false rejects, none of them addressable
 
 `attP031.i` under 1.0, plus `gMonth002_2061.v` and `gMonth004_2063.v` in both
 versions. `particlesZ040.i` stood here too and no longer does; the matcher that
@@ -1299,7 +1480,8 @@ which no clause supports.
 
 That relaxation was measured rather than assumed, in a clean checkout so the
 figure is attributable: keeping a prohibited use that carries `fixed` takes
-XSD 1.0 from 39,345 to 39,346 and leaves 1.1 at 41,532, with no schema-level
+XSD 1.0 from 39,345 to 39,346 and leaves 1.1 at 41,532 (the baseline of that
+run; both totals have since risen, and what matters is the delta) with no schema-level
 change and no false accept introduced — `attF001` still rejects. So it is a
 clean +1, and it is declined anyway. The same change makes this validator
 accept `att="37"` against a declaration that prohibits the attribute, which is
@@ -1308,9 +1490,18 @@ without a clause behind it is not a fix.
 
 The other two are disputed rather than addressable: `gMonth002_2061` and
 `gMonth004_2063` test the old `--MM--` form under W3C bug 6901. `cta0022` was
-in this list and is now fixed — its type alternative's XPath was *raising* rather than answering, and a type alternative whose test
-raises is silently skipped, so a crash was indistinguishable from a false
-test.
+in this list and is now fixed — its type alternative's XPath was *raising*
+rather than answering, and a type alternative whose test raises is silently
+skipped, so a crash was indistinguishable from a false test.
+
+**The heading of this entry was wrong, and the body is what corrects it.** It
+read "3 (1.0) and 2 (1.1) *addressable* false rejects", and then argued each of
+the three down: `attP031` is a suite self-contradiction and the +1 is declined
+on purpose, and the two `gMonth` cases are a withdrawn lexical form under an
+open bug. None of the three is addressable, which is what the body has said
+throughout. The heading counted cases and called them addressable because they
+were false rejects, which is the direction that matters — but direction is not
+the same as tractability, and the two had been conflated.
 
 ### Suite cases that should be read as disputed
 
@@ -1349,17 +1540,29 @@ include them" — was true when written and is not now.
 
 ### Honest summary
 
-Re-measured at `a8dee9a`. The two schema rows read 13 and 12 disagreements and
-named `iri-001` as addressable; both counts were stale and `iri-001` has passed
-since **3f2602e**.
+Re-measured on the current run. The two schema rows once read 13 and 12
+disagreements and named `iri-001` as addressable; both counts were stale and
+`iri-001` has passed since **3f2602e**. They then read 5 and 7, which
+`elemM002` and `idC019` have since taken to 3 and 5.
+
+The three XPath lanes have joined XPath 2.0 at 100%, and are added here because
+a row that is reached is the cheapest thing to verify against: 15,217 of
+15,217 at 2.0, 19,362 of 19,362 at 3.0, and 21,898 of 21,898 at 3.1. RELAX NG
+is 965 of 965.
 
 | | now | reachable | what stands in the way |
 |---|---|---|---|
-| XPath 2.0 | **100.00%** | 100.00% | reached |
-| XSD 1.0 instance | **99.89%** | ~99.99% | 28 disagreements, 27 of them W3C-disputed; `attP031.i` is the lone `accepted` one, and it is a suite self-contradiction |
-| XSD 1.1 instance | **99.90%** | ~99.99% | 27 disagreements, all 27 W3C-disputed |
-| XSD 1.0 schema | **99.97%** | **~99.99%** | 5 disagreements; 4 queried or bug-tied, `particlesZ001` the one `accepted` case and disputed on the suite's own annotation |
-| XSD 1.1 schema | **99.95%** | **~99.99%** | 7 disagreements; 5 queried or bug-tied, `particlesZ033_g` and `simple093` the two `accepted` ones, both argued above as suite defects |
+| XPath 2.0 / 3.0 / 3.1 | **100.00%** | 100.00% | reached |
+| RELAX NG | **100.00%** | 100.00% | reached |
+| XSD 1.0 instance | **99.89%** | ~99.99% | 27 disagreements, 26 of them W3C-disputed; `attP031.i` is the lone `accepted` one, and it is a suite self-contradiction |
+| XSD 1.1 instance | **99.90%** | ~99.99% | 26 disagreements, all 26 W3C-disputed |
+| XSD 1.0 schema | **99.98%** | **~99.99%** | 3 disagreements; 2 queried or bug-tied, `particlesZ001` the one `accepted` case and disputed on the suite's own annotation |
+| XSD 1.1 schema | **99.97%** | **~99.99%** | 5 disagreements; 4 queried or bug-tied, `particlesZ033_g` and `simple093` the two `accepted` ones, both argued above as suite defects |
+
+The instance rows are the schema rows subtracted from the version totals of 30
+and 31 and are given for shape rather than as an independent reading; the
+per-lane figures live in [conformance-gaps.md](conformance-gaps.md), which is
+where they are actually derived.
 
 The two schema rows once read `~99.9%`, which contradicted the ceiling derived
 under *What 100% would take* above and could not be reached. The reachable
@@ -1373,7 +1576,7 @@ that work started:
 | `accepted` — addressable | 197 | 311 |
 | `queried` or bug-tied — the ceiling | 52 | 54 |
 
-and today **33 and 34, of which 2 and 2 are addressable** — the intermediate
+and today **30 and 31, of which 2 and 2 are addressable** — the intermediate
 figures this paragraph carried (95 and 154, of which 46 and 103) were a
 snapshot from partway through and were never re-derived. Twenty-two of the
 disputes in *each* version are bug 4113 alone. Reaching 99.99% would have meant fixing 200
@@ -1385,8 +1588,8 @@ refusal, the XSD false accepts are volume rather than difficulty, and the false
 rejects are one subsystem that needs its occurrence handling reworked rather
 than patched.
 
-**Note that reaching 100% on XSD is not possible and not desirable.** 31 of the
-33 1.0 disagreements and 32 of the 34 on 1.1 are cases the W3C's own metadata
+**Note that reaching 100% on XSD is not possible and not desirable.** 28 of the
+30 1.0 disagreements and 29 of the 31 on 1.1 are cases the W3C's own metadata
 records a dispute about; twenty-two in each are the bug 4113 general-category tests,
 where passing means freezing a Unicode 3.1 table and being wrong about modern
 text.

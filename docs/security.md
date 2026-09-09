@@ -62,7 +62,7 @@ rejecting direction:
 
 `xdm.ParseOptions` `MaxBytes` / `MaxDepth` / `MaxNodes` ·
 `xslt.FileResolver.MaxBytes` · `xsd.Options` `MaxDocuments` ·
-`xquery.Options` `MaxModules` / `MaxModuleBytes` ·
+`xquery.Options` `MaxModules` / `MaxModuleBytes` / `MaxSchemaBytes` ·
 `dtd.LoadOptions` `MaxExternalDocuments` / `MaxExternalBytes` /
 `MaxEntityBytes` · `dtd.FileResolver.MaxBytes` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
@@ -559,6 +559,53 @@ successful while half a library is absent — the same failure a skipped UPA
 check was, in a different package. So there is no partial success: the
 compilation fails, and `TestMaxModulesIsEnforced` asserts that the refusal
 neither succeeds nor borrows `XQST0059` to explain itself.
+
+## XQuery `import schema`: the same rule, a second time
+
+`import schema` (§4.11) is the third feature where the **input itself names a
+resource to read**, and it was built to the module import's pattern
+deliberately rather than to one of its own. Every claim in the section above
+holds here word for word, with the names changed:
+
+`xquery.Options.SchemaResolver` is **nil in the zero value**, so with no
+resolver configured an `at` location is **never opened** — not attempted and
+failed, not opened. The import then fails with `XQST0059`, §4.11's code for a
+schema import that cannot be satisfied, and the message names
+`Options.SchemaResolver` rather than the location it declined to read.
+`Options.Schemas` registers a schema by target namespace, as source text or as
+already-assembled `*xsd.Schema` components, and reads nothing.
+
+One thing is stronger here than for modules. `SchemaResolver` is
+`xsd.Resolver`, the *same* interface `xsd.Load` takes, and the resolver the
+query's import was granted is the one handed to `xsd` for the imported
+schema's own `xs:include` and `xs:import`. So an imported schema can reach no
+further than the import was granted: there is no second resolver that could
+disagree about what this process may read, and no default of `xsd`'s own
+applies. `TestSchemaResolverIsSharedWithXSD` asserts it by observing that the
+query's resolver is the one asked for the include's location.
+
+The no-fetch claim was checked by sabotage, and the first attempt at the test
+was **too weak** — which is the part worth recording. Making the default
+resolver fall back to opening the hint let `/etc/passwd` be opened; but
+`/etc/passwd` is not a schema document, so the parse failed and the error was
+still an `XQST0059` that did not name the file. Asserting only "the message
+does not name the path" therefore passed against a real breach.
+`TestSchemaNoResolverDoesNotFetch` now asserts the **positive** fact instead:
+that the refusal is the configured-nothing refusal, naming
+`no SchemaResolver is configured`, and that it does *not* report having read or
+parsed anything. That version fails against the sabotage, as it must.
+
+`MaxSchemaBytes` (16 MB, following `DefaultMaxModuleBytes` in shape and value)
+bounds the schema source one compilation reads, **cumulatively across every
+import** rather than per import, because a budget spent one import at a time is
+not spent at all. Exceeding it **fails the compilation** with an error wrapping
+`xdm.ErrResourceLimit` and deliberately *not* with `XQST0059` — the same
+governing invariant: the budget declined to answer, and "no such schema" would
+be a claim about the store that is not true. There is no partial success, for
+the reason a truncated module set has none: a schema whose components are
+partly missing validates documents against the half that is left.
+`TestMaxSchemaBytesRefusesRatherThanTruncates` and
+`TestMaxSchemaBytesIsPerCompilation` assert both halves.
 
 ## What fuzzing has ruled out, and what it has not
 

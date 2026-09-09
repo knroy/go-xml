@@ -105,6 +105,7 @@ syntax error does *not* carry the sentinel.
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |
 | `maxNestDepth` | `xquery/nested.go` | `XPST0003` | the query is syntactically invalid |
 | `MaxModules` / `MaxModuleBytes` | `xquery/module.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the module is not there |
+| `MaxSchemaBytes` | `xquery/schemaimport.go` | *(none)* | the refusal names the budget; it is deliberately **not** `XQST0059`, which would claim the schema is not there |
 | `ValidateOptions.MaxDepth` | `xsd/validate.go` | `cvc-elt.1` | the element is invalid against its declaration |
 
 The XSD case reaches a caller through `xsd.ValidationErrors`, which now
@@ -797,6 +798,9 @@ seq, err := q.Eval(xpath.NewContext(nil, xpath.Builtins()))
 | `ModuleResolver` | `ModuleResolver` | *(none)* | Locates a module `Modules` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. |
 | `MaxModules` | `int` | *(none)* | Modules one compilation may load, transitively. Zero means `DefaultMaxModules` (512). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 | `MaxModuleBytes` | `int64` | *(none)* | Total module source one compilation may read, cumulatively. Zero means `DefaultMaxModuleBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
+| `Schemas` | `[]Schema` | *(the schema store)* | Schemas `import schema` may find, registered by target namespace with their source or their assembled `*xsd.Schema` components. Consulted before `SchemaResolver`, and reads nothing. |
+| `SchemaResolver` | `xsd.Resolver` | *(none)* | Locates a schema `Schemas` does not have. **Nil by default: with no resolver an `at` location is never opened** and an import that cannot be answered is `XQST0059`. The same resolver is handed to `xsd` for the imported schema's own `xs:include` and `xs:import`. |
+| `MaxSchemaBytes` | `int64` | *(none)* | Total schema source one compilation may read, cumulatively across every import. Zero means `DefaultMaxSchemaBytes` (16 MB). Exceeding it fails the compilation with `xdm.ErrResourceLimit`. |
 
 Nine prefixes are bound before `Namespaces` is consulted and never need to be
 listed: `xml`, `xs`, `xsi`, `fn`, `local`, `math`, `map` and `array` from
@@ -812,12 +816,13 @@ without a resolver, and so does `import module` — but an untrusted query can
 still spend arbitrary CPU and memory, so bound it with `ctx.Ctx` and a timeout
 the way [server.md](server.md) does for stylesheets.
 
-`import module` follows that rule exactly. `ModuleResolver` is nil in the zero
-value, so an `at` location is **never opened** and a query cannot read a file
-by naming one; `Modules` and `MapModuleResolver` supply modules from memory
-without reading anything. See [security.md](security.md) for why the two
-bounds refuse the compilation rather than compiling against the modules that
-fitted.
+`import module` and `import schema` follow that rule exactly.
+`ModuleResolver` and `SchemaResolver` are nil in the zero value, so an `at`
+location is **never opened** and a query cannot read a file by naming one;
+`Modules`, `MapModuleResolver` and `Schemas` supply what an import needs from
+memory without reading anything. See [security.md](security.md) for why the
+bounds refuse the compilation rather than compiling against the modules — or
+the half of a schema — that fitted.
 
 See [xquery.md](xquery.md) for the guide.
 

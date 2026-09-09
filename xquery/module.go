@@ -452,7 +452,7 @@ func (l *moduleLoader) compile(ns, src, baseURI string, importerVer XQVersion) (
 
 	src = normalizeLineEndings(src)
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}, inLibrary: true}
+		declaredNS: map[string]bool{}, inLibrary: true, opts: l.opts}
 	if err := p.parseVersionDecl(); err != nil {
 		return nil, err
 	}

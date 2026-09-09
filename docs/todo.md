@@ -10,14 +10,14 @@ Current position:
 | XSD 1.0 | 14,385 / 14,388 (99.98%) | 24,973 / 25,000 (99.89%) |
 | XSD 1.1 | 15,349 / 15,354 (99.97%) | 26,196 / 26,222 (99.90%) |
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
-| XPath 3.0 | 100.00% — 19,302 of 19,302 in scope |
-| XPath 3.1 | 100.00% — 21,838 of 21,838 in scope (0 failing) |
-| XQuery 3.1 | 99.96% — 29,918 of 29,930 in scope (12 failing) |
+| XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
+| XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
+| XQuery 3.1 | 99.33% — 30,143 of 30,346 in scope (203 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 98.46% — 11,348 of 11,525 in scope (177 failing); 150 of those 177 need the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,668 `func Test` declarations, clean under `-race` |
+| Tests | 1,685 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -284,35 +284,83 @@ them is in [conformance-gaps.md](conformance-gaps.md), and is dominated by the
 
 ---
 
-### 1.5 XQuery schema import — the last structural gap in `xquery`
+### 1.5 XQuery schema import — **implemented; a schema-aware tail remains**
 
-`import module` is **implemented** (§4.12) — see
-[CHANGELOG.md](../CHANGELOG.md). What remains here is `import schema`, which
-still parses and is then refused with `XQST0059`, leaving the in-scope schema
-definitions empty so that `validate { … }` raises `XQDY0084`. It is not
-mis-parsed; it is refused by name.
+`import schema` is implemented (§4.11). A schema is found in
+`Options.Schemas` or through `Options.SchemaResolver`, and its components reach
+the static context **before the query body is parsed** — which is the whole of
+what made the feature look large and is in fact what made it small. XQuery
+resolves type names while parsing, so `8 cast as h:hatsize` is decided by
+whether the static context knows the name at the moment the parser reads it;
+the imports are therefore followed at the end of the prolog, where `parseProlog`
+already sits, rather than after the body where the *module* loader runs.
 
-**What `import module` cost, for calibration.** A module store
-(`Options.Modules`), a resolver (`Options.ModuleResolver`, nil by default like
-every other one here), two bounds that refuse rather than truncate, and a
-loader that publishes a module before following its imports — because a cycle
-of module imports is *not* an error at XQuery 3.0 and later, which the suite
-settles by carrying the identical module pair under two spec dependencies with
-opposite expected results.
+The PSVI plumbing the old entry budgeted for turned out to be already built.
+`xpath.SchemaTypes` exists, and `xslt` already implements it over an
+`*xsd.Schema` for `xsl:import-schema`; the seam is cut on the **xpath** side
+because `xsd` cannot import `xpath` (a schema's assertions and selectors *are*
+XPath expressions). What this needed was the loader, the store, and the same
+five method bodies on `staticContext` — which is already the
+`xpath.NamespaceResolver` every expression in the module compiles against. The
+optional `SchemaUnionTypes` and `SchemaListTypes` were ported too, which is
+what makes `castable as` against a pure union or a list type answer rather than
+raise the atomic-target static error.
 
-**What `import schema` costs, and why it is a bigger job than it looks.** Not
-a resolver — `xsd` already has one, and the module loader's shape transfers.
-The cost is that the imported components have to reach the *static context*:
-§2.1.1's in-scope schema definitions are what `validate`, `instance of` and a
-`SchemaElementTest` are judged against, and this package's `staticContext`
-has nowhere to put them. That is PSVI plumbing between `xsd` and `xquery`
-rather than another loader, and it is the reason the two halves of `import`
-were separated rather than done together.
+Security is the module import's pattern applied without exception:
+`SchemaResolver` is nil in the zero value, an `at` location is never opened
+without one, and `MaxSchemaBytes` refuses rather than truncates. It is
+`xsd.Resolver` deliberately, so the **same** resolver follows the imported
+schema's own `xs:include` and `xs:import` — an imported schema reaches no
+further than the query's import was granted. See
+[security.md](security.md).
 
-**What it buys.** The `validate` expression, the schema-aware type tests, and
-the QT3 cases that depend on a typed input. It does **not** unblock
-`fn:load-xquery-module`; that needed the module half, which now exists — see
-[reaching-100.md](reaching-100.md) for what actually changed there.
+**What it moved.** The `schemaImport` feature gate came off the QT3 harness and
+the blanket "schema-aware environment" skip was narrowed to the cases that
+actually need typed *input*:
+
+| Lane | in scope | passed | failed |
+|---|---|---|---|
+| XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
+| XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
+| XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,143 | 12 → 203 |
+
+416 cases came into scope at XQuery and 225 more pass. The 191 added failures
+are a real tail and are listed below rather than hidden: a lift that admits
+failing cases has to be visible, which is why the in-scope count is quoted
+first. `prod-SchemaImport` itself is 44 of 73.
+
+**What is still missing, and it is not one thing.** Each of these is a separate
+small feature rather than a bug in the import:
+
+* **Typed input.** A source document does not arrive schema-validated, so a
+  node still atomises as untyped however the query imported. That is what the
+  `schemaValidation` and `typedData` dependencies name, and the harness still
+  skips on them; `prod-CastExpr.schema`'s `(a, b, c) is not an instance of
+  xs:IDREF*` is the shape it takes.
+* **Constructor functions for schema types.** `s:unionOfLists(...)` is
+  `XPST0017`: an imported simple type does not become a callable constructor.
+  Roughly 20 cases.
+* **Impure and restricted unions.** §2.5's purity rule refuses a union
+  carrying facets or holding a list type, so `castable as s:impureUnionType`
+  raises rather than answering. `xslt` refuses these identically — the rule is
+  shared and deliberate (XSD 1.1 §3.16.6.3 fixed the 1.0 error that being
+  permissive here would reintroduce) — so this is a joint gap, not a new one.
+  Roughly 40 cases.
+* **Annotation propagation.** A validated element that is then copied into a
+  constructor loses the annotation the assessment stamped, so
+  `qischema007`-style cases that validate and then wrap fail.
+* **Substitution groups on validated content.** `schema-element(s:H1)`
+  matching a substituted child needs the *node* to have been validated against
+  the head's group, which needs the assessment to record which declaration
+  accepted each child.
+
+**What it buys, delivered.** `validate` against a real schema, with the result
+annotated; `cast as` and `castable as` with the schema author's **facets**
+applied rather than only the base type; `instance of`, `element(*, T)` and
+`schema-element(E)` over imported names; and
+`import schema default element namespace`, which makes the imported namespace
+the default element and type namespace for the rest of the module.
 
 ### 1.6 A host API for JSON, and a context item that is not a node
 

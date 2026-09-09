@@ -1,7 +1,10 @@
 # XQuery
 
-XQuery 3.1, measured at **99.96%** of the W3C QT3 suite (29,952 of 29,964 in
-scope). What is here is the language on top of XPath: constructors, FLWOR, the
+XQuery 3.1, measured at **99.33%** of the W3C QT3 suite (30,143 of 30,346 in
+scope). That percentage fell from 99.96% when `import schema` was implemented:
+416 previously-skipped cases entered the denominator and 225 of them pass, so
+the passing count rose by 225 while the rate fell. No case that passed before
+fails now. What is here is the language on top of XPath: constructors, FLWOR, the
 prolog, and the expression forms that are XQuery's alone. Expressions
 themselves are compiled by [`xpath`](../xpath/), which is at 100% of the same
 suite for 2.0, 3.0 and 3.1.
@@ -245,16 +248,70 @@ opts := xquery.Options{ModuleResolver: xquery.MapModuleResolver{
 Writing one that reads the filesystem or the network is a deliberate grant to
 whoever wrote the query. See [security.md](security.md).
 
+## Importing schemas
+
+`import schema` finds a schema by its **target namespace** (§4.11), and the
+`at` clause is a set of location *hints* on exactly the same terms `import
+module`'s is: with no resolver configured they are never opened.
+
+What an import buys is the schema's components in the **static context** —
+§2.1.1's in-scope schema definitions — which is what `cast as`, `castable as`,
+`instance of`, `element(*, T)`, `schema-element(E)` and `validate` are all
+judged against:
+
+```go
+q, err := xquery.Compile(
+    `import schema namespace h = "http://example.org/hats";
+     8 cast as h:hatsize`,
+    xquery.Options{Schemas: []xquery.Schema{
+        {Namespace: "http://example.org/hats", Source: hatsXSD},
+    }})
+```
+
+The components reach the static context **before the query body is parsed**,
+which is what makes the feature work at all: XQuery resolves type names while
+parsing rather than after, so `h:hatsize` is decided by whether the static
+context knows the name at the moment the parser reads it. (`import module` is
+followed *after* the body, because a module contributes functions and
+variables, and those are resolved late.)
+
+The facets the schema author wrote are applied, not merely the base type: a
+`hatsize` restricted to 4–12 makes `99 castable as h:hatsize` false.
+
+`import schema default element namespace "…"` additionally makes the imported
+namespace the default element **and type** namespace for the rest of the
+module, so the type is nameable with no prefix.
+
+A `validate` expression is assessed against the imported schema and the result
+is **annotated**, so `validate strict { <hat>8</hat> } instance of element(*,
+hatsize)` is true. Strict assessment of an element the schema does not declare
+at top level is `XQDY0084`; an element that is declared and found invalid is
+`XQDY0027`. A query that imported no schema is unchanged: `validate strict` is
+`XQDY0084` and `validate lax` is a skipped assessment that yields its operand.
+
+A `Schema` may carry already-assembled `Components` (an `*xsd.Schema` from
+`xsd.Load`, or from a stylesheet's `Schema()`) instead of `Source`, which is
+how one schema is shared between a stylesheet and a query without loading it
+twice and risking the two disagreeing.
+
+`SchemaResolver` supplies a schema the store does not have. It is
+`xsd.Resolver`, deliberately: the **same** resolver is handed to `xsd` for the
+imported schema's own `xs:include` and `xs:import`, so an imported schema can
+reach no further than the query's import was granted. `MaxSchemaBytes` bounds
+the total schema text one compilation reads, cumulatively across every import,
+and exceeding it **fails** the compilation with an error wrapping
+`xdm.ErrResourceLimit` rather than compiling against a truncated schema.
+
+**Not implemented on this path.** Typed *input*: a source document does not
+arrive schema-validated, so a node still atomises as untyped however the query
+imported. `SchemaUnionTypes` and `SchemaListTypes` — the two optional
+interfaces `xslt` also implements — are not implemented here, so a union or
+list type an imported schema defines resolves as a name but does not match a
+value.
+
 ## What is not implemented
 
-One declaration parses and is then refused, rather than being mis-parsed:
-
-* **`import schema`** leaves the in-scope schema definitions empty, so
-  `validate { … }` raises `XQDY0084`. It needs the imported components to
-  reach the static context, which this package has nowhere to put; see
-  [todo.md](todo.md) §1.5.
-
-Everything else in 3.1 is implemented, `import module` included: every FLWOR clause — `for`, `let`,
+Everything in 3.1 is implemented, `import module` and `import schema` included: every FLWOR clause — `for`, `let`,
 `where`, `group by`, `order by`, `count`, and both the tumbling and sliding
 window clauses; direct and computed
 constructors; `try`/`catch`; `switch`; `typeswitch`; quantified expressions;
@@ -294,10 +351,13 @@ which the suite does not cover.
 
 The same defaults as the rest of the library. A query cannot read a file or
 open a socket unless you give it something that can: `fn:doc`, `fn:collection`
-and `import module` all resolve through a resolver that is **nil by default**,
-and a nil resolver fetches nothing. An `import module ... at "/etc/passwd"` is
-not attempted and refused — it is never opened, and the import fails with
-`XQST0059`. See [security.md](security.md).
+`import module` and `import schema` all resolve through a resolver that is
+**nil by default**, and a nil resolver fetches nothing. An `import module ...
+at "/etc/passwd"` is not attempted and refused — it is never opened, and the
+import fails with `XQST0059`. The same holds word for word for `import schema
+... at "/etc/passwd"`, and the refusal names `Options.SchemaResolver` rather
+than the path, which is what distinguishes "nothing was configured" from "that
+file could not be read". See [security.md](security.md).
 
 Note that a query is *code*. Compiling one from untrusted input is closer to
 `eval` than to parsing a document — the sandbox above bounds what it can

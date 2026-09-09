@@ -49,6 +49,21 @@ type seenDecl struct {
 // with no prolog at all reaches the loop's first iteration, matches nothing,
 // and returns immediately.
 func (p *parser) parseProlog() error {
+	// The imports are followed on the way out, whichever way the loop leaves.
+	// A prolog that reads to its end and one that stops at a word which
+	// begins no declaration both have a complete set of imports by then, and
+	// both are followed by a query body whose type names must resolve against
+	// them. See schemaimport.go on why this is here and not where the module
+	// loader runs.
+	err := p.parsePrologDecls()
+	if err != nil {
+		return err
+	}
+	return loadSchemas(p.schemaImports, p.opts, p.sc, p.sc.baseURI)
+}
+
+// parsePrologDecls reads the declarations themselves. See parseProlog.
+func (p *parser) parsePrologDecls() error {
 	once := map[string]*seenDecl{
 		"boundary-space":      {code: "XQST0068"},
 		"construction":        {code: "XQST0067"},
@@ -120,14 +135,21 @@ func (p *parser) parseProlog() error {
 				}
 				continue
 			}
-			// A schema import needs the in-scope schema definitions in the
-			// static context, which this package does not have: there is
-			// nowhere to put the components a schema would contribute, so an
-			// import that appeared to succeed would leave "validate" judging
-			// against an empty set. It is refused by name rather than
-			// half-honoured. See docs/todo.md §1.5.
-			p.pos = save
-			return p.errorf("XQST0059: schema import is not implemented yet")
+			// The import is recorded here and resolved by the schema loader
+			// at the END of this prolog, before the query body is parsed.
+			// That ordering is the whole feature: XQuery resolves type names
+			// while parsing, so "8 cast as hat:hatsize" is decided by whether
+			// the static context knows the name at the moment the parser
+			// reads it. See schemaimport.go.
+			if err := p.parseSchemaImport(); err != nil {
+				return err
+			}
+			p.skipSpaceAndComments()
+			if !p.consume(";") {
+				return p.errorf(
+					"XPST0003: expected %q after a declaration", ";")
+			}
+			continue
 		}
 
 		what := p.peekKeyword()
@@ -1395,4 +1417,125 @@ func (p *parser) parseModuleDecl() (string, error) {
 		return "", p.errorf("XPST0003: expected %q after a module declaration", ";")
 	}
 	return uri, nil
+}
+
+// parseSchemaImport reads [21] SchemaImport ::= "import schema" SchemaPrefix?
+// URILiteral ("at" URILiteral ("," URILiteral)*)? (§4.11), with the cursor
+// just past "import".
+//
+// The declaration is recorded rather than acted on, exactly as a module import
+// is, and for one of the same two reasons and one different one. The same:
+// the prefix binding is applied immediately, so that a later declaration in
+// this prolog can use it, while nothing is fetched until the loader runs with
+// a budget in hand. The different: the loader runs at the end of THIS method's
+// caller rather than after the body, because a schema contributes TYPE NAMES
+// and those are resolved while the body is parsed. See schemaimport.go.
+//
+// The syntax errors this can raise have already been reported by
+// checkImportSyntax, which the prolog runs first.
+func (p *parser) parseSchemaImport() error {
+	p.skipSpaceAndComments()
+	if !p.consumeKeyword("schema") {
+		return p.errorf("XPST0003: expected %q", "schema")
+	}
+	p.skipSpaceAndComments()
+	imp := schemaImport{}
+	// [22] SchemaPrefix ::= ("namespace" NCName "=") | ("default" "element"
+	// "namespace"). Both are optional, and an import with neither names a
+	// target namespace and binds nothing.
+	prefix := ""
+	defaultElement := false
+	switch {
+	case p.consumeKeyword("namespace"):
+		p.skipSpaceAndComments()
+		prefix = p.scanNCName()
+		if prefix == "" {
+			return p.errorf("XPST0003: expected a prefix after %q",
+				"import schema namespace")
+		}
+		p.skipSpaceAndComments()
+		if !p.consume("=") {
+			return p.errorf("XPST0003: expected %q in a schema import", "=")
+		}
+		p.skipSpaceAndComments()
+	case p.consumeKeyword("default"):
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("element") {
+			return p.errorf("XPST0003: expected %q in a schema import",
+				"default element namespace")
+		}
+		p.skipSpaceAndComments()
+		if !p.consumeKeyword("namespace") {
+			return p.errorf("XPST0003: expected %q in a schema import",
+				"default element namespace")
+		}
+		p.skipSpaceAndComments()
+		defaultElement = true
+	}
+	uri, err := p.parseURILiteral()
+	if err != nil {
+		return err
+	}
+	// §4.11 trims the URI literal of leading and trailing whitespace before
+	// it is used as a namespace, on the same rule that governs a module
+	// import's.
+	imp.ns = strings.TrimSpace(uri)
+	if prefix != "" {
+		// §4.11: two imports may not bind the same prefix, and neither may an
+		// import and a "declare namespace". The check is the prolog's own
+		// XQST0033 rather than a code of the import's, because the fault is
+		// the double binding and not the import.
+		if p.declaredNS[prefix] {
+			return p.errorf(
+				"XQST0033: the prefix %q is already bound in this prolog",
+				prefix)
+		}
+		if err := p.sc.bind(prefix, imp.ns); err != nil {
+			return p.errorf("%s", err.Error())
+		}
+		p.declaredNS[prefix] = true
+	}
+	if defaultElement {
+		// "import schema default element namespace URI" additionally makes
+		// the imported namespace the default element and type namespace for
+		// the rest of the module (§4.11), which is what lets qischema002
+		// write "8 cast as hatsize" with no prefix at all.
+		//
+		// Whether a SECOND such import is XQST0066 is deliberately not
+		// enforced. The suite writes no case for it, and the once-only rule
+		// this package tracks is keyed to "declare default element
+		// namespace"; asserting the same rule for an import on no evidence
+		// would be a refusal invented rather than measured.
+		p.sc.defaultElementNS = imp.ns
+	}
+	p.skipSpaceAndComments()
+	if p.consumeKeyword("at") {
+		// The "at" clause is a list of location HINTS (§4.11), and this
+		// parser's only job is to collect them. Whether any is opened is
+		// decided by Options.SchemaResolver, which fetches nothing when the
+		// caller configured nothing -- see noSchemaResolver.
+		for {
+			p.skipSpaceAndComments()
+			loc, err := p.parseURILiteral()
+			if err != nil {
+				return err
+			}
+			imp.hints = append(imp.hints, strings.TrimSpace(loc))
+			p.skipSpaceAndComments()
+			if !p.consume(",") {
+				break
+			}
+		}
+	}
+	// §4.11 forbids importing one target namespace twice in one prolog. The
+	// two imports would contribute the same components, so the second is
+	// XQST0058 rather than a harmless repeat -- which is schema-import-2.
+	for _, prev := range p.schemaImports {
+		if prev.ns == imp.ns {
+			return p.errorf(
+				"XQST0058: the schema namespace %q is imported twice", imp.ns)
+		}
+	}
+	p.schemaImports = append(p.schemaImports, imp)
+	return nil
 }

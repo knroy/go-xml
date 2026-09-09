@@ -4,7 +4,7 @@
 > design rationale in it — in particular why the parser reads source rather
 > than a token stream, which is still the shape of the implementation. The
 > forecasts below have been overtaken: XQuery 3.1 now exists in
-> [`xquery`](../xquery/) at **99.96%** of the QT3 suite (29,952 of 29,964 in
+> [`xquery`](../xquery/) at **99.33%** of the QT3 suite (30,143 of 30,346 in
 > scope, 17 failing). For what the package
 > does today, read [xquery.md](xquery.md); for what it still cannot do, read
 > [known-gaps.md](known-gaps.md).
@@ -245,6 +245,18 @@ wrapped in `CDATA` because direct constructors contain `<`.
 | 5 | QT3 wiring and the conformance grind | 500 + tail |
 | 6 | Modules | 800–1,200 |
 | 7 | `validate` and schema-aware, optional | 1,000+ |
+
+Every phase is done. Phase 7 came in far under its estimate — roughly 700 lines
+including tests — because the estimate assumed PSVI plumbing between `xsd` and
+`xquery` that turned out to be already built: `xpath.SchemaTypes` is the seam,
+cut on the `xpath` side because `xsd` cannot import `xpath`, and `xslt` had
+already implemented it over an `*xsd.Schema` for `xsl:import-schema`. What
+`xquery` needed was the loader, the store, and the same method bodies on
+`staticContext`, which is already the `NamespaceResolver` every expression in
+the module compiles against. The schema-aware *tail* — typed input documents,
+constructor functions for schema types, annotation propagation — is what the
+1,000+ would have bought, and it is still open; see
+[todo.md](todo.md) §1.5.
 
 Core is roughly **8,000–11,000 lines**, against `xslt`'s 42,000 — the
 difference being everything `xpath` already provides. The conformance tail is

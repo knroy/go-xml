@@ -102,6 +102,41 @@ type Options struct {
 	// xdm.ErrResourceLimit, on the same reasoning as MaxModules: a truncated
 	// module is a module whose declarations are partly missing.
 	MaxModuleBytes int64
+
+	// Schemas are schemas available to "import schema" (§4.11), registered
+	// by target namespace.
+	//
+	// This is the schema store the specification leaves to the
+	// implementation, and it is the only way to import a schema that grants
+	// the query no reach whatever: the caller supplies the components or the
+	// text, so nothing is opened and nothing is fetched. An import with no
+	// "at" clause names a namespace and nothing else, and resolves against
+	// this.
+	//
+	// The store is consulted before SchemaResolver, so a registered schema
+	// shadows any location a query might name for that namespace.
+	Schemas []Schema
+
+	// SchemaResolver locates a schema document that Schemas does not have.
+	// When nil, NOTHING IS FETCHED: an "at" location is never opened, and an
+	// import that the store cannot answer raises XQST0059.
+	//
+	// It is off by default for the same reason ModuleResolver is: an "at"
+	// location is a string chosen by the query's author, and a query is
+	// untrusted input. The same resolver is handed to xsd for the imported
+	// schema's own xs:include and xs:import, so an imported schema can reach
+	// no further than the query's import was granted.
+	SchemaResolver SchemaResolver
+
+	// MaxSchemaBytes bounds the total schema source text one compilation may
+	// read through SchemaResolver and Schemas, cumulatively rather than per
+	// import. Zero means DefaultMaxSchemaBytes.
+	//
+	// Exceeding it fails the compilation with an error wrapping
+	// xdm.ErrResourceLimit rather than XQST0059: a truncated schema is a
+	// schema whose components are partly missing, and compiling against a
+	// partial static context is what this package refuses to do.
+	MaxSchemaBytes int64
 }
 
 // A Query is a compiled query, safe for concurrent use.
@@ -166,9 +201,12 @@ type Query struct {
 // public functions and variables. Nothing is fetched unless a resolver was
 // configured -- see Options.ModuleResolver.
 //
-// "import schema" still parses and is then refused rather than mis-parsed. It
-// needs the in-scope schema definitions in the static context, which this
-// package does not have, so it raises XQST0059 and validate raises XQDY0084.
+// "import schema" is implemented (§4.11): a schema is found in Options.Schemas
+// or through Options.SchemaResolver, and its type and declaration names reach
+// the static context before the query body is parsed, so "cast as my:t",
+// "instance of my:t", "element(*, my:t)", "schema-element(my:e)" and
+// "validate" are all judged against it. Nothing is fetched unless a resolver
+// was configured -- see Options.SchemaResolver.
 func Compile(src string, opts Options) (*Query, error) {
 	sc := newStaticContext()
 	sc.baseURI = opts.BaseURI
@@ -197,7 +235,7 @@ func Compile(src string, opts Options) (*Query, error) {
 	// declared XQuery version implies -- the default until parseVersionDecl
 	// says otherwise, which it does before anything else is read.
 	p := &parser{src: src, sc: sc, version: sc.xqVersion.xpathVersion(),
-		declaredNS: map[string]bool{}}
+		declaredNS: map[string]bool{}, opts: opts}
 	// The version declaration, the prolog and the body are read in that order
 	// because each changes how the next is read: a version declaration can
 	// refuse the whole query, and every prolog declaration is applied to the

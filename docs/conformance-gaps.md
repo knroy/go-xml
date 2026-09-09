@@ -1,9 +1,11 @@
 # W3C conformance: the remaining gaps
 
 Every figure here comes from a full run of the suite it names, with
-`tests/check.sh`. The *Now* and *Failing* columns were re-measured at commit
-`a8dee9a` and reproduce; the XSLT 3.0 row's thirteen were checked case by case
-against the list in that section, in both directions. The *Fixable*, *Open* and *Can't fix* columns are
+`tests/check.sh`. The *In scope*, *Passing*, *Now* and *Failing* columns were
+re-measured at commit `830ae11` plus the uncommitted `import schema` work, and
+every case this file names was checked against those runs in both directions:
+absent from the failing list means the entry is stale, present means the
+recorded reason was re-read against the actual failure text. The *Fixable*, *Open* and *Can't fix* columns are
 verdicts, not measurements, and were revised by the audit recorded at the foot
 of this file; the *Ceiling* column is what those verdicts imply and is
 therefore no longer a measured figure.
@@ -12,15 +14,25 @@ therefore no longer a measured figure.
 |---|---|---:|---:|---|---:|---:|---:|---:|---|
 | **xdm** | *(no external suite)* | — | — | — | — | — | — | — | — |
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xpath** | QT3 — XPath 3.0 | 19,302 | 19,302 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xpath** | QT3 — XPath 3.1 | 21,838 | 21,838 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 29,930 | 29,918 | 99.96% | **12** | 0 | 0 | **12** | 99.96% |
+| **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,143 | 99.33% | **203** | 0 | 0 | **203** | 99.33% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 11,525 | 11,348 | 98.46% | **177** | 0 | 0 | **177** | 98.46% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** | 0 | 0 | **31** | 99.93% |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
-| | **Total** | | | | **99** | **0** | **0** | **99** | |
+| **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 | 0 | 0 | 0 | 100.00% |
+| | **Total** | | | | **449** | **0** | **0** | **449** | |
+
+The last two rows are not W3C suites but real-world corpora — DocBook xslTNG's
+577 test documents and XSpec's 225 — kept here because they are the only
+measurement in this file taken against stylesheets nobody wrote for a test
+harness, and because four defects the W3C suites missed were found by them.
+They are not in the *Total*, which counts W3C disagreements only. Note that
+they are unrelated to the `docbook-001`/`docbook-004` cases read below, which
+belong to the W3C XSLT sets.
 
 *Ceiling* is what the suite would report if every fixable case landed and every
 open question resolved our way; the "can't fix" column is what stands between
@@ -46,12 +58,26 @@ reflects that.
 > unchanged, and where the audit could not settle a case it says so rather than
 > moving it to a flattering bucket.
 
-**All 103 disagreements are triaged as unfixable.** None is now work: the
+**All 449 disagreements are triaged as unfixable.** None is now work: the
 engine defects, harness defects and out-of-scope cases the audit found have all
 been settled — `iri-001` and `docbook-004` fixed, `regex-syntax-xslt20-0987`
 returned to *not implementable*, and `validation-0201` fixed at the engine
 without moving the case, which put its two entries in the can't-fix column
 where the first verdict had placed them.
+
+The count rose from 103 to 449 without a single case regressing, and the two
+causes are worth separating because they pull in opposite directions. **346 of
+the increase is denominator growth**: implementing `import schema` admitted 416
+XQuery cases and 60 XPath cases per lane that the `schemaImport` feature gate
+had been excluding, and lifting the streaming gate admitted the XSLT 3.0
+streaming corpus. Cases that were being counted as "not our business" are
+counted as ours now, which is why the percentages fell while nothing got worse.
+**The other component is that the two largest blocks are single features, not a
+long tail**: 150 of the 177 XSLT 3.0 failures want an `XTSE3430` that only the
+§19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
+processor "is not required to assess whether constructs are guaranteed-streamable" —
+while 203 of the XQuery failures are the five schema-aware features
+[todo.md](todo.md) §1.5 deliberately leaves. Neither is a backlog of defects.
 
 In the *Fixable* column above, "fixable" means "the count can move" — which
 covers three distinct things, and the audit found the old document conflating
@@ -61,11 +87,15 @@ the eight `indeterminate` XSD expectations per version), or a case the suite
 itself puts out of scope through a dependency the harness does not honour
 (`streamable-141`, `unparsed-text-2003`). Only the first kind moves the
 numerator; the other two
-move the denominator or the scoring. They are counted together here because all
+move the denominator or the scoring. They were counted together because all
 three are work, but they are not the same claim and are labelled individually
-below.
+below. Every example named in this paragraph has since been settled, which is
+why the column reads zero — the distinction is kept because it is what the
+column *means*, and the next case to enter it will need to be filed under one
+of the three.
 
-**XPath's single failure, and why the in-scope counts rose.** Two feature
+**Why the XPath in-scope counts rose — and the failure that came with them,
+since fixed.** Two feature
 labels in `tests/qt3/runner.go` had outgrown their meaning: `namespace-axis`
 and `infoset-dtd` were listed as unsupported long after they stopped being so.
 The namespace axis is implemented (`xpath/nsaxis.go`), and the XSLT harness had
@@ -73,11 +103,15 @@ declared `namespace_axis: true` all along — the two harnesses contradicting
 each other is what exposed it. Lifting both moved the *in-scope* count, which
 is the only signal that proves a lift took effect: XPath 2.0 15,183 → 15,222,
 3.0 19,244 → 19,307, 3.1 21,786 → 21,863, XQuery 29,918 → 29,964 in scope
-(29,901 → 29,952 passing) with no new XQuery failure.
+(29,901 → 29,952 passing) with no new XQuery failure. `import schema` then
+lifted the `schemaImport` gate and moved them again: XPath 3.0 19,302 → **19,362**
+and 3.1 21,838 → **21,898**, both still at zero failures, and XQuery
+29,930 → **30,346**.
 
 `infoset-dtd` lifted clean — 27 more cases per XPath lane, 32 in XQuery, zero
 failures. `namespace-axis` admitted 36 more cases per lane, all of which now pass.
-One did not at first: `prod-AxisStep/Axes123`, which asserts node *identity* across
+One did not at first — and it is now fixed, so the trade described below was
+taken and paid off. `prod-AxisStep/Axes123` asserts node *identity* across
 two namespace-axis walks (`/*/namespace::xlink is /*/namespace::*[. =
 '…/xlink']`). It is XP20+, so it appears in all three XPath lanes and is one
 distinct case rather than three. The cause is structural rather than a wrong
@@ -86,15 +120,34 @@ allocates a fresh `&xdm.Node` for each in-scope binding), while `is` compares
 Go pointers (`ln == rn` in `xpath/operators.go`), so two walks over the same
 binding can never be identical. Fixing it means giving namespace nodes a stable
 identity — caching them on the element, or comparing on (parent, prefix)
-instead of pointer — which is an engine change rather than a harness one. The
-trade is worth taking: the lift buys 63 in-scope cases at 3.1 for one failure
-that the skip was previously *hiding*, and a visible failure with a known cause
-is better than a silent exclusion.
+instead of pointer — which is an engine change rather than a harness one. It
+was made: `Node.Is` now defers to `Order()` for `KindNamespace`, and the set
+operators key on `IdentityKey` so they agree. The case passes on all three
+lanes and XPath is clean again. The trade was worth taking: the lift bought 63
+in-scope cases at 3.1 for one failure that the skip was previously *hiding*,
+and a visible failure with a known cause is better than a silent exclusion.
 
-**XQuery's remaining 17.** Three are read case by case below; the other
-fourteen fall in four sets not yet diagnosed individually —
-`prod-ModuleImport` (8), `prod-ContextItemDecl` (4),
-`prod-DecimalFormatDecl` and `prod-OptionDecl.serialization` (1 each).
+**The XQuery failures that predate schema import.** Three are read case by
+case below; the rest fall in three sets not yet diagnosed individually —
+`prod-ModuleImport` (4: `module-URIs-3`, `modules-31`, `-32`, `-33`),
+`prod-ContextItemDecl` (4: `contextDecl-048` and `-052` wanting
+XQST0113, `-050` and `-051` wanting XPTY0004) and
+`prod-OptionDecl.serialization/Serialization-003`, which wants XQST0108. This
+paragraph read "remaining 17 … `prod-ModuleImport` (8) …
+`prod-DecimalFormatDecl` … (1)"; three module-import cases and the
+decimal-format one have since passed, which is what shrank the pre-import
+residue. It is important that this set has not grown: the 203 XQuery failures
+below are cases `import schema` newly *admitted*, not cases it broke, and the
+distinction only holds because the pre-import set was diffed by name rather
+than by count.
+
+`prod-ModuleImport/errata6-003` was briefly counted here and does not belong.
+It fails with `XPST0051: unknown type "a:hatsize"` -- the schema-aware shape,
+not a module-import defect -- and it is **absent from the pre-import failure
+list entirely**, which settles it: the case was out of scope before `import
+schema` admitted it. That is the whole test for which side of this boundary a
+case falls on, and it is a measurement rather than a reading of the symptom.
+The pre-import residue is twelve, not thirteen.
 
 | Cases | Verdict | Why |
 |---|---|---|
@@ -117,8 +170,30 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1 ceiling: 29,918 / 29,930 = 99.96%** — what passes now. Nothing is
-left that is both fixable and worth the change.
+**XQuery 3.1: 30,143 / 30,346 = 99.33%** — what passes now. The denominator
+grew by 416 when `import schema` was implemented and the `schemaImport` feature
+gate came off the harness (29,930 → 30,346); 213 of those 416 newly-admitted
+cases pass and 203 fail, which is the whole of the increase in the failure
+count. The passing count rose by more than 213 — 29,918 → 30,143 — because four
+of the pre-import failures were fixed in the same period, which is why the
+pre-import residue also had to be diffed by name rather than inferred from the
+arithmetic. The 203
+failures are not one gap but five, each a separate small feature rather than a
+defect in the import: typed *input* documents, constructor functions for
+schema-defined simple types, impure and restricted unions (which `xslt` refuses
+identically, by a shared and deliberate purity rule), annotation propagation
+through a constructor, and substitution groups over validated content. They are
+catalogued in [todo.md](todo.md) §1.5.
+
+Where they land bears that out: `prod-CastableExpr` (49) and
+`prod-CastExpr.schema` (47) are the constructor-function gap, `prod-SchemaImport`
+(29) and `prod-InstanceofExpr` (12) the typed-input and annotation ones, and
+`prod-FunctionCall` (16) the union rule, reporting `XPST0008: "lu:restrictedUnion"
+is not a type in the in-scope schema definitions` on the very types §1.5 records
+as deliberately refused. No set outside that catalogue gained a failure.
+
+Of the failures that predate schema import, nothing is left that is both
+fixable and worth the change.
 
 The XSD split is taken largely from the suite's own `status` field rather than
 from judgement: `accepted` marks a settled expectation and `queried` marks one
@@ -130,7 +205,9 @@ none: `iri-001` carries no `<current>` element at all and was nevertheless
 recorded as a proved suite defect. Nine XSD cases per version now count as
 work; the reasoning is under *What is genuinely ours*.
 
-This is down from 345 at commit `69c53cf`, in three rounds of agents working
+This is down from 345 at commit `69c53cf` — measured against the denominators
+of the time, which is the caveat that matters, since the totals above are
+larger only because the denominators grew. In three rounds of agents working
 in isolated worktrees. The first cleared 103 cases: 10 of 10 in the
 `xsl:override` cluster, 9 of 12 across `package`/`accept`/`expose`/
 `use-package`, and 80 XSD schema-validity disagreements. The second cleared a
@@ -255,19 +332,32 @@ can make truthfully. The reasoning is recorded in `xpath/fn_31.go`.
 the harness's own comparison serializer writing a literal CR, which XML §2.11
 converts to LF on re-parse.
 
-**XPath: 21,838 / 21,838 = 100.00%, on all three versions.**
+**XPath: 21,898 / 21,898 = 100.00%, on all three versions.**
 
 ---
 
-# xslt — 21 failures across the two targets
+# xslt — 185 failures across the two targets
 
-Eight at the 2.0 target and thirteen at the 3.0 target. Three cases fail at
-both — `import-schema-137`, `validation-0201` and `docbook-001` — so the
-distinct case count is eighteen. (This heading has read 29, 28, 27, 23 and 22 in
-turn as `xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009`
-missing from the 3.0 list, `unparsed-text-2003` left the denominator, and
+Eight at the 2.0 target and 177 at the 3.0 target. Three cases fail at both —
+`import-schema-137`, `validation-0201` and `docbook-001` — so the distinct case
+count is 182. (This heading has read 29, 28, 27, 23, 22 and 21 in turn as
+`xsl:assert` cleared `catalog-006b`, an audit found `strip-space-009` missing
+from the 3.0 list, `unparsed-text-2003` left the denominator, and
 `use-package-003` was fixed by scoping an ordinary function call to the package
 it is written in.)
+
+**The jump from 21 to 185 is the streaming gate coming off, not a regression.**
+Every case the 21 named is still accounted for below, and the eight XSLT 2.0
+failures are byte-identical to what they were. Of the 164 newly-visible 3.0
+cases, **150 want an `XTSE3430`** — a refusal of a stylesheet as
+non-streamable, which only the §19.8 posture-and-sweep analysis can emit — and
+136 of those read literally "expected error XTSE3430, the transform succeeded":
+the engine computes the right answer and the test wants it to decline. §19.1
+settles whether that is owed: a processor that does not stream "is not required
+to assess whether constructs are guaranteed-streamable". These are the largest
+block in this file and they are not defects. They are diagnosed under *The
+streaming row is the one that overstates the gap*, and only the small remainder
+is read case by case here.
 
 ## XSLT 2.0 — 8 failures
 
@@ -284,7 +374,7 @@ returned to *not implementable* — see its row.
 |---|---|---|---|
 | `format-number-070` | `XTDE0040: no template named "main"` | **Not implementable** | Suite defect. The catalog invokes `<initial-template name="main"/>`; the stylesheet contains exactly one template, `match="root"`, and zero occurrences of `name="main"` (verified by grep). The spec: XTDE0040 is raised when the invocation "specifies a template name that does not match the expanded QName of a named template defined in the stylesheet" and "**It is a dynamic error**" — mandatory. Passing means violating the spec. |
 | `unparsed-text-2003` | First of four assertions returns `false` | **Out of scope — suite defect** | Requires fetching `http://www.w3.org/Consortium/mission.html`; the three local-file assertions pass. But the catalog *does* have a dependency for this and the harness already honours it — the sibling `unparsed-text-2002` declares `available_documents` for the same URL and is skipped, while `2003` omits it. See the 3.0 entry below. |
-| `docbook-001` | `XTDE1450: exsl:document is not available` | **Not implementable** | The vendored DocBook XSL 1.79.1 uses the EXSLT `exsl:document` extension element — 19 times in `chunker.xsl` alone. A vendor extension outside the XSLT specification. |
+| `docbook-001` | `XTMM9000: Can't make chunks with go-xml's processor.` | **Not implementable** | The vendored DocBook XSL 1.79.1 uses the EXSLT `exsl:document` extension element — 19 times in `chunker.xsl` alone. A vendor extension outside the XSLT specification. The *reported error* has moved since this row was written — it read `XTDE1450: exsl:document is not available`, and DocBook's own `chunker.xsl` now reaches its `xsl:message terminate="yes"` fallback first and says so in its own words. The verdict is unchanged; only the symptom is. |
 | `regex-syntax-xslt20-0984` | `[\w]` does not match U+2308 `⌈` | **Not implementable** | Unicode drift, and **the W3C has already fixed it upstream**: the XSLT 3.0 twin `regex-syntax-0984` carries `<modified by="Michael Kay" on="2024-05-04" change="Drop x2308 and x2309, characters reclassified"/>`, and those two codepoints are the only difference between the two copies. The 2.0 copy was never back-patched. (The category argument also holds: U+2308 is `Ps`, and Appendix F defines `\w` by subtracting `\p{P}`.) |
 | `regex-syntax-xslt20-0985` | `[\d]` does not match U+1369 `፩` | **Not implementable** | Same shape, fixed upstream silently: the 3.0 twin's `[\d]` list omits U+1369–U+1371 (ETHIOPIC DIGIT ONE–NINE), the only difference between the copies. They were `Nd` in Unicode 3.0 and are `No` now; `\d` is `\p{Nd}`. |
 | `regex-syntax-xslt20-0987` | `[\c]` matches U+0346 `͆` | **Not implementable** | Edition drift, and the same shape as its two neighbours after all. The audit read the data correctly and drew the wrong conclusion from it. The data: this case's `match` list holds exactly 72 codepoints in the combining block, `0300-0345` and `0360-0361`, and `nonmatch` holds U+0346, the first codepoint in the gap — XML 1.0 **4th edition**'s `CombiningChar` character for character. We implement **5th edition**, whose `NameChar` is the blanket `[#x0300-#x036F]` (`xpath/classdiff.go`). What the audit did not check is whether 4e is a configuration we are free to adopt. It is not: the XSD test suite's own schema (`testdata/xsdtests/common/xsts.xsd`) enumerates `XML-1.0-1e-4e` and `XML-1.0-5e` as **mutually exclusive** processor configurations and records that "XSD 1.1 describes XML 1.0 Fifth Edition as the base version in its normative reference" — so the 4e reading this one case wants would be paid for out of the XSD 1.1 numerator, and the same translation serves `\c` for XPath, XQuery, XSLT and XSD pattern facets alike. The W3C reached the same conclusion: the 3.0 twin `regex-syntax-0987` was rewritten to be edition-**neutral** — every combining character was removed from its `match` list and the `nonmatch` parameter deleted outright — so it passes under either edition. Saxon 9.8 passes that twin and reports the 2.0 copy `notRun`. The 2.0 copy was never back-ported, exactly as with `-0984` and `-0985`. |
@@ -307,10 +397,12 @@ the 3.0 twin `regex-syntax-0984` is still there. Nothing to do.
 **XSLT 2.0 ceiling: 6,193 / 6,201 = 99.87%** — the 6,193 that pass now.
 `regex-syntax-xslt20-0987` is back out of the numerator: it is edition drift like
 its two neighbours, not an engine defect, and its 3.0 twin was made
-edition-neutral rather than fixed. `unparsed-text-2003` and `validation-0201`
-also fail here, and both leave the denominator rather than the numerator if the
-corrections below are taken, which would put the 2.0 figure at
-6,193 / 6,199 = 99.90%. `validation-0201`'s remaining difference is the indent
+edition-neutral rather than fixed. `unparsed-text-2003` **has** since left the
+denominator — the 6,201 above is measured with it already gone, so the
+"6,193 / 6,199 = 99.90%" this paragraph used to project is not a further gain
+still available; it was taken, and 99.87% is the figure after it. Only
+`validation-0201` is still both failing and arguably not the numerator's
+business. `validation-0201`'s remaining difference is the indent
 width and nothing else: the engine defect that used to stand behind it — a
 union's selected member lost on every tree copy — is fixed, and the output now
 matches the expected file byte for byte apart from whitespace.
@@ -366,9 +458,22 @@ data rests on F&O §5.6.1's wholesale delegation to it plus the fingerprint in
 the data, rather than on Appendix F's own words. That caveat cuts against
 changing anything, not for it.
 
-## XSLT 3.0 — 13 failures
+## XSLT 3.0 — 177 failures
 
 ### Deliberate divergence — 1
+
+Two neighbours share this section's set and are not deliberate. `evaluate-046`
+fails with `XTDE3400: accumulator static-vars is defined circularly` where the
+case expects the transform to succeed, and is undiagnosed. **`evaluate-048` is
+a verdict this file should record as wrong**: the CHANGELOG entry for
+`fn:function-lookup`'s dynamic visibility says "Fixes `evaluate-048`", and the
+half it names *is* fixed — but the case still fails, now on
+`FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml":
+scheme "https" is not permitted`. It was the same mistake `validation-0201`
+made three times over: a case can fail for several independent reasons at once,
+and fixing the visible one is what reveals whether there was another. The
+remaining reason is a network fetch, so the case is not reachable regardless;
+what is wrong is the claim that it was closed.
 
 | Cases | Verdict | Why |
 |---|---|---|
@@ -422,13 +527,17 @@ them separate, and `override-t-003a` is the case.
 | `validation-0006` | **Not implementable** | A parentless attribute: `XTTE1555` wanted, `XTTE1540` reported. XTTE1555 is scoped by its own text to "when validating a **document node**", and a parentless attribute is not one; XTTE1540, which covers the `type` attribute, is what the case actually meets. The stylesheet says so itself: "a contrived example to force **Saxon** down a particular code path". |
 | `validation-0201` | **Implementation-defined — the engine defect behind it is fixed** | Three differences were stacked here and two are now gone. The first verdict was that this is Saxon's indentation (3 spaces then 6 where this serializer writes 2) and that `admin/catalog-schema.xsd` licenses a driver to ignore it: *"Test drivers are free to ignore differences in the serialization that are known to be irrelevant."* That licence is real and the case does not test the serializer — its own description calls it *"a 'system test' of schema-aware processing"*. But normalising indentation did not pass the case; it exposed what offset 46 was hiding. The second difference was an encoding one — the expected file declares `iso-8859-1` and carries a NBSP as the single byte `xA0` while the assertion has no `@encoding` — since fixed. The third was the real defect: the output read `29 MAY 1917` where `29 May 1917` is wanted, because `<xsl:template match="Date[data(.) instance of StandardDate]">` never matched. **That is now fixed.** The cause was not, as this row previously guessed, that an imported type is invisible to `instance of` — the type resolved fine and the element carried its annotation. `Date` has type `DateType`, a complex type with simple content extending a *union*, and XSD §3.14.4 selects a union's member per value, so which member accepted the text is recorded separately on the node (`xdm.Node.UnionMember`) and is what atomisation reads. Three copy sites carried the annotation and dropped the member: `stripCopyNode`, `xdmbuild.DeepCopy` and the parentless-attribute copy in `xslt/copyfuncs.go`. The stylesheet declares `<xsl:strip-space elements="*"/>`, so every `Date` reaching a template was a copy that had lost its member and atomised to `xs:untypedAtomic`. With the fix the output is **byte-identical to the expected file apart from whitespace** — all three dates now read "29 May 1917", "12 September 1953", "22 November 1963". Only the indent width remains, which §20 leaves implementation-defined, so the case still fails and the fix is covered by `xslt/unionmember_test.go` instead. |
 
-### Deliberately out of scope — 2
+### Deliberately out of scope — 1
+
+The table carries three rows and only `docbook-001` still fails; the other two
+are kept because their fixes are the reasoning, not the outcome.
+
 
 | Cases | Verdict | Why |
 |---|---|---|
 | `streamable-141` | **Fixed** | It wanted XTSE3430 for `version="1.0"` on an `xsl:apply-templates` inside a `streamable="yes"` mode, and the old verdict was that this needs the §19.8 streamability analysis. It does not. §3.9.1 states the rule *"notwithstanding anything stated in 19 Streamability"*: an instruction processed with XSLT 1.0 behavior **is** roaming and free-ranging, by declaration rather than as a consequence of any posture inference. That makes it checkable without the analysis, and `checkStreamableCompat` in `xslt/staticerrors.go` now checks exactly it — a template whose `@mode` names a mode declared streamable, containing an element that states `version="1.0"`. Nothing wider: a processor that does not stream is not required to assess whether anything else is guaranteed-streamable. Measured at +1 on the 3.0 target (8,611 → 8,612) with the 2.0 failing list byte-identical. The earlier −4 and −177 measurement was a different change — skipping the case through the *set's* unsupported feature, which swept up cases that pass today. |
 | `streamable-021`, `streamable-042`, `streamable-043` | **Fixed — a driver gap, not an engine gap** | All three failed `XTSE1660: validation requires a schema; none was imported`. Each declares the `loans` environment, whose `<schema file="loans.xsd"/>` loads cleanly (2 elements, 90 types), and then validates with `validation="strict"` while declaring **no** `xsl:import-schema` of its own — `streamable-021`'s is commented out. `tests/xslts/runner.go` merged the environment's schema only into a schema the stylesheet had already built, so where `ss.Schema()` was nil the components were loaded and thrown away and strict validation had nothing to look in. The suite's own reference driver settles what should happen: `c:validated-document` in `runner/run-tests.xsl` builds its stylesheet with one synthesised `<xsl:import-schema>` per environment `<schema>`, **unconditionally** and without consulting the stylesheet under test, and XSLT 2.0 §3.14 makes an import satisfiable "using a schema that is already known to the processor". The harness now installs the environment schema when the stylesheet declared none, through a new `Stylesheet.SetSchemaIfAbsent`, which refuses to displace a schema `xsl:import-schema` built — that case still merges, so a declaration the stylesheet named by hand keeps priority. Measured in an isolated worktree: XSLT 3.0 11,332 → **11,335** passing, 193 → **190** failing, the three being exactly these; XSLT 2.0 unmoved at 6,193 / 8. The blast radius is the 33 test-sets that declare a `<schema>`, and all 33 were measured on both trees: only `streamable` moves (106 → 109 passing), every other set identical, `streamable-044` — which imports the same schema itself — still passing. |
-| `docbook-001` | **Not implementable** | EXSLT `exsl:document`, 19 times in `chunker.xsl` alone. |
+| `docbook-001` | **Not implementable** | EXSLT `exsl:document`, 19 times in `chunker.xsl` alone. Now surfaces as DocBook's own `XTMM9000: Can't make chunks with go-xml's processor.` rather than `XTDE1450` — its stylesheet's terminating fallback, reached for the same absent extension. |
 
 Two left this list. `docbook-004` was never an EXSLT case — it was filed as one
 on the strength of its neighbour's name, and its stylesheet is five lines with
@@ -439,7 +548,7 @@ was given the module resolver: §9.7 makes available documents
 implementation-defined at 3.0 where 2.0's §3.13 fixes them at none, and Saxon
 9.8 passes the case.
 
-### Long tail — 2
+### Long tail — 3
 
 Rounds two and three cleared the rest, and `catalog-005b`,
 `type-available-0151`, `catalog-006b` and `unparsed-text-2003` have since
@@ -461,7 +570,10 @@ remaining, **150 want an `XTSE3430`** that only the §19.8 posture-and-sweep
 analysis can emit, and §19.1 says a non-streaming processor "is not required to
 assess whether constructs are guaranteed-streamable" — so they are not defects
 this engine is obliged to close. The reachable ceiling without implementing
-streamability analysis is therefore about **11,496 of 11,525**.
+streamability analysis is therefore **11,498 of 11,525**, or 99.77% — the 177
+less the 150. It is not an approximation any more: the 150 were counted from
+the run rather than projected, and this figure read "about 11,496" when they
+were an estimate.
 
 `base-uri-052` left this list when XInclude was implemented: the environment's
 `xinclude="true"` now runs a real inclusion pass, and the case's assertions are
@@ -469,13 +581,21 @@ about the `xml:base` fixup XInclude 1.0 §4.5.5 requires. The two cases
 once counted towards a higher ceiling, `validation-0006` and `validation-0201`,
 are settled above — the first as not implementable, the second as
 implementation-defined once the engine defect behind it was fixed — so no
-headroom is left against this suite. The thirteen that cannot be fixed: `accept-913`, `package-200`,
+headroom is left against this suite. The fourteen read case by case here:
+`accept-913`, `package-200`,
 `package-021err`, `package-022err`,
 `docbook-001`, `strip-space-009`, `si-copy-117`, `si-copy-of-117`,
-`import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`
-and `evaluate-045` (the last given up deliberately; see *Deliberate
-divergence* above). `streamable-141` was the fourteenth and is fixed — see its
-row above.
+`import-schema-137`, `accumulator-038`, `validation-0201`, `validation-0006`,
+`transform-004` and `evaluate-045` (the last given up deliberately; see
+*Deliberate divergence* above). All fourteen were re-checked against the
+current run and all fourteen still fail with the reason recorded for them.
+`streamable-141` was a fifteenth and is fixed — see its row above.
+
+The other 163 are not individually read here, and the reason is that they do
+not divide 163 ways. 150 want `XTSE3430`; the remainder is the long tail
+diagnosed under *The streaming row is the one that overstates the gap*, plus
+`evaluate-046`, `evaluate-048` and `merge-097`/`-097s`/`-097sf`, all of which
+are read elsewhere in this file.
 
 Entries left this list as the work behind them landed. `base-uri-052`
 went with XInclude. `catalog-006b` went with `xsl:assert`: it reports every
@@ -701,13 +821,22 @@ engine does exactly that. `xsl:source-document`, `xsl:merge`, `xsl:fork`,
 `xsl:accumulator` and the streamable forms are all implemented; what is absent
 is streaming, not the vocabulary.
 
-The 222 that fail divide cleanly:
+The gate is now off for good and the streaming cases are in the measured
+denominator, so this is no longer a projection. Of the 177 XSLT 3.0 failures,
+the streaming corpus contributes the great majority, and it divides cleanly:
 
 | Cases | What they want |
 |---:|---|
-| 150 | **XTSE3430** — reject a stylesheet as non-streamable. 136 read "expected error, the transform succeeded": the engine computes the right answer, and the test wants a refusal |
-| ~65 | An unrelated long tail; several are missing test-data files rather than engine defects |
-| 25 | Two real bugs, now fixed — see below |
+| 150 | **XTSE3430** — reject a stylesheet as non-streamable. 136 read "expected error XTSE3430, the transform succeeded": the engine computes the right answer, and the test wants a refusal. Counted from the current run, not projected |
+| ~13 | An unrelated long tail; several are missing test-data files rather than engine defects, and `merge-097`/`-097s`/`-097sf` are the Saxon collection-URI cases read at the foot of this section |
+| 25 | Two real bugs, now fixed — see below, and no longer among the failures |
+
+This table read "222 … ~65 … 25" when it was a projection made with the gate
+lifted experimentally. The 150 reproduced exactly; the long tail did not,
+because the two bugs below and the `transform`, `initial-function` and
+`streamable-021/042/043` fixes took most of it. That the projection's headline
+figure held and its remainder did not is the ordinary shape of this: a single
+named cause counts reliably, a residue does not.
 
 Only the first group needs streaming work, and specifically the §19.8 posture
 and sweep analysis: a static classifier over the compiled tree that assigns
@@ -785,7 +914,16 @@ resolving an external resource, and only two of them were engine bugs.
 # Summary
 
 The per-suite counts are in the table at the top. What that table cannot show
-is *why* the 103 unfixable cases are unfixable:
+is *why* the 449 unfixable cases are unfixable. Two rows dominate and are new
+since this table was last written — they are listed first, because without them
+the rest reads as though it were the whole story:
+
+| Reason | Cases | Where |
+|---|---:|---|
+| **Requires the §19.8 streamability analysis** | 150 | XSLT 3.0. They want an `XTSE3430` refusing a stylesheet as non-streamable, and 136 of them read "the transform succeeded" — the engine computes the right answer and the test wants it to decline. §19.1: a processor that does not stream "is not required to assess whether constructs are guaranteed-streamable". |
+| **Schema-aware features deliberately left** | 203 | QT3 XQuery 3.1, all of them cases `import schema` newly admitted rather than cases it broke. Five features, catalogued in [todo.md](todo.md) §1.5: typed input documents, constructor functions for schema-defined simple types, impure and restricted unions, annotation propagation through a constructor, and substitution groups over validated content. |
+
+The remaining 96 are the ones this file reads case by case:
 
 | Reason | Cases | Where |
 |---|---:|---|
@@ -795,16 +933,19 @@ is *why* the 103 unfixable cases are unfixable:
 | **Unicode or edition moved** | 3 | `regex-syntax-xslt20-0984`, `-0985` and `-0987`, all three already corrected by the W3C in their XSLT 3.0 twins and never back-ported. `-0987` briefly left this row as an engine defect and has returned: it turns on XML 1.0 4e vs 5e `NameChar`, and 5e is the edition XSD 1.1 normatively requires of us. |
 | **Suite contradicts itself** | 1 | `strip-space-009` asserts a whitespace-preservation rule §4.4 does not state, and its own comment says it exists to exercise Saxon's code paths. `sequence-0132` was listed here and is better explained directly from §11.10 + §3.9; `simple093` was listed here and is reopened as a question. |
 | **Spec declines to decide** | 4 | `si-copy-117` and `si-copy-of-117` use `type=` where XTTE1510 requires `validation=`; `import-schema-137` (which fails on both the 2.0 and 3.0 targets, so counts twice) has two genuine errors and §2.9 makes the choice implementation-dependent. |
-| **Needs a network fetch** | 3 | `unparsed-text-2003` (both targets) and `package-version-011` want documents no resolver is configured to reach. |
+| **Needs a network fetch** | 1 | `evaluate-048` wants `https://www.saxonica.com/welcome/welcome.xml`. `unparsed-text-2003` was here on both targets and has left the denominator; `package-version-011` was here and is fixed — no fetch was ever needed, since `doc('')` names the containing module. |
 | **Vendor extension** | 2 | `docbook-001`, on both targets, needs EXSLT `exsl:document`. |
-| **Feature deliberately not implemented** | 0 | Empty. `streamable-141` was the last entry and is now **fixed**: §3.9.1 states its rule "notwithstanding anything stated in 19 Streamability", so it never needed the analysis its row claimed. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
+| **Feature deliberately not implemented** | 353 | The two rows at the head of this section: 150 XSLT 3.0 cases wanting the §19.8 streamability analysis and 203 XQuery cases wanting the five schema-aware features of [todo.md](todo.md) §1.5. This row read **0** when the streaming gate was still excluding its cases from the denominator and `import schema` had not yet admitted the XQuery ones — the row was empty because the cases were not being counted, which is the failure mode this whole file exists to prevent. `streamable-141` was its last individually-named entry and is **fixed**: §3.9.1 states its rule "notwithstanding anything stated in 19 Streamability", so it never needed the analysis its row claimed. `catalog-006b` was here until `xsl:assert` was implemented, and XSD `iri-001` moved to the fixable column when the audit found it ours, and has since been fixed in the driver. |
+| **Nested compile deadlocks on package-level state** | 1 | `transform-004` calls `fn:transform` from a `static="yes"` variable, so it must run during the static phase. Registering the function there is correct by §9.7 and two lines; it deadlocks on the non-reentrant `compileMu` guarding `Compile`'s package-level state. Architecture debt with a known change and a stated cost. |
+| **Undiagnosed** | 1 | `evaluate-046` reports `XTDE3400: accumulator static-vars is defined circularly` where the case expects success. Not read. |
 | **Costs more than it gains** | 2 | `accept-913` (its own comment contradicts §3.6.3.2), `package-200` (a rule separating it from `use-package-291`–`294` exists but rests on quoting, which neither grammar mentions, and would have exactly one instance in the suite). `use-package-003` was here and is now **fixed**: the narrow form of the change its row called for — carrying the declaring package's visibility on the function component and checking it at the call site — turned out to be contained, and gained the case with no regression. |
 | **Implementation-defined** | 2 | `validation-0201` (both targets) asserts Saxon's 3-space indent byte-for-byte where this serializer writes 2. The suite rewrote the sibling `validation-0202` in 2013 to avoid exactly this. |
 
-The XSLT rows above are exact and case-by-case. The XSD rows are not: they are
-derived from the `status` field and the kind of each disagreement, and the two
-XSD reason rows overlap slightly with the suite-defect row, so this table sums
-to a little more than 103. That imprecision is inherent to deriving the XSD
+The XSLT rows above are exact and case-by-case, save the two feature rows at
+the head, which are counted from the run rather than read individually. The XSD
+rows are not: they are derived from the `status` field and the kind of each
+disagreement, and the two XSD reason rows overlap slightly with the
+suite-defect row, so this table sums to a little more than 449. That imprecision is inherent to deriving the XSD
 split from status rather than from a per-case reading, and it is stated here
 rather than papered over — the previous revision's version of this table summed
 to 124 against a claimed 131, with no note.
@@ -812,16 +953,22 @@ to 124 against a claimed 131, with no note.
 Two suites do reach 100% — XPath at all three versions, and RELAX NG. The
 others will not, and for most of the residue the old reasons hold: a suite
 defect, a W3C-challenged expectation, a vendor extension, or a Unicode snapshot
-that has since moved. What the audit changed is that this is no longer *all* of
-the residue. Twenty-three cases are work, and the honest summary is now "here is
-what is left, here is the part of it that is a backlog, and here is why the
-rest is not".
+that has since moved. The twenty-three cases the audit found to be work have
+all since been settled — fixed, or returned to their original verdict with
+better evidence — which is why the *Fixable* and *Open* columns are zero. What
+replaced them is not a backlog either: the 353 cases in the two rows above are
+two named features, one of which the spec explicitly does not require of a
+non-streaming processor and one of which is deliberately deferred with its
+scope written down. The honest summary is "here is what is left, here are the
+two features that are most of it, and here is why the rest is not work".
 
 ## Related
 
 [reaching-100.md](reaching-100.md) answers the question this file's numbers
 raise: what it would actually take to close each gap, and which of them are not
-work at all.
+work at all. It predates the streaming gate coming off and `import schema`
+landing, so its per-gap reasoning still applies while its arithmetic does not —
+read it for the *what it would take*, and take the counts from here.
 
 [known-gaps.md](known-gaps.md) is the reasoning behind the hard entries here:
 diagnosed causes, fixes that were attempted and measured and reverted, and what
@@ -850,7 +997,8 @@ LCWD does not state, and `xsl:source-document` — which `docbook-004` tests —
 does not appear in the LCWD at all.
 
 **Saxon 9.8's submission is not a neutral referee.** It passes eleven of the
-twenty XSLT 3.0 failures, but several expectations were recorded from Saxon's
+fourteen XSLT 3.0 failures this file reads individually, but several
+expectations were recorded from Saxon's
 own behaviour: `validation-0006`'s stylesheet says outright that it is "a
 contrived example to force Saxon down a particular code path", and
 `validation-0201`'s expected file is Saxon's output byte-for-byte. Saxon's

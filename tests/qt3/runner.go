@@ -249,7 +249,19 @@ func unsupportedSpec(deps []Dependency, target TargetVersion) string {
 			// re-measured, not a record of what was once true. Lifting one is
 			// verified by the IN-SCOPE count moving, not the passing count.
 			switch d.Value {
-			case "schemaValidation", "schemaImport", "typedData",
+			// schemaImport is NOT on this list. "import schema" is
+			// implemented (xquery/schemaimport.go): a schema registered by
+			// the environment reaches the static context, so a type name it
+			// defines resolves and a validate expression is judged against
+			// it. Lifting it is verified by the IN-SCOPE count moving, which
+			// is the rule the note above states.
+			//
+			// schemaValidation and typedData stay. Both ask for the INPUT
+			// DOCUMENT to arrive already validated and annotated, which is a
+			// different thing from importing a schema, and a source declared
+			// validation="strict" is skipped separately in Run for the same
+			// reason.
+			case "schemaValidation", "typedData",
 				"staticTyping", "moduleImport",
 				"xpath-1.0-compatibility",
 				"fn-transform-XSLT", "fn-transform-XSLT30", "fn-format-integer-CLDR",
@@ -591,7 +603,15 @@ func (r *Runner) resolveEnv(ts *TestSet, tc *TestCase) (Environment, error) {
 		out.ContextItem = append(out.ContextItem, e.ContextItem...)
 		out.Params = append(out.Params, e.Params...)
 		out.Namespaces = append(out.Namespaces, e.Namespaces...)
-		out.Schemas = append(out.Schemas, e.Schemas...)
+		// A schema's file is relative to the document that declared the
+		// environment, exactly as a source's is, and is rewritten here for
+		// the same reason: after the merge nothing records which document
+		// that was. Without it a test-set environment's schema was looked for
+		// under the suite root and never found.
+		for _, sch := range e.Schemas {
+			sch.File = srcPath(dir, sch.File)
+			out.Schemas = append(out.Schemas, sch)
+		}
 		out.Collations = append(out.Collations, e.Collations...)
 		out.StaticBaseURI = append(out.StaticBaseURI, e.StaticBaseURI...)
 		out.Resources = append(out.Resources, e.Resources...)
@@ -650,8 +670,42 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		return rep
 	}
 	if len(env.Schemas) > 0 {
-		rep.Outcome, rep.Reason = Skip, "schema-aware environment"
-		return rep
+		// An environment's <schema> is registered with the query rather than
+		// skipped, but ONLY for a query that imports it. The gate is narrowed
+		// rather than removed, and the distinction is the whole of what this
+		// engine can and cannot do.
+		//
+		// A query with "import schema" is asking for the schema's COMPONENTS
+		// -- its type names and its global declarations -- in the static
+		// context, which is implemented (xquery/schemaimport.go): the schema
+		// is registered by target namespace and the file is read by the
+		// harness rather than through a resolver, the same arrangement
+		// caseModules uses and for the same reason. SchemaResolver stays nil,
+		// so an "at" hint in one of these queries is never opened.
+		//
+		// A case with a schema environment and NO import is asking for
+		// something else: that the INPUT DOCUMENT arrive already validated
+		// and annotated, so that a node atomises as its typed value. That is
+		// typed data, it is what the schemaValidation and typedData features
+		// name, and this engine does not carry a PSVI onto a source document.
+		// Admitting those cases measured nothing about schema import -- they
+		// are json-to-xml and castable cases that fail for reasons of their
+		// own -- so they stay skipped, and the reason says which half is
+		// missing.
+		//
+		// A source declared validation="strict" or "lax" is the same request
+		// written on the source rather than implied by the absence of an
+		// import, and is skipped even when the query does import a schema.
+		if !strings.Contains(tc.Test.Query, "import schema") {
+			rep.Outcome, rep.Reason = Skip, "schema-validated input document"
+			return rep
+		}
+		for _, src := range env.Sources {
+			if src.Validation == "strict" || src.Validation == "lax" {
+				rep.Outcome, rep.Reason = Skip, "schema-validated source document"
+				return rep
+			}
+		}
 	}
 	for _, c := range env.Collations {
 		if c.Default == "true" && !strings.HasSuffix(c.URI, "/collation/codepoint") &&
@@ -851,6 +905,13 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 		// keeps the harness from granting a query the filesystem: the "at"
 		// hints in these queries are never opened.
 		opts.Modules, res.err = r.caseModules(ts, tc)
+		if res.err == nil {
+			// A case's <schema> elements are the schemas "import schema" is
+			// to find, registered by target namespace rather than resolved
+			// from a location. SchemaResolver stays nil, so an "at" hint in
+			// one of these queries is never opened. See caseSchemas.
+			opts.Schemas, res.err = r.caseSchemas(env)
+		}
 		if res.err == nil {
 			q, res.err = xquery.Compile(tc.Test.Query, opts)
 		}
@@ -2614,6 +2675,45 @@ func (r *Runner) caseModules(ts *TestSet, tc *TestCase) ([]xquery.Module, error)
 			return nil, err
 		}
 		out = append(out, xquery.Module{Namespace: m.URI, Source: string(src)})
+	}
+	return out, nil
+}
+
+// caseSchemas reads the schemas an environment declares, for Options.Schemas.
+//
+// The catalog gives each one a target namespace and a file, and the file is
+// read here rather than through a resolver, for the reason caseModules gives:
+// the harness knows which files the suite intends, and a resolver would let
+// the query's own "at" hints decide instead. Options.SchemaResolver is
+// therefore left nil, which is what makes the run itself evidence that the
+// engine fetches nothing on a query's say-so.
+//
+// A schema whose file cannot be read is returned as an error, which the caller
+// turns into a skip: the case is about the import, and a missing fixture is
+// the harness's fault rather than the engine's.
+func (r *Runner) caseSchemas(env Environment) ([]xquery.Schema, error) {
+	if len(env.Schemas) == 0 {
+		return nil, nil
+	}
+	out := make([]xquery.Schema, 0, len(env.Schemas))
+	for _, sch := range env.Schemas {
+		if sch.File == "" {
+			// A <schema> naming only a namespace says the namespace is
+			// expected and supplies nothing for it. §4.11 makes importing
+			// such a namespace legal, and a nil-Components entry is how the
+			// store says so without the import failing.
+			out = append(out, xquery.Schema{Namespace: sch.URI})
+			continue
+		}
+		path := filepath.Join(r.Root, filepath.FromSlash(sch.File))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		// No BaseURI: with no resolver configured nothing follows an
+		// xs:include or an xs:import, so there is no relative reference for
+		// one to resolve against. Supplying a base would suggest otherwise.
+		out = append(out, xquery.Schema{Namespace: sch.URI, Source: string(src)})
 	}
 	return out, nil
 }

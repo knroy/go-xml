@@ -10,12 +10,13 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| `type=` naming an attribute declaration was accepted (XSD) | `<xsd:element name="myElem" type="foo"/>` beside `<xsd:attribute name="foo"/>` loaded clean. §3.3.2 requires `type=` to resolve to a *type definition*, and this resolves to a component of the wrong kind. It was hidden by the deferral §3.3.3 grants an element declaration: the unprefixed name lands in the absent namespace, `deferrableMiss` answers true, and the reference was carried on the declaration instead of reported. That latitude exists because a document read later might supply the type — but no document can turn an attribute declaration into one, so the miss is final when it is made. `resolveTypeRefLazy` now reports a name the assembly defines as a non-type before consulting the deferral; `saxonData Missing/missing001`, whose `type="absent"` names nothing at all, keeps its deferral and still loads. Fixes `MS-Element/elemM002` on both versions. | *(unreleased)* |
-| `keyref refer=` reached a key its document never imported (XSD) | `schema.identityConstraints` is one flat map over the whole assembly, so the `refer=` fixup could resolve against a key the asking document has no licence to see. §4.2.6.1 `src-resolve` scopes an `<xs:import>`'s licence to the document that wrote it, which is why `doc.imports` already existed beside the per-assembly set — the fixup was not consulting it. `idC017a.xsd` targets `diffNS` and writes `refer="keyName"` unprefixed with no default namespace in scope, so §3.11.2 resolves it to the *absent* namespace; the only such key belongs to the importing document, which `idC017a.xsd` does not import. `resolveQName`'s own import check cannot catch it, because an unprefixed name with no default namespace returns early through `chameleonQName`. The fixup now captures its declaring document and requires the key's namespace to be that document's own or one it imports; a key in the referrer's own namespace, or in an imported one, still resolves. Fixes `MS-IdentityConstraint/idC019` on both versions. | *(unreleased)* |
-| Typed mode unchecked under a built-in rule | XTTE3100/XTTE3110 were applied where an `xsl:apply-templates` selected a node, and nowhere else. §6.7.3 writes the shallow-copy built-in rule out as a template whose body is literally `<xsl:apply-templates select="@*"/>` and `<xsl:apply-templates select="node()"/>`, and §2.3.3 defines the initial match selection as "the processing then corresponds to the effect of the `xsl:apply-templates` instruction" — so both are selections the error reaches. The check moved into `applyToNode`, which every selection path funnels through, covering the initial selection, the built-in descents and the array-member unwrapping at once. `mode-1438` is a stylesheet that is nothing but `<xsl:mode typed="yes" on-no-match="shallow-copy"/>`: it has no `xsl:apply-templates` of its own, and the document node it starts from carries no annotation to object to, so only the descent into the first element reaches the error. Fixes `mode-1438`. | *(unreleased)* |
-| `typed="false"`, `"0"` and `"unspecified"` read as their opposite | `@typed` is `boolean \| "strict" \| "lax" \| "unspecified"`, and a boolean in this language is any of yes/no, true/false, 1/0. `checkModeTyped` tested only the literal `"no"`, so every other way of writing it fell to the affirmative branch and asserted the reverse of what it said; `"unspecified"`, which asserts nothing, did the same. The bug was unreachable while the check ran only on explicit `xsl:apply-templates` — `mode-1445` (`typed=" false "`), `mode-1446` (`typed="0"`) and the `unspecified` cases all reach a mode through the built-in rules alone — so widening the check's reach in the row above is what exposed it. The capitalised `"No"` stays an error: `mode-1447` writes it and expects `XTSE0020`. | *(unreleased)* |
-| JSON-nested HTML wrote the wrong content-type meta | `json-node-output-method="html"` serializes nested nodes through the minimal serializer in `xpath`, which declared the encoding as the HTML5 `<meta charset="UTF-8">` on the belief that the suite accepts either spelling. It does not: `output-0716` requires the serialization to match `<head>…<meta http-equiv=\"Content-Type\"` and `output-0702` the same with a `content` attribute, and neither regex admits a `charset` attribute in its place. The full serializer in `xslt` had always written the `http-equiv` form, so the two were also disagreeing about the same element. The namespace test was widened to match the full serializer's as well — under the html method every element is HTML by definition, and `output-0702` builds its `<head>` under a default `xmlns` of the XHTML namespace — while still leaving a `<head>` of some other vocabulary alone. Fixes `output-0702` and `output-0716`. | *(unreleased)* |
-| `fn:function-lookup` hidden from `xsl:evaluate` | §10.4.1 keeps the XSLT-defined functions out of the target expression's **static** context, and `restrictedLibrary` applied that to every lookup. But §10.4.2 says of the dynamic context that "all other aspects […] are the same as the dynamic context for the `xsl:evaluate` instruction itself", and its own note takes for granted that `fn:document` is reachable there: "a processor may disallow access using the `doc` or `document` functions to documents in local filestore" would have nothing to disallow otherwise. F&O 16.1.1 resolves `fn:function-lookup` against "the named functions component of the dynamic context" and leaves the outcome implementation-defined where the static context lacks the name. `restrictedLibrary` now implements `LookupDynamic` without the static hiding, so a dynamic lookup finds `fn:document` while a call written out in the expression stays `XTDE3160` — the split `evaluate-047` and `evaluate-048` assert either side of. The stylesheet's own private functions stay hidden either way. Fixes `evaluate-048`. | *(unreleased)* |
+| `validate` in tail position evaluated to the empty sequence | `validateExpr.eval` computed its result and threw it away, so `validate lax {…}` as the last expression of a query yielded nothing. Pre-existing and invisible, because `validate strict` always raised before reaching it. | *(unreleased)* |
+| `type=` naming an attribute declaration was accepted (XSD) | `<xsd:element name="myElem" type="foo"/>` beside `<xsd:attribute name="foo"/>` loaded clean. §3.3.2 requires `type=` to resolve to a *type definition*, and this resolves to a component of the wrong kind. It was hidden by the deferral §3.3.3 grants an element declaration: the unprefixed name lands in the absent namespace, `deferrableMiss` answers true, and the reference was carried on the declaration instead of reported. That latitude exists because a document read later might supply the type — but no document can turn an attribute declaration into one, so the miss is final when it is made. `resolveTypeRefLazy` now reports a name the assembly defines as a non-type before consulting the deferral; `saxonData Missing/missing001`, whose `type="absent"` names nothing at all, keeps its deferral and still loads. Fixes `MS-Element/elemM002` on both versions. | [`830ae11`][830ae11] |
+| `keyref refer=` reached a key its document never imported (XSD) | `schema.identityConstraints` is one flat map over the whole assembly, so the `refer=` fixup could resolve against a key the asking document has no licence to see. §4.2.6.1 `src-resolve` scopes an `<xs:import>`'s licence to the document that wrote it, which is why `doc.imports` already existed beside the per-assembly set — the fixup was not consulting it. `idC017a.xsd` targets `diffNS` and writes `refer="keyName"` unprefixed with no default namespace in scope, so §3.11.2 resolves it to the *absent* namespace; the only such key belongs to the importing document, which `idC017a.xsd` does not import. `resolveQName`'s own import check cannot catch it, because an unprefixed name with no default namespace returns early through `chameleonQName`. The fixup now captures its declaring document and requires the key's namespace to be that document's own or one it imports; a key in the referrer's own namespace, or in an imported one, still resolves. Fixes `MS-IdentityConstraint/idC019` on both versions. | [`830ae11`][830ae11] |
+| Typed mode unchecked under a built-in rule | XTTE3100/XTTE3110 were applied where an `xsl:apply-templates` selected a node, and nowhere else. §6.7.3 writes the shallow-copy built-in rule out as a template whose body is literally `<xsl:apply-templates select="@*"/>` and `<xsl:apply-templates select="node()"/>`, and §2.3.3 defines the initial match selection as "the processing then corresponds to the effect of the `xsl:apply-templates` instruction" — so both are selections the error reaches. The check moved into `applyToNode`, which every selection path funnels through, covering the initial selection, the built-in descents and the array-member unwrapping at once. `mode-1438` is a stylesheet that is nothing but `<xsl:mode typed="yes" on-no-match="shallow-copy"/>`: it has no `xsl:apply-templates` of its own, and the document node it starts from carries no annotation to object to, so only the descent into the first element reaches the error. Fixes `mode-1438`. | [`bc72bed`][bc72bed] |
+| `typed="false"`, `"0"` and `"unspecified"` read as their opposite | `@typed` is `boolean \| "strict" \| "lax" \| "unspecified"`, and a boolean in this language is any of yes/no, true/false, 1/0. `checkModeTyped` tested only the literal `"no"`, so every other way of writing it fell to the affirmative branch and asserted the reverse of what it said; `"unspecified"`, which asserts nothing, did the same. The bug was unreachable while the check ran only on explicit `xsl:apply-templates` — `mode-1445` (`typed=" false "`), `mode-1446` (`typed="0"`) and the `unspecified` cases all reach a mode through the built-in rules alone — so widening the check's reach in the row above is what exposed it. The capitalised `"No"` stays an error: `mode-1447` writes it and expects `XTSE0020`. | [`bc72bed`][bc72bed] |
+| JSON-nested HTML wrote the wrong content-type meta | `json-node-output-method="html"` serializes nested nodes through the minimal serializer in `xpath`, which declared the encoding as the HTML5 `<meta charset="UTF-8">` on the belief that the suite accepts either spelling. It does not: `output-0716` requires the serialization to match `<head>…<meta http-equiv=\"Content-Type\"` and `output-0702` the same with a `content` attribute, and neither regex admits a `charset` attribute in its place. The full serializer in `xslt` had always written the `http-equiv` form, so the two were also disagreeing about the same element. The namespace test was widened to match the full serializer's as well — under the html method every element is HTML by definition, and `output-0702` builds its `<head>` under a default `xmlns` of the XHTML namespace — while still leaving a `<head>` of some other vocabulary alone. Fixes `output-0702` and `output-0716`. | [`bc72bed`][bc72bed] |
+| `fn:function-lookup` hidden from `xsl:evaluate` | §10.4.1 keeps the XSLT-defined functions out of the target expression's **static** context, and `restrictedLibrary` applied that to every lookup. But §10.4.2 says of the dynamic context that "all other aspects […] are the same as the dynamic context for the `xsl:evaluate` instruction itself", and its own note takes for granted that `fn:document` is reachable there: "a processor may disallow access using the `doc` or `document` functions to documents in local filestore" would have nothing to disallow otherwise. F&O 16.1.1 resolves `fn:function-lookup` against "the named functions component of the dynamic context" and leaves the outcome implementation-defined where the static context lacks the name. `restrictedLibrary` now implements `LookupDynamic` without the static hiding, so a dynamic lookup finds `fn:document` while a call written out in the expression stays `XTDE3160` — the split `evaluate-047` and `evaluate-048` assert either side of. The stylesheet's own private functions stay hidden either way. This is the library defect `evaluate-048` turns on, but the case still fails: its assertion fetches `https://www.saxonica.com/...`, and nothing is fetched here without a resolver. Fixed, not evidenced. | [`bc72bed`][bc72bed] |
 | C0 controls serialized raw | `#x1`–`#x1F` fell past every arm of the escaper into a plain rune write, producing output the serializer could not parse back. The version now decides: 1.1 writes character references, 1.0 raises `SERE0006`. | [`a45c3a6`][a45c3a6] |
 | XML declaration hardcoded `1.0` | `xsl:output/@version="1.1"` was parsed and never reached the declaration. Also mapped `xsl:result-document/@output-version`, which §3.5 renames and nothing read. | [`a45c3a6`][a45c3a6] |
 | Arrays dropped from constructed content | An `*xdm.ArrayItem` matched neither arm of a two-arm type switch, so `('a',[1,2],'b')` yielded `"a b"` — members lost from mid-sequence. `xdm.Flatten` was already correct and simply never called. | [`be2938e`][be2938e] |
@@ -91,6 +92,7 @@ what the suites *measured*, not what the library does.
 
 | Feature | Notes | Commit |
 |---|---|---|
+| XQuery `import schema` | Schema import per XQuery 3.1 §4.11 — the last structural gap in `xquery`, which until now parsed the declaration and refused it by name with `XQST0059`. All three prefix forms including `default element namespace`. Components reach the static context *before the body parses*, because XQuery resolves type names while parsing whereas the module loader runs after: `cast`/`castable` apply the schema's facets rather than the base type alone, `instance of`, `element(*,T)` and `schema-element(E)` resolve, and `validate` strict/lax/`type T` is assessed and annotated. `Options.SchemaResolver` is nil by default and nothing is read without one, sharing the budget and the resolver with the schema's own `xs:include`/`xs:import`. QT3 XQuery in scope 29,930 → 30,346, passing 29,918 → 30,143; XPath 3.0 and 3.1 each gained 60 in-scope cases at 0 failures. The 203 failures are newly *admitted* cases, not lost ones — the original 12 are still exactly those 12 — and they are the five features §1.5 of the todo records as deliberately left. | *(unreleased)* |
 | DTD external subsets | `dtd.Load` reads the second half of a DTD. Nothing is fetched by default and the refusal is loud; bounds are shared across subsets, not per-subset. | [`b6fb5ab`][b6fb5ab] |
 | RELAX NG compact syntax | `relaxng.CompileCompact`. | [`b6fb5ab`][b6fb5ab] |
 | XQuery `import module` | Module import per XQuery 3.1. A cycle of imports is not an error. Nothing is fetched by default — `Options.ModuleResolver` is nil in the zero value — and `MaxModules` refuses rather than truncates. | [`b6fb5ab`][b6fb5ab] |
@@ -489,60 +491,62 @@ here so every entry in this file sits under a release.
 | xsd: an identity field typed as a union compared spellings, not values | Identity-constraint equality is defined on values. `keyString` already builds a type-tagged canonical form for every field before the sequence is joined, so `3.0` and `3` collide as one `xs:decimal`, `007` and `7` as one `xs:integer` |
 
 
+[0048fde]: https://github.com/knroy/go-xml/commit/0048fde
+[01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
+[145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
+[176ce57]: https://github.com/knroy/go-xml/commit/176ce57
+[17ce36c]: https://github.com/knroy/go-xml/commit/17ce36c
 [1b027e5]: https://github.com/knroy/go-xml/commit/1b027e5
+[22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
+[277599e]: https://github.com/knroy/go-xml/commit/277599e
+[28699a9]: https://github.com/knroy/go-xml/commit/28699a9
+[28e455a]: https://github.com/knroy/go-xml/commit/28e455a
 [2c461c7]: https://github.com/knroy/go-xml/commit/2c461c7
 [2cc633e]: https://github.com/knroy/go-xml/commit/2cc633e
+[2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
+[30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
 [39f7174]: https://github.com/knroy/go-xml/commit/39f7174
 [3b6e685]: https://github.com/knroy/go-xml/commit/3b6e685
+[3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
+[5964c0a]: https://github.com/knroy/go-xml/commit/5964c0a
+[600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
+[6567f8e]: https://github.com/knroy/go-xml/commit/6567f8e
 [6c8405c]: https://github.com/knroy/go-xml/commit/6c8405c
+[704222f]: https://github.com/knroy/go-xml/commit/704222f
+[78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
+[7b0562a]: https://github.com/knroy/go-xml/commit/7b0562a
 [7c4bef2]: https://github.com/knroy/go-xml/commit/7c4bef2
 [81e6ee5]: https://github.com/knroy/go-xml/commit/81e6ee5
+[830ae11]: https://github.com/knroy/go-xml/commit/830ae11
 [83148b7]: https://github.com/knroy/go-xml/commit/83148b7
 [84735c8]: https://github.com/knroy/go-xml/commit/84735c8
 [8dcc4dc]: https://github.com/knroy/go-xml/commit/8dcc4dc
+[9113ac4]: https://github.com/knroy/go-xml/commit/9113ac4
 [96171c5]: https://github.com/knroy/go-xml/commit/96171c5
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
+[a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
 [a45c3a6]: https://github.com/knroy/go-xml/commit/a45c3a6
 [a820213]: https://github.com/knroy/go-xml/commit/a820213
+[a883c0a]: https://github.com/knroy/go-xml/commit/a883c0a
+[ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
+[b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
 [b6fb5ab]: https://github.com/knroy/go-xml/commit/b6fb5ab
+[bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
+[bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed
 [bd0aaf5]: https://github.com/knroy/go-xml/commit/bd0aaf5
 [be2938e]: https://github.com/knroy/go-xml/commit/be2938e
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
 [d15b6df]: https://github.com/knroy/go-xml/commit/d15b6df
-[e049991]: https://github.com/knroy/go-xml/commit/e049991
-[e51ed3f]: https://github.com/knroy/go-xml/commit/e51ed3f
-[0048fde]: https://github.com/knroy/go-xml/commit/0048fde
-[01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
-[145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
-[176ce57]: https://github.com/knroy/go-xml/commit/176ce57
-[17ce36c]: https://github.com/knroy/go-xml/commit/17ce36c
-[22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
-[277599e]: https://github.com/knroy/go-xml/commit/277599e
-[28e455a]: https://github.com/knroy/go-xml/commit/28e455a
-[2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
-[30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
-[3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
-[5964c0a]: https://github.com/knroy/go-xml/commit/5964c0a
-[600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
-[6567f8e]: https://github.com/knroy/go-xml/commit/6567f8e
-[704222f]: https://github.com/knroy/go-xml/commit/704222f
-[78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
-[7b0562a]: https://github.com/knroy/go-xml/commit/7b0562a
-[a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
-[a883c0a]: https://github.com/knroy/go-xml/commit/a883c0a
-[ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
-[b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
-[bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
 [da1cde6]: https://github.com/knroy/go-xml/commit/da1cde6
+[e049991]: https://github.com/knroy/go-xml/commit/e049991
 [e125888]: https://github.com/knroy/go-xml/commit/e125888
 [e2606cc]: https://github.com/knroy/go-xml/commit/e2606cc
+[e51ed3f]: https://github.com/knroy/go-xml/commit/e51ed3f
 [e967628]: https://github.com/knroy/go-xml/commit/e967628
+[ea4681f]: https://github.com/knroy/go-xml/commit/ea4681f
 [eb5ea72]: https://github.com/knroy/go-xml/commit/eb5ea72
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
-[f88747b]: https://github.com/knroy/go-xml/commit/f88747b
 [f536984]: https://github.com/knroy/go-xml/commit/f536984
-[ea4681f]: https://github.com/knroy/go-xml/commit/ea4681f
-[28699a9]: https://github.com/knroy/go-xml/commit/28699a9
-[9113ac4]: https://github.com/knroy/go-xml/commit/9113ac4
+[f88747b]: https://github.com/knroy/go-xml/commit/f88747b
