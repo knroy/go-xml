@@ -12,12 +12,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.63% — 30,233 of 30,346 in scope (113 failing) |
+| XQuery 3.1 | 99.66% — 30,245 of 30,346 in scope (101 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 98.63% — 11,367 of 11,525 in scope (158 failing); 118 of those 158 need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,722 `func Test` declarations, clean under `-race` |
+| Tests | 1,725 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -323,9 +323,9 @@ actually need typed *input*:
 | XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
 | XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
 | XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
-| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,233 | 12 → 113 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,245 | 12 → 101 |
 
-416 cases came into scope at XQuery and 315 more pass. The 101 added failures
+416 cases came into scope at XQuery and 327 more pass. The 89 added failures
 are a real tail and are listed below rather than hidden: a lift that admits
 failing cases has to be visible, which is why the in-scope count is quoted
 first. `prod-SchemaImport` itself is 15 of 73.
@@ -334,6 +334,23 @@ first. `prod-SchemaImport` itself is 15 of 73.
 `prod-CastableExpr` fell 49 → 8 and `prod-CastExpr.schema` 47 → 37, taking the
 XQuery lane 30,143 → 30,233 with every other lane unmoved. Five root causes,
 all of them in how a *schema-defined* type reaches a cast:
+
+**The ItemType tail, closed.** The other side of the first bullet below, worked
+after it and worth stating separately because it moves in the opposite
+direction. Having made an impure union a legal *cast* target, nothing had made
+it an illegal *ItemType*: the purity check covered only the three built-in list
+types, so a schema-defined list or an impure union in `instance of`, `treat as`
+or a function signature was accepted statically and failed later at the value
+binding as `XPTY0004` — a dynamic error for a static defect. Extending that
+check to `SchemaListType` and `SchemaSimpleType` gives `XPST0051`, which is
+what `FunctionCall-032`, `-033`, `-034` and `-039` require. Two conversions
+closed with it: a pure union declared as a return type now converts an
+`xs:untypedAtomic` by trying its members (`FunctionCall-037`, `-038`), and a
+union with an `xs:QName` member is recognised as namespace-sensitive so that
+the same conversion is refused with `XPTY0117` (`FunctionCall-041`).
+`prod-FunctionCall` fell 9 → 2 and `prod-InstanceofExpr` 12 → 7, taking the
+XQuery lane 30,233 → 30,245 with every other lane unmoved and nothing newly
+failing.
 
 * **The purity rule was applied to the wrong question.** §2.5 admits only a
   *pure* union as an **ItemType**, because `instance of` and a function

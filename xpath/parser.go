@@ -1252,7 +1252,36 @@ func (p *Parser) foldQNameCast(operand Expr, st SequenceType) (Expr, bool, error
 // instanceof111 asks "xs:NMTOKEN('abc') instance of xs:NMTOKENS" and
 // FunctionCall-027 declares a parameter "as xs:NMTOKENS"; both require
 // XPST0051, the code for a type name that is not in scope as an item type.
+//
+// The same rule reaches an imported schema's types, and for the same reason.
+// §2.5.4 admits an AtomicOrUnionType in an ItemType only when it is a
+// *generalized atomic type*: an atomic type, or a pure union type. A
+// schema-defined list is excluded by the sentence above; an impure or
+// restricted union is excluded by §2.5.5, which writes union membership as a
+// clause of derives-from for a *pure* union alone. Both arrive here already
+// classified -- SchemaListType and SchemaSimpleType are set at parse time
+// precisely for the cases the purity walk refused -- so the check is a
+// question about the flags rather than a second walk over the schema.
+//
+// The distinction that keeps this from over-reaching is the one §3.14.2 draws
+// on the other side: those same types ARE legal *cast* targets, because a cast
+// has the lexical form in hand and can put the union's own facets to the
+// schema. That is why the cast-target check a few lines above lets both
+// through, and why extending it to this position would be wrong in the
+// opposite direction. FunctionCall-032, -033, -034 and -039 declare
+// lu:unionOfListType, lu:restrictedUnionType and lu:listType in signature
+// positions and each requires XPST0051.
 func checkNotListType(st SequenceType, where string) error {
+	if st.SchemaListType {
+		return xdm.Errorf("XPST0051",
+			"a list type cannot be used in %s: %s is not an item type",
+			where, st.SchemaType)
+	}
+	if st.SchemaSimpleType {
+		return xdm.Errorf("XPST0051",
+			"%s cannot be used in %s: only a pure union type is an item type",
+			st.SchemaType, where)
+	}
 	if st.ListItemFacet == "" {
 		return nil
 	}

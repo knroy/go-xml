@@ -544,34 +544,61 @@ they agree on is the *rule*, not a bug they share.
 
 ### XQuery schema awareness: three features still left (XQuery 3.1)
 
-**113 failures, and none of them a regression.** This entry exists because the
+**101 failures, and none of them a regression.** This entry exists because the
 number is easy to misread. `import schema` was implemented, and implementing it
-brought **416 previously-skipped cases into scope**, of which 315 now pass. The
-in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,233. The
+brought **416 previously-skipped cases into scope**, of which 327 now pass. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,245. The
 twelve failures that predated the work are still exactly those twelve. A lift
 that admits failing cases raises the failure count by construction, and quoting
 the failure count without the denominator beside it would describe a gain as a
 loss.
 
-**Two of the five have since been closed**, taking the tail 203 → 113: the cast
-target rule (an impure or restricted union is a legal cast target even though
-it is not a legal item type) and the constructor functions that are defined as
-that cast. `prod-CastableExpr` fell 49 → 8, `prod-CastExpr.schema` 47 → 37 and
-`prod-CastExpr` 7 → 0. The entry that recorded the union half as a *deliberate*
-refusal shared with `xslt` was wrong on the reasoning — the suite asserts
-`true`, not an error — and `docs/todo.md` §1.5 now says so; `xslt`'s refusal is
-correct where it stands, because it stands in an item-type position.
+**Three of the five have since been closed**, taking the tail 203 → 113 → 101:
+the cast target rule (an impure or restricted union is a legal cast target even
+though it is not a legal item type), the constructor functions that are defined
+as that cast, and the ItemType purity rule over schema types. `prod-CastableExpr`
+fell 49 → 8, `prod-CastExpr.schema` 47 → 37, `prod-CastExpr` 7 → 0 and
+`prod-FunctionCall` 9 → 2. The entry that recorded the union half as a
+*deliberate* refusal shared with `xslt` was wrong on the reasoning — the suite
+asserts `true`, not an error — and `docs/todo.md` §1.5 now says so; `xslt`'s
+refusal is correct where it stands, because it stands in an item-type position.
 
-What the remaining 113 are is a tail of separate features that `import schema`
+The third closure is the mirror image of the first, and the pair is worth
+reading together because getting either one alone wrong breaks the other.
+§3.14.2 admits **any** simple type as a *cast* target, so an impure or
+restricted union is castable — that was the first fix. §2.5.4 admits only a
+*generalized atomic* type as an **ItemType**, so the same union in `instance
+of`, `treat as` or a function signature is a static error — that is the third.
+The engine had the first rule but applied the second only to the three built-in
+list types, so a schema-defined list or an impure union reached a signature
+unchallenged and failed later, at the value binding, as `XPTY0004`: a dynamic
+error for a static defect. Extending the ItemType check to `SchemaListType` and
+`SchemaSimpleType` moved those to `XPST0051`, where `FunctionCall-032`, `-033`,
+`-034` and `-039` ask for them. A pure union in the same position still works,
+which is what makes the refusal a rule about purity rather than about schema
+types at large.
+
+Two smaller conversions closed with it, both in the *function conversion* rules
+where a pure union is the declared type. §3.1.5 casts an `xs:untypedAtomic` to
+whatever type is declared, and for a union §3.14.2 defines that cast as trying
+the members in order — but a union carries no atomic type code of its own, so
+the engine's "is this atomic" guard refused the conversion before attempting
+it (`FunctionCall-037`, `-038`). And the namespace-sensitivity exclusion that
+guard feeds, which owes `XPTY0117` rather than an ordinary mismatch, asked only
+whether the declared type *was* `xs:QName` — invisible through a union, so a
+union with a `xs:QName` member was converted where the rules forbid it
+(`FunctionCall-041`).
+
+What the remaining 101 are is a tail of separate features that `import schema`
 made *reachable* without making them present. `docs/todo.md` §1.5 names them
 and is the forward-looking half of this entry; what belongs here is the
 measured shape, because it is what says the tail is several features rather
 than one broken import.
 
 The cases cluster by production, not by symptom: `prod-CastExpr.schema` (37),
-`prod-SchemaImport` (15), `prod-InstanceofExpr` (12), `prod-FunctionCall` (9),
-`prod-CastableExpr` (8), `fn-json-to-xml` (7), then fours and below. The error codes cluster
-the same way and identify the five directly:
+`prod-SchemaImport` (15), `prod-InstanceofExpr` (7), `prod-CastableExpr` (8),
+`fn-json-to-xml` (7), `prod-FunctionCall` (2), then fours and below. The error
+codes cluster the same way and identify the five directly:
 
 - **Typed input.** A source document does not arrive schema-validated, so a
   node atomises as untyped however the query imported. `(a, b, c) is not an
@@ -580,23 +607,30 @@ the same way and identify the five directly:
 - **Constructor functions for schema types.** `XPST0017: unknown function` —
   an imported simple type does not become a callable constructor. Roughly 20
   cases.
-- **Impure and restricted unions.** `XPST0051: invalid type "s:myUnionType"`
-  and its relatives: §2.5's purity rule refuses a union carrying facets or
-  holding a list type, so `castable as` raises rather than answering. `xslt`
-  refuses these identically, which is what says the rule is shared and not a
-  bug in the import.
+- ~~**Impure and restricted unions.**~~ **Closed.** §2.5's purity rule was
+  being applied to a *cast* target as well as to an ItemType, so `castable as`
+  raised where it owed an answer. It now answers, and the purity rule keeps the
+  ItemType positions it actually governs — the two halves described above.
 - **Schema element and attribute tests.** `XPST0051: invalid type
   "schema-element(...)"`.
 - **Schemas the harness cannot supply.** `XQST0059: no schema found for
   namespace`, 19 cases — the import is correct and the schema is not there.
 
 **The error-code mismatches are the interesting minority.** Eleven cases raise
-`XPST0008` where `XQDY0027` is wanted, and smaller groups raise `XPST0017` for
-`FORG0001`, `XPTY0004` for `XPST0051`, and `XPST0051` for `XPTY0117`. Those are
-not missing features — they are the static-versus-dynamic boundary being drawn
-one step too early, and they are the part of this tail that is a defect rather
-than an absence. They are worth separating out precisely because the other 180
-are not defects and it would be easy to let these be counted with them.
+`XPST0008` where `XQDY0027` is wanted, and a smaller group raises `XPST0017`
+for `FORG0001`. Those are not missing features — they are the
+static-versus-dynamic boundary being drawn one step too early, and they are the
+part of this tail that is a defect rather than an absence. They are worth
+separating out precisely because the other ~90 are not defects and it would be
+easy to let these be counted with them.
+
+Two of the groups that stood here have been fixed, and both were that same
+boundary drawn on the wrong side: `XPTY0004` for `XPST0051` was a signature
+refused at binding time instead of at compile time, and `XPST0051` for
+`XPTY0117` was a namespace-sensitive union whose sensitivity nothing could see.
+Neither needed a new feature — each needed an existing check to look one field
+further — which is the evidence for reading the rest of this group the same
+way rather than as absent machinery.
 
 ### The `dtd` package cannot enforce XML §4.3.4
 

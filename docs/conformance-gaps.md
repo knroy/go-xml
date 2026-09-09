@@ -16,7 +16,7 @@ therefore no longer a measured figure.
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** | 0 | 0 | **0** | 100.00% |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,233 | 99.63% | **113** | 0 | 0 | **113** | 99.63% |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,245 | 99.66% | **101** | 0 | 0 | **101** | 99.66% |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** | 0 | 0 | **8** | 99.87% |
 | **xslt** | W3C XSLT 3.0 | 11,525 | 11,367 | 98.63% | **158** | 0 | 0 | **158** | 98.63% |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** | 0 | 0 | **30** | 99.92% |
@@ -170,16 +170,17 @@ was "genuinely unbound", and it is not — `ex` is bound by the `xmlns:ex` on th
 enclosing element constructor, which §3.9.1.3 puts into the in-scope namespaces
 of its content. The suite was right and this engine was not.
 
-**XQuery 3.1: 30,233 / 30,346 = 99.63%** — what passes now. The denominator
+**XQuery 3.1: 30,245 / 30,346 = 99.66%** — what passes now. The denominator
 grew by 416 when `import schema` was implemented and the `schemaImport` feature
 gate came off the harness (29,930 → 30,346); 303 of those 416 newly-admitted
-cases pass and 113 fail, which is the whole of the increase in the failure
-count. The passing count rose by more than 303 — 29,918 → 30,233 — because four
+cases pass and 101 fail, which is the whole of the increase in the failure
+count. The passing count rose by more than 303 — 29,918 → 30,245 — because four
 of the pre-import failures were fixed in the same period, which is why the
 pre-import residue also had to be diffed by name rather than inferred from the
-arithmetic. Two of the five features have since been closed — the cast-target
-rule for impure unions and the constructor functions defined as that cast —
-which is what took the tail 203 → 113. The remaining 113
+arithmetic. Three of the five features have since been closed — the cast-target
+rule for impure unions, the constructor functions defined as that cast, and the
+ItemType purity rule over schema types — which is what took the tail
+203 → 113 → 101. The remaining 101
 failures are not one gap, each a separate small feature rather than a
 defect in the import: typed *input* documents, annotation propagation through a
 constructor, and substitution groups over validated content. They are

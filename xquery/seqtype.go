@@ -229,7 +229,18 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 	// against it must still be converted. Barring it here left "declare
 	// function local:f($n as xs:numeric) ... ; local:f(<a>255</a>)" refusing
 	// the untypedAtomic that atomising the element gives (xs-numeric-020).
-	if !t.stype.HasAtomicType && !t.stype.IsNumericType {
+	// A pure union type carries no atomic type code of its own -- a union has
+	// no single primitive to erase to -- so it too fails the test above while
+	// being exactly a type the conversion rules convert into. §3.1.5 casts an
+	// xs:untypedAtomic to the declared type whatever that type is, and for a
+	// union the cast is defined by §3.14.2 as trying the members in order,
+	// which is what castOne's CastToUnion already does. Barring it here left
+	// "declare function local:makeDate($in as xs:string) as lu:unionOfUnionType
+	// { ... xs:untypedAtomic($in) ... }" refusing the untypedAtomic that the
+	// rules exist to convert -- FunctionCall-037 and -038, both of which assert
+	// the result is an xs:date.
+	if !t.stype.HasAtomicType && !t.stype.IsNumericType &&
+		len(t.stype.SchemaUnionMembers) == 0 {
 		return nil, fmt.Errorf("XPTY0004: %s does not match its declared type %s",
 			what, t.src)
 	}
@@ -370,6 +381,18 @@ func promotes(from, to xdm.TypeCode) bool {
 func (t *sequenceType) namespaceSensitive() bool {
 	if t.stype.AtomicType == xdm.TypeQName {
 		return true
+	}
+	// A pure union is namespace-sensitive when any member is, because the
+	// cast to it tries the members in order and reaching the QName one would
+	// need exactly the prefix bindings §3.1.5 says are not available. The
+	// union carries no atomic code of its own, so the test above cannot see
+	// it. FunctionCall-041 declares "as lu:namespaceSensitiveUnionType" over
+	// xs:date, xs:QName and a numeric union, returns xs:untypedAtomic
+	// ('xsi:type'), and requires XPTY0117 rather than an ordinary mismatch.
+	for _, m := range t.stype.SchemaUnionMembers {
+		if m == xdm.TypeQName {
+			return true
+		}
 	}
 	return t.stype.FacetName == "NOTATION"
 }

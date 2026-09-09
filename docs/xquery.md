@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **99.63%** of the W3C QT3 suite (30,233 of 30,346 in
+XQuery 3.1, measured at **99.66%** of the W3C QT3 suite (30,245 of 30,346 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
 416 previously-skipped cases entered the denominator and 315 of them pass, so
 the passing count rose by 315 while the rate fell. No case that passed before

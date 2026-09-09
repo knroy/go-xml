@@ -44,6 +44,9 @@ const unionsSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
       <xs:pattern value="20.*"/>
     </xs:restriction>
   </xs:simpleType>
+  <xs:simpleType name="nsSensitive">
+    <xs:union memberTypes="xs:date xs:QName"/>
+  </xs:simpleType>
 </xs:schema>`
 
 func withUnions() xquery.Options {
@@ -124,6 +127,22 @@ func TestCastToImpureUnionRaisesFORG0001(t *testing.T) {
 // same union that is now a legal CAST target is still refused in a signature.
 // This is the positive fact, not the absence of one -- the parameter binding
 // must fail, and with the type error it owes.
+//
+// That error is XPST0051, the code for a name that is in scope as a type but
+// not as an ITEM type, and it is raised STATICALLY -- when the signature is
+// compiled, not when a value reaches it. This assertion originally said
+// XPTY0004, which is what the engine happened to raise before the ItemType
+// purity check reached schema types: nothing refused the signature, so the
+// refusal fell through to the value binding and read as an ordinary type
+// mismatch. The suite settles which is right, and it is not the one that was
+// asserted here. FunctionCall-032 declares "as lu:unionOfListType" and
+// FunctionCall-039 declares "as lu:restrictedUnionType" -- the two shapes of
+// impurity, a union holding a list and a union derived by restriction -- and
+// both require XPST0051. No suite case asks for XPTY0004 in this position.
+//
+// The distinction is worth keeping straight because the code names the defect:
+// XPTY0004 says a value was wrong, which invites a caller to pass a different
+// value, and no value would have helped. XPST0051 says the signature is.
 func TestImpureUnionIsStillNotAnItemType(t *testing.T) {
 	src := unionQuery(
 		`declare function local:f($a as u:impure) as xs:boolean { true() };
@@ -132,8 +151,8 @@ func TestImpureUnionIsStillNotAnItemType(t *testing.T) {
 	if err == nil {
 		t.Fatal("an impure union must not be usable as an item type")
 	}
-	if !strings.Contains(err.Error(), "XPTY0004") {
-		t.Fatalf("want XPTY0004 for an impure union in a signature, got %v", err)
+	if !strings.Contains(err.Error(), "XPST0051") {
+		t.Fatalf("want XPST0051 for an impure union in a signature, got %v", err)
 	}
 	// A PURE union in the same position still works, which is what makes the
 	// refusal above a rule about purity rather than about schema types.
@@ -297,5 +316,149 @@ func TestCastToUnionWithListMemberNeedsStringSource(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
 		}
+	}
+}
+
+// TestPureUnionReturnTypeConvertsUntypedAtomic covers the function CONVERSION
+// rules where the declared type is a pure union.
+//
+// §3.1.5 casts an xs:untypedAtomic to whatever the declared type is, and for a
+// union §3.14.2 defines that cast as trying the members in order. Neither rule
+// has an exception for "the type has no atomic type code", but the engine's
+// guard did: a union has no single primitive to erase to, so it failed the
+// "is this an atomic type" test and was refused before the cast that was owed
+// to it could be attempted.
+//
+// The two halves below are the two halves of the rule. The first is the
+// conversion itself, and it asserts the RESULT TYPE rather than only the
+// string, because the whole claim is that the value stopped being untyped: the
+// same digits render identically whether the cast happened or not, so a string
+// assertion alone would pass against the bug. The second is the boundary -- a
+// lexical form no member admits must still be refused, so that the fix reads
+// as "try the members" and not as "let anything through".
+//
+// FunctionCall-037 and -038 are the suite's form of the first half, both
+// asserting the result is an xs:date.
+func TestPureUnionReturnTypeConvertsUntypedAtomic(t *testing.T) {
+	got, err := run(t, unionQuery(
+		`declare function local:f($s as xs:string) as u:approxDate {
+		   xs:untypedAtomic($s)
+		 };
+		 local:f("2012-12-12") instance of xs:date`), withUnions())
+	if err != nil {
+		t.Fatalf("a pure union return type must convert an untypedAtomic: %v", err)
+	}
+	if got != "true" {
+		t.Fatalf("want the converted value to be an xs:date, got %q", got)
+	}
+
+	// A pure union converts by trying its members; a value none of them
+	// admits has nowhere to land and owes the declared-type error.
+	_, err = run(t, unionQuery(
+		`declare function local:f($s as xs:string) as u:approxDate {
+		   xs:untypedAtomic($s)
+		 };
+		 local:f("not-a-date")`), withUnions())
+	if err == nil {
+		t.Fatal("a lexical form no member of the union admits must be refused")
+	}
+	if !strings.Contains(err.Error(), "XPTY0004") {
+		t.Fatalf("want XPTY0004 for a value outside the union, got %v", err)
+	}
+}
+
+// TestNamespaceSensitiveUnionRefusesUntypedAtomic is the exclusion §3.1.5
+// carves out of the conversion the test above enables.
+//
+// Casting an xs:untypedAtomic to xs:QName means resolving whatever prefix its
+// string carries, and the only bindings in scope at a call are the callee's,
+// which have nothing to do with where the value was written. §3.1.5 therefore
+// refuses the case outright with XPTY0117 rather than letting it read as an
+// ordinary mismatch -- the codes say different things, and this one says that
+// no value the caller could have written would have worked.
+//
+// The union is what makes this a separate check: it carries no atomic type
+// code of its own, so a test that asks only "is the declared type xs:QName"
+// cannot see the QName member and would let the conversion proceed.
+// FunctionCall-041 is the suite's form, and requires XPTY0117.
+func TestNamespaceSensitiveUnionRefusesUntypedAtomic(t *testing.T) {
+	_, err := run(t, unionQuery(
+		`declare function local:f() as u:nsSensitive {
+		   xs:untypedAtomic("xsi:type")
+		 };
+		 local:f()`), withUnions())
+	if err == nil {
+		t.Fatal("a namespace-sensitive union must refuse an untypedAtomic")
+	}
+	if !strings.Contains(err.Error(), "XPTY0117") {
+		t.Fatalf("want XPTY0117 for a namespace-sensitive union, got %v", err)
+	}
+
+	// The same union still admits a value that IS already a QName, which is
+	// what says XPTY0117 is about the CONVERSION and not about the type.
+	got, err := run(t, unionQuery(
+		`declare function local:f() as u:nsSensitive { xs:QName("xs:string") };
+		 local-name-from-QName(local:f())`), withUnions())
+	if err != nil {
+		t.Fatalf("a QName already of the member type must be admitted: %v", err)
+	}
+	if got != "string" {
+		t.Fatalf("want the QName through unconverted, got %q", got)
+	}
+
+	// A union with NO QName member must still convert, and this row is here
+	// because of what it caught. u:nsSensitive is a union over xs:date AND
+	// xs:QName, so a walk that returned true for ANY member -- rather than
+	// for the QName one -- passes both assertions above: sabotaging the walk
+	// to look for xs:date left the test green. u:approxDate has no QName
+	// member anywhere in it, so it separates "this union is
+	// namespace-sensitive" from "this union has members at all", and the
+	// conversion the rules owe it must still happen.
+	got, err = run(t, unionQuery(
+		`declare function local:f() as u:approxDate {
+		   xs:untypedAtomic("2012-12-12")
+		 };
+		 local:f() instance of xs:date`), withUnions())
+	if err != nil {
+		t.Fatalf("a union with no QName member must still convert: %v", err)
+	}
+	if got != "true" {
+		t.Fatalf("want the non-sensitive union converted to xs:date, got %q", got)
+	}
+}
+
+// TestSchemaListTypeIsNotAnItemType is the list half of the ItemType purity
+// rule, over a SCHEMA-defined list rather than one of the three built-ins.
+//
+// §2.5.4 admits only a generalized atomic type in an ItemType, and a list is
+// not one: its value is a sequence of tokens, and XPath has no way to say "a
+// sequence of exactly the tokens this list admits". The engine already refused
+// xs:NMTOKENS here; a schema-defined list reached the same position and was
+// not refused, so the failure fell through to the value binding and arrived as
+// XPTY0004 -- a dynamic error for a static defect.
+//
+// FunctionCall-034 declares "as lu:listType" and requires XPST0051.
+func TestSchemaListTypeIsNotAnItemType(t *testing.T) {
+	_, err := run(t, unionQuery(
+		`declare function local:f($a as u:decimals) as xs:boolean { true() };
+		 local:f(1)`), withUnions())
+	if err == nil {
+		t.Fatal("a schema-defined list must not be usable as an item type")
+	}
+	if !strings.Contains(err.Error(), "XPST0051") {
+		t.Fatalf("want XPST0051 for a list type in a signature, got %v", err)
+	}
+
+	// The same list type is still a legal CAST target, which is the boundary
+	// §3.14.2 draws against §2.5 and the reason this check belongs in the
+	// ItemType positions alone rather than in the cast-target check.
+	got, err := run(t,
+		unionQuery(`xs:untypedAtomic("1.5 2.5") castable as u:decimals`),
+		withUnions())
+	if err != nil {
+		t.Fatalf("a list type must remain a legal cast target: %v", err)
+	}
+	if got != "true" {
+		t.Fatalf("want the list cast target still answerable, got %q", got)
 	}
 }
