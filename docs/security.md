@@ -413,8 +413,9 @@ And raising the constant is never the fix. The cliffs found here landed at 32,
 third counts decimal digits, and no single number is correct for any two of
 them. The fix is a visited set keyed on the
 component, which stops a cycle exactly and does not limit a legal chain.
-[known-gaps.md](known-gaps.md) records which of the remaining bounds have been
-probed and found sound.
+[xsd.md](xsd.md#limits) sets out why a count could never do the job, and
+[known-gaps.md](known-gaps.md) records the probe that read "sound" for the
+wrong reason.
 
 **Withdrawn.** Two findings were reported, measured, and did not reproduce: a
 CR in a text node *does* survive a round trip, and `$e-1` naming a variable is
@@ -704,8 +705,8 @@ not reopen XXE.**
 
 Deciding whether an element's children match a content model needs the *set* of
 readings the children admit, because nested occurrence bounds cannot be settled
-one reading at a time — see *Nested occurrence bounds were wrong in both
-directions* in [known-gaps.md](known-gaps.md). A set is a thing a schema could
+one reading at a time — see *Why the occurrence counters are a vector and not
+a bracket per scope* in [xsd.md](xsd.md#limits). A set is a thing a schema could
 try to grow, and a schema is untrusted input: a `.xsd` arriving over the wire is
 as hostile as a `.xml`.
 

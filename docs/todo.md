@@ -629,7 +629,7 @@ cannot see:
   `recover()` cannot catch it;
 - and, by differential fuzzing against a brute-force reference, a
   content-model bug that decided a whole class of schemas wrongly in both
-  directions ([known-gaps.md](known-gaps.md)).
+  directions ([xsd.md](xsd.md#limits)).
 
 All four are fixed. The last needed the matcher's counter runtime replaced —
 a set of whole count vectors rather than a bracketed reading per scope, so that

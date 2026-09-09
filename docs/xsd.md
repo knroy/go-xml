@@ -352,6 +352,226 @@ cascade of
 — one refused include, reported as a dozen unresolved references rather than
 as the DOCTYPE it actually is. With `AllowDOCTYPE` set, all 65 load clean.
 
+### Why the occurrence counters are a vector and not a bracket per scope
+
+Moved here from [known-gaps.md](known-gaps.md), which is for gaps; this is the
+design rationale behind `DefaultMaxMatchStates`, and it is a standing
+constraint on anyone touching occurrence handling. Four attempts to fix nested
+occurrence bounds each traded one case for another, and they are summarised so
+a fifth is not made along the same lines.
+
+**The bug they were attacking.** A repeated group whose *only* child is itself
+repeating was decided wrongly in both directions. For
+`<sequence minOccurs="5" maxOccurs="5">` over `<element c minOccurs="2"
+maxOccurs="2"/>` the only valid document is ten `c`, and it was **refused**;
+five `c`, which no reading admits, was **accepted**. The false-accept direction
+was the serious one: a `minOccurs` floor was silently not enforced.
+
+**Why no suite saw it.** A group with two or more distinct child names was
+decided correctly, which is why tens of thousands of XSD suite agreements never
+covered it. It was found by differential fuzzing against a brute-force
+reference and is invisible to both W3C suites — a standing reminder that suite
+agreement is not coverage.
+
+**Why the obvious fixes all failed.** `matchSequence` walked the automaton one
+path at a time and arbitrated the nested counters with heuristics, tracking a
+*low* and a *high* reading of each count independently. `counterAllows`
+consulted the low count and `countersSatisfied` the high one, so a document was
+admitted when *different* readings satisfied each bound though no single
+consistent reading satisfied both. When a group holds one particle its FIRST
+and LAST positions coincide, which makes the group's wraparound edge
+indistinguishable from the inner element's own repeat edge, so the bracket
+cannot be narrowed locally. **No per-edge compile-time label can resolve
+this**, because the ambiguity is real: which scope repeats is only knowable
+from the rest of the input. Every attempt that tried to label the edge
+therefore had to trade one case for another.
+
+**What the resolution requires.** The unit of tracking must be a *vector over
+every scope at once* — a set of whole readings, not a bracket per scope — so
+that counts inside one vector belong to one execution by construction and no
+bound is ever met by a reading another bound is not measured against. Two
+properties keep such a set small, and both are load-bearing: states agreeing on
+position and counts are merged with a scope left behind reset to zero, so
+converged executions are recognised as converged; and each maximum is narrowed
+per document to what that document can actually reach. Without that narrowing
+the suite's `particlesZ036` — a choice of 100,000 over a sequence of
+100,000,000 over an unbounded element — gives each step three readings that
+stay distinct forever and the set grows until the budget stops it.
+
+**Only the counts are searched.** The walk stays deterministic on the
+*positions*: Unique Particle Attribution guarantees at most one element
+particle matches a name, and the one remaining ambiguity, an element against a
+wildcard, is what erratum E1-29 leaves to the processor.
+
+### The 254 cap in `encodeCounts` is not a bound on `maxOccurs`
+
+The count vector is carried as a string of bytes, and `encodeCounts` caps each
+count at 254. Read on its own that looks like a ceiling: an audit predicted
+that `maxOccurs="300"` would accept a 301st child and that `minOccurs="300"`
+would reject a valid 300-child document, since 255 and 256 both encode as 254.
+
+Neither happens, and the reason is that a count never arrives at
+`encodeCounts` un-narrowed. `reachable()` runs first and replaces every bound
+above the document's own child count with `Unbounded` — a maximum a document
+has too few children to reach cannot be broken, so it behaves exactly as
+`unbounded` does. `capCount()` then clamps against that *narrowed* bound, and
+once the maximum is out of reach it returns at most `min+1`. So a stored count
+above 254 would require a scope with 255+ children still in play, and in that
+scope the bound is already `Unbounded` and the exact value has stopped
+deciding anything.
+
+That is three functions' worth of reasoning to re-derive, which is why it is
+pinned rather than argued: `xsd/occurs_boundary_test.go` walks `minOccurs` and
+`maxOccurs` through 126/127/128, 253/254/255/256/257, 300, 1000 and
+65535/65536, each at its bound and one either side, plus the nested-scope form
+where the outer counter is the one that would saturate, and `maxOccurs` values
+of 1,000,000 and 79228162514244337593543950335 which must behave as unbounded.
+
+**A related reading, worth stating because it is not obvious.** A sweep of
+2,028 combinations of outer bounds, inner bounds and child count once found 40
+answers wrong, every one a false *rejection*, and every one with inner
+`minOccurs="0"` and outer `minOccurs` of two or more at a small child count.
+
+`<sequence minOccurs="2" maxOccurs="2">` over `<element c minOccurs="0"
+maxOccurs="2"/>` is the witness, and its answers were self-inconsistent: zero
+`c` accepted, one **refused**, two through four accepted. Accepting 0 and 2 but
+not 1 is not the language of any particle, which is what makes it a bug and not
+a defensible reading. That model describes exactly `c` occurring nought to four
+times.
+
+The rule that had been missed: XSD satisfies a particle by partitioning the
+content into between `minOccurs` and `maxOccurs` consecutive parts each
+matching the term, and **nothing in that rule requires a part to be
+non-empty**. When the term is nullable, an empty part satisfies it. An
+iteration that matches nothing is still an iteration. So the legal totals are
+the union over `i` in `[oMin, oMax]` of `[i*iMin, i*iMax]`, which for
+`iMin = 0` is just `[0, oMax*iMax]`.
+
+The corollary constrains any future change here: **no maximum needs relaxing to
+accommodate this.** Empty iterations are only ever added to reach a floor, and
+a reading that would break a ceiling can decline to add them.
+
+### Saturation is right for the matcher and wrong for the derivation checks
+
+Occurrence bounds saturate at `occursHuge` = 4611686018427387903. Two bounds
+that both exceeded it once compared **equal**, because both clamped to it: a
+base `maxOccurs="1000000000000000000000000000000"` (1e30) restricted by three
+members each at the same value has a true effective total of 3e30 against a
+base of 1e30, so the restriction is invalid and was accepted — a false accept.
+
+**The distinction is the durable part, and it is a live constraint on anyone
+touching occurrence arithmetic.** The matcher compares a bound against a
+*document*, where 1e30 and 3e30 genuinely are the same proposition — more
+children than any document will ever have. The derivation checks compare two
+bounds against *each other*, where they are emphatically not. So the exact
+value is carried alongside the clamped one rather than replacing it:
+`Particle` keeps `MinOccurs`/`MaxOccurs` as `int`, since the automaton, the UPA
+checker and the matcher neither need exactness nor should pay for it, and gains
+`*big.Int` fields that are nil unless clamping actually discarded something.
+
+**`maxOccurs="unbounded"` stays the `Unbounded` sentinel and is never written
+as a magnitude.** "No limit" and "a very large limit" are different
+propositions, and conflating them is precisely how the original defect arose;
+folding unbounded into the exact layer would have recreated it one level up.
+
+**What is deliberately not exact:** everything downstream of content-model
+compilation. A bound reaching the automaton is still the clamped int, because
+the runtime question is "did this document supply enough children", and no
+document can approach the saturation point.
+
+### A depth bound is not cycle detection
+
+The counterpart to the entry above, and the opposite verdict: a bound that
+*does* look wrong and *is*. Twenty-four guards across `xsd/`, `relaxng/`,
+`xdm/`, `xpath/` and `xslt/` stopped a graph walk at a step count — 32, 64,
+256, 500, 4096 — and every one of them was a defect. They are gone; what
+follows is why, because the shape is easy to reintroduce and was reintroduced
+six times before it was named.
+
+**The reason each bound was written was sound.** A model group, a union chain
+or a base-type chain that reaches itself is legal to *write*; these walks run
+before the content-model compiler that reports it, and would otherwise recurse
+forever. The count terminated them.
+
+**What makes it a defect is that a count cannot tell a cyclic graph from a
+merely deep one.** A legal, acyclic, entirely ordinary schema — 33 user-defined
+restrictions over `xs:int`, or a base declaration nested inside 32 sequences,
+or 501 distinct definitions each `<ref>`ing the next — crosses the cliff and
+gets the truncated answer. Nothing in such a schema is recursive or malformed.
+
+**The dangerous part is returning a definite answer rather than a refusal.**
+Almost every one of these walks answers a yes/no question, and on running out
+of steps returned a `false`, a `nil` or an empty map that the caller could not
+distinguish from a completed walk. The failure directions were all three kinds:
+
+* **acceptance** — `collectElementDecls` returning an empty map skipped Element
+  Declarations Consistent entirely; `nonAtomicUnionMember` returning `nil` let
+  a list of lists load; a duplicate `xs:ID` was accepted once the restriction
+  chain under `xs:ID` ran 64 links, and `"1.5"` validated against a type
+  descending from `xs:integer` at the same depth; `checkTypeBaseCycles` giving
+  up after 4096 steps meant the function that exists to catch circular types
+  could not catch a large circular type. `countDigits` in `xsd/facet.go` is the
+  same shape outside a graph walk: it expanded a decimal one digit at a time,
+  stopped at 4096, and returned the short count, so a value with 4600 fraction
+  digits satisfied `fractionDigits="4500"`. The scale now comes from factoring
+  the denominator as `2^a * 5^b`, which is exact and has nothing to exhaust.
+* **rejection** — `derivedFrom` refusing a legal `xsi:type`, and `relaxng`'s
+  `maxRefDepth = 500` refusing a legal 501-definition grammar outright.
+* **silent erasure**, the worst of the three, because nothing reports an error.
+  The five walks over `derivedPrimitives` in `xdm/node.go` simply delivered the
+  value untyped past 32 links, so a comparison that should have been numeric
+  became a string comparison and a transform produced a wrong answer rather
+  than a diagnostic. `accumulatorOrigin` in `xslt/accumulator.go` is sharper
+  still: past 64 links it returned the intermediate copy it had reached — a
+  node in a tree of its own, where the accumulator computes something else
+  entirely. A legal-looking wrong number that nothing downstream can detect.
+
+**Why not raise the constant.** 32 to 1024 moves the cliff without removing it
+and leaves the same bug waiting at a depth nobody will test. `maxDecimalScale`
+is the case that proves it: capped at 18 it printed a 360-digit decimal as `0`,
+was raised to 1024, and printed `1/10^5000` as `0` for exactly the same reason.
+Raising it a third time would have been the same move again — it is now gone,
+the scale following the value. The arbitrariness is the argument:
+`derivationMethodsTo` surfaced only because a legal schema stopped *loading*,
+and its cliff sat at 65 where the validation-time walks sat at 257, because one
+counted links and the other types. `relaxng`'s bound is the sharpest case — the
+mechanism it was named for, `c.expanding`, sat immediately above it and already
+caught every re-entry, so the count could never do the job and could only
+refuse valid grammars.
+
+**A visited set is the exact mechanism, and it must be keyed on what the
+recursion revisits.** Every bound is now a set keyed on the component pointer,
+or on the name string where the graph is a name-to-name registry. That
+identifies a cycle exactly — the only thing the count was ever trying to
+catch — and imposes no limit on a legal chain. `allDerivedDecls` is the
+instructive failure: it already kept a `seen` set, but on *declarations*, which
+deduplicates the result without bounding the walk, since a model group that
+reaches itself revisits the same particle forever without ever repeating a
+declaration.
+
+**Convert the unreachable ones too.** Several of these walks were already
+unreachable because their chains collapse during parsing. They were converted
+anyway: a lone survivor of a pattern invites the next reader to copy it.
+
+**Reachable from a schema, not from an instance.** A trusted schema with
+untrusted documents cannot reach any of them, which is why none of this is a
+security bound and why removing the counts costs nothing there.
+
+**What such a test must assert.** Depths on either side of every old cliff, a
+*semantic* property at each rather than that a call returned; the negative, so
+that a visited set which widened the relation is caught; a genuinely cyclic
+input behind a watchdog, because the regression a visited set can introduce is
+a hang, which no assertion catches; and, where the registry is process-global,
+type names carrying the case's own depth and walk, since `go test` runs one
+process and two cases sharing a name would answer each other's questions.
+
+Above all, **a probe must establish that the loop it measures actually runs**.
+That correction is recorded in
+[known-gaps.md](known-gaps.md#a-negative-result-on-a-bound-must-prove-the-loop-it-bounds-actually-runs),
+because a believed-and-wrong measurement is the thing most likely to be
+re-derived.
+
+
 ## Concurrency
 
 A loaded `Schema` is immutable and safe to validate from any number of
