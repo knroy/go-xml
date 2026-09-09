@@ -544,10 +544,10 @@ they agree on is the *rule*, not a bug they share.
 
 ### XQuery schema awareness: three features still left (XQuery 3.1)
 
-**101 failures, and none of them a regression.** This entry exists because the
+**91 failures, and none of them a regression.** This entry exists because the
 number is easy to misread. `import schema` was implemented, and implementing it
 brought **416 previously-skipped cases into scope**, of which 327 now pass. The
-in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,245. The
+in-scope count went 29,930 → 30,346 and the passing count 29,918 → 30,255. The
 twelve failures that predated the work are still exactly those twelve. A lift
 that admits failing cases raises the failure count by construction, and quoting
 the failure count without the denominator beside it would describe a gain as a
@@ -595,10 +595,10 @@ and is the forward-looking half of this entry; what belongs here is the
 measured shape, because it is what says the tail is several features rather
 than one broken import.
 
-The cases cluster by production, not by symptom: `prod-CastExpr.schema` (37),
-`prod-SchemaImport` (15), `prod-InstanceofExpr` (7), `prod-CastableExpr` (8),
-`fn-json-to-xml` (7), `prod-FunctionCall` (2), then fours and below. The error
-codes cluster the same way and identify the five directly:
+The cases cluster by production, not by symptom: `prod-CastExpr.schema` (36),
+`prod-SchemaImport` (13), `prod-CastableExpr` (8), `prod-InstanceofExpr` (7),
+`fn-json-to-xml` (3), `prod-FunctionCall` (3), then fours and below. The error
+codes cluster the same way:
 
 - **Typed input.** A source document does not arrive schema-validated, so a
   node atomises as untyped however the query imported. `(a, b, c) is not an
@@ -613,8 +613,23 @@ codes cluster the same way and identify the five directly:
   ItemType positions it actually governs — the two halves described above.
 - **Schema element and attribute tests.** `XPST0051: invalid type
   "schema-element(...)"`.
-- **Schemas the harness cannot supply.** `XQST0059: no schema found for
-  namespace`, 19 cases — the import is correct and the schema is not there.
+- ~~**Schemas the harness cannot supply.**~~ **Closed.** This was two
+  different things wearing one error code. Two cases (`qischema041`,
+  `qischema083`) name their schema documents in an `at` hint and no
+  `<environment>` supplies the namespace; the harness now reads those files
+  itself and assembles them with `xsd.LoadFiles`, which is not the same as
+  granting the query a resolver — the catalog says which files the suite
+  intends, and `LoadFiles` confines itself to their directories, so
+  `Options.SchemaResolver` stays nil and the run remains evidence that the
+  engine fetches nothing on a query's say-so. The other nine wanted the F&O
+  §C.2 schema for `http://www.w3.org/2005/xpath-functions`, which the suite
+  ships and its own catalog comments as something "either the test driver or
+  the product under test is expected to recognize"; the driver now recognises
+  it. The *dynamic* half was a separate gap in the engine: `xsd.SchemaForJSON`
+  has carried that schema all along and `xslt` has installed it as a
+  `TreeValidator` since `xslt/jsonvalidate.go`, but `xquery` never wired the
+  hook, so every `validate:true()` query answered with the `FOJS0004` that
+  §17.5.3 reserves for a processor that *cannot* validate. It can.
 
 **The error-code mismatches are the interesting minority.** Eleven cases raise
 `XPST0008` where `XQDY0027` is wanted, and a smaller group raises `XPST0017`

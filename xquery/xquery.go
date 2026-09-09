@@ -343,6 +343,15 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 // and the query's own declarations sit in front.
 func (q *Query) prepare(ctx *xpath.Context) (*xpath.Context, error) {
 	sub := *ctx
+	// Installed unconditionally, as xslt does: whether the processor *can*
+	// validate is a property of the processor, and this one always can --
+	// F&O 3.1 §17.5.3 reserves FOJS0004 for one that cannot. Whether the
+	// query may then write "instance of element(j:map, j:mapType)" is the
+	// separate question "import schema" answers. A caller that installed its
+	// own validator keeps it.
+	if sub.Validator == nil {
+		sub.Validator = jsonTreeValidator{}
+	}
 	if len(q.funcs) > 0 || len(q.formats) > 0 || len(q.modules) > 0 {
 		if ctx.Funcs == nil || ctx.Funcs == xpath.FunctionLibrary(q.lib.Parent) {
 			sub.Funcs = q.lib

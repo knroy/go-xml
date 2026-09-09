@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"regexp"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
+	"github.com/knroy/go-xml/xsd"
 	"github.com/knroy/go-xml/xquery"
 )
 
@@ -911,6 +913,15 @@ func (r *Runner) Run(ts *TestSet, tc *TestCase) (rep Report) {
 			// from a location. SchemaResolver stays nil, so an "at" hint in
 			// one of these queries is never opened. See caseSchemas.
 			opts.Schemas, res.err = r.caseSchemas(env)
+			// A namespace no <environment> supplies may still be named by an
+			// "at" hint in the query itself; the harness reads those files,
+			// the engine never does. See hintedSchemas.
+			if res.err == nil {
+				opts.Schemas = append(opts.Schemas,
+					r.hintedSchemas(ts, tc.Test.Query)...)
+				opts.Schemas = append(opts.Schemas,
+					r.builtinSchemas(tc.Test.Query)...)
+			}
 		}
 		if res.err == nil {
 			q, res.err = xquery.Compile(tc.Test.Query, opts)
@@ -2691,6 +2702,96 @@ func (r *Runner) caseModules(ts *TestSet, tc *TestCase) ([]xquery.Module, error)
 // A schema whose file cannot be read is returned as an error, which the caller
 // turns into a skip: the case is about the import, and a missing fixture is
 // the harness's fault rather than the engine's.
+// schemaHintRE finds the "at" hints of an "import schema" prolog declaration:
+// the namespace it imports, then the one or more string literals naming the
+// documents. §4.11 allows several, and a namespace may be assembled from more
+// than one document (qischema041).
+var schemaHintRE = regexp.MustCompile(
+	`import\s+schema\s+(?:default\s+element\s+namespace|namespace\s+\w+\s*=|)\s*` +
+		`"([^"]*)"\s*at\s+((?:"[^"]*"\s*,?\s*)+)`)
+
+var schemaHintFileRE = regexp.MustCompile(`"([^"]*)"`)
+
+// hintedSchemas reads the schema documents a query names in an "at" hint.
+//
+// The hints are read HERE, by the harness, from the suite's own directory --
+// never by the engine, which keeps SchemaResolver nil. The distinction is the
+// whole point: the catalog says which files the suite intends, so reading them
+// grants the query nothing it did not already have, whereas a resolver would
+// let the query's own text choose what to open. Cases carrying
+// feature="schema-location-hint" declare a namespace no <environment> supplies
+// and name its documents inline (qischema041, qischema083).
+//
+// A hint that names no readable file is skipped rather than reported: §4.11
+// leaves it implementation-defined whether a location hint is used at all, so
+// a missing one is not a failure of the case.
+func (r *Runner) hintedSchemas(ts *TestSet, query string) []xquery.Schema {
+	var out []xquery.Schema
+	for _, m := range schemaHintRE.FindAllStringSubmatch(query, -1) {
+		var paths []string
+		for _, f := range schemaHintFileRE.FindAllStringSubmatch(m[2], -1) {
+			p := filepath.Join(r.Root, ts.Dir, filepath.FromSlash(f[1]))
+			if _, err := os.Stat(p); err == nil {
+				paths = append(paths, p)
+			}
+		}
+		if len(paths) == 0 {
+			continue
+		}
+		// Assembled here rather than handed over as source text, for two
+		// reasons the cases themselves supply. qischema041 spreads one
+		// namespace over two documents, and Options.Schemas keeps the FIRST
+		// registration of a namespace, so two entries would silently drop
+		// one. qischema083's first document xs:imports its second, which
+		// only an assembly with a base can follow. LoadFiles confines its
+		// resolver to the directories of the files named here, so the query
+		// still cannot reach anything the catalog did not point at.
+		sch, err := xsd.LoadFiles(paths, xsd.Options{})
+		if err != nil {
+			continue
+		}
+		out = append(out, xquery.Schema{Namespace: m[1], Components: sch})
+	}
+	return out
+}
+
+// builtinSchemaFiles maps a namespace the suite expects a processor to
+// recognise to the schema document the suite ships for it.
+//
+// fn/json-to-xml.xml declares <schema uri="...xpath-functions" role="import"/>
+// with no file, and comments it: "Either the test driver or the product under
+// test is expected to recognize this URI". This is the driver recognising it.
+// The cases write "import schema" with no "at" hint, so nothing else can
+// supply the static half -- the engine's own built-in copy (xsd.SchemaForJSON,
+// used by the TreeValidator) answers the *dynamic* half, typing the tree
+// fn:json-to-xml builds, but it is deliberately not reachable by name from a
+// query's prolog.
+var builtinSchemaFiles = map[string]string{
+	"http://www.w3.org/2005/xpath-functions": "fn/json-to-xml/schema-for-json.xsd",
+}
+
+// builtinSchemas supplies those schemas for a namespace the query imports
+// without naming a location.
+//
+// Registered only when the query mentions the namespace, so a case that never
+// asks is unaffected, and appended last: Options.Schemas keeps the FIRST
+// registration of a namespace, so an environment naming its own file wins.
+func (r *Runner) builtinSchemas(query string) []xquery.Schema {
+	var out []xquery.Schema
+	for ns, file := range builtinSchemaFiles {
+		if !strings.Contains(query, ns) {
+			continue
+		}
+		sch, err := xsd.LoadFile(
+			filepath.Join(r.Root, filepath.FromSlash(file)), xsd.Options{})
+		if err != nil {
+			continue
+		}
+		out = append(out, xquery.Schema{Namespace: ns, Components: sch})
+	}
+	return out
+}
+
 func (r *Runner) caseSchemas(env Environment) ([]xquery.Schema, error) {
 	if len(env.Schemas) == 0 {
 		return nil, nil

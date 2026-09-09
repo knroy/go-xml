@@ -12,12 +12,12 @@ Current position:
 | XPath 2.0 | 100.00% — 15,217 of 15,217 in scope |
 | XPath 3.0 | 100.00% — 19,362 of 19,362 in scope |
 | XPath 3.1 | 100.00% — 21,898 of 21,898 in scope (0 failing) |
-| XQuery 3.1 | 99.66% — 30,245 of 30,346 in scope (101 failing) |
+| XQuery 3.1 | 99.70% — 30,255 of 30,346 in scope (91 failing) |
 | XSLT 2.0 | 99.87% — 6,193 of 6,201 in scope (8 failing) |
 | XSLT 3.0 | 98.63% — 11,367 of 11,525 in scope (158 failing); 118 of those 158 need more of the §19.8 streamability analysis |
 | RELAX NG | 100.00% — 965 of 965 |
 | Schemas wrongly refused | 7 — 6 on XSD 1.0, 1 on 1.1 |
-| Tests | 1,725 `func Test` declarations, clean under `-race` |
+| Tests | 1,728 `func Test` declarations, clean under `-race` |
 
 Every one of those failures, and why it is still open, is catalogued in
 [known-gaps.md](known-gaps.md). This file is the forward-looking half — what
@@ -323,7 +323,7 @@ actually need typed *input*:
 | XPath 2.0 | 15,217 → 15,217 | 15,217 | 0 → 0 |
 | XPath 3.0 | 19,302 → 19,362 | 19,362 | 0 → 0 |
 | XPath 3.1 | 21,838 → 21,898 | 21,898 | 0 → 0 |
-| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,245 | 12 → 101 |
+| XQuery 3.1 | 29,930 → 30,346 | 29,918 → 30,255 | 12 → 91 |
 
 416 cases came into scope at XQuery and 327 more pass. The 89 added failures
 are a real tail and are listed below rather than hidden: a lift that admits
