@@ -25,8 +25,17 @@ import (
 // and this is the one schema every 3.0 processor is expected to have.
 // json-to-xml-typed-001 to -007 are that stylesheet.
 
-// jsonSchemaSource is F&O 3.1 §C.2 verbatim, less the xs:annotation elements
-// that only carry the W3C licence text.
+// jsonSchemaSource is F&O 3.1 §C.2, less the xs:annotation and comment
+// elements that only carry the W3C licence text.
+//
+// It is a faithful copy rather than a paraphrase, because the type NAMES are
+// observable: §17.5.3 promises "the type annotations that result from
+// validation against the schema given at C.2", and a query asks for them by
+// name with "instance of element(j:boolean, j:booleanType)". An earlier copy
+// declared j:boolean as type="xs:boolean" and inlined the within-map types,
+// which validated the same documents but annotated a boolean element
+// "xs:boolean" — json-to-xml-046 and -047 ask exactly that question and both
+// answered false on the boolean arm alone.
 const jsonSchemaSource = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
     elementFormDefault="qualified"
     targetNamespace="http://www.w3.org/2005/xpath-functions"
@@ -45,28 +54,46 @@ const jsonSchemaSource = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
 
     <xs:element name="number" type="j:numberType"/>
 
-    <xs:element name="boolean" type="xs:boolean"/>
+    <xs:element name="boolean" type="j:booleanType"/>
 
     <xs:element name="null" type="j:nullType"/>
 
     <xs:complexType name="nullType">
         <xs:sequence/>
+        <xs:anyAttribute processContents="skip" namespace="##other"/>
+    </xs:complexType>
+
+    <xs:complexType name="booleanType">
+        <xs:simpleContent>
+            <xs:extension base="xs:boolean">
+                <xs:anyAttribute processContents="skip" namespace="##other"/>
+            </xs:extension>
+        </xs:simpleContent>
     </xs:complexType>
 
     <xs:complexType name="stringType">
         <xs:simpleContent>
             <xs:extension base="xs:string">
                 <xs:attribute name="escaped" type="xs:boolean" use="optional" default="false"/>
+                <xs:anyAttribute processContents="skip" namespace="##other"/>
             </xs:extension>
         </xs:simpleContent>
     </xs:complexType>
 
-    <xs:simpleType name="numberType">
+    <xs:simpleType name="finiteNumberType">
         <xs:restriction base="xs:double">
             <xs:minExclusive value="-INF"/>
             <xs:maxExclusive value="INF"/>
         </xs:restriction>
     </xs:simpleType>
+
+    <xs:complexType name="numberType">
+        <xs:simpleContent>
+            <xs:extension base="j:finiteNumberType">
+                <xs:anyAttribute processContents="skip" namespace="##other"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
 
     <xs:complexType name="arrayType">
         <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -77,65 +104,68 @@ const jsonSchemaSource = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
             <xs:element ref="j:boolean"/>
             <xs:element ref="j:null"/>
         </xs:choice>
+        <xs:anyAttribute processContents="skip" namespace="##other"/>
+    </xs:complexType>
+
+    <xs:complexType name="mapWithinMapType">
+        <xs:complexContent>
+            <xs:extension base="j:mapType">
+                <xs:attributeGroup ref="j:key-group"/>
+            </xs:extension>
+        </xs:complexContent>
+    </xs:complexType>
+
+    <xs:complexType name="arrayWithinMapType">
+        <xs:complexContent>
+            <xs:extension base="j:arrayType">
+                <xs:attributeGroup ref="j:key-group"/>
+            </xs:extension>
+        </xs:complexContent>
+    </xs:complexType>
+
+    <xs:complexType name="stringWithinMapType">
+        <xs:simpleContent>
+            <xs:extension base="j:stringType">
+                <xs:attributeGroup ref="j:key-group"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <xs:complexType name="numberWithinMapType">
+        <xs:simpleContent>
+            <xs:extension base="j:numberType">
+                <xs:attributeGroup ref="j:key-group"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <xs:complexType name="booleanWithinMapType">
+        <xs:simpleContent>
+            <xs:extension base="j:booleanType">
+                <xs:attributeGroup ref="j:key-group"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <xs:complexType name="nullWithinMapType">
+        <xs:attributeGroup ref="j:key-group"/>
     </xs:complexType>
 
     <xs:complexType name="mapType">
         <xs:choice minOccurs="0" maxOccurs="unbounded">
-            <xs:element name="map">
-                <xs:complexType>
-                    <xs:complexContent>
-                        <xs:extension base="j:mapType">
-                            <xs:attribute name="key" type="xs:string"/>
-                        </xs:extension>
-                    </xs:complexContent>
-                </xs:complexType>
+            <xs:element name="map" type="j:mapWithinMapType">
                 <xs:unique name="unique-key-2">
                     <xs:selector xpath="*"/>
                     <xs:field xpath="@key"/>
                 </xs:unique>
             </xs:element>
-            <xs:element name="array">
-                <xs:complexType>
-                    <xs:complexContent>
-                        <xs:extension base="j:arrayType">
-                            <xs:attributeGroup ref="j:key-group"/>
-                        </xs:extension>
-                    </xs:complexContent>
-                </xs:complexType>
-            </xs:element>
-            <xs:element name="string">
-                <xs:complexType>
-                    <xs:simpleContent>
-                        <xs:extension base="j:stringType">
-                            <xs:attributeGroup ref="j:key-group"/>
-                        </xs:extension>
-                    </xs:simpleContent>
-                </xs:complexType>
-            </xs:element>
-            <xs:element name="number">
-                <xs:complexType>
-                    <xs:simpleContent>
-                        <xs:extension base="j:numberType">
-                            <xs:attributeGroup ref="j:key-group"/>
-                        </xs:extension>
-                    </xs:simpleContent>
-                </xs:complexType>
-            </xs:element>
-            <xs:element name="boolean">
-                <xs:complexType>
-                    <xs:simpleContent>
-                        <xs:extension base="xs:boolean">
-                            <xs:attributeGroup ref="j:key-group"/>
-                        </xs:extension>
-                    </xs:simpleContent>
-                </xs:complexType>
-            </xs:element>
-            <xs:element name="null">
-                <xs:complexType>
-                    <xs:attributeGroup ref="j:key-group"/>
-                </xs:complexType>
-            </xs:element>
+            <xs:element name="array" type="j:arrayWithinMapType"/>
+            <xs:element name="string" type="j:stringWithinMapType"/>
+            <xs:element name="number" type="j:numberWithinMapType"/>
+            <xs:element name="boolean" type="j:booleanWithinMapType"/>
+            <xs:element name="null" type="j:nullWithinMapType"/>
         </xs:choice>
+        <xs:anyAttribute processContents="skip" namespace="##other"/>
     </xs:complexType>
 
     <xs:attributeGroup name="key-group">

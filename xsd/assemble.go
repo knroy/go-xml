@@ -291,6 +291,31 @@ func registerDerivedTypes(s *Schema) {
 					xdm.RegisterUnionType(key, names)
 				}
 			}
+			// A simple-content complex type derived from ANOTHER complex
+			// type records that step, exactly as the complex-content
+			// branch above does, rather than jumping straight to the
+			// simple type it atomises as.
+			//
+			// Both facts are wanted and one chain carries both: the step
+			// to the named base answers element(E, thatBase), and the
+			// base's own registration continues to the built-in, so
+			// atomisation still reaches it one link later.
+			//
+			// Registering only the atomisation target lost every
+			// intermediate name. j:stringWithinMapType extends
+			// j:stringType extends xs:string, and recording it as
+			// "-> xs:string" made "instance of element(fn:string,
+			// fn:stringType)" false for a validated map's child, which is
+			// json-to-xml-046's first assertion.
+			if b, ok := ct.Base.(*ComplexType); ok && b != nil {
+				if bn := b.Name; bn.Local != "" && bn.URI != NSSchema &&
+					!(bn.URI == name.URI && bn.Local == name.Local) {
+					xdm.RegisterDerivedType(
+						xdm.AnnotationName(name.URI, name.Local),
+						xdm.AnnotationName(bn.URI, bn.Local))
+					continue
+				}
+			}
 			base = ct.SimpleContent
 		default:
 			continue

@@ -677,6 +677,33 @@ func (s *jsonScanner) hex4() (int, error) {
 	return v, nil
 }
 
+// deliverableInXML reports whether a codepoint can be carried literally by the
+// text node fn:json-to-xml and fn:parse-json produce.
+//
+// This is the XML 1.0 Char production, which is narrower than isXMLChar: that
+// one is the XML 1.1 range, where the C0 controls other than NUL are legal
+// because 1.1 lets them be written as character references. JSON delivery has
+// no such escape hatch — the string is the text node's value — so a C0 control
+// is a character the result "cannot represent", and gets the escaped spelling
+// under escape=true or the fallback/U+FFFD substitution under escape=false.
+//
+// json-to-xml-045 is the case: "-\b-\t--" must come back as itself under
+// escape=true and as "-<FFFD>-<tab>-<FFFD>-" under escape=false. Using the 1.1
+// range let U+0008 and U+0001 through raw on both.
+func deliverableInXML(c rune) bool {
+	switch {
+	case c == 0x09 || c == 0x0A || c == 0x0D:
+		return true
+	case c >= 0x20 && c <= 0xD7FF:
+		return true
+	case c >= 0xE000 && c <= 0xFFFD:
+		return true
+	case c >= 0x10000 && c <= 0x10FFFF:
+		return true
+	}
+	return false
+}
+
 // finishString turns the scanned codepoints into the delivered string.
 func (s *jsonScanner) finishString(rs []rune) (string, error) {
 	if s.opts.escape {
@@ -688,7 +715,7 @@ func (s *jsonScanner) finishString(rs []rune) (string, error) {
 		if c >= escapedBias {
 			c -= escapedBias
 		}
-		if isXMLChar(int64(c)) {
+		if deliverableInXML(c) {
 			b.WriteRune(c)
 			continue
 		}
@@ -774,7 +801,7 @@ func escapeJSONRunes(rs []rune) (string, error) {
 			b.WriteByte('/')
 			continue
 		}
-		if isXMLChar(int64(c)) {
+		if deliverableInXML(c) {
 			b.WriteRune(c)
 			continue
 		}
