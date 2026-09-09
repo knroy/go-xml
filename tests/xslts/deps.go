@@ -46,8 +46,14 @@ var supportedFeatures = map[string]bool{
 	// streamable construct against it. That answers every streaming case
 	// whose result does not depend on bounded memory, which is what the
 	// suite's assertions test.
-	"streaming":          true,
-	"streaming-fallback": true,
+	"streaming": true,
+	// streaming-fallback is NOT claimed. It asserts the opposite of the
+	// §19.8 analysis: that a construct which is not guaranteed-streamable is
+	// evaluated unstreamed rather than refused. streaming-fallback-001 makes
+	// the conflict literal -- it runs si-value-of-101.xsl, the very file
+	// si-value-of-101 uses to require XTSE3430, and asserts its output. Now
+	// that the analysis raises that error the claim is false, and claiming it
+	// would score a refusal we make on purpose as a failure.
 	// XML 1.1 documents are parsed; the version declaration is accepted.
 	"XML_1.1": true,
 	// XPath_3.1 is not listed here: like XSD_1.1 it is answered by supports,

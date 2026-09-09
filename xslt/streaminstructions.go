@@ -92,6 +92,7 @@ func analyzeSequenceConstructor(el *xdm.Node, ctx posture, attrSets map[xdm.QNam
 	return p, a.known
 }
 
+
 // unknown records an unmodelled construct.
 func (a *instrAnalyzer) unknown() props {
 	a.known = false
@@ -462,23 +463,108 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 		ops = append(ops, a.bodyOperand(el, usageAbsorption))
 		return combine(ops, false)
 
+	case "break":
+		// §19.8.4.8: the select expression and the contained sequence
+		// constructor, both usage transmission.
+		var ops []operand
+		if o, ok := a.selectOperand(el, usageTransmission); ok {
+			ops = append(ops, o)
+		} else {
+			ops = append(ops, a.bodyOperand(el, usageTransmission))
+		}
+		return combine(ops, false)
+
+	case "next-iteration":
+		// §19.8.4.28: the xsl:with-param children and nothing else. Their
+		// types come from the with-param, or from the corresponding
+		// xsl:param on the containing xsl:iterate.
+		var targets map[xdm.QName]string
+		for p := el.Parent; p != nil && p.Kind == xdm.KindElement; p = p.Parent {
+			if isXSL(p, "iterate") {
+				targets = declaredParamTypes(p)
+				break
+			}
+		}
+		return combine(a.withParamOperands(el, targets), false)
+
+	case "apply-imports", "next-match":
+		// §19.8.4.4, which §19.8.4.29 makes the rule for xsl:next-match too:
+		// an implicit context item operand (.) with usage absorption, plus
+		// the xsl:with-param children.
+		ops := []operand{{
+			props:          props{a.ctxPosture, sweepMotionless},
+			usage:          usageAbsorption,
+			allowsChildren: a.ctxAllowsChildren,
+		}}
+		ops = append(ops, a.withParamOperands(el, nil)...)
+		return combine(ops, false)
+
+	case "analyze-string":
+		// §19.8.4.3: select absorbs, the regex value template absorbs, and
+		// the two substring constructors have usage navigation because they
+		// can be evaluated more than once. Their context posture is
+		// grounded: §19.8.4.3 says so explicitly, "reflecting the fact that
+		// their context item type is xs:string".
+		ops := a.avtOperands(el, "regex")
+		if o, ok := a.selectOperand(el, usageAbsorption); ok {
+			ops = append(ops, o)
+		}
+		sub := a.sub(postureGrounded, false)
+		for _, c := range el.ChildElements() {
+			if !isXSL(c, "matching-substring") && !isXSL(c, "non-matching-substring") {
+				continue
+			}
+			ops = append(ops, operand{
+				props:          sub.body(c),
+				usage:          usageNavigation,
+				allowsChildren: true,
+			})
+		}
+		a.mergeFrom(sub)
+		return combine(ops, false)
+
+	case "number":
+		// §19.8.4.30: value absorbs if present; otherwise select navigates,
+		// defaulting to the context item expression when select is absent
+		// too. The formatting attributes are value templates with usage
+		// absorption. The from and count patterns are higher-order operands
+		// with usage inspection, and the spec notes that "neither of these
+		// properties affects the outcome", so they contribute nothing.
+		ops := a.avtOperands(el, "format", "lang", "letter-value", "ordinal",
+			"start-at", "grouping-separator", "grouping-size")
+		if o, ok := a.exprOperand(el, "value", usageAbsorption); ok {
+			ops = append(ops, o)
+		} else if o, ok := a.selectOperand(el, usageNavigation); ok {
+			ops = append(ops, o)
+		} else {
+			ops = append(ops, operand{
+				props:          props{a.ctxPosture, sweepMotionless},
+				usage:          usageNavigation,
+				allowsChildren: a.ctxAllowsChildren,
+			})
+		}
+		return combine(ops, false)
+
 	case "copy":
 		return a.copyInstruction(el)
 
 	case "variable":
-		// §19.8.4.39. With an as attribute the usages are type-determined,
-		// which is not modelled; without one the select navigates and the
-		// body absorbs. Navigation from a streamed node is free-ranging,
-		// which is the point of the rule: a variable cannot be bound to a
-		// streamed node.
-		if el.Attr("", "as") != nil {
-			return a.unknown()
+		// §19.8.4.39. With an as attribute both the select expression and
+		// the contained sequence constructor take the type-determined usage
+		// based on that type; without one the select navigates and the body
+		// absorbs. Navigation from a streamed node is free-ranging, which is
+		// the point of the rule: a variable cannot be bound to a streamed
+		// node.
+		selUsage, bodyUsage := usageNavigation, usageAbsorption
+		if at := el.Attr("", "as"); at != nil {
+			u := instrTypeDeterminedUsage(at.Value)
+			selUsage, bodyUsage = u, u
 		}
 		var ops []operand
-		if o, ok := a.selectOperand(el, usageNavigation); ok {
+		if o, ok := a.selectOperand(el, selUsage); ok {
 			ops = append(ops, o)
 		} else {
-			ops = append(ops, a.bodyOperand(el, usageAbsorption))
+			ops = append(ops, a.bodyOperand(el, bodyUsage))
 		}
 		return combine(ops, false)
 
@@ -534,14 +620,94 @@ func (a *instrAnalyzer) instruction(el *xdm.Node) props {
 	case "merge":
 		return a.merge(el)
 
+	case "apply-templates":
+		return a.applyTemplates(el)
+
+	case "call-template":
+		// §19.8.4.9: unless the called template declares that it is called
+		// with no context item, there is an implicit context item operand
+		// whose usage is type-determined by the xsl:context-item/@as of the
+		// target, defaulting to item()*; plus the xsl:with-param children,
+		// whose types come from the with-param or from the target's own
+		// xsl:param declarations.
+		target := calledTemplate(el)
+		if target == nil {
+			// The target was not found -- another package, or a name this
+			// scan does not resolve. Its declarations decide the usages, so
+			// without them there is no verdict.
+			return a.unknown()
+		}
+		var ci *xdm.Node
+		for _, c := range target.ChildElements() {
+			if isXSL(c, "context-item") {
+				ci = c
+				break
+			}
+		}
+		var ops []operand
+		switch {
+		case ci != nil && contextItemAbsent(ci):
+			// No context item operand at all.
+		case ci != nil:
+			ops = append(ops, operand{
+				props:          props{a.ctxPosture, sweepMotionless},
+				usage:          instrTypeDeterminedUsage(ci.AttrValue("as")),
+				allowsChildren: a.ctxAllowsChildren,
+			})
+		default:
+			// No xsl:context-item child: the type defaults to item()*, whose
+			// type-determined usage is navigation.
+			ops = append(ops, operand{
+				props:          props{a.ctxPosture, sweepMotionless},
+				usage:          usageNavigation,
+				allowsChildren: a.ctxAllowsChildren,
+			})
+		}
+		ops = append(ops, a.withParamOperands(el, declaredParamTypes(target))...)
+		return combine(ops, false)
+
+	case "evaluate":
+		// §19.8.4.16: xpath absorbs, context-item and with-params navigate,
+		// base-uri and schema-aware are value templates with usage
+		// absorption, namespace-context is inspected, and the
+		// xsl:with-param children take their type-determined usage.
+		ops := a.avtOperands(el, "base-uri", "schema-aware")
+		if o, ok := a.exprOperand(el, "xpath", usageAbsorption); ok {
+			ops = append(ops, o)
+		}
+		if o, ok := a.exprOperand(el, "context-item", usageNavigation); ok {
+			ops = append(ops, o)
+		}
+		if o, ok := a.exprOperand(el, "with-params", usageNavigation); ok {
+			ops = append(ops, o)
+		}
+		if o, ok := a.exprOperand(el, "namespace-context", usageInspection); ok {
+			ops = append(ops, o)
+		}
+		ops = append(ops, a.withParamOperands(el, nil)...)
+		return combine(ops, false)
+
+	case "stream":
+		// §19.8.4.35. The document the instruction opens is assessed
+		// separately (§18.1); what this rule measures is the effect of the
+		// instruction on the construct that contains it. The two rejecting
+		// clauses concern current-group() and current-merge-group() calls
+		// whose owning instruction is an ancestor of the xsl:stream, which
+		// the analysis below does not distinguish from any other call on
+		// them; both are unmodelled, so a body mentioning either stays
+		// unknown rather than being passed as streamable.
+		if bodyCallsAny(el, "current-group", "current-merge-group") {
+			return a.unknown()
+		}
+		// Otherwise "the posture is grounded and the sweep is the sweep of
+		// the href attribute value template".
+		href, _ := a.avtProps(el, "href")
+		return props{postureGrounded, href.sweep}
+
 	default:
-		// xsl:apply-templates, xsl:call-template, xsl:apply-imports,
-		// xsl:next-match, xsl:next-iteration, xsl:break, xsl:analyze-string,
-		// xsl:number, xsl:evaluate, xsl:stream, xsl:source-document,
-		// xsl:where-populated, xsl:on-empty, xsl:on-non-empty and the
-		// declarations. Each needs either type-determined usage, a mode
-		// lookup, or a rule not written here; see the coverage note in
-		// docs/conformance-gaps.md.
+		// xsl:source-document, xsl:where-populated, xsl:on-empty,
+		// xsl:on-non-empty and the declarations. Each needs a rule not
+		// written here; see the coverage note in docs/conformance-gaps.md.
 		return a.unknown()
 	}
 }
@@ -693,6 +859,217 @@ func attributeSetNames(el *xdm.Node) []xdm.QName {
 		out = append(out, n)
 	}
 	return out
+}
+
+// contextItemAbsent reports whether an xsl:context-item declaration says the
+// template is called with no context item, so that §19.8.4.9 contributes no
+// implicit context item operand.
+//
+// §19.8.4.9 words this as use="prohibited", but no such value exists: the
+// grammar in §9.6 gives use? = "required" | "optional" | "absent", and it is
+// use="absent" that makes "the global focus (context item, position, and size)
+// absent". Both spellings are accepted here, since the prose and the grammar
+// plainly mean the same thing and si-call-template-002 uses the grammar's.
+func contextItemAbsent(ci *xdm.Node) bool {
+	switch strings.TrimSpace(ci.AttrValue("use")) {
+	case "absent", "prohibited":
+		return true
+	}
+	return false
+}
+
+// calledTemplate finds the named template an xsl:call-template refers to, whose
+// xsl:context-item and xsl:param declarations §19.8.4.9 needs.
+//
+// It returns nil when the template is not in this stylesheet -- declared in
+// another package, say. The caller treats that as unmodelled rather than
+// assuming a default, because those declarations are what decide the usages.
+func calledTemplate(el *xdm.Node) *xdm.Node {
+	raw := strings.TrimSpace(el.AttrValue("name"))
+	if raw == "" {
+		return nil
+	}
+	want, err := resolveQNameAttr(el, raw)
+	if err != nil {
+		return nil
+	}
+	root := documentElementOf(el)
+	if root == nil {
+		return nil
+	}
+	var found *xdm.Node
+	walkElements(root, func(d *xdm.Node) bool {
+		if !isXSL(d, "template") {
+			return true
+		}
+		nm := strings.TrimSpace(d.AttrValue("name"))
+		if nm == "" {
+			return true
+		}
+		got, err := resolveQNameAttr(d, nm)
+		if err != nil || got != want {
+			return true
+		}
+		found = d
+		return false
+	})
+	return found
+}
+
+// bodyCallsAny reports whether any XPath expression held in an attribute of el
+// or of a descendant calls one of the named fn: functions.
+//
+// §19.8.4.35 asks a narrower question than this answers: whether the call's
+// nearest containing xsl:for-each-group (or xsl:merge) is an ancestor of the
+// xsl:stream. Answering the narrower question needs the grouping instruction
+// the call binds to; this answers the broader one, which is a superset, so it
+// can only report a call the narrower rule would have ignored. That direction
+// is the safe one, because the caller treats a hit as unknown rather than as an
+// error.
+func bodyCallsAny(el *xdm.Node, names ...string) bool {
+	found := false
+	walkElements(el, func(d *xdm.Node) bool {
+		for _, at := range d.Attrs {
+			for _, n := range names {
+				if strings.Contains(at.Value, n+"(") {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// withParamOperands builds the operands contributed by the xsl:with-param
+// children of el.
+//
+// Every rule that takes parameters -- §19.8.4.4 (xsl:apply-imports and
+// xsl:next-match), §19.8.4.5 (xsl:apply-templates), §19.8.4.9
+// (xsl:call-template), §19.8.4.16 (xsl:evaluate) and §19.8.4.28
+// (xsl:next-iteration) -- words the operand identically: "the select attribute
+// or contained sequence constructor of each xsl:with-param child element, with
+// type-determined usage based on the type declared in the
+// xsl:with-param/@as attribute, or item()* if absent".
+//
+// §19.8.4.9 and §19.8.4.28 add that the type is "the xsl:with-param/@as
+// attribute, or the xsl:param/@as attribute of the corresponding parameter on
+// the target, whichever is more restrictive". targets supplies the target's
+// declarations, indexed by parameter name; it is nil for the rules that do not
+// have that clause (§19.8.4.4, §19.8.4.5 and §19.8.4.16), where the with-param's
+// own type is the whole story.
+//
+// "More restrictive" is resolved on the resulting usage rather than on the
+// types: of the three §19.4 answers, absorption is the one that reads a bounded
+// amount and navigation the one that reads without bound, so the more
+// restrictive requirement is the one that does not navigate. Taking the
+// with-param's type alone would be wrong rather than merely conservative --
+// si-call-template-002 passes a streamed PRICE to a parameter the target
+// declares as xs:decimal, which atomizes it, and calling that navigation
+// rejects a stylesheet the spec requires to run.
+func (a *instrAnalyzer) withParamOperands(el *xdm.Node, targets map[xdm.QName]string) []operand {
+	var ops []operand
+	for _, c := range el.ChildElements() {
+		if !isXSL(c, "with-param") {
+			continue
+		}
+		u := instrTypeDeterminedUsage(c.AttrValue("as"))
+		if targets != nil && c.Attr("", "as") == nil {
+			// No type on the with-param, so the target's declaration is the
+			// only one there is.
+			if nm := strings.TrimSpace(c.AttrValue("name")); nm != "" {
+				if q, err := resolveQNameAttr(c, nm); err == nil {
+					if as, ok := targets[q]; ok {
+						u = instrTypeDeterminedUsage(as)
+					}
+				}
+			}
+		}
+		if o, ok := a.selectOperand(c, u); ok {
+			ops = append(ops, o)
+			continue
+		}
+		ops = append(ops, a.bodyOperand(c, u))
+	}
+	return ops
+}
+
+// declaredParamTypes indexes the as attributes of the xsl:param children of a
+// template or xsl:iterate, for the "whichever is more restrictive" clause of
+// §19.8.4.9 and §19.8.4.28. A parameter with no as attribute maps to the empty
+// string, which instrTypeDeterminedUsage reads as item()*.
+func declaredParamTypes(decl *xdm.Node) map[xdm.QName]string {
+	out := map[xdm.QName]string{}
+	for _, c := range decl.ChildElements() {
+		if !isXSL(c, "param") {
+			continue
+		}
+		nm := strings.TrimSpace(c.AttrValue("name"))
+		if nm == "" {
+			continue
+		}
+		q, err := resolveQNameAttr(c, nm)
+		if err != nil {
+			continue
+		}
+		out[q] = c.AttrValue("as")
+	}
+	return out
+}
+
+// instrTypeDeterminedUsage applies the §19.4 definition in full: "if the
+// required type (ignoring occurrence indicator) is function(*) or a subtype
+// thereof, then inspection; if the required type (ignoring occurrence
+// indicator) is xs:anyAtomicType or a subtype thereof, then absorption;
+// otherwise navigation."
+//
+// It is the whole of what §19.8.4 needs from §19.4. The definition is a
+// function of the required type alone -- no posture, no sweep, no lattice --
+// so the six instruction rules that were held to be blocked on "type-determined
+// usage the lattice does not model" need no lattice support at all.
+//
+// The interesting case is the default. A required type of item()*, which
+// §19.8.4 substitutes wherever an as attribute is absent, is neither atomic nor
+// a function type, so the usage is navigation -- and navigation from a streamed
+// node is free-ranging. That is the rule that stops a streamed node being bound
+// to a variable, passed as a template parameter, or stored in a map, which is
+// what the si-map, si-iterate and si-group cases test.
+//
+// streamfunctions.go has its own typeDeterminedUsage for the §19.8.5 function
+// rules. That one splits two ways rather than three, because a function
+// parameter's declared type is checked there against typePermitsNodes; this is
+// kept separate rather than merged so that neither file's rule shifts under the
+// other's feet.
+//
+// A type this does not recognise falls to navigation, the same answer as
+// item()* and the conservative one: it can only refuse to prove a construct
+// streamable, never prove a non-streamable one streamable.
+func instrTypeDeterminedUsage(as string) usage {
+	s := strings.TrimSpace(as)
+	if s == "" {
+		// No declared type means item()*, whose usage is navigation.
+		return usageNavigation
+	}
+	if atomicSequenceType(s) {
+		return usageAbsorption
+	}
+	// Strip an occurrence indicator before looking for a function type:
+	// "function(*)*" is a function type just as "function(*)" is.
+	if n := len(s); n > 0 {
+		switch s[n-1] {
+		case '?', '*', '+':
+			s = strings.TrimSpace(s[:n-1])
+		}
+	}
+	// function(*), and the map and array types, which XPath makes subtypes
+	// of function(*). Their operands are inspected rather than absorbed: a
+	// function item is opaque, so building one reads nothing from the stream.
+	if strings.HasPrefix(s, "function(") ||
+		strings.HasPrefix(s, "map(") || strings.HasPrefix(s, "array(") {
+		return usageInspection
+	}
+	return usageNavigation
 }
 
 // sortOperands builds the operands contributed by xsl:sort children: their
@@ -934,6 +1311,197 @@ func (a *instrAnalyzer) forkInstruction(el *xdm.Node) props {
 }
 
 // forEach applies §19.8.4.18, whose clauses are tried in order.
+// applyTemplates applies §19.8.4.5, whose clauses are "the first of the
+// following that apply" and so are written in the spec's order.
+//
+// The rule needs to know whether the target mode is declared streamable, which
+// is why modes are collected into the analyzer: an apply-templates to a
+// non-streamable mode is roaming and free-ranging however simple its select
+// expression is.
+func (a *instrAnalyzer) applyTemplates(el *xdm.Node) props {
+	// "If there is no select attribute, the following analysis assumes the
+	// presence of an implicit operand select='child::node()'."
+	sel, selKids := props{a.ctxPosture, sweepMotionless}, true
+	if at := el.Attr("", "select"); at != nil {
+		sel, selKids = a.exprOperandIn(at.Value, el, a.ctxPosture, a.ctxAllowsChildren)
+	} else {
+		// child::node() from the context item strides, and reading it
+		// consumes; from a grounded context it stays grounded.
+		if a.ctxPosture == postureStriding {
+			sel = props{postureStriding, sweepMotionless}
+		}
+	}
+
+	// Clause 1: a grounded select expression. The mode is irrelevant here --
+	// nothing streamed is passed to it -- so this clause comes first, and
+	// <xsl:apply-templates select="copy-of(.)"/> is grounded and consuming
+	// exactly as the spec's example says.
+	if sel.posture == postureGrounded {
+		ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids}}
+		ops = append(ops, a.withParamOperands(el, nil)...)
+		ops = append(ops, a.sortOperands(el, postureGrounded)...)
+		return combine(ops, false)
+	}
+
+	// Clause 2: "If there is an xsl:sort child element, then roaming and
+	// free-ranging." Sorting a streamed selection needs it all in memory.
+	if hasChild(el, "sort") {
+		return roamingFreeRanging
+	}
+
+	// Clause 3: a mode that is not declared streamable. mode="#current" is
+	// treated as streamable, per the note: if the template was reached with a
+	// streamed context item, the current mode must itself be streamable.
+	switch a.modeStreamable(el) {
+	case modeNotStreamable:
+		return roamingFreeRanging
+	case modeUnresolved:
+		// The declaration is somewhere this scan cannot see -- an imported
+		// or included module, which is not inlined when this check runs. The
+		// clause cannot be decided, so the instruction is unmodelled rather
+		// than rejected: si-apply-imports-068 declares its streamable mode in
+		// the module it imports, and rejecting it here would refuse a
+		// stylesheet the spec requires to run.
+		return a.unknown()
+	}
+
+	// Clause 4: a climbing or crawling select expression.
+	if sel.posture == postureClimbing || sel.posture == postureCrawling {
+		return roamingFreeRanging
+	}
+
+	// Clause 5: the general rules, with the select absorbing.
+	ops := []operand{{props: sel, usage: usageAbsorption, allowsChildren: selKids}}
+	ops = append(ops, a.withParamOperands(el, nil)...)
+	return combine(ops, false)
+}
+
+// defaultModeFor returns the [xsl:]default-mode in scope for el and the element
+// that carried it, per §3.8.2: "the mode is taken from the [xsl:]default-mode
+// attribute of the innermost ancestor element that has such an attribute. If
+// there is no such element, then the default is the unnamed mode."
+//
+// The attribute is spelt default-mode on the XSLT elements that allow it and
+// xsl:default-mode on a literal result element, so both are looked for.
+func defaultModeFor(el *xdm.Node) (string, *xdm.Node) {
+	for n := el; n != nil && n.Kind == xdm.KindElement; n = n.Parent {
+		if n.Name.URI == xdm.NSXSL {
+			if v := strings.TrimSpace(n.AttrValue("default-mode")); v != "" {
+				return v, n
+			}
+		}
+		if at := n.Attr(xdm.NSXSL, "default-mode"); at != nil {
+			if v := strings.TrimSpace(at.Value); v != "" {
+				return v, n
+			}
+		}
+	}
+	return "", nil
+}
+
+// modeVerdict is the three-way answer §19.8.4.5 clause 3 needs. The third
+// value matters: this check runs before xsl:import and xsl:include are
+// inlined, so a mode declared in another module is not merely "not declared
+// streamable" -- it is not visible at all, and the two must not be confused.
+type modeVerdict int
+
+const (
+	modeStreamableYes modeVerdict = iota
+	modeNotStreamable
+	modeUnresolved
+)
+
+// modeStreamable reports whether the mode named by an xsl:apply-templates
+// instruction is declared streamable (§19.8.4.5 clause 3).
+//
+// An absent mode attribute names the unnamed mode, and "#current" is treated as
+// streamable by the note in that clause.
+//
+// A mode with no matching xsl:mode declaration in this module answers
+// modeNotStreamable only when the module imports and includes nothing: a
+// stylesheet that stands alone has no other place for the declaration to be, so
+// its absence is decisive. As soon as another module is pulled in, the
+// declaration may be there, and the answer is modeUnresolved.
+func (a *instrAnalyzer) modeStreamable(el *xdm.Node) modeVerdict {
+	raw := strings.TrimSpace(el.AttrValue("mode"))
+	if raw == "#current" {
+		return modeStreamableYes
+	}
+	root := documentElementOf(el)
+	if root == nil {
+		return modeUnresolved
+	}
+	// §3.8.2: an omitted mode attribute, or "#default", takes the mode from
+	// the [xsl:]default-mode of the innermost ancestor that has one, and only
+	// falls back to the unnamed mode when there is none. sf-current-100
+	// declares default-mode="m" on xsl:stylesheet and relies on a bare
+	// xsl:apply-templates reaching the streamable mode m.
+	at, on := el, el
+	if raw == "" || raw == "#default" {
+		raw, on = defaultModeFor(el)
+	}
+	if on != nil {
+		at = on
+	}
+	want := xdm.QName{}
+	if raw != "" && raw != "#default" && raw != "#unnamed" {
+		n, err := resolveQNameAttr(at, raw)
+		if err != nil {
+			return modeUnresolved
+		}
+		want = n
+	}
+	declared := false
+	streamable := false
+	imports := false
+	walkElements(root, func(d *xdm.Node) bool {
+		if isXSL(d, "import") || isXSL(d, "include") || isXSL(d, "use-package") {
+			imports = true
+			return true
+		}
+		if !isXSL(d, "mode") {
+			return true
+		}
+		got := xdm.QName{}
+		if nm := strings.TrimSpace(d.AttrValue("name")); nm != "" {
+			n, err := resolveQNameAttr(d, nm)
+			if err != nil {
+				return true
+			}
+			got = n
+		}
+		if got != want {
+			return true
+		}
+		declared = true
+		if isYes(d.AttrValue("streamable")) {
+			streamable = true
+			return false
+		}
+		return true
+	})
+	switch {
+	case streamable:
+		return modeStreamableYes
+	case declared:
+		// Declared here, and not as streamable. That is decisive whatever
+		// else the stylesheet imports: a mode may be declared only once.
+		return modeNotStreamable
+	case imports:
+		return modeUnresolved
+	}
+	return modeNotStreamable
+}
+
+// documentElementOf returns the outermost element containing el.
+func documentElementOf(el *xdm.Node) *xdm.Node {
+	top := el
+	for top.Parent != nil && top.Parent.Kind == xdm.KindElement {
+		top = top.Parent
+	}
+	return top
+}
+
 func (a *instrAnalyzer) forEach(el *xdm.Node) props {
 	at := el.Attr("", "select")
 	if at == nil {

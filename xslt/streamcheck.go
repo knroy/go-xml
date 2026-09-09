@@ -41,7 +41,9 @@ import (
 // through it are the bodies of template rules, whose context posture is
 // striding by §19.6, but reaching them means following apply-templates
 // through modes, and an error reported against the wrong template would be
-// worse than none.
+// worse than none. A streamable mode's rules are still reached for their MATCH
+// PATTERNS, which need no such following: see checkStreamableModePatterns in
+// streamcontext.go.
 func checkStreamability(root *xdm.Node) error {
 	var err error
 	// §19.8.5: the stylesheet's own xsl:function declarations, so that a call

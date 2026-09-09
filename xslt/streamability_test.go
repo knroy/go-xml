@@ -106,10 +106,16 @@ func TestAnalyzeExprFunctionCalls(t *testing.T) {
 		{"string(.)", props{postureGrounded, sweepConsuming}, true},
 		{"count(@a)", props{postureGrounded, sweepMotionless}, true},
 		{"string(@a)", props{postureGrounded, sweepMotionless}, true},
-		// A function absent from the table leaves the analysis with no
-		// opinion, and says so.
-		{"fn:innermost(descendant::c)", roamingFreeRanging, false},
-		{"fn:reverse(a/b)", roamingFreeRanging, false},
+		// §19.8.9.13 and §19.8.9.17 give fn:innermost and fn:reverse the
+		// general rules with an operand usage of navigation, and navigating
+		// from a streamed operand is free-ranging (§19.8.1). The verdict is
+		// therefore a modelled rejection, not an absence of opinion.
+		{"fn:innermost(descendant::c)", roamingFreeRanging, true},
+		{"fn:reverse(a/b)", roamingFreeRanging, true},
+		// A function still absent from the table leaves no opinion, and says
+		// so: §19.8.9.15 keeps fn:outermost out, its crawling argument
+		// yielding a striding result.
+		{"fn:outermost(descendant::c)", roamingFreeRanging, false},
 	}
 	for _, c := range cases {
 		got, known := analyze(t, c.expr)
@@ -273,9 +279,13 @@ func TestStreamabilityAcceptsStreamableConstructs(t *testing.T) {
 		// either: an unmodelled construct is "no opinion", not an error.
 		`<xsl:sequence select="a|b"/>`,
 		`<xsl:sequence select="for $i in 1 to 3 return $i"/>`,
-		`<xsl:sequence select="reverse(a/b)"/>`,
 		`<xsl:sequence select="map{'a': 1}"/>`,
-		`<xsl:sequence select="innermost(descendant::c)"/>`,
+		// A grounded operand keeps fn:reverse streamable, which is the half
+		// of §19.8.9.17 that belongs in this list now that the function is
+		// modelled: "a call on reverse is not streamable unless the operand
+		// is grounded". The streamed-operand half is asserted in
+		// TestNavigationFromStreamedArgumentIsNotStreamable.
+		`<xsl:sequence select="reverse((1, 2, 3))"/>`,
 	}
 	for _, b := range bodies {
 		if err := compileSrc(t, stylesheetWith(b)); err != nil &&

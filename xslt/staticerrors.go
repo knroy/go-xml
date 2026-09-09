@@ -67,6 +67,9 @@ func checkStaticErrors(root *xdm.Node) error {
 		if err := checkAccumulatorStreamability(root); err != nil {
 			return err
 		}
+		if err := checkStreamableModePatterns(root); err != nil {
+			return err
+		}
 		// A package's own xsl:expose declarations are checked whether or not
 		// anybody uses the package. readUsePackage runs the same arithmetic
 		// on the way into a using package, for its answers; here it is run

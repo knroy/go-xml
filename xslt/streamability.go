@@ -150,8 +150,15 @@ func (a *analyzer) expr(e xpath.Expr) props {
 
 	case *xpath.InstanceOfExpr:
 		// §19.8.8.5: "instance of" inspects its operand -- it looks at the
-		// item's type, never at its subtree.
-		return combine([]operand{a.operandOf(x.Operand, usageInspection)}, false)
+		// item's type, never at its subtree. The one exception is an item
+		// type of the form document-node(element(X)), which cannot be
+		// decided without reading the document's children, and so absorbs
+		// (streamexprs.go).
+		u := usageInspection
+		if isDocumentNodeWithContent(x.Type) {
+			u = usageAbsorption
+		}
+		return combine([]operand{a.operandOf(x.Operand, u)}, false)
 
 	case *xpath.CastExpr, *xpath.TreatExpr:
 		// A cast atomizes. "treat as" transmits, but modelling it as
@@ -161,7 +168,7 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		case *xpath.CastExpr:
 			return combine([]operand{a.operandOf(y.Operand, usageAbsorption)}, false)
 		case *xpath.TreatExpr:
-			return combine([]operand{a.operandOf(y.Operand, usageTransmission)}, false)
+			return a.treatExpr(y)
 		}
 		return a.unknown()
 
@@ -174,11 +181,19 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// left operand.
 		return a.simpleMap(x)
 
+	case *xpath.MapConstructor:
+		// §19.8.8.16, in streamexprs.go.
+		return a.mapConstructor(x)
+
+	case *xpath.ArrayConstructor:
+		// Not in the §19.8.8 table, which enumerates XPath 3.0 productions;
+		// the general rules apply (streamexprs.go).
+		return a.arrayConstructor(x)
+
 	default:
-		// for, some/every, let, inline functions, dynamic calls, named
-		// function references, map and array constructors, and the union
-		// operators. Each has its own section in §19.8.8 and none is
-		// modelled yet.
+		// for, some/every, let, inline functions, dynamic calls and named
+		// function references. Each has its own section in §19.8.8 and none
+		// is modelled yet.
 		return a.unknown()
 	}
 }
@@ -228,9 +243,13 @@ func (a *analyzer) binary(x *xpath.BinaryOp) props {
 			a.operandOf(x.Right, usageInspection),
 		}, false)
 
+	case "|", "union", "intersect", "except":
+		// §19.8.8.4, in streamexprs.go: a cascade on the two operands'
+		// postures rather than the general rules.
+		return a.unionExpr(x.Left, x.Right)
+
 	default:
-		// The union operators (|, union, intersect, except) have their own
-		// rules in §19.8.8.4, and "!" has its own in §19.8.8.6.
+		// "!" has its own rule in §19.8.8.6.
 		return a.unknown()
 	}
 }
@@ -531,6 +550,20 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		}
 		return a.unknown()
 	}
+	// The two nullary context functions §19.8.9 gives sections of their own,
+	// because they have no operands for the general rules to work on
+	// (streamexprs.go).
+	if len(x.Args) == 0 {
+		switch x.Name.Local {
+		case "last":
+			// §19.8.9.14.
+			return a.lastFunction()
+		case "position":
+			// §19.8.9.16: no operands, so the general rules make it
+			// grounded and motionless.
+			return groundedMotionless
+		}
+	}
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok {
 		return a.unknown()
@@ -649,15 +682,26 @@ func builtinOperandUsages(name string, arity int) ([]usage, bool) {
 	}
 	// The remainder, whose arguments differ from one another.
 	mixed := map[string]map[int][]usage{
-		"head":                     {1: {T}},
-		"tail":                     {1: {T}},
-		"exactly-one":              {1: {T}},
-		"zero-or-one":              {1: {T}},
-		"one-or-more":              {1: {T}},
-		"remove":                   {2: {T, A}},
-		"subsequence":              {2: {T, A}, 3: {T, A, A}},
-		"insert-before":            {3: {T, A, T}},
-		"unordered":                {1: {T}},
+		"head":          {1: {T}},
+		"tail":          {1: {T}},
+		"exactly-one":   {1: {T}},
+		"zero-or-one":   {1: {T}},
+		"one-or-more":   {1: {T}},
+		"remove":        {2: {T, A}},
+		"subsequence":   {2: {T, A}, 3: {T, A, A}},
+		"insert-before": {3: {T, A, T}},
+		"unordered":     {1: {T}},
+		// §19.8.9.17 and §19.8.9.13. Both have their own subsection, but only
+		// to explain why the usage is navigation, not to displace the general
+		// rules: reverse "follows the general streamability rules, with its
+		// operand classified as having operand usage navigation", and
+		// innermost "follows the general streamability rules, with the first
+		// argument having operand usage navigation" because a node cannot be
+		// known to be in the result until its descendants have been read.
+		// fn:outermost stays absent: §19.8.9.15 gives it a genuine exception
+		// to the general rules, turning a crawling argument striding.
+		"reverse":                  {1: {N}},
+		"innermost":                {1: {N}},
 		"filter":                   {2: {N, I}},
 		"for-each":                 {2: {N, I}},
 		"for-each-pair":            {3: {N, N, I}},

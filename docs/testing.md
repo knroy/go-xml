@@ -20,7 +20,7 @@ let something through, and the column that matters is the last one.
 
 | layer | count | catches | misses |
 |---|---:|---|---|
-| **Unit tests** | 1,829 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
+| **Unit tests** | 1,868 | a plausible implementation that is quietly wrong | anything nobody thought to write a test for |
 | **Limit boundary tests** | 13 tests | an off-by-one or an overflow at the edge of a configurable limit | a limit nobody added to the inventory |
 | **Race detector** | same tests | shared state a single-goroutine run never reveals | a data race on a path no test walks |
 | **W3C conformance suites** | 141,691 cases | systematic divergence from the specification | what the suites do not ask about — see below |
@@ -44,7 +44,7 @@ figures* section, which fails the gate when this table drifts from the tree:
   `grep -hc "func Test" ./*/limits_boundary_test.go | awk '{n += $1} END {print n + 0}'`
 * **Fuzzing** — `grep -rn "func Fuzz" --include='*_test.go' . | grep -vc '/\.claude/worktrees/'`
 * **W3C conformance suites** — the sum of the in-scope totals in the status
-  table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,525
+  table: XPath 2.0 15,222 + XQuery 3.1 29,964 + XSLT 2.0 6,201 + XSLT 3.0 11,518
   + XSD 1.0 39,388 + XSD 1.1 41,576 + RELAX NG 965. XPath 3.0 and 3.1 are not
   added again — the QT3 catalog is one corpus measured at three versions, and
   the 2.0 figure is the whole of it that this engine claims. An earlier
@@ -383,7 +383,7 @@ DocBook 577
 RelaxNGSpectest 965
 TestQT3 30233
 TestQT3XQuery 30304
-TestXSLT30Suite 11399
+TestXSLT30Suite 11422
 TestXSLTSuite 6193
 VendoredSchemas 185
 XSD10 39358
@@ -624,7 +624,7 @@ regression. Document URIs are not canonicalised across symlinks.
 **Skipped is not failed.** The suites skip cases by declared dependency — a
 specific Unicode version, a spec version not being measured. (Streaming used to
 head that list and no longer does: it was measured and found implemented.) The
-XSLT 3.0 suite has 14,601 cases and 11,525 in scope; counting the difference as
+XSLT 3.0 suite has 14,601 cases and 11,518 in scope; counting the difference as
 failures would understate the engine, and counting it as passes would overstate
 it. Both figures are reported separately for that reason.
 

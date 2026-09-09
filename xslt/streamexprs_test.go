@@ -1,0 +1,326 @@
+package xslt
+
+import (
+	"testing"
+
+	"github.com/knroy/go-xml/xpath"
+)
+
+// Per-construct tests for the §19.8.8 expression rules in streamexprs.go.
+//
+// Every case asserts what the specification requires of the construct, taken
+// from the rule text or from an example the specification itself gives. As in
+// streamability_test.go, the streamable arms matter at least as much as the
+// unstreamable ones: a construct wrongly found roaming becomes a spurious
+// XTSE3430, which rejects a valid stylesheet at compile time.
+
+// analyze31 parses an XPath 3.1 expression -- needed for the map and array
+// constructors, which XPath 3.0 does not have -- and assesses it with a
+// striding context posture, as inside xsl:stream (§19.6).
+func analyze31(t *testing.T, src string) (props, bool) {
+	t.Helper()
+	expr, err := xpath.ParseVersion(src, nil, xpath.XPath31)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", src, err)
+	}
+	return analyzeExpr(expr, postureStriding)
+}
+
+// TestAnalyzeUnionExpr checks the five-step cascade of §19.8.8.4. Four of the
+// five cases carry an example in the rule text itself, and those examples are
+// used verbatim.
+func TestAnalyzeUnionExpr(t *testing.T) {
+	cases := []struct {
+		expr    string
+		want    props
+		comment string
+	}{
+		// Rule 1: "if either of the two operands is free-ranging, then
+		// roaming and free-ranging". The spec's own example.
+		{". | following-sibling::*", roamingFreeRanging,
+			"a free-ranging operand poisons the union"},
+
+		// Rule 2: "if either of the two operands is grounded and motionless,
+		// then the posture and sweep of the other operand". The spec writes
+		// this as ". | doc('abc.com')//x"; "2" is a grounded motionless
+		// operand that needs no document.
+		{"2 | child::a", props{postureStriding, sweepConsuming},
+			"a grounded motionless operand yields the other operand"},
+		{"child::a | 2", props{postureStriding, sweepConsuming},
+			"and does so from either side"},
+
+		// Rule 3: "if both operands are climbing, then climbing and the
+		// wider of the sweeps". The spec's example.
+		{"parent::A | */ancestor::B", props{postureClimbing, sweepConsuming},
+			"two climbing operands stay climbing"},
+		{"parent::A | ancestor::B", props{postureClimbing, sweepMotionless},
+			"two motionless climbing operands stay motionless"},
+
+		// Rule 4: "if the left-hand operand is striding or crawling and the
+		// right-hand operand is also striding or crawling, then crawling and
+		// the wider of the sweeps". The spec's example is "* | */*", and its
+		// note explains why the result is crawling even when both operands
+		// stride: "author | author/name" may yield nested subtrees.
+		{"* | */*", props{postureCrawling, sweepConsuming},
+			"two striding operands compose to crawling, not striding"},
+		{"author | editor", props{postureCrawling, sweepConsuming},
+			"the note's own example: still crawling, not striding"},
+		{"descendant::a | child::b", props{postureCrawling, sweepConsuming},
+			"crawling with striding is crawling"},
+
+		// Rule 5: "otherwise, roaming and free-ranging". The spec's example
+		// is the heterogeneous "child::div | parent::div".
+		{"child::div | parent::div", roamingFreeRanging,
+			"a striding operand and a climbing one do not compose"},
+
+		// "intersect" and "except" take the same rules as "union"; §19.8.8.4
+		// names all three in its title and gives them one cascade.
+		{"child::a intersect child::b", props{postureCrawling, sweepConsuming},
+			"intersect follows the union cascade"},
+		{"child::a except child::b", props{postureCrawling, sweepConsuming},
+			"except follows the union cascade"},
+		{"child::div except parent::div", roamingFreeRanging,
+			"and its roaming case too"},
+	}
+	for _, c := range cases {
+		got, known := analyze(t, c.expr)
+		if !known {
+			t.Errorf("%s: %q was not modelled, but §19.8.8.4 gives it a rule",
+				c.comment, c.expr)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: %q is %v and %v, want %v and %v",
+				c.comment, c.expr, got.posture, got.sweep, c.want.posture, c.want.sweep)
+		}
+	}
+}
+
+// TestAnalyzeMapConstructor checks §19.8.8.16, which defers to §19.8.4.23 and
+// §19.8.4.24: the key expression absorbs and the value expression navigates.
+func TestAnalyzeMapConstructor(t *testing.T) {
+	cases := []struct {
+		expr    string
+		want    props
+		comment string
+	}{
+		// A map of constants has no operand that reads the stream.
+		{"map{'red': false(), 'green': true()}", groundedMotionless,
+			"the spec's own example map is grounded and motionless"},
+
+		// §19.8.4.24 gives the value expression usage navigation, and
+		// §19.8.1 makes navigation from any streamed posture free-ranging.
+		// This is the rule that stops a streamed node being stored in a map,
+		// and it is what sx-MapExpr-901 asserts.
+		{"map{'authors': //AUTHOR}", roamingFreeRanging,
+			"a streamed node may not be stored as a map value"},
+		{"map{'authors': child::AUTHOR}", roamingFreeRanging,
+			"navigation is free-ranging even from a striding operand"},
+
+		// The supported way to write it: ground the value first. §19.8.4.23's
+		// note says the call on copy-of "is necessary to ensure that the
+		// content of the map entry is grounded".
+		{"map{'authors': copy-of(child::AUTHOR)}", props{postureGrounded, sweepConsuming},
+			"a grounded value is allowed, and costs one pass"},
+
+		// §19.8.4.23: with several entries, "grounded and the widest sweep of
+		// the xsl:map-entry children" -- each entry may read the stream in
+		// the same pass, as an implicit fork.
+		{"map{'a': copy-of(child::A), 'b': copy-of(child::B)}",
+			props{postureGrounded, sweepConsuming},
+			"two grounded entries still make one pass"},
+
+		// The key absorbs (§19.8.4.24), so a consuming key costs a pass but
+		// does not roam.
+		{"map{string(child::A): 'v'}", props{postureGrounded, sweepConsuming},
+			"an absorbing key is consuming, not roaming"},
+
+		// "If any of these xsl:map-entry children is roaming or free-ranging,
+		// then roaming and free-ranging."
+		{"map{'a': 'v', 'b': //B}", roamingFreeRanging,
+			"one roaming entry makes the whole map roaming"},
+	}
+	for _, c := range cases {
+		got, known := analyze31(t, c.expr)
+		if !known {
+			t.Errorf("%s: %q was not modelled, but §19.8.8.16 gives it a rule",
+				c.comment, c.expr)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: %q is %v and %v, want %v and %v",
+				c.comment, c.expr, got.posture, got.sweep, c.want.posture, c.want.sweep)
+		}
+	}
+}
+
+// TestAnalyzeArrayConstructor checks that an array constructor is assessed
+// under the general streamability rules with navigation members.
+//
+// XPath 3.1's array constructors postdate the §19.8.8 proforma table, which
+// enumerates XPath 3.0 productions, so the general rules are what remain. They
+// give an array the same answer they give a map, and for the same reason: an
+// array is a function item that may outlive the stream position at which it
+// was built.
+func TestAnalyzeArrayConstructor(t *testing.T) {
+	cases := []struct {
+		expr    string
+		want    props
+		comment string
+	}{
+		{"[1, 2]", groundedMotionless,
+			"an array of constants reads nothing"},
+		{"array{1, 2}", groundedMotionless,
+			"and the curly spelling likewise"},
+
+		// A member that would deliver a streamed node navigates, and
+		// navigation from a streamed posture is free-ranging (§19.8.1). This
+		// is what sx-square-array-201 turns on.
+		{"[//ITEM]", roamingFreeRanging,
+			"a streamed node may not be stored as an array member"},
+		{"[child::ITEM]", roamingFreeRanging,
+			"navigation is free-ranging even from a striding member"},
+		{"array{child::ITEM}", roamingFreeRanging,
+			"the curly spelling stores nodes no more safely"},
+
+		// Grounding the member first is allowed, and the array is grounded.
+		{"[copy-of(child::ITEM)]", props{postureGrounded, sweepConsuming},
+			"a grounded member is allowed, and costs one pass"},
+		// Two members that each read the stream are still one pass, exactly
+		// as two xsl:map-entry children are under §19.8.4.23. The array
+		// constructor is an implicit fork over its members, so §19.8.1's
+		// limit of one potentially-consuming operand does not apply to them.
+		{"[string(child::A), string(child::B)]", props{postureGrounded, sweepConsuming},
+			"two grounded members are one pass, not two"},
+
+		// The case from sx-square-array-B.xsl that this turns on: both
+		// members are attribute steps, which read nothing beyond the start
+		// tag, and the array is streamable.
+		{"[@DESC/string(), @CODE/string()]", props{postureGrounded, sweepConsuming},
+			"two attribute members do not make an array unstreamable"},
+	}
+	for _, c := range cases {
+		got, known := analyze31(t, c.expr)
+		if !known {
+			t.Errorf("%s: %q was not modelled", c.comment, c.expr)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: %q is %v and %v, want %v and %v",
+				c.comment, c.expr, got.posture, got.sweep, c.want.posture, c.want.sweep)
+		}
+	}
+}
+
+// TestAnalyzeLastAndPosition checks §19.8.9.14 and §19.8.9.16.
+func TestAnalyzeLastAndPosition(t *testing.T) {
+	// §19.8.9.16: "the position function follows the general streamability
+	// rules. Since it has no operands, this means it is grounded and
+	// motionless."
+	if got, known := analyze(t, "position()"); !known || got != groundedMotionless {
+		t.Errorf("position() is %v and %v (known=%v), want grounded and motionless",
+			got.posture, got.sweep, known)
+	}
+
+	// §19.8.9.14: "if the context posture for a call on the last function is
+	// striding, crawling, or roaming, then the posture of the function is
+	// roaming, and the sweep is free-ranging. In all other cases the function
+	// is grounded and motionless."
+	postures := []struct {
+		ctx  posture
+		want props
+		why  string
+	}{
+		{postureStriding, roamingFreeRanging, "striding"},
+		{postureCrawling, roamingFreeRanging, "crawling"},
+		{postureRoaming, roamingFreeRanging, "roaming"},
+		{postureGrounded, groundedMotionless, "grounded"},
+		{postureClimbing, groundedMotionless, "climbing"},
+	}
+	expr, err := xpath.Parse("last()", nil)
+	if err != nil {
+		t.Fatalf("parsing last(): %v", err)
+	}
+	for _, c := range postures {
+		got, known := analyzeExpr(expr, c.ctx)
+		if !known {
+			t.Errorf("last() was not modelled in a %s context posture", c.why)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("last() in a %s context posture is %v and %v, want %v and %v",
+				c.why, got.posture, got.sweep, c.want.posture, c.want.sweep)
+		}
+	}
+
+	// The note to §19.8.9.14 gives the reason the climbing case is exempt:
+	// "the latter condition makes expressions like
+	// ancestor::*[@xml:space][last()] streamable."
+	if got, known := analyze(t, "ancestor::*[@xml:space][last()]"); !known || !got.streamable() {
+		t.Errorf("ancestor::*[@xml:space][last()] is %v and %v (known=%v), "+
+			"but the note to §19.8.9.14 says it is streamable",
+			got.posture, got.sweep, known)
+	}
+
+	// A call on last() in a striding predicate is what makes the six
+	// sx-GeneralComp-901 stylesheets non-streamable.
+	if got, known := analyze(t, "(child::ITEM[position() ne last()]/PRICE) = 432"); !known || got.streamable() {
+		t.Errorf("a predicate using last() from a striding posture is %v and %v (known=%v), "+
+			"want roaming and free-ranging", got.posture, got.sweep, known)
+	}
+}
+
+// TestAnalyzeTreatExpr checks the §19.8.8 proforma "T treat as TYPE" and the
+// §19.8.8.5 exception for document-node(element(X)).
+func TestAnalyzeTreatExpr(t *testing.T) {
+	// The proforma gives a single transmission operand, which is what makes
+	// the worked example in §19.8.8.7 motionless: there, "root(.) treat as
+	// document-node()" keeps the striding posture and motionless sweep of
+	// its operand.
+	if got, known := analyze(t, ". treat as document-node()"); !known ||
+		got != (props{postureStriding, sweepMotionless}) {
+		t.Errorf(". treat as document-node() is %v and %v (known=%v), "+
+			"but §19.8.8.7's worked example makes it striding and motionless",
+			got.posture, got.sweep, known)
+	}
+	if got, known := analyze(t, "child::a treat as element(a)"); !known ||
+		got != (props{postureStriding, sweepConsuming}) {
+		t.Errorf("child::a treat as element(a) is %v and %v (known=%v), "+
+			"want the posture and sweep of the transmitted operand",
+			got.posture, got.sweep, known)
+	}
+
+	// §19.8.8.5's note: an item type of the form document-node(element(X))
+	// "matches a document node only if it has exactly one element node child,
+	// and this cannot be determined without consuming the document". The test
+	// costs a read whichever operator asks for it, so the same type makes
+	// "instance of" absorb and "treat as" both transmit and absorb.
+	if got, known := analyze(t, ". treat as document-node(element(account))"); !known ||
+		got.streamable() {
+		t.Errorf(". treat as document-node(element(account)) is %v and %v (known=%v), "+
+			"but the type cannot be tested without consuming the document",
+			got.posture, got.sweep, known)
+	}
+	if got, known := analyze(t, ". instance of document-node(element(account))"); !known ||
+		got.sweep == sweepMotionless {
+		t.Errorf(". instance of document-node(element(account)) is %v and %v (known=%v), "+
+			"but §19.8.8.5 makes that item type absorption",
+			got.posture, got.sweep, known)
+	}
+
+	// The exception is confined to the constrained form. A bare
+	// document-node() matches on sight, so it inspects rather than absorbs,
+	// and an ordinary element test is unaffected.
+	if got, known := analyze(t, ". instance of document-node()"); !known ||
+		got.sweep != sweepMotionless {
+		t.Errorf(". instance of document-node() is %v and %v (known=%v), "+
+			"want motionless: an unconstrained document test reads nothing",
+			got.posture, got.sweep, known)
+	}
+	if got, known := analyze(t, ". instance of element(account)"); !known ||
+		got.sweep != sweepMotionless {
+		t.Errorf(". instance of element(account) is %v and %v (known=%v), "+
+			"want motionless: an element test is decided at the start tag",
+			got.posture, got.sweep, known)
+	}
+}

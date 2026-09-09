@@ -475,22 +475,30 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 		return roamingFreeRanging, false
 	}
 
-	// A function whose body calls itself cannot be assessed by a single pass:
-	// the posture and sweep of the recursive call are the very properties
-	// being computed, and callProps assesses that call as though the answer
-	// were already known. §19.8.5.2's third example shows the spec expects a
-	// fixed-point over the recursion instead ("it is necessary to analyze the
-	// recursive call f:outline(*), and this is possible because it is known
-	// to be a call on an absorbing stylesheet function").
+	// A recursive body needs no iteration to reach its fixed point, because
+	// §19.8.5 breaks the circularity itself. The rules for a function *call*
+	// read only the callee's declared category and the postures of the
+	// argument expressions; they never consult the callee's body. That is
+	// exactly what §19.8.5.2's third example relies on: analysing the
+	// recursive call f:outline(*) "is possible because it is known to be a
+	// call on an absorbing stylesheet function". The category is declared, so
+	// the recursive call is assessed like any other and one pass is already
+	// the fixed point -- and one pass is what guarantees termination, since
+	// no call site re-enters analyzeFunctionBody. Mutual recursion is covered
+	// by the same argument, whatever the length of the cycle.
 	//
-	// That fixed-point is not implemented, so a recursive function is
-	// reported as not modelled and no error is raised for it. Guessing costs
-	// a valid stylesheet: su-ascent-A in the W3C suite is a recursive ascent
-	// function whose body a single pass finds striding, which §19.8.5.7 does
-	// not permit, and the catalog expects that stylesheet to run.
-	if callsItself(f, sel.Value) {
-		return roamingFreeRanging, false
-	}
+	// What a single pass cannot do is decide that a recursive function is
+	// *invalid*. §19.10 makes XTSE3430 optional: a processor may instead run
+	// a declared-streamable construct without streaming, and the W3C catalog
+	// takes that option for su-ascent-A, a recursive ascent function whose
+	// body these rules find striding where §19.8.5.7 permits only climbing or
+	// grounded, yet whose stylesheet the suite expects to run. So a recursive
+	// body may confirm that a function meets its category, never that it
+	// fails: the verdict below is reported when it clears the category and
+	// discarded when it does not, which keeps the analysis from inventing a
+	// rejection. Dropping that asymmetry costs su-ascent-005 and -006 and
+	// gains nothing, measured.
+	recursive := callsItself(f, sel.Value)
 
 	// §19.6 gives the body of a stylesheet function no context item, so a
 	// reference to "." inside it is an error some other check reports. The
@@ -539,7 +547,26 @@ func analyzeFunctionBody(f *streamFunc, funcs map[funcKey]*streamFunc) (props, b
 	// therefore atomizes the body's result, which is what turns a striding
 	// body into a grounded one -- and, when the body can deliver a node with
 	// children, what turns motionless into consuming.
-	return typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr)), true
+	res := typeAdjust(p, f.asType, bodyAllowsChildren(instr, expr))
+
+	// A recursive body reports its verdict only when that verdict clears the
+	// category, for the §19.10 reason given above: the analysis may confirm
+	// streamability through a recursive call but may not reject on one.
+	if recursive && !satisfiesCategory(f, res) {
+		return roamingFreeRanging, false
+	}
+	return res, true
+}
+
+// satisfiesCategory reports whether a function result meets the body rule of
+// the function's declared category. A category with no entry in
+// bodyRequirements imposes no rule, so nothing can fail it.
+func satisfiesCategory(f *streamFunc, p props) bool {
+	req, ok := bodyRequirements[f.category]
+	if !ok {
+		return true
+	}
+	return req.satisfiedBy(p)
 }
 
 // typeAdjust applies §19.2's type-adjustment to a function *result*: the
@@ -591,15 +618,18 @@ func bodyAllowsChildren(instr *xdm.Node, e xpath.Expr) bool {
 // callsItself reports whether the body expression contains a call on the
 // function it is the body of, at any depth.
 //
-// Only direct recursion is detected. Mutual recursion between two declared
-// functions would need the same fixed-point treatment and is not found here;
-// it is rarer, and the consequence is the same over-confident verdict rather
-// than a crash.
+// Only direct recursion is detected, and that is all this needs to detect.
+// The answer no longer decides whether the body is analysed -- the §19.8.5
+// call rules resolve a call from its declared category, so recursion of any
+// shape terminates -- but only whether a *failing* verdict may be reported,
+// which §19.10 forbids for a recursive function. Mutual recursion is analysed
+// just as safely; it merely keeps the right to report a failure, which is the
+// same right every non-recursive function has.
 // The expression is not available as a tree walk here -- xpath exposes no
 // public visitor -- so the body's source text is searched for the function's
 // own lexical name followed by "(". That over-reports rather than under-
 // reports: a name appearing in a string literal would be counted, and the
-// consequence of a false positive is only that the function goes unchecked,
+// consequence of a false positive is only that a failing verdict is withheld,
 // which is the same conservative direction the rest of this analysis takes.
 func callsItself(f *streamFunc, src string) bool {
 	name := strings.TrimSpace(f.body.AttrValue("name"))

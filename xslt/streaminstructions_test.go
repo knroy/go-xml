@@ -627,12 +627,12 @@ func TestAVTExpressionExtraction(t *testing.T) {
 func TestUnmodelledInstructionIsReportedUnknown(t *testing.T) {
 	// The guard the whole check rests on: an instruction whose §19.8.4 rule
 	// is not written must be reported unmodelled, so that streamcheck.go
-	// stays silent rather than rejecting a valid stylesheet. xsl:number is
-	// one such instruction.
-	_, known := analyzeInstrSource(t, `<xsl:number value="1"/>`)
+	// stays silent rather than rejecting a valid stylesheet.
+	// xsl:where-populated is one such instruction.
+	_, known := analyzeInstrSource(t, `<xsl:where-populated><a/></xsl:where-populated>`)
 	if known {
-		t.Error("xsl:number was reported as modelled; its §19.8.4.30 rule is not implemented, " +
-			"so treating it as modelled risks a spurious XTSE3430")
+		t.Error("xsl:where-populated was reported as modelled; its §19.8.4 rule is not " +
+			"implemented, so treating it as modelled risks a spurious XTSE3430")
 	}
 }
 
@@ -666,9 +666,525 @@ func TestUnmodelledInstructionInABodyPropagates(t *testing.T) {
 	// known must propagate out of a nested sequence constructor, not just
 	// out of the instruction itself.
 	_, known := analyzeInstrSource(t, `<xsl:for-each select="a">
-	 <xsl:number value="1"/>
+	 <xsl:where-populated><b/></xsl:where-populated>
 	</xsl:for-each>`)
 	if known {
 		t.Error("an unmodelled instruction inside xsl:for-each did not clear known")
+	}
+}
+
+// --- §19.4 type-determined usage --------------------------------------------
+
+func TestTypeDeterminedUsageFollowsTheRequiredType(t *testing.T) {
+	// §19.4: "if the required type (ignoring occurrence indicator) is
+	// function(*) or a subtype thereof, then inspection; if the required
+	// type (ignoring occurrence indicator) is xs:anyAtomicType or a subtype
+	// thereof, then absorption; otherwise navigation."
+	cases := []struct {
+		as   string
+		want usage
+	}{
+		// Atomic types, and the same types under every occurrence indicator,
+		// since the rule ignores the indicator.
+		{"xs:string", usageAbsorption},
+		{"xs:integer", usageAbsorption},
+		{"xs:anyAtomicType", usageAbsorption},
+		{"xs:double*", usageAbsorption},
+		{"xs:date?", usageAbsorption},
+		{"xs:untypedAtomic+", usageAbsorption},
+		// function(*) and its subtypes.
+		{"function(*)", usageInspection},
+		{"map(*)", usageInspection},
+		{"array(*)", usageInspection},
+		{"map(xs:string, item())", usageInspection},
+		// Everything else, including the item()* that §19.8.4 substitutes
+		// wherever an as attribute is absent.
+		{"", usageNavigation},
+		{"item()*", usageNavigation},
+		{"node()", usageNavigation},
+		{"element(employee)*", usageNavigation},
+		{"document-node()", usageNavigation},
+	}
+	for _, c := range cases {
+		if got := instrTypeDeterminedUsage(c.as); got != c.want {
+			t.Errorf("instrTypeDeterminedUsage(%q) = %v, want %v", c.as, got, c.want)
+		}
+	}
+}
+
+// --- §19.8.4.39 xsl:variable with a declared type ---------------------------
+
+func TestVariableWithNodeTypeNavigatesAndIsFreeRanging(t *testing.T) {
+	// §19.8.4.39: with an as attribute, the select expression takes the
+	// type-determined usage based on that type. element(a)* permits nodes,
+	// so §19.4 gives navigation, and §19.8.1 makes navigation from a
+	// striding operand free-ranging. This is the rule that stops a streamed
+	// node being bound to a variable.
+	p, known := analyzeInstrSource(t,
+		`<xsl:variable name="v" as="element(a)*" select="a"/>`)
+	if !known {
+		t.Fatal("xsl:variable with as=element(a)* was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("binding a streamed selection to as=element(a)* was reported streamable "+
+			"(%v, %v); §19.8.4.39 gives the select navigation usage, which is free-ranging",
+			p.posture, p.sweep)
+	}
+}
+
+func TestVariableWithAtomicTypeAbsorbs(t *testing.T) {
+	// The other half of the same rule: an atomic required type gives
+	// absorption, which is consuming rather than free-ranging, so the
+	// construct stays streamable. Without this the rule above would be
+	// satisfied by a check that rejected every typed xsl:variable.
+	p, known := analyzeInstrSource(t,
+		`<xsl:variable name="v" as="xs:string" select="a"/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		"xsl:variable with as=xs:string over a striding select")
+}
+
+// --- §19.8.4.8 xsl:break ----------------------------------------------------
+
+func TestBreakTransmitsItsSelect(t *testing.T) {
+	// §19.8.4.8: "The select expression (usage transmission)". Transmission
+	// leaves the operand's posture and sweep alone, and by the §19.8.8.8
+	// table a child step from a striding context posture is striding and
+	// consuming -- so xsl:break returns streamed nodes, exactly as
+	// xsl:sequence does under §19.8.4.34.
+	p, known := analyzeInstrSource(t, `<xsl:break select="a"/>`)
+	wantProps(t, p, known, postureStriding, sweepConsuming, "xsl:break select='a'")
+}
+
+// --- §19.8.4.4 xsl:apply-imports and xsl:next-match -------------------------
+
+func TestApplyImportsAbsorbsTheContextItem(t *testing.T) {
+	// §19.8.4.4: "An implicit operand: a context item expression (.), with
+	// usage absorption". Absorbing a striding context item reads its whole
+	// subtree, which is grounded and consuming -- the note's "will normally
+	// be grounded and consuming".
+	p, known := analyzeInstrSource(t, `<xsl:apply-imports/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming, "xsl:apply-imports")
+}
+
+func TestNextMatchFollowsTheApplyImportsRule(t *testing.T) {
+	// §19.8.4.29: "The rules are the same as for xsl:apply-imports: see
+	// 19.8.4.4". The two must therefore agree.
+	p, known := analyzeInstrSource(t, `<xsl:next-match/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming, "xsl:next-match")
+}
+
+func TestNextMatchWithNodeValuedParameterIsNotStreamable(t *testing.T) {
+	// §19.8.4.4's second operand: each xsl:with-param takes the
+	// type-determined usage of its as attribute, defaulting to item()*.
+	// item()* is not atomic, so §19.4 gives navigation, and navigating from
+	// a streamed node is free-ranging -- the note's "provided that nodes in
+	// a streamed document are not passed as parameters".
+	p, known := analyzeInstrSource(t,
+		`<xsl:next-match><xsl:with-param name="p" select="a"/></xsl:next-match>`)
+	if !known {
+		t.Fatal("xsl:next-match with an xsl:with-param was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("passing a streamed node as a parameter was reported streamable (%v, %v); "+
+			"§19.8.4.4 gives the parameter navigation usage", p.posture, p.sweep)
+	}
+}
+
+// --- §19.8.4.28 xsl:next-iteration ------------------------------------------
+
+func TestNextIterationWithNodeValuedParameterIsNotStreamable(t *testing.T) {
+	// §19.8.4.28: the operands are the xsl:with-param children, with
+	// type-determined usage. An undeclared type is item()*, hence navigation.
+	p, known := analyzeInstrSource(t,
+		`<xsl:next-iteration><xsl:with-param name="p" select="a"/></xsl:next-iteration>`)
+	if !known {
+		t.Fatal("xsl:next-iteration was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("carrying a streamed node to the next iteration was reported streamable "+
+			"(%v, %v); §19.8.4.28 gives the parameter navigation usage", p.posture, p.sweep)
+	}
+}
+
+func TestNextIterationWithAtomicParameterIsStreamable(t *testing.T) {
+	// The complement: an atomic declared type gives absorption, which is
+	// consuming rather than free-ranging, so the instruction stays
+	// streamable. Without this the rule above would be satisfied by a check
+	// that rejected every xsl:next-iteration.
+	p, known := analyzeInstrSource(t,
+		`<xsl:next-iteration><xsl:with-param name="p" as="xs:integer" select="count(a)"/></xsl:next-iteration>`)
+	if !known {
+		t.Fatal("xsl:next-iteration with an atomic parameter was reported unmodelled")
+	}
+	if !p.streamable() {
+		t.Errorf("an atomic-typed parameter was reported not streamable (%v, %v); "+
+			"§19.4 gives an atomic required type absorption usage", p.posture, p.sweep)
+	}
+}
+
+// --- §19.8.4.3 xsl:analyze-string -------------------------------------------
+
+func TestAnalyzeStringAbsorbsSelectAndGroundsItsSubstrings(t *testing.T) {
+	// §19.8.4.3: select and the regex value template absorb; the two
+	// substring constructors have usage navigation and "the context posture
+	// for the two sequence constructors is grounded, reflecting the fact
+	// that their context item type is xs:string". Absorbing a striding
+	// select is grounded and consuming, and the grounded substring bodies
+	// add nothing, so the note's "sweep will usually be the same as the
+	// sweep of the select expression, and its posture will be grounded"
+	// holds.
+	p, known := analyzeInstrSource(t, `<xsl:analyze-string select="a" regex="x">
+	 <xsl:matching-substring><m/></xsl:matching-substring>
+	 <xsl:non-matching-substring><n/></xsl:non-matching-substring>
+	</xsl:analyze-string>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming, "xsl:analyze-string")
+
+	// The substring bodies must be assessed with a grounded context posture,
+	// not the instruction's own. A body that reads "." is reading the matched
+	// string, which is already in hand, so it stays motionless and the
+	// instruction stays streamable. Were the striding posture carried in
+	// instead, "." would be a streamed node, absorbing it would consume, and
+	// the second consuming operand would make the whole instruction roaming.
+	p, known = analyzeInstrSource(t, `<xsl:analyze-string select="a" regex="x">
+	 <xsl:matching-substring><xsl:value-of select="."/></xsl:matching-substring>
+	</xsl:analyze-string>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		`xsl:analyze-string whose matching-substring reads "."`)
+}
+
+// --- §19.8.4.30 xsl:number --------------------------------------------------
+
+func TestNumberWithValueAbsorbs(t *testing.T) {
+	// §19.8.4.30: "The value attribute if present: usage absorption". A
+	// literal value reads nothing, so the instruction is motionless.
+	p, known := analyzeInstrSource(t, `<xsl:number value="1"/>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless, "xsl:number value='1'")
+}
+
+func TestNumberWithoutValueNavigatesFromTheContextItem(t *testing.T) {
+	// §19.8.4.30: with no value attribute the select expression has usage
+	// navigation, "defaulting to the context item expression (.) if the
+	// select attribute is also absent". Navigating from a striding context
+	// item is free-ranging: xsl:number counts preceding siblings, which a
+	// streamed reader cannot revisit.
+	p, known := analyzeInstrSource(t, `<xsl:number/>`)
+	if !known {
+		t.Fatal("xsl:number with no attributes was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("bare xsl:number over a streamed context item was reported streamable "+
+			"(%v, %v); §19.8.4.30 gives the implicit select navigation usage",
+			p.posture, p.sweep)
+	}
+}
+
+// --- §19.8.4.5 xsl:apply-templates ------------------------------------------
+
+func TestApplyTemplatesWithGroundedSelectIsGroundedAndConsuming(t *testing.T) {
+	// §19.8.4.5 clause 1, with the spec's own worked example: "For example,
+	// <xsl:apply-templates select="copy-of(.)"/> is grounded and consuming."
+	// The clause applies whatever the mode, because nothing streamed reaches
+	// the templates.
+	p, known := analyzeInstrSource(t, `<xsl:apply-templates select="copy-of(.)"/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		`xsl:apply-templates select="copy-of(.)"`)
+}
+
+func TestApplyTemplatesWithSortIsNotStreamable(t *testing.T) {
+	// §19.8.4.5 clause 2: "If there is an xsl:sort child element, then
+	// roaming and free-ranging." The select is striding so clause 1 does not
+	// fire first, and mode="#current" is treated as streamable so that
+	// clause 3 does not fire either -- without that, clause 3 would reject
+	// this stylesheet for an unrelated reason and the test would pass however
+	// clause 2 behaved.
+	p, known := analyzeInstrSource(t,
+		`<xsl:apply-templates select="a" mode="#current"><xsl:sort select="@n"/></xsl:apply-templates>`)
+	if !known {
+		t.Fatal("xsl:apply-templates with xsl:sort was reported unmodelled")
+	}
+	if p.posture != postureRoaming || p.sweep != sweepFreeRanging {
+		t.Errorf("got %v and %v, want roaming and free-ranging; §19.8.4.5 clause 2 "+
+			"rejects any xsl:apply-templates with an xsl:sort child", p.posture, p.sweep)
+	}
+
+	// The complement: the same instruction without the xsl:sort reaches
+	// clause 5 and is streamable, so clause 2 is what makes the difference.
+	p, known = analyzeInstrSource(t, `<xsl:apply-templates select="a" mode="#current"/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		"the same xsl:apply-templates without an xsl:sort")
+}
+
+func TestApplyTemplatesToANonStreamableModeIsNotStreamable(t *testing.T) {
+	// §19.8.4.5 clause 3: "If the implicit or explicit mode attribute
+	// identifies a mode that is not declared with streamable='yes', then
+	// roaming and free-ranging."
+	p, known := analyzeInstrWithDecls(t, `<xsl:mode name="m"/>`,
+		`<xsl:apply-templates select="a" mode="m"/>`)
+	if !known {
+		t.Fatal("xsl:apply-templates to a declared mode was reported unmodelled")
+	}
+	if p.posture != postureRoaming || p.sweep != sweepFreeRanging {
+		t.Errorf("got %v and %v, want roaming and free-ranging; mode m is not "+
+			"declared streamable", p.posture, p.sweep)
+	}
+}
+
+func TestApplyTemplatesToAStreamableModeIsStreamable(t *testing.T) {
+	// The complement of clause 3, and the guard against a rule that rejects
+	// every xsl:apply-templates: a mode declared streamable="yes" reaches
+	// clause 5, where a striding select absorbs to grounded and consuming.
+	p, known := analyzeInstrWithDecls(t, `<xsl:mode name="m" streamable="yes"/>`,
+		`<xsl:apply-templates select="a" mode="m"/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		`xsl:apply-templates to a streamable mode`)
+}
+
+func TestApplyTemplatesWithCurrentModeIsTreatedAsStreamable(t *testing.T) {
+	// §19.8.4.5's note on clause 3: "When mode='#current' is specified, this
+	// is treated as equivalent to specifying a streamable mode".
+	p, known := analyzeInstrSource(t, `<xsl:apply-templates select="a" mode="#current"/>`)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		`xsl:apply-templates mode="#current"`)
+}
+
+func TestApplyTemplatesWithCrawlingSelectIsNotStreamable(t *testing.T) {
+	// §19.8.4.5 clause 4: "If the select expression is climbing or crawling,
+	// then roaming and free-ranging." A descendant selection is crawling.
+	p, known := analyzeInstrSource(t, `<xsl:apply-templates select="//a" mode="#current"/>`)
+	if !known {
+		t.Fatal("xsl:apply-templates with a crawling select was reported unmodelled")
+	}
+	if p.posture != postureRoaming || p.sweep != sweepFreeRanging {
+		t.Errorf("got %v and %v, want roaming and free-ranging; §19.8.4.5 clause 4 "+
+			"rejects a crawling select", p.posture, p.sweep)
+	}
+}
+
+// --- §19.8.4.9 xsl:call-template --------------------------------------------
+
+func TestCallTemplateNavigatesTheContextItemByDefault(t *testing.T) {
+	// §19.8.4.9: the implicit context item operand takes the type-determined
+	// usage of the target's xsl:context-item/@as, "defaulting to item()* if
+	// absent". item()* gives navigation, and navigating a streamed context
+	// item is free-ranging.
+	p, known := analyzeInstrWithDecls(t,
+		`<xsl:template name="t"><out/></xsl:template>`,
+		`<xsl:call-template name="t"/>`)
+	if !known {
+		t.Fatal("xsl:call-template on a template in the same stylesheet was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("calling a template with a streamed context item was reported streamable "+
+			"(%v, %v); §19.8.4.9 defaults the context item operand to navigation",
+			p.posture, p.sweep)
+	}
+}
+
+func TestCallTemplateWithProhibitedContextItemHasNoContextOperand(t *testing.T) {
+	// §19.8.4.9: "Unless the referenced template has a child
+	// xsl:context-item element with the attribute use='prohibited', there is
+	// an implicit operand". With use="prohibited" there is none, so nothing
+	// is navigated and the call is grounded and motionless.
+	p, known := analyzeInstrWithDecls(t,
+		`<xsl:template name="t"><xsl:context-item use="prohibited"/><out/></xsl:template>`,
+		`<xsl:call-template name="t"/>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless,
+		`xsl:call-template on a template with use="prohibited"`)
+}
+
+func TestCallTemplateOnAnUnknownNameIsUnmodelled(t *testing.T) {
+	// The target's xsl:context-item decides the usage, so a name this scan
+	// cannot resolve leaves the rule without an input. It must report
+	// unmodelled rather than assume a default, or a template declared in
+	// another package would draw a spurious XTSE3430.
+	_, known := analyzeInstrSource(t, `<xsl:call-template name="elsewhere"/>`)
+	if known {
+		t.Error("xsl:call-template naming a template outside the stylesheet was reported " +
+			"as modelled; §19.8.4.9 needs the target's xsl:context-item to decide the usage")
+	}
+}
+
+// --- §19.8.4.16 xsl:evaluate ------------------------------------------------
+
+func TestEvaluateNavigatesItsContextItem(t *testing.T) {
+	// §19.8.4.16: "The xpath expression (usage absorption)" and "The
+	// context-item expression (usage navigation)". Navigating a streamed
+	// node is free-ranging -- the note's "provided that streamed nodes are
+	// not passed to the dynamic expression either as the context item or as
+	// the value of a parameter".
+	p, known := analyzeInstrSource(t, `<xsl:evaluate xpath="'1'" context-item="a"/>`)
+	if !known {
+		t.Fatal("xsl:evaluate was reported unmodelled")
+	}
+	if p.streamable() {
+		t.Errorf("xsl:evaluate given a streamed context item was reported streamable "+
+			"(%v, %v); §19.8.4.16 gives context-item navigation usage", p.posture, p.sweep)
+	}
+}
+
+func TestEvaluateWithLiteralXPathIsStreamable(t *testing.T) {
+	// The complement: with nothing streamed passed in, the instruction is
+	// grounded and motionless, so the rule above is not satisfied by
+	// rejecting every xsl:evaluate.
+	p, known := analyzeInstrSource(t, `<xsl:evaluate xpath="'1+1'"/>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless,
+		`xsl:evaluate with a literal xpath`)
+}
+
+// --- §19.8.4.35 xsl:stream --------------------------------------------------
+
+func TestStreamIsGroundedWithTheSweepOfItsHref(t *testing.T) {
+	// §19.8.4.35's final clause: "Otherwise the posture is grounded and the
+	// sweep is the sweep of the href attribute value template." A literal
+	// href is motionless. The posture is grounded whatever the containing
+	// construct: the document xsl:stream opens is assessed separately, by
+	// §18.1, and not by this rule.
+	p, known := analyzeInstrSource(t, `<xsl:stream href="in.xml"><out/></xsl:stream>`)
+	wantProps(t, p, known, postureGrounded, sweepMotionless, "xsl:stream")
+}
+
+func TestStreamMentioningCurrentGroupIsUnmodelled(t *testing.T) {
+	// §19.8.4.35's first two clauses reject an xsl:stream whose body calls
+	// current-group() or current-merge-group() belonging to an instruction
+	// that is an ancestor of the xsl:stream. Which instruction a call binds
+	// to is not tracked here, so such a body is reported unmodelled rather
+	// than grounded -- the direction that cannot invent an XTSE3430.
+	_, known := analyzeInstrSource(t,
+		`<xsl:stream href="in.xml"><xsl:value-of select="current-group()"/></xsl:stream>`)
+	if known {
+		t.Error("an xsl:stream whose body calls current-group() was reported as modelled; " +
+			"§19.8.4.35 clause 1 turns on which instruction the call binds to, which is not tracked")
+	}
+}
+
+// analyzeFirstInSourceDoc parses a whole stylesheet and returns the properties
+// of the single instruction inside its first streamable xsl:source-document.
+//
+// analyzeInstrSource and analyzeInstrWithDecls build the stylesheet around the
+// fragment; this takes one already written, which the rules that read
+// declarations elsewhere in the module need -- default-mode on the
+// xsl:transform element, an xsl:import, or a named template's own xsl:param
+// declarations.
+func analyzeFirstInSourceDoc(t *testing.T, src string) (props, bool) {
+	t.Helper()
+	doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parsing the test stylesheet: %v", err)
+	}
+	root := doc.Root
+	if root == nil {
+		t.Fatal("no document element")
+	}
+	var container *xdm.Node
+	walkElements(root, func(el *xdm.Node) bool {
+		if container == nil && isXSL(el, "source-document") && isYes(el.AttrValue("streamable")) {
+			container = el
+		}
+		return container == nil
+	})
+	if container == nil {
+		t.Fatal("no streamable xsl:source-document in the test stylesheet")
+	}
+	kids := container.ChildElements()
+	if len(kids) != 1 {
+		t.Fatalf("the source-document holds %d elements, want exactly 1", len(kids))
+	}
+	return analyzeInstruction(kids[0], postureStriding, attributeSetDeclarations(root))
+}
+
+func TestApplyTemplatesUsesTheDefaultModeInScope(t *testing.T) {
+	// §3.8.2: when the mode attribute is omitted, "the mode is taken from the
+	// [xsl:]default-mode attribute of the innermost ancestor element that has
+	// such an attribute". A bare xsl:apply-templates under
+	// default-mode="m" therefore reaches mode m, and §19.8.4.5 clause 3 must
+	// read m's declaration rather than the unnamed mode's. Treating it as the
+	// unnamed mode rejects sf-current-100, which the spec requires to run.
+	src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	 default-mode="m">
+	<xsl:mode name="m" streamable="yes"/>
+	<xsl:template name="main">
+	 <xsl:source-document streamable="yes" href="in.xml"><xsl:apply-templates select="a"/></xsl:source-document>
+	</xsl:template>
+	</xsl:transform>`
+	p, known := analyzeFirstInSourceDoc(t, src)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		"xsl:apply-templates under default-mode=m")
+}
+
+func TestApplyTemplatesToAModeDeclaredInAnImportedModuleIsUnmodelled(t *testing.T) {
+	// §19.8.4.5 clause 3 turns on whether the target mode is declared
+	// streamable, and this check runs before xsl:import is inlined. A mode
+	// with no declaration in this module is therefore not "declared
+	// non-streamable" -- the declaration may be in the module imported. The
+	// analysis must say unmodelled rather than reject: si-apply-imports-068
+	// declares its streamable mode in the module it imports.
+	src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	<xsl:import href="other.xsl"/>
+	<xsl:template name="main">
+	 <xsl:source-document streamable="yes" href="in.xml"><xsl:apply-templates select="a"/></xsl:source-document>
+	</xsl:template>
+	</xsl:transform>`
+	_, known := analyzeFirstInSourceDoc(t, src)
+	if known {
+		t.Error("xsl:apply-templates to a mode with no declaration in a module that imports " +
+			"another was reported as modelled; the declaration may be in the imported module")
+	}
+
+	// The complement, and the guard against a rule that never decides: with
+	// nothing imported, an undeclared mode really is not streamable, and
+	// clause 3 rejects.
+	src = `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+	<xsl:template name="main">
+	 <xsl:source-document streamable="yes" href="in.xml"><xsl:apply-templates select="a"/></xsl:source-document>
+	</xsl:template>
+	</xsl:transform>`
+	p, known := analyzeFirstInSourceDoc(t, src)
+	if !known {
+		t.Fatal("a self-contained stylesheet left the mode unresolved")
+	}
+	if p.posture != postureRoaming || p.sweep != sweepFreeRanging {
+		t.Errorf("got %v and %v, want roaming and free-ranging; the unnamed mode is not "+
+			"declared streamable and nothing is imported", p.posture, p.sweep)
+	}
+}
+
+func TestCallTemplateTakesTheTargetsParameterType(t *testing.T) {
+	// §19.8.4.9: a with-param's usage comes from "the xsl:with-param/@as
+	// attribute, or the xsl:param/@as attribute of the corresponding
+	// parameter on the target named template, whichever is more
+	// restrictive". Here the with-param declares nothing and the target
+	// declares xs:decimal, which atomizes the streamed PRICE. Reading only
+	// the with-param would give item()* and so navigation, rejecting
+	// si-call-template-002, which the spec requires to run.
+	src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+	 xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	<xsl:template name="t">
+	 <xsl:context-item use="absent"/>
+	 <xsl:param name="price" as="xs:decimal"/>
+	</xsl:template>
+	<xsl:template name="main">
+	 <xsl:source-document streamable="yes" href="in.xml"><xsl:call-template name="t"><xsl:with-param name="price" select="PRICE"/></xsl:call-template></xsl:source-document>
+	</xsl:template>
+	</xsl:transform>`
+	p, known := analyzeFirstInSourceDoc(t, src)
+	wantProps(t, p, known, postureGrounded, sweepConsuming,
+		"xsl:call-template whose target declares the parameter as xs:decimal")
+}
+
+func TestContextItemAbsentIsSpeltAbsent(t *testing.T) {
+	// §19.8.4.9 words the no-context-item case as use="prohibited", but no
+	// such value exists: §9.6's grammar is use? = "required" | "optional" |
+	// "absent". Both spellings must give no context item operand, or
+	// si-call-template-002 is rejected.
+	for _, use := range []string{"absent", "prohibited"} {
+		src := `<xsl:transform version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+		<xsl:template name="t"><xsl:context-item use="` + use + `"/><out/></xsl:template>
+		<xsl:template name="main">
+		 <xsl:source-document streamable="yes" href="in.xml"><xsl:call-template name="t"/></xsl:source-document>
+		</xsl:template>
+		</xsl:transform>`
+		p, known := analyzeFirstInSourceDoc(t, src)
+		wantProps(t, p, known, postureGrounded, sweepMotionless,
+			`xsl:call-template on a template with use="`+use+`"`)
 	}
 }
