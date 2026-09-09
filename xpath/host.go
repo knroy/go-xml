@@ -44,6 +44,24 @@ func DeepEqualSequences(ctx *Context, a, b xdm.Sequence) (bool, error) {
 // exported and the divergence is permissive -- an earlier module is allowed a
 // type it should not have had, and is not given a wrong answer -- so the
 // widening is left in place rather than paid for with a breaking change.
+// CheckItemTypePurity refuses a sequence type whose item type is not a
+// generalized atomic type, which is what an ItemType position requires.
+//
+// §2.5.4 admits an AtomicOrUnionType in an ItemType only when it names an
+// atomic type or a *pure* union — one whose members are all atomic. A list
+// type, and a union derived by restriction or with a list member, name a type
+// but not an item type, so a name in scope as the one and not the other is
+// XPST0051 rather than a mismatch.
+//
+// It is exported for XQuery's typeswitch, whose CaseClause takes a
+// SequenceType and so is bound by the same rule. The xpath-internal positions
+// that need it — "instance of", "treat as", a function signature — call the
+// unexported checkNotListType directly; this is the same check under a name a
+// host language can reach, and "where" names the construct for the message.
+func CheckItemTypePurity(st SequenceType, where string) error {
+	return checkNotListType(st, where)
+}
+
 func ParseSequenceType(src string, ns NamespaceResolver) (SequenceType, error) {
 	if ns == nil {
 		ns = defaultResolver{}

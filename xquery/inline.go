@@ -31,6 +31,47 @@ type inlineFunc struct {
 	expr    *compiledExpr
 }
 
+// schemaTypedSignature reports whether any declared parameter or return type
+// is a schema simple type whose conversion rules xpath's own converter does
+// not implement.
+//
+// There are two inline-function implementations, and they do not agree. This
+// package's applies sequenceType.convert, which knows §3.1.5 in full: an
+// xs:untypedAtomic supplied for a pure union is *cast* to a member type, and a
+// namespace-sensitive target refuses the conversion with XPTY0117 because the
+// prefix bindings needed to resolve it are not in scope at the call site.
+// xpath's convertForParam knows neither and reports XPTY0004 for both.
+//
+// Which one runs was decided purely by the *body*: a body of ordinary XPath
+// was handed back to xpath along with its signature. So the same declared type
+// behaved differently depending on whether it was written on an inline
+// function or a declared one — FunctionCall-031 wanted the union cast and
+// FunctionCall-041 the XPTY0117, and both got XPTY0004 only because their
+// bodies happened to need no XQuery syntax.
+//
+// Keeping ownership when a schema type is in the signature fixes that
+// divergence rather than duplicating the union logic into xpath, which would
+// make a third copy of it. The body still goes to xpath; only the conversion
+// moves.
+func (n *inlineFunc) schemaTypedSignature() bool {
+	for _, pm := range n.params {
+		if schemaTypedConversion(pm.typ) {
+			return true
+		}
+	}
+	return schemaTypedConversion(n.returns)
+}
+
+// schemaTypedConversion reports whether a declared type needs the
+// schema-aware converter. See schemaTypedSignature.
+func schemaTypedConversion(t *sequenceType) bool {
+	if t == nil {
+		return false
+	}
+	st := t.stype
+	return st.SchemaUnionMembers != nil || st.SchemaSimpleType || st.SchemaListType
+}
+
 // parseInlineFunc reads "function (ParamList) [as SequenceType] { ... }".
 //
 // It returns ok false without moving the position when what follows is not an
@@ -75,7 +116,7 @@ func (p *parser) parseInlineFunc() (node, bool, error) {
 		return nil, false, nil
 	}
 	src := p.src[p.pos+1 : end]
-	if !needsXQueryParser(src) {
+	if !needsXQueryParser(src) && !n.schemaTypedSignature() {
 		// Ordinary XPath. Hand the whole construct back so that the
 		// expression parser reads it, signature and all.
 		p.pos = start

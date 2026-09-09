@@ -608,6 +608,12 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		item = nil
 	}
 	xctx := xpath.NewContext(item, s.funcs)
+	// A duplicate key in an XPath map constructor is XTDE3365 under XSLT, not
+	// XQuery's XQDY0137: section 17.4 gives the MapExpr its own code, the same
+	// one xsl:map raises for a duplicate among the maps it merges. The two
+	// spellings of a map thus fail alike, which is what si-fork-814 and
+	// sx-MapExpr-007 check.
+	xctx.MapDuplicateCode = "XTDE3365"
 	// The regular-expression dialect follows the processor, not the module.
 	// A pattern is a string read by fn:matches at the point of call rather
 	// than by the parser, so a version="2.0" stylesheet run by a 3.0

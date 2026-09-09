@@ -22,9 +22,13 @@ import (
 // reads the document and evaluates the body, which is what a conforming
 // non-streaming processor does with streamable="yes".
 //
-// use-accumulators is accepted and ignored for the same kind of reason: it
-// names which accumulators apply to the document, and an engine that applies
-// none is not made wrong by being told which ones to apply.
+// use-accumulators, by contrast, is enforced. It is not a statement about
+// memory: 18.2.2 makes it the set of accumulators *applicable* to the document
+// this instruction reads, and XTDE3362 makes reading an inapplicable one a
+// dynamic error whether or not the document is streamed — which is the whole
+// point of non-stream-201, whose own description is "use-accumulators applies
+// even when not streaming". The same set and the same enforcement already
+// serve xsl:merge-source/@use-accumulators; see merge.go.
 
 type sourceDocumentInstr struct {
 	href       *avt
@@ -34,6 +38,10 @@ type sourceDocumentInstr struct {
 	// but XTDE3362 bars a non-streamable accumulator from being read over a
 	// document the stylesheet asked to stream, so the request is recorded.
 	streamed bool
+	// accums is @use-accumulators: the accumulators 18.2.2 makes applicable
+	// to the document this instruction reads. Nil means the attribute was
+	// absent, which leaves the tree unrestricted.
+	accums *modeAccumulators
 	// baseURI is the base URI of the xsl:source-document element itself,
 	// which is the stylesheet module's own unless an xml:base on the element
 	// or an ancestor overrides it. 18.1 resolves @href "as for the doc
@@ -62,8 +70,16 @@ func (c *compiler) compileSourceDocument(n *xdm.Node) (Instruction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sourceDocumentInstr{href: href, validation: spec, body: body,
-		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI}, nil
+	instr := &sourceDocumentInstr{href: href, validation: spec, body: body,
+		streamed: isYes(n.AttrValue("streamable")), baseURI: ns.baseURI}
+	if n.Attr("", "use-accumulators") != nil {
+		accums, err := parseUseAccumulators(n)
+		if err != nil {
+			return nil, err
+		}
+		instr.accums = accums
+	}
+	return instr, nil
 }
 
 func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
@@ -81,6 +97,9 @@ func (i *sourceDocumentInstr) Execute(rt *runtime, out *outputBuilder) error {
 	// selection, so xsl:next-match inside it has nothing to match against.
 	if i.streamed {
 		rt.streamedTrees[root] = true
+	}
+	if i.accums != nil {
+		rt.treeAccums[root] = i.accums
 	}
 	sub := rt.withCurrent(root, 1, 1).clearCurrentRule()
 	return execSequence(i.body, sub, out)

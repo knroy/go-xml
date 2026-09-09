@@ -190,6 +190,22 @@ type Context struct {
 	// ordinary 2.0 evaluation never sees it.
 	Compat bool
 
+	// MapDuplicateCode overrides the error code raised when a map constructor
+	// names the same key twice.
+	//
+	// The construct is one expression with two spellings of the same failure,
+	// because the code is the host language's rather than XPath's. XQuery 3.1
+	// section 3.11.1 calls it XQDY0137, which is the default and what the QT3
+	// suite requires. XSLT 3.0 section 17.4 says of the very same MapExpr that
+	// "if two or more entries have the same key then a dynamic error occurs
+	// [see ERR XTDE3365]", so an XSLT host sets this to XTDE3365 -- matching
+	// the code xsl:map already raises for a duplicate, which is the point: in
+	// XSLT the two ways of writing a map agree on how they fail.
+	//
+	// The zero value keeps XQDY0137, so a host that does not set it behaves
+	// exactly as it did.
+	MapDuplicateCode string
+
 	// Depth guards against unbounded recursion in user-defined functions and
 	// named templates, which the spec does not bound.
 	Depth int

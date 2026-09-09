@@ -45,7 +45,11 @@ func (e *MapConstructor) Eval(ctx *Context) (xdm.Sequence, error) {
 		if _, present, err := m.Get(key); err != nil {
 			return nil, err
 		} else if present {
-			return nil, xdm.Errorf("XQDY0137",
+			code := ctx.MapDuplicateCode
+			if code == "" {
+				code = "XQDY0137"
+			}
+			return nil, xdm.Errorf(code,
 				"the map constructor names the key %q twice", key.String())
 		}
 		m, err = m.Put(key, val)

@@ -668,6 +668,18 @@ func (p *parser) parseContextItemDecl(once map[string]*seenDecl, inSecond *bool)
 		return p.errorf("XPST0003: expected %q or %q in a context item declaration",
 			":=", "external")
 	}
+	// §4.16: "A context item declaration in a library module must not specify
+	// a value, and must not be declared external with a default value." A
+	// library module does not own the context item — the main module supplies
+	// it, and the library may only constrain its type — so an initialiser
+	// there would be a value nothing could use. It is a static error whether
+	// the declaration says "external" or not, which is why the check is on the
+	// initialiser rather than on the keyword: contextDecl-048's module writes
+	// "external := 17" and contextDecl-052's writes ":= 17".
+	if p.inLibrary && (decl.init != nil || decl.body != nil) {
+		return p.errorf("XQST0113: a context item declaration in a library " +
+			"module may not specify a value")
+	}
 	p.contextItem = decl
 	return nil
 }
@@ -1266,6 +1278,21 @@ func (p *parser) checkImportSyntax(what string) error {
 		"must name a target namespace", prefix)
 }
 
+// collapseURI applies the xs:anyURI whitespace facet to a URI literal.
+//
+// A URILiteral has type xs:anyURI, whose whitespace facet is "collapse", not
+// "replace" and not a trim: leading and trailing whitespace is removed *and*
+// every internal run of whitespace becomes a single space. Trimming alone
+// satisfied module-URIs-1 and -2, which only pad the ends, and left
+// module-URIs-3 failing — it imports "Test    Modules" where the module is
+// registered as "Test Modules", and the two must name the same module.
+//
+// strings.Fields splits on exactly the whitespace the facet names (space, tab,
+// CR, LF are all Unicode space), so the join reproduces the facet directly.
+func collapseURI(uri string) string {
+	return strings.Join(strings.Fields(uri), " ")
+}
+
 // parseModuleImport reads "import module [namespace P =] URI [at L1, L2, ...]"
 // (§4.12), with the cursor just past "import".
 //
@@ -1301,10 +1328,10 @@ func (p *parser) parseModuleImport() error {
 	if err != nil {
 		return err
 	}
-	// §4.12 trims the URI literal of leading and trailing whitespace before
-	// it is used as a namespace, which module-URIs-1 asserts by importing
-	// through a literal padded on both sides.
-	imp.ns = strings.TrimSpace(uri)
+	// §4.12 normalises the URI literal before it is used as a namespace,
+	// which module-URIs-1 asserts by importing through a literal padded on
+	// both sides. See collapseURI: trimming is only half the rule.
+	imp.ns = collapseURI(uri)
 	if imp.ns == "" {
 		return p.errorf("XQST0088: the target namespace of a module import " +
 			"may not be a zero-length string")
@@ -1394,7 +1421,9 @@ func (p *parser) parseModuleDecl() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	uri = strings.TrimSpace(uri)
+	// Normalised the same way an import's namespace is, so that a declaration
+	// and an import written with different whitespace still name one module.
+	uri = collapseURI(uri)
 	if uri == "" {
 		// §4.12: "the module declaration must not specify a zero-length
 		// string as the target namespace", because nothing could then import
@@ -1471,10 +1500,9 @@ func (p *parser) parseSchemaImport() error {
 	if err != nil {
 		return err
 	}
-	// §4.11 trims the URI literal of leading and trailing whitespace before
-	// it is used as a namespace, on the same rule that governs a module
-	// import's.
-	imp.ns = strings.TrimSpace(uri)
+	// §4.11 normalises the URI literal before it is used as a namespace, on
+	// the same rule that governs a module import's. See collapseURI.
+	imp.ns = collapseURI(uri)
 	if prefix != "" {
 		// §4.11: two imports may not bind the same prefix, and neither may an
 		// import and a "declare namespace". The check is the prolog's own

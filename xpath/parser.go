@@ -52,6 +52,11 @@ type Parser struct {
 	// difference — xgc:leading-lone-slash, in startsStep — so this is a flag
 	// rather than a second parser.
 	xquery bool
+	// singleType restricts the occurrence indicators a type may carry to "?",
+	// which is the whole of the difference between SingleType and
+	// SequenceType. It is set only while the target of "cast as" or
+	// "castable as" is being parsed. See parseSingleType.
+	singleType bool
 }
 
 // maxParseDepth bounds expression nesting.
@@ -846,7 +851,7 @@ func (p *Parser) parseCastable() (Expr, error) {
 		if err := p.expectKeyword("as"); err != nil {
 			return nil, err
 		}
-		st, err := p.parseSequenceType()
+		st, err := p.parseSingleType()
 		if err != nil {
 			return nil, p.castTargetTypeError(err)
 		}
@@ -868,7 +873,7 @@ func (p *Parser) parseCast() (Expr, error) {
 		if err := p.expectKeyword("as"); err != nil {
 			return nil, err
 		}
-		st, err := p.parseSequenceType()
+		st, err := p.parseSingleType()
 		if err != nil {
 			return nil, p.castTargetTypeError(err)
 		}

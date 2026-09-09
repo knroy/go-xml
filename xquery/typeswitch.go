@@ -201,6 +201,20 @@ done:
 	if err != nil {
 		return xpath.SequenceType{}, p.errorAt(start, "%v", err)
 	}
+	// §3.14.2 gives a CaseClause a SequenceType, so its item type is bound by
+	// the rule every other ItemType position obeys: only a generalized atomic
+	// type — an atomic type or a *pure* union — may appear. "instance of",
+	// "treat as" and a function signature all apply this already; typeswitch
+	// parsed the type raw and so accepted a list type, or a union derived by
+	// restriction, that names a type but not an item type. The clause then
+	// simply failed to match and the default branch answered, turning a static
+	// error into a wrong value. That is typeswitch-113/-114/-115.
+	//
+	// A pure union is still admitted, which is what keeps typeswitch-116
+	// passing: the check is on purity, not on being a union.
+	if err := xpath.CheckItemTypePurity(st, "a typeswitch case"); err != nil {
+		return xpath.SequenceType{}, p.errorAt(start, "%v", err)
+	}
 	return st, nil
 }
 

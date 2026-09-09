@@ -314,8 +314,21 @@ func (t *sequenceType) convertWith(seq xdm.Sequence, what string, cast bool) (xd
 func (t *sequenceType) castOne(a *xdm.Atomic) (xdm.Item, error) {
 	// A pure union type is converted by trying its members in order, which is
 	// a different rule from the single-target cast below.
-	if c, ok := xpath.CastToUnion(a, t.stype); ok {
-		return c, nil
+	//
+	// Only an xs:untypedAtomic is cast this way. §3.1.5 offers a typed value
+	// exactly two conversions — the untypedAtomic cast and numeric/anyURI
+	// promotion — and promotion is defined against a single target type, not a
+	// union, so a typed value that does not already match a union member has
+	// no conversion available and is an error. Casting unconditionally let
+	// xs:decimal 12.3 through "as lu:unionType" as an xs:integer or xs:float,
+	// which is the promotion FunctionCall-030 exists to forbid. That case only
+	// passed before because its inline function took xpath's schema-blind
+	// converter; the declared form gave the wrong answer, and this is the
+	// defect rather than the routing.
+	if a.Type == xdm.TypeUntypedAtomic {
+		if c, ok := xpath.CastToUnion(a, t.stype); ok {
+			return c, nil
+		}
 	}
 	// xs:numeric behaves as it does in a cast: the identity on a value that
 	// already is numeric, and a cast to xs:double on anything else. Only an

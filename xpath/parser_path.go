@@ -1658,8 +1658,11 @@ occurrence:
 	// "xs:integer ? * 3" is an optional integer multiplied by 3, not an
 	// occurrence indicator followed by a second one: taking both left the "3"
 	// with no operator in front of it.
-	if occ, ok := p.acceptOp("?", "*", "+"); ok {
+	if occ, ok := p.acceptOp(p.occurrenceIndicators()...); ok {
 		st.Occurrence = occ
+		return st, nil
+	}
+	if p.singleType {
 		return st, nil
 	}
 	// "*" after a type name is the occurrence indicator, but the lexer cannot
@@ -1799,12 +1802,50 @@ func (p *Parser) parseMapTest(st *SequenceType) error {
 	return p.expectOp(")")
 }
 
+// parseSingleType parses the target of "cast as" and "castable as", which is a
+// SingleType and not a SequenceType.
+//
+//	[77] SingleType ::= SimpleTypeName "?"?
+//
+// The distinction is not cosmetic. A SequenceType's occurrence indicator may be
+// "*" or "+", and parseSequenceType consumes one greedily, so in
+//
+//	15 cast as t:sizeType + 15 cast as t:floatBased
+//
+// the additive "+" was eaten as an occurrence indicator and the expression
+// reported XPST0003 — the operator vanished before the additive parser could
+// see it. That is op-numeric-add-13/-14/-15. Stopping the scan at "?" leaves
+// the "+" in the token stream as the binary operator it is.
+//
+// A cast target written with a genuine "*" or "+" is still a syntax error, as
+// K-SeqExprCast-1 and -2 require: the indicator is no longer part of the type,
+// so it is left behind as an operator with no right operand and the expression
+// fails to parse. The diagnosis moves, but the error code does not.
+func (p *Parser) parseSingleType() (SequenceType, error) {
+	saved := p.singleType
+	p.singleType = true
+	defer func() { p.singleType = saved }()
+	return p.parseSequenceType()
+}
+
+// occurrenceIndicators returns the indicators a type in the current position
+// may carry: "?" alone inside a cast target, all three anywhere else.
+func (p *Parser) occurrenceIndicators() []string {
+	if p.singleType {
+		return []string{"?"}
+	}
+	return []string{"?", "*", "+"}
+}
+
 // finishOccurrence applies a trailing occurrence indicator to a type that was
 // parsed by a path returning early, rather than falling through to the shared
 // label.
 func (p *Parser) finishOccurrence(st SequenceType) (SequenceType, error) {
-	if occ, ok := p.acceptOp("?", "*", "+"); ok {
+	if occ, ok := p.acceptOp(p.occurrenceIndicators()...); ok {
 		st.Occurrence = occ
+		return st, nil
+	}
+	if p.singleType {
 		return st, nil
 	}
 	if p.cur().Kind == TokWildcard && p.cur().Val == "*" {

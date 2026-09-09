@@ -1303,6 +1303,20 @@ func assertExpression(got xdm.Sequence, expr string) (bool, string) {
 	// assertVersion for the language it is compiled in.
 	ctx := assertContext()
 	ctx = ctx.WithVar(xdm.QName{Local: "result"}, got)
+	// The result is the context item as well as $result. The catalog's own
+	// description of <assert> says the expression is evaluated "with the
+	// result of the test as the context item", and most cases only ever use
+	// the $result spelling, which is why the omission went unnoticed: the
+	// three that write an absolute path — modules-31/-32/-33, whose assertions
+	// are "/result/impl = ..." — reported XPDY0002 from the *assertion*, not
+	// from the query. The queries themselves were correct all along.
+	//
+	// Only a single node can be a context item. A result that is not exactly
+	// one item leaves the context empty, which is what an absolute path
+	// against a non-node result should do anyway.
+	if len(got) == 1 {
+		ctx = ctx.WithFocus(got[0], 1, 1)
+	}
 	res, err := xpath.Eval(expr, ctx, resolver{})
 	if err != nil {
 		return false, "assert " + strings.TrimSpace(expr) + ": " + err.Error()
