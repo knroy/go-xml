@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 42 of 30,346; XSLT 3.0 has 75 of 11,518;
+failures of 6,201; XQuery 3.1 has 42 of 30,346; XSLT 3.0 has 67 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 237 cases, or of a decision that produced some of them.
+is an account of those 178 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -60,43 +60,58 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**53 of the 75 XSLT 3.0 failures**, and by far the largest single gap in the
-project. The posture-and-sweep lattice now exists — 13 of the spec's 86
-sections — but the rules built on it do not: all 43 XSLT instruction rules
-(§19.8.6), streamable stylesheet functions (§19.8.5) and accumulators (§19.8.4)
-are still absent. Every one of the 103 fails in the same direction: the suite
-expects `XTSE3430` — *this construct is not guaranteed streamable* — and the
-transform succeeds instead, because the analysis returns `known=false` for a
-construct it cannot yet model and correctly declines to raise an error it has
-not proved.
+**45 of the 67 XSLT 3.0 failures**, and by far the largest single gap in the
+project. The posture-and-sweep lattice exists, and so now do the rules built on
+it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
+§18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
+classifications, and §19.6's context posture for both
+`xsl:source-document`/`xsl:stream` and the template rules of a streamable mode.
+What remains is a long tail of individual constructs rather than a missing body
+of rules.
+
+Every one of the 45 fails in the same direction: the suite expects `XTSE3430` —
+*this construct is not guaranteed streamable* — and the transform succeeds
+instead, because the analysis returns `known=false` for a construct it cannot
+yet model and correctly declines to raise an error it has not proved.
 
 That direction is the whole diagnosis. The engine builds a tree and streams
 nothing, so every construct the analysis would reject is one it simply
-executes. It produces the **right answer** for all 103; what it does not
+executes. It produces the **right answer** for all 45; what it does not
 produce is the static refusal §19.8 requires a streaming processor to make
 before running anything. A construct that is not guaranteed streamable is still
 a construct with a well-defined result, and a tree-building processor reaches
 it. So these are not wrong answers, and they are not silent erasure: they are a
-static analysis that was never written.
+static analysis that is not yet complete.
 
 They cluster by construct rather than by cause, which is what confirms it is
-one missing body of rules and not 103 defects: `streamable`, `si-fork`,
-`accumulator`, `su-absorbing`, and `su-shallow-descent`, `si-for-each-group`
-and `merge`, then a long tail across `su-*`, `si-*`, `sf-*` and `sx-*`.
+missing rules and not 45 defects: `su-absorbing`, `su-shallow-descent`,
+`si-fork` and `si-for-each-group`, then a long tail across `su-*`, `si-*`,
+`sf-*` and `sx-*`.
 
-**Closing it is a real analysis, not a check.** §19.8 assigns every expression
-a posture and a sweep, composes them through every construct, and rejects the
-combinations that would require more than one downward pass. It is a type
-system over the stylesheet, and a partial one is worse than none — a processor
-that raises `XTSE3430` on some unstreamable constructs and not others has told
-the caller nothing they can rely on. That is why nothing partial has been
-attempted here.
+**A partial analysis is safe here, and the safety is structural.** The worry
+that a partial analysis is worse than none — a processor raising `XTSE3430` on
+some unstreamable constructs and not others tells the caller nothing — is
+answered by never guessing. The analysis reports whether it *modelled* every
+construct it met separately from what it concluded, and an error is raised only
+on a fully-modelled verdict; anything else is "no opinion". So the two failure
+modes are not symmetric: a missing rule leaves a case failing, while a wrong
+rule would reject a valid stylesheet, and it is the second that the
+whole-corpus scan measures at zero.
 
-**Note what it would and would not buy.** Completing it would move the 103
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.35% to about
+Two withholdings are worth naming, because both look like gaps and are not.
+§19.8.8.4 widens a union of two striding operands to crawling by its own
+admission rather than by necessity, so a rule applying templates to
+`current-group() except .` is withheld rather than refused — `si-group-055`
+asserts output for exactly that. And §19.8.9.4's roaming verdict for a
+`current-group()` call is reported only where the group is genuinely out of
+reach, which is what keeps `si-fork-116` refused while `si-fork-115`, asking
+for the *key* rather than the group, compiles.
+
+**Note what it would and would not buy.** Completing it would move the 45
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.42% to about
 99.80%. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 103 correct
-answers into 103 refusals to answer. That is the conformant behaviour, and it
+of a single transform that currently succeeds — it would convert 45 correct
+answers into 45 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 
@@ -120,7 +135,7 @@ behind it.
 that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
-branches on it to choose a fallback. It is the same gap as the 103 above, seen
+branches on it to choose a fallback. It is the same gap as the 45 above, seen
 from the other side, and it stays failing for as long as the analysis is
 missing — which is the correct behaviour, not a cost.
 
@@ -961,7 +976,7 @@ That sentence was true of the population the audit covered — the XSD and XPath
 disagreements standing at the time — and is still true of those: XPath is 100%
 at all three versions, and the XSD remainder is argued case by case above. It
 was never true of the suites as a whole. **XSLT 3.0 carries 126 failures of
-which 103 are one missing analysis, and XQuery 3.1 carries 42, and both are
+which 45 are one missing analysis, and XQuery 3.1 carries 42, and both are
 eminently fixable.** A sentence scoped to one audit and left standing after the
 scope changed is the same decay this file keeps recording.
 

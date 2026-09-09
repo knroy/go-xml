@@ -50,6 +50,22 @@ type instrAnalyzer struct {
 	// stylesheet was not scanned, in which case any use-attribute-sets
 	// attribute makes the construct unknown rather than streamable.
 	attrSets map[xdm.QName][]*xdm.Node
+
+	// currentGroup and groupInScope carry to every expression assessed here
+	// the properties §19.8.9.4 gives a call on fn:current-group: those of
+	// the select expression of the innermost xsl:for-each-group that both
+	// contains the call and is its focus-setting container. forEachGroup
+	// sets them on the analyzer it builds for its own body, and they are
+	// cleared wherever the focus moves to a different instruction, so that a
+	// call reached through such a construct falls to the rule's "otherwise,
+	// roaming and free-ranging".
+	currentGroup props
+	groupInScope bool
+
+	// groupOutOfReach says this construct is nested inside an
+	// xsl:for-each-group whose body the walk never assessed, so a call on
+	// fn:current-group() within it is withheld rather than judged.
+	groupOutOfReach bool
 }
 
 // analyzeInstruction returns the posture and sweep of an XSLT instruction (or
@@ -88,11 +104,70 @@ func analyzeSequenceConstructor(el *xdm.Node, ctx posture, attrSets map[xdm.QNam
 		ctxAllowsChildren: true,
 		known:             true,
 		attrSets:          attrSets,
+		// §19.8.9.4 for a container nested inside an xsl:for-each-group: see
+		// enclosingGroupSelect.
+		currentGroup: enclosingGroupSelect(el, attrSets),
 	}
+	a.groupInScope = a.currentGroup != props{}
+	// A nested container whose enclosing group is not grounded reads streamed
+	// nodes a second time. §19.8.9.4 calls that roaming, but this walk never
+	// assessed the outer instruction's body, so the rejection is withheld
+	// rather than raised: si-group-051 must run, and si-group-052 -- the same
+	// stylesheet with a striding select -- is rejected by the general rules
+	// on the path itself, not by this clause.
+	a.groupOutOfReach = !a.groupInScope && hasForEachGroupAncestor(el)
 	p := a.body(el)
 	return p, a.known
 }
 
+// enclosingGroupSelect gives the properties §19.8.9.4 assigns to a call on
+// fn:current-group() inside a streamable container that is itself nested in an
+// xsl:for-each-group. The walk starts at the container, so the outer
+// instruction's select expression has to be found and assessed here.
+//
+// Only a grounded select yields an answer. The group of a grounded select is
+// already materialised, so reading it inside the nested container costs
+// nothing further and the call is grounded and motionless. That is
+// si-group-051, whose select is "Order/copy-of()" and which the suite expects
+// to run. A non-grounded select leaves the group as streamed nodes that the
+// nested container would have to read a second time; §19.8.9.4 makes such a
+// call roaming, and si-group-052 -- identical but for a select of "Order" --
+// expects exactly that rejection. The zero props signals "no enclosing group",
+// which leaves the caller's own roaming answer in place.
+func enclosingGroupSelect(el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node) props {
+	for n := el.Parent; n != nil; n = n.Parent {
+		if !isXSL(n, "for-each-group") {
+			continue
+		}
+		at := n.Attr("", "select")
+		if at == nil {
+			return props{}
+		}
+		outer := &instrAnalyzer{
+			ctxPosture:        postureStriding,
+			ctxAllowsChildren: true,
+			known:             true,
+			attrSets:          attrSets,
+		}
+		sel := outer.exprPropsIn(at.Value, n, postureStriding, true)
+		if !outer.known || sel.posture != postureGrounded {
+			return props{}
+		}
+		return groundedMotionless
+	}
+	return props{}
+}
+
+// hasForEachGroupAncestor reports whether el is nested inside an
+// xsl:for-each-group.
+func hasForEachGroupAncestor(el *xdm.Node) bool {
+	for n := el.Parent; n != nil; n = n.Parent {
+		if isXSL(n, "for-each-group") {
+			return true
+		}
+	}
+	return false
+}
 
 // unknown records an unmodelled construct.
 func (a *instrAnalyzer) unknown() props {
@@ -108,6 +183,9 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 		ctxAllowsChildren: allowsChildren,
 		known:             a.known,
 		attrSets:          a.attrSets,
+		currentGroup:      a.currentGroup,
+		groupInScope:      a.groupInScope,
+		groupOutOfReach:   a.groupOutOfReach,
 	}
 }
 
@@ -143,7 +221,14 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		// this analysis must not turn it into an XTSE3430.
 		return a.unknown(), true
 	}
-	an := &analyzer{ctxPosture: ctx, ctxAllowsChildren: allowsChildren, known: a.known}
+	an := &analyzer{
+		ctxPosture:        ctx,
+		ctxAllowsChildren: allowsChildren,
+		known:             a.known,
+		currentGroup:      a.currentGroup,
+		groupInScope:      a.groupInScope,
+		groupOutOfReach:   a.groupOutOfReach,
+	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
 	a.known = a.known && an.known
@@ -1128,6 +1213,22 @@ func (a *instrAnalyzer) noteBodyModelled(el *xdm.Node, ctx posture) {
 	a.mergeFrom(sub)
 }
 
+// noteGroupBodyModelled is noteBodyModelled for the rejecting clauses of
+// §19.8.4.14, where the body may call fn:current-group(). Without the group
+// properties of §19.8.9.4 in scope such a call would be unmodelled, the body
+// would clear `known`, and the rejection this establishes the body for would
+// then be withheld -- which is exactly what it is being assessed to prevent.
+func (a *instrAnalyzer) noteGroupBodyModelled(el *xdm.Node, sel props) {
+	ctx := sel.posture
+	if ctx == postureRoaming {
+		ctx = postureStriding
+	}
+	sub := a.sub(ctx, true)
+	sub.currentGroup, sub.groupInScope, sub.groupOutOfReach = sel, true, false
+	sub.body(el)
+	a.mergeFrom(sub)
+}
+
 func hasChild(el *xdm.Node, local string) bool {
 	for _, c := range el.ChildElements() {
 		if isXSL(c, local) {
@@ -1712,6 +1813,21 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 			ops = append(ops, o)
 		}
 		sub := a.sub(postureGrounded, true)
+		// §19.8.9.4: inside this body, fn:current-group() takes the posture
+		// and sweep of the select expression.
+		//
+		// The sweep is taken from the select only where the select is not
+		// already an operand in its own right. Here it is -- the first
+		// operand above -- so charging the body a second consuming read for
+		// the same one pass over the stream would count it twice, and
+		// feg-004 of si-for-each-group-A, whose select atomizes attributes
+		// into a grounded sequence, would be rejected for a single
+		// well-behaved call. What the body sees is the group already
+		// assembled, so the call keeps the select's posture with a
+		// motionless sweep, and two calls still combine to free-ranging
+		// through the select operand as the note to §19.8.4.19 describes.
+		sub.currentGroup = props{sel.posture, sweepMotionless}
+		sub.groupInScope, sub.groupOutOfReach = true, false
 		ops = append(ops, operand{
 			props:          sub.body(el),
 			usage:          usageTransmission,
@@ -1732,7 +1848,7 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	// implementation. The body is therefore assessed first, purely for its
 	// effect on `known`, and its properties are discarded.
 	if groupBy != nil && !isXSL(el.Parent, "fork") {
-		a.noteBodyModelled(el, sel.posture)
+		a.noteGroupBodyModelled(el, sel)
 		return roamingFreeRanging
 	}
 
@@ -1743,14 +1859,14 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 		}
 		p := a.exprPropsIn(gat.Value, el, postureGrounded, true)
 		if p.sweep != sweepMotionless {
-			a.noteBodyModelled(el, sel.posture)
+			a.noteGroupBodyModelled(el, sel)
 			return roamingFreeRanging
 		}
 	}
 
 	// Clause 4: an xsl:sort child.
 	if hasSort {
-		a.noteBodyModelled(el, sel.posture)
+		a.noteGroupBodyModelled(el, sel)
 		return roamingFreeRanging
 	}
 
@@ -1759,6 +1875,8 @@ func (a *instrAnalyzer) forEachGroup(el *xdm.Node) props {
 	}
 
 	sub := a.sub(sel.posture, selKids)
+	// §19.8.9.4, as in the grounded clause above.
+	sub.currentGroup, sub.groupInScope, sub.groupOutOfReach = sel, true, false
 	bodyProps := sub.body(el)
 	a.mergeFrom(sub)
 

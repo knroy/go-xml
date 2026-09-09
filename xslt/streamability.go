@@ -61,6 +61,21 @@ type analyzer struct {
 	// body. §19.8.8.11 calls a variable reference "singular" when no such
 	// construct intervenes, and gives the two answers different postures.
 	higherOrder bool
+
+	// currentGroup carries the properties §19.8.9.4 gives a call on
+	// fn:current-group: the posture and sweep of the select expression of
+	// the innermost containing xsl:for-each-group, when that instruction is
+	// also the call's focus-setting container and no higher-order operand
+	// lies on the path between them. groupInScope is false where no such
+	// instruction contains the call, which by the same rule makes the call
+	// roaming and free-ranging.
+	currentGroup props
+	groupInScope bool
+
+	// groupOutOfReach says a call on fn:current-group() here belongs to an
+	// xsl:for-each-group whose body this walk never assessed. Such a call is
+	// withheld rather than judged: see the current-group case in funcCall.
+	groupOutOfReach bool
 }
 
 // analyzeExpr returns the posture and sweep of e, and whether every construct
@@ -273,6 +288,9 @@ func (a *analyzer) filter(x *xpath.FilterExpr) props {
 			paramCategory:     a.paramCategory,
 			hasStreamParam:    a.hasStreamParam,
 			higherOrder:       a.higherOrder,
+			currentGroup:      a.currentGroup,
+			groupInScope:      a.groupInScope,
+			groupOutOfReach:   a.groupOutOfReach,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -311,6 +329,9 @@ func (a *analyzer) step(s *xpath.Step, ctx posture) props {
 			paramCategory:     a.paramCategory,
 			hasStreamParam:    a.hasStreamParam,
 			higherOrder:       a.higherOrder,
+			currentGroup:      a.currentGroup,
+			groupInScope:      a.groupInScope,
+			groupOutOfReach:   a.groupOutOfReach,
 		}
 		pp := inner.expr(p)
 		a.known = a.known && inner.known
@@ -390,6 +411,9 @@ func (a *analyzer) path(x *xpath.PathExpr) props {
 				paramCategory:     a.paramCategory,
 				hasStreamParam:    a.hasStreamParam,
 				higherOrder:       a.higherOrder,
+				currentGroup:      a.currentGroup,
+				groupInScope:      a.groupInScope,
+				groupOutOfReach:   a.groupOutOfReach,
 			}
 			next = inner.expr(e)
 			curAllowsChildren = inner.allowsChildren(e)
@@ -471,6 +495,9 @@ func (a *analyzer) isScanningStep(e xpath.Expr) bool {
 				paramCategory:     a.paramCategory,
 				hasStreamParam:    a.hasStreamParam,
 				higherOrder:       a.higherOrder,
+				currentGroup:      a.currentGroup,
+				groupInScope:      a.groupInScope,
+				groupOutOfReach:   a.groupOutOfReach,
 			}
 			sw := inner.expr(p).sweep
 			if !inner.known {
@@ -580,6 +607,28 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			// §19.8.9.16: no operands, so the general rules make it
 			// grounded and motionless.
 			return groundedMotionless
+		case "current-grouping-key", "current-merge-key", "current-merge-group":
+			// §19.8.9.5, §19.8.9.7 and §19.8.9.6. Each is grounded and
+			// motionless unconditionally. For current-merge-group the spec
+			// gives the reason: "the nodes to be merged are always
+			// snapshots, and therefore grounded".
+			return groundedMotionless
+		case "current-group":
+			// §19.8.9.4: the sweep and posture of the call are those of the
+			// select expression of the containing xsl:for-each-group, but
+			// only when that instruction is the call's focus-setting
+			// container and no higher-order operand separates them.
+			// "Otherwise, roaming and free-ranging" -- a fact about the
+			// stylesheet, not a gap in this analysis, so known stays set.
+			// A container nested inside an xsl:for-each-group has the outer
+			// select assessed for it by enclosingGroupSelect.
+			if !a.groupInScope {
+				if a.groupOutOfReach {
+					return a.unknown()
+				}
+				return roamingFreeRanging
+			}
+			return a.currentGroup
 		}
 	}
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))

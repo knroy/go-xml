@@ -113,18 +113,17 @@ func TestXSLT30Suite(t *testing.T) {
 		}
 	}
 
-	if os.Getenv("GOXSLT_XSLTS_VERBOSE") != "" {
-		only := os.Getenv("GOXSLT_XSLTS_ONLYSET")
-		for _, f := range sum.Failures {
-			if only != "" && f.Set != only {
-				continue
-			}
-			t.Logf("  FAIL %s/%s: %s", f.Set, f.Name, f.Why)
-		}
-	}
-
+	// One listing, not two. This block was duplicated -- once reading
+	// GOXSLT_XSLTS_ONLYSET and once GOXSLT_XSLTS_SET -- so every failure was
+	// printed twice whenever neither was set, which is the usual case. Both
+	// names are still honoured, and both narrow the LISTING only: the suite
+	// always runs in full, because the ratchet is a count over the whole
+	// suite and a partial run cannot be compared against it.
 	if os.Getenv("GOXSLT_XSLTS_VERBOSE") != "" {
 		only := os.Getenv("GOXSLT_XSLTS_SET")
+		if only == "" {
+			only = os.Getenv("GOXSLT_XSLTS_ONLYSET")
+		}
 		for _, f := range sum.Failures {
 			if only != "" && f.Set != only {
 				continue

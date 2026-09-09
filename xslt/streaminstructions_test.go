@@ -646,12 +646,12 @@ func TestUnmodelledPredicateInAScanningPathIsReportedUnknown(t *testing.T) {
 	// implementation, not about the path, and the roaming verdict that
 	// follows must not be reported as an XTSE3430.
 	//
-	// fn:current-group() has no entry in the §19.8.9 table, so a path
+	// fn:unparsed-text() has no entry in the §19.8.9 table, so a path
 	// filtered on it must come back unmodelled.
 	_, known := analyzeInstrSource(t,
-		`<xsl:value-of select="//transaction[@date = current-group()[1]/Date]"/>`)
+		`<xsl:value-of select="//transaction[@date = unparsed-text('d.txt')]"/>`)
 	if known {
-		t.Error("a path whose predicate calls the unmodelled current-group() was reported " +
+		t.Error("a path whose predicate calls the unmodelled unparsed-text() was reported " +
 			"as modelled; the roaming verdict would then be raised as a spurious XTSE3430")
 	}
 

@@ -32,6 +32,7 @@ package xslt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
@@ -265,7 +266,9 @@ func hasBooleanStaticType(e xpath.Expr) bool {
 // written for every mode cannot be held to the streamability of one of them.
 //
 // The verdict is withheld unless the analysis fully modelled the body (known),
-// which is the guard the whole check rests on.
+// which is the guard the whole check rests on, and unless it rests on
+// fn:current-group inside its own xsl:for-each-group: see
+// bodyCallsCurrentGroup.
 func checkStreamableModeBodies(root *xdm.Node) error {
 	streamable := streamableModeNames(root)
 	if len(streamable) == 0 {
@@ -293,7 +296,7 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 			return true
 		}
 		p, known := analyzeSequenceConstructor(el, postureStriding, sets)
-		if known && !p.streamable() {
+		if known && !p.streamable() && !bodyCallsCurrentGroup(el) {
 			err = fmt.Errorf(
 				"the body of the template rule matching %q in a streamable "+
 					"mode is %v and %v, so it is not "+
@@ -304,4 +307,105 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		return true
 	})
 	return err
+}
+
+// bodyCallsCurrentGroup reports whether a template rule's body calls
+// fn:current-group INSIDE an xsl:for-each-group of its own.
+//
+// §19.8.9.4 gives such a call the posture and sweep of the group's select
+// expression, so where the select is striding the call is striding too. The
+// analysis reaches that answer, but only along the traversal that
+// xsl:for-each-group itself drives: the group's properties are put in scope by
+// forEachGroup as it descends into the body, and are not recoverable from the
+// call site alone. Composing them back out is where the precision is lost.
+//
+// si-group-055 is the case. Its rule groups with group-starting-with over a
+// striding select and writes
+//
+//	<xsl:apply-templates select="current-group() except ."/>
+//
+// inside an xsl:fork. Both operands of the except are striding and motionless,
+// so §19.8.8.4 widens the result to crawling -- by its own admission a choice
+// rather than a necessity:
+//
+//	"Where the two operands are both striding, there are cases where an
+//	implementation could determine that the result is also striding: for
+//	example (author | editor). In general, however, the combination of two
+//	striding operands may produce a sequence of nodes that have nested
+//	subtrees (consider author | author/name), so the result is classified as
+//	crawling."
+//
+// §19.8.4.5 then makes an xsl:apply-templates over a crawling selection
+// roaming, and the rule is refused for a nesting the group cannot produce: its
+// members are siblings, and except only removes items. The catalog asserts
+// OUTPUT for si-group-055, and its description names the Saxon bug (3256) it
+// was written against, so a processor that refuses it is wrong about the
+// stylesheet. si-group-203 and aspiring-002 write the same idiom.
+//
+// Separating the group's real posture from the widened one needs the §19.2
+// U-type inference this analysis approximates syntactically, so the verdict is
+// withheld rather than guessed -- the same "no opinion" every unmodelled
+// construct gets.
+//
+// The withholding stops at the xsl:for-each-group boundary, and that boundary
+// is what keeps si-fork-116 refused. There the call is written in a rule with
+// no grouping of its own, so its group is genuinely out of reach and
+// §19.8.9.4's "otherwise, roaming and free-ranging" is a fact about the
+// stylesheet; the catalog asserts XTSE3430 for it, noting "it's a static
+// error". si-fork-115, the same stylesheet asking for the KEY instead, is
+// streamable by §19.8.9.5 without needing anything here.
+func bodyCallsCurrentGroup(rule *xdm.Node) bool {
+	found := false
+	var walk func(el *xdm.Node, inGroup bool)
+	walk = func(el *xdm.Node, inGroup bool) {
+		if found {
+			return
+		}
+		if el != rule && isXSL(el, "for-each-group") {
+			inGroup = true
+		}
+		if inGroup {
+			for _, at := range el.Attrs {
+				// Exactly one reference. Two references to the group in one
+				// expression read it twice, which §19.8.1's limit of one
+				// potentially-consuming operand refuses on its own terms and
+				// independently of §19.8.8.4's widening -- si-group-017
+				// writes "count(current-group()), current-group()" and the
+				// catalog asserts XTSE3430 for it. Withholding there would
+				// silence a real refusal, so only the single-reference case
+				// is withheld.
+				if countCurrentGroupRefs(at.Value) == 1 {
+					found = true
+					return
+				}
+			}
+		}
+		for _, c := range el.ChildElements() {
+			walk(c, inGroup)
+		}
+	}
+	walk(rule, false)
+	return found
+}
+
+// countCurrentGroupRefs counts the calls on fn:current-group in an attribute
+// value, not counting calls on fn:current-grouping-key, whose name begins with
+// the same characters.
+func countCurrentGroupRefs(v string) int {
+	const name = "current-group"
+	n := 0
+	for i := 0; ; {
+		j := strings.Index(v[i:], name)
+		if j < 0 {
+			return n
+		}
+		at := i + j
+		i = at + len(name)
+		if at > 0 && isNameContinuation(rune(v[at-1])) {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimLeft(v[i:], " \t\r\n"), "(") {
+			n++
+		}
+	}
 }

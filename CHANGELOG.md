@@ -16,6 +16,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| A streamable rule using `current-group()` in its own grouping was refused | §19.8.8.4 widens a union of two striding operands to crawling by its own admission, so `current-group() except .` roamed and `si-group-055` was rejected though the catalog asserts output. Withheld inside the grouping only, which keeps `si-fork-116` refused. 11,443 → 11,451. | — |
 | A pattern facet was tested against the source value, not the canonical result | F&O 3.0 §18.3.3 tests the pattern against the cast result's canonical form; the engine handed the schema the source's `fn:string` form. `canonicalLexical` answers for the numeric primitives. | — |
 | A cast to a union's list member returned one item instead of a sequence | F&O 3.0 §18.3.6 makes a cast to a list type a sequence, but the impure-union branch returned the operand unchanged. `SchemaUnionListMemberType` builds the sequence, atomic members tried first. | — |
 | A schema-defined list or impure union was accepted as an item type | §2.5.4 admits only a generalized atomic type as an ItemType; the purity check covered only the three built-in list types. `SchemaListType` and `SchemaSimpleType` are now `XPST0051`. | — |

@@ -27,13 +27,13 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,304 | 99.86% | **42** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,443 | 99.35% | **75** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,451 | 99.42% | **67** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
 | **xslt** | DocBook xslTNG *(real-world)* | 577 | 577 | 100.00% | 0 |
 | **xslt** | XSpec *(real-world)* | 225 | 225 | 100.00% | 0 |
-| | **Total** | | | | **237** |
+| | **Total** | | | | **178** |
 
 The unit-test suite is 1,829 tests.
 
@@ -47,7 +47,7 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The two largest blocks are single features, not a long tail.** 53 of the 75
+**The two largest blocks are single features, not a long tail.** 45 of the 67
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
@@ -145,11 +145,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 75 failures
+## xslt 3.0 — 67 failures
 
-**XSLT 3.0: 11,443 / 11,518 = 99.35%.**
+**XSLT 3.0: 11,451 / 11,518 = 99.42%.**
 
-**53 of the 75 want an `XTSE3430`** — a refusal of a stylesheet as
+**45 of the 67 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
