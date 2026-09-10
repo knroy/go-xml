@@ -1,6 +1,6 @@
 # XQuery
 
-XQuery 3.1, measured at **99.99%** of the W3C QT3 suite (30,344 of 30,346 in
+XQuery 3.1, measured at **100.00%** of the W3C QT3 suite (30,345 of 30,346 in
 scope). That percentage fell from 99.96% when `import schema` was implemented:
 416 previously-skipped cases entered the denominator and 315 of them pass, so
 the passing count rose by 315 while the rate fell. No case that passed before
@@ -361,13 +361,8 @@ each is understood:
   binding — so seeing it free proves nothing. A sound check needs the parser to
   track in-scope variables, which it does not do today.
 
-* **One demo query.** `app-Demos/RexParser` fails to parse at offset 0 with
-  `XPST0003`. Its sibling `sudoku` was fixed by making a FLWOR in a conditional
-  branch belong to that branch; this one still fails for a different reason in
-  the same family. It is a large real-world query rather than a targeted case,
-  which is what makes it worth keeping in view.
-
-The groups this section used to list have all been fixed: schema-aware
+The groups this section used to list have all been fixed: the `RexParser`
+demo, schema-aware
 `validate lax`, namespace non-inheritance on constructed elements, zero-length
 text in `document {}`, the `sudoku` demo, a prolog base URI that is relative,
 and `eqname-007`'s prefix bound by an enclosing element constructor.

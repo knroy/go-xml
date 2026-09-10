@@ -25,7 +25,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,344 | 99.99% | **2** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,345 | 100.00% | **1** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,481 | 99.68% | **37** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
@@ -108,15 +108,17 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 2 failures
+## xquery — 1 failure
 
-**XQuery 3.1: 30,344 / 30,346 = 99.99%.**
+**XQuery 3.1: 30,345 / 30,346 = 100.00%.**
 
-What remains is two singletons: `prod-ContextItemDecl` and `app-Demos`, one
-case each. `op-same-key/same-key-023` is closed: `map:put` and `map:remove`
-copied the whole entry slice, so 421,875 keys cost hours; the map is now a
-persistent hash array mapped trie that shares structure and keeps insertion
-order by sequence number.
+What remains is one singleton, `prod-ContextItemDecl`. `app-Demos/RexParser`
+is closed: the two ExprSingle scanners now keep a nesting stack rather than
+flat counters, so a stop keyword is honoured only when nothing nested inside
+the expression is open to claim it. `op-same-key/same-key-023` is closed too:
+`map:put` and `map:remove` copied the whole entry slice, so 421,875 keys cost
+hours; the map is now a persistent hash array mapped trie that shares structure
+and keeps insertion order by sequence number.
 
 `prod-CastExpr.schema` is closed. Its last three cases — `CastAs-UnionType-27`
 and `-28`, `CastAs-ListType-21` — were one shape: a cast to a list type built
@@ -136,11 +138,10 @@ unreached `typeswitch` branch, judged against the live scope), `FunctionCall-051
 (an element validated against a complex type with element-only content has no
 typed value).
 
-The two singletons are read here.
+The remaining singleton is read here.
 
 | Case | Verdict | Why |
 |---|---|---|
-| `app-Demos/RexParser` | **Not implementable here** | A large real-world query rather than a targeted case. The sibling `sudoku` was fixed by making a FLWOR in a conditional branch belong to that branch; this one still fails in the same family. Its symptom has been misread before: see *Corrections*, `RexParser`'s offset. |
 | `prod-ContextItemDecl/contextDecl-052` | **A W3C fixture defect** | The case registers `ContextItemDecl/libmodule-3.xq` under the namespace `…/libmodule3`, and the file declares `…/libmodule1`. §4.12 makes a module that declares another target namespace a module that was not found, so `XQST0059` is correct and precedes the wanted `XQST0113` — which we do implement, and which `TestContextItemDeclInLibraryModuleRejectsValue` pins. Reordering the two would mean fully compiling a module already known to be the wrong one, and would cost `modules-bad-ns`. |
 
 ## xslt 2.0 — 8 failures
@@ -743,19 +744,21 @@ rebuild both score **225**. The entry has been removed.
 reset, not the construct. The actual construct is a multi-clause FLWOR in a
 conditional branch.
 
-Re-measured: it is not one construct but **four distinct sites in the one
-query**, each a different manifestation of the same weakness. `scanToStop`
-(`exprsingle.go`) and `scanExprSingleSource` (`flwor_parse.go`) decide where an
-ExprSingle ends with flat counters plus a one-word `branch` flag, which cannot
-represent the nesting *order* of interleaved `if` and FLWOR constructs. Four
-successive refinements were prototyped; each fixed three sites, kept the unit
-tests green, and then surfaced the fourth. The sound fix replaces the counters in
-both scanners with a nesting stack that records construct identity, and makes
-`parseIf` pass branch-appropriate stops — roughly 150 lines across
-`exprsingle.go`, `flwor_parse.go` and `ifexpr.go`. One piece of it *is* small and
-correct standing alone (`ifexpr.go`'s else branch scans with no stop words, where
-`typeswitch.go` passes `enclosingClauseStops`), but landing it alone makes a
-third site reachable, so it must not go in unaccompanied.
+Re-measured: it was not one construct but several sites in the one query, each
+a different manifestation of the same weakness. `scanToStop` (`exprsingle.go`)
+and `scanExprSingleSource` (`flwor_parse.go`) decided where an ExprSingle ends
+with flat counters plus a one-word `branch` flag, which cannot represent the
+nesting *order* of interleaved `if` and FLWOR constructs.
+
+**Closed.** Both scanners now keep a nesting stack (`xquery/nesting.go`)
+recording which construct opened each level, so a keyword is honoured as a stop
+only when nothing nested is open to claim it. Four further sites fell out of
+that: the last branch of an `if` and of a `switch` scanned with no stop words
+where `typeswitch` passes `enclosingClauseStops`; those stops had excluded the
+binding keywords, which only a counter needed; and `scanToStop` never asked
+`wordIsName`, so `empty($stack)` read as the order-by modifier. The four had to
+land together — each alone makes the next reachable, which is why the earlier
+prototypes each fixed three sites and surfaced a fourth.
 
 ## `evaluate-048` was recorded as closed and is not
 

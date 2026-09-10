@@ -147,16 +147,19 @@ func (p *parser) parseConstructorItem() (node, bool, error) {
 func (p *parser) scanToStop(stops []string) (int, error) {
 	i := p.pos
 	depth := 0
-	// FLWORs opened at depth zero within the scan and not yet closed by their
-	// own "return". A FLWOR is not one of the forms parseXQueryOnly parses
+	// nest records which constructs are open at this point of the scan, and
+	// in what order. A FLWOR is not one of the forms parseXQueryOnly parses
 	// ahead of this scan, so an unparenthesised one is scanned over here, and
-	// its "return" belongs to it rather than to whatever enclosed the caller.
-	// Only when the count is zero does a "return" end the expression.
-	open := 0
-	// Conditionals opened at depth zero within the scan and not yet closed by
-	// their own "else", counted for the same reason "open" counts FLWORs: the
-	// "else" of a nested "if" is not the one that ends this branch.
-	cond := 0
+	// its "return" belongs to it rather than to whatever enclosed the caller;
+	// likewise the "else" of a nested "if" is not the one that ends this
+	// branch. Which of the two a keyword closes depends on which is innermost,
+	// which a pair of counters cannot say -- see nesting.go.
+	var nest nestStack
+	// branchHead records that the last thing read was a "then" or an "else",
+	// so that the word after it begins a branch. Only a binding keyword
+	// consults it, and only to open the branch's own FLWOR rather than end
+	// the scan.
+	branchHead := false
 	for i < len(p.src) {
 		c := p.src[i]
 		// A literal, a comment, a pragma or a string constructor holds no
@@ -168,7 +171,15 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 				return 0, err
 			}
 			i = end + 1
+			branchHead = false
 			continue
+		}
+		// Whitespace between an "else" and the branch it introduces is not a
+		// thing read, so it alone leaves branchHead standing. A word clears
+		// it after being handled -- the word the flag is about is the one
+		// being read now -- and everything else clears it here.
+		if c != ' ' && c != '\t' && c != '\r' && c != '\n' && !isNameByte(c) {
+			branchHead = false
 		}
 		switch c {
 		case '(':
@@ -181,7 +192,7 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 		case '[', '{':
 			depth++
 		case ',':
-			if depth == 0 && open == 0 {
+			if depth == 0 && !nest.closesComma() {
 				return i, nil
 			}
 			// With a FLWOR still open the comma separates that FLWOR's own
@@ -206,6 +217,9 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 					j++
 				}
 				w := p.src[i:j]
+				// head is branchHead for the word after this one: set only
+				// by "then" and "else", cleared by every other word.
+				head := false
 				switch {
 				// A binding keyword opens a FLWOR whose own "return" will
 				// close it. startsBindingClause tells the clause from a call
@@ -214,17 +228,43 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 				// answers only about the text after the word, so the word
 				// itself is checked here -- it takes "return $v" for a
 				// binding otherwise.
+				//
+				// openBinding folds a clause onto a FLWOR already innermost
+				// rather than opening a second level, because the clauses of
+				// one FLWOR share one "return". The flat count this replaced
+				// opened a level per clause, so "let $r := 1 let $e := 2
+				// return $r" left a level open past the end of the branch.
 				case bindingKeywords[w] && startsBindingClause(w, p.src[j:]):
-					open++
-				// A "return" closes the innermost FLWOR still open. Only when
-				// none is open does it belong to whatever enclosed the
-				// caller, and end this expression.
-				case w == "return" && open > 0:
-					open--
-				// A "then" opens a conditional whose own "else" closes it,
-				// counted the way "return" closes a FLWOR. Without this the
-				// then-branch of an outer conditional ended at the first
-				// "else" it met, which belongs to a nested "if":
+					// With nothing open the keyword may still be a stop of
+					// this caller's -- a clause of the enclosing FLWOR.
+					//
+					// Not at the head of an expression, though: a clause
+					// continues a clause list, and at the start of the scan
+					// or just after a "then" or an "else" there is no
+					// expression before this one for it to continue. A FLWOR
+					// written there opens the branch instead, which is how
+					// the last branch of a conditional or a typeswitch is
+					// commonly written -- "else let $c0 := 1 ... return ..",
+					// RexParser's p:parse. Stopping at the start of the scan
+					// returned an empty ExprSingle; stopping after an "else"
+					// cut the branch and left the rest of it unread.
+					if _, open := nest.innermost(); !open && i > p.pos &&
+						!branchHead {
+						for _, kw := range stops {
+							if w == kw {
+								return i, nil
+							}
+						}
+					}
+					nest.openBinding()
+				// A "return" or a "satisfies" closes the innermost FLWOR
+				// still open. Only when the innermost construct is not a
+				// FLWOR -- or nothing is open -- does it belong to whatever
+				// enclosed the caller, and end this expression.
+				case (w == "return" || w == "satisfies") && nest.closeReturn():
+				// A "then" opens a conditional whose own "else" closes it.
+				// Without this the then-branch of an outer conditional ended
+				// at the first "else" it met, which belongs to a nested "if":
 				//
 				//	then let $i := .. return if (..) then () else if (..) ..
 				//
@@ -234,16 +274,55 @@ func (p *parser) scanToStop(stops []string) (int, error) {
 				// the way the binding keywords do, because it can only ever
 				// follow an "if (..)".
 				case w == "then":
-					cond++
-				case w == "else" && cond > 0:
-					cond--
+					nest.openThen()
+					head = true
+				case w == "else":
+					// An "else" closes a conditional opened within this
+					// scan. With none open it is an enclosing conditional's
+					// and ends the expression, whether or not the caller
+					// named it a stop -- a bare "else" cannot otherwise
+					// follow a complete expression, so there is nothing else
+					// it can be. Running on past it swallowed the caller's
+					// own else branch, which is the "unexpected \"else\"
+					// after expression" RexParser's p:parse reported.
+					if !nest.closeElse() {
+						return i, nil
+					}
+					head = true
 				default:
 					for _, kw := range stops {
 						if w == kw {
+							// A clause keyword is not reserved, so a bare one
+							// may still be a name: "empty($stack)" is a call
+							// to fn:empty, not the order-by modifier it is
+							// spelled like, and RexParser's p:parse writes
+							// exactly that. wordIsName judges by what follows
+							// and needs the cursor on the word's end.
+							//
+							// Only the clause keywords are asked about. The
+							// stops a caller adds -- "case", "default",
+							// "catch" -- are the keywords of the construct
+							// being parsed, and each is followed by an
+							// expression or a type, so nothing after one
+							// tells a keyword from a name; wordIsName has no
+							// arm for them and its fallthrough, written for
+							// the modifiers, took "case ()" for a call. What
+							// settles them instead is that a bare one cannot
+							// follow a complete expression at depth zero:
+							// "case" is a reserved function name, so nothing
+							// else there can be spelled that way.
+							if stopWords[w] {
+								probe := *p
+								probe.pos = j
+								if probe.wordIsName(w) {
+									break
+								}
+							}
 							return i, nil
 						}
 					}
 				}
+				branchHead = head
 				i = j
 				continue
 			}
@@ -285,20 +364,26 @@ var bindingKeywords = map[string]bool{
 //
 //	typeswitch(1) case $i as xs:string return "s" default return let $q := 5 return $q
 //
-// reaches this scan itself, and its "return" closes its own "let". The scan
-// therefore counts binding keywords against returns rather than stopping at
-// the first one; see scanToStop, which does the counting because only it
-// knows the nesting depth and what it has already stepped over.
+// reaches this scan itself, and its "return" closes its own "let". So the set
+// is every stop word, and scanToStop decides per occurrence whether a word
+// closes something the branch opened or belongs to the enclosing clause; only
+// it knows the nesting, and it keeps a stack rather than a count so that it
+// knows the order too. See nesting.go.
 //
-// "for" and "let" are not stops for the same reason -- either may open that
-// FLWOR -- while the rest can only continue a clause list already open, which
-// inside a branch means an enclosing one.
+// The binding keywords used to be left out of this set, because either may
+// open that nested FLWOR and a flat count could not tell the two uses apart.
+// The stack can: with nothing open, a bare "let" at depth zero is the
+// enclosing FLWOR's next clause and ends the branch. Leaving them out is what
+// let the last branch of a conditional swallow the clause after it --
+//
+//	let $c1 := if (..) then 1 else if (..) then let $x := .. return $x else 0
+//	let $current := ..
+//
+// is RexParser's p:transition, whose "else 0" ran on through the following
+// "let" to the end of the function body.
 var enclosingClauseStops = func() []string {
 	stops := make([]string, 0, len(stopWords))
 	for w := range stopWords {
-		if w == "for" || w == "let" || w == "some" || w == "every" {
-			continue
-		}
 		stops = append(stops, w)
 	}
 	sort.Strings(stops)

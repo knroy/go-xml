@@ -170,27 +170,37 @@ func (p *parser) scanExprSingleSource() (string, error) {
 	// prev is the last significant character seen, which decides whether a
 	// word here can be a keyword at all.
 	prev := byte(0)
-	// branch records that the word just scanned was "then" or "else", and
-	// nested counts the FLWORs opened after one that no "return" has closed
-	// yet. Together they are the context the single prev byte cannot carry.
+	// nest records which constructs are open at this point of the scan, and
+	// in what order; see nesting.go for why the order is what matters.
 	//
-	// Every word collapses prev to a sentinel, so "then let $i := 1 return $i"
-	// presented "let" as a bare clause keyword at depth zero and the scan
-	// ended the ExprSingle there. The extent was truncated to "if (..) then",
-	// needsQueryParser never saw the typed let, and parseIf declined the whole
-	// conditional -- the XPST0003 the sudoku demo reports. A branch of a
-	// conditional is itself an ExprSingle, so a FLWOR opening there is nested
-	// inside this expression rather than being a clause of the enclosing one.
+	// A branch of a conditional is itself an ExprSingle, so a FLWOR opening
+	// there is nested inside this expression rather than being a clause of the
+	// enclosing one, and its "return" is its own. Without that, "then let $i
+	// := 1 return $i" presented "let" as a bare clause keyword at depth zero
+	// and the scan ended the ExprSingle there; the extent came back truncated
+	// to "if (..) then", needsXQueryParser never saw the typed let, and
+	// parseIf declined the whole conditional -- the XPST0003 the sudoku demo
+	// reports.
 	//
-	// Only these two keywords consult the preceding word, so the name-versus-
-	// keyword rule the axis-step cases rest on is untouched: "$start-column"
-	// and "$x/order" are still settled by the prev byte and "count(..)" by the
-	// lookahead in wordIsName. Axes089's
+	// The stack replaces a "was the last word then/else" flag paired with a
+	// count. That flag went false at the first word after "then", so the
+	// second clause of a branch FLWOR -- "then let $r := 1 let $e := 2 return
+	// $r" -- read as a clause of an enclosing FLWOR and cut the branch there.
+	// That is the RexParser refusal.
+	//
+	// The name-versus-keyword rule the axis-step cases rest on is untouched:
+	// "$start-column" and "$x/order" are still settled by the prev byte and
+	// "count(..)" by the lookahead in wordIsName. Axes089's
 	// "let $color := if (..) then 'a' else 'b' return <td/>" is unaffected --
-	// its branches are literals, which reset branch, so the "return" after
-	// them still ends the scan and stays with the enclosing let.
-	branch := false
-	nested := 0
+	// its branches open nothing, so the stack is empty at the "return" after
+	// them and it still ends the scan and stays with the enclosing let.
+	var nest nestStack
+	// branchHead records that the word just read was a "then" or an "else",
+	// so that the next word begins a branch. Only a binding keyword consults
+	// it, and only to open the branch's FLWOR rather than end the scan; the
+	// stack in nesting.go cannot say this, because it records what is open
+	// and not that an expression has yet to begin.
+	branchHead := false
 	for !p.eof() {
 		c := p.src[p.pos]
 		// A literal, a comment, a pragma or a string constructor holds no
@@ -204,8 +214,8 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			p.pos = end + 1
 			if c != '(' {
 				prev = '"'
-				branch = false
 			}
+			branchHead = false
 			continue
 		}
 		switch {
@@ -213,7 +223,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			depth++
 			p.pos++
 			prev = c
-			branch = false
+			branchHead = false
 			continue
 
 		case c == ')' || c == ']' || c == '}':
@@ -226,11 +236,11 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			depth--
 			p.pos++
 			prev = c
-			branch = false
+			branchHead = false
 			continue
 
 		case c == ',':
-			if depth == 0 && nested == 0 {
+			if depth == 0 && !nest.closesComma() {
 				// A comma at depth zero separates the items of the enclosing
 				// Expr, and an ExprSingle by definition contains none.
 				goto done
@@ -239,7 +249,7 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			// FLWOR's own bindings instead -- one clause may bind several
 			// variables -- so it is part of this expression, not a boundary.
 			p.pos++
-			branch = false
+			branchHead = false
 			continue
 
 		case c == '<':
@@ -251,14 +261,14 @@ func (p *parser) scanExprSingleSource() (string, error) {
 			if !startsMarkup(p.src, p.pos, prev) {
 				p.pos++
 				prev = '<'
-				branch = false
+				branchHead = false
 				continue
 			}
 			if err := p.skipDirConstructor(); err != nil {
 				return "", err
 			}
 			prev = '>'
-			branch = false
+			branchHead = false
 			continue
 
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
@@ -268,28 +278,55 @@ func (p *parser) scanExprSingleSource() (string, error) {
 
 		if !isNameStartByte(c) {
 			prev = c
-			branch = false
 			p.pos++
+			branchHead = false
 			continue
 		}
 
 		// A word. Decide whether it ends the expression.
 		wordStart := p.pos
+		// prevBefore is the significant byte before this word, kept because
+		// prev is overwritten below and the then/else handling needs it to
+		// tell a keyword from a name the same way the stop words do.
+		prevBefore := prev
 		w := p.scanNCName()
 		if depth == 0 && stopWords[w] && canStartClause(prev) &&
 			!p.wordIsName(w) {
+			// A stop keyword ends the scan only when nothing nested inside
+			// this expression is open to claim it. Otherwise it closes the
+			// innermost open construct -- and only if that construct is of
+			// the kind it closes, which is why the stack records the kind.
 			switch {
-			case branch && bindingKeywords[w]:
-				nested++
-			case w == "return" && nested > 0:
-				nested--
+			case bindingKeywords[w] && startsBindingClause(w, p.src[p.pos:]):
+				// At the head of a branch the keyword opens that branch's
+				// own FLWOR; elsewhere, with nothing open, it is a clause of
+				// the enclosing FLWOR and ends this expression.
+				if _, open := nest.innermost(); !open && !branchHead {
+					p.pos = wordStart
+					goto done
+				}
+				nest.openBinding()
+			case (w == "return" || w == "satisfies") && nest.closeReturn():
 			default:
 				p.pos = wordStart
 				goto done
 			}
 		}
 		prev = 'x'
-		branch = w == "then" || w == "else"
+		// "then" and "else" are not stop words, so they are seen only here.
+		// A "then" opens a conditional; an "else" closes the innermost one,
+		// discarding anything the then-branch left open. Either way the word
+		// after it begins a branch, which is an ExprSingle of its own.
+		switch {
+		case w == "then" && depth == 0 && canStartClause(prevBefore):
+			nest.openThen()
+			branchHead = true
+		case w == "else" && depth == 0:
+			nest.closeElse()
+			branchHead = true
+		default:
+			branchHead = false
+		}
 	}
 done:
 	src := strings.TrimSpace(p.src[start:p.pos])

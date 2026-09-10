@@ -81,7 +81,12 @@ func (p *parser) parseSwitch() (node, bool, error) {
 		return nil, true, p.errorf("XPST0003: expected %q after %q",
 			"return", "default")
 	}
-	d, err := p.scanExprSingle()
+	// The default branch is the last thing in the switch, so no keyword of
+	// this construct follows it -- but a clause of an enclosing FLWOR may, and
+	// its keyword ends this ExprSingle just as "case" ended the ones before
+	// it. See enclosingClauseStops, and typeswitch.go, whose default branch is
+	// the same shape.
+	d, err := p.scanExprSingle(enclosingClauseStops...)
 	if err != nil {
 		return nil, true, err
 	}
