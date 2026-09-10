@@ -118,6 +118,18 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 			// item budget is forwarded the same way for the same reason.
 			sub.items, sub.heldItems = c.items, c.heldItems
 			sub.bytes, sub.heldBytes = c.bytes, c.heldBytes
+			// The recursion depth comes from the call for the same reason,
+			// and it is the one budget that cannot survive on its own: items
+			// and bytes are pointers that ride the value copy, while Depth is
+			// an int, so a captured context carries the depth the reference
+			// was *written* at. For a function that applies itself through
+			// its own name -- local:f(local:f#2, 1) -- that is the same
+			// shallow depth every time round, so the charge never
+			// accumulates and the recursion runs to a Go stack overflow,
+			// which is fatal and uncatchable. InlineFunctionExpr.Eval takes
+			// it from the call below for exactly this reason; a named
+			// reference reaches the body through here instead.
+			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
 			// Only the *focus* is retained from the reference point; the
 			// variable bindings come from the call. The two parts of the
 			// captured context have opposite lifetimes in a prolog, where a

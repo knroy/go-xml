@@ -5,6 +5,7 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xdmbuild"
+	"github.com/knroy/go-xml/xpath"
 )
 
 // inlineFunc is an InlineFunctionExpr whose body this package had to parse.
@@ -174,12 +175,20 @@ func (n *inlineFunc) sequence(ctx *evalContext) (xdm.Sequence, error) {
 				len(n.params), len(args))
 		}
 		// The body runs in the captured scope rather than the caller's,
-		// which is what makes this a closure. callCtx names the context the
-		// call was made from and is deliberately unused: the only thing it
-		// could contribute is the per-evaluation resource accounting, and
-		// this package cannot reach the unexported fields that carry it.
-		_ = callCtx
+		// which is what makes this a closure. Two things still have to come
+		// from the call. The item and byte counters ride the captured
+		// context as pointers, so they arrive on their own. The recursion
+		// depth does not: Depth is an int, so the closure carries the depth
+		// it was *written* at, which for a function applying itself is the
+		// same shallow depth every time round. The charge would never
+		// accumulate and the recursion would reach a Go stack overflow,
+		// which is fatal and uncatchable. Depth and MaxDepth are exported,
+		// so they can be taken here even though the counters cannot; xpath's
+		// own two invocation paths take them for the same reason.
 		sub := captured
+		if c, ok := callCtx.(*xpath.Context); ok && c != nil {
+			sub.Depth, sub.MaxDepth = c.Depth, c.MaxDepth
+		}
 		for i, pm := range n.params {
 			v := args[i]
 			conv, err := pm.typ.convert(v, fmt.Sprintf(
