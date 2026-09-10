@@ -336,6 +336,11 @@ func (q *Query) Eval(ctx *xpath.Context) (xdm.Sequence, error) {
 	// prolog is setup, and a query with fifty globals is not one evaluation
 	// that materialised the sum of them.
 	ctx = ctx.HoldItemBudget()
+	// The byte budget needs the same boundary for the same reason. A chain of
+	// "let"s, each concatenating the previous string with itself, reaches
+	// xpath once per binding, so the per-expression reset cleared the counter
+	// between the doublings and the whole 640 MB was built uncharged.
+	ctx = ctx.HoldByteBudget()
 	ec := &evalContext{xp: ctx, sc: q.sc}
 	for _, n := range q.body {
 		if err := n.eval(ref, ec); err != nil {

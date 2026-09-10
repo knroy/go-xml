@@ -53,10 +53,7 @@ catch it, no deferred function runs, and one request takes the server with it.
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
 
 One further cost finding is recorded in the audit report and not yet acted
-on: the `MaxItems` budget is not reached on the primary XQuery evaluation
-path. A second, the string bomb, is described below.
 on: `fn:distinct-values` is quadratic on numerics with heavy allocation.
-A second, the string bomb, is described below.
 
 **Knowingly incomplete.** One narrowing remains, and it is in an API rather
 than at a copy site. `xdmbuild.Builder.AddAttributeTyped` takes a type
@@ -78,7 +75,8 @@ rejecting direction:
 `MaxEntityBytes` · `dtd.FileResolver.MaxBytes` ·
 `xsd.ValidateOptions` `MaxDepth` / `MaxErrors` ·
 `DefaultMaxMatchStates` · `subsumeMaxStates` · `subsumeMaxProduct` ·
-`branchLimit` · `xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
+`branchLimit` · `xpath` `MaxItems` / `MaxBytes` ·
+`xsd.Options` `MaxContentModelPositions` · `maxUPAStateWidth` ·
 `maxUPAPairTests` ·
 `maxSubstitutionClosure` · `TransformOptions.MaxDepth` · the RELAX NG
 derivative bound · the XPath regex step and depth budgets ·
@@ -716,25 +714,6 @@ the documented defence for it is configured and does not apply.
 **Until then, do not compile or evaluate an untrusted expression, query or
 stylesheet in a process you need to keep alive.**
 
-### MEDIUM — a string can be doubled past every budget
-
-`MaxItems` counts items. A string is one item however long it is, so nothing
-bounds the bytes an evaluation produces:
-
-```
-1,009-byte expression  ->  671,088,640 bytes returned, no error
-```
-
-Twenty-six nested `let`s, each concatenating the previous string with itself.
-Reachable from a stylesheet too, as a chain of `xsl:variable` and `concat`,
-where each added line doubles the result.
-
-The limits listed under *Deliberate limits* above bound bytes at **ingress** —
-`FileResolver.MaxBytes`, `MaxModuleBytes`, `MaxExternalBytes`,
-`MaxEntityBytes` — and the list reads as complete. None of them bounds bytes
-**produced during evaluation**, and `xpath` has no `MaxBytes` of any kind.
-A byte budget alongside `MaxItems` is what would close it.
-
 ### INFO — `javascript:` URLs pass through
 
 `<a href="{/d/u}"/>` yields `href="javascript:alert(document.domain)"`. This is
@@ -1277,6 +1256,7 @@ reject* refused a legal one, and *cost* produced the right answer too slowly.
 - **The `MaxItems` budget was not reached on the primary XQuery evaluation path** — cost, and worse than an absent budget: a caller read the documented option and it did not bind. A FLWOR is parsed and evaluated by `xquery` rather than by `xpath`, so its tuple stream reached none of the constructs that charge the budget, and the per-expression reset in `Compiled.Eval` cleared the counter once per tuple. `Context.HoldItemBudget` moves the boundary out to one query evaluation and `flwor.eval` charges both accumulators; the two paths now refuse the same expression at the same point. See CHANGELOG.
 - **The process environment was readable by any stylesheet or query** — false accept, the only I/O in the library that failed open. `fn:environment-variable` and `fn:available-environment-variables` now answer from `Context.Environment`, and withhold everything when it is nil. See CHANGELOG.
 - **A flat operator chain overflowed the stack during compilation** — availability, `maxParseDepth` counting nesting where the attack was length. Every infix loop in the precedence ladder now charges `maxChainLength`. See CHANGELOG.
+- **A string could be doubled past every budget** — availability: `MaxItems` counts items and a string is one item however long it is, so a 1,009-byte expression of twenty-six nested `let`s returned 671,088,640 bytes with no error, and the same chain of `xsl:variable` and `xsl:value-of` did it from a stylesheet. The byte limits above all bound **ingress**; nothing bounded bytes **produced during evaluation**. `xpath.MaxBytes` now charges the constructs that concatenate as they build — held across one query or one transform, because the chain's steps are siblings that a per-expression boundary never sees — and refuses with `XPDY0130`. The bound is 1 GiB against a largest measured legitimate string of 14,516,346 bytes. See CHANGELOG.
 
 **Sixth audit.**
 

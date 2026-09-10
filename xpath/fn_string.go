@@ -64,12 +64,18 @@ func registerStringFuncs(l *Library) {
 	for n := 2; n <= concatMaxArity; n++ {
 		concatArities = append(concatArities, n)
 	}
-	l.registerFn("concat", concatArities, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("concat", concatArities, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
 		for i := range args {
 			// fn:concat takes xs:anyAtomicType, not xs:string.
 			s, err := argAnyAtomicString(args, i)
 			if err != nil {
+				return nil, err
+			}
+			// Charged as it builds, not after: this is the doubling
+			// chain's own step, and charging the finished string would
+			// mean the allocation had already happened.
+			if err := ctx.countBytes(len(s)); err != nil {
 				return nil, err
 			}
 			sb.WriteString(s)
@@ -112,6 +118,11 @@ func registerStringFuncs(l *Library) {
 				return nil, err
 			}
 			parts = append(parts, v)
+		}
+		for _, p := range parts {
+			if err := ctx.countBytes(len(p) + len(sep)); err != nil {
+				return nil, err
+			}
 		}
 		return strSeq(strings.Join(parts, sep)), nil
 	}
@@ -251,7 +262,7 @@ func registerStringFuncs(l *Library) {
 
 	l.registerFn("substring", []int{2, 3}, fnSubstring)
 
-	l.registerFn("translate", []int{3}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("translate", []int{3}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		// Only the first argument is xs:string?. The two mapping arguments are
 		// xs:string, so an empty sequence there is a type error rather than an
 		// empty map.
@@ -267,10 +278,14 @@ func registerStringFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(translate(src, from, to)), nil
+		out := translate(src, from, to)
+		if err := ctx.countBytes(len(out)); err != nil {
+			return nil, err
+		}
+		return strSeq(out), nil
 	})
 
-	l.registerFn("codepoints-to-string", []int{1}, func(_ *Context, args []xdm.Sequence) (xdm.Sequence, error) {
+	l.registerFn("codepoints-to-string", []int{1}, func(ctx *Context, args []xdm.Sequence) (xdm.Sequence, error) {
 		var sb strings.Builder
 		for _, it := range xdm.Atomize(args[0]) {
 			// The parameter is xs:integer*, so a string is a type error
@@ -302,6 +317,9 @@ func registerStringFuncs(l *Library) {
 			if !isXMLChar(cp) {
 				return nil, fmt.Errorf(
 					"FOCH0001: %d is not a valid XML character", cp)
+			}
+			if err := ctx.countBytes(utf8.RuneLen(rune(cp))); err != nil {
+				return nil, err
 			}
 			sb.WriteRune(rune(cp))
 		}

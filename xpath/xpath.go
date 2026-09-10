@@ -164,6 +164,15 @@ func (c *Compiled) Eval(ctx *Context) (xdm.Sequence, error) {
 	if ctx == nil || !ctx.heldItems {
 		ctx.resetItems()
 	}
+	// The byte budget takes the same boundary for the same reason, and is held
+	// separately: a stylesheet that builds a legitimate string once per node
+	// of a large document is doing nothing wrong, and a budget carried across
+	// all of them would refuse it. The two holds are independent because the
+	// natural unit differs -- a FLWOR for items, one constructed value for
+	// bytes -- and a host that holds one does not thereby hold the other.
+	if ctx == nil || !ctx.heldBytes {
+		ctx.resetBytes()
+	}
 	if (c.staticBase != "" && c.staticBase != ctx.StaticBaseURI) ||
 		c.staticCollation != nil || c.compat != ctx.Compat ||
 		c.version != ctx.Version ||

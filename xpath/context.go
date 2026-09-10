@@ -255,6 +255,24 @@ type Context struct {
 	// the nested evaluations it has to cover.
 	heldItems bool
 
+	// bytes counts the bytes of string content this evaluation has built,
+	// bounding the one dimension items cannot: a string is a single item
+	// however long it is, so a chain of concatenations that doubles its
+	// result each step passes the item budget untouched. See MaxBytes.
+	//
+	// A pointer for the same reason items is one -- the Context is copied by
+	// value on every scope change, and a plain counter would let each copy
+	// accumulate its own. Nil means unbounded, which is what a hand-built
+	// Context gets.
+	bytes *int64
+
+	// heldBytes suppresses Compiled.Eval's per-expression reset of bytes,
+	// because a host language is measuring a larger evaluation against the
+	// same counter. Set by HoldByteBudget; the same mechanism as heldItems,
+	// and separate from it because the two budgets have different natural
+	// boundaries -- a FLWOR for items, one constructed value for bytes.
+	heldBytes bool
+
 	// Now is the value fn:current-dateTime and its siblings return.
 	//
 	// The spec requires these to be stable for the whole of one evaluation:
@@ -307,6 +325,34 @@ func (c *Context) depthLimit() int {
 // works in thousands of nodes, not tens of millions, so this only fires on
 // input designed to exhaust memory or on a genuine runaway.
 const MaxItems = 5_000_000
+
+// MaxBytes bounds the string content one evaluation may build.
+//
+// MaxItems bounds how many items an evaluation materialises, and a string is
+// one item however long it is, so nothing bounded the bytes: twenty-six
+// nested "let"s, each concatenating the previous string with itself, is a
+// 1,009-byte expression that returned 671,088,640 bytes without complaint.
+// Four more lines is ten gigabytes. The limits in docs/security.md all bound
+// bytes at ingress -- what a parse, a module or an external entity may read --
+// and none of them sees a string produced during evaluation.
+//
+// The bound is set from measurement rather than taste. Instrumenting the
+// charge points and running the suites and the real-world corpora, the
+// largest legitimate accumulation was 14,516,346 bytes, in the XSLT 3.0
+// suite. The XQuery suite peaked at 4,382,554 -- Constr-cont-document-3,
+// codepoints-to-string over every valid XML codepoint -- the XPath suite at
+// 4,194,304, XSLT 2.0 at 753,560, and the DocBook xslTNG and XSpec corpora,
+// 877 real documents through two large real stylesheets, at 1,031,269.
+// A gibibyte is 74 times the largest of those, so a transform that serialises
+// a big document into one text node or joins a whole corpus is unaffected,
+// which matters more than the bound being tight: a false rejection is a
+// conformance bug, and refusing legitimate work would be worse than the
+// runaway this guards.
+//
+// The charge is cumulative over the evaluation, not per string, so the
+// doubling chain is refused while it is still doubling -- the step that would
+// cross the bound never allocates.
+const MaxBytes = 1 << 30
 
 // DocumentResolver loads a document by URI for fn:doc and fn:document.
 type DocumentResolver interface {
@@ -490,6 +536,7 @@ func NewContext(item xdm.Item, funcs FunctionLibrary) *Context {
 		Position: 1,
 		Size:     1,
 		items:    new(int64),
+		bytes:    new(int64),
 	}
 	if item == nil {
 		c.Position, c.Size = 0, 0
@@ -690,6 +737,79 @@ func (c *Context) HoldItemBudget() *Context {
 func (c *Context) resetItems() {
 	if c != nil && c.items != nil {
 		atomic.StoreInt64(c.items, 0)
+	}
+}
+
+// countBytes charges n bytes of built string content against the evaluation
+// budget.
+//
+// The constructs that concatenate call it as they build, so a runaway is
+// stopped while it is running rather than after it has already allocated. A
+// Context with no budget -- one assembled by hand rather than through
+// NewContext -- is unbounded, which keeps the type usable as a plain value.
+func (c *Context) countBytes(n int) error {
+	if c == nil || c.bytes == nil || n <= 0 {
+		return nil
+	}
+	if atomic.AddInt64(c.bytes, int64(n)) > MaxBytes {
+		// XPDY0130 is this engine's own code for "the evaluation asked for
+		// more than I will allocate", and the wording says bytes rather than
+		// items so the two refusals are not confused. The suite sanctions it
+		// for exactly this shape: fn/codepoints-to-string.xml's overflow case
+		// builds an impossibly long string and accepts XPDY0130 for it. The
+		// sentinel is added alongside so a caller can tell a refusal from a
+		// fault. See xdm.ErrResourceLimit.
+		return fmt.Errorf(
+			"XPDY0130: evaluation built more than %d bytes of string "+
+				"content; the expression is building a string too large to "+
+				"hold: %w", MaxBytes, xdm.ErrResourceLimit)
+	}
+	return nil
+}
+
+// ChargeBytes charges n bytes of built string content against the evaluation
+// budget, reporting XPDY0130 when the budget is exhausted.
+//
+// It is exported for a host language that concatenates in its own evaluator
+// rather than through this package's Expr tree. XSLT is the case: xsl:value-of
+// joins its selected sequence with xslt's own code, so the text it appends
+// reaches none of the functions here that charge as they grow.
+func (c *Context) ChargeBytes(n int) error { return c.countBytes(n) }
+
+// HoldByteBudget returns a copy of c on which Compiled.Eval will not reset the
+// byte budget, and arms a fresh budget for the construction about to begin.
+//
+// Compiled.Eval resets per expression because that is the right boundary for a
+// bare XPath expression. A host that builds one result out of many expressions
+// has the opposite problem: a query's "let" chain and a template's run of
+// xsl:variable declarations each reach xpath once per binding, so the
+// per-expression reset clears the counter between the doublings and a chain
+// that doubles its result per line is never charged for the doubling. Holding
+// it moves the boundary out to one query evaluation or one transform, which is
+// where "how much string content must fit in memory at once" is actually
+// asked.
+//
+// The flag rides on the value copy the scope-changing methods make, so every
+// nested evaluation inherits the hold while the caller's own Context keeps the
+// per-expression boundary it had. A context that already holds the budget is
+// returned unchanged rather than re-armed: an inner construction that reset
+// the counter would clear the outer one's charges and hand it an allowance it
+// has already spent, which is the leak this exists to avoid arriving from the
+// other side.
+func (c *Context) HoldByteBudget() *Context {
+	if c == nil || c.heldBytes {
+		return c
+	}
+	n := *c
+	n.heldBytes = true
+	n.resetBytes()
+	return &n
+}
+
+// resetBytes starts a fresh byte budget for one expression evaluation.
+func (c *Context) resetBytes() {
+	if c != nil && c.bytes != nil {
+		atomic.StoreInt64(c.bytes, 0)
 	}
 }
 

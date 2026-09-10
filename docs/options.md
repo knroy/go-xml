@@ -101,6 +101,7 @@ syntax error does *not* carry the sentinel.
 | `maxParseDepth` (type) | `xpath/parser_path.go` | `XPST0003` | as above; a *type* nests through a path the expression counter never sees |
 | `maxChainLength` | `xpath/parser.go` | `XPST0003` | as above; the expression is well-formed, and it is the *length* of one flat operator chain that is refused, not its nesting |
 | `MaxItems` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own) |
+| `MaxBytes` | `xpath/context.go` | `XPDY0130` | (no misdescription; the code is this engine's own, and the suite already sanctions it for an over-long string — see `fn/codepoints-to-string.xml`. The wording says bytes rather than items, so the two refusals that share the code are still told apart) |
 | `Context.MaxDepth` | `xpath/context.go` | `XPDY0001` | no context item is defined |
 | `backtrackBudget` | `xpath/regex_backtrack.go` | `FORX0002` | the regular expression is invalid |
 | range bound | `xpath/operators.go` | `FOAR0002` | a numeric operation overflowed |

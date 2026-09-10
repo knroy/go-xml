@@ -1310,6 +1310,13 @@ func (e *StringConcat) Eval(ctx *Context) (xdm.Sequence, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The "||" operator is fn:concat($a, $b) by definition, and it is charged
+	// here rather than routed through concat because it evaluates its operands
+	// directly. Without this the operator is a doubling primitive that the
+	// budget on concat does not see.
+	if err := ctx.countBytes(len(ls) + len(rs)); err != nil {
+		return nil, err
+	}
 	return strSeq(ls + rs), nil
 }
 

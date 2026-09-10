@@ -103,6 +103,9 @@ func registerRegexFuncs(l *Library) {
 			if e := bt.Err(); e != nil {
 				return nil, e
 			}
+			if err := ctx.countBytes(len(out)); err != nil {
+				return nil, err
+			}
 			return strSeq(out), nil
 		}
 		if br != nil {
@@ -113,7 +116,11 @@ func registerRegexFuncs(l *Library) {
 			if err != nil {
 				return nil, err
 			}
-			return strSeq(br.ReplaceAllString(s, goRepl)), nil
+			out := br.ReplaceAllString(s, goRepl)
+			if err := ctx.countBytes(len(out)); err != nil {
+				return nil, err
+			}
+			return strSeq(out), nil
 		}
 		// A pattern that matches the empty string would loop forever in some
 		// engines and produce surprising output here; the spec makes it an
@@ -125,7 +132,11 @@ func registerRegexFuncs(l *Library) {
 		if err != nil {
 			return nil, err
 		}
-		return strSeq(re.ReplaceAllString(s, goRepl)), nil
+		out := re.ReplaceAllString(s, goRepl)
+		if err := ctx.countBytes(len(out)); err != nil {
+			return nil, err
+		}
+		return strSeq(out), nil
 	})
 
 	// fn:tokenize($input as xs:string?) as xs:string*, added in 3.1.

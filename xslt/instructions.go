@@ -104,7 +104,17 @@ func (i *valueOfInstr) Execute(rt *runtime, out *outputBuilder) error {
 	if err := checkAtomizable(seq); err != nil {
 		return err
 	}
-	out.AppendText(constructedText(seq, sep))
+	text := constructedText(seq, sep)
+	// xsl:value-of is where a doubled string is realised in a stylesheet: a
+	// chain of xsl:variable bodies, each holding two xsl:value-of of the
+	// previous one, doubles its result per declaration and none of it reaches
+	// the functions in xpath that charge as they build. Charging the text
+	// here, against the budget evalVariableRaw holds across the body, is what
+	// stops that chain while it is still doubling.
+	if err := rt.ctx.ChargeBytes(len(text)); err != nil {
+		return err
+	}
+	out.AppendText(text)
 	return nil
 }
 

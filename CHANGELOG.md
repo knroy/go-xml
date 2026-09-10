@@ -16,6 +16,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| Nothing bounded the bytes an evaluation produced, so a 1,009-byte expression of nested doubling `let`s returned 640 MB, and a stylesheet chain of `xsl:variable` did the same | `xpath.MaxBytes` charges the constructs that concatenate as they build, held across one query or one transform; the bound is 1 GiB against a largest measured legitimate string of 13.8 MB. Refuses with `XPDY0130`. | — |
 | A self-applying function item recursed uncharged and killed the process with an unrecoverable stack overflow | `DynamicCall.Eval` now descends before `Invoke`, and an inline function's closure takes `Depth` from the call rather than from where it was written; the attack refuses with `XPDY0001` like every other recursion. | — |
 | `TransformOptions.MaxDepth` bounded template recursion only, so an expression was held at the package default of 500 whatever the caller asked | The option now reaches the XPath context, which is what lets it govern the path that takes untrusted input — and lets a continuation-passing function nesting 530 deep run. | — |
 | `fn:distinct-values` compared numerics pairwise, so n distinct integers cost O(n^2) `eq` calls with a `big.Rat` each | Non-transitive promotion only involves float and double, so integer and decimal now key on their exact rational and only the inexact values are scanned. 100,000 integers: 573 s and 480 GB become 0.15 s and 109 MB. | — |

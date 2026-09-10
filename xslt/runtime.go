@@ -681,7 +681,18 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		now = time.Now()
 	}
 	xctx = xctx.WithNow(now)
-	rt.ctx = xctx
+	// One transform is the unit the byte budget is measured over. The chain
+	// that defeats a narrower boundary is a run of SIBLING xsl:variable
+	// declarations, each holding two xsl:value-of of the one before it: no
+	// single variable is large, and Compiled.Eval's per-expression reset
+	// clears the counter between every one of them, so a bound drawn at the
+	// expression or at one constructed value never sees the doubling. The
+	// transform is also the honest unit -- its constructed string content is
+	// what has to fit in memory at once -- and it is far above what real work
+	// reaches: the largest a whole document took through the DocBook xslTNG
+	// and XSpec corpora was 1,031,269 bytes, and the largest in the XSLT 3.0
+	// suite 14,516,346. See xpath.MaxBytes.
+	rt.ctx = xctx.HoldByteBudget()
 	// A variable reference resolves against the package the expression was
 	// written in, so that two packages' globals of one name stay distinct.
 	// See globalBindingName.
