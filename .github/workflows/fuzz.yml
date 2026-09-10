@@ -1,0 +1,69 @@
+name: Fuzz
+
+# Scheduled, not per-push. A coverage-guided search is nondeterministic by
+# construction: the same commit can pass one run and fail the next when the
+# mutator happens to reach further. Hung off every merge that is a job people
+# turn off rather than fix, so it runs nightly and on demand instead, and the
+# per-push gate in ci.yml stays deterministic. The seed corpora still run as
+# ordinary unit tests there, so a target that stops compiling is caught in a
+# minute; what this job adds is the search.
+on:
+  schedule:
+    # 04:17 UTC daily. Not on the hour: GitHub's scheduler queues the whole
+    # world's on-the-hour jobs together and runs them late.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # One target per matrix leg. `go test -fuzz` takes exactly one target per
+  # invocation -- that is Go's restriction, not this repository's -- so nine
+  # targets are nine runs whatever shape they are given, and a matrix gives
+  # each its own log and its own crasher artifact. fail-fast is off because
+  # the eight other targets are still worth searching once one has found
+  # something.
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {pkg: ./xpath, target: FuzzCompileNoPanic}
+          - {pkg: ./internal/xmlfork, target: FuzzTokenNoPanic}
+          - {pkg: ./xdm, target: FuzzParseNoPanic}
+          - {pkg: ./xdm, target: FuzzParseDOCTYPE}
+          - {pkg: ./relaxng, target: FuzzParseCompactNoPanic}
+          - {pkg: ./xsd, target: FuzzLoadSchemaNoPanic}
+          - {pkg: ./xsd, target: FuzzSchemaComplexity}
+          - {pkg: ./xslt, target: FuzzSerializeRoundTrip}
+          - {pkg: ./xslt, target: FuzzCompileStylesheetNoPanic}
+    name: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+      # -run '^$' suppresses the ordinary tests so that only the search runs;
+      # GOXSLT_NO_SUITES keeps the conformance harnesses out of it for the
+      # same reason ci.yml's fast gate sets it. -fuzztime is bounded: nine
+      # legs at 300s is five minutes of wall clock, since they run in
+      # parallel, and a scheduled job that takes an hour is one nobody reads.
+      - name: go test -fuzz ${{ matrix.target }}
+        env:
+          GOXSLT_NO_SUITES: '1'
+        run: go test ${{ matrix.pkg }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 300s -count=1
+      # A crasher is the whole point of the job, and Go writes it to the
+      # package's own testdata/fuzz/<Target>/ -- which is NOT the gitignored
+      # top-level testdata/ holding the third-party suite checkouts. Uploading
+      # it means the reproducing input survives the runner: commit it into
+      # that same path and it replays as a seed on every build thereafter.
+      - name: Upload the crasher
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crasher-${{ matrix.target }}
+          path: ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
