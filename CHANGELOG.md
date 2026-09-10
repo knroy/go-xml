@@ -16,6 +16,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| A call on a stylesheet function inside a streamable instruction was never assessed | The §19.8.5 function table reached the body check but not the instruction analyser, so every such call was unmodelled and suppressed the whole body's verdict. Threaded it through. 11,452 → 11,454. | — |
+| `for` and quantified expressions were unmodelled, hiding §19.8.8.11 | §19.8.8.1–2 make the return/satisfies clause a higher-order operand, which turns a streaming-parameter reference inside it roaming. Implemented both. 11,454 → 11,456. | — |
 | A streamable rule using `current-group()` in its own grouping was refused | §19.8.8.4 widens a union of two striding operands to crawling by its own admission, so `current-group() except .` roamed and `si-group-055` was rejected though the catalog asserts output. Withheld inside the grouping only, which keeps `si-fork-116` refused. 11,443 → 11,451. | — |
 | A pattern facet was tested against the source value, not the canonical result | F&O 3.0 §18.3.3 tests the pattern against the cast result's canonical form; the engine handed the schema the source's `fn:string` form. `canonicalLexical` answers for the numeric primitives. | — |
 | A cast to a union's list member returned one item instead of a sequence | F&O 3.0 §18.3.6 makes a cast to a list type a sequence, but the impure-union branch returned the operand unchanged. `SchemaUnionListMemberType` builds the sequence, atomic members tried first. | — |

@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,320 | 99.91% | **26** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,452 | 99.43% | **66** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,456 | 99.46% | **62** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -147,7 +147,7 @@ three `regex-syntax-xslt20` cases.
 
 ## xslt 3.0 — 66 failures
 
-**XSLT 3.0: 11,452 / 11,518 = 99.43%.**
+**XSLT 3.0: 11,456 / 11,518 = 99.46%.**
 
 **44 of the 66 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
@@ -215,6 +215,8 @@ and tested on its own, in `xslt/streamlattice.go` and
 | 19.5 posture, 19.7 sweep | complete |
 | 19.6 context posture | the `xsl:stream` / streamable `xsl:source-document` clauses only |
 | 19.8.1 general streamability rules | complete, including the absorption downgrade, the choice-group and same-posture escapes, the higher-order rule and the singleton-builtin rule |
+| 19.8.8.1 `for` expressions | complete; the "S must be grounded" rule is carried by the navigation usage §19.8.1 gives S |
+| 19.8.8.2 quantified expressions | complete |
 | 19.8.8.3 `if` expressions | complete |
 | 19.8.8.7 path expressions | complete, both phases, including the scanning-expression reassessment that makes `//x` streamable |
 | 19.8.8.8 axis steps | the posture table and the predicate rule; not the numeric-predicate narrowing |
@@ -238,9 +240,10 @@ than the numerous ones. Absent entirely:
 - **Streamable stylesheet functions (§19.8.5) and accumulators (§19.8.4).**
   These are what the `su-*` test families exercise, and they are the largest
   single block of the remaining cases.
-- **§19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and quantified
-  expressions, §19.8.8.6 simple mapping (`!`), §19.8.8.10 dynamic calls,
-  §19.8.8.14 inline functions, §19.8.8.15 map expressions.**
+- **§19.8.8.10 dynamic calls, §19.8.8.14 inline functions, and `let`
+  expressions.** §19.8.8.4 union/intersect/except, §19.8.8.1–2 `for` and
+  quantified expressions, §19.8.8.6 simple mapping (`!`) and §19.8.8.15/16 map
+  expressions are implemented.
 - **The 18 per-function sections of §19.8.9** that do not follow the general
   rules: `fn:current`, `fn:last`, `fn:position`, `fn:root`, `fn:reverse`,
   `fn:innermost`, `fn:outermost`, `fn:fold-right`, `fn:function-lookup`, the

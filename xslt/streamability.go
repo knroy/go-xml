@@ -213,11 +213,53 @@ func (a *analyzer) expr(e xpath.Expr) props {
 		// the general rules apply (streamexprs.go).
 		return a.arrayConstructor(x)
 
+	case *xpath.ForExpr:
+		// §19.8.8.1, in streamexprs.go.
+		return a.forExpr(x)
+
+	case *xpath.QuantifiedExpr:
+		// §19.8.8.2, in streamexprs.go.
+		return a.quantifiedExpr(x)
+
 	default:
-		// for, some/every, let, inline functions, dynamic calls and named
-		// function references. Each has its own section in §19.8.8 and none
-		// is modelled yet.
+		// let, inline functions, dynamic calls and named function
+		// references. Each has its own section in §19.8.8 and none is
+		// modelled yet.
 		return a.unknown()
+	}
+}
+
+// higherOrderOperand assesses e as a higher-order operand of the construct
+// being analysed, with the given usage.
+//
+// Two things follow from the operand being higher-order, and both matter.
+// combine refuses a construct whose one consuming operand is higher-order,
+// because the parent may evaluate it more than once and the input cannot be
+// rewound. And §19.8.8.11 makes a reference to the streaming parameter
+// non-singular once a higher-order operand separates it from the function
+// body, which for the absorbing, shallow-descent and deep-descent categories
+// turns that reference roaming.
+func (a *analyzer) higherOrderOperand(e xpath.Expr, u usage) operand {
+	inner := &analyzer{
+		ctxPosture:        a.ctxPosture,
+		ctxAllowsChildren: a.ctxAllowsChildren,
+		known:             a.known,
+		funcs:             a.funcs,
+		streamingParam:    a.streamingParam,
+		paramCategory:     a.paramCategory,
+		hasStreamParam:    a.hasStreamParam,
+		higherOrder:       true,
+		currentGroup:      a.currentGroup,
+		groupInScope:      a.groupInScope,
+		groupOutOfReach:   a.groupOutOfReach,
+	}
+	p := inner.expr(e)
+	a.known = a.known && inner.known
+	return operand{
+		props:          p,
+		usage:          u,
+		allowsChildren: inner.allowsChildren(e),
+		higherOrder:    true,
 	}
 }
 

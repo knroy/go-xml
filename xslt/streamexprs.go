@@ -222,3 +222,70 @@ func isDocumentNodeWithContent(st xpath.SequenceType) bool {
 	}
 	return kt.Kind == xdm.KindDocument && !kt.Any && kt.Content != nil
 }
+
+// forExpr applies §19.8.8.1 to "for $v in S return R".
+//
+// The section gives two rules, in order:
+//
+//	If S is not grounded, then roaming and free-ranging.
+//	Otherwise, the general streamability rules apply. The operand roles are:
+//	  The in expression (S). This has usage navigation.
+//	  The return expression (R). This is a higher-order operand with usage
+//	  transmission.
+//
+// The first rule stops the range variable being bound to a streamed node --
+// "this disallows expressions of the form for $x in child::section return
+// $x/para, because this requires data flow analysis". It is not written out
+// below, because the second rule already implies it and a branch that cannot
+// be reached is a branch no test can hold honest: §19.8.1 gives the usage
+// navigation an adjusted sweep of free-ranging for EVERY non-grounded posture
+// (climbing, striding and crawling alike), and a free-ranging operand makes
+// the construct roaming before any other rule is consulted. So giving S the
+// usage navigation, as rule 2 requires, rejects exactly the expressions rule 1
+// names. Sabotage-testing an explicit posture test here left every assertion
+// green, which is what dead code looks like.
+//
+// A multi-clause "for $i in X, $j in Y return R" is nested, exactly as
+// §19.8.8.2 says to rewrite the quantified form: the outer clause's return
+// expression is the rest of the for. The rewriting is done here rather than
+// in the parser because it is a rule about this analysis and nothing else.
+func (a *analyzer) forExpr(x *xpath.ForExpr) props {
+	if len(x.Bindings) == 0 {
+		return a.unknown()
+	}
+	seq := a.operandOf(x.Bindings[0].Seq, usageNavigation)
+	ret := x.Return
+	if len(x.Bindings) > 1 {
+		ret = &xpath.ForExpr{Bindings: x.Bindings[1:], Return: x.Return}
+	}
+	return combine([]operand{
+		seq,
+		a.higherOrderOperand(ret, usageTransmission),
+	}, false)
+}
+
+// quantifiedExpr applies §19.8.8.2 to "some|every $v in S satisfies C".
+//
+// Unlike the for rule, there is no separate "S must be grounded" test: the
+// general rules apply directly, with S carrying usage navigation -- and
+// navigation from any non-grounded posture is free-ranging (§19.8.1), which
+// reaches the same place by the route the spec chose. C is a higher-order
+// operand with usage inspection.
+//
+// "some $i in X, $j in Y satisfies C" is rewritten as nested quantified
+// expressions, which §19.8.8.2 asks for in as many words.
+func (a *analyzer) quantifiedExpr(x *xpath.QuantifiedExpr) props {
+	if len(x.Bindings) == 0 {
+		return a.unknown()
+	}
+	test := x.Test
+	if len(x.Bindings) > 1 {
+		test = &xpath.QuantifiedExpr{
+			Every: x.Every, Bindings: x.Bindings[1:], Test: x.Test,
+		}
+	}
+	return combine([]operand{
+		a.operandOf(x.Bindings[0].Seq, usageNavigation),
+		a.higherOrderOperand(test, usageInspection),
+	}, false)
+}

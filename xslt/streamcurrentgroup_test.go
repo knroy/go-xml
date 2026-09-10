@@ -127,7 +127,7 @@ func TestCurrentGroupInANestedContainerIsWithheld(t *testing.T) {
 		t.Fatal("no xsl:source-document in the test stylesheet")
 	}
 	_, known := analyzeSequenceConstructor(container, postureStriding,
-		attributeSetDeclarations(root))
+		attributeSetDeclarations(root), collectStreamFuncs(root))
 	if known {
 		t.Error("a current-group() call inside a nested streamable container was " +
 			"reported as modelled; the outer select expression was never assessed, " +

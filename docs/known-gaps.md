@@ -60,7 +60,7 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**44 of the 66 XSLT 3.0 failures**, and by far the largest single gap in the
+**40 of the 62 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
@@ -69,14 +69,14 @@ classifications, and §19.6's context posture for both
 What remains is a long tail of individual constructs rather than a missing body
 of rules.
 
-Every one of the 45 fails in the same direction: the suite expects `XTSE3430` —
+Every one of the 40 fails in the same direction: the suite expects `XTSE3430` —
 *this construct is not guaranteed streamable* — and the transform succeeds
 instead, because the analysis returns `known=false` for a construct it cannot
 yet model and correctly declines to raise an error it has not proved.
 
 That direction is the whole diagnosis. The engine builds a tree and streams
 nothing, so every construct the analysis would reject is one it simply
-executes. It produces the **right answer** for all 45; what it does not
+executes. It produces the **right answer** for all 40; what it does not
 produce is the static refusal §19.8 requires a streaming processor to make
 before running anything. A construct that is not guaranteed streamable is still
 a construct with a well-defined result, and a tree-building processor reaches
@@ -84,7 +84,7 @@ it. So these are not wrong answers, and they are not silent erasure: they are a
 static analysis that is not yet complete.
 
 They cluster by construct rather than by cause, which is what confirms it is
-missing rules and not 45 defects: `su-absorbing`, `su-shallow-descent`,
+missing rules and not 40 defects: `su-absorbing`, `su-shallow-descent`,
 `si-fork` and `si-for-each-group`, then a long tail across `su-*`, `si-*`,
 `sf-*` and `sx-*`.
 
@@ -107,7 +107,29 @@ asserts output for exactly that. And §19.8.9.4's roaming verdict for a
 reach, which is what keeps `si-fork-116` refused while `si-fork-115`, asking
 for the *key* rather than the group, compiles.
 
-**Note what it would and would not buy.** Completing it would move the 45
+**Eight of the remaining forty are not reachable from the spec as written.**
+`su-absorbing-205/901/905/908`, `su-inspection-901/902/903` and
+`su-shallow-descent-902` each declare a streamable function whose body the
+§19.8.5 body rules accept, yet the catalog demands `XTSE3430`. The discriminator
+is not multiplicity: `su-inspection-A`, a stylesheet the catalog expects to
+*run*, has a function with the same four references to its streaming parameter
+that the rejected `su-inspection-901` has. §19.8.8.11's table gives the
+streaming parameter of an absorbing or inspection function a **grounded**
+posture, and §19.8.1 then says "if P is grounded, then S′ is S" — so absorbing
+that reference costs nothing and the body is motionless, exactly as the analysis
+reports. The suite's own catalog says as much for `su-absorbing-205`: "Analysis
+suggests there's a rule missing in the spec: multiple references to the
+streaming parameter, or references within a higher-order operand, should not be
+allowed" (w3c/qtspecs#15, saxonica.plan.io#4561). Saxon 9.8 passes all eight,
+so the rule exists somewhere — but not in the text, and inventing one that
+rejects `su-inspection-901` while sparing `su-inspection-A` would be guessing at
+a rule whose only evidence is the answers. `su-inspection-902` and
+`su-shallow-descent-906` ("first argument allows a sequence") are the clearest
+case: §19.8.5.3's own worked example declares `<xsl:param name="input"
+as="node()*"/>` and is called guaranteed-streamable, so a cardinality rule would
+contradict the spec's example and reject valid stylesheets. Left failing.
+
+**Note what it would and would not buy.** Completing it would move the 40
 cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.42% to about
 99.80%. It would not make the engine stream, and it would not change the result
 of a single transform that currently succeeds — it would convert 45 correct
@@ -135,7 +157,7 @@ behind it.
 that `system-property('xsl:supports-streaming')` answers `yes`. §26.5 requires a
 processor that does not conform to the streaming feature to answer `no`, which
 is what this answers. Passing it would mean lying to every stylesheet that
-branches on it to choose a fallback. It is the same gap as the 45 above, seen
+branches on it to choose a fallback. It is the same gap as the 40 above, seen
 from the other side, and it stays failing for as long as the analysis is
 missing — which is the correct behaviour, not a cost.
 

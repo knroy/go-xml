@@ -275,6 +275,9 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		return nil
 	}
 	sets := attributeSetDeclarations(root)
+	// §19.8.5: a call on a stylesheet function inside a rule body is assessed
+	// by its declared category, so the declarations have to be to hand.
+	funcs := collectStreamFuncs(root)
 	var err error
 	walkElements(root, func(el *xdm.Node) bool {
 		if err != nil {
@@ -295,7 +298,7 @@ func checkStreamableModeBodies(root *xdm.Node) error {
 		if !inStreamable {
 			return true
 		}
-		p, known := analyzeSequenceConstructor(el, postureStriding, sets)
+		p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs)
 		if known && !p.streamable() && !bodyCallsCurrentGroup(el) {
 			err = fmt.Errorf(
 				"the body of the template rule matching %q in a streamable "+

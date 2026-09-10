@@ -84,7 +84,7 @@ func checkStreamability(root *xdm.Node) error {
 		// per-expression scan below, and it catches what that scan cannot:
 		// an instruction that is streamable expression by expression but
 		// whose operands together read the stream twice.
-		if p, known := analyzeSequenceConstructor(el, postureStriding, sets); known && !p.streamable() {
+		if p, known := analyzeSequenceConstructor(el, postureStriding, sets, funcs); known && !p.streamable() {
 			err = fmt.Errorf(
 				"the body of a streamable %s is %v and %v, "+
 					"so it is not guaranteed-streamable (XTSE3430)",

@@ -66,6 +66,17 @@ type instrAnalyzer struct {
 	// xsl:for-each-group whose body the walk never assessed, so a call on
 	// fn:current-group() within it is withheld rather than judged.
 	groupOutOfReach bool
+
+	// funcs indexes the stylesheet's own xsl:function declarations, so that
+	// an expression inside an instruction body can assess a call on one
+	// under §19.8.5 (callProps) instead of abandoning the whole body.
+	//
+	// Without it every stylesheet-function call in a streamable instruction
+	// reached funcCall's "not modelled" branch, which cleared known for the
+	// enclosing construct and suppressed the XTSE3430 that §19.8.5's call
+	// rules are there to raise. The function table was already built by
+	// checkStreamability for the body check; it simply never reached here.
+	funcs map[funcKey]*streamFunc
 }
 
 // analyzeInstruction returns the posture and sweep of an XSLT instruction (or
@@ -98,15 +109,22 @@ func analyzeAttributeSet(decl *xdm.Node, attrSets map[xdm.QName][]*xdm.Node) (pr
 
 // analyzeSequenceConstructor returns the posture and sweep of the sequence
 // constructor formed by the children of el.
-func analyzeSequenceConstructor(el *xdm.Node, ctx posture, attrSets map[xdm.QName][]*xdm.Node) (props, bool) {
+// funcs indexes the stylesheet's xsl:function declarations so that a call on
+// one inside the body is assessed under §19.8.5; a nil map leaves every such
+// call unmodelled, which is right only where the declarations are not to hand.
+func analyzeSequenceConstructor(
+	el *xdm.Node, ctx posture, attrSets map[xdm.QName][]*xdm.Node,
+	funcs map[funcKey]*streamFunc,
+) (props, bool) {
 	a := &instrAnalyzer{
 		ctxPosture:        ctx,
 		ctxAllowsChildren: true,
 		known:             true,
 		attrSets:          attrSets,
+		funcs:             funcs,
 		// §19.8.9.4 for a container nested inside an xsl:for-each-group: see
 		// enclosingGroupSelect.
-		currentGroup: enclosingGroupSelect(el, attrSets),
+		currentGroup: enclosingGroupSelect(el, attrSets, funcs),
 	}
 	a.groupInScope = a.currentGroup != props{}
 	// A nested container whose enclosing group is not grounded reads streamed
@@ -134,7 +152,9 @@ func analyzeSequenceConstructor(el *xdm.Node, ctx posture, attrSets map[xdm.QNam
 // call roaming, and si-group-052 -- identical but for a select of "Order" --
 // expects exactly that rejection. The zero props signals "no enclosing group",
 // which leaves the caller's own roaming answer in place.
-func enclosingGroupSelect(el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node) props {
+func enclosingGroupSelect(
+	el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node, funcs map[funcKey]*streamFunc,
+) props {
 	for n := el.Parent; n != nil; n = n.Parent {
 		if !isXSL(n, "for-each-group") {
 			continue
@@ -148,6 +168,7 @@ func enclosingGroupSelect(el *xdm.Node, attrSets map[xdm.QName][]*xdm.Node) prop
 			ctxAllowsChildren: true,
 			known:             true,
 			attrSets:          attrSets,
+			funcs:             funcs,
 		}
 		sel := outer.exprPropsIn(at.Value, n, postureStriding, true)
 		if !outer.known || sel.posture != postureGrounded {
@@ -186,6 +207,7 @@ func (a *instrAnalyzer) sub(ctx posture, allowsChildren bool) *instrAnalyzer {
 		currentGroup:      a.currentGroup,
 		groupInScope:      a.groupInScope,
 		groupOutOfReach:   a.groupOutOfReach,
+		funcs:             a.funcs,
 	}
 }
 
@@ -228,6 +250,7 @@ func (a *instrAnalyzer) exprOperandIn(src string, el *xdm.Node, ctx posture, all
 		currentGroup:      a.currentGroup,
 		groupInScope:      a.groupInScope,
 		groupOutOfReach:   a.groupOutOfReach,
+		funcs:             a.funcs,
 	}
 	p := an.expr(expr)
 	kids := an.allowsChildren(expr)
