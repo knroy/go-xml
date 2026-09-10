@@ -81,11 +81,16 @@ type runtime struct {
 	keyBuilding map[keyCacheKey]bool
 
 	// accumValues caches each accumulator's value at every node of a tree,
-	// and accumBuilding guards the circular case. Both mirror keyIndex and
-	// keyBuilding, and for the same reason: computing one value means
-	// walking everything before it, so the walk is done once per pair.
+	// and accumBuilding holds the values recorded so far by a walk still in
+	// progress. Both mirror keyIndex and keyBuilding, and for the same
+	// reason: computing one value means walking everything before it, so
+	// the walk is done once per pair. Unlike keyBuilding, the in-progress
+	// entry is the partial table rather than a flag, because a rule is
+	// allowed to read values the walk has already recorded (§18.2.4: an
+	// end-phase rule may read the pre-descent value of its own node), and
+	// only a value not yet recorded is circular.
 	accumValues   map[accumCacheKey]*accumulatorValues
-	accumBuilding map[accumCacheKey]bool
+	accumBuilding map[accumCacheKey]*accumulatorValues
 	// accumOrigin maps a node produced by a copy-accumulators="yes" copy to
 	// the node it was copied from, which is the only thing that can say what
 	// an accumulator's value at the copy should be. It is a map on the
@@ -569,7 +574,7 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		keyBuilding: map[keyCacheKey]bool{},
 
 		accumValues:   map[accumCacheKey]*accumulatorValues{},
-		accumBuilding: map[accumCacheKey]bool{},
+		accumBuilding: map[accumCacheKey]*accumulatorValues{},
 		accumOrigin:   map[*xdm.Node]*xdm.Node{},
 		treeAccums:    map[*xdm.Node]*modeAccumulators{},
 		streamedTrees: map[*xdm.Node]bool{},

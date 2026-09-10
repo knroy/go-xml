@@ -110,6 +110,20 @@ func TestAccumulatorAfterSweepRules(t *testing.T) {
 		}
 	})
 
+	// The climbing rule: "If the context posture is climbing, the function
+	// is free-ranging." The target is an ancestor of the node being
+	// processed, whose post-descent value the stream has not reached. The
+	// Last Call draft's cascade has no such rule and cannot refuse
+	// accumulator-060; the Recommendation's does. It sits before the known
+	// check, so an unmodelled position does not let the call through.
+	t.Run("climbing context posture", func(t *testing.T) {
+		sw, ok := accumulatorAfterSweep(accumAfterState{}, postureClimbing, true)
+		if !ok || sw != sweepFreeRanging {
+			t.Errorf("a climbing context posture makes the call free-ranging; "+
+				"got %v, ok=%v", sw, ok)
+		}
+	})
+
 	// Rule 3: a context item that cannot have children -- a text node, say --
 	// makes the call motionless whatever surrounds it, because both the
 	// pre- and post-descent values are known before any construct sees it.
@@ -145,6 +159,47 @@ func TestAccumulatorAfterSweepRules(t *testing.T) {
 		if _, ok := accumulatorAfterSweep(
 			accumAfterState{}, postureStriding, true); ok {
 			t.Error("a position the walk did not describe must be withheld")
+		}
+	})
+}
+
+// accumulator-060's shape: the post-descent value of the accumulator is asked
+// for on the PARENT of the node being processed. The parent step is climbing
+// and motionless, and the call after a consuming xsl:apply-templates would be
+// motionless by rule 8, so the eight rules of the Last Call draft leave the
+// path grounded and motionless; only the climbing rule refuses it.
+func TestAccumulatorAfterOnParentXTSE3430(t *testing.T) {
+	sheet := func(expr string) string {
+		return modeSheet(`<xsl:accumulator name="a" initial-value="0" streamable="yes" as="xs:integer">
+		  <xsl:accumulator-rule match="fig" select="$value + 1"/>
+		</xsl:accumulator>
+		<xsl:template match="fig" mode="s">
+		  <pix><xsl:apply-templates mode="s"/><p><xsl:value-of select="` + expr + `"/></p></pix>
+		</xsl:template>`)
+	}
+	t.Run("post-descent value of the parent is refused", func(t *testing.T) {
+		err := compileModeSheet(t, sheet("../accumulator-after('a')"))
+		if err == nil || !strings.Contains(err.Error(), "XTSE3430") {
+			t.Fatalf("the parent's post-descent value is not known while "+
+				"its child is being processed; want XTSE3430, got: %v", err)
+		}
+	})
+	// THE ACCEPTANCE DIRECTION. The parent's PRE-descent value was recorded
+	// before the descent began, and §19.8.9.2 makes the call grounded and
+	// motionless whatever the context posture; the same path with
+	// accumulator-before is valid.
+	t.Run("pre-descent value of the parent is motionless", func(t *testing.T) {
+		if err := compileModeSheet(t, sheet("../accumulator-before('a')")); err != nil {
+			t.Fatalf("../accumulator-before is a climbing step and a "+
+				"motionless call, so the stylesheet is valid; got: %v", err)
+		}
+	})
+	// And the call on the node itself, after the descent, is the shape the
+	// spec's own example endorses.
+	t.Run("post-descent value of the node itself is motionless", func(t *testing.T) {
+		if err := compileModeSheet(t, sheet("accumulator-after('a')")); err != nil {
+			t.Fatalf("a call after a consuming apply-templates is motionless; "+
+				"got: %v", err)
 		}
 	})
 }

@@ -850,6 +850,20 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 		return props{postureGrounded, sw}
 	}
 
+	// §19.8.9.2: "If the argument to accumulator-before is motionless, the
+	// function call is grounded and motionless. Otherwise, the function call
+	// is roaming and free-ranging." Without this entry the call was
+	// unmodelled, and an expression such as
+	// "accumulator-after('w') - accumulator-before('w')" -- accumulator-059's
+	// -- took the whole expression with it, so the consuming call on
+	// accumulator-after beside it was never seen.
+	if x.Name.Local == "accumulator-before" && len(x.Args) == 1 {
+		if arg := a.expr(x.Args[0]); arg.sweep != sweepMotionless {
+			return roamingFreeRanging
+		}
+		return groundedMotionless
+	}
+
 	usages, ok := builtinOperandUsages(x.Name.Local, len(x.Args))
 	if !ok && contextDefaultingBuiltin[x.Name.Local] {
 		// A call one argument short of a form whose FINAL argument defaults

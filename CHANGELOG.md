@@ -16,6 +16,9 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| An end-phase accumulator rule reading its own pre-descent value was refused as circular | The walk now hands back its partial table, and `XTDE3400` fires only for a value not yet recorded. `evaluate-046`. 11,480 → 11,481. | — |
+| `../accumulator-after()` was accepted: the Last Call cascade has no climbing rule | Added the Recommendation's rule — a climbing context posture is free-ranging, the parent's post-descent value being unknown. `accumulator-060`. 11,479 → 11,480. | — |
+| `fn:accumulator-before` was unmodelled, hiding a consuming `accumulator-after` beside it | §19.8.9.2: grounded and motionless with a motionless argument, else roaming. `accumulator-059`'s pre-descent difference is now refused. 11,478 → 11,479. | — |
 | `fn:current` was unmodelled, abandoning every construct containing it | §19.8.9.3 gives the call the outermost expression's context posture (striding in a pattern), and §19.8.1 charges absorbing it by that item's type. 11,463 → 11,473. | [`ab89b76`][ab89b76] |
 | A streamable template rule could return streamed nodes | §18.1 demands a grounded result of an `xsl:stream` body "or of a streamable template rule"; only the former was checked. Applied it to rule bodies too. 11,463 → 11,464. | [`2eb28b6`][2eb28b6] |
 | A path descending from a climbing posture was rescued as a scan | §19.8.8.7's reassessment assumes a striding start, so `for-each select=".."` with a descending body was accepted where `count(../*)` was refused. 11,464 → 11,465. | [`2eb28b6`][2eb28b6] |

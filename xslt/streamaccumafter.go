@@ -54,6 +54,24 @@ func accumulatorAfterSweep(st accumAfterState, ctx posture, ctxAllowsChildren bo
 	if ctx == postureGrounded {
 		return sweepMotionless, true
 	}
+	// "If the context posture is climbing, the function is free-ranging."
+	// The rule is not in the Last Call draft, whose cascade -- the eight
+	// rules below -- cannot refuse accumulator-060's
+	// "../accumulator-after('f:figNr')": the parent step is climbing and
+	// motionless, the call after a consuming xsl:apply-templates is
+	// motionless by rule 8, and the path is then grounded and motionless.
+	// The Recommendation added the rule with the 2016 rework of this
+	// section (the one accumulator-008s cites as "Bug 30018"), and the
+	// reason is the case's own description: the target of the accumulator
+	// is an ancestor of the node being processed, whose post-descent value
+	// is not known until that ancestor's end event, which the stream has
+	// not reached. It sits before the known check deliberately: the
+	// position of the call in its sequence constructor is irrelevant when
+	// the value asked for cannot exist yet, so an unmodelled position is no
+	// reason to let the call through.
+	if ctx == postureClimbing {
+		return sweepFreeRanging, true
+	}
 	// Rule 3: "If the context item type has an empty intersection with
 	// U{document-node(), element()} ... the function is motionless." Both
 	// the pre-descent and post-descent values of a childless node are known

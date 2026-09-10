@@ -353,23 +353,26 @@ func (rt *runtime) accumulatorValuesFor(def *accumulatorDef, root *xdm.Node,
 	if v, ok := rt.accumValues[key]; ok {
 		return v, nil
 	}
-	// A rule whose own expression reads this accumulator over this tree is
-	// circular: the value it asks for is the one being computed. The cache is
-	// written only when the walk finishes, so without this mark the
-	// re-entrant call would start a second walk and recurse until the depth
-	// guard fired with the wrong diagnosis.
-	if rt.accumBuilding[key] {
-		return nil, fmt.Errorf(
-			"XTDE3400: accumulator %s is defined circularly: a rule reads "+
-				"the accumulator it computes", def.name.Lexical())
+	// A rule whose own expression reads this accumulator over this tree
+	// re-enters here while the walk is in progress. The cache is written
+	// only when the walk finishes, so without this entry the re-entrant
+	// call would start a second walk and recurse until the depth guard
+	// fired with the wrong diagnosis. It is not circular in itself: §18.2.4
+	// records the pre-descent value of a node before its children are
+	// visited, so an end-phase rule reading accumulator-before(.) -- as
+	// evaluate-046's rule does, to hand the static variables gathered so
+	// far to xsl:evaluate -- asks for a value that already exists. The
+	// partial table is handed back, and fnAccumulator reports XTDE3400
+	// only when the node it wants is not in it yet.
+	if v := rt.accumBuilding[key]; v != nil {
+		return v, nil
 	}
-	rt.accumBuilding[key] = true
-	defer delete(rt.accumBuilding, key)
-
 	vals := &accumulatorValues{
 		before: map[*xdm.Node]xdm.Sequence{},
 		after:  map[*xdm.Node]xdm.Sequence{},
 	}
+	rt.accumBuilding[key] = vals
+	defer delete(rt.accumBuilding, key)
 	cur, err := def.initial.Eval(ctx.WithFocus(root, 1, 1).
 		WithVar(currentVar, xdm.One(root)))
 	if err != nil {
@@ -608,10 +611,23 @@ func fnAccumulator(rt *runtime, ctx *xpath.Context, args []xdm.Sequence,
 	if err != nil {
 		return nil, err
 	}
+	table := vals.before
 	if post {
-		return vals.after[node], nil
+		table = vals.after
 	}
-	return vals.before[node], nil
+	v, ok := table[node]
+	if !ok {
+		// The walk visits every node the checks above let through, so a
+		// missing entry means the walk is still in progress and has not
+		// reached this value: the rule computing it is reading it. That
+		// is the circularity XTDE3400 names -- a start-phase rule reading
+		// accumulator-before of its own node, or an end-phase rule reading
+		// accumulator-after of it.
+		return nil, fmt.Errorf(
+			"XTDE3400: accumulator %s is defined circularly: a rule reads "+
+				"the value of %s(%q) it is computing", def.name.Lexical(), fname, lex)
+	}
+	return v, nil
 }
 
 // noteCopiedAccumulators records that copy was made from orig, so that an

@@ -27,7 +27,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
 | **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,343 | 99.99% | **3** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,478 | 99.65% | **40** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,481 | 99.68% | **37** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -150,11 +150,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 40 failures
+## xslt 3.0 — 37 failures
 
-**XSLT 3.0: 11,478 / 11,518 = 99.65%.**
+**XSLT 3.0: 11,481 / 11,518 = 99.68%.**
 
-**17 of the 40 want an `XTSE3430`** — a refusal of a stylesheet as
+**15 of the 37 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -163,7 +163,7 @@ assess whether constructs are guaranteed-streamable". These are the largest
 block in this file and they are not defects. What the analysis covers and what
 it does not is under *The §19.8 streamability analysis* below.
 
-The remaining 23 divide as follows. Several are divergences and are read in §2;
+The remaining 22 divide as follows. Several are divergences and are read in §2;
 what is genuinely open is read here.
 
 ### Package composition — 4
@@ -193,7 +193,7 @@ what is genuinely open is read here.
 | `su-ascent-902` | **Withheld — the rule contradicts the spec** | The case wants `XTSE3430` for an `xsl:function streamability="ascent"` whose first parameter is declared `as="node()*"`; its description is "Invalid ascent function - first arg accepts a sequence", and every other case in the family uses `node()?` or `node()`. But no such precondition exists. §19.8.5.7 constrains only the *body* (posture climbing or grounded, sweep motionless) and the *call* (a cascade on P0/S0); §19.8.5's preamble adds nothing about cardinality, and §19.8.8.11 gives a streaming parameter its posture from the category-and-singularity table alone, which never consults the declared occurrence indicator. Decisively, §19.8.5.7's **own worked example** declares `<xsl:param name="input" as="element(para)*"/>` and the spec says of it "the function body meets the rules for this category". Implementing the test's rule would refuse that example. Measured here: this function's body computes as grounded and motionless, which the ascent category permits, so the analysis is right to accept it — unlike its siblings `su-ascent-901` (grounded/consuming) and `-903` (striding/motionless), which it already refuses. |
 | `accumulator-061` | **Costs more than it gains** | Read in §2. |
 | `evaluate-045` | **Won't fix** | Read in §2. |
-| `evaluate-046` | **Undiagnosed** | Fails with `XTDE3400: accumulator static-vars is defined circularly` where the case expects the transform to succeed. Not read. |
+| `streamable-116` | **Not implementable — the spec permits what we do, and the suite marks the case `_WRONG`** | Wants `XPDY0002`: a global variable `select="count(//*)"` reads the context item while the initial mode is streamable and the source is supplied `streaming="true"`, so the case expects the global context item to be *absent*. §3.6.6 says otherwise. Without an `xsl:global-context-item` declaration "the item supplied as the global context item cannot be a node in a streamed document (the transformation API may handle this either by disallowing such an input, **or by building the corresponding tree in memory and supplying the global context item as an unstreamed node**)". This engine builds every tree in memory, so it takes the second option the spec offers: `$size` evaluates and the transform succeeds. The error is reachable only by an API that withholds the global context item whenever the initial mode streams — a choice the spec leaves to the implementation, and one that would touch every global variable of every streamed-mode invocation. The catalog's own keywords carry `_WRONG:wrong-error-code`, the suite authors' mark that the expected code is disputed; and the error is dynamic, not a streamability verdict, so no §19.8 rule reaches it. |
 | `evaluate-048` | **Needs a network fetch** | Fails on `FODC0002: cannot retrieve "https://www.saxonica.com/welcome/welcome.xml": scheme "https" is not permitted`. Not reachable regardless. Its earlier half — `fn:function-lookup`'s dynamic visibility — was a separate reason; see *Corrections*. |
 | `docbook-001` | **Not implementable** | Read in §2 — a vendor extension. |
 | `merge-097`, `-097s`, `-097sf` | **Not implementable** | They call `uri-collection('.?select=merge-097-*.xml')`. The `?select=` query string is a Saxon extension, not something F&O defines, and the test set says so in a comment beside the cases: they "rely on Saxon-format collection URIs … and [are] therefore not interoperable". None of the three declares an `<environment>` or a `<collection>`, so there is nothing for the harness to honour — the harness supplies a collection resolver only where the environment declares one, precisely so that `fn:collection` keeps refusing everywhere else. The resulting `FODC0002: collections are not configured` is the engine failing closed by design: a collection URI that can name a directory is a file-disclosure vector, and returning an empty sequence instead would make "collections are switched off" indistinguishable from "the collection was empty". |

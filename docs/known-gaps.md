@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 3 of 30,346; XSLT 3.0 has 40 of 11,518;
+failures of 6,201; XQuery 3.1 has 3 of 30,346; XSLT 3.0 has 37 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 112 cases, or of a decision that produced some of them.
+is an account of those 109 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -172,12 +172,12 @@ refuses the same grouping for a reason that never consults the call — a
 free-ranging `group-starting-with` pattern, or a grouping key that is not
 motionless — since neither answer rests on the widening.
 
-**Note what it would and would not buy.** Completing it would move the 17
-cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.65% to about
-99.81%. Nine of those 17 are the unreachable group above, so the reachable
-gain is 8. It would not make the engine stream, and it would not change the result
-of a single transform that currently succeeds — it would convert 17 correct
-answers into 17 refusals to answer. That is the conformant behaviour, and it
+**Note what it would and would not buy.** Completing it would move the 15
+cases still wanting an `XTSE3430` and take XSLT 3.0 from 99.68% to about
+99.81%. Nine of those 15 are the unreachable group above, so the reachable
+gain is 6. It would not make the engine stream, and it would not change the result
+of a single transform that currently succeeds — it would convert 15 correct
+answers into 15 refusals to answer. That is the conformant behaviour, and it
 is worth being explicit that the gain is measured in conformance rather than in
 capability.
 
