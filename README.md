@@ -686,10 +686,12 @@ Every remote-reference mechanism is off unless you turn it on.
   read any file beside it, not only include one — keep stylesheets in a
   directory of their own if that matters. Everything outside stays refused.
   `xslt.FileResolver` confines reads to directories you name and refuses every
-  non-`file` scheme; there is no network option. In `xslt`, confinement is
-  enforced by `os.Root` at the moment of opening rather than by resolving a
-  path and checking it first, so a symlink swapped between the check and the open cannot
-  escape — the older resolve-then-check design had that gap. Each read is
+  non-`file` scheme; there is no network option. Confinement is enforced by
+  `os.Root` at the moment of opening rather than by resolving a path and
+  checking it first, so a symlink swapped between the check and the open cannot
+  escape — the older resolve-then-check design had that gap. Every rooted
+  resolver works this way: `xslt`, `xsd`, `dtd` and the `relaxng` resolver in
+  `cmd/go-xml`, which the other three joined on 2026-09-10. Each read is
   bounded by `FileResolver.MaxBytes`, 64 MB by default, and a larger file is
   refused rather than truncated.
 * **`xsl:include` and `xsl:import` fail closed** the same way, via
