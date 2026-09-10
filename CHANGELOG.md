@@ -16,11 +16,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| Nothing bounded the bytes an evaluation produced, so a 1,009-byte expression of nested doubling `let`s returned 640 MB, and a stylesheet chain of `xsl:variable` did the same | `xpath.MaxBytes` charges the constructs that concatenate as they build, held across one query or one transform; the bound is 1 GiB against a largest measured legitimate string of 13.8 MB. Refuses with `XPDY0130`. | — |
-| A self-applying function item recursed uncharged and killed the process with an unrecoverable stack overflow | `DynamicCall.Eval` now descends before `Invoke`, and an inline function's closure takes `Depth` from the call rather than from where it was written; the attack refuses with `XPDY0001` like every other recursion. | — |
-| `TransformOptions.MaxDepth` bounded template recursion only, so an expression was held at the package default of 500 whatever the caller asked | The option now reaches the XPath context, which is what lets it govern the path that takes untrusted input — and lets a continuation-passing function nesting 530 deep run. | — |
-| `fn:distinct-values` compared numerics pairwise, so n distinct integers cost O(n^2) `eq` calls with a `big.Rat` each | Non-transitive promotion only involves float and double, so integer and decimal now key on their exact rational and only the inexact values are scanned. 100,000 integers: 573 s and 480 GB become 0.15 s and 109 MB. | — |
-| The process environment was readable with no opt-in: any stylesheet enumerated 92 variables and read a secret by name | Both functions answer from `Context.Environment`, nil withholding everything. The empty sequence, not an error — §16.2.1 makes availability implementation-dependent. | — |
+| Nothing bounded the bytes an evaluation produced, so a 1,009-byte expression of nested doubling `let`s returned 640 MB, and a stylesheet chain of `xsl:variable` did the same | `xpath.MaxBytes` charges the constructs that concatenate as they build, held across one query or one transform; the bound is 1 GiB against a largest measured legitimate string of 13.8 MB. Refuses with `XPDY0130`. [`b50b373`][b50b373] |
+| A self-applying function item recursed uncharged and killed the process with an unrecoverable stack overflow | `DynamicCall.Eval` now descends before `Invoke`, and an inline function's closure takes `Depth` from the call rather than from where it was written; the attack refuses with `XPDY0001` like every other recursion. [`35c2e77`][35c2e77] |
+| `TransformOptions.MaxDepth` bounded template recursion only, so an expression was held at the package default of 500 whatever the caller asked | The option now reaches the XPath context, which is what lets it govern the path that takes untrusted input — and lets a continuation-passing function nesting 530 deep run. [`35c2e77`][35c2e77] |
+| `fn:distinct-values` compared numerics pairwise, so n distinct integers cost O(n^2) `eq` calls with a `big.Rat` each | Non-transitive promotion only involves float and double, so integer and decimal now key on their exact rational and only the inexact values are scanned. 100,000 integers: 573 s and 480 GB become 0.15 s and 109 MB. [`694fe29`][694fe29] |
+| The process environment was readable with no opt-in: any stylesheet enumerated 92 variables and read a secret by name | Both functions answer from `Context.Environment`, nil withholding everything. The empty sequence, not an error — §16.2.1 makes availability implementation-dependent. [`40930d5`][40930d5] |
 | `map:put` and `map:remove` copied the whole entry slice, so a large map cost O(n) per call | The map is a persistent hash array mapped trie that shares structure and keeps insertion order by sequence number; `same-key-023`'s 421,875 keys now finish. | [`ac743d4`][ac743d4] |
 | Conformance figures in the documentation drifted from the measured ones and nothing failed | `tests/docfigures.sh` reads `tests/ratchet.txt` and fails `check.sh` on any copy beside a suite denominator that disagrees; the XSD schema/instance split is ratcheted too. | [`920fd8a`][920fd8a] |
 | The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. | [`7f2d2d0`][7f2d2d0] |
@@ -143,13 +143,13 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The documented `MaxItems` budget never bound on an XQuery body | A FLWOR is evaluated by `xquery`, not `xpath`, so its tuple stream was charged nothing and `Compiled.Eval` reset the counter once per tuple. `HoldItemBudget` holds it for one query; `flwor.eval` charges both accumulators. | — |
+| The documented `MaxItems` budget never bound on an XQuery body | A FLWOR is evaluated by `xquery`, not `xpath`, so its tuple stream was charged nothing and `Compiled.Eval` reset the counter once per tuple. `HoldItemBudget` holds it for one query; `flwor.eval` charges both accumulators. [`fe41f3c`][fe41f3c] |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
 | A budget answered "valid" | Exhausting the budget was reported as success instead of as an inability to decide. | [`2c461c7`][2c461c7] |
 | Budgets counted the wrong thing | A bound over the wrong quantity is not a bound. | [`8dcc4dc`][8dcc4dc] |
 | Last unbudgeted load-time algorithm | Now bounded; `Options.MaxContentModelPositions` makes the position budget host-tunable. | [`81e6ee5`][81e6ee5] |
 | Substitution closure unbounded | Bounded, along with the pairwise overlap test it fed. | [`1b027e5`][1b027e5] |
-| A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength` = 10,000; longest real chain is 190. | — |
+| A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength` = 10,000; longest real chain is 190. [`106bcdc`][106bcdc] |
 
 ### Fixed — test harness
 
@@ -585,43 +585,74 @@ here so every entry in this file sits under a release.
 
 [0048fde]: https://github.com/knroy/go-xml/commit/0048fde
 [01b91ba]: https://github.com/knroy/go-xml/commit/01b91ba
+[0634425]: https://github.com/knroy/go-xml/commit/0634425
+[106bcdc]: https://github.com/knroy/go-xml/commit/106bcdc
+[120e7ec]: https://github.com/knroy/go-xml/commit/120e7ec
 [145d0d1]: https://github.com/knroy/go-xml/commit/145d0d1
 [176ce57]: https://github.com/knroy/go-xml/commit/176ce57
 [17ce36c]: https://github.com/knroy/go-xml/commit/17ce36c
+[18a6d96]: https://github.com/knroy/go-xml/commit/18a6d96
 [1b027e5]: https://github.com/knroy/go-xml/commit/1b027e5
+[1c43c4e]: https://github.com/knroy/go-xml/commit/1c43c4e
+[1d10349]: https://github.com/knroy/go-xml/commit/1d10349
 [22d2d64]: https://github.com/knroy/go-xml/commit/22d2d64
+[24c4cca]: https://github.com/knroy/go-xml/commit/24c4cca
 [277599e]: https://github.com/knroy/go-xml/commit/277599e
 [28699a9]: https://github.com/knroy/go-xml/commit/28699a9
 [28e455a]: https://github.com/knroy/go-xml/commit/28e455a
 [2c461c7]: https://github.com/knroy/go-xml/commit/2c461c7
 [2cc633e]: https://github.com/knroy/go-xml/commit/2cc633e
+[2cf1ad6]: https://github.com/knroy/go-xml/commit/2cf1ad6
+[2eb28b6]: https://github.com/knroy/go-xml/commit/2eb28b6
 [2ef8dba]: https://github.com/knroy/go-xml/commit/2ef8dba
 [30dc68d]: https://github.com/knroy/go-xml/commit/30dc68d
+[35c2e77]: https://github.com/knroy/go-xml/commit/35c2e77
+[3672fa3]: https://github.com/knroy/go-xml/commit/3672fa3
 [39f7174]: https://github.com/knroy/go-xml/commit/39f7174
+[3b4b1e8]: https://github.com/knroy/go-xml/commit/3b4b1e8
 [3b6e685]: https://github.com/knroy/go-xml/commit/3b6e685
 [3f3cce3]: https://github.com/knroy/go-xml/commit/3f3cce3
+[40930d5]: https://github.com/knroy/go-xml/commit/40930d5
 [5964c0a]: https://github.com/knroy/go-xml/commit/5964c0a
+[59ee9b9]: https://github.com/knroy/go-xml/commit/59ee9b9
+[5cd6b38]: https://github.com/knroy/go-xml/commit/5cd6b38
+[5f0df59]: https://github.com/knroy/go-xml/commit/5f0df59
 [600e7c0]: https://github.com/knroy/go-xml/commit/600e7c0
 [6567f8e]: https://github.com/knroy/go-xml/commit/6567f8e
+[6654bac]: https://github.com/knroy/go-xml/commit/6654bac
+[694fe29]: https://github.com/knroy/go-xml/commit/694fe29
 [6c8405c]: https://github.com/knroy/go-xml/commit/6c8405c
+[6e03e3d]: https://github.com/knroy/go-xml/commit/6e03e3d
 [704222f]: https://github.com/knroy/go-xml/commit/704222f
+[73d547b]: https://github.com/knroy/go-xml/commit/73d547b
 [78f70d5]: https://github.com/knroy/go-xml/commit/78f70d5
+[7ad2845]: https://github.com/knroy/go-xml/commit/7ad2845
 [7b0562a]: https://github.com/knroy/go-xml/commit/7b0562a
 [7c4bef2]: https://github.com/knroy/go-xml/commit/7c4bef2
+[7f2d2d0]: https://github.com/knroy/go-xml/commit/7f2d2d0
 [81e6ee5]: https://github.com/knroy/go-xml/commit/81e6ee5
 [830ae11]: https://github.com/knroy/go-xml/commit/830ae11
 [83148b7]: https://github.com/knroy/go-xml/commit/83148b7
 [84735c8]: https://github.com/knroy/go-xml/commit/84735c8
+[878f9ed]: https://github.com/knroy/go-xml/commit/878f9ed
+[885f6b7]: https://github.com/knroy/go-xml/commit/885f6b7
 [8dcc4dc]: https://github.com/knroy/go-xml/commit/8dcc4dc
 [9113ac4]: https://github.com/knroy/go-xml/commit/9113ac4
+[920fd8a]: https://github.com/knroy/go-xml/commit/920fd8a
 [96171c5]: https://github.com/knroy/go-xml/commit/96171c5
 [9a41bea]: https://github.com/knroy/go-xml/commit/9a41bea
 [a3ec25e]: https://github.com/knroy/go-xml/commit/a3ec25e
 [a45c3a6]: https://github.com/knroy/go-xml/commit/a45c3a6
 [a820213]: https://github.com/knroy/go-xml/commit/a820213
 [a883c0a]: https://github.com/knroy/go-xml/commit/a883c0a
+[ab89b76]: https://github.com/knroy/go-xml/commit/ab89b76
+[ac743d4]: https://github.com/knroy/go-xml/commit/ac743d4
 [ad2c3dc]: https://github.com/knroy/go-xml/commit/ad2c3dc
+[aeead08]: https://github.com/knroy/go-xml/commit/aeead08
 [b21f5eb]: https://github.com/knroy/go-xml/commit/b21f5eb
+[b361b10]: https://github.com/knroy/go-xml/commit/b361b10
+[b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
+[b50b373]: https://github.com/knroy/go-xml/commit/b50b373
 [b6fb5ab]: https://github.com/knroy/go-xml/commit/b6fb5ab
 [bb803d5]: https://github.com/knroy/go-xml/commit/bb803d5
 [bc72bed]: https://github.com/knroy/go-xml/commit/bc72bed
@@ -630,6 +661,8 @@ here so every entry in this file sits under a release.
 [c3a52be]: https://github.com/knroy/go-xml/commit/c3a52be
 [c8fc839]: https://github.com/knroy/go-xml/commit/c8fc839
 [cc17983]: https://github.com/knroy/go-xml/commit/cc17983
+[d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
+[d145807]: https://github.com/knroy/go-xml/commit/d145807
 [d15b6df]: https://github.com/knroy/go-xml/commit/d15b6df
 [da1cde6]: https://github.com/knroy/go-xml/commit/da1cde6
 [e049991]: https://github.com/knroy/go-xml/commit/e049991
@@ -642,32 +675,5 @@ here so every entry in this file sits under a release.
 [f0ffb5b]: https://github.com/knroy/go-xml/commit/f0ffb5b
 [f536984]: https://github.com/knroy/go-xml/commit/f536984
 [f88747b]: https://github.com/knroy/go-xml/commit/f88747b
-[6654bac]: https://github.com/knroy/go-xml/commit/6654bac
-[73d547b]: https://github.com/knroy/go-xml/commit/73d547b
-[0634425]: https://github.com/knroy/go-xml/commit/0634425
-[120e7ec]: https://github.com/knroy/go-xml/commit/120e7ec
-[18a6d96]: https://github.com/knroy/go-xml/commit/18a6d96
-[1c43c4e]: https://github.com/knroy/go-xml/commit/1c43c4e
-[1d10349]: https://github.com/knroy/go-xml/commit/1d10349
-[24c4cca]: https://github.com/knroy/go-xml/commit/24c4cca
-[2cf1ad6]: https://github.com/knroy/go-xml/commit/2cf1ad6
-[2eb28b6]: https://github.com/knroy/go-xml/commit/2eb28b6
-[3b4b1e8]: https://github.com/knroy/go-xml/commit/3b4b1e8
-[5cd6b38]: https://github.com/knroy/go-xml/commit/5cd6b38
-[5f0df59]: https://github.com/knroy/go-xml/commit/5f0df59
-[7ad2845]: https://github.com/knroy/go-xml/commit/7ad2845
-[885f6b7]: https://github.com/knroy/go-xml/commit/885f6b7
-[ab89b76]: https://github.com/knroy/go-xml/commit/ab89b76
-[b361b10]: https://github.com/knroy/go-xml/commit/b361b10
-[b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
-[d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
-[d145807]: https://github.com/knroy/go-xml/commit/d145807
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
-[3672fa3]: https://github.com/knroy/go-xml/commit/3672fa3
-[59ee9b9]: https://github.com/knroy/go-xml/commit/59ee9b9
-[6e03e3d]: https://github.com/knroy/go-xml/commit/6e03e3d
-[7f2d2d0]: https://github.com/knroy/go-xml/commit/7f2d2d0
-[878f9ed]: https://github.com/knroy/go-xml/commit/878f9ed
-[920fd8a]: https://github.com/knroy/go-xml/commit/920fd8a
-[ac743d4]: https://github.com/knroy/go-xml/commit/ac743d4
-[aeead08]: https://github.com/knroy/go-xml/commit/aeead08
+[fe41f3c]: https://github.com/knroy/go-xml/commit/fe41f3c
