@@ -527,6 +527,43 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 				return out, nil
 			}
 		}
+		// The value belongs to a MEMBER of the union, and F&O 3.0 18.3.2 makes
+		// the cast's result an instance of that member -- the same rule
+		// castToUnion applies to a pure union, and it does not stop applying
+		// because the union carries a facet of its own. Returning the source
+		// untouched made "s:restrictedUnion('2012-10-08')" an xs:string where
+		// CastAs-UnionType-34 requires an xs:date, and left the result of
+		// s:lowercaseName('candlewick') failing "instance of xs:NCName"
+		// (CastAs-UnionType-26).
+		//
+		// The union's own facets have already been applied above, through
+		// SchemaValueValid; what is left is only to give the value the member's
+		// type. The members are tried in declaration order, which is the order
+		// the schema reports them in, and the first that accepts the value
+		// wins. A source that is already one of the members is left alone --
+		// casting it onwards would canonicalise it away, exactly as in
+		// castToUnion.
+		for i, m := range e.Type.SchemaSimpleAtomicMembers {
+			facet := ""
+			if i < len(e.Type.SchemaSimpleAtomicFacets) {
+				facet = e.Type.SchemaSimpleAtomicFacets[i]
+			}
+			// Already the member, with nothing further for the member to add:
+			// leave it alone. The facet is what "nothing further" turns on --
+			// xs:NCName erases to xs:string, so an xs:string source LOOKS like
+			// the member while satisfying none of its constraints and carrying
+			// none of its annotation. Breaking on the code alone left
+			// s:lowercaseName('candlewick') a bare xs:string, failing the
+			// "instance of xs:NCName" CastAs-UnionType-26 asserts.
+			if src.Type == m && facet == "" {
+				break
+			}
+			out, err := CastToDerived(src, m, facet)
+			if err != nil {
+				continue
+			}
+			return xdm.One(out), nil
+		}
 		return xdm.One(src), nil
 	}
 
@@ -823,14 +860,64 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 			}
 		}
 	}
+	// An xs:QName operand takes the shortcut even when the schema has more to
+	// say, because for it "the loop reaches the same answer" is false. A QName
+	// value carries a namespace binding that no lexical form holds, and the
+	// loop takes the FIRST member the value casts to -- so a union over
+	// xs:NCName and xs:QName handed an actual QName matched the NCName member,
+	// cast the namespace away, and left local-name-from-QName with no QName to
+	// read (CastAs-UnionType-20 and -33). Re-validating it is not an option
+	// either: the schema is asked about a LEXICAL value, the written form of a
+	// QName matches prefixes rather than namespaces, and the expanded
+	// "{uri}local" spelling is in no type's lexical space, so every QName
+	// shown to the validator was rejected. Nor is there anything to re-check
+	// -- SchemaUnionMembers is non-nil only for a PURE union, which by XPath
+	// 3.1 2.5 carries no facets of its own.
+	if a.Type == xdm.TypeQName {
+		for _, m := range st.SchemaUnionMembers {
+			if m == xdm.TypeQName {
+				return a, nil
+			}
+		}
+	}
 	// The lexical form is what the member types are tried against, because a
 	// union is defined over the lexical space: "12:00:00" is an xs:time and
 	// not an xs:date, and only the written form says so.
 	lex := a.String()
-	for _, m := range st.SchemaUnionMembers {
-		out, err := CastAtomic(a, m)
+	for i, m := range st.SchemaUnionMembers {
+		// The member's NAME, not just its code. XPath erases every derived
+		// string type to xs:string, so a union over xs:NCName and xs:QName
+		// reports xs:string for the first member; casting to that code
+		// returned a bare string that applied none of the member's facets and
+		// satisfied "instance of xs:NCName" not at all. F&O 3.0 18.3.2 makes
+		// the result of a cast to a union an instance of the member that
+		// accepted it -- CastAs-UnionType-18 and -26 assert exactly that -- so
+		// the facet has to be applied and the annotation recorded, which is
+		// what CastToDerived does. See SchemaUnionMemberFacets.
+		facet := ""
+		if i < len(st.SchemaUnionMemberFacets) {
+			facet = st.SchemaUnionMemberFacets[i]
+		}
+		out, err := CastToDerived(a, m, facet)
 		if err != nil {
 			continue
+		}
+		// A QName-valued member carries a namespace that CastToDerived cannot
+		// supply: it has no static context, so it built a QName with no URI
+		// and namespace-uri-from-QName on the result was empty. The bindings
+		// that apply are the ones in scope where the TYPE NAME was written --
+		// which is why CastAs-UnionType-13..15 expect FORG0001 rather than the
+		// caller's own binding for the prefix -- and they were captured there.
+		// See SchemaExpandQName.
+		if m == xdm.TypeQName && a.Type != xdm.TypeQName {
+			if st.SchemaExpandQName == nil {
+				continue
+			}
+			q, ok := st.SchemaExpandQName(a.String())
+			if !ok {
+				continue
+			}
+			out = xdm.NewQNameValue(q)
 		}
 		// The built-in cast settles the lexical form of the member, and it is
 		// THAT form the schema is asked about -- not the operand's. A cast
@@ -841,7 +928,12 @@ func castToUnion(a *xdm.Atomic, st SequenceType) (*xdm.Atomic, error) {
 		// already in the member's lexical space, which is the question
 		// validation asks and not the one a cast asks -- CastAs-UnionType-3
 		// expects 123 where that reading raised FORG0001.
-		if st.SchemaValueValid != nil {
+		//
+		// A QName result is exempt for the same reason the shortcut above
+		// exempts one: there is no lexical spelling to hand the validator that
+		// means what the value means, and a pure union has no facets of its
+		// own for the validator to apply.
+		if st.SchemaValueValid != nil && m != xdm.TypeQName {
 			if st.SchemaValueValid(out.String()) != nil {
 				continue
 			}

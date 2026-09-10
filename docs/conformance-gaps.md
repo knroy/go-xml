@@ -25,7 +25,7 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,320 | 99.91% | **26** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,336 | 99.97% | **10** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
 | **xslt** | W3C XSLT 3.0 | 11,518 | 11,456 | 99.46% | **62** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
@@ -51,7 +51,7 @@ Two suites reach 100% — XPath at all three versions, and RELAX NG.
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
-while 36 of the 42 XQuery failures sit in `prod-CastExpr.schema` and are the
+while 4 of the 10 XQuery failures sit in `prod-CastExpr.schema` and are the
 schema-aware features [todo.md](todo.md) §1.5 deliberately leaves. Neither is a
 backlog of defects.
 
@@ -108,21 +108,25 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 22 failures
+## xquery — 10 failures
 
-**XQuery 3.1: 30,324 / 30,346 = 99.93%.**
+**XQuery 3.1: 30,336 / 30,346 = 99.97%.**
 
 The failures cluster by production, not by symptom.
-**`prod-CastExpr.schema` (19) is all but the whole of it**, with three singletons
-behind it: `prod-ContextItemDecl`, `op-same-key` and `app-Demos`, one case each.
+**`prod-CastExpr.schema` (4)** — `CastAs-UnionType-27` and `-28`,
+`CastAs-ListType-21`, and `user-defined-11` — plus six singletons:
+`prod-TypeswitchExpr`, `prod-FunctionCall`, `prod-ContextItemDecl`,
+`op-same-key`, `misc-CombinedErrorCodes` and `app-Demos`, one case each.
 
-The 19 are not one gap. They are separate small features that `import schema`
-made *reachable* without making them present — typed *input* documents,
-annotation propagation through a constructor, and substitution groups over
-validated content — and they are catalogued in [todo.md](todo.md) §1.5. The
-largest single shape is that a cast to a **list** type must yield items
-annotated with the list's item type, which is annotation propagation reached
-from the cast side.
+The remaining three `CastAs-*` cases are one shape: a union whose member, or a
+list whose item type, is a **derived string type with no built-in atomic code**
+— `xs:IDREF` in `xs:IDREFS`, or a union used as a list's item type. The item
+type resolves to no code, so the cast cannot build the sequence F&O 3.0 18.3.6
+owes and returns the single string it was handed. Closing it means giving the
+derived string types codes of their own, or teaching the list cast to carry a
+facet name where no code exists — the same information the union-member fix
+already carries, one level further in. `user-defined-11` is unrelated: it wants
+`XQST0034` for a duplicate function declaration.
 
 Four of the six singletons this section used to read are now closed, each for a
 different reason and none by loosening a check: `user-defined-11` (`XQST0034`

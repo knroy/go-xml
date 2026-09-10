@@ -471,6 +471,18 @@ type SequenceType struct {
 	// membership — matching nothing rather than matching too much.
 	SchemaUnionMembers []xdm.TypeCode
 
+	// SchemaUnionMemberFacets are the member type NAMES of the same union, one
+	// per entry of SchemaUnionMembers and in the same order, or nil when the
+	// resolver cannot supply them.
+	//
+	// A CAST to a union produces an instance of the member that accepted the
+	// value, and the erased code cannot say which derived type that was: a
+	// union over xs:NCName and xs:QName reports xs:string for the first, so
+	// the cast returned a bare string and "instance of xs:NCName" was false.
+	// The name is what CastToDerived needs to apply the facet and annotate the
+	// result. See SchemaUnionMemberFacets.
+	SchemaUnionMemberFacets []string
+
 	// SchemaListType marks a schema-defined simple type of variety list
 	// written in type position.
 	//
@@ -547,6 +559,13 @@ type SequenceType struct {
 	// nil when the type has no atomic member, which refuses every non-string
 	// source -- the right answer for a union over list types alone.
 	SchemaSimpleAtomicMembers []xdm.TypeCode
+
+	// SchemaSimpleAtomicFacets are those members' NAMES, one per entry and in
+	// the same order, or nil when the resolver cannot supply them. It is
+	// SchemaUnionMemberFacets for the impure case, and exists for the same
+	// reason: the cast's result is an instance of the member that accepted the
+	// value, and the erased code cannot say which derived type that was.
+	SchemaSimpleAtomicFacets []string
 
 	// Occurrence is "", "?", "*" or "+".
 	Occurrence string

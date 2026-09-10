@@ -294,6 +294,20 @@ func (b bracedSchemaResolver) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xd
 	return nil, false
 }
 
+func (b bracedSchemaResolver) SchemaUnionMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionMemberFacets); ok {
+		return v.SchemaUnionMemberFacetNames(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionAtomicMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionMemberFacets); ok {
+		return v.SchemaUnionAtomicMemberFacetNames(name)
+	}
+	return nil, false
+}
+
 func (b bracedSchemaResolver) SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool) {
 	if v, ok := b.inner.(SchemaUnionListMemberType); ok {
 		return v.SchemaUnionListMemberItemType(name)
@@ -307,7 +321,8 @@ func wrapBraced(ns NamespaceResolver, uris []string) NamespaceResolver {
 	b := bracedResolver{NamespaceResolver: ns, uris: uris}
 	switch ns.(type) {
 	case SchemaTypes, SchemaUnionTypes, SchemaListTypes,
-		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMemberType:
+		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMemberType,
+		SchemaUnionMemberFacets:
 		return bracedSchemaResolver{bracedResolver: b, inner: ns}
 	}
 	return b

@@ -561,3 +561,38 @@ func inlineSignature(e *InlineFunctionExpr) []string {
 	}
 	return sig
 }
+
+// lookupSchemaConstructor resolves a DYNAMIC reference to the constructor
+// function of an imported schema type.
+//
+// Nothing registers such a function in the library -- the set of them is not
+// known until a schema is imported -- so an ordinary call is folded into the
+// cast the constructor is defined to be while the parser's schema hook is in
+// reach (foldSchemaConstructor). fn:function-lookup asks the same question
+// after parsing, with a name that is already expanded, and found nothing:
+// CastAs-UnionType-8 looks up {…/unionListDefined}myUnionType1 and got
+// XPST0017 where F&O 16.4.3 owes it the constructor's function item.
+//
+// The static context survives on Context.StaticNamespaces, which is the very
+// resolver the parser used, so the same resolution is available here. The name
+// is fed back through it as a lexical one because every schema hook is keyed
+// on a lexical name plus a resolver; wrapBraced supplies a synthetic prefix
+// for the URI, exactly as the lexer does for a Q{…} literal in source.
+//
+// A name that is not a simple type in the static context yields false, which
+// fn:function-lookup reports as the empty sequence -- the answer F&O 16.1.1
+// gives for any name that is not in scope.
+func lookupSchemaConstructor(ctx *Context, name xdm.QName, arity int) (*xdm.FunctionItem, bool) {
+	if arity != 1 || ctx == nil || ctx.StaticNamespaces == nil {
+		return nil, false
+	}
+	ns := wrapBraced(ctx.StaticNamespaces, []string{name.URI})
+	prefix := fmt.Sprintf("%s0", bracedURIPrefix)
+	cast, ok := schemaConstructorCast(
+		xdm.QName{URI: name.URI, Prefix: prefix, Local: name.Local},
+		[]Expr{&VarRef{Name: ConstructorArgVar}}, ns, ctx.Version)
+	if !ok {
+		return nil, false
+	}
+	return schemaConstructorItem(name, cast), true
+}

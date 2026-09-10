@@ -40,9 +40,9 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 26 of 30,346; XSLT 3.0 has 66 of 11,518;
+failures of 6,201; XQuery 3.1 has 10 of 30,346; XSLT 3.0 has 66 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
-is an account of those 178 cases, or of a decision that produced some of them.
+is an account of those 162 cases, or of a decision that produced some of them.
 
 What this file adds, and that one does not:
 
@@ -171,30 +171,36 @@ implementing it brought **416 previously-skipped cases into scope**, of which
 construction, and quoting the failure count without the denominator beside it
 would describe a gain as a loss.
 
-The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → **22** as the features
-behind it landed. What remains is a tail of separate features that `import schema` made
-*reachable* without making them present. `docs/todo.md` §1.5 names them and is
-the forward-looking half of this entry; what belongs here is the measured
-shape, because it is what says the tail is several features rather than one
-broken import.
+The tail has fallen 203 → 113 → 101 → 93 → 42 → 26 → **10** as the features
+behind it landed. What remains is a tail of separate features that
+`import schema` made *reachable* without making them present. `docs/todo.md`
+§1.5 names them and is the forward-looking half of this entry; what belongs
+here is the measured shape, because it is what says the tail is several
+features rather than one broken import.
 
-The cases cluster by production, not by symptom, and
-**`prod-CastExpr.schema` (19) is now all but the whole of it**, with three
-singletons behind it: `prod-ContextItemDecl`, `op-same-key` and `app-Demos`,
-one case each. The error codes cluster the same way:
+The cases cluster by production, not by symptom.
+**`prod-CastExpr.schema` now holds 4** — `CastAs-UnionType-27` and `-28`,
+`CastAs-ListType-21`, and `user-defined-11` — with six singletons beside it:
+`prod-TypeswitchExpr`, `prod-FunctionCall`, `prod-ContextItemDecl`,
+`op-same-key`, `misc-CombinedErrorCodes` and `app-Demos`, one case each.
 
-- **Typed input.** A source document does not arrive schema-validated, so a
-  node atomises as untyped however the query imported. `(a, b, c) is not an
-  instance of xs:IDREF*` is the shape, and it is the `schemaValidation` and
-  `typedData` dependencies the harness still skips on.
-- **Constructor functions for schema types.** `XPST0017: unknown function` —
-  an imported simple type does not become a callable constructor.
-- **Schema element and attribute tests.** `XPST0051: invalid type
-  "schema-element(...)"`.
+What is left of the cast group is a single shape, and a narrow one: a union
+whose member — or a list whose item type — is a **derived string type with no
+built-in atomic code**. `xs:IDREFS` is a list of `xs:IDREF`, and `xs:IDREF`
+erases to `xs:string` with no code of its own, so the item type resolves to
+nothing, the cast cannot build the sequence F&O 3.0 18.3.6 owes, and the single
+string it was handed comes back. The union-member half of exactly this problem
+is closed — a cast to a union now carries the member's NAME alongside its
+erased code, so `xs:NCName` applies its facet and annotates the result — and
+closing the list half means carrying the same information one level further in,
+or giving the derived string types codes of their own.
 
 **The error-code mismatches are the interesting minority.** A group raises
-`XPST0008` where `XQDY0027` is wanted, and a smaller one raises `XPST0017` for
-`FORG0001`. Those are not missing features — they are the static-versus-dynamic
+`XPST0008` where `XQDY0027` is wanted. The `XPST0017`-for-`FORG0001` group that
+stood beside it is closed: the constructor of an imported schema type is
+registered in no library, so every DYNAMIC route to it -- `function-lookup`, and
+a partial application `t(?)` -- reported the name unknown where the cast it
+stands for owed `FORG0001`. Those are not missing features — they are the static-versus-dynamic
 boundary being drawn one step too early, and they are the part of this tail
 that is a defect rather than an absence. They are worth separating out
 precisely because the rest are not defects and it would be easy to let these be

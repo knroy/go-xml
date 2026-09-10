@@ -485,3 +485,101 @@ func annotationKeyOf(lex string, ns NamespaceResolver) string {
 	}
 	return xdm.AnnotationName(uri, local)
 }
+
+// SchemaUnionMemberFacets reports the NAMES of a union's member types, in the
+// same order and with the same membership as the codes reported alongside.
+//
+// It exists because those codes are lossy in exactly the way a CAST cares
+// about. XPath erases every derived string type to xs:string, so a union over
+// xs:NCName and xs:QName reports two codes, xs:string and xs:QName, and
+// casting to the first produced a bare xs:string. F&O 3.0 18.3.2 makes the
+// result of a cast to a union an instance of the MEMBER that accepted it, so
+// "s:sensitiveUnion('candlewick') instance of xs:NCName" must be true --
+// CastAs-UnionType-18 asserts it, and the erased code cannot carry the fact.
+// The name can: CastToDerived applies the facet the code cannot express and
+// annotates the result with it.
+//
+// It is separate from SchemaUnionNames, which reports the annotation keys a
+// validated NODE may carry: that walk is deliberately looser about purity and
+// deliberately non-parallel (it skips members already seen), so its slice
+// cannot be indexed alongside the codes.
+//
+// Optional in the same way as every other schema interface here: a resolver
+// that does not implement it reports no names, and a cast to a union keeps the
+// erased member code it always had.
+type SchemaUnionMemberFacets interface {
+	// SchemaUnionMemberFacetNames returns one name per entry of
+	// SchemaUnionMemberTypes: a built-in member's bare local name
+	// ("NCName"), and the empty string for a member with no built-in name to
+	// apply. ok is false when the name is not a pure union.
+	SchemaUnionMemberFacetNames(name xdm.QName) ([]string, bool)
+
+	// SchemaUnionAtomicMemberFacetNames is the same, one name per entry of
+	// SchemaUnionAtomicMemberTypes: an IMPURE union's atomic members, which a
+	// cast reaches by the same rule and which lose the same information.
+	// CastAs-UnionType-34 casts to a pattern-restricted union over xs:date and
+	// three Gregorian types and requires an xs:date back.
+	SchemaUnionAtomicMemberFacetNames(name xdm.QName) ([]string, bool)
+}
+
+// schemaUnionMemberFacetsOf resolves a lexical type name to the facet names of
+// a pure union's members, through the same prefix bindings as everything else.
+func schemaUnionMemberFacetsOf(lex string, ns NamespaceResolver) ([]string, bool) {
+	su, ok := ns.(SchemaUnionMemberFacets)
+	if !ok {
+		return nil, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return nil, false
+	}
+	return su.SchemaUnionMemberFacetNames(name)
+}
+
+// schemaUnionAtomicMemberFacetsOf resolves a lexical type name to the facet
+// names of an impure union's atomic members, through the same prefix bindings.
+func schemaUnionAtomicMemberFacetsOf(lex string, ns NamespaceResolver) ([]string, bool) {
+	su, ok := ns.(SchemaUnionMemberFacets)
+	if !ok {
+		return nil, false
+	}
+	name, ok := resolveTypeQName(lex, ns)
+	if !ok {
+		return nil, false
+	}
+	return su.SchemaUnionAtomicMemberFacetNames(name)
+}
+
+// fillUnionMemberDetail records what a cast to a pure union needs beyond the
+// member type codes: the member NAMES, so the result can be annotated with the
+// member that accepted it, and a prefix resolver, so a QName-valued member can
+// be built at all.
+//
+// Both are properties of the static context and are gone by evaluation time,
+// which is why they are captured here alongside SchemaValueValid rather than
+// reconstructed in castToUnion. Both are also optional -- a resolver that
+// supplies neither leaves the cast exactly as it was.
+func fillUnionMemberDetail(st *SequenceType, lex string, ns NamespaceResolver) {
+	if names, ok := schemaUnionMemberFacetsOf(lex, ns); ok &&
+		len(names) == len(st.SchemaUnionMembers) {
+		st.SchemaUnionMemberFacets = names
+	}
+	// A QName-valued MEMBER needs the bindings for the same reason a
+	// QName-valued type does: CastAtomic has no static context, so it builds
+	// a QName with no URI. Whether any member is QName-valued is not known
+	// until the codes are in hand, so the hook is installed only when one is.
+	for _, m := range st.SchemaUnionMembers {
+		if m != xdm.TypeQName {
+			continue
+		}
+		ns := ns
+		st.SchemaExpandQName = func(lexical string) (xdm.QName, bool) {
+			q, err := resolveLexicalQName(lexical, ns)
+			if err != nil {
+				return xdm.QName{}, false
+			}
+			return q, true
+		}
+		break
+	}
+}

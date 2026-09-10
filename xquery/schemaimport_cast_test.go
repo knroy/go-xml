@@ -53,6 +53,14 @@ const unionsSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
       <xs:maxInclusive value="19"/>
     </xs:restriction>
   </xs:simpleType>
+  <xs:simpleType name="ncnameOrQName">
+    <xs:union memberTypes="xs:NCName xs:QName"/>
+  </xs:simpleType>
+  <xs:simpleType name="lowercaseName">
+    <xs:restriction base="u:ncnameOrQName">
+      <xs:pattern value="[a-z:]+"/>
+    </xs:restriction>
+  </xs:simpleType>
 </xs:schema>`
 
 func withUnions() xquery.Options {
@@ -705,5 +713,163 @@ func TestAtomicTypeConstructorAppliesFacets(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
 		}
+	}
+}
+
+// TestSchemaConstructorIsReachableDynamically pins the root cause: the
+// constructor function of an imported schema type is registered in no function
+// library -- the set of them is not known until a schema is imported -- so it
+// was folded into its cast only for a call written out in the source. Every
+// DYNAMIC route to the same function found nothing and reported XPST0017 (or,
+// for a partial application, went looking in the library and failed there).
+//
+// F&O 3.0 16.4.3 makes fn:function-lookup behave like a named function
+// reference, and XPath 3.0 3.1.6 makes "f(?)" on an arity-1 function the same
+// item "f#1" is; "f#1" already worked, so the other two must agree with it.
+// CastAs-UnionType-8 and -9 and CastAs-ListType-24 are the suite's form.
+func TestSchemaConstructorIsReachableDynamically(t *testing.T) {
+	// Each row is a different way of naming the SAME function item. The
+	// expected value is the one the written-out call u:sizeType("12") gives,
+	// so a row that disagrees with it is the bug whatever it returns.
+	for _, c := range []struct {
+		what string
+		body string
+	}{
+		{"named reference", `let $f := u:sizeType#1 return $f("12")`},
+		{"partial application", `let $f := u:sizeType(?) return $f("12")`},
+		{"function-lookup", `let $f := function-lookup(
+			QName("` + unionsNS + `", "sizeType"), 1) return $f("12")`},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.what, err)
+			continue
+		}
+		if got != "12" {
+			t.Errorf("%s: got %q, want %q", c.what, got, "12")
+		}
+	}
+	// The facets travel with it: a constructor reached dynamically is the
+	// same cast, so a value the type refuses must still be refused. Without
+	// this the rows above would pass on a constructor that erased the type.
+	_, err := run(t, unionQuery(`let $f := function-lookup(
+		QName("`+unionsNS+`", "sizeType"), 1) return $f("99")`), withUnions())
+	if err == nil {
+		t.Fatal("a value outside the type's range must not construct")
+	}
+	if !strings.Contains(err.Error(), "FORG0001") {
+		t.Fatalf("want FORG0001 from the dynamic constructor, got %v", err)
+	}
+	// A name that is no type in the static context is still the empty
+	// sequence, which is what F&O 16.1.1 owes for any name not in scope --
+	// the fix must not turn every unknown name into a function.
+	got, err := run(t, unionQuery(`empty(function-lookup(
+		QName("`+unionsNS+`", "noSuchType"), 1))`), withUnions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "true" {
+		t.Fatalf("an unknown name must look up to the empty sequence, got %s", got)
+	}
+}
+
+// TestCastToUnionYieldsTheMemberType pins the rule F&O 3.0 18.3.2 states and
+// this engine's erased type codes cannot carry: the result of a cast to a
+// union is an instance of the MEMBER that accepted the value.
+//
+// XPath erases every derived string type to xs:string, so a union over
+// xs:NCName and xs:QName reports the members as {xs:string, xs:QName} and
+// casting to the first produced a bare xs:string -- applying none of the
+// member's facets and satisfying "instance of xs:NCName" not at all. The
+// member's NAME is what closes the gap. CastAs-UnionType-18 and -26 assert
+// exactly these two rows; -34 is the restricted-union row.
+func TestCastToUnionYieldsTheMemberType(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want string
+	}{
+		// A PURE union: the NCName member accepts it, so the result is one.
+		{`u:ncnameOrQName("candlewick") instance of xs:NCName`, "true"},
+		{`("candlewick" cast as u:ncnameOrQName) instance of xs:NCName`, "true"},
+		// A union derived by RESTRICTION reaches its members the same way.
+		{`u:lowercaseName("candlewick") instance of xs:NCName`, "true"},
+		{`(xs:untypedAtomic("2001-01-01") cast as u:restricted)
+			instance of xs:date`, "true"},
+		// NEGATIVE: the member's own facet still decides. "xs:integer" holds a
+		// colon, so no NCName accepts it and the QName member is what does --
+		// a result that is NOT an xs:NCName.
+		{`("xs:integer" cast as u:ncnameOrQName) instance of xs:NCName`, "false"},
+		{`("xs:integer" cast as u:ncnameOrQName) instance of xs:QName`, "true"},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
+	}
+}
+
+// TestCastToUnionResolvesQNameMembers is the namespace half of the same rule.
+//
+// A QName's namespace comes from the static context, and CastAtomic has none:
+// it built a QName with no URI, so namespace-uri-from-QName on the result was
+// empty and two prefixes for one namespace compared unequal. The bindings that
+// apply are the ones in scope where the TYPE NAME was written -- which is why
+// the negative row below must fail rather than pick up the caller's binding.
+// CastAs-UnionType-10, -11 and -13..15 are the suite's form.
+func TestCastToUnionResolvesQNameMembers(t *testing.T) {
+	got, err := run(t, unionQuery(
+		`namespace-uri-from-QName("xs:integer" cast as u:ncnameOrQName)`), withUnions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "http://www.w3.org/2001/XMLSchema" {
+		t.Fatalf("the QName member must carry its namespace, got %q", got)
+	}
+	// NEGATIVE, and the sharper half: "pre" is bound where the FUNCTION ITEM
+	// is applied, not where u:ncnameOrQName was written, so no member accepts
+	// the value and the cast owes FORG0001. Resolving against the call site
+	// instead would answer "http://example.com/ns" and score as a pass.
+	_, err = run(t, unionQuery(`
+		declare function local:f($f as function(*)) as item()* {
+		  <a xmlns:pre="http://example.com/ns">{$f('pre:local')}</a>
+		};
+		local:f(u:ncnameOrQName#1)`), withUnions())
+	if err == nil {
+		t.Fatal("a prefix bound only at the call site must not resolve")
+	}
+	if !strings.Contains(err.Error(), "FORG0001") {
+		t.Fatalf("want FORG0001 for an unresolvable prefix, got %v", err)
+	}
+}
+
+// TestCastToUnionKeepsAnExistingQName is the case the member loop cannot get
+// right on its own. A QName value carries a namespace binding no lexical form
+// holds, and the loop takes the FIRST member the value casts to -- so a union
+// over xs:NCName and xs:QName handed an actual QName matched the NCName member
+// and cast the namespace away, leaving local-name-from-QName with no QName to
+// read. CastAs-UnionType-20 and -33 are the suite's form.
+func TestCastToUnionKeepsAnExistingQName(t *testing.T) {
+	got, err := run(t, unionQuery(
+		`local-name-from-QName(u:ncnameOrQName(node-name(<a/>)))`), withUnions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "a" {
+		t.Fatalf("an xs:QName operand must stay a QName, got %q", got)
+	}
+	// NEGATIVE: the shortcut is for a union that HAS a QName member. A union
+	// with none must still refuse a QName it cannot convert, rather than
+	// passing it through untouched.
+	got, err = run(t, unionQuery(
+		`node-name(<a/>) castable as u:intOrDate`), withUnions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "false" {
+		t.Fatalf("a union with no QName member must refuse one, got %s", got)
 	}
 }

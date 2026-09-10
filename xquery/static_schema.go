@@ -404,3 +404,131 @@ func (sc *staticContext) SchemaUnionListMemberItemType(name xdm.QName) (xdm.Type
 	}
 	return walk(st)
 }
+
+// SchemaUnionMemberFacetNames implements xpath.SchemaUnionMemberFacets.
+//
+// The walk is SchemaUnionMemberTypes' exactly, collecting names in place of
+// codes so that the two slices are index-parallel. It is separate rather than
+// folded into that method because the interface is optional and its signature
+// is fixed; see xpath.SchemaUnionMemberFacets for why a cast needs the names.
+func (sc *staticContext) SchemaUnionMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if sc.schema == nil {
+		return nil, false
+	}
+	t, ok := sc.schema.Types[name]
+	if !ok {
+		return nil, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok || st.Variety != xsd.VarietyUnion {
+		return nil, false
+	}
+	seenType := map[*xsd.SimpleType]bool{}
+	var walk func(u *xsd.SimpleType) ([]string, bool)
+	walk = func(u *xsd.SimpleType) ([]string, bool) {
+		if seenType[u] || !u.Facets.IsEmpty() {
+			return nil, false
+		}
+		seenType[u] = true
+		var out []string
+		for _, m := range u.MemberTypes {
+			if m == nil {
+				return nil, false
+			}
+			switch m.Variety {
+			case xsd.VarietyUnion:
+				sub, pure := walk(m)
+				if !pure {
+					return nil, false
+				}
+				out = append(out, sub...)
+			case xsd.VarietyAtomic:
+				// Only a BUILT-IN member has a facet name CastToDerived
+				// understands. A schema-defined restriction contributes the
+				// empty string, which leaves the cast on its erased code --
+				// the behaviour before this existed, and the safe direction:
+				// applying a facet name the table does not hold would be a
+				// silent no-op anyway.
+				if m.Name.URI == xsd.NSSchema {
+					out = append(out, m.Name.Local)
+					continue
+				}
+				out = append(out, "")
+			default:
+				return nil, false
+			}
+		}
+		return out, true
+	}
+	names, pure := walk(st)
+	if !pure || len(names) == 0 {
+		return nil, false
+	}
+	return names, true
+}
+
+// SchemaUnionAtomicMemberFacetNames implements xpath.SchemaUnionMemberFacets.
+//
+// The walk is SchemaUnionAtomicMemberTypes' exactly, collecting names in place
+// of codes so the two slices are index-parallel. See the note there on why a
+// restriction of a union has to descend to the ancestor that declares the
+// members, and xpath.SchemaUnionMemberFacets on why a cast needs the names.
+func (sc *staticContext) SchemaUnionAtomicMemberFacetNames(name xdm.QName) ([]string, bool) {
+	if sc.schema == nil {
+		return nil, false
+	}
+	t, ok := sc.schema.Types[name]
+	if !ok {
+		return nil, false
+	}
+	st, ok := t.(*xsd.SimpleType)
+	if !ok {
+		return nil, false
+	}
+	for st != nil && st.Variety == xsd.VarietyUnion && len(st.MemberTypes) == 0 {
+		base, ok := st.Base.(*xsd.SimpleType)
+		if !ok || base == st {
+			break
+		}
+		st = base
+	}
+	if st == nil || st.Variety != xsd.VarietyUnion {
+		return nil, false
+	}
+	seen := map[*xsd.SimpleType]bool{}
+	var out []string
+	var walk func(u *xsd.SimpleType)
+	walk = func(u *xsd.SimpleType) {
+		if u == nil || seen[u] {
+			return
+		}
+		seen[u] = true
+		for _, m := range u.MemberTypes {
+			if m == nil {
+				continue
+			}
+			switch m.Variety {
+			case xsd.VarietyUnion:
+				walk(m)
+			case xsd.VarietyAtomic:
+				// Only a BUILT-IN member has a name CastToDerived understands;
+				// a schema-defined one contributes the empty string, leaving
+				// the cast on the erased code it always used.
+				if _, isAtomic, ok := sc.LookupSchemaType(m.Name); ok && isAtomic {
+					if m.Name.URI == xsd.NSSchema {
+						out = append(out, m.Name.Local)
+					} else {
+						out = append(out, "")
+					}
+					continue
+				}
+				if _, found := xpath.BuiltinAtomicTypeCode(m.Name.Local); found &&
+					m.Name.URI == xsd.NSSchema {
+					out = append(out, m.Name.Local)
+				}
+			}
+		}
+	}
+	walk(st)
+	return out, true
+}

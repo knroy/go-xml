@@ -91,6 +91,12 @@ func registerHOFuncs(l *Library) {
 		n := int(v)
 		fn, ok := LookupDynamic(ctx, name, n)
 		if !ok {
+			// The constructor function of an imported schema type is in
+			// no library, so it has to be resolved from the static
+			// context rather than looked up. See lookupSchemaConstructor.
+			if item, ok := lookupSchemaConstructor(ctx, name, n); ok {
+				return xdm.One(item), nil
+			}
 			return xdm.Empty(), nil
 		}
 		item := functionItemFor(name, n, fn.Call)
