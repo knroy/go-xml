@@ -107,7 +107,17 @@ func withRetainedFocus(ref *Context, inner func(any, []xdm.Sequence) (xdm.Sequen
 		p := &sub
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			sub.Ctx = c.Ctx
-			sub.items = c.items
+			// Both budgets come from the call, and each with the flag that
+			// says where its boundary is. The counter alone is not enough:
+			// heldBytes rides on the value copy, so a closure captured
+			// outside a host's hold would carry "not held" into a call that
+			// is held, and the first Compiled.Eval under the body would
+			// reset the caller's counter and discard charges the caller had
+			// already made -- the leak HoldByteBudget's idempotence guard
+			// exists to prevent, arriving through the closure instead. The
+			// item budget is forwarded the same way for the same reason.
+			sub.items, sub.heldItems = c.items, c.heldItems
+			sub.bytes, sub.heldBytes = c.bytes, c.heldBytes
 			// Only the *focus* is retained from the reference point; the
 			// variable bindings come from the call. The two parts of the
 			// captured context have opposite lifetimes in a prolog, where a
@@ -196,7 +206,11 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 		if c, ok := callCtx.(invokeContext); ok && c != nil {
 			s := *captured
 			s.Ctx = c.Ctx
-			s.items = c.items
+			// Both budgets come from the call, each with the flag that says
+			// where its boundary is -- see withRetainedFocus for why the
+			// counter alone would let a closure reset the caller's charges.
+			s.items, s.heldItems = c.items, c.heldItems
+			s.bytes, s.heldBytes = c.bytes, c.heldBytes
 			// The recursion depth is one of those per-evaluation limits, and
 			// it has to come from the CALL rather than the closure: a closure
 			// captures the depth it was written at, which for a function that
