@@ -16,11 +16,11 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| Nothing bounded the bytes an evaluation produced, so a 1,009-byte expression of nested doubling `let`s returned 640 MB, and a stylesheet chain of `xsl:variable` did the same | `xpath.MaxBytes` charges the constructs that concatenate as they build, held across one query or one transform; the bound is 1 GiB against a largest measured legitimate string of 13.8 MB. Refuses with `XPDY0130`. | [`b50b373`][b50b373] |
-| A self-applying function item recursed uncharged and killed the process with an unrecoverable stack overflow | `DynamicCall.Eval` now descends before `Invoke`, and an inline function's closure takes `Depth` from the call rather than from where it was written; the attack refuses with `XPDY0001` like every other recursion. | [`35c2e77`][35c2e77] |
-| `TransformOptions.MaxDepth` bounded template recursion only, so an expression was held at the package default of 500 whatever the caller asked | The option now reaches the XPath context, which is what lets it govern the path that takes untrusted input — and lets a continuation-passing function nesting 530 deep run. | [`35c2e77`][35c2e77] |
-| `fn:distinct-values` compared numerics pairwise, so n distinct integers cost O(n^2) `eq` calls with a `big.Rat` each | Non-transitive promotion only involves float and double, so integer and decimal now key on their exact rational and only the inexact values are scanned. 100,000 integers: 573 s and 480 GB become 0.15 s and 109 MB. | [`694fe29`][694fe29] |
-| The process environment was readable with no opt-in: any stylesheet enumerated 92 variables and read a secret by name | Both functions answer from `Context.Environment`, nil withholding everything. The empty sequence, not an error — §16.2.1 makes availability implementation-dependent. | [`40930d5`][40930d5] |
+| Nothing bounded the bytes an evaluation produced: a 1,009-byte expression returned 640 MB | `xpath.MaxBytes` charges the constructs that concatenate as they build. Refuses with `XPDY0130`. | [`b50b373`][b50b373] |
+| A self-applying function item recursed uncharged and killed the process | `DynamicCall.Eval` descends before `Invoke`, so the attack refuses with `XPDY0001`. | [`35c2e77`][35c2e77] |
+| `TransformOptions.MaxDepth` bounded template recursion only, not expressions | The option now reaches the XPath context, which is the path that takes untrusted input. | [`35c2e77`][35c2e77] |
+| `fn:distinct-values` compared numerics pairwise, costing O(n^2) `eq` calls | Integer and decimal key on their exact rational; 100,000 integers go from 573 s to 0.15 s. | [`694fe29`][694fe29] |
+| The process environment was readable with no opt-in | Both functions answer from `Context.Environment`, nil withholding everything. | [`40930d5`][40930d5] |
 | `map:put` and `map:remove` copied the whole entry slice, so a large map cost O(n) per call | The map is a persistent hash array mapped trie that shares structure and keeps insertion order by sequence number; `same-key-023`'s 421,875 keys now finish. | [`ac743d4`][ac743d4] |
 | Conformance figures in the documentation drifted from the measured ones and nothing failed | `tests/docfigures.sh` reads `tests/ratchet.txt` and fails `check.sh` on any copy beside a suite denominator that disagrees; the XSD schema/instance split is ratcheted too. | [`920fd8a`][920fd8a] |
 | The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. | [`7f2d2d0`][7f2d2d0] |
@@ -143,13 +143,13 @@ turn "I could not prove the constraint" into "the constraint holds."*
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The documented `MaxItems` budget never bound on an XQuery body | A FLWOR is evaluated by `xquery`, not `xpath`, so its tuple stream was charged nothing and `Compiled.Eval` reset the counter once per tuple. `HoldItemBudget` holds it for one query; `flwor.eval` charges both accumulators. | [`fe41f3c`][fe41f3c] |
+| The documented `MaxItems` budget never bound on an XQuery body | `Compiled.Eval` reset the counter once per tuple; `HoldItemBudget` holds it for one query. | [`fe41f3c`][fe41f3c] |
 | Uncompilable content models skipped every constraint on them | A model that would not compile passed silently rather than declining. | [`b6fb5ab`][b6fb5ab] |
 | A budget answered "valid" | Exhausting the budget was reported as success instead of as an inability to decide. | [`2c461c7`][2c461c7] |
 | Budgets counted the wrong thing | A bound over the wrong quantity is not a bound. | [`8dcc4dc`][8dcc4dc] |
 | Last unbudgeted load-time algorithm | Now bounded; `Options.MaxContentModelPositions` makes the position budget host-tunable. | [`81e6ee5`][81e6ee5] |
 | Substitution closure unbounded | Bounded, along with the pairwise overlap test it fed. | [`1b027e5`][1b027e5] |
-| A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength` = 10,000; longest real chain is 190. | [`106bcdc`][106bcdc] |
+| A flat operator chain overflowed the stack at compile time | The depth cap counts nesting, and the attack is length. Every infix loop charges `maxChainLength`. | [`106bcdc`][106bcdc] |
 
 ### Fixed — test harness
 
