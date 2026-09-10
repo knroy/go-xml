@@ -10,21 +10,21 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | What it does |
 |---|---|
-| `map:put` and `map:remove` copied the whole entry slice, so a large map cost O(n) per call | The map is a persistent hash array mapped trie that shares structure and keeps insertion order by sequence number; `same-key-023`'s 421,875 keys now finish. |
-| Conformance figures in the documentation drifted from the measured ones and nothing failed | `tests/docfigures.sh` reads `tests/ratchet.txt` and fails `check.sh` on any copy beside a suite denominator that disagrees; the XSD schema/instance split is ratcheted too. |
 | **The foundation of the XSLT 3.0 §19.8 streamability analysis** | §19 infers a posture and sweep for every construct and refuses a free-ranging one with `XTSE3430`. The lattice and the §19.8.8 XPath rules are implemented; an unmodelled construct is "no opinion", not a rejection. |
 
 ### Fixed — engine
 
 | Change | Problem → solution | Commit |
 |---|---|---|
-| The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. 30,344 → 30,345. | — |
-| `fn:transform` from a `static="yes"` variable deadlocked: the nested compile asked for a mutex the outer one held | `Compile` now takes the lock and delegates to `compileLocked`, which the static phase re-enters without it; the static library binds the real function. `transform-004`. 11,481 → 11,482. | — |
-| The §19.8.8.2 quantified rule was withheld over a streamed binding: faithful, it refused three valid stylesheets | A data-flow environment gives the range variable the binding's posture, so `$t/@value` stays striding and `$t/preceding-sibling::*` roams. `streamable-129`. 11,482 → 11,483. | — |
-| §19.8.9.4's third condition was unenforced: a `current-group()` call kept its group across a focus-changing container | A nested `xsl:for-each`, `xsl:iterate` or `xsl:copy select=` is now the call's focus-setting container, so the call is roaming. `si-group-031`. 11,481 → 11,482. | — |
-| An end-phase accumulator rule reading its own pre-descent value was refused as circular | The walk now hands back its partial table, and `XTDE3400` fires only for a value not yet recorded. `evaluate-046`. 11,480 → 11,481. | — |
-| `../accumulator-after()` was accepted: the Last Call cascade has no climbing rule | Added the Recommendation's rule — a climbing context posture is free-ranging, the parent's post-descent value being unknown. `accumulator-060`. 11,479 → 11,480. | — |
-| `fn:accumulator-before` was unmodelled, hiding a consuming `accumulator-after` beside it | §19.8.9.2: grounded and motionless with a motionless argument, else roaming. `accumulator-059`'s pre-descent difference is now refused. 11,478 → 11,479. | — |
+| `map:put` and `map:remove` copied the whole entry slice, so a large map cost O(n) per call | The map is a persistent hash array mapped trie that shares structure and keeps insertion order by sequence number; `same-key-023`'s 421,875 keys now finish. | [`ac743d4`][ac743d4] |
+| Conformance figures in the documentation drifted from the measured ones and nothing failed | `tests/docfigures.sh` reads `tests/ratchet.txt` and fails `check.sh` on any copy beside a suite denominator that disagrees; the XSD schema/instance split is ratcheted too. | [`920fd8a`][920fd8a] |
+| The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. 30,344 → 30,345. | [`7f2d2d0`][7f2d2d0] |
+| `fn:transform` from a `static="yes"` variable deadlocked: the nested compile asked for a mutex the outer one held | `Compile` now takes the lock and delegates to `compileLocked`, which the static phase re-enters without it; the static library binds the real function. `transform-004`. 11,481 → 11,482. | [`59ee9b9`][59ee9b9] |
+| The §19.8.8.2 quantified rule was withheld over a streamed binding: faithful, it refused three valid stylesheets | A data-flow environment gives the range variable the binding's posture, so `$t/@value` stays striding and `$t/preceding-sibling::*` roams. `streamable-129`. 11,482 → 11,483. | [`6e03e3d`][6e03e3d] |
+| §19.8.9.4's third condition was unenforced: a `current-group()` call kept its group across a focus-changing container | A nested `xsl:for-each`, `xsl:iterate` or `xsl:copy select=` is now the call's focus-setting container, so the call is roaming. `si-group-031`. 11,481 → 11,482. | [`3672fa3`][3672fa3] |
+| An end-phase accumulator rule reading its own pre-descent value was refused as circular | The walk now hands back its partial table, and `XTDE3400` fires only for a value not yet recorded. `evaluate-046`. 11,480 → 11,481. | [`878f9ed`][878f9ed] |
+| `../accumulator-after()` was accepted: the Last Call cascade has no climbing rule | Added the Recommendation's rule — a climbing context posture is free-ranging, the parent's post-descent value being unknown. `accumulator-060`. 11,479 → 11,480. | [`878f9ed`][878f9ed] |
+| `fn:accumulator-before` was unmodelled, hiding a consuming `accumulator-after` beside it | §19.8.9.2: grounded and motionless with a motionless argument, else roaming. `accumulator-059`'s pre-descent difference is now refused. 11,478 → 11,479. | [`878f9ed`][878f9ed] |
 | `fn:current` was unmodelled, abandoning every construct containing it | §19.8.9.3 gives the call the outermost expression's context posture (striding in a pattern), and §19.8.1 charges absorbing it by that item's type. 11,463 → 11,473. | [`ab89b76`][ab89b76] |
 | A streamable template rule could return streamed nodes | §18.1 demands a grounded result of an `xsl:stream` body "or of a streamable template rule"; only the former was checked. Applied it to rule bodies too. 11,463 → 11,464. | [`2eb28b6`][2eb28b6] |
 | A path descending from a climbing posture was rescued as a scan | §19.8.8.7's reassessment assumes a striding start, so `for-each select=".."` with a descending body was accepted where `count(../*)` was refused. 11,464 → 11,465. | [`2eb28b6`][2eb28b6] |
@@ -128,8 +128,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | A Windows filename parsed as a URI scheme | `c:\my\doc\books.xml` was read as scheme `c`; backslashes are not legal URI characters on any platform, so it is FODC0005. | [`f536984`][f536984] |
 | `fn:transform` codes and options | FOXT0001 where the options identify no stylesheet (QT3 reserves it for an unavailable *product*); an option as element content refused as a text node; an href-less `xsl:result-document` treated as secondary. | [`f536984`][f536984] |
 | Four unchecked or unread attributes | `exponent-separator` accepted but never mapped into the format, XTSE0730 unimplemented, `xsl:attribute-set/@streamable` missing from the table, and `xsl:` attribute *values* on an LRE never checked. | [`f536984`][f536984] |
-| A cast to a schema list type built tokens from the item type's erased code | `xs:IDREF` became `xs:string` and a union item type nothing, against F&O 3.0 §18.3.6. The item type is now resolved as a full cast target and each token cast through it. | — |
-| A union over list types returned the one string it was handed | The list member was looked up by item code, and `xs:IDREFS` is a built-in the schema's type table lacks. The members are now resolved by name and tried in order. 30,340 → 30,343. | — |
+| A cast to a schema list type built tokens from the item type's erased code | `xs:IDREF` became `xs:string` and a union item type nothing, against F&O 3.0 §18.3.6. The item type is now resolved as a full cast target and each token cast through it. | [`aeead08`][aeead08] |
+| A union over list types returned the one string it was handed | The list member was looked up by item code, and `xs:IDREFS` is a built-in the schema's type table lacks. The members are now resolved by name and tried in order. 30,340 → 30,343. | [`aeead08`][aeead08] |
 
 ### Fixed — bounds and budgets
 
@@ -162,10 +162,9 @@ what the suites *measured*, not what the library does.
 
 | Finding | Verdict | Commit |
 |---|---|---|
-| The §19.8.8 `A \|\| A` rule for `\|\|` cannot land alone | Faithful to the table and it refuses `si-fork-952`, but it unshields §19.8.8.4's admitted striding-union widening and costs 18 asserting cases: 11,451 → 11,435. Needs the U-type inference first. | [`5cd6b38`][5cd6b38] |
+| The §19.8.8 `A \|\| A` rule for `\|\|` cannot land alone | Faithful to the table and it refuses `si-fork-952`, but it unshields §19.8.8.4's admitted striding-union widening and costs 18 asserting cases: 11,451 → 11,435. A U-type inference is not the way in: narrowing a union of sibling name tests was built, gained the two `si-fork` cases, lost `sx-union-202`, and contradicts the spec's own `unordered(a\|b)` and `count((author \| editor))` examples, both crawling. Reverted. | [`5cd6b38`][5cd6b38] |
 | `system-property('xsl:supports-streaming')` answers "no" | Correct, and must stay: §26.5 says a non-conforming processor "must return the value no", and "yes" would lie to stylesheets that branch on it to pick a fallback. | [`f536984`][f536984] |
 | `merge-097`, `-097s`, `-097sf` | Not interoperable, per the test set's own maintainer comment: they rely on Saxon's `?select=` collection URIs and declare no environment. | [`f536984`][f536984] |
-| `transform-004` | Needs `fn:transform` during the static phase, which deadlocks on a non-reentrant compile mutex — confirmed from a stack trace, not inferred. | [`f536984`][f536984] |
 | Unrecognised `fn:transform` options | Ignoring them is correct: `fn-transform-48` is titled "…unrecognised option which is ignored" and asserts success. | [`e049991`][e049991] |
 | Two XSD 1.1 "false accepts" | The suite's, not ours. | [`7c4bef2`][7c4bef2] |
 | DocBook 5.0's XSD refused | The schema is genuinely invalid. | [`c8fc839`][c8fc839] |
@@ -657,3 +656,11 @@ here so every entry in this file sits under a release.
 [d0dd99d]: https://github.com/knroy/go-xml/commit/d0dd99d
 [d145807]: https://github.com/knroy/go-xml/commit/d145807
 [f9c0cf5]: https://github.com/knroy/go-xml/commit/f9c0cf5
+[3672fa3]: https://github.com/knroy/go-xml/commit/3672fa3
+[59ee9b9]: https://github.com/knroy/go-xml/commit/59ee9b9
+[6e03e3d]: https://github.com/knroy/go-xml/commit/6e03e3d
+[7f2d2d0]: https://github.com/knroy/go-xml/commit/7f2d2d0
+[878f9ed]: https://github.com/knroy/go-xml/commit/878f9ed
+[920fd8a]: https://github.com/knroy/go-xml/commit/920fd8a
+[ac743d4]: https://github.com/knroy/go-xml/commit/ac743d4
+[aeead08]: https://github.com/knroy/go-xml/commit/aeead08
