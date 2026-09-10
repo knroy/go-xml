@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"net/url"
 	"os"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -18,8 +18,8 @@ import (
 
 	"github.com/knroy/go-xml/xdm"
 	"github.com/knroy/go-xml/xpath"
-	"github.com/knroy/go-xml/xsd"
 	"github.com/knroy/go-xml/xquery"
+	"github.com/knroy/go-xml/xsd"
 )
 
 // SuiteClock is the fixed value fn:current-dateTime returns during a run.
