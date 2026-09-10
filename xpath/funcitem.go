@@ -197,6 +197,17 @@ func (e *InlineFunctionExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			s := *captured
 			s.Ctx = c.Ctx
 			s.items = c.items
+			// The recursion depth is one of those per-evaluation limits, and
+			// it has to come from the CALL rather than the closure: a closure
+			// captures the depth it was written at, which for a function that
+			// applies itself is the same shallow depth every time round. With
+			// the captured value the charge could never accumulate however
+			// diligently the call site charged it, so the body would recurse
+			// until the stack overflowed. Taking the caller's makes the nest
+			// count, and taking MaxDepth with it keeps a caller that raised
+			// its own bound from having the package default reimposed inside
+			// a closure written before it was set.
+			s.Depth, s.MaxDepth = c.Depth, c.MaxDepth
 			sub = &s
 		}
 		for i, p := range e.Params {
@@ -514,7 +525,22 @@ func (e *DynamicCall) Eval(ctx *Context) (xdm.Sequence, error) {
 		return nil, fmt.Errorf("XPTY0004: %s takes %d argument(s), got %d",
 			fn.String(), fn.Arity, len(args))
 	}
-	return fn.Invoke(clearHostVars(ctx), args)
+	// A dynamic call recurses exactly as a named one does, so it is charged
+	// exactly as a named one is -- FuncCall.Eval descends before Function.Call
+	// and this descends before Invoke. Without it a function item that applies
+	// itself, "let $f := function($g) { $g($g) } return $f($f)", never passed
+	// through the bound at all and overflowed the stack, which in Go is a
+	// fatal runtime error the host cannot recover from.
+	//
+	// The charge is on the *nesting*, not on the call: sub is a copy, so it
+	// is released when this call returns and a thousand sequential calls from
+	// fn:for-each are a thousand calls at the caller's depth rather than one
+	// nest a thousand deep.
+	sub, err := ctx.Descend()
+	if err != nil {
+		return nil, err
+	}
+	return fn.Invoke(clearHostVars(sub), args)
 }
 
 // singleFunctionItem extracts the one function item a sequence must hold.

@@ -16,6 +16,8 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 
 | Change | Problem → solution | Commit |
 |---|---|---|
+| A self-applying function item recursed uncharged and killed the process with an unrecoverable stack overflow | `DynamicCall.Eval` now descends before `Invoke`, and an inline function's closure takes `Depth` from the call rather than from where it was written; the attack refuses with `XPDY0001` like every other recursion. | — |
+| `TransformOptions.MaxDepth` bounded template recursion only, so an expression was held at the package default of 500 whatever the caller asked | The option now reaches the XPath context, which is what lets it govern the path that takes untrusted input — and lets a continuation-passing function nesting 530 deep run. | — |
 | `map:put` and `map:remove` copied the whole entry slice, so a large map cost O(n) per call | The map is a persistent hash array mapped trie that shares structure and keeps insertion order by sequence number; `same-key-023`'s 421,875 keys now finish. | [`ac743d4`][ac743d4] |
 | Conformance figures in the documentation drifted from the measured ones and nothing failed | `tests/docfigures.sh` reads `tests/ratchet.txt` and fails `check.sh` on any copy beside a suite denominator that disagrees; the XSD schema/instance split is ratcheted too. | [`920fd8a`][920fd8a] |
 | The two ExprSingle scanners bounded a branch with flat counters, which cannot record the nesting order of interleaved `if` and FLWOR | Both keep a nesting stack, so a stop keyword is honoured only when nothing nested is open to claim it; the last branch of `if` and `switch` now scans with the enclosing clause's stops. `RexParser`. 30,344 → 30,345. | [`7f2d2d0`][7f2d2d0] |

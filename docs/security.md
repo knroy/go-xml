@@ -40,13 +40,12 @@ Eight audits have passed over this code. This section is the whole of what is
 already fixed has been reduced to one line apiece under *History* at the end,
 with the narrative in [CHANGELOG.md](../CHANGELOG.md).
 
-**Open.** Four, and the first two end the process rather than the request.
+**Open.** Three, and the first ends the process rather than the request.
 A Go stack overflow is a fatal runtime error, not a panic: `recover()` does not
 catch it, no deferred function runs, and one request takes the server with it.
 
 | finding | reach | why it is still open |
 |---|---|---|
-| **a 62-byte expression overflows the stack** | any compiled expression or query | the dynamic-call path charges no recursion depth; see *Open findings*. |
 | **a flat operator chain overflows the stack** | any compiled expression or stylesheet | the parser's cap counts nesting, and the attack is length; see *Open findings*. |
 | the process environment is readable | hostile stylesheet, or hostile document through a trusted one | `fn:environment-variable` and `fn:available-environment-variables` have no opt-in; see *Open findings*. |
 | `javascript:` URLs pass through | hostile stylesheet | an XSLT processor is not an HTML sanitiser; see *Open findings*. |
@@ -666,36 +665,6 @@ reference DAG — not that one is hard to write by hand, because it is not.
 
 ## Open findings
 
-### CRITICAL — a self-applying inline function overflows the stack
-
-```
-let $f := function($g, $n) { $g($g, $n + 1) } return $f($f, 1)
-```
-
-Sixty-two bytes, plain XPath 3.1, default context, nothing configured: about a
-second later the process is gone with `fatal error: stack overflow`. The same
-expression through `xquery.Eval` behaves the same way. This is not a panic —
-`recover()` does not catch a Go stack overflow, so an embedder cannot contain
-it per request.
-
-It is a gap in one path rather than a decision. Named recursion, mutual
-recursion, `for`, `let` and quantified expressions all stop at
-`XPDY0001: recursion exceeded 500 levels`; only the dynamic-call path is
-uncharged. `DynamicCall.Eval` calls `fn.Invoke` directly
-(`xpath/funcitem.go:517`) where `FuncCall.Eval` calls `ctx.Descend()`, and the
-inline function's `Invoke` closure copies only `Ctx` and `items` from the
-calling context (`xpath/funcitem.go:195-200`), dropping `Depth`. Both halves
-need fixing; either alone leaves it open.
-
-**`TransformOptions.MaxDepth` does not govern this path.** A 268-byte
-stylesheet holding the same inline function in an `xsl:variable` kills the
-process through `Stylesheet.Transform` with `MaxDepth: 50` explicitly set —
-verified. That is the entry point which actually takes untrusted input, and
-the documented defence for it is configured and does not apply.
-
-**Until then, do not compile or evaluate an untrusted expression, query or
-stylesheet in a process you need to keep alive.**
-
 ### CRITICAL — a flat operator chain overflows the stack during compilation
 
 `"1" + strings.Repeat("+1", 3000000)` — six megabytes of ASCII — ends the
@@ -1273,7 +1242,7 @@ wrong on first framing.
 
 ## History
 
-Seven audits have passed over this code. Every finding below was reproduced,
+Eight audits have passed over this code. Every finding below was reproduced,
 fixed, and pinned by a regression test that fails against the previous code;
 the full narrative for each — what it was, how it was reproduced, why the fix
 took the shape it did — now lives in [CHANGELOG.md](../CHANGELOG.md). They are
@@ -1284,6 +1253,11 @@ already found.
 Each line names the **direction** of the defect, because that is what decides
 who was exposed: a *false accept* let an invalid input through, a *false
 reject* refused a legal one, and *cost* produced the right answer too slowly.
+
+**Eighth audit.**
+
+- **A 62-byte self-applying inline function overflowed the stack and killed the process** — availability, and unrecoverable: `recover()` does not catch a Go stack overflow. The dynamic-call path charged no recursion depth and the inline closure dropped `Depth`; both are fixed, so it refuses with `XPDY0001` like every other recursion. See CHANGELOG.
+- **`TransformOptions.MaxDepth` did not govern expression recursion** — the same finding's second half: the option bounded templates only, so the XPath side kept its package default of 500 however the caller configured it. It now reaches the XPath context, which both honours a lowered bound and stops a legitimate 530-deep continuation-passing function being refused. See CHANGELOG.
 
 **Sixth audit.**
 

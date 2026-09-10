@@ -82,3 +82,66 @@ func TestTransformMaxDepthBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// TransformOptions.MaxDepth must bound expression recursion as well as
+// template recursion. A self-applying function item reached the XPath engine
+// with the package default in force whatever the caller asked for, so the
+// documented option did not govern the path that actually takes untrusted
+// input; and a legitimate continuation-passing function was refused at 500
+// even where the caller had allowed more. Both directions are checked here.
+func TestTransformMaxDepthBoundsExpressionRecursion(t *testing.T) {
+	const attack = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+<xsl:template name="main">
+<xsl:variable name="v" select="let $f := function($g, $n) { $g($g, $n + 1) } return $f($f, 1)"/>
+<out><xsl:value-of select="$v"/></out>
+</xsl:template>
+</xsl:stylesheet>`
+
+	sheet := compileSheet(t, attack)
+	_, err := sheet.Transform(context.Background(), nil,
+		TransformOptions{InitialTemplate: "main", MaxDepth: 50})
+	if err == nil {
+		t.Fatal("a self-applying function item was accepted; before the fix this " +
+			"ended the process with a stack overflow recover() cannot catch")
+	}
+	// The caller asked for 50, so 50 is the bound that must be reported --
+	// naming 500 would mean the option never reached the expression engine.
+	if !strings.Contains(err.Error(), "recursion exceeded 50 levels") {
+		t.Fatalf("want the caller's own bound of 50, got %v", err)
+	}
+
+	// The acceptance direction: a continuation-passing fibonacci nests one
+	// dynamic call per unit of the result, so fib(11) needs a little over 500
+	// levels. It must succeed under the default bound of 1000.
+	const fib = `<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+ xmlns:f="http://local/">
+<xsl:function name="f:fib"><xsl:param name="n"/><xsl:param name="countfun"/>
+<xsl:sequence select="if ($n = 1 or $n = 2) then $countfun(1)
+ else let $first := function($x) { let $second := function($y) { $countfun($x + $y) }
+ return f:fib($n - 2, $second) } return f:fib($n - 1, $first)"/></xsl:function>
+<xsl:template name="main"><out><xsl:value-of select="f:fib(11, function($a) {$a})"/></out></xsl:template>
+</xsl:stylesheet>`
+
+	res, err := compileSheet(t, fib).Transform(context.Background(), nil,
+		TransformOptions{InitialTemplate: "main"})
+	if err != nil {
+		t.Fatalf("higher-order-functions-068's fibonacci was refused: %v", err)
+	}
+	if !strings.Contains(res.String(), ">89<") {
+		t.Fatalf("want fib(11) = 89, got %s", res.String())
+	}
+}
+
+// compileSheet compiles a stylesheet from source or fails the test.
+func compileSheet(t *testing.T, src string) *Stylesheet {
+	t.Helper()
+	doc, err := xdm.ParseString(src, xdm.ParseOptions{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	sheet, err := Compile(doc.Root, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	return sheet
+}

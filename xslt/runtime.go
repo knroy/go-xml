@@ -646,6 +646,15 @@ func newRuntime(s *Stylesheet, ctx context.Context, root *xdm.Node, opts Transfo
 		xctx.LibraryVersion = xpath.XPath31
 	}
 	xctx.Ctx = ctx
+	// TransformOptions.MaxDepth bounds recursion in the transform, and an
+	// expression recurses as surely as a template does: a continuation-passing
+	// function like higher-order-functions-068's fibonacci nests one dynamic
+	// call per unit of the result, 707 levels for fib(11). Left unset, the
+	// XPath side kept its own package default of 500 whatever the caller
+	// asked for, so a caller that raised the bound was refused at 500 and the
+	// message named a limit it had not chosen. Passing it through is what
+	// makes the documented option govern this path.
+	xctx.MaxDepth = rt.maxDepth
 	xctx.Docs = opts.Documents
 	xctx.Collections = opts.Collections
 	xctx.Texts = opts.Texts
