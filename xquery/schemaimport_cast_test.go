@@ -47,6 +47,12 @@ const unionsSchema = `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
   <xs:simpleType name="nsSensitive">
     <xs:union memberTypes="xs:date xs:QName"/>
   </xs:simpleType>
+  <xs:simpleType name="sizeType">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="19"/>
+    </xs:restriction>
+  </xs:simpleType>
 </xs:schema>`
 
 func withUnions() xquery.Options {
@@ -653,5 +659,51 @@ func TestPureListTypeConstructorIsUnchanged(t *testing.T) {
 	}
 	if got != "3" {
 		t.Fatalf("a list constructor must yield one item per token, got %q", got)
+	}
+}
+
+// TestAtomicTypeConstructorAppliesFacets asserts F&O 3.0 17.5 for an imported
+// ATOMIC type: "The semantics of the constructor function xs:TYPE(arg) are
+// identical to the semantics of arg cast as xs:TYPE?", and a value outside the
+// type raises err:FORG0001.
+//
+// The constructor had been folded into a cast that carried only the primitive
+// type code, with no handle on the schema, so u:sizeType -- an xs:integer
+// restricted to 1..19 -- accepted every integer. The cast form checked the
+// same facets correctly, which is exactly the disagreement 17.5 forbids, and
+// is why every row below asserts the two forms together rather than the
+// constructor alone. prod-CastExpr.schema/user-defined-2 is the suite's case.
+func TestAtomicTypeConstructorAppliesFacets(t *testing.T) {
+	// Outside the range: both forms owe FORG0001.
+	for _, body := range []string{
+		`u:sizeType(20)`,
+		`20 cast as u:sizeType`,
+		`u:sizeType(0)`,
+		`0 cast as u:sizeType`,
+		`u:sizeType("20")`,
+	} {
+		if _, err := run(t, unionQuery(body), withUnions()); err == nil {
+			t.Errorf("%s: a value outside the facets must raise FORG0001", body)
+		} else if !strings.Contains(err.Error(), "FORG0001") {
+			t.Errorf("%s: want FORG0001, got %v", body, err)
+		}
+	}
+	// Inside the range: both forms yield the value, so the check above is a
+	// statement about the facets and not a constructor that refuses
+	// everything.
+	for _, c := range []struct{ body, want string }{
+		{`u:sizeType(19)`, "19"},
+		{`19 cast as u:sizeType`, "19"},
+		{`u:sizeType(1)`, "1"},
+		{`u:sizeType("15")`, "15"},
+	} {
+		got, err := run(t, unionQuery(c.body), withUnions())
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.body, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.body, got, c.want)
+		}
 	}
 }

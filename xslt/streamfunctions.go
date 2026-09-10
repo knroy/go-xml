@@ -731,6 +731,12 @@ func (a *analyzer) simpleMap(x *xpath.SimpleMap) props {
 		paramCategory:     a.paramCategory,
 		hasStreamParam:    a.hasStreamParam,
 		higherOrder:       true,
+		// "$input ! path()" navigates away from the very node $input
+		// denotes, so the context item on the right inherits the left
+		// operand's streamed-but-grounded standing (§19.8.8.11, and the
+		// note under §19.8.5). Without this the navigation usage would
+		// meet a grounded context and cost nothing.
+		ctxStreamedGrounded: a.isStreamingParamRef(x.Left),
 	}
 	p := inner.expr(x.Right)
 	a.known = a.known && inner.known

@@ -392,3 +392,109 @@ func TestTypeDeterminedUsageAtomizes(t *testing.T) {
 		t.Errorf("type-determined usage of node()* = %v, want navigation", got)
 	}
 }
+
+// TestNavigationFromStreamingParamIsFreeRanging checks the rule that makes
+// fn:path unstreamable inside a declared-streamable stylesheet function.
+//
+// §19.8.8.11 gives a reference to the streaming parameter of an absorbing
+// function a *grounded* posture. §19.8.1 would then stop at "If P is grounded,
+// then S' is S" and charge nothing for any usage at all. But the note under
+// §19.8.5 says the nodes such a reference denotes "can only derive from
+// streamed nodes passed in an argument to the function", and navigation
+// reaches outside the subtree of such a node -- to an ancestor or a preceding
+// sibling that a streaming processor has already discarded.
+//
+// So an operand that is grounded-but-streamed is free-ranging under a
+// navigation usage, and unaffected under every other usage. §19.8.9's table
+// gives fn:path the operand usage navigation, which is what test
+// su-absorbing-912 ("The path() function is not streamable") relies on.
+func TestNavigationFromStreamingParamIsFreeRanging(t *testing.T) {
+	for _, tc := range []struct {
+		usage usage
+		want  sweep
+		why   string
+	}{
+		{usageNavigation, sweepFreeRanging,
+			"navigation leaves the subtree the stream still holds"},
+		{usageAbsorption, sweepMotionless,
+			"absorption reads the subtree forward, which a grounded posture already accounts for"},
+		{usageInspection, sweepMotionless,
+			"inspection reads no further than the node itself"},
+		{usageTransmission, sweepMotionless,
+			"transmission hands on a value the grounded posture says is not streamed"},
+	} {
+		o := operand{
+			props:            groundedMotionless,
+			usage:            tc.usage,
+			allowsChildren:   true,
+			streamedGrounded: true,
+		}
+		if got := o.adjustedSweep(); got != tc.want {
+			t.Errorf("adjusted sweep of a grounded streamed operand under %v = %v, want %v (%s)",
+				tc.usage, got, tc.want, tc.why)
+		}
+	}
+
+	// Without the streamedGrounded mark, a grounded operand keeps its own
+	// sweep under every usage, navigation included (§19.8.1).
+	o := operand{props: groundedMotionless, usage: usageNavigation, allowsChildren: true}
+	if got := o.adjustedSweep(); got != sweepMotionless {
+		t.Errorf("adjusted sweep of a plain grounded operand under navigation = %v, "+
+			"want motionless (§19.8.1: if P is grounded, S' is S)", got)
+	}
+}
+
+// TestPathOnStreamingParamIsNotStreamable checks the same rule end to end, on
+// the shape su-absorbing-912 uses: an absorbing function whose body is
+// "$input ! path()". §19.8.5.2 requires the body of an absorbing function to
+// be grounded, so a free-ranging body is not guaranteed-streamable.
+//
+// The call reaches fn:path through the simple map operator, so this also
+// covers the context-item half of the rule: "path()" is "path(.)", and "."
+// here denotes the very node $input denotes.
+func TestPathOnStreamingParamIsNotStreamable(t *testing.T) {
+	doc := parseSheet(t, `
+<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f">
+  <xsl:function name="f:z" as="xs:string*" streamability="absorbing">
+    <xsl:param name="input" as="node()*"/>
+    <xsl:sequence select="$input ! path()"/>
+  </xsl:function>
+</xsl:stylesheet>`)
+	funcs := collectStreamFuncs(doc)
+	f, ok := funcs[funcKey{uri: "urn:f", local: "z", arity: 1}]
+	if !ok {
+		t.Fatal("f:z not collected")
+	}
+	p, known := analyzeFunctionBody(f, funcs)
+	if !known {
+		t.Fatal("the body of f:z was not modelled, so no verdict is reached")
+	}
+	if p.streamable() {
+		t.Errorf("body of an absorbing f:z = %v/%v, want not streamable: "+
+			"fn:path navigates away from the streaming parameter (§19.8.9, §19.8.1)",
+			p.posture, p.sweep)
+	}
+	if satisfiesCategory(f, p) {
+		t.Error("a free-ranging body must not satisfy the absorbing category (§19.8.5.2)")
+	}
+
+	// The same body without fn:path stays streamable, so the rejection above
+	// is the navigation usage and not the shape of the expression.
+	doc2 := parseSheet(t, `
+<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:f="urn:f">
+  <xsl:function name="f:z" as="xs:string*" streamability="absorbing">
+    <xsl:param name="input" as="node()*"/>
+    <xsl:sequence select="$input ! name()"/>
+  </xsl:function>
+</xsl:stylesheet>`)
+	funcs2 := collectStreamFuncs(doc2)
+	f2 := funcs2[funcKey{uri: "urn:f", local: "z", arity: 1}]
+	p2, known2 := analyzeFunctionBody(f2, funcs2)
+	if !known2 || !p2.streamable() {
+		t.Errorf("body of \"$input ! name()\" = %v/%v known=%v, want streamable: "+
+			"fn:name has usage inspection, which costs nothing here",
+			p2.posture, p2.sweep, known2)
+	}
+}

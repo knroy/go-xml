@@ -56,6 +56,14 @@ type analyzer struct {
 	paramCategory  streamCategory
 	hasStreamParam bool
 
+	// ctxStreamedGrounded says the context item here is a streamed node that
+	// §19.8.8.11 nevertheless reports as grounded — it was reached from a
+	// bare reference to the streaming parameter, as in "$input ! path()".
+	// It carries operand.streamedGrounded across a change of focus, so that
+	// a navigation usage applied to "." is charged the same way it would be
+	// if applied to "$input" directly. Set by simpleMap.
+	ctxStreamedGrounded bool
+
 	// higherOrder records that the expression now being analysed sits inside
 	// a higher-order operand of some construct between it and the function
 	// body. §19.8.8.11 calls a variable reference "singular" when no such
@@ -218,10 +226,35 @@ func (a *analyzer) expr(e xpath.Expr) props {
 func (a *analyzer) operandOf(e xpath.Expr, u usage) operand {
 	p := a.expr(e)
 	return operand{
-		props:          p,
-		usage:          u,
-		allowsChildren: a.allowsChildren(e),
+		props:            p,
+		usage:            u,
+		allowsChildren:   a.allowsChildren(e),
+		streamedGrounded: a.isStreamingParamRef(e),
 	}
+}
+
+// isStreamingParamRef reports whether the expression denotes the streaming
+// parameter of the stylesheet function being analysed -- either as a bare
+// reference to it, or as "." where the focus was set from one.
+//
+// Only those two shapes count. Once the reference is used in a path or a
+// filter, the enclosing expression has a posture of its own that the ordinary
+// rules already carry, and it is that posture -- not the parameter's -- that
+// decides what a further usage costs.
+func (a *analyzer) isStreamingParamRef(e xpath.Expr) bool {
+	if !a.hasStreamParam {
+		return false
+	}
+	switch x := e.(type) {
+	case *xpath.VarRef:
+		return x.Name.URI == a.streamingParam.URI &&
+			x.Name.Local == a.streamingParam.Local
+	case *xpath.ContextItem:
+		// "." inside "$input ! f(.)" denotes the same streamed node the
+		// streaming parameter does; simpleMap records that in the context.
+		return a.ctxStreamedGrounded
+	}
+	return false
 }
 
 // binary handles the operators whose operand usages the spec fixes.
@@ -651,6 +684,10 @@ func (a *analyzer) funcCall(x *xpath.FuncCall) props {
 			// "string()" consuming where "string(.)" was motionless, which
 			// §19.8.1 gives no warrant for: the two are equivalent.
 			allowsChildren: a.ctxAllowsChildren,
+			// Likewise "path()" is "path(.)": when the context item is the
+			// streamed node a streaming parameter denotes, navigating from
+			// it costs the same either way. See operand.streamedGrounded.
+			streamedGrounded: a.ctxStreamedGrounded,
 		}
 		return combine([]operand{ci}, false)
 	}

@@ -185,6 +185,26 @@ type operand struct {
 	// when they all belong to the choice group, because only one of them is
 	// ever evaluated.
 	choiceGroup bool
+
+	// streamedGrounded marks an operand whose posture is grounded but whose
+	// value is nevertheless a node of the streamed document: a reference to
+	// the streaming parameter of an absorbing or inspection stylesheet
+	// function, or a context item standing for one. §19.8.8.11 gives such a
+	// reference a grounded posture, but the note under §19.8.5 is explicit
+	// that the nodes it denotes "can only derive from streamed nodes passed
+	// in an argument to the function".
+	//
+	// The distinction matters for one usage only. §19.8.1 makes an operand's
+	// adjusted sweep equal to its own sweep as soon as the posture is
+	// grounded, which is right for absorption and inspection — the subtree
+	// below such a node is read forward, and the grounded posture records
+	// that nothing streamed comes back out. It is not right for navigation,
+	// which reaches *outside* that subtree, to an ancestor or a preceding
+	// sibling a streaming processor has already discarded. So navigation
+	// applied to a streamed node is free-ranging whatever the posture says.
+	// That is what makes fn:path on a streaming parameter unstreamable:
+	// §19.8.9's table gives fn:path the operand usage navigation.
+	streamedGrounded bool
 }
 
 // adjustedUsage applies the §19.8.1 downgrade of absorption to inspection for
@@ -204,6 +224,15 @@ func (o operand) adjustedUsage() usage {
 // reaches the posture/usage table.
 func (o operand) adjustedSweep() sweep {
 	if o.props.sweep == sweepFreeRanging || o.props.posture == postureRoaming {
+		return sweepFreeRanging
+	}
+	// Navigation away from a streamed node is free-ranging even when the
+	// posture is grounded: the grounded posture of a streaming-parameter
+	// reference (§19.8.8.11) says the reference yields no streamed node to
+	// its parent, not that the node it denotes is off the stream. Reaching
+	// its ancestors or siblings still needs part of the document a streaming
+	// processor no longer holds. See operand.streamedGrounded.
+	if o.streamedGrounded && o.adjustedUsage() == usageNavigation {
 		return sweepFreeRanging
 	}
 	if o.props.posture == postureGrounded {

@@ -199,17 +199,116 @@ func (b bracedResolver) ResolvePrefix(prefix string) (string, bool) {
 // against a static context that had imported one, while the same test written
 // with an ordinary prefix resolved fine. Carrying the inner SchemaTypes
 // through restores the one property the wrapper was never meant to change.
+// bracedSchemaResolver is bracedResolver for a resolver that also carries a
+// schema.
+//
+// Embedding only NamespaceResolver promotes only that interface's methods, so
+// the wrapper answered ResolvePrefix and nothing else: a resolver that
+// implemented SchemaTypes stopped implementing it the moment an expression
+// contained a braced URI literal, and every schema lookup in schema_types.go
+// took its "no schema in the static context" branch. That made
+// schema-element(Q{uri}local) report XPST0008 -- "no schema is imported" --
+// against a static context that had imported one, while the same test written
+// with an ordinary prefix resolved fine.
+//
+// SchemaTypes was the first interface found through that trap and is not the
+// only one the static context answers. schema_types.go type-asserts the
+// resolver for six, and carrying one while dropping five left the same defect
+// in five more places: "() instance of Q{uri}pureUnion" reported XPST0051,
+// "only a pure union type is an item type", about a union that IS pure,
+// because SchemaUnionTypes had gone missing and the purity walk was never
+// reached. CastAs-UnionType-28, -29 and -30 are the suite's cases.
+//
+// The inner resolver is held as one value and the six methods delegate to it,
+// rather than embedding six interfaces. An EMBEDDED interface that is nil
+// still makes the struct satisfy that interface, so a caller's
+// "v, ok := ns.(SchemaUnionTypes)" would succeed and then dereference nil --
+// turning a resolver that implements some but not all of the six from a
+// missed lookup into a panic. Delegating keeps each answer exactly the one
+// the inner resolver would have given.
 type bracedSchemaResolver struct {
 	bracedResolver
-	SchemaTypes
+	inner NamespaceResolver
+}
+
+func (b bracedSchemaResolver) LookupSchemaType(name xdm.QName) (xdm.TypeCode, bool, bool) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.LookupSchemaType(name)
+	}
+	return 0, false, false
+}
+
+func (b bracedSchemaResolver) ValidateSchemaValue(name xdm.QName, value string) (bool, error) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.ValidateSchemaValue(name, value)
+	}
+	return false, nil
+}
+
+func (b bracedSchemaResolver) SchemaDeclarationType(name xdm.QName, attribute bool) (string, bool) {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.SchemaDeclarationType(name, attribute)
+	}
+	return "", false
+}
+
+func (b bracedSchemaResolver) SubstitutionGroupMembers(name xdm.QName) []xdm.QName {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.SubstitutionGroupMembers(name)
+	}
+	return nil
+}
+
+func (b bracedSchemaResolver) LookupSchemaDeclaration(name xdm.QName, attribute bool) bool {
+	if v, ok := b.inner.(SchemaTypes); ok {
+		return v.LookupSchemaDeclaration(name, attribute)
+	}
+	return false
+}
+
+func (b bracedSchemaResolver) SchemaUnionMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if v, ok := b.inner.(SchemaUnionTypes); ok {
+		return v.SchemaUnionMemberTypes(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaTypeIsList(name xdm.QName) (xdm.QName, bool) {
+	if v, ok := b.inner.(SchemaListTypes); ok {
+		return v.SchemaTypeIsList(name)
+	}
+	return xdm.QName{}, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionMemberNames(name xdm.QName) ([]string, bool) {
+	if v, ok := b.inner.(SchemaUnionNames); ok {
+		return v.SchemaUnionMemberNames(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionAtomicMemberTypes(name xdm.QName) ([]xdm.TypeCode, bool) {
+	if v, ok := b.inner.(SchemaImpureUnionTypes); ok {
+		return v.SchemaUnionAtomicMemberTypes(name)
+	}
+	return nil, false
+}
+
+func (b bracedSchemaResolver) SchemaUnionListMemberItemType(name xdm.QName) (xdm.TypeCode, bool) {
+	if v, ok := b.inner.(SchemaUnionListMemberType); ok {
+		return v.SchemaUnionListMemberItemType(name)
+	}
+	return 0, false
 }
 
 // wrapBraced wraps ns so the synthetic prefixes resolve, preserving the inner
-// resolver's schema when it has one.
+// resolver's schema interfaces when it has any.
 func wrapBraced(ns NamespaceResolver, uris []string) NamespaceResolver {
 	b := bracedResolver{NamespaceResolver: ns, uris: uris}
-	if st, ok := ns.(SchemaTypes); ok {
-		return bracedSchemaResolver{bracedResolver: b, SchemaTypes: st}
+	switch ns.(type) {
+	case SchemaTypes, SchemaUnionTypes, SchemaListTypes,
+		SchemaUnionNames, SchemaImpureUnionTypes, SchemaUnionListMemberType:
+		return bracedSchemaResolver{bracedResolver: b, inner: ns}
 	}
 	return b
 }

@@ -25,9 +25,9 @@ Every figure here comes from a full run of the suite it names, with
 | **xpath** | QT3 — XPath 2.0 | 15,217 | 15,217 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.0 | 19,362 | 19,362 | 100.00% | **0** |
 | **xpath** | QT3 — XPath 3.1 | 21,898 | 21,898 | 100.00% | **0** |
-| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,304 | 99.86% | **42** |
+| **xquery** | QT3 — XQuery 3.1 | 30,346 | 30,320 | 99.91% | **26** |
 | **xslt** | W3C XSLT 2.0 | 6,201 | 6,193 | 99.87% | **8** |
-| **xslt** | W3C XSLT 3.0 | 11,518 | 11,451 | 99.42% | **67** |
+| **xslt** | W3C XSLT 3.0 | 11,518 | 11,452 | 99.43% | **66** |
 | **xsd** | W3C xsdtests 1.0 | 39,388 | 39,358 | 99.92% | **30** |
 | **xsd** | W3C xsdtests 1.1 | 41,576 | 41,545 | 99.93% | **31** |
 | **relaxng** | Clark spectest | 965 | 965 | 100.00% | **0** |
@@ -47,7 +47,7 @@ W3C XSLT sets.
 
 Two suites reach 100% — XPath at all three versions, and RELAX NG.
 
-**The two largest blocks are single features, not a long tail.** 45 of the 67
+**The two largest blocks are single features, not a long tail.** 44 of the 66
 XSLT 3.0 failures want an `XTSE3430` that only the unwritten remainder of the
 §19.8 posture-and-sweep analysis can emit — and §19.1 says a non-streaming
 processor "is not required to assess whether constructs are guaranteed-streamable" —
@@ -108,9 +108,9 @@ All three XPath versions agree with the suite on every case in scope.
 
 965 of 965 assertions in James Clark's spectest. **No known gaps.**
 
-## xquery — 42 failures
+## xquery — 26 failures
 
-**XQuery 3.1: 30,304 / 30,346 = 99.86%.**
+**XQuery 3.1: 30,320 / 30,346 = 99.91%.**
 
 The failures cluster by production, not by symptom.
 **`prod-CastExpr.schema` (36) is all but the whole of it**, with six singletons
@@ -145,11 +145,11 @@ three `regex-syntax-xslt20` cases.
 
 **XSLT 2.0: 6,193 / 6,201 = 99.87%.**
 
-## xslt 3.0 — 67 failures
+## xslt 3.0 — 66 failures
 
-**XSLT 3.0: 11,451 / 11,518 = 99.42%.**
+**XSLT 3.0: 11,452 / 11,518 = 99.43%.**
 
-**45 of the 67 want an `XTSE3430`** — a refusal of a stylesheet as
+**44 of the 66 want an `XTSE3430`** — a refusal of a stylesheet as
 non-streamable, which only the §19.8 posture-and-sweep analysis can emit. Most
 read literally "expected error XTSE3430, the transform succeeded": the engine
 computes the right answer and the test wants it to decline. §19.1 settles
@@ -372,6 +372,42 @@ example; the cost of the implemented rule is nothing measured.
 This is recorded because it is the shape of thing a later reader corrects back
 to the letter of the draft. It is a divergence taken knowingly, not an
 oversight — see the rule and its reasoning in `xslt/streaminstructions.go`.
+
+## The `||` operator — 2 cases gained, 18 lost
+
+**Measured and reverted.** §19.8.8's proforma operand-usage table lists
+`StringConcatExpr [19]` as `A || A`: both operands absorb, the same entry it
+gives `AdditiveExpr`. Adding that one case to the expression dispatch in
+`xslt/streamability.go` is a faithful transcription, and it does what it should
+— `si-fork-952`, whose `current-group()/(AUTHOR||TITLE)` is two down-selections
+in one step, is refused, and so is `si-fork-902`.
+
+It also **loses 18 cases**, measured: 11,451/67 → 11,435/83. `||` was the last
+unmodelled construct standing between the analysis and
+`xslt/streamexprs.go`'s §19.8.8.4 widening, which turns a union of two
+*striding* operands into crawling. The spec admits that widening is a choice
+rather than a necessity ("there are cases where an implementation could
+determine that the result is also striding: for example `(author | editor)`").
+`sx-union-C.xsl` hosts 18 cases that all assert output, one of which writes
+`.+1 || ' '` inside a `for-each` over `PRICE union QUANTITY`; the widened
+posture makes the body roaming and the whole stylesheet is refused at compile
+time, taking all 18 with it. That stylesheet's own comment concedes the point —
+"Streamable in Saxon but perhaps not in the W3C spec".
+
+Withholding the verdict on the striding+striding widening rescues those 18 and
+costs `sx-union-202`, which wants `XTSE3430` for `(/BOOKLIST/ITEM |
+/BOOKLIST/MAGAZINE)/PRICE` and is annotated "The union of two striding
+expressions is crawling". Both stylesheets union two striding operands, so no
+rule reading the union alone separates them. The distinction that would is
+whether the widened posture feeds a following *step* — real in both cases, but
+it means threading "this posture was widened" through the two-phase path fold
+of §19.8.8.7, which is a change to shared analysis plumbing rather than a
+transcription.
+
+So `||` is correct, currently unmodelled, and cannot be landed on its own. It
+should go in together with the U-type inference that would let §19.8.8.4 keep
+`(author | editor)` striding — the same missing inference already recorded
+against `si-group-055` in `bodyCallsCurrentGroup`.
 
 ## `evaluate-045` — 1 case gained, 510 real documents lost
 

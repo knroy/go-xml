@@ -1245,15 +1245,33 @@ func (p *Parser) foldSchemaConstructor(name xdm.QName, args []Expr) (Expr, bool)
 		}
 		return nil, false
 	}
-	return &CastExpr{
-		Operand: args[0],
-		Type: SequenceType{
-			AtomicType:    prim,
-			HasAtomicType: true,
-			SchemaType:    annotationKeyOf(lex, p.ns),
-			Occurrence:    "?",
-		},
-	}, true
+	st := SequenceType{
+		AtomicType:    prim,
+		HasAtomicType: true,
+		SchemaType:    annotationKeyOf(lex, p.ns),
+		Occurrence:    "?",
+	}
+	// The facets of the imported type, captured exactly as the type-position
+	// path captures them, and for the same reason: they live in the schema
+	// and nothing carries a schema into the evaluator.
+	//
+	// Omitting them here made the constructor a weaker test than the cast it
+	// is defined to be. myType:sizeType is an xs:integer restricted to 1..19,
+	// so "20 cast as myType:sizeType" failed on maxInclusive while
+	// "myType:sizeType(20)" erased the type to xs:integer and returned 20 --
+	// user-defined-2, which requires FORG0001. F&O 3.0 17.5 defines a
+	// user-defined type's constructor as the corresponding cast, so the two
+	// cannot disagree.
+	if lex, ns := lex, p.ns; true {
+		st.SchemaValueValid = func(value string) error {
+			known, err := schemaValueValid(lex, ns, value)
+			if !known {
+				return nil
+			}
+			return err
+		}
+	}
+	return &CastExpr{Operand: args[0], Type: st}, true
 }
 
 // foldQNameConstructor rewrites xs:QName("prefix:local") into a QName literal.

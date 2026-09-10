@@ -52,6 +52,14 @@ func listTypeName(lex string, ns NamespaceResolver) (string, bool) {
 // The lexical form is split on XML whitespace and each token cast to the item
 // type. A form with no tokens fails: the built-in list types all carry
 // minLength 1.
+//
+// Each token is annotated with the item type it was validated against. F&O 3.0
+// 17.3 gives the constructors the return types xs:NMTOKEN*, xs:IDREF* and
+// xs:ENTITY*, and 18.3.6 says the result of casting to a list type is "a
+// sequence of zero or more atomic values each of which is an instance of the
+// item type of L". Without the annotation the tokens came back as plain
+// xs:string, so "'a b c' cast as xs:IDREFS instance of xs:IDREF*" was false --
+// CastAs-ListType-7 and its neighbours.
 func castToListType(a *xdm.Atomic, facet string) (xdm.Sequence, error) {
 	toks := collapseXMLSpaceFields(a.String())
 	if len(toks) == 0 {
@@ -64,9 +72,28 @@ func castToListType(a *xdm.Atomic, facet string) (xdm.Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, v)
+		out = append(out, v.WithDerived(facet))
 	}
 	return out, nil
+}
+
+// listSourceValue is the operand-type gate F&O 3.0 18.3.6 puts on a cast to a
+// list type: "the supplied value must be of type xs:string or
+// xs:untypedAtomic". Anything else is XPTY0004 rather than a failed cast, so
+// xs:ENTITIES(xs:anyURI("abcd")) is a type error and not the one-token list
+// the string value would have made -- CastAs-ListType-17 and -18.
+//
+// The rule reaches the constructor functions as well as the cast, because 17.3
+// defines their semantics as "equivalent to casting to the corresponding types
+// from xs:string".
+func listSourceValue(a *xdm.Atomic) (string, error) {
+	switch a.Type {
+	case xdm.TypeString, xdm.TypeUntypedAtomic:
+		return a.String(), nil
+	}
+	return "", xdm.ErrType(
+		"a value of type %s cannot be cast to a list type, "+
+			"which requires xs:string or xs:untypedAtomic", a.TypeName())
 }
 
 // collapseXMLSpaceFields splits on the four XML whitespace characters alone.

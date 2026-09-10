@@ -371,7 +371,18 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 	// separated token, so it cannot go through CastAtomic, which maps one
 	// item to one. See listtype.go.
 	if e.Type.ListItemFacet != "" {
-		out, err := castToListType(atoms[0].(*xdm.Atomic), e.Type.ListItemFacet)
+		a := atoms[0].(*xdm.Atomic)
+		// The operand type is checked before the tokens are, because 18.3.6
+		// admits only xs:string and xs:untypedAtomic as a source. That is a
+		// type error rather than a cast failure, so "castable as" is false
+		// rather than the error escaping.
+		if _, err := listSourceValue(a); err != nil {
+			if e.Castable {
+				return xdm.One(xdm.NewBoolean(false)), nil
+			}
+			return nil, err
+		}
+		out, err := castToListType(a, e.Type.ListItemFacet)
 		if e.Castable {
 			return xdm.One(xdm.NewBoolean(err == nil)), nil
 		}
@@ -622,7 +633,24 @@ func (e *CastExpr) Eval(ctx *Context) (xdm.Sequence, error) {
 			}
 		}
 		if verr := e.Type.SchemaValueValid(lex); verr != nil {
+			// The schema layer reports a facet violation as a plain error --
+			// it validates documents, where an XPath error code means
+			// nothing. Here the same fact is a failed CAST, and F&O 3.0 17.5
+			// names the error: "If the value passed to a constructor is not
+			// in the lexical space of the datatype to be constructed, and
+			// cannot be converted to a value in the value space ... a dynamic
+			// error is raised [err:FORG0001]". 18.3.1 says the same for the
+			// cast form.
+			//
+			// Left uncoded, the failure was still a failure, so the QT3
+			// harness scored it correct: an error carrying no code at all is
+			// the one case it accepts against any expected code. That is its
+			// documented weak spot, and passing through it is not the same as
+			// being right.
 			err = verr
+			if xdm.ErrorCode(verr) == "" {
+				err = xdm.Errorf("FORG0001", "%v", verr)
+			}
 			out = nil
 		}
 	}

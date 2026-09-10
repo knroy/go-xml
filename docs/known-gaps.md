@@ -40,7 +40,7 @@ of them.
 
 For orientation only, and re-derived rather than inherited: XPath 2.0, 3.0 and
 3.1 and RELAX NG are at **100%** with no failures at all; XSLT 2.0 has 8
-failures of 6,201; XQuery 3.1 has 42 of 30,346; XSLT 3.0 has 67 of 11,518;
+failures of 6,201; XQuery 3.1 has 26 of 30,346; XSLT 3.0 has 66 of 11,518;
 XSD 1.0 disagrees on 30 of 39,388 and XSD 1.1 on 31 of 41,576. Everything below
 is an account of those 178 cases, or of a decision that produced some of them.
 
@@ -60,7 +60,7 @@ much each costs.
 
 ### §19.8 streamability analysis is partially implemented (XSLT 3.0)
 
-**45 of the 67 XSLT 3.0 failures**, and by far the largest single gap in the
+**44 of the 66 XSLT 3.0 failures**, and by far the largest single gap in the
 project. The posture-and-sweep lattice exists, and so now do the rules built on
 it: the §19.8.4 instruction rules, §19.8.5 streamable stylesheet functions,
 §18.2.8 accumulators, the §19.8.8 expression rules, the §19.8.9 function
@@ -145,7 +145,7 @@ missing — which is the correct behaviour, not a cost.
 because the number is easy to misread. `import schema` was implemented, and
 implementing it brought **416 previously-skipped cases into scope**, of which
 335 now pass. The in-scope count went 29,930 → 30,346 and the passing count
-29,918 → 30,304. A lift that admits failing cases raises the failure count by
+29,918 → 30,320. A lift that admits failing cases raises the failure count by
 construction, and quoting the failure count without the denominator beside it
 would describe a gain as a loss.
 

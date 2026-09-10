@@ -136,6 +136,7 @@ what the suites *measured*, not what the library does.
 
 | Finding | Verdict | Commit |
 |---|---|---|
+| The §19.8.8 `A \|\| A` rule for `\|\|` cannot land alone | Faithful to the table and it refuses `si-fork-952`, but it unshields §19.8.8.4's admitted striding-union widening and costs 18 asserting cases: 11,451 → 11,435. Needs the U-type inference first. | — |
 | `system-property('xsl:supports-streaming')` answers "no" | Correct, and must stay: §26.5 says a non-conforming processor "must return the value no", and "yes" would lie to stylesheets that branch on it to pick a fallback. | [`f536984`][f536984] |
 | `merge-097`, `-097s`, `-097sf` | Not interoperable, per the test set's own maintainer comment: they rely on Saxon's `?select=` collection URIs and declare no environment. | [`f536984`][f536984] |
 | `transform-004` | Needs `fn:transform` during the static phase, which deadlocks on a non-reentrant compile mutex — confirmed from a stack trace, not inferred. | [`f536984`][f536984] |
