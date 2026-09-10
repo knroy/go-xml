@@ -13,7 +13,22 @@ jobs:
   # The fast gate: build, vet, unit tests, race. Runs on every push and needs
   # nothing external, so a broken commit is caught in about a minute.
   test:
-    runs-on: ubuntu-latest
+    # Three operating systems, because CLAUDE.md's rule 3 asks that file
+    # handling work on all of them and nothing here had ever demonstrated it.
+    # Path separators, symlink support, case sensitivity and the confinement
+    # rules that os.Root enforces all differ on Windows, and a library that
+    # resolves schema and DTD references by path is exactly the kind that
+    # breaks there quietly. Only this job gets the matrix: the conformance job
+    # clones about 944M of W3C corpora, and paying that three times buys
+    # almost no signal the Linux run does not already give.
+    #
+    # fail-fast is off so that one platform's failure does not hide the other
+    # two. The whole point of adding Windows is to SEE what it reports.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -23,7 +38,12 @@ jobs:
       # Enforced, now that the tree is clean. It was advisory while drift
       # remained, because failing the build on it would have meant
       # reformatting unrelated files inside every unrelated change.
+      # bash explicitly: the default shell on a Windows runner is PowerShell,
+      # where this script is not merely non-portable but silently wrong --
+      # `grep` and `$(...)` are not what PowerShell parses. Every other step in
+      # this job is a single `go` invocation and needs no such pin.
       - name: gofmt
+        shell: bash
         run: |
           unformatted=$(gofmt -l . | grep -v '^testdata/' || true)
           if [ -n "$unformatted" ]; then
@@ -66,6 +86,7 @@ jobs:
         working-directory: w3cschemas
         env:
           GOFLAGS: -mod=readonly
+        shell: bash
         run: |
           go build ./...
           go vet ./...
@@ -115,3 +136,20 @@ jobs:
       # like a check that passed.
       - name: tests/check.sh
         run: tests/check.sh
+
+      # The provenance of the figures the step above just printed: Go version,
+      # repo commit, GOOS/GOARCH, UTC time, and the revision of each suite
+      # checkout. It is uploaded rather than committed because it describes a
+      # MEASUREMENT, not a commit -- attached here it travels with the run
+      # whose numbers it explains, which is what nobody could produce when an
+      # outside report quoted counts from a tree we could not identify.
+      #
+      # if: always() because a FAILING run is when the question "measured
+      # against what?" actually gets asked.
+      - name: Upload the run's provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last-run
+          path: tests/last-run.txt
+          if-no-files-found: warn

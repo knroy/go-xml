@@ -262,6 +262,109 @@ fail()    { printf 'FAIL: %s\n' "$1"; failed=1; }
 skip()    { skipped="${skipped}  - $1
 "; }
 
+
+# Provenance. Every figure this script prints is a measurement, and a
+# measurement whose conditions are not recorded is a number someone will later
+# read as current.
+#
+# That is not hypothetical here: an external audit report was written against a
+# tree nobody can now identify, quoted counts that no longer matched, and was
+# read as a description of this repository — and the reason it could not be
+# refuted on the spot is that WE COULD NOT PROVE WHAT WE HAD MEASURED EITHER.
+# tests/ratchet.txt holds bare "<name> <count>" pairs; the CI cache key is the
+# static string suites-v2, so even the suite revision behind a CI figure was
+# unrecoverable. Two numbers from different trees, different Go versions and
+# different suite checkouts looked exactly alike.
+#
+# So: Go version, repo commit and whether the tree was dirty, GOOS/GOARCH, the
+# UTC time, and the checkout revision of every suite present. Printed into the
+# transcript, where whoever reads a failing CI log sees it, AND written to
+# tests/last-run.txt, which survives after the log is gone.
+#
+# It is NOT written to tests/ratchet.txt. The ratchet rewrites that file
+# in place -- grep -v the line, append the new one, sort -- so anything else
+# living there would be destroyed by the first count that moved.
+#
+# tests/last-run.txt is deliberately GITIGNORED. It changes on every run, so
+# committing it would put a diff in every gate run and make the ratchet's own
+# commits unreadable; and a committed copy would still only prove what the last
+# person to commit ran, which is the weaker of the two claims anyone wants.
+# What proves a figure is the file emitted BESIDE that figure -- attached to a
+# CI run, or pasted into the issue that quotes the number -- and CI uploads it
+# for exactly that reason. A file in git would be provenance for the commit;
+# this is provenance for the measurement.
+PROVENANCE_FILE="$ROOT/tests/last-run.txt"
+
+# suiterev prints the revision of one vendored suite. They are separate
+# checkouts under testdata/, not submodules, so each is asked on its own.
+#
+# The --show-toplevel comparison is the part that matters, and it must compare
+# against the SUITE directory rather than against $ROOT. testdata/relaxng holds
+# a single copied spectest.xml rather than a clone, and `git -C` there does not
+# fail -- it walks UP and answers with whatever repository encloses it, which
+# would record a go-xml commit as the RelaxNG suite revision and look entirely
+# plausible. Comparing to $ROOT is not enough to catch that: in an agent
+# worktree testdata/ is a symlink to the primary checkout, so the enclosing
+# repository is a different path than $ROOT and the bogus answer survives. The
+# only revision worth recording is one from a checkout whose ROOT IS THE SUITE.
+# A suite that is not one is recorded as such; that is a fact about the
+# measurement, not a reason to fail the gate.
+suiterev() {
+	_name=$1 _dir=$2
+	[ -d "$_dir" ] || { printf '%-12s (absent)\n' "$_name"; return 0; }
+	_top=$(git -C "$_dir" rev-parse --show-toplevel 2>/dev/null || true)
+	# Both sides resolved through the same command so that a symlinked
+	# testdata/ compares equal to the path git reports.
+	_real=$(cd "$_dir" 2>/dev/null && pwd -P) || _real=""
+	_topreal=$([ -n "$_top" ] && cd "$_top" 2>/dev/null && pwd -P) || _topreal=""
+	if [ -z "$_topreal" ] || [ "$_topreal" != "$_real" ]; then
+		printf '%-12s (not a git checkout of its own)\n' "$_name"
+		return 0
+	fi
+	printf '%-12s %s\n' "$_name" \
+		"$(git -C "$_dir" rev-parse HEAD 2>/dev/null || echo '(unknown)')"
+}
+
+provenance() {
+	printf 'go           %s\n' "$($GO version 2>/dev/null || echo '(unknown)')"
+	_head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo '(not a git checkout)')
+	# A dirty tree is recorded rather than refused: the gate is run on work in
+	# progress far more often than on a clean commit, and a figure measured on
+	# uncommitted changes is exactly the one that must not be quoted as the
+	# commit's.
+	if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+		printf 'commit       %s (dirty)\n' "$_head"
+	else
+		printf 'commit       %s\n' "$_head"
+	fi
+	printf 'platform     %s/%s (%s)\n' \
+		"$($GO env GOOS 2>/dev/null)" "$($GO env GOARCH 2>/dev/null)" \
+		"$(uname -sm 2>/dev/null || echo unknown)"
+	printf 'utc          %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+	suiterev qt3tests "$QT3"
+	suiterev xsdtests "$XSDTS"
+	suiterev xslt30 "$XSLTS"
+	suiterev relaxng "$(dirname "$RNG")"
+	suiterev xsltng "$XSLTNG"
+	suiterev xspec "$XSPEC"
+	[ -n "$UBL" ] && suiterev ubl "$UBL"
+	[ -n "$CII" ] && suiterev cii "$CII"
+	return 0
+}
+
+section "provenance"
+# Written first, then echoed, rather than piped through tee: in a pipeline the
+# write failing is the exit status of a subshell nobody reads, and provenance
+# that silently did not persist is the exact failure this section exists to
+# prevent. A tree that cannot be written to still prints -- the transcript is
+# the half that matters in CI -- but it says so.
+if provenance > "$PROVENANCE_FILE" 2>/dev/null; then
+	cat "$PROVENANCE_FILE"
+	printf -- '--- written to tests/last-run.txt\n'
+else
+	provenance
+	printf -- '--- NOT written to tests/last-run.txt (not writable)\n'
+fi
 section "build"
 $GO build ./... || fail "build"
 

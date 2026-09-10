@@ -43,3 +43,12 @@
 # root, where it is 11 MB and has twice been staged by accident. The package is
 # a main, so it has no *.test name for the rule above to catch.
 /xsdsuite
+
+# The provenance of the last gate run: Go version, repo commit, GOOS/GOARCH,
+# UTC time, and the revision of every suite that was on disk. Written by
+# tests/check.sh on every run, so committing it would put a diff in the tree
+# every time anyone ran the gate. It is not committed because what it proves is
+# the MEASUREMENT, not the commit: it is useful attached to the figure it
+# explains -- a CI artifact, or pasted beside a quoted number -- and a copy in
+# git would only ever say what the last committer happened to run.
+/tests/last-run.txt
