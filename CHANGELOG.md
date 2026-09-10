@@ -17,7 +17,7 @@ breaking change means 2.0 with a new module path. See *Stability* below.
 | Change | Problem → solution | Commit |
 |---|---|---|
 | Three rooted resolvers checked containment and then opened, so only `xslt` enforced its root at open time | `xsd`, `dtd` and the CLI's RELAX NG resolver open through `os.OpenRoot`; the string check stays as diagnosis, not enforcement. | [`37972d9`][37972d9] |
-| A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`PLACEHOLDER`][PLACEHOLDER] |
+| A function applying itself through its own name recursed uncharged, bypassing `MaxDepth` | Both function-item invocation paths take `Depth` from the call, as the inline path already did. | [`e511421`][e511421] |
 | An attribute value template concatenated past `MaxBytes`, so the byte budget bound `xsl:value-of` and not `{$v}{$v}` | `avt.eval` charges the text before it joins the builder. | [`5c17280`][5c17280] |
 | `fn:transform` minted a fresh depth allowance per nesting level, so a self-calling stylesheet killed the process | The charge comes from the call and the nested runtime continues the count, so nesting refuses with `XPDY0001`. | [`8e0f44d`][8e0f44d] |
 | A function item invoked through the public API ran against a byte budget of its own | Both invoke sites forward each budget with the flag marking its boundary, `items` included. | [`d63cbb2`][d63cbb2] |
@@ -664,6 +664,7 @@ here so every entry in this file sits under a release.
 [b4c4bb2]: https://github.com/knroy/go-xml/commit/b4c4bb2
 [b50b373]: https://github.com/knroy/go-xml/commit/b50b373
 [8e0f44d]: https://github.com/knroy/go-xml/commit/8e0f44d
+[e511421]: https://github.com/knroy/go-xml/commit/e511421
 [5c17280]: https://github.com/knroy/go-xml/commit/5c17280
 [37972d9]: https://github.com/knroy/go-xml/commit/37972d9
 [d63cbb2]: https://github.com/knroy/go-xml/commit/d63cbb2
